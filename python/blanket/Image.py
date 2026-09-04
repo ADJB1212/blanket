@@ -64,6 +64,17 @@ class Image:
     def tobytes(self) -> bytes:
         return self._native.tobytes()
 
+    def to_pillow(self) -> object:
+        """Return an equivalent Pillow image when Pillow is installed."""
+
+        try:
+            from PIL import Image as PillowImage
+        except ImportError as error:
+            raise ImportError(
+                "Pillow is required for to_pillow(); install blanket[test] or Pillow"
+            ) from error
+        return PillowImage.frombytes(self.mode, self.size, self.tobytes())
+
     def save(
         self,
         fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
