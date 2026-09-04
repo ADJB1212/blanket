@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Benchmark Blanket's supported operations against Pillow."""
 
 from __future__ import annotations
@@ -7,15 +6,14 @@ import argparse
 import gc
 import json
 import statistics
-import time
 from collections.abc import Callable
 from io import BytesIO
 from pathlib import Path
+from time import perf_counter
 from typing import Any
 
-from PIL import Image as PillowImage
-
 from blanket import Image as BlanketImage
+from PIL import Image as PillowImage
 
 
 def make_rgb(width: int, height: int) -> bytes:
@@ -35,9 +33,9 @@ def measure(operation: Callable[[], object], warmups: int, iterations: int) -> f
     gc.disable()
     try:
         for _ in range(iterations):
-            started = time.perf_counter()
+            started = perf_counter()
             operation()
-            samples.append(time.perf_counter() - started)
+            samples.append(perf_counter() - started)
     finally:
         gc.enable()
     return statistics.median(samples)
@@ -141,13 +139,7 @@ def main() -> None:
     for result in results:
         pillow_ms = result["pillow_ms"]
         speedup = result["blanket_speedup"]
-        print(
-            f"{result['operation']:<18} {result['blanket_ms']:>12.3f} "
-            f"{pillow_ms if pillow_ms is not None else '-':>12.3f} "
-            f"{speedup if speedup is not None else '-':>10.2f}"
-            if pillow_ms is not None
-            else f"{result['operation']:<18} {result['blanket_ms']:>12.3f} {'-':>12} {'-':>10}"
-        )
+        print(f"{result['operation']:<18} {result['blanket_ms']:>12.3f} {pillow_ms if pillow_ms is not None else '-':>12.3f} {speedup if speedup is not None else '-':>10.2f}" if pillow_ms is not None else f"{result['operation']:<18} {result['blanket_ms']:>12.3f} {'-':>12} {'-':>10}")
 
     if args.json_path is not None:
         args.json_path.write_text(json.dumps(results, indent=2) + "\n")

@@ -18,8 +18,8 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 test = [
-    "Pillow==12.2.0",
-    "pytest>=8,<10",
+    "Pillow>=12.3.0",
+    "pytest>=9,<10",
 ]
 
 [tool.maturin]

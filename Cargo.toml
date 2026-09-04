@@ -3,6 +3,7 @@ name = "blanket"
 version = "0.1.0"
 edition = "2024"
 description = "A focused Rust-backed image library with a Pillow-shaped Python API"
+authors = ["Andrew Jaffe"]
 license = "MIT"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -18,3 +19,19 @@ gamut-core = "2.0.1"
 gamut-jxl = "0.4.0"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 pyo3 = "0.29.0"
+
+[profile.release]
+opt-level = 3
+debug = false
+lto = "fat"
+strip = true
+incremental = false
+codegen-units = 16
+
+[profile.dev]
+opt-level = 1
+debug = true
+lto = "off"
+
+[tool.maturin]
+profile = "release"

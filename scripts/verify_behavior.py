@@ -1,23 +1,16 @@
-#!/usr/bin/env python3
 """Differential and cross-codec checks against Pillow 12.2."""
 
 from __future__ import annotations
 
 from io import BytesIO
 
-from PIL import Image as PillowImage
-
 from blanket import Image as BlanketImage
+from PIL import Image as PillowImage
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
-    return bytes(
-        (x * 17 + y * 29 + channel * 53) % 256
-        for y in range(height)
-        for x in range(width)
-        for channel in range(channels)
-    )
+    return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
 def check_conversions() -> int:
@@ -62,13 +55,9 @@ def check_jpeg_interop() -> int:
     for producer in ("Pillow", "Blanket"):
         stream = BytesIO()
         if producer == "Pillow":
-            PillowImage.frombytes("RGB", (37, 29), raw).save(
-                stream, "JPEG", quality=85
-            )
+            PillowImage.frombytes("RGB", (37, 29), raw).save(stream, "JPEG", quality=85)
         else:
-            BlanketImage.frombytes("RGB", (37, 29), raw).save(
-                stream, "JPEG", quality=85
-            )
+            BlanketImage.frombytes("RGB", (37, 29), raw).save(stream, "JPEG", quality=85)
 
         payload = stream.getvalue()
         with PillowImage.open(BytesIO(payload)) as pillow_loaded:
@@ -76,12 +65,7 @@ def check_jpeg_interop() -> int:
             blanket_loaded = BlanketImage.open(BytesIO(payload))
             assert blanket_loaded.size == pillow_loaded.size == (37, 29)
             assert blanket_loaded.mode == pillow_loaded.mode == "RGB"
-            differences = [
-                abs(left - right)
-                for left, right in zip(
-                    blanket_loaded.tobytes(), pillow_loaded.tobytes(), strict=True
-                )
-            ]
+            differences = [abs(left - right) for left, right in zip(blanket_loaded.tobytes(), pillow_loaded.tobytes(), strict=True)]
             assert sum(differences) / len(differences) <= 1.0
             assert max(differences) <= 4
     return 2
@@ -92,9 +76,7 @@ def check_jxl_roundtrip() -> int:
     for mode in ("L", "RGB", "RGBA"):
         raw = pixels(mode, 16, 12)
         stream = BytesIO()
-        BlanketImage.frombytes(mode, (16, 12), raw).save(
-            stream, "JXL", lossless=True, effort=1
-        )
+        BlanketImage.frombytes(mode, (16, 12), raw).save(stream, "JXL", lossless=True, effort=1)
         loaded = BlanketImage.open(stream)
         assert (loaded.format, loaded.mode, loaded.size) == ("JXL", mode, (16, 12))
         assert loaded.tobytes() == raw
@@ -103,12 +85,7 @@ def check_jxl_roundtrip() -> int:
 
 
 def main() -> None:
-    checks = (
-        check_conversions()
-        + check_png_interop()
-        + check_jpeg_interop()
-        + check_jxl_roundtrip()
-    )
+    checks = check_conversions() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip()
     print(f"behavior verification passed: {checks} checks")
 
 

@@ -1,24 +1,17 @@
-#!/usr/bin/env python3
 """Exercise unsupported image operations through Blanket's Pillow adapter."""
 
 from __future__ import annotations
 
 from io import BytesIO
 
+from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 from PIL import ImageFilter, ImageOps
-
-from blanket import Image as BlanketImage
 
 
 def main() -> None:
     size = (32, 24)
-    raw = bytes(
-        (x * 13 + y * 31 + channel * 71) % 256
-        for y in range(size[1])
-        for x in range(size[0])
-        for channel in range(3)
-    )
+    raw = bytes((x * 13 + y * 31 + channel * 71) % 256 for y in range(size[1]) for x in range(size[0]) for channel in range(3))
     blanket = BlanketImage.frombytes("RGB", size, raw)
     pillow = blanket.to_pillow()
     assert isinstance(pillow, PillowImage.Image)
