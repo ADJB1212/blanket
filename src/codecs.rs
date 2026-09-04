@@ -13,6 +13,7 @@ use crate::raster::{Image, PixelMode};
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
+const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageFormat {
@@ -99,6 +100,8 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
     let decoder = image::ImageReader::with_format(Cursor::new(data), format)
         .into_decoder()
         .map_err(|error| error.to_string())?;
+    let dimensions = decoder.dimensions();
+    validate_dimensions(dimensions.0, dimensions.1)?;
     let color = decoder.color_type();
     let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
     let (width, height) = (image.width(), image.height());
@@ -116,6 +119,7 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
 fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     let decoder = JxlDecoder::new();
     let info = decoder.info(data).map_err(|error| error.to_string())?;
+    validate_dimensions(info.dimensions.width, info.dimensions.height)?;
     let (mode, pixels) = if info.color_channels == 1 && !info.has_alpha {
         let image: ImageBuf<Gray8> = decoder.decode_image(data).map_err(|e| e.to_string())?;
         (PixelMode::L, image.as_samples().to_vec())
@@ -212,6 +216,18 @@ fn quality_to_distance(quality: u8) -> f32 {
     } else {
         (6.24 + 2.5_f32.powf((30.0 - quality) / 5.0) / 6.25).min(25.0)
     }
+}
+
+fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
+    let pixels = (width as usize)
+        .checked_mul(height as usize)
+        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    if pixels > MAX_IMAGE_PIXELS {
+        return Err(format!(
+            "image size ({pixels} pixels) exceeds Blanket limit of {MAX_IMAGE_PIXELS} pixels"
+        ));
+    }
+    Ok(())
 }
 
 fn codec_error(error: impl std::fmt::Display) -> PyErr {
