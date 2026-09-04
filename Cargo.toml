@@ -32,6 +32,3 @@ codegen-units = 16
 opt-level = 1
 debug = true
 lto = "off"
-
-[tool.maturin]
-profile = "release"

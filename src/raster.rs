@@ -197,27 +197,7 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return source.to_vec();
     }
 
-    let pixel_count = source.len() / from.channels();
-    let mut output = Vec::with_capacity(pixel_count * to.channels());
-    for pixel in source.chunks_exact(from.channels()) {
-        let (red, green, blue, alpha) = match from {
-            PixelMode::L => (pixel[0], pixel[0], pixel[0], 255),
-            PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], 255),
-            PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
-        };
-
-        match to {
-            PixelMode::L => {
-                let luminance =
-                    ((red as u32 * 19_595 + green as u32 * 38_470 + blue as u32 * 7_471 + 0x8000)
-                        >> 16) as u8;
-                output.push(luminance);
-            }
-            PixelMode::Rgb => output.extend_from_slice(&[red, green, blue]),
-            PixelMode::Rgba => output.extend_from_slice(&[red, green, blue, alpha]),
-        }
-    }
-    output
+    crate::simd::convert(source, from, to)
 }
 
 #[cfg(test)]

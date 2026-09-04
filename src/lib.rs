@@ -1,5 +1,6 @@
 mod codecs;
 mod raster;
+mod simd;
 
 use codecs::open_bytes;
 use pyo3::prelude::*;
