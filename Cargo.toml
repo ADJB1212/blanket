@@ -14,4 +14,7 @@ crate-type = ["cdylib"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
+gamut-core = "2.0.1"
+gamut-jxl = "0.4.0"
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 pyo3 = "0.29.0"

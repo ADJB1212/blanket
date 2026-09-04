@@ -2,6 +2,8 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
+use crate::codecs::{self, ImageFormat, SaveOptions};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PixelMode {
     L,
@@ -38,7 +40,7 @@ impl PixelMode {
     }
 }
 
-#[pyclass(module = "blanket._blanket", skip_from_py_object)]
+#[pyclass(name = "_Image", module = "blanket._blanket", skip_from_py_object)]
 #[derive(Clone)]
 pub(crate) struct Image {
     pub(crate) width: u32,
@@ -129,6 +131,27 @@ impl Image {
 
     fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
         Ok(PyBytes::new(py, self.pixel_data()?).unbind())
+    }
+
+    #[pyo3(name = "_encode")]
+    fn encode(
+        &self,
+        py: Python<'_>,
+        format: &str,
+        quality: u8,
+        compress_level: u8,
+        lossless: bool,
+        effort: u8,
+    ) -> PyResult<Py<PyBytes>> {
+        let format = ImageFormat::parse(format)?;
+        let options = SaveOptions {
+            quality,
+            compress_level,
+            lossless,
+            effort,
+        };
+        let encoded = py.detach(|| codecs::encode(self, format, options))?;
+        Ok(PyBytes::new(py, &encoded).unbind())
     }
 
     fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
