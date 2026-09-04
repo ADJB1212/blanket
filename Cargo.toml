@@ -10,5 +10,8 @@ license = "MIT"
 name = "_blanket"
 crate-type = ["cdylib"]
 
+[features]
+extension-module = ["pyo3/extension-module"]
+
 [dependencies]
-pyo3 = { version = "0.29.0", features = ["extension-module"] }
+pyo3 = "0.29.0"
