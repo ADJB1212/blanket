@@ -6,7 +6,6 @@ description = "A focused Rust-backed image library with a Pillow-shaped Python A
 authors = ["Andrew Jaffe"]
 license = "MIT"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "_blanket"
 crate-type = ["cdylib"]
@@ -15,10 +14,11 @@ crate-type = ["cdylib"]
 extension-module = ["pyo3/extension-module"]
 
 [dependencies]
-gamut-core = "2.0.1"
-gamut-jxl = "0.4.0"
+garb = "0.2.8"
+gamut-core = "2"
+gamut-jxl = "0.4"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
-pyo3 = "0.29.0"
+pyo3 = "0.29"
 
 [profile.release]
 opt-level = 3
