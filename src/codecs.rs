@@ -1,12 +1,12 @@
 use std::io::Cursor;
 
-use gamut_core::{DecodeImage, Dimensions, EncodeImage, Gray8, ImageBuf, ImageRef, Rgb8, Rgba8};
-use gamut_jxl::{Distance, Effort, JxlDecoder, JxlEncoder};
-use image::codecs::jpeg::JpegEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
+use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
+use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+use turbojpeg::{Colorspace, Compressor, Decompressor, PixelFormat, Subsamp};
 
 use crate::UnidentifiedImageError;
 use crate::raster::{Image, PixelMode};
@@ -91,7 +91,7 @@ pub(crate) fn open_bytes(
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
-        ImageFormat::Jpeg => decode_rust_image(data, RustFormat::Jpeg, "JPEG"),
+        ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
     }
 }
@@ -116,28 +116,103 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
         .map_err(|error| error.to_string())
 }
 
-fn decode_jxl(data: &[u8]) -> Result<Image, String> {
-    let decoder = JxlDecoder::new();
-    let info = decoder.info(data).map_err(|error| error.to_string())?;
-    validate_dimensions(info.dimensions.width, info.dimensions.height)?;
-    let (mode, pixels) = if info.color_channels == 1 && !info.has_alpha {
-        let image: ImageBuf<Gray8> = decoder.decode_image(data).map_err(|e| e.to_string())?;
-        (PixelMode::L, image.as_samples().to_vec())
-    } else if info.color_channels == 3 && !info.has_alpha {
-        let image: ImageBuf<Rgb8> = decoder.decode_image(data).map_err(|e| e.to_string())?;
-        (PixelMode::Rgb, image.as_samples().to_vec())
+fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
+    let mut decoder = Decompressor::new().map_err(|error| error.to_string())?;
+    let header = decoder
+        .read_header(data)
+        .map_err(|error| error.to_string())?;
+    let width = u32::try_from(header.width).map_err(|error| error.to_string())?;
+    let height = u32::try_from(header.height).map_err(|error| error.to_string())?;
+    validate_dimensions(width, height)?;
+
+    let (mode, format) = match header.colorspace {
+        Colorspace::Gray => (PixelMode::L, PixelFormat::GRAY),
+        Colorspace::CMYK | Colorspace::YCCK => (PixelMode::Rgb, PixelFormat::CMYK),
+        Colorspace::RGB | Colorspace::YCbCr => (PixelMode::Rgb, PixelFormat::RGB),
+    };
+    let pitch = header
+        .width
+        .checked_mul(format.size())
+        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    let length = header
+        .height
+        .checked_mul(pitch)
+        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    let mut pixels = vec![0; length];
+    decoder
+        .decompress(
+            data,
+            turbojpeg::Image {
+                pixels: pixels.as_mut_slice(),
+                width: header.width,
+                pitch,
+                height: header.height,
+                format,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    let pixels = if format == PixelFormat::CMYK {
+        cmyk_to_rgb(&pixels)
     } else {
-        let image: ImageBuf<Rgba8> = decoder.decode_image(data).map_err(|e| e.to_string())?;
-        (PixelMode::Rgba, image.as_samples().to_vec())
+        pixels
+    };
+    Image::from_pixels(width, height, mode, pixels, Some("JPEG".to_owned()))
+        .map_err(|error| error.to_string())
+}
+
+fn cmyk_to_rgb(cmyk: &[u8]) -> Vec<u8> {
+    let mut rgb = Vec::with_capacity(cmyk.len() / 4 * 3);
+    // JPEG stores CMYK samples inverted, so combining a color channel with K
+    // is a multiplication rather than the usual subtractive CMYK formula.
+    for pixel in cmyk.as_chunks::<4>().0 {
+        rgb.push(multiply_u8(pixel[0], pixel[3]));
+        rgb.push(multiply_u8(pixel[1], pixel[3]));
+        rgb.push(multiply_u8(pixel[2], pixel[3]));
+    }
+    rgb
+}
+
+fn multiply_u8(left: u8, right: u8) -> u8 {
+    let product = u16::from(left) * u16::from(right) + 128;
+    ((product + (product >> 8)) >> 8) as u8
+}
+
+fn decode_jxl(data: &[u8]) -> Result<Image, String> {
+    let decoder = decoder_builder()
+        .build()
+        .map_err(|error| error.to_string())?;
+    let (info, pixels) = decoder
+        .decode_with::<u8>(data)
+        .map_err(|error| error.to_string())?;
+    validate_dimensions(info.width, info.height)?;
+
+    let (mode, pixels) = match (info.num_color_channels, info.has_alpha_channel) {
+        (1, false) => (PixelMode::L, pixels),
+        (3, false) => (PixelMode::Rgb, pixels),
+        (1, true) => (PixelMode::Rgba, luma_alpha_to_rgba(&pixels)),
+        (3, true) => (PixelMode::Rgba, pixels),
+        (channels, has_alpha) => {
+            return Err(format!(
+                "unsupported JPEG XL channel layout: {channels} color channels, alpha={has_alpha}"
+            ));
+        }
     };
     Image::from_pixels(
-        info.dimensions.width,
-        info.dimensions.height,
+        info.width,
+        info.height,
         mode,
         pixels,
         Some("JXL".to_owned()),
     )
     .map_err(|error| error.to_string())
+}
+
+fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
+    let mut rgba = Vec::with_capacity(luma_alpha.len().saturating_mul(2));
+    for &[luma, alpha] in luma_alpha.as_chunks::<2>().0 {
+        rgba.extend_from_slice(&[luma, luma, luma, alpha]);
+    }
+    rgba
 }
 
 pub(crate) fn encode(
@@ -177,44 +252,64 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
     if image.mode == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
-    let mut output = Vec::new();
-    JpegEncoder::new_with_quality(&mut output, quality)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
+
+    let (format, subsampling) = match image.mode {
+        PixelMode::L => (PixelFormat::GRAY, Subsamp::Gray),
+        // Match the default used by Pillow/libjpeg for RGB JPEG output.
+        PixelMode::Rgb => (PixelFormat::RGB, Subsamp::Sub2x2),
+        PixelMode::Rgba => unreachable!("RGBA is rejected above"),
+    };
+    let mut encoder = Compressor::new().map_err(codec_error)?;
+    encoder
+        .set_quality(i32::from(quality))
         .map_err(codec_error)?;
-    Ok(output)
+    encoder.set_subsamp(subsampling).map_err(codec_error)?;
+    encoder
+        .compress_to_vec(turbojpeg::Image {
+            pixels,
+            width: image.width as usize,
+            pitch: image.width as usize * format.size(),
+            height: image.height as usize,
+            format,
+        })
+        .map_err(codec_error)
 }
 
 fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
-    let dimensions = Dimensions::new(image.width, image.height).map_err(codec_error)?;
-    let effort = Effort::from_level(options.effort)
-        .ok_or_else(|| PyValueError::new_err("effort must be between 1 and 10"))?;
-    let encoder = if options.lossless {
-        JxlEncoder::lossless()
-    } else {
-        let distance = quality_to_distance(options.quality);
-        JxlEncoder::lossy(Distance::new(distance).map_err(codec_error)?)
-    }
-    .with_effort(effort);
-
-    match image.mode {
-        PixelMode::L => encoder
-            .encode_to_vec(ImageRef::<Gray8>::new(pixels, dimensions).map_err(codec_error)?)
-            .map_err(codec_error),
-        PixelMode::Rgb => encoder
-            .encode_to_vec(ImageRef::<Rgb8>::new(pixels, dimensions).map_err(codec_error)?)
-            .map_err(codec_error),
-        PixelMode::Rgba => encoder
-            .encode_to_vec(ImageRef::<Rgba8>::new(pixels, dimensions).map_err(codec_error)?)
-            .map_err(codec_error),
-    }
+    let (color_encoding, has_alpha) = match image.mode {
+        PixelMode::L => (ColorEncoding::SrgbLuma, false),
+        PixelMode::Rgb => (ColorEncoding::Srgb, false),
+        PixelMode::Rgba => (ColorEncoding::Srgb, true),
+    };
+    let mut encoder = encoder_builder()
+        .has_alpha(has_alpha)
+        .lossless(options.lossless)
+        .speed(jxl_encoder_speed(options.effort)?)
+        .jpeg_quality(f32::from(options.quality))
+        .uses_original_profile(options.lossless || options.quality == 100)
+        .color_encoding(color_encoding)
+        .build()
+        .map_err(codec_error)?;
+    let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
+    let encoded: EncoderResult<u8> = encoder
+        .encode_frame(&frame, image.width, image.height)
+        .map_err(codec_error)?;
+    Ok(encoded.data)
 }
 
-fn quality_to_distance(quality: u8) -> f32 {
-    let quality = f32::from(quality);
-    if quality >= 30.0 {
-        0.1 + (100.0 - quality) * 0.09
-    } else {
-        (6.24 + 2.5_f32.powf((30.0 - quality) / 5.0) / 6.25).min(25.0)
+fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
+    match effort {
+        1 => Ok(EncoderSpeed::Lightning),
+        2 => Ok(EncoderSpeed::Thunder),
+        3 => Ok(EncoderSpeed::Falcon),
+        4 => Ok(EncoderSpeed::Cheetah),
+        5 => Ok(EncoderSpeed::Hare),
+        6 => Ok(EncoderSpeed::Wombat),
+        7 => Ok(EncoderSpeed::Squirrel),
+        8 => Ok(EncoderSpeed::Kitten),
+        9 => Ok(EncoderSpeed::Tortoise),
+        10 => Ok(EncoderSpeed::Glacier),
+        _ => Err(PyValueError::new_err("effort must be between 1 and 10")),
     }
 }
 
@@ -250,9 +345,18 @@ mod tests {
     }
 
     #[test]
-    fn quality_mapping_matches_libjxl_convention() {
-        assert!((quality_to_distance(100) - 0.1).abs() < f32::EPSILON);
-        assert!((quality_to_distance(90) - 1.0).abs() < f32::EPSILON);
-        assert!(quality_to_distance(1) <= 25.0);
+    fn expands_luma_alpha_pixels_to_rgba() {
+        assert_eq!(
+            luma_alpha_to_rgba(&[0x10, 0x20, 0x30, 0x40]),
+            [0x10, 0x10, 0x10, 0x20, 0x30, 0x30, 0x30, 0x40]
+        );
+    }
+
+    #[test]
+    fn converts_cmyk_pixels_to_rgb() {
+        assert_eq!(
+            cmyk_to_rgb(&[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 255]),
+            [255, 0, 0, 0, 255, 0, 0, 0, 0]
+        );
     }
 }

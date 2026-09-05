@@ -56,6 +56,26 @@ def test_jpeg_cross_library_loads() -> None:
         assert (loaded.mode, loaded.size) == ("RGB", (17, 13))
 
 
+def test_cmyk_jpeg_loads_as_rgb() -> None:
+    raw = pixels("RGBA")
+    output = BytesIO()
+    source = PillowImage.frombytes("CMYK", (17, 13), raw)
+    source.save(output, "JPEG", quality=85)
+
+    output.seek(0)
+    with PillowImage.open(output) as pillow:
+        expected = pillow.convert("RGB")
+        output.seek(0)
+        actual = BlanketImage.open(output)
+
+    assert (actual.mode, actual.size) == ("RGB", (17, 13))
+    differences = [
+        abs(left - right)
+        for left, right in zip(actual.tobytes(), expected.tobytes(), strict=True)
+    ]
+    assert max(differences) <= 1
+
+
 def test_to_pillow_returns_real_pillow_image() -> None:
     raw = pixels("RGBA")
     converted = BlanketImage.frombytes("RGBA", (17, 13), raw).to_pillow()

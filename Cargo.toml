@@ -10,15 +10,18 @@ license = "MIT"
 name = "_blanket"
 crate-type = ["cdylib"]
 
-[features]
-extension-module = ["pyo3/extension-module"]
-
 [dependencies]
 garb = "0.2.8"
-gamut-core = "2"
-gamut-jxl = "0.4"
-image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "rayon"] }
+jpegxl-rs = { version = "0.15.0", default-features = false}
 pyo3 = "0.29"
+turbojpeg-sys = { version = "1.2", default-features = false, features = ["cmake", "require-simd"] }
+turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "require-simd"] }
+
+[features]
+vendored = ["jpegxl-rs/vendored"]
+dynamic = []
+extension-module = ["pyo3/extension-module"]
 
 [profile.release]
 opt-level = 3
@@ -26,7 +29,7 @@ debug = false
 lto = "fat"
 strip = true
 incremental = false
-codegen-units = 16
+codegen-units = 32
 
 [profile.dev]
 opt-level = 1

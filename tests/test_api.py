@@ -44,13 +44,12 @@ def test_jxl_lossless_roundtrip(mode: str) -> None:
     assert loaded.tobytes() == raw
 
 
-def test_jpeg_roundtrip() -> None:
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+def test_jpeg_roundtrip(mode: str) -> None:
     output = BytesIO()
-    Image.frombytes("RGB", (17, 13), pixels("RGB")).save(
-        output, "JPEG", quality=85
-    )
+    Image.frombytes(mode, (17, 13), pixels(mode)).save(output, "JPEG", quality=85)
     loaded = Image.open(output)
-    assert (loaded.format, loaded.mode, loaded.size) == ("JPEG", "RGB", (17, 13))
+    assert (loaded.format, loaded.mode, loaded.size) == ("JPEG", mode, (17, 13))
 
 
 def test_path_format_inference(tmp_path: object) -> None:
