@@ -115,7 +115,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         comps += [
             ("load JXL lossless", lambda p=jxl_ll_bytes: BlanketImage.open(BytesIO(p)), lambda p=jxl_ll_bytes: pillow_load(p)),
             ("load JXL lossy", lambda p=jxl_lossy_bytes: BlanketImage.open(BytesIO(p)), lambda p=jxl_lossy_bytes: pillow_load(p)),
-            ("save JXL ll eff=1", lambda b=b_rgb: b.save(BytesIO(), "JXL", lossless=True, effort=1), lambda p=p_rgb: p.save(BytesIO(), "JXL", lossless=True, effort=1)),
+            ("save JXL lossless eff=1", lambda b=b_rgb: b.save(BytesIO(), "JXL", lossless=True, effort=1), lambda p=p_rgb: p.save(BytesIO(), "JXL", lossless=True, effort=1)),
             ("save JXL q90 eff=3", lambda b=b_rgb: b.save(BytesIO(), "JXL", quality=90, effort=3), lambda p=p_rgb: p.save(BytesIO(), "JXL", quality=90, effort=3)),
             ("save JXL q90 eff=7", lambda b=b_rgb: b.save(BytesIO(), "JXL", quality=90, effort=7), lambda p=p_rgb: p.save(BytesIO(), "JXL", quality=90, effort=7)),
         ]

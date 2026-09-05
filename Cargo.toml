@@ -12,13 +12,14 @@ crate-type = ["cdylib"]
 
 [dependencies]
 garb = "0.2.8"
-image = { version = "0.25.10", default-features = false, features = ["png", "rayon"] }
-jpegxl-rs = { version = "0.15.0", default-features = false}
 pyo3 = "0.29"
+image = { version = "0.25.10", default-features = false, features = ["png", "rayon"] }
+jpegxl-rs = { version = "0.15.0", default-features = false }
 turbojpeg-sys = { version = "1.2", default-features = false, features = ["cmake", "require-simd"] }
 turbojpeg = { version = "1.5.1", default-features = false, features = ["cmake", "require-simd"] }
 
 [features]
+default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
 dynamic = []
 extension-module = ["pyo3/extension-module"]

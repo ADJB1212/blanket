@@ -7,14 +7,10 @@ import os
 from pathlib import Path
 from typing import BinaryIO
 
-from ._blanket import _Image, frombytes as _native_frombytes, open_bytes
+from ._blanket import _Image, open_bytes
+from ._blanket import frombytes as _native_frombytes
 
-_EXTENSIONS = {
-    ".png": "PNG",
-    ".jpg": "JPEG",
-    ".jpeg": "JPEG",
-    ".jxl": "JXL",
-}
+_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL"}
 
 
 class Image:
@@ -70,17 +66,10 @@ class Image:
         try:
             from PIL import Image as PillowImage
         except ImportError as error:
-            raise ImportError(
-                "Pillow is required for to_pillow(); install blanket[test] or Pillow"
-            ) from error
+            raise ImportError("Pillow is required for to_pillow(); install blanket[test] or Pillow") from error
         return PillowImage.frombytes(self.mode, self.size, self.tobytes())
 
-    def save(
-        self,
-        fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
-        format: str | None = None,
-        **options: object,
-    ) -> None:
+    def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save this image as PNG, JPEG, or JPEG XL."""
 
         output_format = _output_format(fp, format)
@@ -96,17 +85,10 @@ class Image:
         self.close()
 
     def __repr__(self) -> str:
-        return (
-            f"<blanket.Image.Image image mode={self.mode} "
-            f"size={self.width}x{self.height}>"
-        )
+        return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
 
-def open(
-    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
-    mode: str = "r",
-    formats: list[str] | tuple[str, ...] | None = None,
-) -> Image:
+def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None) -> Image:
     """Open and eagerly decode a supported image."""
 
     if mode != "r":
@@ -127,9 +109,7 @@ def frombytes(mode: str, size: tuple[int, int], data: object) -> Image:
     return Image(_native_frombytes(mode, size, raw))
 
 
-def _read_bytes(
-    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
-) -> bytes:
+def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
     if hasattr(fp, "read"):
         stream = fp
         try:
@@ -143,10 +123,7 @@ def _read_bytes(
     return Path(os.fsdecode(os.fspath(fp))).read_bytes()
 
 
-def _write_bytes(
-    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
-    data: bytes,
-) -> None:
+def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, data: bytes) -> None:
     if hasattr(fp, "write"):
         fp.write(data)  # type: ignore[union-attr]
         return
@@ -172,31 +149,20 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
-    allowed = {
-        "PNG": {"compress_level"},
-        "JPEG": {"quality"},
-        "JXL": {"quality", "lossless", "effort"},
-    }[format]
+    allowed = {"PNG": {"compress_level"}, "JPEG": {"quality"}, "JXL": {"quality", "lossless", "effort"}}[format]
     unknown = supplied.keys() - allowed
     if unknown:
         names = ", ".join(sorted(unknown))
         raise TypeError(f"unsupported {format} save option(s): {names}")
 
-    default_quality = 90 if format == "JXL" else 75
-    quality = _bounded_int("quality", supplied.get("quality", default_quality), 1, 100)
-    compress_level = _bounded_int(
-        "compress_level", supplied.get("compress_level", 6), 0, 9
-    )
-    effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
     lossless = supplied.get("lossless", False)
     if not isinstance(lossless, bool):
         raise TypeError("lossless must be a bool")
-    return {
-        "quality": quality,
-        "compress_level": compress_level,
-        "lossless": lossless,
-        "effort": effort,
-    }
+    quality = 100 if lossless else _bounded_int("quality", supplied.get("quality", 90), 1, 100)
+    compress_level = _bounded_int("compress_level", supplied.get("compress_level", 6), 0, 9)
+    effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
+
+    return {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
 
 
 def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:

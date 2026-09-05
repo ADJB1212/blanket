@@ -3,6 +3,7 @@ use std::io::Cursor;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
+use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -178,7 +179,9 @@ fn multiply_u8(left: u8, right: u8) -> u8 {
 }
 
 fn decode_jxl(data: &[u8]) -> Result<Image, String> {
+    let runner = ThreadsRunner::default();
     let decoder = decoder_builder()
+        .parallel_runner(&runner)
         .build()
         .map_err(|error| error.to_string())?;
     let (info, pixels) = decoder
@@ -281,10 +284,14 @@ fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Ve
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
         PixelMode::Rgba => (ColorEncoding::Srgb, true),
     };
+    let runner = ThreadsRunner::default();
     let mut encoder = encoder_builder()
+        .parallel_runner(&runner)
         .has_alpha(has_alpha)
         .lossless(options.lossless)
         .speed(jxl_encoder_speed(options.effort)?)
+        .decoding_speed(0)
+        .use_container(false)
         .jpeg_quality(f32::from(options.quality))
         .uses_original_profile(options.lossless || options.quality == 100)
         .color_encoding(color_encoding)
