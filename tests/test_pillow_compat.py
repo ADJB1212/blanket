@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import numpy as np
 import pytest
 
 PIL = pytest.importorskip("PIL")
@@ -10,6 +11,15 @@ from PIL import Image as PillowImage
 from blanket import Image as BlanketImage
 
 from test_api import pixels
+
+
+@pytest.mark.parametrize("shape", [(13, 17), (13, 17, 3), (13, 17, 4)])
+def test_fromarray_matches_pillow(shape: tuple[int, ...]) -> None:
+    array = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
+    blanket = BlanketImage.fromarray(array)
+    pillow = PillowImage.fromarray(array)
+    assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size)
+    assert blanket.tobytes() == pillow.tobytes()
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])

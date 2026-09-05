@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from ._blanket import _Image, open_bytes
+from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
 _EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL"}
@@ -109,6 +110,12 @@ def frombytes(mode: str, size: tuple[int, int], data: object) -> Image:
     return Image(_native_frombytes(mode, size, raw))
 
 
+def fromarray(obj: object, mode: str | None = None) -> Image:
+    """Create an image from an 8-bit object exposing the array interface."""
+
+    return Image(_native_fromarray(obj, mode))
+
+
 def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
     if hasattr(fp, "read"):
         stream = fp
@@ -173,4 +180,4 @@ def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:
     return value
 
 
-__all__ = ["Image", "frombytes", "open"]
+__all__ = ["Image", "fromarray", "frombytes", "open"]

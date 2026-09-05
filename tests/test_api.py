@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import numpy as np
 import pytest
 
 from blanket import Image, UnidentifiedImageError
@@ -16,6 +17,32 @@ def pixels(mode: str, size: tuple[int, int] = (17, 13)) -> bytes:
         for x in range(width)
         for channel in range(channels)
     )
+
+
+@pytest.mark.parametrize("mode, channels", [("L", ()), ("RGB", (3,)), ("RGBA", (4,))])
+def test_fromarray(mode: str, channels: tuple[int, ...]) -> None:
+    raw = pixels(mode)
+    array = np.frombuffer(raw, dtype=np.uint8).reshape((13, 17, *channels)).copy()
+    image = Image.fromarray(array)
+
+    array[...] = 0
+    assert (image.mode, image.size) == (mode, (17, 13))
+    assert image.tobytes() == raw
+
+
+def test_fromarray_supports_strided_arrays() -> None:
+    source = np.arange(12 * 16 * 3, dtype=np.uint8).reshape(12, 16, 3)
+    array = source[::2, ::2]
+    image = Image.fromarray(array)
+    assert (image.mode, image.size) == ("RGB", (8, 6))
+    assert image.tobytes() == array.tobytes()
+
+
+def test_fromarray_rejects_unsupported_arrays() -> None:
+    with pytest.raises(TypeError, match="cannot handle this data type"):
+        Image.fromarray(np.zeros((3, 5), dtype=np.float32))
+    with pytest.raises(TypeError, match="cannot handle this data type"):
+        Image.fromarray(np.zeros((3, 5, 2), dtype=np.uint8))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

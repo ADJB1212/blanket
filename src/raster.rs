@@ -1,4 +1,5 @@
-use pyo3::exceptions::PyValueError;
+use pyo3::buffer::PyBuffer;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
@@ -183,6 +184,67 @@ pub(crate) fn frombytes(mode: &str, size: (u32, u32), data: &[u8]) -> PyResult<I
     Image::from_pixels(size.0, size.1, mode, data.to_vec(), None)
 }
 
+#[pyfunction(signature = (obj, mode = None))]
+pub(crate) fn fromarray(
+    py: Python<'_>,
+    obj: &Bound<'_, PyAny>,
+    mode: Option<&str>,
+) -> PyResult<Image> {
+    let interface = obj.getattr("__array_interface__")?;
+    let shape: Vec<usize> = interface.get_item("shape")?.extract()?;
+    let typestr: String = interface.get_item("typestr")?.extract()?;
+    let inferred_mode = array_mode(&shape, &typestr)?;
+    let mode = mode.map_or(Ok(inferred_mode), PixelMode::parse)?;
+
+    let maximum_dimensions = match mode {
+        PixelMode::L => 2,
+        PixelMode::Rgb => 3,
+        PixelMode::Rgba => 4,
+    };
+    if shape.len() > maximum_dimensions {
+        return Err(PyValueError::new_err(format!(
+            "too many dimensions: {} > {maximum_dimensions}",
+            shape.len()
+        )));
+    }
+
+    let (width, height) = match shape.as_slice() {
+        [] => {
+            return Err(PyValueError::new_err(
+                "array must have at least one dimension",
+            ));
+        }
+        [height] => (1, *height),
+        [height, width, ..] => (*width, *height),
+    };
+    let width = u32::try_from(width)
+        .map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
+    let height = u32::try_from(height)
+        .map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
+
+    let pixels = PyBuffer::<u8>::get(obj)?.to_vec(py)?;
+    Image::from_pixels(width, height, mode, pixels, None)
+}
+
+fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
+    if typestr == "|u1" {
+        match shape {
+            [_] | [_, _] => return Ok(PixelMode::L),
+            [_, _, 3] => return Ok(PixelMode::Rgb),
+            [_, _, 4] => return Ok(PixelMode::Rgba),
+            _ => {}
+        }
+    }
+
+    let type_shape = match shape {
+        [] | [_] | [_, _] => vec![1, 1],
+        [_, _, channels, ..] => vec![1, 1, *channels],
+    };
+    Err(PyTypeError::new_err(format!(
+        "cannot handle this data type: {type_shape:?}, {typestr}"
+    )))
+}
+
 fn expected_len(width: u32, height: u32, mode: PixelMode) -> PyResult<usize> {
     let pixels = (width as usize)
         .checked_mul(height as usize)
@@ -234,5 +296,14 @@ mod tests {
             convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb),
             [1, 2, 3]
         );
+    }
+
+    #[test]
+    fn infers_supported_array_modes() {
+        assert_eq!(array_mode(&[3, 5], "|u1").unwrap(), PixelMode::L);
+        assert_eq!(array_mode(&[3, 5, 3], "|u1").unwrap(), PixelMode::Rgb);
+        assert_eq!(array_mode(&[3, 5, 4], "|u1").unwrap(), PixelMode::Rgba);
+        assert!(array_mode(&[3, 5], "<f4").is_err());
+        assert!(array_mode(&[3, 5, 2], "|u1").is_err());
     }
 }

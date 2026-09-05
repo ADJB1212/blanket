@@ -13,6 +13,7 @@ from time import perf_counter
 from typing import Any
 
 import pillow_jxl
+import numpy as np
 from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 from rich.console import Console
@@ -147,13 +148,19 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
 
 
 def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
-    """Benchmark frombytes, tobytes, and to_pillow round-trip."""
+    """Benchmark array/byte construction, extraction, and Pillow conversion."""
     raw = make_rgb(*size)
+    array = np.frombuffer(raw, dtype=np.uint8).reshape(size[1], size[0], 3)
 
     b_img = BlanketImage.frombytes("RGB", size, raw)
     p_img = PillowImage.frombytes("RGB", size, raw)
 
-    return [("frombytes RGB", lambda r=raw, s=size: BlanketImage.frombytes("RGB", s, r), lambda r=raw, s=size: PillowImage.frombytes("RGB", s, r)), ("tobytes RGB", lambda b=b_img: b.tobytes(), lambda p=p_img: p.tobytes()), ("to_pillow()", lambda b=b_img: b.to_pillow(), None)]
+    return [
+        ("fromarray RGB", lambda a=array: BlanketImage.fromarray(a), lambda a=array: PillowImage.fromarray(a)),
+        ("frombytes RGB", lambda r=raw, s=size: BlanketImage.frombytes("RGB", s, r), lambda r=raw, s=size: PillowImage.frombytes("RGB", s, r)),
+        ("tobytes RGB", lambda b=b_img: b.tobytes(), lambda p=p_img: p.tobytes()),
+        ("to_pillow()", lambda b=b_img: b.to_pillow(), None),
+    ]
 
 
 # ── Rich output ─────────────────────────────────────────────────────────

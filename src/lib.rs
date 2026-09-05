@@ -4,7 +4,7 @@ mod simd;
 
 use codecs::open_bytes;
 use pyo3::prelude::*;
-use raster::{Image, frombytes};
+use raster::{Image, fromarray, frombytes};
 
 pyo3::create_exception!(
     _blanket,
@@ -21,6 +21,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.py().get_type::<UnidentifiedImageError>(),
     )?;
     module.add_class::<Image>()?;
+    module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     Ok(())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import numpy as np
 from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 
@@ -27,6 +28,24 @@ def check_conversions() -> int:
             assert actual.tobytes() == expected.tobytes()
             checks += 1
     return checks
+
+
+def check_fromarray() -> int:
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        channels = {"L": (), "RGB": (3,), "RGBA": (4,)}[mode]
+        array = np.frombuffer(raw, dtype=np.uint8).reshape((29, 37, *channels))
+        blanket = BlanketImage.fromarray(array)
+        pillow = PillowImage.fromarray(array)
+        assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size)
+        assert blanket.tobytes() == pillow.tobytes()
+        checks += 1
+
+    source = np.arange(12 * 16 * 3, dtype=np.uint8).reshape(12, 16, 3)
+    strided = source[::2, ::2]
+    assert BlanketImage.fromarray(strided).tobytes() == PillowImage.fromarray(strided).tobytes()
+    return checks + 1
 
 
 def check_png_interop() -> int:
@@ -85,7 +104,7 @@ def check_jxl_roundtrip() -> int:
 
 
 def main() -> None:
-    checks = check_conversions() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip()
+    checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip()
     print(f"behavior verification passed: {checks} checks")
 
 

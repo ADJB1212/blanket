@@ -17,10 +17,11 @@ installed.
 
 ## Supported API
 
-`Image.open()` accepts paths and binary streams. `Image.Image.save()` infers
-PNG, JPEG, or JPEG XL from a path extension, or accepts an explicit format for
-streams. `Image.Image.convert()` supports all conversions among `L`, `RGB`, and
-`RGBA`.
+`Image.open()` accepts paths and binary streams. `Image.fromarray()` accepts
+8-bit array-interface objects with grayscale, RGB, or RGBA shapes, including
+strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
+path extension, or accepts an explicit format for streams. `Image.Image.convert()`
+supports all conversions among `L`, `RGB`, and `RGBA`.
 
 Supported encoder options are:
 
