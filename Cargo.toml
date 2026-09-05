@@ -1,7 +1,9 @@
 [package]
 name = "blanket"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+resolver = "3"
+rust-version = "1.97"
 description = "A focused Rust-backed image library with a Pillow-shaped Python API"
 authors = ["Andrew Jaffe"]
 license = "MIT"
@@ -30,9 +32,9 @@ debug = false
 lto = "fat"
 strip = true
 incremental = false
-codegen-units = 32
+codegen-units = 8
 
 [profile.dev]
 opt-level = 1
-debug = true
+debug = "line-directives-only"
 lto = "off"

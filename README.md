@@ -2,7 +2,8 @@
 
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
-converting 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG, and JPEG XL files.
+converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
+and JPEG XL files.
 
 ```python
 from blanket import Image
@@ -32,9 +33,39 @@ Supported encoder options are:
 
 JPEG does not accept `RGBA`; call `image.convert("RGB")` before saving.
 
-Blanket loads eagerly. It does not preserve metadata or support palettes,
-CMYK, images deeper than 8 bits per channel, animation, or Pillow's pixel
-mutation and processing APIs.
+## ImageOps
+
+`from blanket import ImageOps` provides all 18 functions in Pillow's
+[`ImageOps` submodule](https://pillow.readthedocs.io/en/stable/reference/ImageOps.html):
+
+- Tone and color: `autocontrast`, `colorize`, `equalize`, `grayscale`, `invert`,
+  `posterize`, `solarize`.
+- Geometry: `contain`, `cover`, `crop`, `deform`, `expand`, `fit`, `flip`,
+  `mirror`, `pad`, `scale`.
+- Orientation: `exif_transpose`, including `in_place=True`.
+
+```python
+from blanket import Image, ImageOps
+
+with Image.open("input.jpg") as image:
+    upright = ImageOps.exif_transpose(image)
+    thumbnail = ImageOps.fit(upright, (256, 256), method=Image.Resampling.LANCZOS)
+    ImageOps.autocontrast(thumbnail).save("thumbnail.png")
+```
+
+Pixel processing runs in Rust, without a Pillow runtime dependency. Geometry
+supports all three Blanket modes; histogram and lookup operations accept `L`
+and `RGB`, while `colorize` requires `L`. `grayscale` accepts all three modes.
+The signatures, defaults, border forms, masks, CSS color arguments, and
+`SupportsGetMesh` protocol follow Pillow. Resizing supports all six
+`Image.Resampling` filters; mesh deformation supports nearest, bilinear, and
+bicubic sampling. Filtered RGBA operations use premultiplied alpha.
+
+Opening PNG and JPEG retains EXIF/XMP in `image.info` for `exif_transpose`;
+uncompressed EXIF/XMP boxes in JPEG XL containers are also read. Other metadata
+and compressed JPEG XL metadata boxes are not retained. Transposition removes
+the orientation while preserving other EXIF entries. Saving still writes pixel
+data only and does not preserve metadata.
 
 ## Pillow interoperability
 

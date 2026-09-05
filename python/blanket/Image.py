@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import builtins
 import os
+from enum import IntEnum
 from pathlib import Path
 from typing import BinaryIO
 
@@ -12,6 +13,20 @@ from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
 _EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL"}
+
+
+class Resampling(IntEnum):
+    """Pillow-compatible resampling filter identifiers."""
+
+    NEAREST = 0
+    LANCZOS = 1
+    BILINEAR = 2
+    BICUBIC = 3
+    BOX = 4
+    HAMMING = 5
+
+
+NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, HAMMING = Resampling
 
 
 class Image:
@@ -97,7 +112,11 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
     data = _read_bytes(fp)
-    return Image(open_bytes(data, formats))
+    image = Image(open_bytes(data, formats))
+    from ._exif import read_metadata
+
+    image.info.update(read_metadata(data, image.format))
+    return image
 
 
 def frombytes(mode: str, size: tuple[int, int], data: object) -> Image:
@@ -180,4 +199,4 @@ def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:
     return value
 
 
-__all__ = ["Image", "fromarray", "frombytes", "open"]
+__all__ = ["Image", "Resampling", "NEAREST", "LANCZOS", "BILINEAR", "BICUBIC", "BOX", "HAMMING", "fromarray", "frombytes", "open"]

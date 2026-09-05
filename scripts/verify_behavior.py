@@ -1,4 +1,4 @@
-"""Differential and cross-codec checks against Pillow 12.2."""
+"""Differential Image, ImageOps, and cross-codec checks against Pillow."""
 
 from __future__ import annotations
 
@@ -6,7 +6,9 @@ from io import BytesIO
 
 import numpy as np
 from blanket import Image as BlanketImage
+from blanket import ImageOps as BlanketOps
 from PIL import Image as PillowImage
+from PIL import ImageOps as PillowOps
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
@@ -103,9 +105,82 @@ def check_jxl_roundtrip() -> int:
     return checks
 
 
+class MirrorMesh:
+    """Exercise the deformer protocol with a horizontal reflection."""
+
+    def getmesh(self, image: BlanketImage.Image | PillowImage.Image) -> list[tuple[tuple[int, int, int, int], tuple[int, ...]]]:
+        w, h = image.size
+        return [((0, 0, w, h), (w, 0, w, h, 0, h, 0, 0))]
+
+
+def check_imageops() -> int:
+    """Compare every ImageOps function, including masks, filters and EXIF."""
+    checks = 0
+
+    def compare(actual: BlanketImage.Image, expected: PillowImage.Image, label: str) -> None:
+        nonlocal checks
+        assert (actual.mode, actual.size) == (expected.mode, expected.size), label
+        assert actual.tobytes() == expected.tobytes(), label
+        checks += 1
+
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        blanket = BlanketImage.frombytes(mode, (37, 29), raw)
+        pillow = PillowImage.frombytes(mode, (37, 29), raw)
+        cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": "rebeccapurple"}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
+        if mode in ("L", "RGB"):
+            cases += [
+                ("autocontrast", {}),
+                ("autocontrast", {"cutoff": (2, 5), "ignore": [0, 255], "preserve_tone": True}),
+                ("equalize", {}),
+                ("invert", {}),
+                ("posterize", {"bits": 4}),
+                ("solarize", {"threshold": 100}),
+            ]
+            mask = pixels("L")
+            b_mask = BlanketImage.frombytes("L", blanket.size, mask)
+            p_mask = PillowImage.frombytes("L", pillow.size, mask)
+            for name in ("autocontrast", "equalize"):
+                compare(getattr(BlanketOps, name)(blanket, mask=b_mask), getattr(PillowOps, name)(pillow, mask=p_mask), f"{name} masked {mode}")
+        if mode == "L":
+            cases += [("colorize", {"black": "navy", "white": "gold"}), ("colorize", {"black": "black", "white": "white", "mid": "red", "blackpoint": 10, "midpoint": 100, "whitepoint": 240})]
+        for name, options in cases:
+            compare(getattr(BlanketOps, name)(blanket, **options), getattr(PillowOps, name)(pillow, **options), f"{name} {mode} {options}")
+
+        for method in BlanketImage.Resampling:
+            for name, options in (("contain", {}), ("cover", {}), ("fit", {"bleed": 0.05, "centering": (0.2, 0.8)}), ("pad", {"color": "#1234", "centering": (0, 1)})):
+                compare(getattr(BlanketOps, name)(blanket, (19, 17), method, **options), getattr(PillowOps, name)(pillow, (19, 17), method, **options), f"{name} {mode} {method.name}")
+            compare(BlanketOps.scale(blanket, 1.5, method), PillowOps.scale(pillow, 1.5, method), f"scale {mode} {method.name}")
+        for method in (BlanketImage.NEAREST, BlanketImage.BILINEAR, BlanketImage.BICUBIC):
+            compare(BlanketOps.deform(blanket, MirrorMesh(), method), PillowOps.deform(pillow, MirrorMesh(), method), f"deform {mode} {method.name}")
+
+        for orientation in range(1, 9):
+            exif = PillowImage.Exif()
+            exif[274] = orientation
+            exif[270] = "Preserve unrelated EXIF data"
+            # Decode fresh inputs for each call, including the mutating variant.
+            payload = BytesIO()
+            pillow.save(payload, "PNG", exif=exif)
+            for in_place in (False, True):
+                b_source = BlanketImage.open(BytesIO(payload.getvalue()))
+                p_source = PillowImage.open(BytesIO(payload.getvalue()))
+                with b_source, p_source:
+                    actual = BlanketOps.exif_transpose(b_source, in_place=in_place)
+                    expected = PillowOps.exif_transpose(p_source, in_place=in_place)
+                    if in_place:
+                        assert actual is expected is None
+                        actual, expected = b_source, p_source
+                    compare(actual, expected, f"exif_transpose {mode} orientation={orientation} in_place={in_place}")
+                    actual_exif = PillowImage.Exif()
+                    actual_exif.load(actual.info["exif"])
+                    assert dict(actual_exif) == dict(expected.getexif())
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip()
-    print(f"behavior verification passed: {checks} checks")
+    imageops_checks = check_imageops()
+    print(f"behavior verification passed: {checks + imageops_checks} checks ({imageops_checks} ImageOps)")
 
 
 if __name__ == "__main__":

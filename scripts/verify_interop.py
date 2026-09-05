@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from io import BytesIO
 
+import numpy as np
 from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 from PIL import ImageFilter, ImageOps
@@ -26,12 +27,13 @@ def main() -> None:
     processed = ImageOps.autocontrast(filtered)
     assert processed.size == (16, 12)
 
-    returned = BlanketImage.frombytes(processed.mode, processed.size, processed.tobytes())
+    returned = BlanketImage.fromarray(np.asarray(processed))
+    assert (returned.mode, returned.size) == (processed.mode, processed.size)
     output = BytesIO()
     returned.save(output, "PNG")
     reloaded = BlanketImage.open(output)
     assert reloaded.tobytes() == processed.tobytes()
-    print("Pillow interoperability passed: merge, resize, rotate, filter, ImageOps")
+    print("Pillow interoperability passed: merge, resize, rotate, filter, ImageOps, fromarray")
 
 
 if __name__ == "__main__":

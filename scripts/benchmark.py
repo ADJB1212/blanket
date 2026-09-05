@@ -7,15 +7,18 @@ import gc
 import json
 import statistics
 from collections.abc import Callable
+from functools import partial
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from typing import Any
 
-import pillow_jxl
 import numpy as np
+import pillow_jxl
 from blanket import Image as BlanketImage
+from blanket import ImageOps as BlanketOps
 from PIL import Image as PillowImage
+from PIL import ImageOps as PillowOps
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -163,6 +166,56 @@ def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     ]
 
 
+class InsetMesh:
+    """Map an inset source rectangle onto the full destination."""
+
+    def getmesh(self, image: BlanketImage.Image | PillowImage.Image) -> list[tuple[tuple[int, int, int, int], tuple[float, ...]]]:
+        w, h = image.size
+        x, y = w * 0.05, h * 0.05
+        return [((0, 0, w, h), (x, y, x, h - y, w - x, h - y, w - x, y))]
+
+
+def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark all ImageOps functions on their supported Blanket modes.
+
+    Inputs and EXIF payloads are prepared outside the timed calls.
+    Operations return new images so every iteration sees the same source.
+    """
+    w, h = size
+    target = (max(1, w // 2), max(1, h // 3))
+    border = max(0, min(w, h) // 20)
+    comps: list[Comparison] = []
+    exif = PillowImage.Exif()
+    exif[274] = 6
+    exif_bytes = exif.tobytes()
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        blanket.info["exif"] = pillow.info["exif"] = exif_bytes
+        cases = [
+            ("contain", {"size": target}),
+            ("cover", {"size": target}),
+            ("crop", {"border": border}),
+            ("deform", {"deformer": InsetMesh()}),
+            ("exif_transpose", {}),
+            ("expand", {"border": border, "fill": "navy"}),
+            ("fit", {"size": target, "bleed": 0.05}),
+            ("flip", {}),
+            ("grayscale", {}),
+            ("mirror", {}),
+            ("pad", {"size": target, "color": "navy"}),
+            ("scale", {"factor": 0.5}),
+        ]
+        if mode in ("L", "RGB"):
+            cases += [("autocontrast", {"cutoff": 1}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 4}), ("solarize", {"threshold": 128})]
+        if mode == "L":
+            cases.append(("colorize", {"black": "navy", "white": "gold"}))
+        for name, options in cases:
+            comps.append((f"{name} {mode}", partial(getattr(BlanketOps, name), blanket, **options), partial(getattr(PillowOps, name), pillow, **options)))
+    return comps
+
+
 # ── Rich output ─────────────────────────────────────────────────────────
 
 
@@ -226,7 +279,16 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int) ->
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
-            results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
+            results.append(
+                {
+                    "operation": name,
+                    "blanket_ms": b["median"] * 1000,
+                    "blanket_p25_ms": b["p25"] * 1000,
+                    "blanket_p75_ms": b["p75"] * 1000,
+                    "pillow_ms": p["median"] * 1000,
+                    "blanket_speedup": p["median"] / b["median"],
+                }
+            )
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
     return results
@@ -246,7 +308,7 @@ def main() -> None:
 
         sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
         if not args.jxl_only:
-            sections += [("Conversions", conversion_comparisons(size)), ("Memory", memory_comparisons(size))]
+            sections += [("Conversions", conversion_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size))]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:
@@ -271,9 +333,7 @@ def main() -> None:
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = (
-            f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
-        )
+        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.json_path is not None:

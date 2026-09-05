@@ -1,4 +1,5 @@
 mod codecs;
+mod ops;
 mod raster;
 mod simd;
 
@@ -24,5 +25,6 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
+    ops::register(module)?;
     Ok(())
 }
