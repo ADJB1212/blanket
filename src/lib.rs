@@ -1,5 +1,7 @@
 mod codecs;
 mod ops;
+mod ops_simd;
+mod parallel;
 mod raster;
 mod simd;
 

@@ -7,7 +7,7 @@ name = "blanket"
 description = "A Rust-backed image library with a Pillow-shaped Python API"
 readme = "README.md"
 authors = [{ name = "Andrew Jaffe", email = "adjaffeb@gmail.com" }]
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 license = "MIT"
 classifiers = [
     "Development Status :: 3 - Alpha",

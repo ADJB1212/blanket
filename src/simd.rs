@@ -1,3 +1,4 @@
+use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::raster::PixelMode;
 use garb::bytes;
 
@@ -27,17 +28,29 @@ fn convert_layout(
 
     let pixel_count = source.len() / source_channels;
     let mut output = vec![0; pixel_count * destination_channels];
-    conversion(source, &mut output).expect("validated image buffers have matching pixel counts");
+    chunks_mut(
+        &mut output,
+        CHUNK_PIXELS * destination_channels,
+        |i, dst| {
+            let start = i * CHUNK_PIXELS * source_channels;
+            let count = dst.len() / destination_channels * source_channels;
+            conversion(&source[start..start + count], dst)
+                .expect("validated image buffers have matching pixel counts");
+        },
+    );
     output
 }
 
 fn gray_to_rgb(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0u8; source.len() * 3];
-    let (pixels, remainder) = output.as_chunks_mut::<3>();
-    debug_assert!(remainder.is_empty());
-    for (&gray, rgb) in source.iter().zip(pixels) {
-        rgb.fill(gray);
-    }
+    chunks_mut(&mut output, CHUNK_PIXELS * 3, |i, dst| {
+        for (&gray, rgb) in source[i * CHUNK_PIXELS..]
+            .iter()
+            .zip(dst.as_chunks_mut::<3>().0)
+        {
+            rgb.fill(gray);
+        }
+    });
     output
 }
 
@@ -46,9 +59,11 @@ fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0u8; pixel_count];
     let (colors, remainder) = source.as_chunks::<SOURCE_CHANNELS>();
     debug_assert!(remainder.is_empty());
-    for (color, gray) in colors.iter().zip(output.iter_mut()) {
-        *gray = pillow_luma(color[0], color[1], color[2]);
-    }
+    chunks_mut(&mut output, CHUNK_PIXELS, |i, dst| {
+        for (color, gray) in colors[i * CHUNK_PIXELS..].iter().zip(dst) {
+            *gray = pillow_luma(color[0], color[1], color[2]);
+        }
+    });
     output
 }
 

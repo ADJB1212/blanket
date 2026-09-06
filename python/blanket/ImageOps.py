@@ -13,7 +13,7 @@ from itertools import pairwise
 from typing import Literal, Protocol, overload
 
 from . import Image
-from ._blanket import _Image, ops_canvas, ops_histogram, ops_lut, ops_mesh, ops_resize, ops_transpose
+from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_resize, ops_transpose
 from ._color import color_pixel
 from ._exif import transpose_metadata
 
@@ -136,7 +136,7 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
             ramp.extend(first[channel] + (i - start) * (last[channel] - first[channel]) // (end - start) for i in range(start, end))
         ramp.extend([stops[-1][1][channel]] * (256 - whitepoint))
         table.extend(ramp)
-    return _result(image, ops_lut(image.convert("RGB")._native, table))
+    return _result(image, ops_colorize(image._native, table))
 
 
 def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:

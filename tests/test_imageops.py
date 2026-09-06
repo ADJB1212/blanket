@@ -389,3 +389,56 @@ def test_deform_zero_area_box() -> None:
     for ops, image in ((ImageOps, b), (PILOps, p)):
         with pytest.raises(ZeroDivisionError):
             ops.deform(image, deformer)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize(
+    "name,kwargs",
+    [
+        ("crop", {"border": (7, 9, 11, 13)}),
+        ("expand", {"border": (3, 5), "fill": "#1234"}),
+        ("flip", {}),
+        ("mirror", {}),
+        ("grayscale", {}),
+        ("fit", {"size": (377, 311), "bleed": 0.07}),
+        ("scale", {"factor": 1.5, "resample": Image.Resampling.NEAREST}),
+    ],
+)
+def test_parallel_imageops_match_pillow(mode: str, name: str, kwargs: dict) -> None:
+    # Large enough for worker partitions, with unaligned row and SIMD tails.
+    b, p = pair(mode, (521, 509))
+    same(getattr(ImageOps, name)(b, **kwargs), getattr(PILOps, name)(p, **kwargs))
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize("name,kwargs", [("autocontrast", {"cutoff": (2, 7), "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {"threshold": 173})])
+def test_parallel_luts_and_histograms(mode: str, name: str, kwargs: dict) -> None:
+    b, p = pair(mode, (521, 509))
+    b_options, p_options = kwargs.copy(), kwargs.copy()
+    if name in ("autocontrast", "equalize"):
+        data = bytes(0 if i % 3 == 0 else 255 for i in range(521 * 509))
+        b_options["mask"] = Image.frombytes("L", b.size, data)
+        p_options["mask"] = PILImage.frombytes("L", p.size, data)
+    same(getattr(ImageOps, name)(b, **b_options), getattr(PILOps, name)(p, **p_options))
+
+
+def test_parallel_colorize() -> None:
+    b, p = pair("L", (521, 509))
+    same(ImageOps.colorize(b, "navy", "gold", "red"), PILOps.colorize(p, "navy", "gold", "red"))
+
+
+@pytest.mark.parametrize("orientation", range(2, 9))
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_parallel_exif_tiles(mode: str, orientation: int) -> None:
+    b, p = pair(mode, (521, 509))
+    exif = PILImage.Exif()
+    exif[274] = orientation
+    b.info["exif"] = p.info["exif"] = exif.tobytes()
+    same(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_parallel_mesh_overwrite_order(mode: str) -> None:
+    b, p = pair(mode, (521, 509))
+    mesh = [((0, 0, 521, 509), (521, 0, 521, 509, 0, 509, 0, 0)), ((1, 1, 520, 508), (0, 0, 0, 507, 519, 507, 519, 0))]
+    same(ImageOps.deform(b, Deformer(mesh)), PILOps.deform(p, Deformer(mesh)))

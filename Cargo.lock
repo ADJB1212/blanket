@@ -164,6 +164,7 @@ dependencies = [
  "image",
  "jpegxl-rs",
  "pyo3",
+ "rayon",
  "turbojpeg",
  "turbojpeg-sys",
 ]

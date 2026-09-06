@@ -15,6 +15,7 @@ crate-type = ["cdylib"]
 [dependencies]
 garb = "0.2.8"
 pyo3 = "0.29"
+rayon = "1.12"
 image = { version = "0.25.10", default-features = false, features = ["png", "rayon"] }
 jpegxl-rs = { version = "0.15.0", default-features = false }
 turbojpeg-sys = { version = "1.2", default-features = false, features = ["cmake", "require-simd"] }
