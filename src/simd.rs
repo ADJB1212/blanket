@@ -1,56 +1,119 @@
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::raster::PixelMode;
-use garb::bytes;
 
 pub(crate) fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     debug_assert_ne!(from, to, "caller should short-circuit identity conversion");
 
     match (from, to) {
-        (PixelMode::Rgba, PixelMode::Rgb) => convert_layout(source, 4, 3, bytes::rgba_to_rgb),
-        (PixelMode::Rgb, PixelMode::Rgba) => convert_layout(source, 3, 4, bytes::rgb_to_rgba),
-        (PixelMode::L, PixelMode::Rgb) => gray_to_rgb(source),
-        (PixelMode::L, PixelMode::Rgba) => convert_layout(source, 1, 4, bytes::gray_to_rgba),
+        (PixelMode::Rgba, PixelMode::Rgb) => convert_layout::<4, 3>(source),
+        (PixelMode::Rgb, PixelMode::Rgba) => convert_layout::<3, 4>(source),
+        (PixelMode::L, PixelMode::Rgb) => convert_layout::<1, 3>(source),
+        (PixelMode::L, PixelMode::Rgba) => convert_layout::<1, 4>(source),
         (PixelMode::Rgb, PixelMode::L) => color_to_gray::<3>(source),
         (PixelMode::Rgba, PixelMode::L) => color_to_gray::<4>(source),
         _ => unreachable!("all mode pairs are covered"),
     }
 }
 
-fn convert_layout(
-    source: &[u8],
-    source_channels: usize,
-    destination_channels: usize,
-    conversion: fn(&[u8], &mut [u8]) -> Result<(), garb::SizeError>,
-) -> Vec<u8> {
-    if source.is_empty() {
-        return Vec::new();
+fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
+    let count = source.len() / S;
+    #[cfg(not(target_arch = "aarch64"))]
+    if S != 1 || C == 4 {
+        // Keep garb's runtime-dispatched SIMD on other architectures.
+        let conversion = match (S, C) {
+            (3, 4) => garb::bytes::rgb_to_rgba,
+            (4, 3) => garb::bytes::rgba_to_rgb,
+            (1, 4) => garb::bytes::gray_to_rgba,
+            _ => unreachable!(),
+        };
+        let mut output = vec![0; count * C];
+        crate::parallel::chunks_mut_above(
+            &mut output,
+            256 * 1024 * C,
+            2 * 1024 * 1024,
+            |i, dst| {
+                let start = i * 256 * 1024 * S;
+                conversion(&source[start..start + dst.len() / C * S], dst)
+                    .expect("validated image buffers have matching pixel counts");
+            },
+        );
+        return output;
     }
-
-    let pixel_count = source.len() / source_channels;
-    let mut output = vec![0; pixel_count * destination_channels];
-    chunks_mut(
-        &mut output,
-        CHUNK_PIXELS * destination_channels,
-        |i, dst| {
-            let start = i * CHUNK_PIXELS * source_channels;
-            let count = dst.len() / destination_channels * source_channels;
-            conversion(&source[start..start + count], dst)
-                .expect("validated image buffers have matching pixel counts");
-        },
-    );
-    output
-}
-
-fn gray_to_rgb(source: &[u8]) -> Vec<u8> {
-    let mut output = vec![0u8; source.len() * 3];
-    chunks_mut(&mut output, CHUNK_PIXELS * 3, |i, dst| {
-        for (&gray, rgb) in source[i * CHUNK_PIXELS..]
+    let mut output = Vec::<u8>::with_capacity(count * C);
+    let spare = &mut output.spare_capacity_mut()[..count * C];
+    let chunk_pixels = if S == 4 { 64 * 1024 } else { 256 * 1024 };
+    let fill = |i: usize, dst: &mut [std::mem::MaybeUninit<u8>]| {
+        let src = &source[i * chunk_pixels * S..(i * chunk_pixels + dst.len() / C) * S];
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            // NEON is mandatory on AArch64. These stores initialize exactly
+            // 16 complete pixels within the allocated spare capacity.
+            unsafe {
+                while offset + 16 <= src.len() / S {
+                    let ptr = src.as_ptr().add(offset * S);
+                    let (r, g, b) = if S == 1 {
+                        let gray = vld1q_u8(ptr);
+                        (gray, gray, gray)
+                    } else if S == 3 {
+                        let rgb = vld3q_u8(ptr);
+                        (rgb.0, rgb.1, rgb.2)
+                    } else {
+                        let rgba = vld4q_u8(ptr);
+                        (rgba.0, rgba.1, rgba.2)
+                    };
+                    let ptr = dst.as_mut_ptr().cast::<u8>().add(offset * C);
+                    if C == 3 {
+                        vst3q_u8(ptr, uint8x16x3_t(r, g, b));
+                    } else {
+                        vst4q_u8(ptr, uint8x16x4_t(r, g, b, vdupq_n_u8(255)));
+                    }
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (src, pixel) in src[offset * S..]
+            .as_chunks::<S>()
+            .0
             .iter()
-            .zip(dst.as_chunks_mut::<3>().0)
+            .zip(dst[offset * C..].as_chunks_mut::<C>().0)
         {
-            rgb.fill(gray);
+            for (channel, value) in pixel.iter_mut().enumerate() {
+                value.write(if channel == 3 {
+                    255
+                } else {
+                    src[if S == 1 { 0 } else { channel }]
+                });
+            }
         }
-    });
+    };
+    // Cheap grayscale expansion stays serial while its output fits in cache.
+    let parallel_bytes = match S {
+        1 => 5 * 1024 * 1024,
+        4 => 1024 * 1024,
+        _ => 2 * 1024 * 1024,
+    };
+    if spare.len() >= parallel_bytes {
+        use rayon::prelude::*;
+        spare
+            .par_chunks_mut(chunk_pixels * C)
+            .enumerate()
+            .for_each(|(i, dst)| fill(i, dst));
+    } else {
+        spare
+            .chunks_mut(chunk_pixels * C)
+            .enumerate()
+            .for_each(|(i, dst)| fill(i, dst));
+    }
+    // Every byte was initialized above, including the scalar tail of each
+    // disjoint chunk. A panic before completion leaves the vector length zero.
+    unsafe {
+        output.set_len(count * C);
+    }
     output
 }
 

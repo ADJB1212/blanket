@@ -423,33 +423,80 @@ fn ops_reduce(
     let size = ((right - left).div_ceil(fx), (bottom - top).div_ceil(fy));
     let c = image.mode.channels();
     let mut pixels = buffer(size, c)?;
-    py.detach(|| {
-        for y in 0..size.1 {
-            let y0 = top + y * fy;
+    py.detach(|| match image.mode {
+        PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::Rgb => {
+            reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
+        }
+        PixelMode::Rgba => {
+            reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds)
+        }
+    });
+    output(image, size, pixels)
+}
+
+fn reduce_pixels<const C: usize>(
+    source: &[u8],
+    output: &mut [u8],
+    width: u32,
+    size: (u32, u32),
+    factor: (u32, u32),
+    bounds: (u32, u32, u32, u32),
+) {
+    if output.is_empty() {
+        return;
+    }
+    let (fx, fy) = factor;
+    let (left, top, right, bottom) = bounds;
+    let source = source.as_chunks::<C>().0;
+    let row_bytes = size.0 as usize * C;
+    // Reduction reads many more bytes than it writes. Schedule by source work.
+    let threshold = MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1);
+    chunks_mut_above(output, row_bytes * 8, threshold, |band, rows| {
+        for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+            let y0 = top + (band * 8 + i) as u32 * fy;
             let y1 = y0.saturating_add(fy).min(bottom);
-            for x in 0..size.0 {
-                let x0 = left + x * fx;
+            if fx == 2 && fy == 2 && y1 - y0 == 2 && (right - left).is_multiple_of(2) {
+                let start = y0 as usize * width as usize + left as usize;
+                let end = start + (right - left) as usize;
+                let upper = source[start..end].as_chunks::<2>().0;
+                let lower = source[start + width as usize..end + width as usize]
+                    .as_chunks::<2>()
+                    .0;
+                for ((dst, upper), lower) in
+                    row.as_chunks_mut::<C>().0.iter_mut().zip(upper).zip(lower)
+                {
+                    for channel in 0..C {
+                        let sum = u16::from(upper[0][channel])
+                            + u16::from(upper[1][channel])
+                            + u16::from(lower[0][channel])
+                            + u16::from(lower[1][channel]);
+                        dst[channel] = ((sum + 2) >> 2) as u8;
+                    }
+                }
+                continue;
+            }
+            for (x, dst) in row.as_chunks_mut::<C>().0.iter_mut().enumerate() {
+                let x0 = left + x as u32 * fx;
                 let x1 = x0.saturating_add(fx).min(right);
                 let count = u64::from(x1 - x0) * u64::from(y1 - y0);
                 // Match Pillow's 24-bit reciprocal, including its rounding.
                 let multiplier = ((1_u64 << 24) as f32 / count as f32) as u64;
-                for channel in 0..c {
-                    let mut sum = 0_u64;
-                    for sy in y0..y1 {
-                        for sx in x0..x1 {
-                            sum += u64::from(
-                                source[(sy as usize * image.width as usize + sx as usize) * c
-                                    + channel],
-                            );
+                let mut sums = [0_u64; C];
+                for sy in y0..y1 {
+                    let start = sy as usize * width as usize;
+                    for pixel in &source[start + x0 as usize..start + x1 as usize] {
+                        for channel in 0..C {
+                            sums[channel] += u64::from(pixel[channel]);
                         }
                     }
-                    pixels[(y as usize * size.0 as usize + x as usize) * c + channel] =
-                        (((sum + count / 2) * multiplier) >> 24) as u8;
+                }
+                for channel in 0..C {
+                    dst[channel] = (((sums[channel] + count / 2) * multiplier) >> 24) as u8;
                 }
             }
         }
     });
-    output(image, size, pixels)
 }
 
 #[pyfunction]
@@ -516,16 +563,11 @@ fn ops_resize(
             };
             let xs = positions(b[0], dx, size.0, image.width);
             let ys = positions(b[1], dy, size.1, image.height);
-            let row_bytes = size.0 as usize * c;
-            chunks_mut(&mut result, row_bytes * 16, |band, rows| {
-                for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                    let sy = ys[band * 16 + i];
-                    for (x, &sx) in xs.iter().enumerate() {
-                        let src = (sy * image.width as usize + sx) * c;
-                        row[x * c..(x + 1) * c].copy_from_slice(&source[src..src + c]);
-                    }
-                }
-            });
+            match image.mode {
+                PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::Rgb => resize_nearest::<3>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::Rgba => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
+            }
             return Ok(());
         }
         let mut source = Cow::Borrowed(source);
@@ -543,6 +585,43 @@ fn ops_resize(
         Ok(())
     })?;
     output(image, size, result)
+}
+
+// Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
+// for every output pixel. Repeated source rows only need one gather per band.
+fn resize_nearest<const C: usize>(
+    source: &[u8],
+    output: &mut [u8],
+    width: u32,
+    xs: &[usize],
+    ys: &[usize],
+) {
+    let row_bytes = xs.len() * C;
+    let half_width =
+        xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
+    let source = source.as_chunks::<C>().0;
+    chunks_mut(output, row_bytes * 16, |band, rows| {
+        for i in 0..rows.len() / row_bytes {
+            let sy = ys[band * 16 + i];
+            if i > 0 && sy == ys[band * 16 + i - 1] {
+                rows.copy_within((i - 1) * row_bytes..i * row_bytes, i * row_bytes);
+                continue;
+            }
+            let src = &source[sy * width as usize..(sy + 1) * width as usize];
+            let row = &mut rows[i * row_bytes..(i + 1) * row_bytes];
+            let dst = row.as_chunks_mut::<C>().0;
+            if half_width {
+                // Contiguous pairs expose the common 2:1 gather to SIMD.
+                for (dst, pair) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                    *dst = pair[1];
+                }
+            } else {
+                for (dst, &sx) in dst.iter_mut().zip(xs) {
+                    *dst = src[sx];
+                }
+            }
+        }
+    });
 }
 
 fn resample<const C: usize>(
