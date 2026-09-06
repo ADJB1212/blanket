@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import builtins
+import math
 import os
+from operator import index
 from enum import IntEnum
 from pathlib import Path
 from typing import BinaryIO
@@ -75,6 +77,60 @@ class Image:
 
     def tobytes(self) -> bytes:
         return self._native.tobytes()
+
+    def resize(self, size: tuple[int, int], resample: int | None = None, box: tuple[float, float, float, float] | None = None, reducing_gap: float | None = None) -> Image:
+        """Return a resized copy, using BICUBIC unless a filter is specified.
+
+        ``box`` selects a source rectangle within the image. ``reducing_gap``
+        optionally enables integer reduction before filtering (at least 1.0).
+        """
+        from ._blanket import ops_reduce, ops_resize, ops_transpose
+
+        method = Resampling.BICUBIC if resample is None else resample
+        if method not in range(6):
+            raise ValueError(f"Unknown resampling filter ({method})")
+        if reducing_gap is not None and reducing_gap < 1.0:
+            raise ValueError("reducing_gap must be 1.0 or greater")
+        size = tuple(index(value) for value in size)
+        if len(size) != 2:
+            raise TypeError("size must contain two integers")
+        if min(size) <= 0:
+            raise ValueError("height and width must be > 0")
+        box = (0, 0, self.width, self.height) if box is None else tuple(box)
+        if len(box) != 4:
+            raise TypeError("box must contain four coordinates")
+        if (
+            not all(math.isfinite(value) for value in box)
+            or box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height
+            or box[2] < box[0] or box[3] < box[1]
+        ):
+            raise ValueError("invalid resize box")
+        self.load()
+        native = self._native
+        if size == self.size and box == (0, 0, self.width, self.height):
+            native = ops_transpose(native, 1)
+        else:
+            # Pillow's alpha-aware path does not use integer reduction.
+            if reducing_gap is not None and method != Resampling.NEAREST and self.mode != "RGBA":
+                fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
+                fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
+                if fx > 1 or fy > 1:
+                    support = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}[method] - 0.5
+                    sx = support * (box[2] - box[0]) / size[0]
+                    sy = support * (box[3] - box[1]) / size[1]
+                    safe = (
+                        max(0, int(box[0] - sx)), max(0, int(box[1] - sy)),
+                        min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)),
+                    )
+                    native = ops_reduce(native, (fx, fy), safe)
+                    box = (
+                        (box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy,
+                        (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy,
+                    )
+            native = ops_resize(native, size, method, box)
+        result = Image(native)
+        result.info.update(self.info)
+        return result
 
     def to_pillow(self) -> object:
         """Return an equivalent Pillow image when Pillow is installed."""

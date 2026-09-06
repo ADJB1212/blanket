@@ -152,6 +152,27 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
     ]
 
 
+def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark resize filters, source boxes, and integer reduction by mode."""
+    w, h = size
+    down = (max(1, w // 2), max(1, h // 2))
+    up = (w * 2, h * 2)
+    thumbnail = (max(1, w // 8), max(1, h // 8))
+    box = (w * 0.1, h * 0.1, w * 0.9, h * 0.9)
+    comps: list[Comparison] = []
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        for method in BlanketImage.Resampling:
+            for direction, target in (("down", down), ("up", up)):
+                comps.append((f"resize {direction} {method.name} {mode}", partial(blanket.resize, target, resample=method), partial(pillow.resize, target, resample=int(method))))
+        cases = [("box BICUBIC", down, {"box": box}), ("thumb LANCZOS", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS}), ("thumb LANCZOS gap=3", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS, "reducing_gap": 3.0})]
+        for label, target, options in cases:
+            comps.append((f"resize {label} {mode}", partial(blanket.resize, target, **options), partial(pillow.resize, target, **options)))
+    return comps
+
+
 def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Benchmark array/byte construction, extraction, and Pillow conversion."""
     raw = make_rgb(*size)
@@ -228,13 +249,7 @@ def imageenhance_comparisons(size: tuple[int, int]) -> list[Comparison]:
         for name in ("Color", "Contrast", "Brightness", "Sharpness"):
             blanket_class = getattr(BlanketEnhance, name)
             pillow_class = getattr(PillowEnhance, name)
-            comps.append(
-                (
-                    f"{name} {mode}",
-                    lambda cls=blanket_class, image=blanket: cls(image).enhance(1.5),
-                    lambda cls=pillow_class, image=pillow: cls(image).enhance(1.5),
-                )
-            )
+            comps.append((f"{name} {mode}", lambda cls=blanket_class, image=blanket: cls(image).enhance(1.5), lambda cls=pillow_class, image=pillow: cls(image).enhance(1.5)))
     return comps
 
 
@@ -280,7 +295,7 @@ def make_table(results: list[dict[str, Any]]) -> Table:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
-    parser.add_argument("--iterations", type=int, default=10)
+    parser.add_argument("-i", "--iterations", type=int, default=10)
     parser.add_argument("--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
     parser.add_argument("--jxl-only", action="store_true", help="only run JXL codec benchmarks (pillow-jxl-plugin required)")
@@ -321,12 +336,7 @@ def main() -> None:
 
         sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
         if not args.jxl_only:
-            sections += [
-                ("Conversions", conversion_comparisons(size)),
-                ("Memory", memory_comparisons(size)),
-                ("ImageOps", imageops_comparisons(size)),
-                ("ImageEnhance", imageenhance_comparisons(size)),
-            ]
+            sections += [("Conversions", conversion_comparisons(size)), ("Resize", resize_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size)), ("ImageEnhance", imageenhance_comparisons(size))]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:

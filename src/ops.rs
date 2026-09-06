@@ -18,6 +18,7 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
     module.add_function(wrap_pyfunction!(ops_transpose, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_reduce, module)?)?;
     module.add_function(wrap_pyfunction!(ops_mesh, module)?)?;
     Ok(())
 }
@@ -397,6 +398,58 @@ fn unpremultiply(pixels: &mut [u8]) {
             }
         }
     });
+}
+
+/// Integer box reduction used by resize's reducing_gap optimization.
+#[pyfunction]
+fn ops_reduce(
+    py: Python<'_>,
+    image: &Image,
+    factor: (u32, u32),
+    bounds: (u32, u32, u32, u32),
+) -> PyResult<Image> {
+    let source = image.pixel_data()?;
+    let (fx, fy) = factor;
+    let (left, top, right, bottom) = bounds;
+    if fx == 0
+        || fy == 0
+        || left > right
+        || top > bottom
+        || right > image.width
+        || bottom > image.height
+    {
+        return Err(PyValueError::new_err("invalid reduction bounds or factor"));
+    }
+    let size = ((right - left).div_ceil(fx), (bottom - top).div_ceil(fy));
+    let c = image.mode.channels();
+    let mut pixels = buffer(size, c)?;
+    py.detach(|| {
+        for y in 0..size.1 {
+            let y0 = top + y * fy;
+            let y1 = y0.saturating_add(fy).min(bottom);
+            for x in 0..size.0 {
+                let x0 = left + x * fx;
+                let x1 = x0.saturating_add(fx).min(right);
+                let count = u64::from(x1 - x0) * u64::from(y1 - y0);
+                // Match Pillow's 24-bit reciprocal, including its rounding.
+                let multiplier = ((1_u64 << 24) as f32 / count as f32) as u64;
+                for channel in 0..c {
+                    let mut sum = 0_u64;
+                    for sy in y0..y1 {
+                        for sx in x0..x1 {
+                            sum += u64::from(
+                                source[(sy as usize * image.width as usize + sx as usize) * c
+                                    + channel],
+                            );
+                        }
+                    }
+                    pixels[(y as usize * size.0 as usize + x as usize) * c + channel] =
+                        (((sum + count / 2) * multiplier) >> 24) as u8;
+                }
+            }
+        }
+    });
+    output(image, size, pixels)
 }
 
 #[pyfunction]

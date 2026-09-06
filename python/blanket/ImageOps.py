@@ -13,7 +13,7 @@ from itertools import pairwise
 from typing import Literal, Protocol, overload
 
 from . import Image
-from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_resize, ops_transpose
+from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
 from ._color import color_pixel
 from ._exif import transpose_metadata
 
@@ -70,17 +70,7 @@ def _border(border: Border) -> tuple[int, int, int, int]:
 
 
 def _resize(image: Image.Image, size: tuple[int, int], method: int, box: tuple[float, float, float, float] | None = None) -> Image.Image:
-    if method is None:
-        method = Image.Resampling.BICUBIC
-    if method not in range(6):
-        raise ValueError(f"Unknown resampling filter ({method})")
-    if size[0] <= 0 or size[1] <= 0:
-        raise ValueError("height and width must be > 0")
-    if box is None:
-        box = (0, 0, image.width, image.height)
-    if tuple(size) == image.size and box == (0, 0, image.width, image.height):
-        return _copy(image)
-    return _result(image, ops_resize(image._native, size, method, box))
+    return image.resize(size, method, box)
 
 
 def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ignore: int | Sequence[int] | None = None, mask: Image.Image | None = None, preserve_tone: bool = False) -> Image.Image:

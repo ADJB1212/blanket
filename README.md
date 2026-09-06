@@ -24,6 +24,12 @@ strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
 path extension, or accepts an explicit format for streams. `Image.Image.convert()`
 supports all conversions among `L`, `RGB`, and `RGBA`.
 
+`image.resize((width, height), resample=None, box=None, reducing_gap=None)`
+returns a new image and copies its metadata. The default filter is BICUBIC;
+all six `Image.Resampling` filters are supported. Use `box` to select a source
+rectangle or `reducing_gap` (at least `1.0`) to enable integer reduction before
+resampling.
+
 Supported encoder options are:
 
 - PNG: `compress_level=0..9` (default `6`)
