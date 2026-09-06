@@ -16,8 +16,10 @@ from typing import Any
 import numpy as np
 import pillow_jxl
 from blanket import Image as BlanketImage
+from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageOps as BlanketOps
 from PIL import Image as PillowImage
+from PIL import ImageEnhance as PillowEnhance
 from PIL import ImageOps as PillowOps
 from rich.console import Console
 from rich.panel import Panel
@@ -216,6 +218,26 @@ def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comps
 
 
+def imageenhance_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark construction and enhancement for every class and mode."""
+    comps: list[Comparison] = []
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(*size)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        for name in ("Color", "Contrast", "Brightness", "Sharpness"):
+            blanket_class = getattr(BlanketEnhance, name)
+            pillow_class = getattr(PillowEnhance, name)
+            comps.append(
+                (
+                    f"{name} {mode}",
+                    lambda cls=blanket_class, image=blanket: cls(image).enhance(1.5),
+                    lambda cls=pillow_class, image=pillow: cls(image).enhance(1.5),
+                )
+            )
+    return comps
+
+
 # ── Rich output ─────────────────────────────────────────────────────────
 
 
@@ -299,7 +321,12 @@ def main() -> None:
 
         sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
         if not args.jxl_only:
-            sections += [("Conversions", conversion_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size))]
+            sections += [
+                ("Conversions", conversion_comparisons(size)),
+                ("Memory", memory_comparisons(size)),
+                ("ImageOps", imageops_comparisons(size)),
+                ("ImageEnhance", imageenhance_comparisons(size)),
+            ]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:

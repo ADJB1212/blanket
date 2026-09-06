@@ -68,7 +68,7 @@ fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
 }
 
 #[inline(always)]
-fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
+pub(crate) fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
     ((u32::from(r) * 19_595 + u32::from(g) * 38_470 + u32::from(b) * 7_471 + 0x8000) >> 16) as u8
 }
 

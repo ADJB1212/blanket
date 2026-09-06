@@ -6,8 +6,10 @@ from io import BytesIO
 
 import numpy as np
 from blanket import Image as BlanketImage
+from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageOps as BlanketOps
 from PIL import Image as PillowImage
+from PIL import ImageEnhance as PillowEnhance
 from PIL import ImageFilter
 from PIL import ImageOps as PillowOps
 
@@ -205,6 +207,27 @@ def check_imageops() -> int:
     return checks
 
 
+def check_imageenhance() -> int:
+    """Compare every ImageEnhance class across modes and factor ranges."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        blanket = BlanketImage.frombytes(mode, (37, 29), raw)
+        pillow = PillowImage.frombytes(mode, (37, 29), raw)
+        for name in ("Color", "Contrast", "Brightness", "Sharpness"):
+            actual = getattr(BlanketEnhance, name)(blanket)
+            expected = getattr(PillowEnhance, name)(pillow)
+            assert actual.degenerate.tobytes() == expected.degenerate.tobytes(), f"{name} degenerate {mode}"
+            checks += 1
+            for factor in (-1, 0, 0.5, 1, 1.75, 3):
+                result = actual.enhance(factor)
+                reference = expected.enhance(factor)
+                assert (result.mode, result.size) == (reference.mode, reference.size), f"{name} {mode} {factor}"
+                assert result.tobytes() == reference.tobytes(), f"{name} {mode} {factor}"
+                checks += 1
+    return checks
+
+
 def main() -> None:
     checks = (
         check_conversions()
@@ -215,7 +238,11 @@ def main() -> None:
         + check_pillow_adapter()
     )
     imageops_checks = check_imageops()
-    print(f"behavior verification passed: {checks + imageops_checks} checks ({imageops_checks} ImageOps)")
+    imageenhance_checks = check_imageenhance()
+    print(
+        f"behavior verification passed: {checks + imageops_checks + imageenhance_checks} checks "
+        f"({imageops_checks} ImageOps, {imageenhance_checks} ImageEnhance)"
+    )
 
 
 if __name__ == "__main__":

@@ -61,6 +61,20 @@ The signatures, defaults, border forms, masks, CSS color arguments, and
 `Image.Resampling` filters; mesh deformation supports nearest, bilinear, and
 bicubic sampling. Filtered RGBA operations use premultiplied alpha.
 
+## ImageEnhance
+
+`from blanket import ImageEnhance` provides Pillow-compatible `Color`,
+`Contrast`, `Brightness`, and `Sharpness` enhancer classes for all three
+Blanket modes. Enhancement factors are unrestricted, and RGBA enhancement
+preserves alpha for finite factors. Degenerate-image construction and blending
+run in native parallel kernels.
+
+```python
+from blanket import ImageEnhance
+
+enhanced = ImageEnhance.Contrast(image).enhance(1.5)
+```
+
 Opening PNG and JPEG retains EXIF/XMP in `image.info` for `exif_transpose`;
 uncompressed EXIF/XMP boxes in JPEG XL containers are also read. Other metadata
 and compressed JPEG XL metadata boxes are not retained. Transposition removes

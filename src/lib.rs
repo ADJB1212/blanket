@@ -1,6 +1,7 @@
 #![cfg_attr(RUSTC_IS_NIGHTLY, feature(portable_simd))]
 
 mod codecs;
+mod enhance;
 mod ops;
 mod ops_simd;
 mod parallel;
@@ -29,6 +30,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
+    enhance::register(module)?;
     ops::register(module)?;
     Ok(())
 }
