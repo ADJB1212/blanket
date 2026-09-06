@@ -1,3 +1,5 @@
+#![cfg_attr(RUSTC_IS_NIGHTLY, feature(portable_simd))]
+
 mod codecs;
 mod ops;
 mod ops_simd;

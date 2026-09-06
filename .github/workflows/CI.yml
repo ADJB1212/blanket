@@ -45,8 +45,6 @@ jobs:
         run: uv run --no-sync pytest -q
       - name: Verify Pillow behavior
         run: uv run --no-sync python scripts/verify_behavior.py
-      - name: Verify Pillow interoperability
-        run: uv run --no-sync python scripts/verify_interop.py
       - name: Smoke-test benchmark
         if: runner.os == 'Linux' && matrix.python == '3.14'
         run: >-

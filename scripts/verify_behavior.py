@@ -8,6 +8,7 @@ import numpy as np
 from blanket import Image as BlanketImage
 from blanket import ImageOps as BlanketOps
 from PIL import Image as PillowImage
+from PIL import ImageFilter
 from PIL import ImageOps as PillowOps
 
 
@@ -105,6 +106,33 @@ def check_jxl_roundtrip() -> int:
     return checks
 
 
+def check_pillow_adapter() -> int:
+    """Exercise unsupported image operations through Blanket's Pillow adapter."""
+    size = (32, 24)
+    raw = bytes((x * 13 + y * 31 + channel * 71) % 256 for y in range(size[1]) for x in range(size[0]) for channel in range(3))
+    blanket = BlanketImage.frombytes("RGB", size, raw)
+    pillow = blanket.to_pillow()
+    assert isinstance(pillow, PillowImage.Image)
+
+    bands = pillow.split()
+    merged = PillowImage.merge("RGB", bands)
+    assert merged.tobytes() == raw
+
+    resized = merged.resize((16, 12))
+    rotated = resized.rotate(17)
+    filtered = rotated.filter(ImageFilter.DETAIL)
+    processed = PillowOps.autocontrast(filtered)
+    assert processed.size == (16, 12)
+
+    returned = BlanketImage.fromarray(np.asarray(processed))
+    assert (returned.mode, returned.size) == (processed.mode, processed.size)
+    output = BytesIO()
+    returned.save(output, "PNG")
+    reloaded = BlanketImage.open(output)
+    assert reloaded.tobytes() == processed.tobytes()
+    return 1
+
+
 class MirrorMesh:
     """Exercise the deformer protocol with a horizontal reflection."""
 
@@ -178,7 +206,14 @@ def check_imageops() -> int:
 
 
 def main() -> None:
-    checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip()
+    checks = (
+        check_conversions()
+        + check_fromarray()
+        + check_png_interop()
+        + check_jpeg_interop()
+        + check_jxl_roundtrip()
+        + check_pillow_adapter()
+    )
     imageops_checks = check_imageops()
     print(f"behavior verification passed: {checks + imageops_checks} checks ({imageops_checks} ImageOps)")
 

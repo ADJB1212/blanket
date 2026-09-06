@@ -97,7 +97,6 @@ uv sync --extra test
 cargo test
 uv run pytest
 uv run python scripts/verify_behavior.py
-uv run python scripts/verify_interop.py
 uv run python scripts/benchmark.py
 ```
 

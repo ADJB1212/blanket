@@ -1,17 +1,27 @@
 //! SIMD kernels with scalar tails and portable fallbacks.
 //!
-//! AArch64 guarantees NEON. Other architectures use the same channel-specialized
-//! loops and Rayon partitions; no CPU-specific instructions are assumed there.
+//! Nightly uses portable SIMD; other toolchains use NEON on AArch64 and
+//! scalar kernels on other architectures.
 
 pub(crate) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
     assert!(tables.len() == 256 || tables.len() == C * 256);
+    dispatch_lut::<C>(source, output, tables);
+}
+
+#[cfg(RUSTC_IS_NIGHTLY)]
+fn dispatch_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
+    portable::lut::<C>(source, output, tables);
+}
+
+#[cfg(not(RUSTC_IS_NIGHTLY))]
+fn dispatch_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     #[cfg(target_arch = "aarch64")]
-    {
-        // SAFETY: NEON is mandatory on AArch64; the kernel bounds every load
-        // and store and only reads complete 256-entry lookup tables.
-        unsafe { neon::lut::<C>(source, output, tables) };
-    }
+    // SAFETY: NEON is mandatory on AArch64; the kernel bounds every load
+    // and store and only reads complete 256-entry lookup tables.
+    unsafe {
+        neon::lut::<C>(source, output, tables)
+    };
     #[cfg(not(target_arch = "aarch64"))]
     scalar_lut::<C>(source, output, tables);
 }
@@ -38,11 +48,7 @@ fn scalar_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
 pub(crate) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(Some(output.len()), source.len().checked_mul(3));
     assert_eq!(tables.len(), 768);
-    #[cfg(target_arch = "aarch64")]
-    // SAFETY: NEON is guaranteed, and input/output/table extents are validated.
-    let start = unsafe { neon::colorize(source, output, tables) };
-    #[cfg(not(target_arch = "aarch64"))]
-    let start = 0;
+    let start = dispatch_colorize(source, output, tables);
     for (&v, dst) in source[start..]
         .iter()
         .zip(output[start * 3..].as_chunks_mut::<3>().0)
@@ -52,12 +58,49 @@ pub(crate) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) {
     }
 }
 
+#[cfg(RUSTC_IS_NIGHTLY)]
+fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
+    portable::colorize(source, output, tables)
+}
+
+#[cfg(not(RUSTC_IS_NIGHTLY))]
+fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
+    #[cfg(target_arch = "aarch64")]
+    // SAFETY: NEON is guaranteed, and input/output/table extents are validated.
+    return unsafe { neon::colorize(source, output, tables) };
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let _ = (source, output, tables);
+        0
+    }
+}
+
 /// Resample contiguous lanes from several source rows, retaining fixed-point
 /// coefficient rounding. Returns the byte count processed by SIMD.
 pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
+    dispatch_vertical(source, output, stride, weights)
+}
+
+#[cfg(RUSTC_IS_NIGHTLY)]
+fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
+    let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
+    if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
+        assert!(
+            weights.is_empty()
+                || source.len()
+                    >= (weights.len() - 1)
+                        .saturating_mul(stride)
+                        .saturating_add(output.len())
+        );
+        return portable::vertical(source, output, stride, weights);
+    }
+    0
+}
+
+#[cfg(not(RUSTC_IS_NIGHTLY))]
+fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
     #[cfg(target_arch = "aarch64")]
     {
-        // Bound accumulators even if new filters are added in the future.
         let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
         if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
             // SAFETY: Each referenced source row spans output.len() bytes.
@@ -76,7 +119,88 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
     0
 }
 
-#[cfg(target_arch = "aarch64")]
+#[cfg(RUSTC_IS_NIGHTLY)]
+mod portable {
+    use std::simd::Simd;
+    use std::simd::prelude::*;
+
+    const LANES: usize = 16;
+    const VLANES: usize = 8;
+
+    pub(super) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
+        let mut offset = 0;
+        if tables.len() == 256 {
+            while offset + LANES <= source.len() {
+                let idx: Simd<usize, LANES> =
+                    Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
+                let vals: Simd<u8, LANES> = Simd::gather_or_default(tables, idx);
+                output[offset..offset + LANES].copy_from_slice(&vals.to_array());
+                offset += LANES;
+            }
+            super::scalar_lut::<1>(&source[offset..], &mut output[offset..], tables);
+        } else {
+            while offset + LANES * C <= source.len() {
+                for c in 0..C {
+                    let src_idx: Simd<usize, LANES> =
+                        Simd::from_array(std::array::from_fn(|i| offset + i * C + c));
+                    let src_bytes: Simd<u8, LANES> = Simd::gather_or_default(source, src_idx);
+                    let idx: Simd<usize, LANES> = src_bytes.cast();
+                    let table_slice = &tables[c * 256..c * 256 + 256];
+                    let vals: Simd<u8, LANES> = Simd::gather_or_default(table_slice, idx);
+                    let arr = vals.to_array();
+                    for i in 0..LANES {
+                        output[offset + i * C + c] = arr[i];
+                    }
+                }
+                offset += LANES * C;
+            }
+            super::scalar_lut::<C>(&source[offset..], &mut output[offset..], tables);
+        }
+    }
+
+    pub(super) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
+        let mut offset = 0;
+        while offset + LANES <= source.len() {
+            let idx: Simd<usize, LANES> =
+                Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
+            for c in 0..3 {
+                let table_slice = &tables[c * 256..c * 256 + 256];
+                let vals: Simd<u8, LANES> = Simd::gather_or_default(table_slice, idx);
+                let arr = vals.to_array();
+                for i in 0..LANES {
+                    output[(offset + i) * 3 + c] = arr[i];
+                }
+            }
+            offset += LANES;
+        }
+        offset
+    }
+
+    pub(super) fn vertical(
+        source: &[u8],
+        output: &mut [u8],
+        stride: usize,
+        weights: &[i32],
+    ) -> usize {
+        let end = output.len() / VLANES * VLANES;
+        for x in (0..end).step_by(VLANES) {
+            let mut acc: Simd<i32, VLANES> = Simd::splat(1 << 21);
+            for (i, &weight) in weights.iter().enumerate() {
+                let bytes: Simd<u8, VLANES> =
+                    Simd::from_slice(&source[i * stride + x..i * stride + x + VLANES]);
+                let widened: Simd<i32, VLANES> = bytes.cast();
+                acc += widened * Simd::splat(weight);
+            }
+            let shifted = acc >> Simd::splat(22);
+            let clamped = shifted.simd_clamp(Simd::splat(0), Simd::splat(255));
+            let narrowed: Simd<u8, VLANES> = clamped.cast();
+            output[x..x + VLANES].copy_from_slice(&narrowed.to_array());
+        }
+        end
+    }
+}
+
+#[cfg(all(target_arch = "aarch64", not(RUSTC_IS_NIGHTLY)))]
 mod neon {
     use std::arch::aarch64::*;
 
@@ -198,16 +322,22 @@ mod tests {
 
     #[test]
     fn lut_matches_scalar_at_vector_boundaries() {
+        check_lut::<1>();
+        check_lut::<3>();
+        check_lut::<4>();
+    }
+
+    fn check_lut<const C: usize>() {
         for n in [0, 1, 15, 16, 17, 47, 48, 49, 255, 256, 257] {
-            let input: Vec<u8> = (0..n * 3).map(|i| (i * 37) as u8).collect();
-            for channels in [1, 3] {
+            let input: Vec<u8> = (0..n * C).map(|i| (i * 37) as u8).collect();
+            for channels in [1, C] {
                 let tables: Vec<u8> = (0..channels * 256)
                     .map(|i| (i * 53 + i / 256 * 13) as u8)
                     .collect();
                 let mut expected = vec![0; input.len()];
                 let mut actual = expected.clone();
-                scalar_lut::<3>(&input, &mut expected, &tables);
-                lut::<3>(&input, &mut actual, &tables);
+                scalar_lut::<C>(&input, &mut expected, &tables);
+                lut::<C>(&input, &mut actual, &tables);
                 assert_eq!(actual, expected);
             }
         }
@@ -219,6 +349,8 @@ mod tests {
         let source: Vec<u8> = (0..4 * 31).map(|i| (i * 67) as u8).collect();
         let mut actual = vec![0; 31];
         let count = vertical(&source, &mut actual, 31, &weights);
+        #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
+        assert_eq!(count, 24);
         for x in 0..count {
             let sum = weights
                 .iter()
@@ -227,6 +359,15 @@ mod tests {
                     sum + i64::from(source[i * 31 + x]) * i64::from(w)
                 });
             assert_eq!(actual[x], (sum >> 22).clamp(0, 255) as u8);
+        }
+    }
+
+    #[test]
+    fn vertical_leaves_output_for_scalar_when_weights_can_overflow() {
+        for weight in [i32::MIN, i32::MAX] {
+            let mut output = [123; 16];
+            assert_eq!(vertical(&[255; 16], &mut output, 16, &[weight]), 0);
+            assert_eq!(output, [123; 16]);
         }
     }
 

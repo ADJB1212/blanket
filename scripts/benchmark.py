@@ -5,11 +5,11 @@ from __future__ import annotations
 import argparse
 import gc
 import json
-import statistics
 from collections.abc import Callable
 from functools import partial
 from io import BytesIO
 from pathlib import Path
+from statistics import geometric_mean, median
 from time import perf_counter
 from typing import Any
 
@@ -64,7 +64,7 @@ def measure(operation: Callable[[], object], warmups: int, iterations: int) -> d
     finally:
         gc.enable()
     samples.sort()
-    return {"median": statistics.median(samples), "p25": samples[len(samples) // 4], "p75": samples[(len(samples) * 3) // 4]}
+    return {"median": median(samples), "p25": samples[len(samples) // 4], "p75": samples[(len(samples) * 3) // 4]}
 
 
 # ── comparison builders ──────────────────────────────────────────────────
@@ -279,16 +279,7 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int) ->
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
-            results.append(
-                {
-                    "operation": name,
-                    "blanket_ms": b["median"] * 1000,
-                    "blanket_p25_ms": b["p25"] * 1000,
-                    "blanket_p75_ms": b["p75"] * 1000,
-                    "pillow_ms": p["median"] * 1000,
-                    "blanket_speedup": p["median"] / b["median"],
-                }
-            )
+            results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
     return results
@@ -329,23 +320,17 @@ def main() -> None:
     if paired:
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(1 for s in speedups if s > 1.0)
-        geo_mean = _geometric_mean(speedups)
+        geo_mean = geometric_mean(speedups)
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
+        summary = (
+            f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
+        )
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.json_path is not None:
         args.json_path.write_text(json.dumps(all_results, indent=2) + "\n")
-
-
-def _geometric_mean(values: list[float]) -> float:
-    """Compute geometric mean without requiring Python 3.11+."""
-    product = 1.0
-    for v in values:
-        product *= v
-    return product ** (1.0 / len(values))
 
 
 if __name__ == "__main__":
