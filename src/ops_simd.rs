@@ -1,7 +1,7 @@
 //! SIMD kernels with scalar tails and portable fallbacks.
 //!
 //! Nightly uses portable SIMD; other toolchains use NEON on AArch64 and
-//! scalar kernels on other architectures.
+//! runtime-detected AVX2 on x86/x86_64, with scalar fallbacks elsewhere.
 
 pub(crate) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
@@ -22,6 +22,18 @@ fn dispatch_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8])
     unsafe {
         neon::lut::<C>(source, output, tables)
     };
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 is detected at runtime; the kernel bounds all accesses.
+        unsafe {
+            if tables.len() == 256 {
+                x86::lut::<1>(source, output, tables);
+            } else {
+                x86::lut::<C>(source, output, tables);
+            }
+        }
+        return;
+    }
     #[cfg(not(target_arch = "aarch64"))]
     scalar_lut::<C>(source, output, tables);
 }
@@ -68,6 +80,11 @@ fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: NEON is guaranteed, and input/output/table extents are validated.
     return unsafe { neon::colorize(source, output, tables) };
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 is detected and input/output/table extents are validated.
+        return unsafe { x86::colorize(source, output, tables) };
+    }
     #[cfg(not(target_arch = "aarch64"))]
     {
         let _ = (source, output, tables);
@@ -99,7 +116,7 @@ fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &
 
 #[cfg(not(RUSTC_IS_NIGHTLY))]
 fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
-    #[cfg(target_arch = "aarch64")]
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
     {
         let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
         if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
@@ -112,7 +129,14 @@ fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &
                             .saturating_mul(stride)
                             .saturating_add(output.len())
             );
+            #[cfg(target_arch = "aarch64")]
             return unsafe { neon::vertical(source, output, stride, weights) };
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            if std::arch::is_x86_feature_detected!("avx2") {
+                // SAFETY: AVX2 is detected; row extents and accumulator bounds
+                // were checked above. The kernel processes eight bytes at a time.
+                return unsafe { x86::vertical(source, output, stride, weights) };
+            }
         }
     }
     let _ = (source, output, stride, weights);
@@ -195,6 +219,128 @@ mod portable {
             let clamped = shifted.simd_clamp(Simd::splat(0), Simd::splat(255));
             let narrowed: Simd<u8, VLANES> = clamped.cast();
             output[x..x + VLANES].copy_from_slice(&narrowed.to_array());
+        }
+        end
+    }
+}
+
+#[cfg(all(
+    any(target_arch = "x86", target_arch = "x86_64"),
+    not(RUSTC_IS_NIGHTLY)
+))]
+mod x86 {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    /// Narrow eight nonnegative i32 lanes to bytes, preserving lane order.
+    #[target_feature(enable = "avx2")]
+    unsafe fn pack_bytes(values: __m256i) -> __m128i {
+        let shorts = _mm_packus_epi32(
+            _mm256_castsi256_si128(values),
+            _mm256_extracti128_si256::<1>(values),
+        );
+        _mm_packus_epi16(shorts, _mm_setzero_si128())
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
+        let end = source.len() / (8 * C) * (8 * C);
+        if end == 0 {
+            super::scalar_lut::<C>(source, output, tables);
+            return;
+        }
+        // AVX2 gathers i32 entries, so widen once instead of reading four bytes
+        // at each u8 entry (which would overread the end of the original table).
+        let table: [[i32; 256]; C] =
+            std::array::from_fn(|c| std::array::from_fn(|i| i32::from(tables[c * 256 + i])));
+        let channels: [[i32; 8]; C] = std::array::from_fn(|block| {
+            std::array::from_fn(|i| (((block * 8 + i) % C) * 256) as i32)
+        });
+        // SAFETY: each block loads/stores eight bytes. Indices select a byte's
+        // channel and value in the widened table. Tails start on a pixel boundary.
+        unsafe {
+            for offset in (0..end).step_by(8 * C) {
+                for (block, channel) in channels.iter().enumerate() {
+                    let offset = offset + block * 8;
+                    let bytes = _mm_loadl_epi64(source.as_ptr().add(offset).cast());
+                    let indices = _mm256_add_epi32(
+                        _mm256_cvtepu8_epi32(bytes),
+                        _mm256_loadu_si256(channel.as_ptr().cast()),
+                    );
+                    let values =
+                        _mm256_i32gather_epi32::<4>(table.as_flattened().as_ptr(), indices);
+                    _mm_storel_epi64(output.as_mut_ptr().add(offset).cast(), pack_bytes(values));
+                }
+            }
+        }
+        super::scalar_lut::<C>(&source[end..], &mut output[end..], tables);
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
+        let end = source.len() / 8 * 8;
+        if end == 0 {
+            return 0;
+        }
+        let table: [i32; 256] = std::array::from_fn(|i| {
+            i32::from(tables[i])
+                | (i32::from(tables[256 + i]) << 8)
+                | (i32::from(tables[512 + i]) << 16)
+        });
+        let shuffle = _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1);
+        // SAFETY: each gather indexes a complete i32 entry. Each input block
+        // contains eight bytes and writes two groups of twelve RGB bytes.
+        unsafe {
+            for offset in (0..end).step_by(8) {
+                let bytes = _mm_loadl_epi64(source.as_ptr().add(offset).cast());
+                let values =
+                    _mm256_i32gather_epi32::<4>(table.as_ptr(), _mm256_cvtepu8_epi32(bytes));
+                for (half, values) in [
+                    _mm256_castsi256_si128(values),
+                    _mm256_extracti128_si256::<1>(values),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    let packed = _mm_shuffle_epi8(values, shuffle);
+                    let mut rgb = [0_u8; 16];
+                    _mm_storeu_si128(rgb.as_mut_ptr().cast(), packed);
+                    let start = offset * 3 + half * 12;
+                    output[start..start + 12].copy_from_slice(&rgb[..12]);
+                }
+            }
+        }
+        end
+    }
+
+    #[target_feature(enable = "avx2")]
+    pub(super) unsafe fn vertical(
+        source: &[u8],
+        output: &mut [u8],
+        stride: usize,
+        weights: &[i32],
+    ) -> usize {
+        let end = output.len() / 8 * 8;
+        // SAFETY: caller checks row extents and accumulator bounds. Only full
+        // groups of eight bytes are loaded/stored; the caller handles the tail.
+        unsafe {
+            for x in (0..end).step_by(8) {
+                let mut acc = _mm256_set1_epi32(1 << 21);
+                for (i, &weight) in weights.iter().enumerate() {
+                    let bytes = _mm_loadl_epi64(source.as_ptr().add(i * stride + x).cast());
+                    acc = _mm256_add_epi32(
+                        acc,
+                        _mm256_mullo_epi32(_mm256_cvtepu8_epi32(bytes), _mm256_set1_epi32(weight)),
+                    );
+                }
+                let clamped = _mm256_min_epi32(
+                    _mm256_max_epi32(_mm256_srai_epi32::<22>(acc), _mm256_setzero_si256()),
+                    _mm256_set1_epi32(255),
+                );
+                _mm_storel_epi64(output.as_mut_ptr().add(x).cast(), pack_bytes(clamped));
+            }
         }
         end
     }
@@ -328,7 +474,7 @@ mod tests {
     }
 
     fn check_lut<const C: usize>() {
-        for n in [0, 1, 15, 16, 17, 47, 48, 49, 255, 256, 257] {
+        for n in [0, 1, 7, 8, 9, 15, 16, 17, 47, 48, 49, 255, 256, 257] {
             let input: Vec<u8> = (0..n * C).map(|i| (i * 37) as u8).collect();
             for channels in [1, C] {
                 let tables: Vec<u8> = (0..channels * 256)
@@ -351,6 +497,18 @@ mod tests {
         let count = vertical(&source, &mut actual, 31, &weights);
         #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
         assert_eq!(count, 24);
+        #[cfg(all(
+            not(RUSTC_IS_NIGHTLY),
+            any(target_arch = "x86", target_arch = "x86_64")
+        ))]
+        assert_eq!(
+            count,
+            if std::arch::is_x86_feature_detected!("avx2") {
+                24
+            } else {
+                0
+            }
+        );
         for x in 0..count {
             let sum = weights
                 .iter()
@@ -359,6 +517,75 @@ mod tests {
                     sum + i64::from(source[i * 31 + x]) * i64::from(w)
                 });
             assert_eq!(actual[x], (sum >> 22).clamp(0, 255) as u8);
+        }
+    }
+
+    #[test]
+    fn vertical_preserves_tails_and_guards() {
+        for width in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            for weights in [
+                &[][..],
+                &[1 << 22][..],
+                &[-(1 << 22)][..],
+                &[2 << 22][..],
+                &[-400_000, 2_000_000, 3_000_000, -405_696][..],
+            ] {
+                let stride = width + 3;
+                // Offset both buffers by one to exercise unaligned loads/stores.
+                let source: Vec<u8> = (0..1 + weights.len() * stride)
+                    .map(|i| (i * 67) as u8)
+                    .collect();
+                let mut actual = vec![123; width + 2];
+                let count = vertical(&source[1..], &mut actual[1..1 + width], stride, weights);
+                let enabled = cfg!(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"));
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                let enabled = enabled || std::arch::is_x86_feature_detected!("avx2");
+                assert_eq!(count, if enabled { width / 8 * 8 } else { 0 });
+                for x in 0..count {
+                    let sum = weights
+                        .iter()
+                        .enumerate()
+                        .fold(1_i64 << 21, |sum, (i, &w)| {
+                            sum + i64::from(source[1 + i * stride + x]) * i64::from(w)
+                        });
+                    assert_eq!(actual[1 + x], (sum >> 22).clamp(0, 255) as u8);
+                }
+                assert_eq!(actual[0], 123);
+                assert!(actual[1 + count..].iter().all(|&v| v == 123));
+            }
+        }
+    }
+
+    #[test]
+    fn colorize_dispatch_preserves_tails_and_guards() {
+        let tables: Vec<u8> = (0..768).map(|i| (i * 29 + i / 256 * 7) as u8).collect();
+        for n in [0, 1, 7, 8, 9, 15, 16, 17, 255, 256, 257] {
+            let source: Vec<u8> = (0..n + 1).map(|i| (i * 37) as u8).collect();
+            let mut output = vec![123; n * 3 + 2];
+            let count = dispatch_colorize(&source[1..], &mut output[1..1 + n * 3], &tables);
+            #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
+            assert_eq!(count, n / 16 * 16);
+            #[cfg(all(
+                not(RUSTC_IS_NIGHTLY),
+                any(target_arch = "x86", target_arch = "x86_64")
+            ))]
+            assert_eq!(
+                count,
+                if std::arch::is_x86_feature_detected!("avx2") {
+                    n / 8 * 8
+                } else {
+                    0
+                }
+            );
+            for i in 0..count {
+                let v = usize::from(source[1 + i]);
+                assert_eq!(
+                    &output[1 + i * 3..1 + (i + 1) * 3],
+                    &[tables[v], tables[256 + v], tables[512 + v]]
+                );
+            }
+            assert_eq!(output[0], 123);
+            assert!(output[1 + count * 3..].iter().all(|&v| v == 123));
         }
     }
 
@@ -374,7 +601,7 @@ mod tests {
     #[test]
     fn colorize_matches_scalar_at_vector_boundaries() {
         let tables: Vec<u8> = (0..768).map(|i| (i * 29 + i / 256 * 7) as u8).collect();
-        for n in [0, 1, 15, 16, 17, 255, 256, 257] {
+        for n in [0, 1, 7, 8, 9, 15, 16, 17, 255, 256, 257] {
             let source: Vec<u8> = (0..n).map(|i| (i * 37) as u8).collect();
             let mut output = vec![0; n * 3];
             colorize(&source, &mut output, &tables);
