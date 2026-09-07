@@ -160,6 +160,7 @@ dependencies = [
 name = "blanket"
 version = "1.0.0"
 dependencies = [
+ "flate2",
  "garb",
  "image",
  "jpegxl-rs",

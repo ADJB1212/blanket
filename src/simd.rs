@@ -47,6 +47,20 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
             unsafe {
                 while offset + 16 <= src.len() / S {
                     let ptr = src.as_ptr().add(offset * S);
+                    if S == 4 && C == 3 {
+                        // Compact 16 packed RGBA pixels with byte tables,
+                        // avoiding a full deinterleave followed by interleave.
+                        let rgba = vld1q_u8_x4(ptr);
+                        let a = vld1q_u8([0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20].as_ptr());
+                        let b = vld1q_u8([21, 22, 24, 25, 26, 28, 29, 30, 32, 33, 34, 36, 37, 38, 40, 41].as_ptr());
+                        let c = vld1q_u8([42, 44, 45, 46, 48, 49, 50, 52, 53, 54, 56, 57, 58, 60, 61, 62].as_ptr());
+                        vst1q_u8_x3(
+                            dst.as_mut_ptr().cast::<u8>().add(offset * C),
+                            uint8x16x3_t(vqtbl4q_u8(rgba, a), vqtbl4q_u8(rgba, b), vqtbl4q_u8(rgba, c)),
+                        );
+                        offset += 16;
+                        continue;
+                    }
                     let (r, g, b) = if S == 1 {
                         let gray = vld1q_u8(ptr);
                         (gray, gray, gray)
@@ -79,7 +93,7 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
     // Cheap grayscale expansion stays serial while its output fits in cache.
     let parallel_bytes = match S {
         1 => 5 * 1024 * 1024,
-        4 => 1024 * 1024,
+        4 => 2 * 1024 * 1024,
         _ => 2 * 1024 * 1024,
     };
     if spare.len() >= parallel_bytes {

@@ -30,8 +30,11 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 }
 
 fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
-    let mut pixels = buffer(source.len())?;
-    pixels.copy_from_slice(source);
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(source.len())
+        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.extend_from_slice(source);
     output(image, pixels)
 }
 

@@ -49,6 +49,36 @@ fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
     Image::from_pixels(size.0, size.1, image.mode, pixels, None)
 }
 
+/// Copy complete rows into a reserved, empty image without first zeroing it.
+fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_row: impl Fn(usize) -> &'a [u8] + Sync) {
+    assert!(pixels.is_empty());
+    let len = row_bytes.checked_mul(height).expect("validated image dimensions");
+    if len == 0 {
+        return;
+    }
+    if len < 4 * 1024 * 1024 {
+        for y in 0..height {
+            pixels.extend_from_slice(source_row(y));
+        }
+        return;
+    }
+    pixels.spare_capacity_mut()[..len]
+        .par_chunks_mut(row_bytes * 32)
+        .enumerate()
+        .for_each(|(band, rows)| {
+            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                let src = source_row(band * 32 + i);
+                assert_eq!(src.len(), row.len());
+                // SAFETY: source and destination are separate allocations.
+                // Each worker initializes only its disjoint destination rows.
+                unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), row.as_mut_ptr().cast::<u8>(), row.len()) };
+            }
+        });
+    // SAFETY: every byte in the reserved image was initialized above. If a
+    // worker panics, the vector remains empty and exposes no unwritten bytes.
+    unsafe { pixels.set_len(len) };
+}
+
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     let source = image.pixel_data()?;
@@ -60,13 +90,37 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         .map(|_| buffer((image.width, image.height), 1))
         .collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
-        for (channel, band) in bands.iter_mut().enumerate() {
-            chunks_mut(band, CHUNK_PIXELS, |chunk, dst| {
-                let start = chunk * CHUNK_PIXELS;
-                for (i, value) in dst.iter_mut().enumerate() {
-                    *value = source[(start + i) * channels + channel];
+        let split = |offset: usize, red: &mut [u8], green: &mut [u8], blue: &mut [u8], alpha: Option<&mut [u8]>| {
+            let src = &source[offset * channels..(offset + red.len()) * channels];
+            if let Some(alpha) = alpha {
+                for ((((r, g), b), a), pixel) in red.iter_mut().zip(green).zip(blue).zip(alpha).zip(src.as_chunks::<4>().0) {
+                    [*r, *g, *b, *a] = *pixel;
                 }
-            });
+            } else {
+                for (((r, g), b), pixel) in red.iter_mut().zip(green).zip(blue).zip(src.as_chunks::<3>().0) {
+                    [*r, *g, *b] = *pixel;
+                }
+            }
+        };
+        // Deinterleave all bands in one source pass and one Rayon dispatch.
+        let [red, green, blue, rest @ ..] = bands.as_mut_slice() else {
+            unreachable!()
+        };
+        if source.len() < 2 * 1024 * 1024 {
+            split(0, red, green, blue, rest.first_mut().map(Vec::as_mut_slice));
+        } else if let Some(alpha) = rest.first_mut() {
+            red.par_chunks_mut(CHUNK_PIXELS)
+                .zip(green.par_chunks_mut(CHUNK_PIXELS))
+                .zip(blue.par_chunks_mut(CHUNK_PIXELS))
+                .zip(alpha.par_chunks_mut(CHUNK_PIXELS))
+                .enumerate()
+                .for_each(|(i, (((r, g), b), a))| split(i * CHUNK_PIXELS, r, g, b, Some(a)));
+        } else {
+            red.par_chunks_mut(CHUNK_PIXELS)
+                .zip(green.par_chunks_mut(CHUNK_PIXELS))
+                .zip(blue.par_chunks_mut(CHUNK_PIXELS))
+                .enumerate()
+                .for_each(|(i, ((r, g), b))| split(i * CHUNK_PIXELS, r, g, b, None));
         }
     });
     bands
@@ -200,46 +254,35 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
         let mut pixels = reserved_buffer(size, channels)?;
         py.detach(|| {
             let row_bytes = size.0 as usize * channels;
-            for y in 0..size.1 {
-                let start = (((i64::from(y) - offset.1) as usize * image.width as usize) + (-offset.0) as usize) * channels;
-                pixels.extend_from_slice(&source[start..start + row_bytes]);
-            }
+            copy_rows(&mut pixels, row_bytes, size.1 as usize, |y| {
+                let start = (((y as i64 - offset.1) as usize * image.width as usize) + (-offset.0) as usize) * channels;
+                &source[start..start + row_bytes]
+            });
         });
         return output(image, size, pixels);
     }
-    let mut pixels = buffer(size, channels)?;
+    let mut pixels = reserved_buffer(size, channels)?;
     py.detach(|| {
         let left = offset.0.max(0).min(i64::from(size.0));
         let right = (offset.0.saturating_add(i64::from(image.width))).clamp(0, i64::from(size.0));
         let top = offset.1.max(0).min(i64::from(size.1));
         let bottom = (offset.1.saturating_add(i64::from(image.height))).clamp(0, i64::from(size.1));
         let row_bytes = size.0 as usize * channels;
-        let fill_row = |row: &mut [u8]| {
-            if fill.iter().all(|&v| v == 0) {
-                return;
-            } // buffer is already zeroed
-            match channels {
-                1 => row.fill(fill[0]),
-                3 => row.as_chunks_mut::<3>().0.iter_mut().for_each(|p| p.copy_from_slice(&fill)),
-                4 => row.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p.copy_from_slice(&fill)),
-                _ => unreachable!(),
+        let border = fill.repeat(size.0 as usize);
+        // Append each byte once; a padded image is mostly source data and
+        // does not need a zeroed full-size allocation or worker scheduling.
+        for y in 0..i64::from(size.1) {
+            if y >= top && y < bottom && right > left {
+                let lo = left as usize * channels;
+                let hi = right as usize * channels;
+                pixels.extend_from_slice(&border[..lo]);
+                let src = ((y - offset.1) as usize * image.width as usize + (left - offset.0) as usize) * channels;
+                pixels.extend_from_slice(&source[src..src + hi - lo]);
+                pixels.extend_from_slice(&border[hi..]);
+            } else {
+                pixels.extend_from_slice(&border[..row_bytes]);
             }
-        };
-        chunks_mut_above(&mut pixels, row_bytes * 32, 2 * 1024 * 1024, |band, rows| {
-            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                let y = (band * 32 + i) as i64;
-                if y >= top && y < bottom && right > left {
-                    let lo = left as usize * channels;
-                    let hi = right as usize * channels;
-                    fill_row(&mut row[..lo]);
-                    fill_row(&mut row[hi..]);
-                    let src = ((y - offset.1) as usize * image.width as usize + (left - offset.0) as usize) * channels;
-                    row[lo..hi].copy_from_slice(&source[src..src + hi - lo]);
-                } else {
-                    fill_row(row);
-                }
-            }
-        });
+        }
     });
     output(image, size, pixels)
 }
@@ -260,6 +303,17 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         (image.width, image.height)
     };
     let c = image.mode.channels();
+    if orientation == 4 {
+        let mut pixels = reserved_buffer(size, c)?;
+        py.detach(|| {
+            let row_bytes = image.width as usize * c;
+            copy_rows(&mut pixels, row_bytes, image.height as usize, |y| {
+                let start = (image.height as usize - 1 - y) * row_bytes;
+                &source[start..start + row_bytes]
+            });
+        });
+        return output(image, size, pixels);
+    }
     let mut pixels = buffer(size, c)?;
     py.detach(|| match image.mode {
         PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
@@ -293,13 +347,18 @@ fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usiz
             }
         } else {
             for x0 in (0..width).step_by(32) {
-                for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
-                    let y = band * 32 + i;
-                    let row = row.as_chunks_mut::<C>().0;
-                    for (x, dst) in row.iter_mut().enumerate().take((x0 + 32).min(width)).skip(x0) {
-                        let sx = if orientation == 7 || orientation == 8 { w - 1 - y } else { y };
-                        let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
-                        *dst = source[sy * w + sx];
+                let count = rows.len() / (width * C);
+                for x in x0..(x0 + 32).min(width) {
+                    let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
+                    let sx = if orientation == 7 || orientation == 8 {
+                        w - band * 32 - count
+                    } else {
+                        band * 32
+                    };
+                    let src = &source[sy * w + sx..sy * w + sx + count];
+                    for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
+                        let i = if orientation == 7 || orientation == 8 { count - 1 - i } else { i };
+                        row[x * C..(x + 1) * C].copy_from_slice(&src[i]);
                     }
                 }
             }
@@ -434,21 +493,39 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
     let source = source.as_chunks::<C>().0;
     let row_bytes = size.0 as usize * C;
     // Reduction reads many more bytes than it writes. Schedule by source work.
-    let threshold = MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1);
+    let threshold = if cfg!(target_arch = "aarch64") && C == 1 && fx == 3 && fy == 3 {
+        128 * 1024
+    } else {
+        MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1)
+    };
     chunks_mut_above(output, row_bytes * 8, threshold, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y0 = top + (band * 8 + i) as u32 * fy;
             let y1 = y0.saturating_add(fy).min(bottom);
             if fx == 3 && fy == 3 && y1 - y0 == 3 {
                 let full = ((right - left) / 3) as usize;
-                for (x, dst) in row.as_chunks_mut::<C>().0[..full].iter_mut().enumerate() {
-                    let start = y0 as usize * width as usize + left as usize + x * 3;
+                let start = y0 as usize * width as usize + left as usize;
+                let stride = width as usize;
+                let upper = source[start..start + full * 3].as_chunks::<3>().0;
+                let middle = source[start + stride..start + stride + full * 3].as_chunks::<3>().0;
+                let lower = source[start + stride * 2..start + stride * 2 + full * 3].as_chunks::<3>().0;
+                let done = if C == 1 {
+                    crate::ops_simd::reduce_three_l(
+                        upper.as_flattened().as_flattened(),
+                        middle.as_flattened().as_flattened(),
+                        lower.as_flattened().as_flattened(),
+                        &mut row[..full],
+                    )
+                } else {
+                    0
+                };
+                // Fixed contiguous groups expose the nine-sample sum to SIMD
+                // without repeating row offsets and bounds checks per pixel.
+                for (((dst, upper), middle), lower) in row.as_chunks_mut::<C>().0[..full].iter_mut().zip(upper).zip(middle).zip(lower).skip(done) {
                     for channel in 0..C {
                         let mut sum = 0_u32;
-                        for dy in 0..3 {
-                            let offset = start + dy * width as usize;
-                            sum +=
-                                u32::from(source[offset][channel]) + u32::from(source[offset + 1][channel]) + u32::from(source[offset + 2][channel]);
+                        for samples in [upper, middle, lower] {
+                            sum += u32::from(samples[0][channel]) + u32::from(samples[1][channel]) + u32::from(samples[2][channel]);
                         }
                         dst[channel] = (((sum + 4) * 1_864_135) >> 24) as u8;
                     }
@@ -576,7 +653,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
     let source = source.as_chunks::<C>().0;
-    chunks_mut(output, row_bytes * 16, |band, rows| {
+    chunks_mut_above(output, row_bytes * 16, 1024 * 1024, |band, rows| {
         for i in 0..rows.len() / row_bytes {
             let sy = ys[band * 16 + i];
             if i > 0 && sy == ys[band * 16 + i - 1] {
@@ -588,9 +665,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
             let dst = row.as_chunks_mut::<C>().0;
             if half_width {
                 // Contiguous pairs expose the common 2:1 gather to SIMD.
-                for (dst, pair) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
-                    *dst = pair[1];
-                }
+                crate::ops_simd::nearest_half::<C>(src.as_flattened(), dst.as_flattened_mut());
             } else {
                 for (dst, &sx) in dst.iter_mut().zip(xs) {
                     *dst = src[sx];
@@ -806,6 +881,37 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                 })
                 .collect()
         });
+        if channels != 1
+            && let Some(columns) = &columns
+        {
+            // Interior extents need neither per-pixel fill checks nor
+            // optional byte offsets; reuse the typed resize gather.
+            if columns.iter().all(Option::is_some) && row_origins.iter().all(|&(_, y)| y >= 0.0 && y < image.height as f64) {
+                let xs: Vec<_> = columns.iter().map(|x| x.unwrap() / channels).collect();
+                let ys: Vec<_> = row_origins.iter().map(|&(_, y)| y as usize).collect();
+                if channels == 3 {
+                    // The grayscale table kernel also gathers RGB bytes when
+                    // each pixel coordinate is expanded into its three bands.
+                    let bytes: Vec<_> = columns.iter().flat_map(|x| (0..3).map(move |c| Some(x.unwrap() + c))).collect();
+                    let map = crate::ops_simd::NearestL::new(&bytes, image.width as usize * 3).unwrap();
+                    if map.is_vectorized() {
+                        chunks_mut_above(&mut pixels, row_bytes * 16, 512 * 1024, |band, rows| {
+                            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                                let start = ys[band * 16 + i] * image.width as usize * 3;
+                                map.sample(&source[start..start + image.width as usize * 3], row);
+                            }
+                        });
+                        return;
+                    }
+                }
+                match image.mode {
+                    PixelMode::Rgb => resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::Rgba => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::L => unreachable!(),
+                }
+                return;
+            }
+        }
         let nearest_l = columns
             .as_ref()
             .filter(|_| channels == 1)

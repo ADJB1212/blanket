@@ -3,6 +3,7 @@ use std::io::Cursor;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
+use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
 use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
@@ -15,6 +16,12 @@ use crate::raster::{Image, PixelMode};
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
+
+thread_local! {
+    // A runner is used by only its owning calling thread. Reuse its workers
+    // across decodes; each image still gets a fresh decoder and metadata state.
+    static JXL_DECODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageFormat {
@@ -163,9 +170,13 @@ fn multiply_u8(left: u8, right: u8) -> u8 {
 }
 
 fn decode_jxl(data: &[u8]) -> Result<Image, String> {
-    let runner = ThreadsRunner::default();
-    let decoder = decoder_builder().parallel_runner(&runner).build().map_err(|error| error.to_string())?;
-    let (info, pixels) = decoder.decode_with::<u8>(data).map_err(|error| error.to_string())?;
+    // Size the pool after reading basic info instead of starting one worker
+    // per CPU even for small images with only a few independently coded groups.
+    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| {
+        let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
+        let decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
+        decoder.decode_with::<u8>(data).map_err(|error| error.to_string())
+    })?;
     validate_dimensions(info.width, info.height)?;
 
     let (mode, pixels) = match (info.num_color_channels, info.has_alpha_channel) {

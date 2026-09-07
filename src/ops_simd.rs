@@ -545,8 +545,120 @@ mod neon {
     }
 }
 
+/// Gather the second pixel of each pair for exact half-width nearest resize.
+pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
+    assert_eq!(source.len(), output.len() * 2);
+    #[allow(unused_mut)]
+    let mut done = 0;
+    #[cfg(target_arch = "aarch64")]
+    if C == 3 {
+        use std::arch::aarch64::*;
+        // SAFETY: NEON is mandatory on AArch64. Each iteration reads 32 RGB
+        // pixels and writes 16, within the checked source and output lengths.
+        unsafe {
+            while done + 48 <= output.len() {
+                let a = vld3q_u8(source.as_ptr().add(done * 2));
+                let b = vld3q_u8(source.as_ptr().add(done * 2 + 48));
+                vst3q_u8(
+                    output.as_mut_ptr().add(done),
+                    uint8x16x3_t(vuzp2q_u8(a.0, b.0), vuzp2q_u8(a.1, b.1), vuzp2q_u8(a.2, b.2)),
+                );
+                done += 48;
+            }
+        }
+    }
+    for (dst, pair) in output[done..]
+        .as_chunks_mut::<C>()
+        .0
+        .iter_mut()
+        .zip(source[done * 2..].as_chunks::<C>().0.as_chunks::<2>().0)
+    {
+        *dst = pair[1];
+    }
+}
+
+/// Return the number of complete grayscale 3x3 averages written by SIMD.
+pub(crate) fn reduce_three_l(upper: &[u8], middle: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
+    assert_eq!(upper.len(), output.len() * 3);
+    assert_eq!(middle.len(), upper.len());
+    assert_eq!(lower.len(), upper.len());
+    #[allow(unused_mut)]
+    let mut done = 0;
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        // SAFETY: NEON is mandatory on AArch64. Each iteration reads 48
+        // bytes from each checked row and writes 16 bytes inside output.
+        unsafe {
+            while done + 16 <= output.len() {
+                let mut lo = vdupq_n_u16(4);
+                let mut hi = vdupq_n_u16(4);
+                for row in [upper, middle, lower] {
+                    let p = vld3q_u8(row.as_ptr().add(done * 3));
+                    for v in [p.0, p.1, p.2] {
+                        lo = vaddw_u8(lo, vget_low_u8(v));
+                        hi = vaddw_u8(hi, vget_high_u8(v));
+                    }
+                }
+                let average = |sum| {
+                    let a = vmulq_n_u32(vmovl_u16(vget_low_u16(sum)), 1_864_135);
+                    let b = vmulq_n_u32(vmovl_u16(vget_high_u16(sum)), 1_864_135);
+                    vshrn_n_u16::<8>(vcombine_u16(vshrn_n_u32::<16>(a), vshrn_n_u32::<16>(b)))
+                };
+                vst1q_u8(output.as_mut_ptr().add(done), vcombine_u8(average(lo), average(hi)));
+                done += 16;
+            }
+        }
+    }
+    done
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reduce_three_l_rounding_and_guards() {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33] {
+            for value in 0..=255 {
+                let upper = vec![value; count * 3 + 1];
+                let middle: Vec<_> = (0..count * 3 + 1).map(|i| if value % 2 == 0 { (i * 37) as u8 } else { value }).collect();
+                let lower = vec![value; count * 3 + 1];
+                let mut output = vec![73; count + 2];
+                let done = super::reduce_three_l(&upper[1..], &middle[1..], &lower[1..], &mut output[1..count + 1]);
+                for i in 0..done {
+                    let sum: u32 = [&upper, &middle, &lower]
+                        .iter()
+                        .flat_map(|r| &r[1 + i * 3..1 + (i + 1) * 3])
+                        .map(|&v| u32::from(v))
+                        .sum();
+                    assert_eq!(output[i + 1], (((sum + 4) * 1_864_135) >> 24) as u8);
+                }
+                assert_eq!(output[0], 73);
+                assert!(output[done + 1..].iter().all(|&v| v == 73));
+            }
+        }
+    }
+
+    #[test]
+    fn nearest_half_vector_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 400] {
+                let source: Vec<u8> = (0..count * C * 2 + 1).map(|i| (i * 37 + i / 11) as u8).collect();
+                let mut output = vec![199; count * C + 2];
+                super::nearest_half::<C>(&source[1..], &mut output[1..count * C + 1]);
+                let expected: Vec<_> = (0..count)
+                    .flat_map(|i| (0..C).map(move |c| 1 + (i * 2 + 1) * C + c))
+                    .map(|i| source[i])
+                    .collect();
+                assert_eq!(&output[1..count * C + 1], expected);
+                assert_eq!(output[0], 199);
+                assert_eq!(output[count * C + 1], 199);
+            }
+        }
+        check::<1>();
+        check::<3>();
+        check::<4>();
+    }
+
     use super::*;
 
     #[test]
