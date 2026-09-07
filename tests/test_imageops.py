@@ -108,6 +108,40 @@ def test_borders(mode: str, border: object, name: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_crop_border_and_box_are_distinct(mode: str) -> None:
+    b, p = pair(mode)
+    b.info["custom"] = "preserved"
+    border = ImageOps.crop(b, border=2)
+    same(border, PILOps.crop(p, border=2))
+    assert border.size == (b.width - 4, b.height - 4)
+    box = (1, 2, 3, 4)
+    region = b.crop(box=box)
+    same(region, p.crop(box=box))
+    assert region.size == (2, 2)
+    # Pillow retains tuple border support despite its integer annotation.
+    sides = ImageOps.crop(b, border=box)
+    same(sides, PILOps.crop(p, border=box))
+    assert sides.size == (b.width - 4, b.height - 6)
+    for result in (border, region, sides, ImageOps.crop(b), b.crop()):
+        assert result is not b
+        assert result.info == b.info and result.info is not b.info
+    with pytest.raises(TypeError):
+        b.crop(border=2)
+    with pytest.raises(TypeError):
+        ImageOps.crop(b, box=box)
+
+
+@pytest.mark.parametrize("border", [100, (0, 100)])
+def test_crop_border_error_matches_pillow(border: object) -> None:
+    b, p = pair("L")
+    with pytest.raises(ValueError) as expected:
+        PILOps.crop(p, border=border)
+    with pytest.raises(ValueError) as actual:
+        ImageOps.crop(b, border=border)
+    assert str(actual.value) == str(expected.value)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize(
     "color", [0, 0x12345678, "red", "RebeccaPurple", "#123", "#abcd", "#12345678", "rgb(12, 34, 56)", "rgb(20%, 30%, 50%)", "rgba(1, 2, 3, 4)", "hsl(120, 30%, 50%)", "hsv(250, 50%, 80%)"]
 )

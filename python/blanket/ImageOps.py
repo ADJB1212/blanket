@@ -160,14 +160,14 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     return Image.Image(ops_canvas(resized._native, size, offset, color_pixel(color, image.mode)))
 
 
-def crop(image: Image.Image, border: Border = 0) -> Image.Image:
-    """Remove an integer, (horizontal, vertical), or four-sided border."""
+def crop(image: Image.Image, border: int = 0) -> Image.Image:
+    """Remove ``border`` pixels from each side of the image.
+
+    Like Pillow, also accepts (horizontal, vertical) or (left, top, right,
+    bottom) border tuples. Use image.crop(box) to select a rectangle instead.
+    """
     left, top, right, bottom = _border(border)
-    box = (left, top, image.width - right, image.height - bottom)
-    if box[2] < box[0] or box[3] < box[1]:
-        raise ValueError("Coordinate 'right' or 'lower' is less than 'left' or 'upper'")
-    left, top, right, bottom = (round(v) for v in box)
-    return _result(image, ops_canvas(image._native, (right - left, bottom - top), (-left, -top), [0] * len(image.mode)))
+    return image.crop((left, top, image.width - right, image.height - bottom))
 
 
 def scale(image: Image.Image, factor: float, resample: int = Image.Resampling.BICUBIC) -> Image.Image:

@@ -8,7 +8,7 @@ import os
 from operator import index
 from enum import IntEnum
 from pathlib import Path
-from typing import BinaryIO
+from typing import BinaryIO, Protocol, Sequence
 
 from ._blanket import _Image, open_bytes
 from ._blanket import fromarray as _native_fromarray
@@ -29,6 +29,43 @@ class Resampling(IntEnum):
 
 
 NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, HAMMING = Resampling
+
+
+class Transpose(IntEnum):
+    """Pillow-compatible flip and right-angle rotation identifiers."""
+
+    FLIP_LEFT_RIGHT = 0
+    FLIP_TOP_BOTTOM = 1
+    ROTATE_90 = 2
+    ROTATE_180 = 3
+    ROTATE_270 = 4
+    TRANSPOSE = 5
+    TRANSVERSE = 6
+
+
+class Transform(IntEnum):
+    """Pillow-compatible geometric transformation identifiers."""
+
+    AFFINE = 0
+    EXTENT = 1
+    PERSPECTIVE = 2
+    QUAD = 3
+    MESH = 4
+
+
+FLIP_LEFT_RIGHT, FLIP_TOP_BOTTOM, ROTATE_90, ROTATE_180, ROTATE_270, TRANSPOSE, TRANSVERSE = Transpose
+AFFINE, EXTENT, PERSPECTIVE, QUAD, MESH = Transform
+
+
+class SupportsGetData(Protocol):
+    def getdata(self) -> tuple[int, Sequence[object]]: ...
+
+
+class ImageTransformHandler:
+    """Base class for custom transformation handlers."""
+
+    def transform(self, size: tuple[int, int], image: Image, resample: int = Resampling.NEAREST, fill: int = 1) -> Image:
+        raise NotImplementedError
 
 
 class Image:
@@ -77,6 +114,162 @@ class Image:
 
     def tobytes(self) -> bytes:
         return self._native.tobytes()
+
+    def split(self) -> tuple[Image, ...]:
+        """Return independent L images for each band, in channel order."""
+        from ._blanket import ops_split
+
+        bands = tuple(Image(native) for native in ops_split(self._native))
+        for band in bands:
+            band.info.update(self.info)
+        return bands
+
+    def reduce(self, factor: int | tuple[int, int], box: tuple[int, int, int, int] | None = None) -> Image:
+        """Average integer blocks, rounding the output dimensions up.
+
+        factor can specify horizontal and vertical factors separately.
+        box selects a nonempty source rectangle within the image.
+        """
+        from ._blanket import ops_reduce
+
+        factor = factor if isinstance(factor, (list, tuple)) else (factor, factor)
+        factor = tuple(index(value) for value in factor)
+        if len(factor) != 2:
+            raise TypeError("factor must contain two integers")
+        if min(factor) < 1:
+            raise ValueError("scale must be > 0")
+        box = (0, 0, self.width, self.height) if box is None else tuple(index(v) for v in box)
+        if len(box) != 4:
+            raise TypeError("box must contain four integers")
+        if factor == (1, 1) and box == (0, 0, self.width, self.height):
+            return self.crop()
+        if box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height:
+            raise ValueError("box must be within the image")
+        if box[2] <= box[0] or box[3] <= box[1]:
+            raise ValueError("box can't be empty")
+        result = Image(ops_reduce(self._native, factor, box))
+        result.info.update(self.info)
+        return result
+
+    def entropy(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> float:
+        """Return Shannon entropy over all channel histogram bins.
+
+        An L mask selects pixels with nonzero values. As in Pillow, extrema
+        is ignored for the supported 8-bit modes.
+        """
+        from ._blanket import ops_entropy
+
+        self.load()
+        if mask is not None:
+            mask.load()
+        return ops_entropy(self._native, None if mask is None else mask._native)
+
+    def transpose(self, method: int) -> Image:
+        """Return a flipped or right-angle rotated copy using ``Transpose``."""
+        from ._blanket import ops_transpose
+
+        method = index(method)
+        if method not in range(7):
+            raise ValueError("No such transpose operation")
+        result = Image(ops_transpose(self._native, (2, 4, 8, 3, 6, 5, 7)[method]))
+        result.info.update(self.info)
+        return result
+
+    def transform(
+        self,
+        size: tuple[int, int],
+        method: int | ImageTransformHandler | SupportsGetData,
+        data: Sequence[object] | None = None,
+        resample: int = Resampling.NEAREST,
+        fill: int = 1,
+        fillcolor: str | int | tuple[int, ...] | None = None,
+    ) -> Image:
+        """Map source pixels to a new canvas using a ``Transform`` method.
+
+        AFFINE and PERSPECTIVE use inverse mapping coefficients. EXTENT takes
+        a source rectangle. QUAD takes NW, SW, SE, NE source corners; MESH
+        takes (destination rectangle, source quad) pairs in drawing order.
+        Supports NEAREST, BILINEAR and BICUBIC, plus optional fillcolor.
+        """
+        from ._blanket import ops_affine, ops_warp
+        from ._color import color_pixel
+
+        if isinstance(method, ImageTransformHandler):
+            return method.transform(size, self, resample=resample, fill=fill)
+        if hasattr(method, "getdata"):
+            method, data = method.getdata()
+        if data is None:
+            raise ValueError("missing method data")
+        if method not in tuple(Transform):
+            raise ValueError("unknown transformation method")
+        if resample not in (0, 2, 3):
+            raise ValueError("transform supports NEAREST, BILINEAR and BICUBIC")
+        size = tuple(index(v) for v in size)
+        if len(size) != 2:
+            raise TypeError("size must contain two integers")
+        if min(size) < 0:
+            raise ValueError("width and height must be >= 0")
+        self.load()
+        color = color_pixel(fillcolor, self.mode)
+        if self.mode == "RGBA" and resample != 0 and isinstance(fillcolor, str):
+            color[3] = 255
+
+        def coordinates(values: Sequence[object], count: int) -> tuple[float, ...]:
+            values = tuple(float(v) for v in values[:count])
+            if len(values) != count or not all(math.isfinite(v) for v in values):
+                raise ValueError(f"transform requires {count} finite coordinates")
+            return values
+
+        if method in (Transform.AFFINE, Transform.EXTENT):
+            if method == Transform.EXTENT:
+                left, top, right, bottom = coordinates(data, 4)
+                matrix = ((right - left) / size[0], 0, left, 0, (bottom - top) / size[1], top)
+            else:
+                matrix = coordinates(data, 6)
+            native = ops_affine(self._native, size, matrix, resample, color)
+        else:
+            if method == Transform.MESH:
+                mesh = []
+                for box, quad in data:
+                    box = tuple(index(v) for v in box)
+                    if len(box) != 4:
+                        raise ValueError("mesh boxes require four coordinates")
+                    mesh.append((box, coordinates(quad, 8)))
+            else:
+                mesh = [((0, 0, *size), coordinates(data, 8))]
+            native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE),
+                              color if fillcolor is not None else None)
+        result = Image(native)
+        result.info.update(self.info)
+        return result
+
+    def crop(self, box: tuple[float, float, float, float] | None = None) -> Image:
+        """Return the rectangular region defined by ``box``.
+
+        Coordinates are ``(left, upper, right, lower)``. Areas outside the
+        source image are padded with zero-valued pixels, as in Pillow.
+        """
+        from ._blanket import ops_canvas, ops_transpose
+
+        if box is None:
+            self.load()
+            native = ops_transpose(self._native, 1)
+        else:
+            if box[2] < box[0]:
+                raise ValueError("Coordinate 'right' is less than 'left'")
+            if box[3] < box[1]:
+                raise ValueError("Coordinate 'lower' is less than 'upper'")
+            self.load()
+            left, upper, right, lower = (round(value) for value in box)
+            native = ops_canvas(
+                self._native,
+                (right - left, lower - upper),
+                (-left, -upper),
+                [0] * len(self.mode),
+            )
+        result = Image(native)
+        result.info.update(self.info)
+        return result
 
     def resize(self, size: tuple[int, int], resample: int | None = None, box: tuple[float, float, float, float] | None = None, reducing_gap: float | None = None) -> Image:
         """Return a resized copy, using BICUBIC unless a filter is specified.
@@ -129,6 +322,69 @@ class Image:
                     )
             native = ops_resize(native, size, method, box)
         result = Image(native)
+        result.info.update(self.info)
+        return result
+
+    def rotate(
+        self,
+        angle: float,
+        resample: int = Resampling.NEAREST,
+        expand: bool = False,
+        center: tuple[float, float] | None = None,
+        translate: tuple[float, float] | None = None,
+        fillcolor: str | int | tuple[int, ...] | None = None,
+    ) -> Image:
+        """Return a copy rotated counterclockwise by an angle in degrees.
+
+        Supports NEAREST (default), BILINEAR, and BICUBIC. The default center
+        is the image midpoint; translate shifts the result after rotation.
+        expand enlarges the canvas assuming the default center and no translation.
+        fillcolor colors pixels outside the source image.
+        """
+        from ._blanket import ops_affine, ops_transpose
+        from ._color import color_pixel
+
+        angle %= 360.0
+        if not math.isfinite(angle):
+            raise ValueError("angle must be finite")
+        self.load()
+        orientation = None
+        if not (center or translate):
+            if angle in (0, 180):
+                orientation = 1 if angle == 0 else 3
+            elif angle in (90, 270) and (expand or self.width == self.height):
+                orientation = 8 if angle == 90 else 6
+        if orientation is not None:
+            result = Image(ops_transpose(self._native, orientation))
+        else:
+            if resample not in (Resampling.NEAREST, Resampling.BILINEAR, Resampling.BICUBIC):
+                raise ValueError("rotate supports NEAREST, BILINEAR and BICUBIC")
+            w, h = self.size
+            cx, cy = (w / 2, h / 2) if center is None else center
+            tx, ty = (0, 0) if translate is None else translate
+            if not all(math.isfinite(v) for v in (cx, cy, tx, ty)):
+                raise ValueError("center and translate must contain finite coordinates")
+            radians = -math.radians(angle)
+            a, b = round(math.cos(radians), 15), round(math.sin(radians), 15)
+            d, e = -b, a
+            c = a * (-cx - tx) + b * (-cy - ty) + cx
+            f = d * (-cx - tx) + e * (-cy - ty) + cy
+            if expand:
+                corners = [(a * x + b * y + c, d * x + e * y + f)
+                           for x, y in ((0, 0), (w, 0), (w, h), (0, h))]
+                nw = math.ceil(max(x for x, _ in corners)) - math.floor(min(x for x, _ in corners))
+                nh = math.ceil(max(y for _, y in corners)) - math.floor(min(y for _, y in corners))
+                dx, dy = -(nw - w) / 2, -(nh - h) / 2
+                c, f = a * dx + b * dy + c, d * dx + e * dy + f
+                w, h = nw, nh
+            fill = color_pixel(fillcolor, self.mode)
+            if self.mode == "RGBA" and resample != Resampling.NEAREST and isinstance(fillcolor, str):
+                # Pillow parses strings in its intermediate RGBa mode as RGB.
+                fill[3] = 255
+            result = Image(ops_affine(
+                self._native, (w, h), (a, b, c, d, e, f),
+                resample, fill,
+            ))
         result.info.update(self.info)
         return result
 
@@ -255,4 +511,7 @@ def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:
     return value
 
 
-__all__ = ["Image", "Resampling", "NEAREST", "LANCZOS", "BILINEAR", "BICUBIC", "BOX", "HAMMING", "fromarray", "frombytes", "open"]
+__all__ = ["Image", "Resampling", "Transpose", "Transform", "ImageTransformHandler", "SupportsGetData",
+           "NEAREST", "LANCZOS", "BILINEAR", "BICUBIC", "BOX", "HAMMING",
+           "FLIP_LEFT_RIGHT", "FLIP_TOP_BOTTOM", "ROTATE_90", "ROTATE_180", "ROTATE_270", "TRANSPOSE", "TRANSVERSE",
+           "AFFINE", "EXTENT", "PERSPECTIVE", "QUAD", "MESH", "fromarray", "frombytes", "open"]

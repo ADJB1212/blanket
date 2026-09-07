@@ -143,6 +143,49 @@ class MirrorMesh:
         return [((0, 0, w, h), (w, 0, w, h, 0, h, 0, 0))]
 
 
+def check_bands_statistics() -> int:
+    """Compare split, reduction, and entropy across all supported modes."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        blanket = BlanketImage.frombytes(mode, (37, 29), raw)
+        pillow = PillowImage.frombytes(mode, (37, 29), raw)
+        for actual, expected in zip(blanket.split(), pillow.split()):
+            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
+            checks += 1
+        for factor in (1, 2, 3, (2, 5)):
+            actual, expected = blanket.reduce(factor), pillow.reduce(factor)
+            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
+            checks += 1
+        assert abs(blanket.entropy() - pillow.entropy()) < 1e-12
+        checks += 1
+        mask = pixels("L")
+        b_mask = BlanketImage.frombytes("L", blanket.size, mask)
+        p_mask = PillowImage.frombytes("L", pillow.size, mask)
+        assert abs(blanket.entropy(b_mask) - pillow.entropy(p_mask)) < 1e-12
+        checks += 1
+    return checks
+
+
+def check_crop_apis() -> int:
+    """Keep Image.crop box coordinates distinct from ImageOps.crop borders."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        blanket = BlanketImage.frombytes(mode, (37, 29), raw)
+        pillow = PillowImage.frombytes(mode, (37, 29), raw)
+        for box in (None, (1, 2, 3, 4), (-2, -3, 40, 32), (0.5, 1.5, 9.5, 8.5)):
+            actual, expected = blanket.crop(box=box), pillow.crop(box=box)
+            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), f"Image.crop {mode} {box}"
+            checks += 1
+        for border in (0, 2, -2, (1, 2), (1, 2, 3, 4)):
+            actual = BlanketOps.crop(blanket, border=border)
+            expected = PillowOps.crop(pillow, border=border)
+            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), f"ImageOps.crop {mode} {border}"
+            checks += 1
+    return checks
+
+
 def check_imageops() -> int:
     """Compare every ImageOps function, including masks, filters and EXIF."""
     checks = 0
@@ -236,6 +279,8 @@ def main() -> None:
         + check_jpeg_interop()
         + check_jxl_roundtrip()
         + check_pillow_adapter()
+        + check_crop_apis()
+        + check_bands_statistics()
     )
     imageops_checks = check_imageops()
     imageenhance_checks = check_imageenhance()

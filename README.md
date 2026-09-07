@@ -24,11 +24,40 @@ strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
 path extension, or accepts an explicit format for streams. `Image.Image.convert()`
 supports all conversions among `L`, `RGB`, and `RGBA`.
 
+`image.split()` returns independent `L` images for each channel.
+`image.reduce(factor, box=None)` averages integer pixel blocks; `factor` can
+be an integer or a `(horizontal, vertical)` pair. Output dimensions round up,
+and RGBA reduction accounts for alpha.
+`image.entropy(mask=None, extrema=None)` returns Shannon entropy over channel
+histogram bins, optionally selecting pixels with a nonzero `L` mask. `extrema`
+is accepted for Pillow compatibility and ignored for 8-bit images.
+
 `image.resize((width, height), resample=None, box=None, reducing_gap=None)`
 returns a new image and copies its metadata. The default filter is BICUBIC;
 all six `Image.Resampling` filters are supported. Use `box` to select a source
 rectangle or `reducing_gap` (at least `1.0`) to enable integer reduction before
 resampling.
+
+`image.crop((left, upper, right, lower))` returns a rectangular copy, padding
+areas outside the image with zero-valued pixels. Omitting the box copies the
+whole image.
+`ImageOps.crop(image, border=2)` instead removes two pixels from each side;
+its argument is a border width, not a rectangle.
+
+`image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)` returns a flipped or rotated
+copy. All seven Pillow transpose operations are supported.
+
+`image.transform(size, method, data=None, resample=Image.Resampling.NEAREST,
+fill=1, fillcolor=None)` supports `Image.Transform.AFFINE`, `EXTENT`,
+`PERSPECTIVE`, `QUAD`, and `MESH`, with NEAREST, BILINEAR, or BICUBIC sampling.
+It also accepts objects with `getdata()` and `Image.ImageTransformHandler`
+subclasses. Both methods copy image metadata.
+
+`image.rotate(angle, resample=Image.Resampling.NEAREST, expand=False,
+center=None, translate=None, fillcolor=None)` returns a counterclockwise rotated
+copy and preserves metadata. Rotation supports NEAREST, BILINEAR, and BICUBIC,
+with optional canvas expansion, rotation center, translation, and fill color.
+Expansion assumes the default center and no translation.
 
 Supported encoder options are:
 

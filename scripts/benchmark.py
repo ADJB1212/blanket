@@ -173,6 +173,60 @@ def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comps
 
 
+def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark crop, rotation, every transpose, and every transform by mode."""
+    w, h = size
+    target = (max(1, w // 2), max(1, h // 2))
+    inset = (w * 0.1, h * 0.1, w * 0.9, h * 0.9)
+    quad = (w * 0.05, h * 0.1, w * 0.1, h * 0.95,
+            w * 0.9, h * 0.9, w * 0.95, h * 0.05)
+    mesh = [((0, 0, *target), quad)]
+    transforms = [
+        (BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)),
+        (BlanketImage.Transform.EXTENT, inset),
+        (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)),
+        (BlanketImage.Transform.QUAD, quad),
+        (BlanketImage.Transform.MESH, mesh),
+    ]
+    comps: list[Comparison] = []
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        for label, box in (("copy", None), ("inset", inset), ("padded", (-w // 10, -h // 10, w, h))):
+            comps.append((f"Image.crop {label} {mode}", partial(blanket.crop, box=box), partial(pillow.crop, box=box)))
+        for method in BlanketImage.Transpose:
+            comps.append((f"transpose {method.name} {mode}", partial(blanket.transpose, method), partial(pillow.transpose, int(method))))
+        comps.append((f"rotate 90 expand {mode}", partial(blanket.rotate, 90, expand=True), partial(pillow.rotate, 90, expand=True)))
+        for resample in (BlanketImage.Resampling.NEAREST, BlanketImage.Resampling.BILINEAR, BlanketImage.Resampling.BICUBIC):
+            for label, options in (("17", {}), ("17 expand fill", {"expand": True, "fillcolor": "navy"})):
+                comps.append((f"rotate {label} {resample.name} {mode}", partial(blanket.rotate, 17, resample=resample, **options), partial(pillow.rotate, 17, resample=int(resample), **options)))
+            for method, data in transforms:
+                comps.append((f"transform {method.name} {resample.name} {mode}", partial(blanket.transform, target, method, data, resample=resample), partial(pillow.transform, target, int(method), data, resample=int(resample))))
+    return comps
+
+
+def band_statistics_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark band copies, integer reduction, and masked entropy."""
+    w, h = size
+    mask_raw = bytes(i % 2 for i in range(w * h))
+    b_mask = BlanketImage.frombytes("L", size, mask_raw)
+    p_mask = PillowImage.frombytes("L", size, mask_raw)
+    comps: list[Comparison] = []
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        comps.append((f"split {mode}", blanket.split, pillow.split))
+        comps.append((f"entropy {mode}", blanket.entropy, pillow.entropy))
+        comps.append((f"entropy masked {mode}", partial(blanket.entropy, b_mask), partial(pillow.entropy, p_mask)))
+        for factor in (2, 3, (2, 3)):
+            comps.append((f"reduce {factor} {mode}", partial(blanket.reduce, factor), partial(pillow.reduce, factor)))
+        box = (w // 10, h // 10, w - w // 10, h - h // 10)
+        comps.append((f"reduce box {mode}", partial(blanket.reduce, 3, box=box), partial(pillow.reduce, 3, box=box)))
+    return comps
+
+
 def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Benchmark array/byte construction, extraction, and Pillow conversion."""
     raw = make_rgb(*size)
@@ -235,7 +289,8 @@ def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
         if mode == "L":
             cases.append(("colorize", {"black": "navy", "white": "gold"}))
         for name, options in cases:
-            comps.append((f"{name} {mode}", partial(getattr(BlanketOps, name), blanket, **options), partial(getattr(PillowOps, name), pillow, **options)))
+            label = f"ImageOps.crop border={border}" if name == "crop" else name
+            comps.append((f"{label} {mode}", partial(getattr(BlanketOps, name), blanket, **options), partial(getattr(PillowOps, name), pillow, **options)))
     return comps
 
 
@@ -336,7 +391,7 @@ def main() -> None:
 
         sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
         if not args.jxl_only:
-            sections += [("Conversions", conversion_comparisons(size)), ("Resize", resize_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size)), ("ImageEnhance", imageenhance_comparisons(size))]
+            sections += [("Conversions", conversion_comparisons(size)), ("Resize", resize_comparisons(size)), ("Geometry", geometry_comparisons(size)), ("Bands and statistics", band_statistics_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size)), ("ImageEnhance", imageenhance_comparisons(size))]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:

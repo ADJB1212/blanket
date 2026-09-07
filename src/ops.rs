@@ -15,15 +15,25 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_split, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_entropy, module)?)?;
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
     module.add_function(wrap_pyfunction!(ops_transpose, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_reduce, module)?)?;
     module.add_function(wrap_pyfunction!(ops_mesh, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_warp, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_affine, module)?)?;
     Ok(())
 }
 
 fn buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
+    let mut result = reserved_buffer(size, channels)?;
+    result.resize(size.0 as usize * size.1 as usize * channels, 0);
+    Ok(result)
+}
+
+fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
     let len = (size.0 as usize)
         .checked_mul(size.1 as usize)
         .and_then(|n| n.checked_mul(channels))
@@ -32,12 +42,63 @@ fn buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
     result
         .try_reserve_exact(len)
         .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    result.resize(len, 0);
     Ok(result)
 }
 
 fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
     Image::from_pixels(size.0, size.1, image.mode, pixels, None)
+}
+
+#[pyfunction]
+fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
+    let source = image.pixel_data()?;
+    let channels = image.mode.channels();
+    if channels == 1 {
+        return py.detach(|| {
+            Image::from_pixels(
+                image.width,
+                image.height,
+                PixelMode::L,
+                source.to_vec(),
+                None,
+            )
+            .map(|band| vec![band])
+        });
+    }
+    let mut bands = (0..channels)
+        .map(|_| buffer((image.width, image.height), 1))
+        .collect::<PyResult<Vec<_>>>()?;
+    py.detach(|| {
+        for (channel, band) in bands.iter_mut().enumerate() {
+            chunks_mut(band, CHUNK_PIXELS, |chunk, dst| {
+                let start = chunk * CHUNK_PIXELS;
+                for (i, value) in dst.iter_mut().enumerate() {
+                    *value = source[(start + i) * channels + channel];
+                }
+            });
+        }
+    });
+    bands
+        .into_iter()
+        .map(|pixels| Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None))
+        .collect()
+}
+
+#[pyfunction(signature = (image, mask=None))]
+fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<f64> {
+    let bins = ops_histogram(py, image, mask)?;
+    let total = bins.iter().sum::<u64>() as f64;
+    if total == 0.0 {
+        return Ok(f64::NAN);
+    }
+    Ok(-bins
+        .into_iter()
+        .filter(|&n| n != 0)
+        .map(|n| {
+            let probability = n as f64 / total;
+            probability * probability.log2()
+        })
+        .sum::<f64>())
 }
 
 #[pyfunction]
@@ -146,6 +207,25 @@ fn ops_canvas(
     if fill.len() != channels {
         return Err(PyValueError::new_err("invalid fill color"));
     }
+    if offset.0 <= 0
+        && offset.1 <= 0
+        && offset.0.saturating_add(i64::from(image.width)) >= i64::from(size.0)
+        && offset.1.saturating_add(i64::from(image.height)) >= i64::from(size.1)
+    {
+        // An interior crop writes every byte. Append complete source rows so
+        // allocation does not first zero memory that is immediately replaced.
+        let mut pixels = reserved_buffer(size, channels)?;
+        py.detach(|| {
+            let row_bytes = size.0 as usize * channels;
+            for y in 0..size.1 {
+                let start = (((i64::from(y) - offset.1) as usize * image.width as usize)
+                    + (-offset.0) as usize)
+                    * channels;
+                pixels.extend_from_slice(&source[start..start + row_bytes]);
+            }
+        });
+        return output(image, size, pixels);
+    }
     let mut pixels = buffer(size, channels)?;
     py.detach(|| {
         let left = offset.0.max(0).min(i64::from(size.0));
@@ -204,6 +284,9 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     let source = image.pixel_data()?;
     if !(1..=8).contains(&orientation) {
         return Err(PyValueError::new_err("invalid orientation"));
+    }
+    if orientation == 1 {
+        return py.detach(|| output(image, (image.width, image.height), source.to_vec()));
     }
     let size = if orientation >= 5 {
         (image.height, image.width)
@@ -266,6 +349,8 @@ fn transpose<const C: usize>(
                 let src = &source[sy * w..(sy + 1) * w];
                 if orientation == 1 || orientation == 4 {
                     row.copy_from_slice(src.as_flattened());
+                } else if C == 3 {
+                    crate::ops_simd::reverse_rgb(src.as_flattened(), row);
                 } else {
                     for (dst, src) in row.as_chunks_mut::<C>().0.iter_mut().zip(src.iter().rev()) {
                         *dst = *src;
@@ -429,7 +514,10 @@ fn ops_reduce(
             reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
         }
         PixelMode::Rgba => {
-            reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds)
+            let mut source = source.to_vec();
+            premultiply(&mut source);
+            reduce_pixels::<4>(&source, &mut pixels, image.width, size, factor, bounds);
+            unpremultiply(&mut pixels);
         }
     });
     output(image, size, pixels)
@@ -456,6 +544,25 @@ fn reduce_pixels<const C: usize>(
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y0 = top + (band * 8 + i) as u32 * fy;
             let y1 = y0.saturating_add(fy).min(bottom);
+            if fx == 3 && fy == 3 && y1 - y0 == 3 {
+                let full = ((right - left) / 3) as usize;
+                for (x, dst) in row.as_chunks_mut::<C>().0[..full].iter_mut().enumerate() {
+                    let start = y0 as usize * width as usize + left as usize + x * 3;
+                    for channel in 0..C {
+                        let mut sum = 0_u32;
+                        for dy in 0..3 {
+                            let offset = start + dy * width as usize;
+                            sum += u32::from(source[offset][channel])
+                                + u32::from(source[offset + 1][channel])
+                                + u32::from(source[offset + 2][channel]);
+                        }
+                        dst[channel] = (((sum + 4) * 1_864_135) >> 24) as u8;
+                    }
+                }
+                if (right - left).is_multiple_of(3) {
+                    continue;
+                }
+            }
             if fx == 2 && fy == 2 && y1 - y0 == 2 && (right - left).is_multiple_of(2) {
                 let start = y0 as usize * width as usize + left as usize;
                 let end = start + (right - left) as usize;
@@ -477,6 +584,9 @@ fn reduce_pixels<const C: usize>(
                 continue;
             }
             for (x, dst) in row.as_chunks_mut::<C>().0.iter_mut().enumerate() {
+                if fx == 3 && fy == 3 && y1 - y0 == 3 && x < ((right - left) / 3) as usize {
+                    continue;
+                }
                 let x0 = left + x as u32 * fx;
                 let x1 = x0.saturating_add(fx).min(right);
                 let count = u64::from(x1 - x0) * u64::from(y1 - y0);
@@ -768,18 +878,265 @@ fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u
     }
 }
 
+fn affine_coordinate(a: f64, b: f64, c: f64, x: f64, y: f64) -> f64 {
+    // Match the contraction order used by Pillow's ARM affine mapper.
+    if cfg!(target_arch = "aarch64") {
+        a.mul_add(x, b * y) + c
+    } else {
+        a * x + b * y + c
+    }
+}
+
+fn quad_coordinate(origin: f64, a: f64, b: f64, c: f64, u: f64, v: f64) -> f64 {
+    if cfg!(target_arch = "aarch64") {
+        (c * u).mul_add(v, b.mul_add(v, a.mul_add(u, origin)))
+    } else {
+        origin + a * u + b * v + c * u * v
+    }
+}
+
+fn nearest_columns<const C: usize>(
+    source: Option<&[u8]>,
+    row: &mut [u8],
+    columns: &[Option<usize>],
+    fill: &[u8],
+) {
+    let fill: [u8; C] = fill.try_into().unwrap();
+    for (dst, column) in row.as_chunks_mut::<C>().0.iter_mut().zip(columns) {
+        *dst = if let (Some(src), Some(offset)) = (source, column) {
+            src[*offset..*offset + C].try_into().unwrap()
+        } else {
+            fill
+        };
+    }
+}
+
+fn nearest_fixed<const C: usize>(
+    source: &[u8],
+    row: &mut [u8],
+    size: (u32, u32),
+    coordinates: (i64, i64),
+    steps: (i64, i64),
+    fill: &[u8],
+) {
+    let source = source.as_chunks::<C>().0;
+    let fill: [u8; C] = fill.try_into().unwrap();
+    let (mut x, mut y) = coordinates;
+    for dst in row.as_chunks_mut::<C>().0 {
+        let (sx, sy) = (x >> 16, y >> 16);
+        *dst = if sx >= 0 && sy >= 0 && sx < i64::from(size.0) && sy < i64::from(size.1) {
+            source[sy as usize * size.0 as usize + sx as usize]
+        } else {
+            fill
+        };
+        x += steps.0;
+        y += steps.1;
+    }
+}
+
+/// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
+#[pyfunction]
+fn ops_affine(
+    py: Python<'_>,
+    image: &Image,
+    size: (u32, u32),
+    matrix: [f64; 6],
+    method: u8,
+    fill: Vec<u8>,
+) -> PyResult<Image> {
+    let source = image.pixel_data()?;
+    let channels = image.mode.channels();
+    if ![0, 2, 3].contains(&method)
+        || !matrix.iter().all(|v| v.is_finite())
+        || fill.len() != channels
+    {
+        return Err(PyValueError::new_err("invalid affine transform"));
+    }
+    let [a, b, c, d, e, f] = matrix;
+    // Pillow uses 16.16 coordinates for nearest affine rotations when all
+    // corners fit, but leaves axis-aligned transforms in floating point.
+    let fixed = method == 0
+        && (b != 0.0 || d != 0.0)
+        && [
+            (0.0, 0.0),
+            (size.0 as f64, 0.0),
+            (0.0, size.1 as f64),
+            (size.0 as f64, size.1 as f64),
+        ]
+        .iter()
+        .all(|&(x, y)| (a * x + b * y + c).abs() < 32768.0 && (d * x + e * y + f).abs() < 32768.0);
+    let fix = |v: f64| (v * 65536.0 + 0.5).floor() as i64;
+    let coefficients = [
+        fix(a),
+        fix(b),
+        fix(c + a * 0.5 + b * 0.5),
+        fix(d),
+        fix(e),
+        fix(f + d * 0.5 + e * 0.5),
+    ];
+    let mut pixels = buffer(size, channels)?;
+    if pixels.is_empty() {
+        return output(image, size, pixels);
+    }
+    py.detach(|| {
+        let mut source = Cow::Borrowed(source);
+        if channels == 4 && method != 0 {
+            premultiply(source.to_mut());
+        }
+        // Nearest's floating path advances coordinates incrementally. Direct
+        // multiplication can pick a different pixel at fractional boundaries.
+        let row_origins: Vec<_> = if method == 0 && !fixed {
+            let (mut x, mut y) = (c + b * 0.5 + a * 0.5, f + e * 0.5 + d * 0.5);
+            (0..size.1)
+                .map(|_| {
+                    let origin = (x, y);
+                    x += b;
+                    y += e;
+                    origin
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let row_bytes = size.0 as usize * channels;
+        // Axis-aligned nearest transforms reuse exactly the same horizontal
+        // coordinates on every row. Preserve incremental floating rounding.
+        let columns: Option<Vec<_>> = (method == 0 && b == 0.0 && d == 0.0).then(|| {
+            let mut x = c + a * 0.5;
+            (0..size.0)
+                .map(|_| {
+                    let offset =
+                        (x >= 0.0 && x < image.width as f64).then(|| x as usize * channels);
+                    x += a;
+                    offset
+                })
+                .collect()
+        });
+        let nearest_l = columns
+            .as_ref()
+            .filter(|_| channels == 1)
+            .and_then(|columns| crate::ops_simd::NearestL::new(columns, image.width as usize));
+        // Table gathers are memory work: small outputs cost less than a Rayon
+        // dispatch. Other transforms still benefit from finer scheduling.
+        let threshold = if nearest_l.as_ref().is_some_and(|map| map.is_vectorized()) {
+            MIN_PARALLEL_BYTES
+        } else {
+            32 * 1024
+        };
+        chunks_mut_above(&mut pixels, row_bytes * 16, threshold, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                let y = (band * 16 + i) as f64;
+                let mut nearest = row_origins.get(band * 16 + i).copied().unwrap_or_default();
+                if let Some(columns) = &columns {
+                    let sy = nearest.1;
+                    let source_row = if sy >= 0.0 && sy < image.height as f64 {
+                        let start = sy as usize * image.width as usize * channels;
+                        Some(&source[start..start + image.width as usize * channels])
+                    } else {
+                        None
+                    };
+                    if let (Some(map), Some(src)) = (&nearest_l, source_row) {
+                        map.sample(src, row);
+                        continue;
+                    }
+                    match image.mode {
+                        PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
+                        PixelMode::Rgb => nearest_columns::<3>(source_row, row, columns, &fill),
+                        PixelMode::Rgba => nearest_columns::<4>(source_row, row, columns, &fill),
+                    }
+                    continue;
+                }
+                if fixed {
+                    let [a, b, c, d, e, f] = coefficients;
+                    let origin = (b * y as i64 + c, e * y as i64 + f);
+                    let steps = (a, d);
+                    let size = (image.width, image.height);
+                    match image.mode {
+                        PixelMode::L => {
+                            nearest_fixed::<1>(&source, row, size, origin, steps, &fill)
+                        }
+                        PixelMode::Rgb => {
+                            nearest_fixed::<3>(&source, row, size, origin, steps, &fill)
+                        }
+                        PixelMode::Rgba => {
+                            nearest_fixed::<4>(&source, row, size, origin, steps, &fill)
+                        }
+                    }
+                    continue;
+                }
+                for (x, dst) in row.chunks_exact_mut(channels).enumerate() {
+                    let (sx, sy) = if method == 0 {
+                        let coordinate = nearest;
+                        nearest.0 += a;
+                        nearest.1 += d;
+                        coordinate
+                    } else {
+                        (
+                            affine_coordinate(a, b, c, x as f64 + 0.5, y + 0.5),
+                            affine_coordinate(d, e, f, x as f64 + 0.5, y + 0.5),
+                        )
+                    };
+                    if sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64
+                    {
+                        sample(&source, image, sx, sy, method, dst);
+                    } else {
+                        dst.copy_from_slice(&fill);
+                    }
+                }
+            }
+        });
+        // Fill values also belong to Pillow's intermediate premultiplied mode.
+        if channels == 4 && method != 0 {
+            unpremultiply(&mut pixels);
+        }
+    });
+    output(image, size, pixels)
+}
+
 #[pyfunction]
 fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<Image> {
+    ops_warp(
+        py,
+        image,
+        (image.width, image.height),
+        mesh,
+        (method, false),
+        None,
+    )
+}
+
+#[pyfunction]
+fn ops_warp(
+    py: Python<'_>,
+    image: &Image,
+    size: (u32, u32),
+    mesh: Mesh,
+    filters: (u8, bool),
+    fill: Option<Vec<u8>>,
+) -> PyResult<Image> {
+    let (method, perspective) = filters;
     let source = image.pixel_data()?;
     if ![0, 2, 3].contains(&method) {
         return Err(PyValueError::new_err(
             "mesh transforms support NEAREST, BILINEAR and BICUBIC",
         ));
     }
-    let size = (image.width, image.height);
     let c = image.mode.channels();
+    if fill.as_ref().is_some_and(|v| v.len() != c)
+        || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite()))
+    {
+        return Err(PyValueError::new_err("invalid warp data"));
+    }
     let mut result = buffer(size, c)?;
+    if result.is_empty() {
+        return output(image, size, result);
+    }
     py.detach(|| {
+        if let Some(fill) = &fill {
+            for pixel in result.chunks_exact_mut(c) {
+                pixel.copy_from_slice(fill);
+            }
+        }
         let mut source = Cow::Borrowed(source);
         if c == 4 && method != 0 {
             premultiply(source.to_mut());
@@ -801,19 +1158,37 @@ fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<I
             let row_bytes = size.0 as usize * c;
             // Mesh entries retain their order (later boxes overwrite earlier
             // ones); only disjoint rows within an entry execute concurrently.
-            chunks_mut(
+            chunks_mut_above(
                 &mut result[first * row_bytes..last * row_bytes],
                 row_bytes * 16,
+                32 * 1024,
                 |band, rows| {
                     for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                         let y = (first + band * 16 + i) as i64;
                         for x in left.max(0)..right.min(i64::from(size.0)) {
                             let u = (x - left.max(0)) as f64 + 0.5;
                             let v = (y - top.max(0)) as f64 + 0.5;
-                            let sx = q[0] + ax * u + bx * v + cx * u * v;
-                            let sy = q[1] + ay * u + by * v + cy * u * v;
+                            let (sx, sy) = if perspective {
+                                let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
+                                (
+                                    affine_coordinate(q[0], q[1], q[2], u, v) / divisor,
+                                    affine_coordinate(q[3], q[4], q[5], u, v) / divisor,
+                                )
+                            } else {
+                                (
+                                    quad_coordinate(q[0], ax, bx, cx, u, v),
+                                    quad_coordinate(q[1], ay, by, cy, u, v),
+                                )
+                            };
                             let dst = x as usize * c;
-                            sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
+                            if fill.is_none()
+                                || (sx >= 0.0
+                                    && sy >= 0.0
+                                    && sx < image.width as f64
+                                    && sy < image.height as f64)
+                            {
+                                sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
+                            }
                         }
                     }
                 },

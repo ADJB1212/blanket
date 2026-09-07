@@ -97,6 +97,37 @@ def test_conversions_and_context_manager() -> None:
         source.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize(
+    "box",
+    [None, (2, 3, 11, 10), (-3, -2, 8, 7), (12, 9, 21, 17), (0.5, 1.5, 9.5, 8.5), (2, 2, 2, 2)],
+)
+def test_crop_matches_pillow(mode: str, box: tuple[float, float, float, float] | None) -> None:
+    from PIL import Image as PillowImage
+
+    raw = pixels(mode)
+    image = Image.frombytes(mode, (17, 13), raw)
+    image.info["test"] = 42
+    result = image.crop(box)
+    expected = PillowImage.frombytes(mode, image.size, raw).crop(box)
+
+    assert result is not image
+    assert result.size == expected.size
+    assert result.tobytes() == expected.tobytes()
+    assert result.info == image.info
+    assert result.info is not image.info
+
+
+@pytest.mark.parametrize(
+    "box, message",
+    [((2, 0, 1, 1), "right"), ((0, 2, 1, 1), "lower")],
+)
+def test_crop_rejects_reversed_box(box: tuple[int, int, int, int], message: str) -> None:
+    image = Image.frombytes("L", (2, 2), b"abcd")
+    with pytest.raises(ValueError, match=message):
+        image.crop(box)
+
+
 def test_open_filters_and_errors() -> None:
     output = BytesIO()
     Image.frombytes("L", (2, 2), b"\0\x7f\x80\xff").save(output, "PNG")

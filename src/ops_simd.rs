@@ -2,6 +2,181 @@
 //!
 //! Nightly uses portable SIMD; other toolchains use NEON on AArch64 and
 //! runtime-detected AVX2 on x86/x86_64, with scalar fallbacks elsewhere.
+//! Nearest grayscale gathers also support x86 CPUs with SSSE3.
+
+/// Reusable grayscale gather map for an axis-aligned nearest transform.
+pub(crate) struct NearestL {
+    columns: Vec<usize>,
+    width: usize,
+    #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
+    blocks: Vec<Option<(usize, [u8; 16])>>,
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    ssse3: bool,
+}
+
+impl NearestL {
+    pub(crate) fn new(columns: &[Option<usize>], width: usize) -> Option<Self> {
+        let columns: Vec<usize> = columns.iter().copied().collect::<Option<_>>()?;
+        if columns.iter().any(|&x| x >= width) {
+            return None;
+        }
+        #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
+        let blocks = columns
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|xs| {
+                let base = *xs.iter().min().unwrap();
+                // Two table registers gather 16 nearby pixels without scalar
+                // loads. Wide reductions and right-edge loads use the fallback.
+                (width - base >= 32 && xs.iter().all(|&x| x - base < 32))
+                    .then(|| (base, xs.map(|x| (x - base) as u8)))
+            })
+            .collect();
+        Some(Self {
+            columns,
+            width,
+            #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
+            blocks,
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            ssse3: std::arch::is_x86_feature_detected!("ssse3"),
+        })
+    }
+
+    pub(crate) fn is_vectorized(&self) -> bool {
+        #[cfg(target_arch = "aarch64")]
+        {
+            self.blocks.iter().any(Option::is_some)
+        }
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        {
+            self.ssse3 && self.blocks.iter().any(Option::is_some)
+        }
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+        {
+            false
+        }
+    }
+
+    pub(crate) fn sample(&self, source: &[u8], output: &mut [u8]) {
+        assert_eq!(source.len(), self.width);
+        assert_eq!(output.len(), self.columns.len());
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+        let done = 0;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let done = if self.ssse3 {
+            // SAFETY: CPU support is checked when constructing the map; the
+            // source and output lengths are checked above.
+            unsafe { self.sample_ssse3(source, output) }
+        } else {
+            0
+        };
+        #[cfg(target_arch = "aarch64")]
+        let done = {
+            use std::arch::aarch64::*;
+            for (i, block) in self.blocks.iter().enumerate() {
+                if let Some((base, indices)) = block {
+                    // SAFETY: new() checks both 16-byte loads fit the source;
+                    // each block owns 16 output bytes. NEON is mandatory here.
+                    unsafe {
+                        let table = uint8x16x2_t(
+                            vld1q_u8(source.as_ptr().add(*base)),
+                            vld1q_u8(source.as_ptr().add(*base + 16)),
+                        );
+                        vst1q_u8(
+                            output.as_mut_ptr().add(i * 16),
+                            vqtbl2q_u8(table, vld1q_u8(indices.as_ptr())),
+                        );
+                    }
+                } else {
+                    for j in i * 16..(i + 1) * 16 {
+                        output[j] = source[self.columns[j]];
+                    }
+                }
+            }
+            self.blocks.len() * 16
+        };
+        for (dst, &x) in output[done..].iter_mut().zip(&self.columns[done..]) {
+            *dst = source[x];
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    #[target_feature(enable = "ssse3")]
+    unsafe fn sample_ssse3(&self, source: &[u8], output: &mut [u8]) -> usize {
+        #[cfg(target_arch = "x86")]
+        use std::arch::x86::*;
+        #[cfg(target_arch = "x86_64")]
+        use std::arch::x86_64::*;
+
+        for (i, block) in self.blocks.iter().enumerate() {
+            if let Some((base, indices)) = block {
+                // SAFETY: new() validates the complete 32-byte table. Each
+                // block has 16 indices and writes 16 disjoint output bytes.
+                unsafe {
+                    let low = _mm_loadu_si128(source.as_ptr().add(*base).cast());
+                    let high = _mm_loadu_si128(source.as_ptr().add(*base + 16).cast());
+                    let indices = _mm_loadu_si128(indices.as_ptr().cast());
+                    // PSHUFB zeros lanes whose index has its high bit set.
+                    // Select 0..15 from low, 16..31 from high, then combine.
+                    let low_indices =
+                        _mm_or_si128(indices, _mm_cmpgt_epi8(indices, _mm_set1_epi8(15)));
+                    let high_indices = _mm_sub_epi8(indices, _mm_set1_epi8(16));
+                    let values = _mm_or_si128(
+                        _mm_shuffle_epi8(low, low_indices),
+                        _mm_shuffle_epi8(high, high_indices),
+                    );
+                    _mm_storeu_si128(output.as_mut_ptr().add(i * 16).cast(), values);
+                }
+            } else {
+                for j in i * 16..(i + 1) * 16 {
+                    output[j] = source[self.columns[j]];
+                }
+            }
+        }
+        self.blocks.len() * 16
+    }
+}
+
+/// Reverse packed RGB pixels without reversing their channel order.
+pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
+    assert_eq!(source.len(), output.len());
+    assert!(source.len().is_multiple_of(3));
+    let pixels = source.len() / 3;
+    #[cfg(not(target_arch = "aarch64"))]
+    let done = 0;
+    #[cfg(target_arch = "aarch64")]
+    let done = {
+        let mut done = 0;
+        use std::arch::aarch64::*;
+        // SAFETY: NEON is mandatory on AArch64. Each iteration loads and
+        // stores exactly 16 complete RGB pixels within the provided slices.
+        unsafe {
+            while done + 16 <= pixels {
+                let src = vld3q_u8(source.as_ptr().add((pixels - done - 16) * 3));
+                let reverse = |v| {
+                    let v = vrev64q_u8(v);
+                    vextq_u8::<8>(v, v)
+                };
+                vst3q_u8(
+                    output.as_mut_ptr().add(done * 3),
+                    uint8x16x3_t(reverse(src.0), reverse(src.1), reverse(src.2)),
+                );
+                done += 16;
+            }
+        }
+        done
+    };
+    for (i, dst) in output[done * 3..]
+        .as_chunks_mut::<3>()
+        .0
+        .iter_mut()
+        .enumerate()
+    {
+        let start = (pixels - done - i - 1) * 3;
+        dst.copy_from_slice(&source[start..start + 3]);
+    }
+}
 
 pub(crate) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
@@ -610,5 +785,73 @@ mod tests {
                 assert_eq!(*pixel, [tables[i], tables[256 + i], tables[512 + i]]);
             }
         }
+    }
+
+    #[test]
+    fn reverse_rgb_vector_boundaries_and_unaligned_slices() {
+        for n in [0, 1, 15, 16, 17, 31, 32, 33, 127] {
+            let source: Vec<u8> = (0..n * 3 + 2).map(|i| (i * 37) as u8).collect();
+            let mut output = vec![123; n * 3 + 2];
+            reverse_rgb(&source[1..1 + n * 3], &mut output[1..1 + n * 3]);
+            for i in 0..n {
+                assert_eq!(
+                    output[1 + i * 3..1 + (i + 1) * 3],
+                    source[1 + (n - i - 1) * 3..1 + (n - i) * 3]
+                );
+            }
+            assert_eq!(output[0], 123);
+            assert_eq!(output[n * 3 + 1], 123);
+        }
+    }
+
+    #[test]
+    fn nearest_l_gathers_and_scalar_tails() {
+        let source: Vec<u8> = (0..258).map(|i| (i * 37) as u8).collect();
+        for n in [0, 1, 15, 16, 17, 31, 32, 33, 127] {
+            for step in [0, 1, 2, 5] {
+                for reverse in [false, true] {
+                    let columns: Vec<_> = (0..n)
+                        .map(|i| {
+                            let x = i * step % 256;
+                            Some(if reverse { 255 - x } else { x })
+                        })
+                        .collect();
+                    let map = NearestL::new(&columns, 256).unwrap();
+                    let mut output = vec![123; n + 2];
+                    map.sample(&source[1..257], &mut output[1..n + 1]);
+                    for (i, column) in columns.iter().enumerate() {
+                        assert_eq!(output[i + 1], source[1 + column.unwrap()]);
+                    }
+                    assert_eq!(output[0], 123);
+                    assert_eq!(output[n + 1], 123);
+                    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                    {
+                        let mut scalar_map = NearestL::new(&columns, 256).unwrap();
+                        scalar_map.ssse3 = false;
+                        assert!(!scalar_map.is_vectorized());
+                        let mut scalar = vec![0; n];
+                        scalar_map.sample(&source[1..257], &mut scalar);
+                        assert_eq!(scalar, output[1..n + 1]);
+                    }
+                }
+            }
+        }
+        assert!(NearestL::new(&[None], 256).is_none());
+        assert!(NearestL::new(&[Some(256)], 256).is_none());
+    }
+
+    #[test]
+    fn nearest_l_detects_vector_support() {
+        let columns: Vec<_> = (0..16).map(Some).collect();
+        let map = NearestL::new(&columns, 32).unwrap();
+        #[cfg(target_arch = "aarch64")]
+        assert!(map.is_vectorized());
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        assert_eq!(
+            map.is_vectorized(),
+            std::arch::is_x86_feature_detected!("ssse3")
+        );
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+        assert!(!map.is_vectorized());
     }
 }
