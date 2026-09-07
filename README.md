@@ -116,6 +116,52 @@ and compressed JPEG XL metadata boxes are not retained. Transposition removes
 the orientation while preserving other EXIF entries. Saving still writes pixel
 data only and does not preserve metadata.
 
+## ImageFilter
+
+`from blanket import ImageFilter` provides Pillow-compatible built-in convolution
+filters, custom `Kernel` filters, `RankFilter`, `MedianFilter`, `MinFilter`,
+`MaxFilter`, `ModeFilter`, `BoxBlur`, `GaussianBlur`, `UnsharpMask`, and
+`Color3DLUT` (including `generate` and `transform`). Filtering supports Blanket's
+`L`, `RGB`, and `RGBA` images; color LUTs require RGB or RGBA input. Pixel kernels
+run in Rust and release the GIL, with parallel output partitions for large images.
+Python handles filter configuration and user callbacks for generating LUT tables.
+
+```python
+from blanket import ImageFilter
+
+blurred = image.filter(ImageFilter.GaussianBlur(radius=2))
+sharpened = image.filter(ImageFilter.SHARPEN)
+```
+
+`Image.filter` accepts filter instances, classes, and custom `Filter` or
+`MultibandFilter` subclasses. Convolution preserves the image border; rank filters
+extend edge pixels, while mode filters use the available neighborhood. Blurs
+accept a scalar radius or separate `(x, y)` radii. Non-finite or excessively large
+blur radii are rejected. Run benchmarks with
+`uv run --no-sync python scripts/benchmark.py --filter-only --sizes web`.
+
+## ImagePalette
+
+`from blanket import ImagePalette` provides Pillow-compatible palette objects,
+including color allocation, copying, raw data, serialization, and the `wedge`,
+`negative`, `random`, and `sepia` factories. `load` reads text palettes, GIMP
+palettes, and GIMP RGB gradients. LUT generation, color indexing, palette ramps,
+sepia generation, and gradient rendering use the native Rust backend. Python
+preserves mutable palette storage and handles file parsing; `random` uses Python's
+random generator to match Pillow's seeded behavior.
+
+```python
+from blanket import ImagePalette
+
+palette = ImagePalette.ImagePalette("RGBA")
+red_index = palette.getcolor((255, 0, 0, 128))
+mode, data = palette.getdata()
+```
+
+Palette objects are standalone: Blanket images still support `L`, `RGB`, and
+`RGBA` modes, with no indexed `P`/`PA` image support. Run the palette benchmarks
+with `uv run --no-sync python scripts/benchmark.py --palette-only -i 100 -w 10`.
+
 ## Pillow interoperability
 
 Install Pillow through the test extra, then convert explicitly:

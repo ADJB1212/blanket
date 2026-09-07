@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
-from io import BytesIO
+import random
+from io import BytesIO, StringIO
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 from blanket import Image as BlanketImage
 from blanket import ImageEnhance as BlanketEnhance
+from blanket import ImageFilter as BlanketFilter
 from blanket import ImageOps as BlanketOps
+from blanket import ImagePalette as BlanketPalette
 from PIL import Image as PillowImage
 from PIL import ImageEnhance as PillowEnhance
 from PIL import ImageFilter
 from PIL import ImageOps as PillowOps
+from PIL import ImagePalette as PillowPalette
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
@@ -271,22 +277,100 @@ def check_imageenhance() -> int:
     return checks
 
 
+def check_imagepalette() -> int:
+    """Compare palette state, allocation, factories, serialization, and loaders."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        for factory in ("wedge", "negative"):
+            actual = getattr(BlanketPalette, factory)(mode)
+            expected = getattr(PillowPalette, factory)(mode)
+            assert actual.getdata() == expected.getdata()
+            assert actual.colors == expected.colors
+            assert actual.copy().getdata() == expected.copy().getdata()
+            output, reference = StringIO(), StringIO()
+            actual.save(output)
+            expected.save(reference)
+            assert output.getvalue() == reference.getvalue()
+            checks += 1
+    for mode in ("RGB", "RGBA"):
+        actual, expected = BlanketPalette.ImagePalette(mode), PillowPalette.ImagePalette(mode)
+        for value in range(256):
+            color = (value, 255 - value, value // 2)
+            assert actual.getcolor(color) == expected.getcolor(color)
+        assert actual.getdata() == expected.getdata()
+        assert actual.colors == expected.colors
+        checks += 1
+    state = random.getstate()
+    try:
+        random.seed(12)
+        actual = BlanketPalette.random()
+        random.seed(12)
+        assert actual.getdata() == PillowPalette.random().getdata()
+        checks += 1
+    finally:
+        random.setstate(state)
+    for white in ("#fff0c0", "red", "#123", "hsl(120, 50%, 50%)"):
+        assert BlanketPalette.sepia(white).getdata() == PillowPalette.sepia(white).getdata()
+        checks += 1
+    for value in (0, 0.5, 1, 2.2, 255):
+        assert BlanketPalette.make_gamma_lut(value) == PillowPalette.make_gamma_lut(value)
+        assert BlanketPalette.make_linear_lut(0, value) == PillowPalette.make_linear_lut(0, value)
+        checks += 2
+    assert BlanketPalette.raw("RGB;L", b"\1\2\3").getdata() == PillowPalette.raw("RGB;L", b"\1\2\3").getdata()
+    checks += 1
+    with TemporaryDirectory() as directory:
+        path = Path(directory) / "palette"
+        payloads = ["0 255 0 0\n1 128\n", "GIMP Palette\nName: Sample\n255 0 0 Red\n0 255 0 Green\n"]
+        payloads += [f"GIMP Gradient\nName: Sample\n1\n0 .3 1 0 .2 .4 0 1 .6 .9 1 {kind} 0\n" for kind in range(5)]
+        for payload in payloads:
+            path.write_text(payload)
+            assert BlanketPalette.load(str(path)) == PillowPalette.load(str(path))
+            checks += 1
+    return checks
+
+
+def check_imagefilter() -> int:
+    """Compare native filters byte-for-byte across every supported image mode."""
+    checks = 0
+    specifications = [(name, ()) for name in ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")]
+    specifications += [("Kernel", ((3, 3), [0, 1, 0, -1, 2, 1, 0, 1, 0], 4, 3))]
+    specifications += [("RankFilter", (5, 7)), ("MedianFilter", (3,)), ("MinFilter", (5,)), ("MaxFilter", (5,)), ("ModeFilter", (3,))]
+    specifications += [(name, (radius,)) for name in ("BoxBlur", "GaussianBlur") for radius in (0, 0.3, 2, (1.7, 0.5), 20)]
+    specifications += [("UnsharpMask", ()), ("UnsharpMask", (1.5, 75, 0))]
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        actual = BlanketImage.frombytes(mode, (37, 29), raw)
+        expected = PillowImage.frombytes(mode, (37, 29), raw)
+        for name, args in specifications:
+            result = actual.filter(getattr(BlanketFilter, name)(*args))
+            reference = expected.filter(getattr(ImageFilter, name)(*args))
+            assert (result.mode, result.size, result.info) == (reference.mode, reference.size, reference.info), name
+            assert result.tobytes() == reference.tobytes(), f"{name} {mode} {args}"
+            checks += 1
+        if mode != "L":
+            for channels in (3, 4):
+
+                def color(r: float, g: float, b: float, channels: int = channels) -> tuple[float, ...]:
+                    return (1 - r, g * g, b * 1.2) + ((0.5,) if channels == 4 else ())
+
+                target = "RGBA" if channels == 4 else None
+                lut = BlanketFilter.Color3DLUT.generate((3, 4, 5), color, channels, target)
+                reference_lut = ImageFilter.Color3DLUT.generate((3, 4, 5), color, channels, target)
+                assert lut.table == reference_lut.table
+                assert actual.filter(lut).tobytes() == expected.filter(reference_lut).tobytes()
+                checks += 1
+    return checks
+
+
 def main() -> None:
-    checks = (
-        check_conversions()
-        + check_fromarray()
-        + check_png_interop()
-        + check_jpeg_interop()
-        + check_jxl_roundtrip()
-        + check_pillow_adapter()
-        + check_crop_apis()
-        + check_bands_statistics()
-    )
+    checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
     imageenhance_checks = check_imageenhance()
+    imagepalette_checks = check_imagepalette()
+    imagefilter_checks = check_imagefilter()
     print(
-        f"behavior verification passed: {checks + imageops_checks + imageenhance_checks} checks "
-        f"({imageops_checks} ImageOps, {imageenhance_checks} ImageEnhance)"
+        f"behavior verification passed: {checks + imageops_checks + imageenhance_checks + imagepalette_checks + imagefilter_checks} checks "
+        f"({imageops_checks} ImageOps, {imageenhance_checks} ImageEnhance, {imagepalette_checks} ImagePalette, {imagefilter_checks} ImageFilter)"
     )
 
 

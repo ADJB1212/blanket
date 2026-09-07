@@ -7,20 +7,26 @@ import gc
 import json
 from collections.abc import Callable
 from functools import partial
-from io import BytesIO
+from io import BytesIO, StringIO
 from pathlib import Path
 from statistics import geometric_mean, median
+from tempfile import TemporaryDirectory
 from time import perf_counter
+from types import ModuleType
 from typing import Any
 
 import numpy as np
 import pillow_jxl
 from blanket import Image as BlanketImage
 from blanket import ImageEnhance as BlanketEnhance
+from blanket import ImageFilter as BlanketFilter
 from blanket import ImageOps as BlanketOps
+from blanket import ImagePalette as BlanketPalette
 from PIL import Image as PillowImage
 from PIL import ImageEnhance as PillowEnhance
+from PIL import ImageFilter as PillowFilter
 from PIL import ImageOps as PillowOps
+from PIL import ImagePalette as PillowPalette
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -167,7 +173,11 @@ def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
         for method in BlanketImage.Resampling:
             for direction, target in (("down", down), ("up", up)):
                 comps.append((f"resize {direction} {method.name} {mode}", partial(blanket.resize, target, resample=method), partial(pillow.resize, target, resample=int(method))))
-        cases = [("box BICUBIC", down, {"box": box}), ("thumb LANCZOS", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS}), ("thumb LANCZOS gap=3", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS, "reducing_gap": 3.0})]
+        cases = [
+            ("box BICUBIC", down, {"box": box}),
+            ("thumb LANCZOS", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS}),
+            ("thumb LANCZOS gap=3", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS, "reducing_gap": 3.0}),
+        ]
         for label, target, options in cases:
             comps.append((f"resize {label} {mode}", partial(blanket.resize, target, **options), partial(pillow.resize, target, **options)))
     return comps
@@ -180,7 +190,13 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
     inset = (w * 0.1, h * 0.1, w * 0.9, h * 0.9)
     quad = (w * 0.05, h * 0.1, w * 0.1, h * 0.95, w * 0.9, h * 0.9, w * 0.95, h * 0.05)
     mesh = [((0, 0, *target), quad)]
-    transforms = [(BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)), (BlanketImage.Transform.EXTENT, inset), (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)), (BlanketImage.Transform.QUAD, quad), (BlanketImage.Transform.MESH, mesh)]
+    transforms = [
+        (BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)),
+        (BlanketImage.Transform.EXTENT, inset),
+        (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)),
+        (BlanketImage.Transform.QUAD, quad),
+        (BlanketImage.Transform.MESH, mesh),
+    ]
     comps: list[Comparison] = []
     for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
         raw = make_pixels(w, h)
@@ -195,7 +211,13 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
             for label, options in (("17", {}), ("17 expand fill", {"expand": True, "fillcolor": "navy"})):
                 comps.append((f"rotate {label} {resample.name} {mode}", partial(blanket.rotate, 17, resample=resample, **options), partial(pillow.rotate, 17, resample=int(resample), **options)))
             for method, data in transforms:
-                comps.append((f"transform {method.name} {resample.name} {mode}", partial(blanket.transform, target, method, data, resample=resample), partial(pillow.transform, target, int(method), data, resample=int(resample))))
+                comps.append(
+                    (
+                        f"transform {method.name} {resample.name} {mode}",
+                        partial(blanket.transform, target, method, data, resample=resample),
+                        partial(pillow.transform, target, int(method), data, resample=int(resample)),
+                    )
+                )
     return comps
 
 
@@ -304,6 +326,71 @@ def imageenhance_comparisons(size: tuple[int, int]) -> list[Comparison]:
 # ── Rich output ─────────────────────────────────────────────────────────
 
 
+def imagefilter_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Compare filtering, including alpha, fractional radii, and 3D LUTs."""
+    comparisons: list[Comparison] = []
+    specifications = [(name, ()) for name in ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")]
+    specifications += [("Kernel", ((3, 3), [0, 1, 0, -1, 2, 1, 0, 1, 0], 4, 3))]
+    specifications += [("RankFilter", (5, 7)), ("MedianFilter", (3,)), ("MedianFilter", (5,)), ("MinFilter", (5,)), ("MaxFilter", (5,)), ("ModeFilter", (3,))]
+    specifications += [(name, (radius,)) for name in ("BoxBlur", "GaussianBlur") for radius in (2, 10.5)]
+    specifications += [("UnsharpMask", ())]
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(*size)
+        actual = BlanketImage.frombytes(mode, size, raw)
+        expected = PillowImage.frombytes(mode, size, raw)
+        for name, args in specifications:
+            actual_filter = getattr(BlanketFilter, name)(*args)
+            expected_filter = getattr(PillowFilter, name)(*args)
+            label = f"{name} {mode}" + (f" {args}" if args and name != "Kernel" else "")
+            comparisons.append((label, partial(actual.filter, actual_filter), partial(expected.filter, expected_filter)))
+        if mode != "L":
+            callback = lambda r, g, b: (1 - r, g * g, b)
+            comparisons.append(
+                (f"Color3DLUT {mode} (17)", partial(actual.filter, BlanketFilter.Color3DLUT.generate(17, callback)), partial(expected.filter, PillowFilter.Color3DLUT.generate(17, callback)))
+            )
+    return comparisons
+
+
+def imagepalette_comparisons(directory: Path) -> list[Comparison]:
+    """Palette operations have a fixed 256-entry size, independent of images."""
+    data = bytes(range(256)) * 3
+    gradient = directory / "gradient.ggr"
+    gradient.write_text("GIMP Gradient\nName: Benchmark\n1\n0 .3 1 0 .2 .4 0 1 .6 .9 1 2 0\n")
+    text_palette = directory / "palette.pal"
+    PillowPalette.wedge().save(str(text_palette))
+
+    def allocate(module: ModuleType) -> object:
+        palette = module.ImagePalette()
+        for value in range(256):
+            palette.getcolor((value, 255 - value, value // 2))
+        return palette
+
+    comparisons: list[Comparison] = []
+    for name in ("wedge", "negative", "sepia", "random"):
+        comparisons.append((f"ImagePalette.{name}", getattr(BlanketPalette, name), getattr(PillowPalette, name)))
+    comparisons.extend(
+        [
+            ("ImagePalette.linear LUT", lambda: BlanketPalette.make_linear_lut(0, 240), lambda: PillowPalette.make_linear_lut(0, 240)),
+            ("ImagePalette.gamma LUT", lambda: BlanketPalette.make_gamma_lut(2.2), lambda: PillowPalette.make_gamma_lut(2.2)),
+            ("ImagePalette.colors (256)", lambda: BlanketPalette.ImagePalette(palette=data).colors, lambda: PillowPalette.ImagePalette(palette=data).colors),
+            ("ImagePalette.allocate (256)", lambda: allocate(BlanketPalette), lambda: allocate(PillowPalette)),
+            ("ImagePalette.load text", lambda: BlanketPalette.load(str(text_palette)), lambda: PillowPalette.load(str(text_palette))),
+            ("ImagePalette.load gradient", lambda: BlanketPalette.load(str(gradient)), lambda: PillowPalette.load(str(gradient))),
+        ]
+    )
+    actual, expected = BlanketPalette.ImagePalette(palette=bytearray(data)), PillowPalette.ImagePalette(palette=bytearray(data))
+    _ = actual.colors, expected.colors
+    comparisons.extend(
+        [
+            ("ImagePalette.lookup cached", lambda: actual.getcolor((0, 1, 2)), lambda: expected.getcolor((0, 1, 2))),
+            ("ImagePalette.copy", actual.copy, expected.copy),
+            ("ImagePalette.tobytes", actual.tobytes, expected.tobytes),
+            ("ImagePalette.save text", lambda: actual.save(StringIO()), lambda: expected.save(StringIO())),
+        ]
+    )
+    return comparisons
+
+
 def _speedup_text(value: float | None) -> Text:
     """Return a colored speedup cell."""
     if value is None:
@@ -373,6 +460,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-i", "--iterations", type=int, default=10)
     parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
+    parser.add_argument("--palette-only", action="store_true", help="run only the fixed-size ImagePalette benchmarks")
+    parser.add_argument("--filter-only", action="store_true", help="run only the ImageFilter benchmarks")
     parser.add_argument("--jxl-only", action="store_true", help="only run JXL codec benchmarks (pillow-jxl-plugin required)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
@@ -384,6 +473,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--warmups cannot be negative")
     if arguments.skip_jxl and arguments.jxl_only:
         parser.error("--skip-jxl and --jxl-only are mutually exclusive")
+    if arguments.palette_only and arguments.jxl_only:
+        parser.error("--palette-only and --jxl-only are mutually exclusive")
+    if arguments.filter_only and (arguments.palette_only or arguments.jxl_only):
+        parser.error("--filter-only is mutually exclusive with --palette-only and --jxl-only")
     return arguments
 
 
@@ -393,7 +486,16 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int) ->
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
-            results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
+            results.append(
+                {
+                    "operation": name,
+                    "blanket_ms": b["median"] * 1000,
+                    "blanket_p25_ms": b["p25"] * 1000,
+                    "blanket_p75_ms": b["p75"] * 1000,
+                    "pillow_ms": p["median"] * 1000,
+                    "blanket_speedup": p["median"] / b["median"],
+                }
+            )
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
     return results
@@ -404,15 +506,28 @@ def main() -> None:
     console = Console()
     all_results: list[dict[str, Any]] = []
 
-    for size_name in args.sizes:
+    if not args.jxl_only and not args.filter_only:
+        with TemporaryDirectory() as directory:
+            results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations)
+        for result in results:
+            result.update(section="ImagePalette", size="palette", width=256, height=1)
+        all_results.extend(results)
+        displayed_results = slower_results(results) if args.slower_only else results
+        if displayed_results:
+            console.rule("ImagePalette (256 entries)")
+            console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
+
+    for size_name in [] if args.palette_only else args.sizes:
         size = SIZES[size_name]
         w, h = size
         mpx = (w * h) / 1_000_000
 
         console.rule(f"[bold]{size_name}[/bold]  {w}×{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
 
-        sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
-        if not args.jxl_only:
+        sections: list[tuple[str, list[Comparison]]] = (
+            [("ImageFilter", imagefilter_comparisons(size))] if args.filter_only else [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
+        )
+        if not args.jxl_only and not args.filter_only:
             sections += [
                 ("Conversions", conversion_comparisons(size)),
                 ("Resize", resize_comparisons(size)),
@@ -421,6 +536,7 @@ def main() -> None:
                 ("Memory", memory_comparisons(size)),
                 ("ImageOps", imageops_comparisons(size)),
                 ("ImageEnhance", imageenhance_comparisons(size)),
+                ("ImageFilter", imagefilter_comparisons(size)),
             ]
 
         size_results: list[dict[str, Any]] = []
@@ -449,9 +565,7 @@ def main() -> None:
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = (
-            f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
-        )
+        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.json_path is not None:

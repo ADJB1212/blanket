@@ -5,10 +5,14 @@ from __future__ import annotations
 import builtins
 import math
 import os
-from operator import index
 from enum import IntEnum
+from operator import index
 from pathlib import Path
-from typing import BinaryIO, Protocol, Sequence
+from typing import TYPE_CHECKING, BinaryIO, Protocol, Sequence
+
+if TYPE_CHECKING:
+    from .ImageFilter import Filter
+    from .ImagePalette import ImagePalette
 
 from ._blanket import _Image, open_bytes
 from ._blanket import fromarray as _native_fromarray
@@ -73,6 +77,8 @@ class Image:
 
     def __init__(self, native: _Image) -> None:
         self._native = native
+        self.filename: str | bytes = ""
+        self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
 
     @property
@@ -99,6 +105,16 @@ class Image:
     def info(self) -> dict[object, object]:
         return self._info
 
+    @property
+    def is_animated(self) -> bool:
+        """Blanket exposes a single frame for every supported image."""
+        return False
+
+    @property
+    def has_transparency_data(self) -> bool:
+        """Whether alpha or transparency metadata exists, even if opaque."""
+        return self.mode == "RGBA" or "transparency" in self.info
+
     def load(self) -> None:
         """Validate that this eagerly loaded image remains open."""
 
@@ -114,6 +130,25 @@ class Image:
 
     def tobytes(self) -> bytes:
         return self._native.tobytes()
+
+    def filter(self, filter: Filter | type[Filter]) -> Image:
+        """Return a filtered image, accepting a filter instance or class."""
+        from ._blanket import filter_merge
+        from .ImageFilter import MultibandFilter
+
+        self.load()
+        if callable(filter):
+            filter = filter()
+        if not hasattr(filter, "filter"):
+            raise TypeError("filter argument should be ImageFilter.Filter instance or class")
+        if self.mode == "L" or isinstance(filter, MultibandFilter):
+            result = Image(filter.filter(self._native))
+            result.info.update(self.info)
+            return result
+        bands = [filter.filter(band._native) for band in self.split()]
+        result = Image(filter_merge(self.mode, bands))
+        result.info.update(self.info)
+        return result
 
     def split(self) -> tuple[Image, ...]:
         """Return independent L images for each band, in channel order."""
@@ -425,6 +460,8 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
         raise TypeError("formats must be a list or tuple")
     data = _read_bytes(fp)
     image = Image(open_bytes(data, formats))
+    if not hasattr(fp, "read"):
+        image.filename = os.fspath(fp)
     from ._exif import read_metadata
 
     image.info.update(read_metadata(data, image.format))

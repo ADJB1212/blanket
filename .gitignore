@@ -29,6 +29,7 @@ venv/
 .installed.cfg
 *.egg
 uv.lock
+Cargo.lock
 
 # Installer logs
 pip-log.txt

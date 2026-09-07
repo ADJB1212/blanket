@@ -2,8 +2,10 @@
 
 mod codecs;
 mod enhance;
+mod filter;
 mod ops;
 mod ops_simd;
+mod palette;
 mod parallel;
 mod raster;
 mod simd;
@@ -24,6 +26,8 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     enhance::register(module)?;
+    filter::register(module)?;
     ops::register(module)?;
+    palette::register(module)?;
     Ok(())
 }

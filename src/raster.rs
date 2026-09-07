@@ -110,6 +110,10 @@ impl Image {
         self.pixel_data().map(|_| ())
     }
 
+    fn copy(&self) -> PyResult<Self> {
+        Self::from_pixels(self.width, self.height, self.mode, self.pixel_data()?.to_vec(), None)
+    }
+
     fn close(&mut self) {
         self.pixels = None;
     }
