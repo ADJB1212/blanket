@@ -33,6 +33,7 @@ features = ["extension-module", "vendored"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+console_output_style = "none"
 
 [tool.ruff]
 line-length = 200
@@ -44,3 +45,17 @@ ignore = ["F401"]
 [tool.ruff.format]
 quote-style = "double"
 skip-magic-trailing-comma = true
+
+[tool.ruff.lint.isort]
+split-on-trailing-comma = false
+
+[tool.ty.rules]
+unresolved-import = "ignore"
+invalid-assignment = "ignore"
+invalid-argument-type = "ignore"
+not-subscriptable = "ignore"
+call-non-callable = "ignore"
+not-iterable = "ignore"
+unresolved-attribute = "ignore"
+no-matching-overload = "ignore"
+invalid-return-type = "ignore"

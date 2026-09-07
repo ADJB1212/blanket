@@ -178,16 +178,9 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
     w, h = size
     target = (max(1, w // 2), max(1, h // 2))
     inset = (w * 0.1, h * 0.1, w * 0.9, h * 0.9)
-    quad = (w * 0.05, h * 0.1, w * 0.1, h * 0.95,
-            w * 0.9, h * 0.9, w * 0.95, h * 0.05)
+    quad = (w * 0.05, h * 0.1, w * 0.1, h * 0.95, w * 0.9, h * 0.9, w * 0.95, h * 0.05)
     mesh = [((0, 0, *target), quad)]
-    transforms = [
-        (BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)),
-        (BlanketImage.Transform.EXTENT, inset),
-        (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)),
-        (BlanketImage.Transform.QUAD, quad),
-        (BlanketImage.Transform.MESH, mesh),
-    ]
+    transforms = [(BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)), (BlanketImage.Transform.EXTENT, inset), (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)), (BlanketImage.Transform.QUAD, quad), (BlanketImage.Transform.MESH, mesh)]
     comps: list[Comparison] = []
     for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
         raw = make_pixels(w, h)
@@ -323,8 +316,8 @@ def _speedup_text(value: float | None) -> Text:
     return Text(label, style="red")
 
 
-def make_table(results: list[dict[str, Any]]) -> Table:
-    """Build one compact Rich table spanning all benchmark sections."""
+def make_detail_table(results: list[dict[str, Any]]) -> Table:
+    """Build a table containing every benchmark result."""
     table = Table(show_lines=False, pad_edge=False, box=None)
     table.add_column("Operation", style="cyan", no_wrap=True)
     table.add_column("Blanket ms", justify="right")
@@ -344,6 +337,33 @@ def make_table(results: list[dict[str, Any]]) -> Table:
     return table
 
 
+def make_summary_table(results: list[dict[str, Any]]) -> Table:
+    """Summarize benchmark results with one row per section."""
+    table = Table(show_lines=False, pad_edge=False, box=None)
+    table.add_column("Section", style="cyan", no_wrap=True)
+    table.add_column("Faster", justify="right")
+    table.add_column("Geo mean", justify="right")
+    table.add_column("Best", justify="right")
+    table.add_column("Worst", justify="right")
+
+    sections = dict.fromkeys(r["section"] for r in results)
+    for section in sections:
+        paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
+        if not paired:
+            table.add_row(section, "—", "—", "—", "—")
+            continue
+        speedups = [r["blanket_speedup"] for r in paired]
+        wins = sum(speedup > 1.0 for speedup in speedups)
+        table.add_row(section, f"{wins}/{len(paired)}", _speedup_text(geometric_mean(speedups)), _speedup_text(max(speedups)), _speedup_text(min(speedups)))
+
+    return table
+
+
+def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return paired results where Blanket trails Pillow."""
+    return [r for r in results if r["blanket_speedup"] is not None and r["blanket_speedup"] < 1.0]
+
+
 # ── main ─────────────────────────────────────────────────────────────────
 
 
@@ -351,9 +371,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
     parser.add_argument("-i", "--iterations", type=int, default=10)
-    parser.add_argument("--warmups", type=int, default=2)
+    parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
     parser.add_argument("--jxl-only", action="store_true", help="only run JXL codec benchmarks (pillow-jxl-plugin required)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
+    parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
     parser.add_argument("--json", type=Path, dest="json_path")
     arguments = parser.parse_args()
     if arguments.iterations < 1:
@@ -391,7 +413,15 @@ def main() -> None:
 
         sections: list[tuple[str, list[Comparison]]] = [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
         if not args.jxl_only:
-            sections += [("Conversions", conversion_comparisons(size)), ("Resize", resize_comparisons(size)), ("Geometry", geometry_comparisons(size)), ("Bands and statistics", band_statistics_comparisons(size)), ("Memory", memory_comparisons(size)), ("ImageOps", imageops_comparisons(size)), ("ImageEnhance", imageenhance_comparisons(size))]
+            sections += [
+                ("Conversions", conversion_comparisons(size)),
+                ("Resize", resize_comparisons(size)),
+                ("Geometry", geometry_comparisons(size)),
+                ("Bands and statistics", band_statistics_comparisons(size)),
+                ("Memory", memory_comparisons(size)),
+                ("ImageOps", imageops_comparisons(size)),
+                ("ImageEnhance", imageenhance_comparisons(size)),
+            ]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:
@@ -403,13 +433,16 @@ def main() -> None:
                 r["height"] = h
             size_results.extend(results)
 
-        console.print(make_table(size_results))
-        console.print()
+        displayed_results = slower_results(size_results) if args.slower_only else size_results
+        if displayed_results:
+            table = make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results)
+            console.print(table)
+            console.print()
         all_results.extend(size_results)
 
     # ── summary ──────────────────────────────────────────────────────
     paired = [r for r in all_results if r["blanket_speedup"] is not None]
-    if paired:
+    if paired and not args.slower_only:
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(1 for s in speedups if s > 1.0)
         geo_mean = geometric_mean(speedups)
@@ -422,7 +455,8 @@ def main() -> None:
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.json_path is not None:
-        args.json_path.write_text(json.dumps(all_results, indent=2) + "\n")
+        output_results = slower_results(all_results) if args.slower_only else all_results
+        args.json_path.write_text(json.dumps(output_results, indent=2) + "\n")
 
 
 if __name__ == "__main__":

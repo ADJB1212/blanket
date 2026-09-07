@@ -54,16 +54,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
     if channels == 1 {
-        return py.detach(|| {
-            Image::from_pixels(
-                image.width,
-                image.height,
-                PixelMode::L,
-                source.to_vec(),
-                None,
-            )
-            .map(|band| vec![band])
-        });
+        return py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, source.to_vec(), None).map(|band| vec![band]));
     }
     let mut bands = (0..channels)
         .map(|_| buffer((image.width, image.height), 1))
@@ -127,9 +118,7 @@ fn apply_lut<const C: usize>(source: &[u8], output: &mut [u8], lut: &[u8]) {
 #[pyfunction]
 fn ops_colorize(py: Python<'_>, image: &Image, tables: Vec<u8>) -> PyResult<Image> {
     if image.mode != PixelMode::L || tables.len() != 768 {
-        return Err(PyValueError::new_err(
-            "colorize requires L pixels and three 256-entry tables",
-        ));
+        return Err(PyValueError::new_err("colorize requires L pixels and three 256-entry tables"));
     }
     let source = image.pixel_data()?;
     let mut output = buffer((image.width, image.height), 3)?;
@@ -195,13 +184,7 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 
 /// Place the source on a filled canvas. Negative offsets clip the source.
 #[pyfunction]
-fn ops_canvas(
-    py: Python<'_>,
-    image: &Image,
-    size: (u32, u32),
-    offset: (i64, i64),
-    fill: Vec<u8>,
-) -> PyResult<Image> {
+fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<u8>) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
     if fill.len() != channels {
@@ -218,9 +201,7 @@ fn ops_canvas(
         py.detach(|| {
             let row_bytes = size.0 as usize * channels;
             for y in 0..size.1 {
-                let start = (((i64::from(y) - offset.1) as usize * image.width as usize)
-                    + (-offset.0) as usize)
-                    * channels;
+                let start = (((i64::from(y) - offset.1) as usize * image.width as usize) + (-offset.0) as usize) * channels;
                 pixels.extend_from_slice(&source[start..start + row_bytes]);
             }
         });
@@ -239,41 +220,26 @@ fn ops_canvas(
             } // buffer is already zeroed
             match channels {
                 1 => row.fill(fill[0]),
-                3 => row
-                    .as_chunks_mut::<3>()
-                    .0
-                    .iter_mut()
-                    .for_each(|p| p.copy_from_slice(&fill)),
-                4 => row
-                    .as_chunks_mut::<4>()
-                    .0
-                    .iter_mut()
-                    .for_each(|p| p.copy_from_slice(&fill)),
+                3 => row.as_chunks_mut::<3>().0.iter_mut().for_each(|p| p.copy_from_slice(&fill)),
+                4 => row.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p.copy_from_slice(&fill)),
                 _ => unreachable!(),
             }
         };
-        chunks_mut_above(
-            &mut pixels,
-            row_bytes * 32,
-            2 * 1024 * 1024,
-            |band, rows| {
-                for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                    let y = (band * 32 + i) as i64;
-                    if y >= top && y < bottom && right > left {
-                        let lo = left as usize * channels;
-                        let hi = right as usize * channels;
-                        fill_row(&mut row[..lo]);
-                        fill_row(&mut row[hi..]);
-                        let src = ((y - offset.1) as usize * image.width as usize
-                            + (left - offset.0) as usize)
-                            * channels;
-                        row[lo..hi].copy_from_slice(&source[src..src + hi - lo]);
-                    } else {
-                        fill_row(row);
-                    }
+        chunks_mut_above(&mut pixels, row_bytes * 32, 2 * 1024 * 1024, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                let y = (band * 32 + i) as i64;
+                if y >= top && y < bottom && right > left {
+                    let lo = left as usize * channels;
+                    let hi = right as usize * channels;
+                    fill_row(&mut row[..lo]);
+                    fill_row(&mut row[hi..]);
+                    let src = ((y - offset.1) as usize * image.width as usize + (left - offset.0) as usize) * channels;
+                    row[lo..hi].copy_from_slice(&source[src..src + hi - lo]);
+                } else {
+                    fill_row(row);
                 }
-            },
-        );
+            }
+        });
     });
     output(image, size, pixels)
 }
@@ -296,56 +262,24 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     let c = image.mode.channels();
     let mut pixels = buffer(size, c)?;
     py.detach(|| match image.mode {
-        PixelMode::L => transpose::<1>(
-            source,
-            &mut pixels,
-            image.width as usize,
-            image.height as usize,
-            orientation,
-        ),
-        PixelMode::Rgb => transpose::<3>(
-            source,
-            &mut pixels,
-            image.width as usize,
-            image.height as usize,
-            orientation,
-        ),
-        PixelMode::Rgba => transpose::<4>(
-            source,
-            &mut pixels,
-            image.width as usize,
-            image.height as usize,
-            orientation,
-        ),
+        PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::Rgb => transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::Rgba => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
     });
     output(image, size, pixels)
 }
 
-fn transpose<const C: usize>(
-    source: &[u8],
-    output: &mut [u8],
-    w: usize,
-    h: usize,
-    orientation: u8,
-) {
+fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
     let source = source.as_chunks::<C>().0;
     let width = if orientation >= 5 { h } else { w };
     // Bands and tiles keep 90-degree rotations local to cache and give every
     // worker exclusive ownership of complete destination rows.
-    let threshold = if orientation < 5 {
-        2 * 1024 * 1024
-    } else {
-        MIN_PARALLEL_BYTES
-    };
+    let threshold = if orientation < 5 { 2 * 1024 * 1024 } else { MIN_PARALLEL_BYTES };
     chunks_mut_above(output, width * C * 32, threshold, |band, rows| {
         if orientation < 5 {
             for (i, row) in rows.chunks_exact_mut(w * C).enumerate() {
                 let y = band * 32 + i;
-                let sy = if orientation == 3 || orientation == 4 {
-                    h - 1 - y
-                } else {
-                    y
-                };
+                let sy = if orientation == 3 || orientation == 4 { h - 1 - y } else { y };
                 let src = &source[sy * w..(sy + 1) * w];
                 if orientation == 1 || orientation == 4 {
                     row.copy_from_slice(src.as_flattened());
@@ -362,22 +296,9 @@ fn transpose<const C: usize>(
                 for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
                     let y = band * 32 + i;
                     let row = row.as_chunks_mut::<C>().0;
-                    for (x, dst) in row
-                        .iter_mut()
-                        .enumerate()
-                        .take((x0 + 32).min(width))
-                        .skip(x0)
-                    {
-                        let sx = if orientation == 7 || orientation == 8 {
-                            w - 1 - y
-                        } else {
-                            y
-                        };
-                        let sy = if orientation == 6 || orientation == 7 {
-                            h - 1 - x
-                        } else {
-                            x
-                        };
+                    for (x, dst) in row.iter_mut().enumerate().take((x0 + 32).min(width)).skip(x0) {
+                        let sx = if orientation == 7 || orientation == 8 { w - 1 - y } else { y };
+                        let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
                         *dst = source[sy * w + sx];
                     }
                 }
@@ -449,13 +370,7 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Vec<(us
             (
                 left,
                 raw.into_iter()
-                    .map(|v| {
-                        if sum == 0.0 {
-                            0
-                        } else {
-                            (v / sum * 4194304.0).round() as i32
-                        }
-                    })
+                    .map(|v| if sum == 0.0 { 0 } else { (v / sum * 4194304.0).round() as i32 })
                     .collect(),
             )
         })
@@ -487,22 +402,11 @@ fn unpremultiply(pixels: &mut [u8]) {
 
 /// Integer box reduction used by resize's reducing_gap optimization.
 #[pyfunction]
-fn ops_reduce(
-    py: Python<'_>,
-    image: &Image,
-    factor: (u32, u32),
-    bounds: (u32, u32, u32, u32),
-) -> PyResult<Image> {
+fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32)) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let (fx, fy) = factor;
     let (left, top, right, bottom) = bounds;
-    if fx == 0
-        || fy == 0
-        || left > right
-        || top > bottom
-        || right > image.width
-        || bottom > image.height
-    {
+    if fx == 0 || fy == 0 || left > right || top > bottom || right > image.width || bottom > image.height {
         return Err(PyValueError::new_err("invalid reduction bounds or factor"));
     }
     let size = ((right - left).div_ceil(fx), (bottom - top).div_ceil(fy));
@@ -510,9 +414,7 @@ fn ops_reduce(
     let mut pixels = buffer(size, c)?;
     py.detach(|| match image.mode {
         PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::Rgb => {
-            reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
-        }
+        PixelMode::Rgb => reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds),
         PixelMode::Rgba => {
             let mut source = source.to_vec();
             premultiply(&mut source);
@@ -523,14 +425,7 @@ fn ops_reduce(
     output(image, size, pixels)
 }
 
-fn reduce_pixels<const C: usize>(
-    source: &[u8],
-    output: &mut [u8],
-    width: u32,
-    size: (u32, u32),
-    factor: (u32, u32),
-    bounds: (u32, u32, u32, u32),
-) {
+fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, size: (u32, u32), factor: (u32, u32), bounds: (u32, u32, u32, u32)) {
     if output.is_empty() {
         return;
     }
@@ -552,9 +447,8 @@ fn reduce_pixels<const C: usize>(
                         let mut sum = 0_u32;
                         for dy in 0..3 {
                             let offset = start + dy * width as usize;
-                            sum += u32::from(source[offset][channel])
-                                + u32::from(source[offset + 1][channel])
-                                + u32::from(source[offset + 2][channel]);
+                            sum +=
+                                u32::from(source[offset][channel]) + u32::from(source[offset + 1][channel]) + u32::from(source[offset + 2][channel]);
                         }
                         dst[channel] = (((sum + 4) * 1_864_135) >> 24) as u8;
                     }
@@ -567,17 +461,11 @@ fn reduce_pixels<const C: usize>(
                 let start = y0 as usize * width as usize + left as usize;
                 let end = start + (right - left) as usize;
                 let upper = source[start..end].as_chunks::<2>().0;
-                let lower = source[start + width as usize..end + width as usize]
-                    .as_chunks::<2>()
-                    .0;
-                for ((dst, upper), lower) in
-                    row.as_chunks_mut::<C>().0.iter_mut().zip(upper).zip(lower)
-                {
+                let lower = source[start + width as usize..end + width as usize].as_chunks::<2>().0;
+                for ((dst, upper), lower) in row.as_chunks_mut::<C>().0.iter_mut().zip(upper).zip(lower) {
                     for channel in 0..C {
-                        let sum = u16::from(upper[0][channel])
-                            + u16::from(upper[1][channel])
-                            + u16::from(lower[0][channel])
-                            + u16::from(lower[1][channel]);
+                        let sum =
+                            u16::from(upper[0][channel]) + u16::from(upper[1][channel]) + u16::from(lower[0][channel]) + u16::from(lower[1][channel]);
                         dst[channel] = ((sum + 2) >> 2) as u8;
                     }
                 }
@@ -610,13 +498,7 @@ fn reduce_pixels<const C: usize>(
 }
 
 #[pyfunction]
-fn ops_resize(
-    py: Python<'_>,
-    image: &Image,
-    size: (u32, u32),
-    method: u8,
-    bounds: BoxF,
-) -> PyResult<Image> {
+fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF) -> PyResult<Image> {
     let source = image.pixel_data()?;
     if method > 5 {
         return Err(PyValueError::new_err("unknown resampling filter"));
@@ -638,18 +520,9 @@ fn ops_resize(
     }
     // Pillow resamples very tall images vertically first to limit temporary
     // storage. Pass order affects 8-bit rounding, so retain it as well.
-    if u64::from(image.height) > u64::from(image.width) * 100
-        && size.1 < image.height
-        && image.width > 0
-    {
+    if u64::from(image.height) > u64::from(image.width) * 100 && size.1 < image.height && image.width > 0 {
         let transposed = ops_transpose(py, image, 5)?;
-        let resized = ops_resize(
-            py,
-            &transposed,
-            (size.1, size.0),
-            method,
-            (bounds.1, bounds.0, bounds.3, bounds.2),
-        )?;
+        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2))?;
         return ops_transpose(py, &resized, 5);
     }
     let c = image.mode.channels();
@@ -699,16 +572,9 @@ fn ops_resize(
 
 // Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
 // for every output pixel. Repeated source rows only need one gather per band.
-fn resize_nearest<const C: usize>(
-    source: &[u8],
-    output: &mut [u8],
-    width: u32,
-    xs: &[usize],
-    ys: &[usize],
-) {
+fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize]) {
     let row_bytes = xs.len() * C;
-    let half_width =
-        xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
+    let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
     let source = source.as_chunks::<C>().0;
     chunks_mut(output, row_bytes * 16, |band, rows| {
         for i in 0..rows.len() / row_bytes {
@@ -734,14 +600,7 @@ fn resize_nearest<const C: usize>(
     });
 }
 
-fn resample<const C: usize>(
-    source: &[u8],
-    output: &mut [u8],
-    image: &Image,
-    size: (u32, u32),
-    b: [f64; 4],
-    method: u8,
-) -> PyResult<()> {
+fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8) -> PyResult<()> {
     let horizontal = weights(image.width, size.0, b[0], b[2], method);
     let vertical = weights(image.height, size.1, b[1], b[3], method);
     let first_row = vertical.first().unwrap().0;
@@ -749,36 +608,22 @@ fn resample<const C: usize>(
     let last_row = last_start + last_weights.len();
     let row_bytes = size.0 as usize * C;
     let input_stride = image.width as usize * C;
-    let horizontal_identity =
-        size.0 == image.width && b[0] == 0.0 && b[2] == f64::from(image.width);
+    let horizontal_identity = size.0 == image.width && b[0] == 0.0 && b[2] == f64::from(image.width);
     let temp = if horizontal_identity {
         Cow::Borrowed(&source[first_row * input_stride..last_row * input_stride])
     } else {
         let mut temp = buffer((size.0, (last_row - first_row) as u32), C)?;
-        let narrow = horizontal.iter().all(|(_, coefficients)| {
-            coefficients
-                .iter()
-                .map(|&w| i64::from(w).abs())
-                .sum::<i64>()
-                * 255
-                + (1 << 21)
-                <= i64::from(i32::MAX)
-        });
+        let narrow = horizontal
+            .iter()
+            .all(|(_, coefficients)| coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + (1 << 21) <= i64::from(i32::MAX));
         chunks_mut(&mut temp, row_bytes * 16, |band, rows| {
             for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
                 let y = first_row + band * 16 + i;
-                let src = source[y * input_stride..(y + 1) * input_stride]
-                    .as_chunks::<C>()
-                    .0;
-                for ((start, coefficients), dst) in
-                    horizontal.iter().zip(dst.as_chunks_mut::<C>().0)
-                {
+                let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
+                for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
                     if narrow {
                         let mut sums = [1_i32 << 21; C];
-                        for (pixel, &weight) in src[*start..*start + coefficients.len()]
-                            .iter()
-                            .zip(coefficients)
-                        {
+                        for (pixel, &weight) in src[*start..*start + coefficients.len()].iter().zip(coefficients) {
                             for c in 0..C {
                                 sums[c] += i32::from(pixel[c]) * weight;
                             }
@@ -791,9 +636,7 @@ fn resample<const C: usize>(
                             let sum = coefficients
                                 .iter()
                                 .enumerate()
-                                .fold(1_i64 << 21, |sum, (i, &w)| {
-                                    sum + i64::from(src[start + i][c]) * i64::from(w)
-                                });
+                                .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
                             dst[c] = (sum >> 22).clamp(0, 255) as u8;
                         }
                     }
@@ -811,9 +654,7 @@ fn resample<const C: usize>(
                 let sum = coefficients
                     .iter()
                     .enumerate()
-                    .fold(1_i64 << 21, |sum, (i, &w)| {
-                        sum + i64::from(src[i * row_bytes + x]) * i64::from(w)
-                    });
+                    .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[i * row_bytes + x]) * i64::from(w));
                 *out = (sum >> 22).clamp(0, 255) as u8;
             }
         }
@@ -838,11 +679,7 @@ fn interpolate(a: f64, b: f64, t: f64) -> f64 {
 }
 
 fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u8]) {
-    let (w, h, c) = (
-        image.width as usize,
-        image.height as usize,
-        image.mode.channels(),
-    );
+    let (w, h, c) = (image.width as usize, image.height as usize, image.mode.channels());
     if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 || x >= w as f64 || y >= h as f64 {
         dst.fill(0);
         return;
@@ -857,22 +694,14 @@ fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u
     let (tx, ty) = (x - x.floor(), y - y.floor());
     for (ch, out) in dst.iter_mut().enumerate() {
         let get = |dx: i64, dy: i64| {
-            f64::from(
-                source[((iy + dy).clamp(0, h as i64 - 1) as usize * w
-                    + (ix + dx).clamp(0, w as i64 - 1) as usize)
-                    * c
-                    + ch],
-            )
+            f64::from(source[((iy + dy).clamp(0, h as i64 - 1) as usize * w + (ix + dx).clamp(0, w as i64 - 1) as usize) * c + ch])
         };
         let value = if method == 2 {
             let top = interpolate(get(0, 0), get(1, 0), tx);
             let bottom = interpolate(get(0, 1), get(1, 1), tx);
             interpolate(top, bottom, ty)
         } else {
-            cubic(
-                [-1, 0, 1, 2].map(|dy| cubic([-1, 0, 1, 2].map(|dx| get(dx, dy)), tx)),
-                ty,
-            )
+            cubic([-1, 0, 1, 2].map(|dy| cubic([-1, 0, 1, 2].map(|dx| get(dx, dy)), tx)), ty)
         };
         *out = value.clamp(0.0, 255.0) as u8;
     }
@@ -895,12 +724,7 @@ fn quad_coordinate(origin: f64, a: f64, b: f64, c: f64, u: f64, v: f64) -> f64 {
     }
 }
 
-fn nearest_columns<const C: usize>(
-    source: Option<&[u8]>,
-    row: &mut [u8],
-    columns: &[Option<usize>],
-    fill: &[u8],
-) {
+fn nearest_columns<const C: usize>(source: Option<&[u8]>, row: &mut [u8], columns: &[Option<usize>], fill: &[u8]) {
     let fill: [u8; C] = fill.try_into().unwrap();
     for (dst, column) in row.as_chunks_mut::<C>().0.iter_mut().zip(columns) {
         *dst = if let (Some(src), Some(offset)) = (source, column) {
@@ -911,14 +735,7 @@ fn nearest_columns<const C: usize>(
     }
 }
 
-fn nearest_fixed<const C: usize>(
-    source: &[u8],
-    row: &mut [u8],
-    size: (u32, u32),
-    coordinates: (i64, i64),
-    steps: (i64, i64),
-    fill: &[u8],
-) {
+fn nearest_fixed<const C: usize>(source: &[u8], row: &mut [u8], size: (u32, u32), coordinates: (i64, i64), steps: (i64, i64), fill: &[u8]) {
     let source = source.as_chunks::<C>().0;
     let fill: [u8; C] = fill.try_into().unwrap();
     let (mut x, mut y) = coordinates;
@@ -936,20 +753,10 @@ fn nearest_fixed<const C: usize>(
 
 /// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
 #[pyfunction]
-fn ops_affine(
-    py: Python<'_>,
-    image: &Image,
-    size: (u32, u32),
-    matrix: [f64; 6],
-    method: u8,
-    fill: Vec<u8>,
-) -> PyResult<Image> {
+fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, fill: Vec<u8>) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
-    if ![0, 2, 3].contains(&method)
-        || !matrix.iter().all(|v| v.is_finite())
-        || fill.len() != channels
-    {
+    if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != channels {
         return Err(PyValueError::new_err("invalid affine transform"));
     }
     let [a, b, c, d, e, f] = matrix;
@@ -957,23 +764,11 @@ fn ops_affine(
     // corners fit, but leaves axis-aligned transforms in floating point.
     let fixed = method == 0
         && (b != 0.0 || d != 0.0)
-        && [
-            (0.0, 0.0),
-            (size.0 as f64, 0.0),
-            (0.0, size.1 as f64),
-            (size.0 as f64, size.1 as f64),
-        ]
-        .iter()
-        .all(|&(x, y)| (a * x + b * y + c).abs() < 32768.0 && (d * x + e * y + f).abs() < 32768.0);
+        && [(0.0, 0.0), (size.0 as f64, 0.0), (0.0, size.1 as f64), (size.0 as f64, size.1 as f64)]
+            .iter()
+            .all(|&(x, y)| (a * x + b * y + c).abs() < 32768.0 && (d * x + e * y + f).abs() < 32768.0);
     let fix = |v: f64| (v * 65536.0 + 0.5).floor() as i64;
-    let coefficients = [
-        fix(a),
-        fix(b),
-        fix(c + a * 0.5 + b * 0.5),
-        fix(d),
-        fix(e),
-        fix(f + d * 0.5 + e * 0.5),
-    ];
+    let coefficients = [fix(a), fix(b), fix(c + a * 0.5 + b * 0.5), fix(d), fix(e), fix(f + d * 0.5 + e * 0.5)];
     let mut pixels = buffer(size, channels)?;
     if pixels.is_empty() {
         return output(image, size, pixels);
@@ -1005,8 +800,7 @@ fn ops_affine(
             let mut x = c + a * 0.5;
             (0..size.0)
                 .map(|_| {
-                    let offset =
-                        (x >= 0.0 && x < image.width as f64).then(|| x as usize * channels);
+                    let offset = (x >= 0.0 && x < image.width as f64).then(|| x as usize * channels);
                     x += a;
                     offset
                 })
@@ -1052,15 +846,9 @@ fn ops_affine(
                     let steps = (a, d);
                     let size = (image.width, image.height);
                     match image.mode {
-                        PixelMode::L => {
-                            nearest_fixed::<1>(&source, row, size, origin, steps, &fill)
-                        }
-                        PixelMode::Rgb => {
-                            nearest_fixed::<3>(&source, row, size, origin, steps, &fill)
-                        }
-                        PixelMode::Rgba => {
-                            nearest_fixed::<4>(&source, row, size, origin, steps, &fill)
-                        }
+                        PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
+                        PixelMode::Rgb => nearest_fixed::<3>(&source, row, size, origin, steps, &fill),
+                        PixelMode::Rgba => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
                     }
                     continue;
                 }
@@ -1076,8 +864,7 @@ fn ops_affine(
                             affine_coordinate(d, e, f, x as f64 + 0.5, y + 0.5),
                         )
                     };
-                    if sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64
-                    {
+                    if sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64 {
                         sample(&source, image, sx, sy, method, dst);
                     } else {
                         dst.copy_from_slice(&fill);
@@ -1095,36 +882,18 @@ fn ops_affine(
 
 #[pyfunction]
 fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<Image> {
-    ops_warp(
-        py,
-        image,
-        (image.width, image.height),
-        mesh,
-        (method, false),
-        None,
-    )
+    ops_warp(py, image, (image.width, image.height), mesh, (method, false), None)
 }
 
 #[pyfunction]
-fn ops_warp(
-    py: Python<'_>,
-    image: &Image,
-    size: (u32, u32),
-    mesh: Mesh,
-    filters: (u8, bool),
-    fill: Option<Vec<u8>>,
-) -> PyResult<Image> {
+fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters: (u8, bool), fill: Option<Vec<u8>>) -> PyResult<Image> {
     let (method, perspective) = filters;
     let source = image.pixel_data()?;
     if ![0, 2, 3].contains(&method) {
-        return Err(PyValueError::new_err(
-            "mesh transforms support NEAREST, BILINEAR and BICUBIC",
-        ));
+        return Err(PyValueError::new_err("mesh transforms support NEAREST, BILINEAR and BICUBIC"));
     }
     let c = image.mode.channels();
-    if fill.as_ref().is_some_and(|v| v.len() != c)
-        || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite()))
-    {
+    if fill.as_ref().is_some_and(|v| v.len() != c) || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite())) {
         return Err(PyValueError::new_err("invalid warp data"));
     }
     let mut result = buffer(size, c)?;
@@ -1175,18 +944,10 @@ fn ops_warp(
                                     affine_coordinate(q[3], q[4], q[5], u, v) / divisor,
                                 )
                             } else {
-                                (
-                                    quad_coordinate(q[0], ax, bx, cx, u, v),
-                                    quad_coordinate(q[1], ay, by, cy, u, v),
-                                )
+                                (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
                             };
                             let dst = x as usize * c;
-                            if fill.is_none()
-                                || (sx >= 0.0
-                                    && sy >= 0.0
-                                    && sx < image.width as f64
-                                    && sy < image.height as f64)
-                            {
+                            if fill.is_none() || (sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64) {
                                 sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
                             }
                         }
@@ -1224,8 +985,7 @@ mod tests {
     fn transpose_non_square_and_clip_canvas() {
         Python::initialize();
         Python::attach(|py| {
-            let image =
-                Image::from_pixels(3, 2, PixelMode::L, vec![1, 2, 3, 4, 5, 6], None).unwrap();
+            let image = Image::from_pixels(3, 2, PixelMode::L, vec![1, 2, 3, 4, 5, 6], None).unwrap();
             let rotated = ops_transpose(py, &image, 6).unwrap();
             assert_eq!((rotated.width, rotated.height), (2, 3));
             assert_eq!(rotated.pixel_data().unwrap(), [4, 1, 5, 2, 6, 3]);

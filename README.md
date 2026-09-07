@@ -150,5 +150,7 @@ uv run python scripts/benchmark.py
 ```
 
 The benchmark uses equal in-memory inputs, forces Pillow to decode eagerly,
-and reports median duration plus Blanket's speed ratio. JPEG XL results are
-reported separately because Pillow has no built-in JPEG XL codec.
+and summarizes each section using Blanket's speed ratio. Pass `--verbose` to
+see timings for every operation, or `--slower-only` to show only operations
+where Blanket trails Pillow. JPEG XL results are reported separately because
+Pillow has no built-in JPEG XL codec.

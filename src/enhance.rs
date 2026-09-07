@@ -52,19 +52,15 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
 
     let mut pixels = buffer(first_pixels.len())?;
     py.detach(|| {
-        chunks_mut(
-            &mut pixels,
-            CHUNK_PIXELS * first.mode.channels(),
-            |i, dst| {
-                let start = i * CHUNK_PIXELS * first.mode.channels();
-                blend_bytes(
-                    &first_pixels[start..start + dst.len()],
-                    &second_pixels[start..start + dst.len()],
-                    dst,
-                    factor,
-                );
-            },
-        );
+        chunks_mut(&mut pixels, CHUNK_PIXELS * first.mode.channels(), |i, dst| {
+            let start = i * CHUNK_PIXELS * first.mode.channels();
+            blend_bytes(
+                &first_pixels[start..start + dst.len()],
+                &second_pixels[start..start + dst.len()],
+                dst,
+                factor,
+            );
+        });
     });
     output(first, pixels)
 }
@@ -94,12 +90,7 @@ fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
 fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
     chunks_mut(output, CHUNK_PIXELS * C, |i, dst| {
         let start = i * CHUNK_PIXELS * C;
-        for (source, output) in source[start..]
-            .as_chunks::<C>()
-            .0
-            .iter()
-            .zip(dst.as_chunks_mut::<C>().0)
-        {
+        for (source, output) in source[start..].as_chunks::<C>().0.iter().zip(dst.as_chunks_mut::<C>().0) {
             let luma = crate::simd::pillow_luma(source[0], source[1], source[2]);
             output[0] = luma;
             output[1] = luma;
@@ -136,12 +127,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         }),
         PixelMode::Rgba => chunks_mut(&mut pixels, CHUNK_PIXELS * 4, |i, dst| {
             let start = i * CHUNK_PIXELS * 4;
-            for (source, output) in source[start..]
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .zip(dst.as_chunks_mut::<4>().0)
-            {
+            for (source, output) in source[start..].as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
                 *output = [mean, mean, mean, source[3]];
             }
         }),
@@ -159,8 +145,7 @@ fn byte_sum(source: &[u8]) -> u64 {
 
 fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
     let pixels = source.as_chunks::<C>().0;
-    let luminance =
-        |pixel: &[u8; C]| u64::from(crate::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
+    let luminance = |pixel: &[u8; C]| u64::from(crate::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
     if source.len() >= MIN_PARALLEL_BYTES {
         pixels.par_iter().map(luminance).sum()
     } else {
@@ -181,12 +166,7 @@ fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
         py.detach(|| {
             chunks_mut(&mut pixels, CHUNK_PIXELS * 4, |i, dst| {
                 let start = i * CHUNK_PIXELS * 4;
-                for (source, output) in source[start..]
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .zip(dst.as_chunks_mut::<4>().0)
-                {
+                for (source, output) in source[start..].as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
                     output[3] = source[3];
                 }
             });
@@ -267,12 +247,7 @@ mod tests {
         smooth::<4>(&source, &mut output, 5);
         assert_eq!(&output[..20], &source[..20]);
         assert_eq!(&output[80..], &source[80..]);
-        for (actual, expected) in output
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .zip(source.as_chunks::<4>().0)
-        {
+        for (actual, expected) in output.as_chunks::<4>().0.iter().zip(source.as_chunks::<4>().0) {
             assert_eq!(actual[3], expected[3]);
         }
     }

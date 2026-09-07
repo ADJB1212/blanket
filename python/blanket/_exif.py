@@ -42,6 +42,13 @@ def _orientation(raw: bytes) -> tuple[int | None, bytes]:
     return None, raw
 
 
+ORIENTATION_RE = re.compile(r'tiff:Orientation="([0-9])"|<tiff:Orientation>([0-9])</tiff:Orientation>')
+
+ORIENTATION_REMOVE_RE = re.compile(r'tiff:Orientation="[0-9]"|<tiff:Orientation>[0-9]</tiff:Orientation>')
+
+ORIENTATION_REMOVE_BYTES_RE = re.compile(ORIENTATION_REMOVE_RE.pattern.encode())
+
+
 def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, object]]:
     result = info.copy()
     raw = info.get("exif")
@@ -62,7 +69,7 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
             if isinstance(xmp, bytes):
                 xmp = xmp.decode("utf-8", "replace")
             if isinstance(xmp, str):
-                match = re.search(r'tiff:Orientation="([0-9])"|<tiff:Orientation>([0-9])</tiff:Orientation>', xmp)
+                match = ORIENTATION_RE.search(xmp)
                 if match:
                     orientation = int(match[1] or match[2])
                     break
@@ -71,15 +78,14 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
     if orientation in range(2, 9):
         if raw is not None:
             result["Raw profile type exif" if profile else "exif"] = cleaned.hex() if profile else cleaned
-        pattern = r'tiff:Orientation="[0-9]"|<tiff:Orientation>[0-9]</tiff:Orientation>'
         for key in ("XML:com.adobe.xmp", "xmp"):
             value = result.get(key)
             if isinstance(value, str):
-                result[key] = re.sub(pattern, "", value)
+                result[key] = ORIENTATION_REMOVE_RE.sub("", value)
             elif isinstance(value, bytes):
-                result[key] = re.sub(pattern.encode(), b"", value)
+                result[key] = ORIENTATION_REMOVE_BYTES_RE.sub(b"", value)
             elif isinstance(value, tuple):
-                result[key] = tuple(re.sub(pattern.encode(), b"", v) for v in value)
+                result[key] = tuple(ORIENTATION_REMOVE_BYTES_RE.sub(b"", v) for v in value)
     return orientation, result
 
 

@@ -29,8 +29,7 @@ impl NearestL {
                 let base = *xs.iter().min().unwrap();
                 // Two table registers gather 16 nearby pixels without scalar
                 // loads. Wide reductions and right-edge loads use the fallback.
-                (width - base >= 32 && xs.iter().all(|&x| x - base < 32))
-                    .then(|| (base, xs.map(|x| (x - base) as u8)))
+                (width - base >= 32 && xs.iter().all(|&x| x - base < 32)).then(|| (base, xs.map(|x| (x - base) as u8)))
             })
             .collect();
         Some(Self {
@@ -46,15 +45,15 @@ impl NearestL {
     pub(crate) fn is_vectorized(&self) -> bool {
         #[cfg(target_arch = "aarch64")]
         {
-            self.blocks.iter().any(Option::is_some)
+            return self.blocks.iter().any(Option::is_some);
         }
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
-            self.ssse3 && self.blocks.iter().any(Option::is_some)
+            return self.ssse3 && self.blocks.iter().any(Option::is_some);
         }
         #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
         {
-            false
+            return false;
         }
     }
 
@@ -79,14 +78,8 @@ impl NearestL {
                     // SAFETY: new() checks both 16-byte loads fit the source;
                     // each block owns 16 output bytes. NEON is mandatory here.
                     unsafe {
-                        let table = uint8x16x2_t(
-                            vld1q_u8(source.as_ptr().add(*base)),
-                            vld1q_u8(source.as_ptr().add(*base + 16)),
-                        );
-                        vst1q_u8(
-                            output.as_mut_ptr().add(i * 16),
-                            vqtbl2q_u8(table, vld1q_u8(indices.as_ptr())),
-                        );
+                        let table = uint8x16x2_t(vld1q_u8(source.as_ptr().add(*base)), vld1q_u8(source.as_ptr().add(*base + 16)));
+                        vst1q_u8(output.as_mut_ptr().add(i * 16), vqtbl2q_u8(table, vld1q_u8(indices.as_ptr())));
                     }
                 } else {
                     for j in i * 16..(i + 1) * 16 {
@@ -119,13 +112,9 @@ impl NearestL {
                     let indices = _mm_loadu_si128(indices.as_ptr().cast());
                     // PSHUFB zeros lanes whose index has its high bit set.
                     // Select 0..15 from low, 16..31 from high, then combine.
-                    let low_indices =
-                        _mm_or_si128(indices, _mm_cmpgt_epi8(indices, _mm_set1_epi8(15)));
+                    let low_indices = _mm_or_si128(indices, _mm_cmpgt_epi8(indices, _mm_set1_epi8(15)));
                     let high_indices = _mm_sub_epi8(indices, _mm_set1_epi8(16));
-                    let values = _mm_or_si128(
-                        _mm_shuffle_epi8(low, low_indices),
-                        _mm_shuffle_epi8(high, high_indices),
-                    );
+                    let values = _mm_or_si128(_mm_shuffle_epi8(low, low_indices), _mm_shuffle_epi8(high, high_indices));
                     _mm_storeu_si128(output.as_mut_ptr().add(i * 16).cast(), values);
                 }
             } else {
@@ -167,12 +156,7 @@ pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
         }
         done
     };
-    for (i, dst) in output[done * 3..]
-        .as_chunks_mut::<3>()
-        .0
-        .iter_mut()
-        .enumerate()
-    {
+    for (i, dst) in output[done * 3..].as_chunks_mut::<3>().0.iter_mut().enumerate() {
         let start = (pixels - done - i - 1) * 3;
         dst.copy_from_slice(&source[start..start + 3]);
     }
@@ -219,12 +203,7 @@ fn scalar_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
             *dst = tables[usize::from(src)];
         }
     } else {
-        for (src, dst) in source
-            .as_chunks::<C>()
-            .0
-            .iter()
-            .zip(output.as_chunks_mut::<C>().0)
-        {
+        for (src, dst) in source.as_chunks::<C>().0.iter().zip(output.as_chunks_mut::<C>().0) {
             for c in 0..C {
                 dst[c] = tables[c * 256 + usize::from(src[c])];
             }
@@ -236,10 +215,7 @@ pub(crate) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(Some(output.len()), source.len().checked_mul(3));
     assert_eq!(tables.len(), 768);
     let start = dispatch_colorize(source, output, tables);
-    for (&v, dst) in source[start..]
-        .iter()
-        .zip(output[start * 3..].as_chunks_mut::<3>().0)
-    {
+    for (&v, dst) in source[start..].iter().zip(output[start * 3..].as_chunks_mut::<3>().0) {
         let index = usize::from(v);
         *dst = [tables[index], tables[256 + index], tables[512 + index]];
     }
@@ -277,13 +253,7 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
 fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
     let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
     if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
-        assert!(
-            weights.is_empty()
-                || source.len()
-                    >= (weights.len() - 1)
-                        .saturating_mul(stride)
-                        .saturating_add(output.len())
-        );
+        assert!(weights.is_empty() || source.len() >= (weights.len() - 1).saturating_mul(stride).saturating_add(output.len()));
         return portable::vertical(source, output, stride, weights);
     }
     0
@@ -297,13 +267,7 @@ fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &
         if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
             // SAFETY: Each referenced source row spans output.len() bytes.
             // Loads/stores operate only on complete groups of eight bytes.
-            assert!(
-                weights.is_empty()
-                    || source.len()
-                        >= (weights.len() - 1)
-                            .saturating_mul(stride)
-                            .saturating_add(output.len())
-            );
+            assert!(weights.is_empty() || source.len() >= (weights.len() - 1).saturating_mul(stride).saturating_add(output.len()));
             #[cfg(target_arch = "aarch64")]
             return unsafe { neon::vertical(source, output, stride, weights) };
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -330,8 +294,7 @@ mod portable {
         let mut offset = 0;
         if tables.len() == 256 {
             while offset + LANES <= source.len() {
-                let idx: Simd<usize, LANES> =
-                    Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
+                let idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
                 let vals: Simd<u8, LANES> = Simd::gather_or_default(tables, idx);
                 output[offset..offset + LANES].copy_from_slice(&vals.to_array());
                 offset += LANES;
@@ -340,8 +303,7 @@ mod portable {
         } else {
             while offset + LANES * C <= source.len() {
                 for c in 0..C {
-                    let src_idx: Simd<usize, LANES> =
-                        Simd::from_array(std::array::from_fn(|i| offset + i * C + c));
+                    let src_idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| offset + i * C + c));
                     let src_bytes: Simd<u8, LANES> = Simd::gather_or_default(source, src_idx);
                     let idx: Simd<usize, LANES> = src_bytes.cast();
                     let table_slice = &tables[c * 256..c * 256 + 256];
@@ -360,8 +322,7 @@ mod portable {
     pub(super) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
         let mut offset = 0;
         while offset + LANES <= source.len() {
-            let idx: Simd<usize, LANES> =
-                Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
+            let idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
             for c in 0..3 {
                 let table_slice = &tables[c * 256..c * 256 + 256];
                 let vals: Simd<u8, LANES> = Simd::gather_or_default(table_slice, idx);
@@ -375,18 +336,12 @@ mod portable {
         offset
     }
 
-    pub(super) fn vertical(
-        source: &[u8],
-        output: &mut [u8],
-        stride: usize,
-        weights: &[i32],
-    ) -> usize {
+    pub(super) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
         let end = output.len() / VLANES * VLANES;
         for x in (0..end).step_by(VLANES) {
             let mut acc: Simd<i32, VLANES> = Simd::splat(1 << 21);
             for (i, &weight) in weights.iter().enumerate() {
-                let bytes: Simd<u8, VLANES> =
-                    Simd::from_slice(&source[i * stride + x..i * stride + x + VLANES]);
+                let bytes: Simd<u8, VLANES> = Simd::from_slice(&source[i * stride + x..i * stride + x + VLANES]);
                 let widened: Simd<i32, VLANES> = bytes.cast();
                 acc += widened * Simd::splat(weight);
             }
@@ -399,10 +354,7 @@ mod portable {
     }
 }
 
-#[cfg(all(
-    any(target_arch = "x86", target_arch = "x86_64"),
-    not(RUSTC_IS_NIGHTLY)
-))]
+#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(RUSTC_IS_NIGHTLY)))]
 mod x86 {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
@@ -412,10 +364,7 @@ mod x86 {
     /// Narrow eight nonnegative i32 lanes to bytes, preserving lane order.
     #[target_feature(enable = "avx2")]
     unsafe fn pack_bytes(values: __m256i) -> __m128i {
-        let shorts = _mm_packus_epi32(
-            _mm256_castsi256_si128(values),
-            _mm256_extracti128_si256::<1>(values),
-        );
+        let shorts = _mm_packus_epi32(_mm256_castsi256_si128(values), _mm256_extracti128_si256::<1>(values));
         _mm_packus_epi16(shorts, _mm_setzero_si128())
     }
 
@@ -428,11 +377,8 @@ mod x86 {
         }
         // AVX2 gathers i32 entries, so widen once instead of reading four bytes
         // at each u8 entry (which would overread the end of the original table).
-        let table: [[i32; 256]; C] =
-            std::array::from_fn(|c| std::array::from_fn(|i| i32::from(tables[c * 256 + i])));
-        let channels: [[i32; 8]; C] = std::array::from_fn(|block| {
-            std::array::from_fn(|i| (((block * 8 + i) % C) * 256) as i32)
-        });
+        let table: [[i32; 256]; C] = std::array::from_fn(|c| std::array::from_fn(|i| i32::from(tables[c * 256 + i])));
+        let channels: [[i32; 8]; C] = std::array::from_fn(|block| std::array::from_fn(|i| (((block * 8 + i) % C) * 256) as i32));
         // SAFETY: each block loads/stores eight bytes. Indices select a byte's
         // channel and value in the widened table. Tails start on a pixel boundary.
         unsafe {
@@ -440,12 +386,8 @@ mod x86 {
                 for (block, channel) in channels.iter().enumerate() {
                     let offset = offset + block * 8;
                     let bytes = _mm_loadl_epi64(source.as_ptr().add(offset).cast());
-                    let indices = _mm256_add_epi32(
-                        _mm256_cvtepu8_epi32(bytes),
-                        _mm256_loadu_si256(channel.as_ptr().cast()),
-                    );
-                    let values =
-                        _mm256_i32gather_epi32::<4>(table.as_flattened().as_ptr(), indices);
+                    let indices = _mm256_add_epi32(_mm256_cvtepu8_epi32(bytes), _mm256_loadu_si256(channel.as_ptr().cast()));
+                    let values = _mm256_i32gather_epi32::<4>(table.as_flattened().as_ptr(), indices);
                     _mm_storel_epi64(output.as_mut_ptr().add(offset).cast(), pack_bytes(values));
                 }
             }
@@ -459,25 +401,18 @@ mod x86 {
         if end == 0 {
             return 0;
         }
-        let table: [i32; 256] = std::array::from_fn(|i| {
-            i32::from(tables[i])
-                | (i32::from(tables[256 + i]) << 8)
-                | (i32::from(tables[512 + i]) << 16)
-        });
+        let table: [i32; 256] =
+            std::array::from_fn(|i| i32::from(tables[i]) | (i32::from(tables[256 + i]) << 8) | (i32::from(tables[512 + i]) << 16));
         let shuffle = _mm_setr_epi8(0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, -1, -1, -1, -1);
         // SAFETY: each gather indexes a complete i32 entry. Each input block
         // contains eight bytes and writes two groups of twelve RGB bytes.
         unsafe {
             for offset in (0..end).step_by(8) {
                 let bytes = _mm_loadl_epi64(source.as_ptr().add(offset).cast());
-                let values =
-                    _mm256_i32gather_epi32::<4>(table.as_ptr(), _mm256_cvtepu8_epi32(bytes));
-                for (half, values) in [
-                    _mm256_castsi256_si128(values),
-                    _mm256_extracti128_si256::<1>(values),
-                ]
-                .into_iter()
-                .enumerate()
+                let values = _mm256_i32gather_epi32::<4>(table.as_ptr(), _mm256_cvtepu8_epi32(bytes));
+                for (half, values) in [_mm256_castsi256_si128(values), _mm256_extracti128_si256::<1>(values)]
+                    .into_iter()
+                    .enumerate()
                 {
                     let packed = _mm_shuffle_epi8(values, shuffle);
                     let mut rgb = [0_u8; 16];
@@ -491,12 +426,7 @@ mod x86 {
     }
 
     #[target_feature(enable = "avx2")]
-    pub(super) unsafe fn vertical(
-        source: &[u8],
-        output: &mut [u8],
-        stride: usize,
-        weights: &[i32],
-    ) -> usize {
+    pub(super) unsafe fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
         let end = output.len() / 8 * 8;
         // SAFETY: caller checks row extents and accumulator bounds. Only full
         // groups of eight bytes are loaded/stored; the caller handles the tail.
@@ -505,10 +435,7 @@ mod x86 {
                 let mut acc = _mm256_set1_epi32(1 << 21);
                 for (i, &weight) in weights.iter().enumerate() {
                     let bytes = _mm_loadl_epi64(source.as_ptr().add(i * stride + x).cast());
-                    acc = _mm256_add_epi32(
-                        acc,
-                        _mm256_mullo_epi32(_mm256_cvtepu8_epi32(bytes), _mm256_set1_epi32(weight)),
-                    );
+                    acc = _mm256_add_epi32(acc, _mm256_mullo_epi32(_mm256_cvtepu8_epi32(bytes), _mm256_set1_epi32(weight)));
                 }
                 let clamped = _mm256_min_epi32(
                     _mm256_max_epi32(_mm256_srai_epi32::<22>(acc), _mm256_setzero_si256()),
@@ -531,12 +458,7 @@ mod neon {
         unsafe {
             std::array::from_fn(|i| {
                 let p = table.as_ptr().add(i * 64);
-                uint8x16x4_t(
-                    vld1q_u8(p),
-                    vld1q_u8(p.add(16)),
-                    vld1q_u8(p.add(32)),
-                    vld1q_u8(p.add(48)),
-                )
+                uint8x16x4_t(vld1q_u8(p), vld1q_u8(p.add(16)), vld1q_u8(p.add(32)), vld1q_u8(p.add(48)))
             })
         }
     }
@@ -562,10 +484,7 @@ mod neon {
             if tables.len() == 256 {
                 let table = load_table(tables);
                 while offset + 16 <= source.len() {
-                    vst1q_u8(
-                        output.as_mut_ptr().add(offset),
-                        lookup(&table, vld1q_u8(source.as_ptr().add(offset))),
-                    );
+                    vst1q_u8(output.as_mut_ptr().add(offset), lookup(&table, vld1q_u8(source.as_ptr().add(offset))));
                     offset += 16;
                 }
                 super::scalar_lut::<1>(&source[offset..], &mut output[offset..], tables);
@@ -588,12 +507,7 @@ mod neon {
         }
     }
 
-    pub(super) unsafe fn vertical(
-        source: &[u8],
-        output: &mut [u8],
-        stride: usize,
-        weights: &[i32],
-    ) -> usize {
+    pub(super) unsafe fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
         let end = output.len() / 8 * 8;
         // SAFETY: caller checks source row extents and accumulator bounds.
         unsafe {
@@ -607,10 +521,7 @@ mod neon {
                     low = vmlaq_n_s32(low, lo, weight);
                     high = vmlaq_n_s32(high, hi, weight);
                 }
-                let shorts = vcombine_u16(
-                    vqmovun_s32(vshrq_n_s32::<22>(low)),
-                    vqmovun_s32(vshrq_n_s32::<22>(high)),
-                );
+                let shorts = vcombine_u16(vqmovun_s32(vshrq_n_s32::<22>(low)), vqmovun_s32(vshrq_n_s32::<22>(high)));
                 vst1_u8(output.as_mut_ptr().add(x), vqmovn_u16(shorts));
             }
         }
@@ -627,10 +538,7 @@ mod neon {
             let b = load_table(&tables[512..768]);
             for i in (0..end).step_by(16) {
                 let v = vld1q_u8(source.as_ptr().add(i));
-                vst3q_u8(
-                    output.as_mut_ptr().add(i * 3),
-                    uint8x16x3_t(lookup(&r, v), lookup(&g, v), lookup(&b, v)),
-                );
+                vst3q_u8(output.as_mut_ptr().add(i * 3), uint8x16x3_t(lookup(&r, v), lookup(&g, v), lookup(&b, v)));
             }
         }
         end
@@ -652,9 +560,7 @@ mod tests {
         for n in [0, 1, 7, 8, 9, 15, 16, 17, 47, 48, 49, 255, 256, 257] {
             let input: Vec<u8> = (0..n * C).map(|i| (i * 37) as u8).collect();
             for channels in [1, C] {
-                let tables: Vec<u8> = (0..channels * 256)
-                    .map(|i| (i * 53 + i / 256 * 13) as u8)
-                    .collect();
+                let tables: Vec<u8> = (0..channels * 256).map(|i| (i * 53 + i / 256 * 13) as u8).collect();
                 let mut expected = vec![0; input.len()];
                 let mut actual = expected.clone();
                 scalar_lut::<C>(&input, &mut expected, &tables);
@@ -672,25 +578,13 @@ mod tests {
         let count = vertical(&source, &mut actual, 31, &weights);
         #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
         assert_eq!(count, 24);
-        #[cfg(all(
-            not(RUSTC_IS_NIGHTLY),
-            any(target_arch = "x86", target_arch = "x86_64")
-        ))]
-        assert_eq!(
-            count,
-            if std::arch::is_x86_feature_detected!("avx2") {
-                24
-            } else {
-                0
-            }
-        );
+        #[cfg(all(not(RUSTC_IS_NIGHTLY), any(target_arch = "x86", target_arch = "x86_64")))]
+        assert_eq!(count, if std::arch::is_x86_feature_detected!("avx2") { 24 } else { 0 });
         for x in 0..count {
             let sum = weights
                 .iter()
                 .enumerate()
-                .fold(1_i64 << 21, |sum, (i, &w)| {
-                    sum + i64::from(source[i * 31 + x]) * i64::from(w)
-                });
+                .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[i * 31 + x]) * i64::from(w));
             assert_eq!(actual[x], (sum >> 22).clamp(0, 255) as u8);
         }
     }
@@ -707,9 +601,7 @@ mod tests {
             ] {
                 let stride = width + 3;
                 // Offset both buffers by one to exercise unaligned loads/stores.
-                let source: Vec<u8> = (0..1 + weights.len() * stride)
-                    .map(|i| (i * 67) as u8)
-                    .collect();
+                let source: Vec<u8> = (0..1 + weights.len() * stride).map(|i| (i * 67) as u8).collect();
                 let mut actual = vec![123; width + 2];
                 let count = vertical(&source[1..], &mut actual[1..1 + width], stride, weights);
                 let enabled = cfg!(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"));
@@ -720,9 +612,7 @@ mod tests {
                     let sum = weights
                         .iter()
                         .enumerate()
-                        .fold(1_i64 << 21, |sum, (i, &w)| {
-                            sum + i64::from(source[1 + i * stride + x]) * i64::from(w)
-                        });
+                        .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[1 + i * stride + x]) * i64::from(w));
                     assert_eq!(actual[1 + x], (sum >> 22).clamp(0, 255) as u8);
                 }
                 assert_eq!(actual[0], 123);
@@ -740,24 +630,11 @@ mod tests {
             let count = dispatch_colorize(&source[1..], &mut output[1..1 + n * 3], &tables);
             #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
             assert_eq!(count, n / 16 * 16);
-            #[cfg(all(
-                not(RUSTC_IS_NIGHTLY),
-                any(target_arch = "x86", target_arch = "x86_64")
-            ))]
-            assert_eq!(
-                count,
-                if std::arch::is_x86_feature_detected!("avx2") {
-                    n / 8 * 8
-                } else {
-                    0
-                }
-            );
+            #[cfg(all(not(RUSTC_IS_NIGHTLY), any(target_arch = "x86", target_arch = "x86_64")))]
+            assert_eq!(count, if std::arch::is_x86_feature_detected!("avx2") { n / 8 * 8 } else { 0 });
             for i in 0..count {
                 let v = usize::from(source[1 + i]);
-                assert_eq!(
-                    &output[1 + i * 3..1 + (i + 1) * 3],
-                    &[tables[v], tables[256 + v], tables[512 + v]]
-                );
+                assert_eq!(&output[1 + i * 3..1 + (i + 1) * 3], &[tables[v], tables[256 + v], tables[512 + v]]);
             }
             assert_eq!(output[0], 123);
             assert!(output[1 + count * 3..].iter().all(|&v| v == 123));
@@ -794,10 +671,7 @@ mod tests {
             let mut output = vec![123; n * 3 + 2];
             reverse_rgb(&source[1..1 + n * 3], &mut output[1..1 + n * 3]);
             for i in 0..n {
-                assert_eq!(
-                    output[1 + i * 3..1 + (i + 1) * 3],
-                    source[1 + (n - i - 1) * 3..1 + (n - i) * 3]
-                );
+                assert_eq!(output[1 + i * 3..1 + (i + 1) * 3], source[1 + (n - i - 1) * 3..1 + (n - i) * 3]);
             }
             assert_eq!(output[0], 123);
             assert_eq!(output[n * 3 + 1], 123);
@@ -847,10 +721,7 @@ mod tests {
         #[cfg(target_arch = "aarch64")]
         assert!(map.is_vectorized());
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        assert_eq!(
-            map.is_vectorized(),
-            std::arch::is_x86_feature_detected!("ssse3")
-        );
+        assert_eq!(map.is_vectorized(), std::arch::is_x86_feature_detected!("ssse3"));
         #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
         assert!(!map.is_vectorized());
     }

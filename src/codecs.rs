@@ -65,13 +65,8 @@ pub(crate) struct SaveOptions {
 }
 
 #[pyfunction]
-pub(crate) fn open_bytes(
-    py: Python<'_>,
-    data: &[u8],
-    formats: Option<Vec<String>>,
-) -> PyResult<Image> {
-    let format = ImageFormat::detect(data)
-        .ok_or_else(|| UnidentifiedImageError::new_err("cannot identify image file"))?;
+pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Image> {
+    let format = ImageFormat::detect(data).ok_or_else(|| UnidentifiedImageError::new_err("cannot identify image file"))?;
     if let Some(formats) = formats {
         let allowed = formats
             .iter()
@@ -85,8 +80,7 @@ pub(crate) fn open_bytes(
         }
     }
 
-    py.detach(|| decode(data, format))
-        .map_err(UnidentifiedImageError::new_err)
+    py.detach(|| decode(data, format)).map_err(UnidentifiedImageError::new_err)
 }
 
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
@@ -108,20 +102,15 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
     let (width, height) = (image.width(), image.height());
     let (mode, pixels) = match color {
         ColorType::L8 | ColorType::L16 => (PixelMode::L, image.into_luma8().into_raw()),
-        ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => {
-            (PixelMode::Rgb, image.into_rgb8().into_raw())
-        }
+        ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => (PixelMode::Rgb, image.into_rgb8().into_raw()),
         _ => (PixelMode::Rgba, image.into_rgba8().into_raw()),
     };
-    Image::from_pixels(width, height, mode, pixels, Some(format_name.to_owned()))
-        .map_err(|error| error.to_string())
+    Image::from_pixels(width, height, mode, pixels, Some(format_name.to_owned())).map_err(|error| error.to_string())
 }
 
 fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
     let mut decoder = Decompressor::new().map_err(|error| error.to_string())?;
-    let header = decoder
-        .read_header(data)
-        .map_err(|error| error.to_string())?;
+    let header = decoder.read_header(data).map_err(|error| error.to_string())?;
     let width = u32::try_from(header.width).map_err(|error| error.to_string())?;
     let height = u32::try_from(header.height).map_err(|error| error.to_string())?;
     validate_dimensions(width, height)?;
@@ -152,13 +141,8 @@ fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
             },
         )
         .map_err(|error| error.to_string())?;
-    let pixels = if format == PixelFormat::CMYK {
-        cmyk_to_rgb(&pixels)
-    } else {
-        pixels
-    };
-    Image::from_pixels(width, height, mode, pixels, Some("JPEG".to_owned()))
-        .map_err(|error| error.to_string())
+    let pixels = if format == PixelFormat::CMYK { cmyk_to_rgb(&pixels) } else { pixels };
+    Image::from_pixels(width, height, mode, pixels, Some("JPEG".to_owned())).map_err(|error| error.to_string())
 }
 
 fn cmyk_to_rgb(cmyk: &[u8]) -> Vec<u8> {
@@ -180,13 +164,8 @@ fn multiply_u8(left: u8, right: u8) -> u8 {
 
 fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     let runner = ThreadsRunner::default();
-    let decoder = decoder_builder()
-        .parallel_runner(&runner)
-        .build()
-        .map_err(|error| error.to_string())?;
-    let (info, pixels) = decoder
-        .decode_with::<u8>(data)
-        .map_err(|error| error.to_string())?;
+    let decoder = decoder_builder().parallel_runner(&runner).build().map_err(|error| error.to_string())?;
+    let (info, pixels) = decoder.decode_with::<u8>(data).map_err(|error| error.to_string())?;
     validate_dimensions(info.width, info.height)?;
 
     let (mode, pixels) = match (info.num_color_channels, info.has_alpha_channel) {
@@ -200,14 +179,7 @@ fn decode_jxl(data: &[u8]) -> Result<Image, String> {
             ));
         }
     };
-    Image::from_pixels(
-        info.width,
-        info.height,
-        mode,
-        pixels,
-        Some("JXL".to_owned()),
-    )
-    .map_err(|error| error.to_string())
+    Image::from_pixels(info.width, info.height, mode, pixels, Some("JXL".to_owned())).map_err(|error| error.to_string())
 }
 
 fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
@@ -218,11 +190,7 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
     rgba
 }
 
-pub(crate) fn encode(
-    image: &Image,
-    format: ImageFormat,
-    options: SaveOptions,
-) -> PyResult<Vec<u8>> {
+pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
     match format {
         ImageFormat::Png => encode_png(image, pixels, options.compress_level),
@@ -241,13 +209,9 @@ fn color_type(mode: PixelMode) -> ExtendedColorType {
 
 fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
-    PngEncoder::new_with_quality(
-        &mut output,
-        CompressionType::Level(compress_level),
-        FilterType::Adaptive,
-    )
-    .write_image(pixels, image.width, image.height, color_type(image.mode))
-    .map_err(codec_error)?;
+    PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
+        .write_image(pixels, image.width, image.height, color_type(image.mode))
+        .map_err(codec_error)?;
     Ok(output)
 }
 
@@ -263,9 +227,7 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
     };
     let mut encoder = Compressor::new().map_err(codec_error)?;
-    encoder
-        .set_quality(i32::from(quality))
-        .map_err(codec_error)?;
+    encoder.set_quality(i32::from(quality)).map_err(codec_error)?;
     encoder.set_subsamp(subsampling).map_err(codec_error)?;
     encoder
         .compress_to_vec(turbojpeg::Image {
@@ -298,9 +260,7 @@ fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Ve
         .build()
         .map_err(codec_error)?;
     let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-    let encoded: EncoderResult<u8> = encoder
-        .encode_frame(&frame, image.width, image.height)
-        .map_err(codec_error)?;
+    let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
     Ok(encoded.data)
 }
 
@@ -325,9 +285,7 @@ fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
         .checked_mul(height as usize)
         .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
     if pixels > MAX_IMAGE_PIXELS {
-        return Err(format!(
-            "image size ({pixels} pixels) exceeds Blanket limit of {MAX_IMAGE_PIXELS} pixels"
-        ));
+        return Err(format!("image size ({pixels} pixels) exceeds Blanket limit of {MAX_IMAGE_PIXELS} pixels"));
     }
     Ok(())
 }
@@ -343,10 +301,7 @@ mod tests {
     #[test]
     fn detects_supported_signatures() {
         assert_eq!(ImageFormat::detect(PNG_SIGNATURE), Some(ImageFormat::Png));
-        assert_eq!(
-            ImageFormat::detect(&[0xff, 0xd8, 0xff]),
-            Some(ImageFormat::Jpeg)
-        );
+        assert_eq!(ImageFormat::detect(&[0xff, 0xd8, 0xff]), Some(ImageFormat::Jpeg));
         assert_eq!(ImageFormat::detect(&[0xff, 0x0a]), Some(ImageFormat::Jxl));
         assert_eq!(ImageFormat::detect(b"not an image"), None);
     }

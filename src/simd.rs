@@ -27,16 +27,10 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
             _ => unreachable!(),
         };
         let mut output = vec![0; count * C];
-        crate::parallel::chunks_mut_above(
-            &mut output,
-            256 * 1024 * C,
-            2 * 1024 * 1024,
-            |i, dst| {
-                let start = i * 256 * 1024 * S;
-                conversion(&source[start..start + dst.len() / C * S], dst)
-                    .expect("validated image buffers have matching pixel counts");
-            },
-        );
+        crate::parallel::chunks_mut_above(&mut output, 256 * 1024 * C, 2 * 1024 * 1024, |i, dst| {
+            let start = i * 256 * 1024 * S;
+            conversion(&source[start..start + dst.len() / C * S], dst).expect("validated image buffers have matching pixel counts");
+        });
         return output;
     }
     let mut output = Vec::<u8>::with_capacity(count * C);
@@ -76,18 +70,9 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
         };
         #[cfg(not(target_arch = "aarch64"))]
         let offset = 0;
-        for (src, pixel) in src[offset * S..]
-            .as_chunks::<S>()
-            .0
-            .iter()
-            .zip(dst[offset * C..].as_chunks_mut::<C>().0)
-        {
+        for (src, pixel) in src[offset * S..].as_chunks::<S>().0.iter().zip(dst[offset * C..].as_chunks_mut::<C>().0) {
             for (channel, value) in pixel.iter_mut().enumerate() {
-                value.write(if channel == 3 {
-                    255
-                } else {
-                    src[if S == 1 { 0 } else { channel }]
-                });
+                value.write(if channel == 3 { 255 } else { src[if S == 1 { 0 } else { channel }] });
             }
         }
     };
@@ -99,15 +84,9 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
     };
     if spare.len() >= parallel_bytes {
         use rayon::prelude::*;
-        spare
-            .par_chunks_mut(chunk_pixels * C)
-            .enumerate()
-            .for_each(|(i, dst)| fill(i, dst));
+        spare.par_chunks_mut(chunk_pixels * C).enumerate().for_each(|(i, dst)| fill(i, dst));
     } else {
-        spare
-            .chunks_mut(chunk_pixels * C)
-            .enumerate()
-            .for_each(|(i, dst)| fill(i, dst));
+        spare.chunks_mut(chunk_pixels * C).enumerate().for_each(|(i, dst)| fill(i, dst));
     }
     // Every byte was initialized above, including the scalar tail of each
     // disjoint chunk. A panic before completion leaves the vector length zero.
@@ -141,30 +120,18 @@ mod tests {
 
     #[test]
     fn rgba_to_rgb_basic() {
-        let rgba: Vec<u8> = (0..256)
-            .flat_map(|i| [i as u8, (i * 2) as u8, (i * 3) as u8, 0xAA])
-            .collect();
+        let rgba: Vec<u8> = (0..256).flat_map(|i| [i as u8, (i * 2) as u8, (i * 3) as u8, 0xAA]).collect();
         let result = convert(&rgba, PixelMode::Rgba, PixelMode::Rgb);
         for i in 0..256 {
             assert_eq!(result[i * 3], rgba[i * 4], "R mismatch at pixel {i}");
-            assert_eq!(
-                result[i * 3 + 1],
-                rgba[i * 4 + 1],
-                "G mismatch at pixel {i}"
-            );
-            assert_eq!(
-                result[i * 3 + 2],
-                rgba[i * 4 + 2],
-                "B mismatch at pixel {i}"
-            );
+            assert_eq!(result[i * 3 + 1], rgba[i * 4 + 1], "G mismatch at pixel {i}");
+            assert_eq!(result[i * 3 + 2], rgba[i * 4 + 2], "B mismatch at pixel {i}");
         }
     }
 
     #[test]
     fn rgb_to_rgba_basic() {
-        let rgb: Vec<u8> = (0..256)
-            .flat_map(|i| [i as u8, (i * 2) as u8, (i * 3) as u8])
-            .collect();
+        let rgb: Vec<u8> = (0..256).flat_map(|i| [i as u8, (i * 2) as u8, (i * 3) as u8]).collect();
         let result = convert(&rgb, PixelMode::Rgb, PixelMode::Rgba);
         for i in 0..256 {
             assert_eq!(result[i * 4], rgb[i * 3], "R mismatch at pixel {i}");
@@ -210,14 +177,7 @@ mod tests {
     #[test]
     fn rgba_to_l_matches_pillow_luminance() {
         let rgba: Vec<u8> = (0u8..=u8::MAX)
-            .flat_map(|value| {
-                [
-                    value,
-                    value.wrapping_mul(37),
-                    value.wrapping_add(113),
-                    value.wrapping_mul(19),
-                ]
-            })
+            .flat_map(|value| [value, value.wrapping_mul(37), value.wrapping_add(113), value.wrapping_mul(19)])
             .collect();
         let result = convert(&rgba, PixelMode::Rgba, PixelMode::L);
         let expected = scalar_luminance_rgba(&rgba);
@@ -245,14 +205,8 @@ mod tests {
 
     #[test]
     fn handles_single_pixel() {
-        assert_eq!(
-            convert(&[10, 20, 30, 40], PixelMode::Rgba, PixelMode::Rgb),
-            [10, 20, 30]
-        );
-        assert_eq!(
-            convert(&[10, 20, 30], PixelMode::Rgb, PixelMode::Rgba),
-            [10, 20, 30, 255]
-        );
+        assert_eq!(convert(&[10, 20, 30, 40], PixelMode::Rgba, PixelMode::Rgb), [10, 20, 30]);
+        assert_eq!(convert(&[10, 20, 30], PixelMode::Rgb, PixelMode::Rgba), [10, 20, 30, 255]);
         assert_eq!(convert(&[42], PixelMode::L, PixelMode::Rgb), [42, 42, 42]);
     }
 
@@ -261,10 +215,7 @@ mod tests {
             .as_chunks::<3>()
             .0
             .iter()
-            .map(|px| {
-                ((px[0] as u32 * 19_595 + px[1] as u32 * 38_470 + px[2] as u32 * 7_471 + 0x8000)
-                    >> 16) as u8
-            })
+            .map(|px| ((px[0] as u32 * 19_595 + px[1] as u32 * 38_470 + px[2] as u32 * 7_471 + 0x8000) >> 16) as u8)
             .collect()
     }
 
@@ -273,10 +224,7 @@ mod tests {
             .as_chunks::<4>()
             .0
             .iter()
-            .map(|px| {
-                ((px[0] as u32 * 19_595 + px[1] as u32 * 38_470 + px[2] as u32 * 7_471 + 0x8000)
-                    >> 16) as u8
-            })
+            .map(|px| ((px[0] as u32 * 19_595 + px[1] as u32 * 38_470 + px[2] as u32 * 7_471 + 0x8000) >> 16) as u8)
             .collect()
     }
 }

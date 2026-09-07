@@ -52,13 +52,7 @@ pub(crate) struct Image {
 }
 
 impl Image {
-    pub(crate) fn from_pixels(
-        width: u32,
-        height: u32,
-        mode: PixelMode,
-        pixels: Vec<u8>,
-        format: Option<String>,
-    ) -> PyResult<Self> {
+    pub(crate) fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
         let expected = expected_len(width, height, mode)?;
         if pixels.len() != expected {
             return Err(PyValueError::new_err(format!(
@@ -76,9 +70,7 @@ impl Image {
     }
 
     pub(crate) fn pixel_data(&self) -> PyResult<&[u8]> {
-        self.pixels
-            .as_deref()
-            .ok_or_else(|| PyValueError::new_err("operation on closed image"))
+        self.pixels.as_deref().ok_or_else(|| PyValueError::new_err("operation on closed image"))
     }
 }
 
@@ -135,15 +127,7 @@ impl Image {
     }
 
     #[pyo3(name = "_encode")]
-    fn encode(
-        &self,
-        py: Python<'_>,
-        format: &str,
-        quality: u8,
-        compress_level: u8,
-        lossless: bool,
-        effort: u8,
-    ) -> PyResult<Py<PyBytes>> {
+    fn encode(&self, py: Python<'_>, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8) -> PyResult<Py<PyBytes>> {
         let format = ImageFormat::parse(format)?;
         let options = SaveOptions {
             quality,
@@ -159,12 +143,7 @@ impl Image {
         slf
     }
 
-    fn __exit__(
-        &mut self,
-        _exc_type: &Bound<'_, PyAny>,
-        _exc_value: &Bound<'_, PyAny>,
-        _traceback: &Bound<'_, PyAny>,
-    ) {
+    fn __exit__(&mut self, _exc_type: &Bound<'_, PyAny>, _exc_value: &Bound<'_, PyAny>, _traceback: &Bound<'_, PyAny>) {
         self.close();
     }
 
@@ -185,11 +164,7 @@ pub(crate) fn frombytes(mode: &str, size: (u32, u32), data: &[u8]) -> PyResult<I
 }
 
 #[pyfunction(signature = (obj, mode = None))]
-pub(crate) fn fromarray(
-    py: Python<'_>,
-    obj: &Bound<'_, PyAny>,
-    mode: Option<&str>,
-) -> PyResult<Image> {
+pub(crate) fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>) -> PyResult<Image> {
     let interface = obj.getattr("__array_interface__")?;
     let shape: Vec<usize> = interface.get_item("shape")?.extract()?;
     let typestr: String = interface.get_item("typestr")?.extract()?;
@@ -210,17 +185,13 @@ pub(crate) fn fromarray(
 
     let (width, height) = match shape.as_slice() {
         [] => {
-            return Err(PyValueError::new_err(
-                "array must have at least one dimension",
-            ));
+            return Err(PyValueError::new_err("array must have at least one dimension"));
         }
         [height] => (1, *height),
         [height, width, ..] => (*width, *height),
     };
-    let width = u32::try_from(width)
-        .map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
-    let height = u32::try_from(height)
-        .map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
+    let width = u32::try_from(width).map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
+    let height = u32::try_from(height).map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
 
     let pixels = PyBuffer::<u8>::get(obj)?.to_vec(py)?;
     Image::from_pixels(width, height, mode, pixels, None)
@@ -240,9 +211,7 @@ fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
         [] | [_] | [_, _] => vec![1, 1],
         [_, _, channels, ..] => vec![1, 1, *channels],
     };
-    Err(PyTypeError::new_err(format!(
-        "cannot handle this data type: {type_shape:?}, {typestr}"
-    )))
+    Err(PyTypeError::new_err(format!("cannot handle this data type: {type_shape:?}, {typestr}")))
 }
 
 fn expected_len(width: u32, height: u32, mode: PixelMode) -> PyResult<usize> {
@@ -280,22 +249,13 @@ mod tests {
     #[test]
     fn converts_like_pillow_fixed_point_luminance() {
         let rgb = [255, 0, 0, 0, 255, 0, 0, 0, 255, 12, 34, 56];
-        assert_eq!(
-            convert_pixels(&rgb, PixelMode::Rgb, PixelMode::L),
-            [76, 150, 29, 30]
-        );
+        assert_eq!(convert_pixels(&rgb, PixelMode::Rgb, PixelMode::L), [76, 150, 29, 30]);
     }
 
     #[test]
     fn expands_and_drops_channels() {
-        assert_eq!(
-            convert_pixels(&[7, 23], PixelMode::L, PixelMode::Rgba),
-            [7, 7, 7, 255, 23, 23, 23, 255]
-        );
-        assert_eq!(
-            convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb),
-            [1, 2, 3]
-        );
+        assert_eq!(convert_pixels(&[7, 23], PixelMode::L, PixelMode::Rgba), [7, 7, 7, 255, 23, 23, 23, 255]);
+        assert_eq!(convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb), [1, 2, 3]);
     }
 
     #[test]

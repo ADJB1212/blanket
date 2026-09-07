@@ -1,0 +1,5 @@
+imports_granularity = "Module"
+group_imports = "StdExternalCrate"
+where_single_line = true
+max_width = 150
+fn_params_layout = "Compressed"
