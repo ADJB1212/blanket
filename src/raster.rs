@@ -164,13 +164,19 @@ impl Image {
         }
         let destination = PixelMode::parse(mode)?;
         if let Some((palette_mode, palette)) = &self.palette {
-            let channels = palette_mode.channels();
-            let mut expanded = Vec::with_capacity(self.pixel_data()?.len() * channels);
-            for &slot in self.pixel_data()? {
-                let offset = slot as usize * channels;
-                expanded.extend_from_slice(palette.get(offset..offset + channels).unwrap_or(&[0, 0, 0, 255][..channels]));
-            }
-            let converted = py.detach(|| convert_pixels(&expanded, *palette_mode, destination));
+            let indices = self.pixel_data()?;
+            let converted = py.detach(|| {
+                let expanded = match palette_mode {
+                    PixelMode::L => expand_palette::<1>(indices, palette),
+                    PixelMode::Rgb => expand_palette::<3>(indices, palette),
+                    PixelMode::Rgba => expand_palette::<4>(indices, palette),
+                };
+                if *palette_mode == destination {
+                    expanded
+                } else {
+                    convert_pixels(&expanded, *palette_mode, destination)
+                }
+            });
             return Self::from_pixels(self.width, self.height, destination, converted, None);
         }
         let source = self.mode;
@@ -301,6 +307,24 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     crate::simd::convert(source, from, to)
 }
 
+/// Resolve palette indices through a complete 256-entry table. Missing
+/// entries read as opaque black, as before.
+fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> Vec<u8> {
+    let table: [[u8; C]; 256] = std::array::from_fn(|slot| {
+        let mut color = [0; C];
+        color.copy_from_slice(palette.get(slot * C..slot * C + C).unwrap_or(&[0, 0, 0, 255][..C]));
+        color
+    });
+    let mut expanded = vec![0; indices.len() * C];
+    crate::parallel::chunks_mut(&mut expanded, crate::parallel::CHUNK_PIXELS * C, |chunk, dst| {
+        let start = chunk * crate::parallel::CHUNK_PIXELS;
+        for (pixel, &slot) in dst.as_chunks_mut::<C>().0.iter_mut().zip(&indices[start..]) {
+            *pixel = table[usize::from(slot)];
+        }
+    });
+    expanded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +350,14 @@ mod tests {
     fn expands_and_drops_channels() {
         assert_eq!(convert_pixels(&[7, 23], PixelMode::L, PixelMode::Rgba), [7, 7, 7, 255, 23, 23, 23, 255]);
         assert_eq!(convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb), [1, 2, 3]);
+    }
+
+    #[test]
+    fn expands_palette_indices_with_opaque_black_fallback() {
+        let palette = [10, 20, 30, 40, 50, 60];
+        assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
+        assert_eq!(expand_palette::<4>(&[0, 1], &[1, 2, 3, 4]), [1, 2, 3, 4, 0, 0, 0, 255]);
+        assert!(expand_palette::<3>(&[], &palette).is_empty());
     }
 
     #[test]

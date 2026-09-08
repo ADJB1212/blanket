@@ -45,39 +45,51 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
         return Err(PyValueError::new_err("bad kernel size"));
     }
     let weights: Vec<f32> = kernel.into_iter().map(|value| value / scale).collect();
-    py.detach(|| convolve(source, &mut pixels, image.width as usize, image.mode.channels(), &weights, offset));
+    let width = image.width as usize;
+    py.detach(|| match (image.mode, size.0) {
+        (PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+    });
     output(image, pixels)
 }
 
-fn convolve(source: &[u8], pixels: &mut [u8], width: usize, channels: usize, weights: &[f32], offset: f32) {
+// Fixed channel and kernel sizes let every tap and band unroll; the runtime
+// version spent its time on strided index arithmetic and bounds checks.
+fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], width: usize, weights: &[f32], offset: f32) {
     if pixels.is_empty() {
         return;
     }
-    let size = if weights.len() == 9 { 3 } else { 5 };
-    let radius = size / 2;
-    let stride = width * channels;
+    let taps: &[[f32; K]] = weights.as_chunks::<K>().0;
+    let radius = K / 2;
+    let stride = width * C;
     let height = source.len() / stride;
+    let source = source.as_chunks::<C>().0;
     chunks_mut(pixels, stride * 16, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let y = band * 16 + i;
             if y < radius || y + radius >= height {
                 continue;
             }
+            let row = row.as_chunks_mut::<C>().0;
             for x in radius..width - radius {
-                for channel in 0..channels {
-                    let mut sum = offset + 0.5;
-                    for ky in 0..size {
-                        let start = ((y + radius - ky) * width + x - radius) * channels + channel;
-                        // Sum each row before accumulating, matching Pillow's f32 order.
-                        let first = f32::from(source[start]);
-                        let second = f32::from(source[start + channels]) * weights[ky * size + 1];
-                        let mut subtotal = kernel_add(first, weights[ky * size], second);
-                        for kx in 2..size {
-                            subtotal = kernel_add(f32::from(source[start + kx * channels]), weights[ky * size + kx], subtotal);
+                let mut sums = [offset + 0.5; C];
+                for (ky, taps) in taps.iter().enumerate() {
+                    let window: &[[u8; C]; K] = source[(y + radius - ky) * width + x - radius..][..K].try_into().unwrap();
+                    // Sum each row before accumulating, matching Pillow's f32 order.
+                    for c in 0..C {
+                        let mut subtotal = kernel_add(f32::from(window[0][c]), taps[0], f32::from(window[1][c]) * taps[1]);
+                        for kx in 2..K {
+                            subtotal = kernel_add(f32::from(window[kx][c]), taps[kx], subtotal);
                         }
-                        sum += subtotal;
+                        sums[c] += subtotal;
                     }
-                    row[x * channels + channel] = sum as u8;
+                }
+                for c in 0..C {
+                    row[x][c] = sums[c] as u8;
                 }
             }
         }
@@ -210,28 +222,30 @@ fn gaussian_radius(radius: f32) -> f32 {
     integer + fraction
 }
 
-fn box_horizontal(source: &[u8], pixels: &mut [u8], width: usize, channels: usize, radius: f32) {
+fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize, radius: f32) {
     let integer = radius as usize;
     let weight = ((1_u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u64;
     let far_weight = u64::from((1_u32 << 24).wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
-    let stride = width * channels;
+    let stride = width * C;
+    let source = source.as_chunks::<C>().0;
     chunks_mut(pixels, stride * 16, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
-            let input = &source[(band * 16 + i) * stride..][..stride];
-            for channel in 0..channels {
-                let mut sum = u64::from(input[channel]) * (integer as u64 + 1);
-                for x in 1..=integer.min(width - 1) {
-                    sum += u64::from(input[x * channels + channel]);
+            let input = &source[(band * 16 + i) * width..][..width];
+            let row = row.as_chunks_mut::<C>().0;
+            for channel in 0..C {
+                let mut sum = u64::from(input[0][channel]) * (integer as u64 + 1);
+                for pixel in &input[1..=integer.min(width - 1)] {
+                    sum += u64::from(pixel[channel]);
                 }
-                sum += u64::from(input[(width - 1) * channels + channel]) * integer.saturating_sub(width - 1) as u64;
+                sum += u64::from(input[width - 1][channel]) * integer.saturating_sub(width - 1) as u64;
                 for x in 0..width {
                     let left = x.saturating_sub(integer + 1);
                     let right = (x + integer + 1).min(width - 1);
-                    let ends = u64::from(input[left * channels + channel]) + u64::from(input[right * channels + channel]);
-                    row[x * channels + channel] = ((sum * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
+                    let ends = u64::from(input[left][channel]) + u64::from(input[right][channel]);
+                    row[x][channel] = ((sum * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
                     if x + 1 < width {
-                        sum -= u64::from(input[x.saturating_sub(integer) * channels + channel]);
-                        sum += u64::from(input[right * channels + channel]);
+                        sum -= u64::from(input[x.saturating_sub(integer)][channel]);
+                        sum += u64::from(input[right][channel]);
                     }
                 }
             }
@@ -239,19 +253,7 @@ fn box_horizontal(source: &[u8], pixels: &mut [u8], width: usize, channels: usiz
     });
 }
 
-fn transpose(source: &[u8], pixels: &mut [u8], width: usize, height: usize, channels: usize) {
-    chunks_mut(pixels, height * channels * 16, |band, rows| {
-        for (i, row) in rows.chunks_exact_mut(height * channels).enumerate() {
-            let x = band * 16 + i;
-            for (y, pixel) in row.chunks_exact_mut(channels).enumerate() {
-                let offset = (y * width + x) * channels;
-                pixel.copy_from_slice(&source[offset..offset + channels]);
-            }
-        }
-    });
-}
-
-fn blurred(source: &[u8], width: usize, height: usize, channels: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
     let mut pixels = buffer(source.len())?;
     pixels.copy_from_slice(source);
     if pixels.is_empty() {
@@ -269,36 +271,37 @@ fn blurred(source: &[u8], width: usize, height: usize, channels: usize, radii: (
     let passes = if gaussian { 3 } else { 1 };
     if radii.0 > 0.0 {
         for _ in 0..passes {
-            box_horizontal(&pixels, &mut scratch, width, channels, radii.0);
+            box_horizontal::<C>(&pixels, &mut scratch, width, radii.0);
             std::mem::swap(&mut pixels, &mut scratch);
         }
     }
     if radii.1 > 0.0 {
-        transpose(&pixels, &mut scratch, width, height, channels);
+        // The cache-tiled rotation kernel turns the vertical pass horizontal.
+        crate::ops::transpose::<C>(&pixels, &mut scratch, width, height, 5);
         std::mem::swap(&mut pixels, &mut scratch);
         for _ in 0..passes {
-            box_horizontal(&pixels, &mut scratch, height, channels, radii.1);
+            box_horizontal::<C>(&pixels, &mut scratch, height, radii.1);
             std::mem::swap(&mut pixels, &mut scratch);
         }
-        transpose(&pixels, &mut scratch, height, width, channels);
+        crate::ops::transpose::<C>(&pixels, &mut scratch, height, width, 5);
         std::mem::swap(&mut pixels, &mut scratch);
     }
     Ok(pixels)
 }
 
+fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+    let (width, height) = (image.width as usize, image.height as usize);
+    match image.mode {
+        PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
+        PixelMode::Rgb => blurred::<3>(source, width, height, radii, gaussian),
+        PixelMode::Rgba => blurred::<4>(source, width, height, radii, gaussian),
+    }
+}
+
 #[pyfunction]
 fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let pixels = py.detach(|| {
-        blurred(
-            source,
-            image.width as usize,
-            image.height as usize,
-            image.mode.channels(),
-            radii,
-            gaussian,
-        )
-    })?;
+    let pixels = py.detach(|| blur(image, source, radii, gaussian))?;
     output(image, pixels)
 }
 
@@ -306,14 +309,7 @@ fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool)
 fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
-        let mut pixels = blurred(
-            source,
-            image.width as usize,
-            image.height as usize,
-            image.mode.channels(),
-            (radius, radius),
-            true,
-        )?;
+        let mut pixels = blur(image, source, (radius, radius), true)?;
         chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
             for (&original, blurred) in source[chunk * CHUNK_PIXELS..].iter().zip(dst) {
                 let difference = i32::from(original) - i32::from(*blurred);
@@ -404,16 +400,23 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
             .checked_mul(bands.len())
             .ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?,
     )?;
-    py.detach(|| {
-        chunks_mut(&mut pixels, CHUNK_PIXELS * mode.channels(), |chunk, dst| {
-            for (i, pixel) in dst.chunks_exact_mut(mode.channels()).enumerate() {
-                for (channel, value) in pixel.iter_mut().enumerate() {
-                    *value = sources[channel][chunk * CHUNK_PIXELS + i];
-                }
-            }
-        })
+    py.detach(|| match mode {
+        PixelMode::L => pixels.copy_from_slice(sources[0]),
+        PixelMode::Rgb => merge::<3>(&sources, &mut pixels),
+        PixelMode::Rgba => merge::<4>(&sources, &mut pixels),
     });
     Image::from_pixels(width, height, mode, pixels, None)
+}
+
+fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
+    chunks_mut(pixels, CHUNK_PIXELS * C, |chunk, dst| {
+        let start = chunk * CHUNK_PIXELS;
+        let dst = dst.as_chunks_mut::<C>().0;
+        let bands: [&[u8]; C] = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
+        for (i, pixel) in dst.iter_mut().enumerate() {
+            *pixel = std::array::from_fn(|c| bands[c][i]);
+        }
+    });
 }
 
 #[cfg(test)]
@@ -426,18 +429,36 @@ mod tests {
         let mut result = input.clone();
         let mut kernel = [0.0; 9];
         kernel[0] = 1.0;
-        convolve(&input, &mut result, 5, 1, &kernel, 0.0);
+        convolve::<1, 3>(&input, &mut result, 5, &kernel, 0.0);
         assert_eq!(result[12], input[16]);
         assert_eq!(&result[..5], &input[..5]);
+        // Interleaved channels stay independent, including alpha.
+        let rgba: Vec<u8> = (0..100).collect();
+        let mut result = rgba.clone();
+        convolve::<4, 3>(&rgba, &mut result, 5, &kernel, 0.0);
+        assert_eq!(&result[48..52], &rgba[64..68]);
+        assert_eq!(&result[..20], &rgba[..20]);
     }
 
     #[test]
     fn box_blur_replicates_edges_and_rounds() {
         let mut result = [0; 3];
-        box_horizontal(&[0, 90, 0], &mut result, 3, 1, 1.0);
+        box_horizontal::<1>(&[0, 90, 0], &mut result, 3, 1.0);
         assert_eq!(result, [30; 3]);
-        box_horizontal(&[77; 3], &mut result, 3, 1, 100.5);
+        box_horizontal::<1>(&[77; 3], &mut result, 3, 100.5);
         assert_eq!(result, [77; 3]);
+        let mut rgb = [0; 9];
+        box_horizontal::<3>(&[0, 90, 3, 90, 0, 3, 0, 90, 3], &mut rgb, 3, 1.0);
+        assert_eq!(rgb, [30, 60, 3, 30, 60, 3, 30, 60, 3]);
+    }
+
+    #[test]
+    fn vertical_blur_uses_transposed_passes() {
+        // A 1x3 column blurred vertically equals the 3x1 row blurred horizontally.
+        let column = blurred::<1>(&[0, 90, 0], 1, 3, (0.0, 1.0), false).unwrap();
+        let row = blurred::<1>(&[0, 90, 0], 3, 1, (1.0, 0.0), false).unwrap();
+        assert_eq!(column, row);
+        assert_eq!(column, [30; 3]);
     }
 
     #[test]

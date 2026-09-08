@@ -170,6 +170,96 @@ def test_parallel_fixed_palette_matches_pillow() -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
+def _photo(mode: str, size: tuple[int, int]) -> bytes:
+    # Smooth gradients plus noise produce hundreds of thousands of distinct colors.
+    import random
+
+    rng = random.Random(97)
+    w, h = size
+    channels = len(mode)
+    out = bytearray()
+    for y in range(h):
+        for x in range(w):
+            base = (x * 255 // w, y * 255 // h, (x + y) * 255 // (w + h), 200 if (x + y) % 7 else 30)
+            out.extend(min(255, max(0, v + rng.randint(-12, 12))) for v in base[:channels])
+    return bytes(out)
+
+
+def _error(image: bytes, reconstructed: bytes) -> int:
+    return sum((a - b) ** 2 for a, b in zip(image, reconstructed, strict=True))
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_fast_octree_matches_pillow_cells(mode: str) -> None:
+    # FASTOCTREE mirrors Pillow's fixed color cubes. Pillow's qsort orders
+    # equal cell populations unpredictably, so compare the reconstruction
+    # rather than entry order; grayscale has too few cells to tie.
+    size = (211, 97)
+    raw = _photo(mode, size)
+    image = Image.frombytes(mode, size, raw)
+    actual = image.quantize(256, Image.Quantize.FASTOCTREE)
+    expected = PillowImage.frombytes(mode, size, raw).quantize(256, PillowImage.Quantize.FASTOCTREE)
+    assert len(actual.getpalette(None)) == len(expected.getpalette(None))
+    actual_error = _error(raw, actual.convert(mode).tobytes())
+    expected_error = _error(raw, expected.convert(mode).tobytes())
+    assert abs(actual_error - expected_error) <= expected_error // 50
+    if mode == "L":
+        assert sorted(actual.getpalette()) == sorted(expected.getpalette())
+        assert actual.convert(mode).tobytes() == expected.convert(mode).tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_fast_octree_small_palettes_keep_populous_cells(mode: str) -> None:
+    size = (211, 97)
+    raw = _photo(mode, size)
+    image = Image.frombytes(mode, size, raw)
+    for colors in (1, 2, 16, 64):
+        result = image.quantize(colors, Image.Quantize.FASTOCTREE)
+        assert len(result.getpalette(None)) == colors * len(result.palette.mode)
+        assert len(set(result.tobytes())) <= colors
+        assert result.convert(mode).tobytes() == result.to_pillow().convert(mode).tobytes()
+
+
+@pytest.mark.parametrize("method", [0, 1])
+def test_exact_methods_handle_many_colors(method: int) -> None:
+    size = (157, 61)
+    raw = _photo("RGB", size)
+    image = Image.frombytes("RGB", size, raw)
+    result = image.quantize(64, method, kmeans=1)
+    assert len(set(result.tobytes())) <= 64
+    assert result.convert("RGB").tobytes() == result.to_pillow().convert("RGB").tobytes()
+    # Every pixel maps to the palette entry nearest to its color.
+    palette = result.getpalette()
+    entries = [tuple(palette[i : i + 3]) for i in range(0, len(palette), 3)]
+    for pixel, index in zip(zip(*[iter(raw)] * 3), result.tobytes(), strict=True):
+        best = min(sum((a - b) ** 2 for a, b in zip(pixel, entry)) for entry in entries)
+        assert sum((a - b) ** 2 for a, b in zip(pixel, entries[index])) == best
+
+
+def test_wide_dither_matches_pillow() -> None:
+    # Wide rows carry the diffusion error across many pixels and rows.
+    size = (301, 23)
+    raw = _photo("RGB", size)
+    image = Image.frombytes("RGB", size, raw)
+    palette = image.quantize(16)
+    expected = image.to_pillow().quantize(palette=palette.to_pillow(), dither=3)
+    assert image.quantize(palette=palette, dither=3).tobytes() == expected.tobytes()
+
+
+def test_palette_convert_matches_pillow_for_all_targets() -> None:
+    size = (37, 11)
+    raw = _photo("RGBA", size)
+    quantized = Image.frombytes("RGBA", size, raw).quantize(64)
+    reference = quantized.to_pillow()
+    for mode in ("L", "RGB", "RGBA"):
+        assert quantized.convert(mode).tobytes() == reference.convert(mode).tobytes()
+    # Indices beyond a short palette read as opaque black.
+    short = Image.frombytes("P", (3, 1), bytes([0, 1, 200]))
+    short.putpalette([10, 20, 30, 40, 50, 60])
+    assert short.convert("RGB").tobytes() == bytes([10, 20, 30, 40, 50, 60, 0, 0, 0])
+    assert short.convert("RGBA").tobytes() == bytes([10, 20, 30, 255, 40, 50, 60, 255, 0, 0, 0, 255])
+
+
 def test_closed_pixel_quantize_reduce() -> None:
     image = Image.frombytes("L", (1, 1), b"\x00")
     image.close()

@@ -53,6 +53,9 @@ thread_local! {
     // A runner is used by only its owning calling thread. Reuse its workers
     // across decodes; each image still gets a fresh decoder and metadata state.
     static JXL_DECODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
+    // Encoding likewise reuses one worker pool instead of spawning a thread
+    // per CPU for every save.
+    static JXL_ENCODE_RUNNER: Option<ThreadsRunner<'static>> = ThreadsRunner::new(None, None);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -289,22 +292,25 @@ fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Ve
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
         PixelMode::Rgba => (ColorEncoding::Srgb, true),
     };
-    let runner = ThreadsRunner::default();
-    let mut encoder = encoder_builder()
-        .parallel_runner(&runner)
-        .has_alpha(has_alpha)
-        .lossless(options.lossless)
-        .speed(jxl_encoder_speed(options.effort)?)
-        .decoding_speed(0)
-        .use_container(false)
-        .jpeg_quality(f32::from(options.quality))
-        .uses_original_profile(options.lossless || options.quality == 100)
-        .color_encoding(color_encoding)
-        .build()
-        .map_err(codec_error)?;
-    let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-    let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
-    Ok(encoded.data)
+    let speed = jxl_encoder_speed(options.effort)?;
+    JXL_ENCODE_RUNNER.with(|runner| {
+        let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+        let mut encoder = encoder_builder()
+            .parallel_runner(runner)
+            .has_alpha(has_alpha)
+            .lossless(options.lossless)
+            .speed(speed)
+            .decoding_speed(0)
+            .use_container(false)
+            .jpeg_quality(f32::from(options.quality))
+            .uses_original_profile(options.lossless || options.quality == 100)
+            .color_encoding(color_encoding)
+            .build()
+            .map_err(codec_error)?;
+        let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
+        let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
+        Ok(encoded.data)
+    })
 }
 
 fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {

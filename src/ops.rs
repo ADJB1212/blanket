@@ -211,10 +211,23 @@ fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResul
 fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
     let count = |start: usize, bytes: &[u8]| {
         let mut bins = vec![0_u64; C * 256];
-        for (i, pixel) in bytes.as_chunks::<C>().0.iter().enumerate() {
-            if mask.is_none_or(|m| m[start + i] != 0) {
-                for c in 0..C {
-                    bins[c * 256 + usize::from(pixel[c])] += 1;
+        let pixels = bytes.as_chunks::<C>().0;
+        // Hoist the mask decision out of the per-pixel loop.
+        match mask {
+            None => {
+                for pixel in pixels {
+                    for c in 0..C {
+                        bins[c * 256 + usize::from(pixel[c])] += 1;
+                    }
+                }
+            }
+            Some(mask) => {
+                for (pixel, &selected) in pixels.iter().zip(&mask[start..]) {
+                    if selected != 0 {
+                        for c in 0..C {
+                            bins[c * 256 + usize::from(pixel[c])] += 1;
+                        }
+                    }
                 }
             }
         }
@@ -325,7 +338,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     output(image, size, pixels)
 }
 
-fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+pub(crate) fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
     let source = source.as_chunks::<C>().0;
     let width = if orientation >= 5 { h } else { w };
     // Bands and tiles keep 90-degree rotations local to cache and give every
