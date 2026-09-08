@@ -13,6 +13,7 @@ name = "_blanket"
 crate-type = ["cdylib"]
 
 [dependencies]
+png = "0.18"
 garb = "0.2"
 pyo3 = "0.29"
 rayon = "1.12"
@@ -40,7 +41,11 @@ incremental = false
 codegen-units = 1
 
 [profile.dev]
-codegen-units = 64
+incremental = true
+codegen-units = 256
 opt-level = 0
 debug = "line-directives-only"
-lto = "off"
+lto = false
+
+[lints.clippy]
+needless_return = "allow"

@@ -17,11 +17,7 @@ def load_benchmark() -> Any:
 
 def test_summary_table_has_one_row_per_section() -> None:
     benchmark = load_benchmark()
-    results = [
-        {"section": "Codec I/O", "blanket_speedup": 2.0},
-        {"section": "Codec I/O", "blanket_speedup": 0.5},
-        {"section": "Memory", "blanket_speedup": None},
-    ]
+    results = [{"section": "Codec I/O", "blanket_speedup": 2.0}, {"section": "Codec I/O", "blanket_speedup": 0.5}, {"section": "Memory", "blanket_speedup": None}]
 
     table = benchmark.make_summary_table(results)
 
@@ -41,11 +37,6 @@ def test_slower_only_argument(monkeypatch: Any) -> None:
 def test_slower_results_excludes_faster_and_unpaired_operations() -> None:
     benchmark = load_benchmark()
     slower = {"operation": "slower", "blanket_speedup": 0.5}
-    results = [
-        slower,
-        {"operation": "equal", "blanket_speedup": 1.0},
-        {"operation": "faster", "blanket_speedup": 2.0},
-        {"operation": "unpaired", "blanket_speedup": None},
-    ]
+    results = [slower, {"operation": "equal", "blanket_speedup": 1.0}, {"operation": "faster", "blanket_speedup": 2.0}, {"operation": "unpaired", "blanket_speedup": None}]
 
     assert benchmark.slower_results(results) == [slower]

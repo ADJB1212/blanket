@@ -5,10 +5,11 @@ from __future__ import annotations
 import builtins
 import math
 import os
+from collections.abc import Sequence
 from enum import IntEnum
 from operator import index
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Protocol, Sequence
+from typing import TYPE_CHECKING, BinaryIO, Protocol, Self
 
 if TYPE_CHECKING:
     from .ImageFilter import Filter
@@ -33,6 +34,28 @@ class Resampling(IntEnum):
 
 
 NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, HAMMING = Resampling
+
+
+class Quantize(IntEnum):
+    """Pillow-compatible palette quantization methods."""
+
+    MEDIANCUT = 0
+    MAXCOVERAGE = 1
+    FASTOCTREE = 2
+    LIBIMAGEQUANT = 3
+
+
+class Dither(IntEnum):
+    """Pillow-compatible dithering identifiers."""
+
+    NONE = 0
+    ORDERED = 1
+    RASTERIZE = 2
+    FLOYDSTEINBERG = 3
+
+
+MEDIANCUT, MAXCOVERAGE, FASTOCTREE, LIBIMAGEQUANT = Quantize
+NONE, ORDERED, RASTERIZE, FLOYDSTEINBERG = Dither
 
 
 class Transpose(IntEnum):
@@ -80,6 +103,11 @@ class Image:
         self.filename: str | bytes = ""
         self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
+        palette_data = native.palette_data()
+        if palette_data is not None:
+            from .ImagePalette import ImagePalette
+
+            self.palette = ImagePalette(palette_data[0], bytes(palette_data[1]))
 
     @property
     def mode(self) -> str:
@@ -113,12 +141,13 @@ class Image:
     @property
     def has_transparency_data(self) -> bool:
         """Whether alpha or transparency metadata exists, even if opaque."""
-        return self.mode == "RGBA" or "transparency" in self.info
+        return self.mode == "RGBA" or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> None:
         """Validate that this eagerly loaded image remains open."""
 
         self._native.load()
+        self._sync_palette()
 
     def close(self) -> None:
         self._native.close()
@@ -126,7 +155,94 @@ class Image:
     def convert(self, mode: str) -> Image:
         """Return a new image converted to `L`, `RGB`, or `RGBA`."""
 
-        return Image(self._native.convert(mode))
+        if mode == "P" and self.mode != "P":
+            return self.quantize()
+        self._sync_palette()
+        result = Image(self._native.convert(mode))
+        result.info.update(self.info)
+        return result
+
+    def _sync_palette(self) -> None:
+        if self.mode == "P" and self.palette is not None:
+            self._native.set_palette(self.palette.mode, self.palette.tobytes())
+
+    def copy(self) -> Image:
+        """Return an independent copy of the pixels, palette, and metadata."""
+        self._sync_palette()
+        result = Image(self._native.copy())
+        result.info.update(self.info)
+        return result
+
+    def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
+        """Return a pixel value, accepting negative coordinates as Pillow does."""
+        self.load()
+        if not isinstance(xy, (tuple, list)):
+            raise TypeError("argument must be a sequence")
+        if len(xy) != 2:
+            raise TypeError("argument must be sequence of length 2")
+        coordinates = tuple(int(v) if isinstance(v, float) else index(v) for v in xy)
+        return self._native.getpixel(coordinates)
+
+    def getpalette(self, rawmode: str | None = "RGB") -> list[int] | None:
+        """Return interleaved palette entries, or None for non-palette images."""
+        self.load()
+        if self.palette is None:
+            return None
+        mode = self.palette.mode if rawmode is None else rawmode
+        if mode not in ("RGB", "RGBA"):
+            raise ValueError("unrecognized raw mode")
+        data = self.palette.tobytes()
+        if mode == self.palette.mode:
+            return list(data)
+        if mode == "RGB":
+            return [v for i, v in enumerate(data) if i % 4 != 3]
+        return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
+
+    def putpalette(self, data: Sequence[int] | bytes | ImagePalette, rawmode: str = "RGB") -> None:
+        """Attach an RGB or RGBA palette to an L or P image."""
+        from .ImagePalette import ImagePalette
+
+        self.load()
+        if self.mode not in ("L", "P"):
+            raise ValueError("illegal image mode")
+        palette = data.copy() if isinstance(data, ImagePalette) else ImagePalette(rawmode, bytes(data))
+        self._native.set_palette(palette.mode, palette.tobytes())
+        self.palette = palette
+
+    def quantize(self, colors: int = 256, method: int | None = None, kmeans: int = 0, palette: Image | None = None, dither: Dither = Dither.FLOYDSTEINBERG) -> Image:
+        """Return an indexed P image using a generated or supplied palette.
+
+        MEDIANCUT, MAXCOVERAGE, and FASTOCTREE run in the native backend.
+        LIBIMAGEQUANT is unavailable in this build. Generated palette ordering
+        and color choices may differ from Pillow's implementations.
+        """
+        from ._blanket import quantize
+
+        self.load()
+        method = Quantize.FASTOCTREE if method is None and self.mode == "RGBA" else Quantize.MEDIANCUT if method is None else index(method)
+        if self.mode == "RGBA" and method not in (2, 3):
+            raise ValueError("Fast Octree (method == 2) and libimagequant (method == 3) are the only valid methods for quantizing RGBA images")
+        if palette is not None:
+            palette.load()
+            if palette.mode != "P":
+                raise ValueError("bad mode for palette image")
+            if self.mode not in ("RGB", "L"):
+                raise ValueError("only RGB or L mode images can be quantized to a palette")
+            palette._sync_palette()
+            # Pillow ignores the generated-palette options on this path.
+            colors, method, kmeans = 256, 0, 0
+        else:
+            colors, kmeans = index(colors), index(kmeans)
+            if not 1 <= colors <= 256:
+                raise ValueError("bad number of colors")
+            if kmeans < 0:
+                raise ValueError("kmeans must not be negative")
+            if method not in range(4):
+                raise ValueError("quantization error")
+        source = self.convert("RGB") if self.mode == "P" else self
+        result = Image(quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
+        result.info.update(self.info)
+        return result
 
     def tobytes(self) -> bytes:
         return self._native.tobytes()
@@ -167,6 +283,7 @@ class Image:
         """
         from ._blanket import ops_reduce
 
+        self.load()
         factor = factor if isinstance(factor, (list, tuple)) else (factor, factor)
         factor = tuple(index(value) for value in factor)
         if len(factor) != 2:
@@ -178,6 +295,8 @@ class Image:
             raise TypeError("box must contain four integers")
         if factor == (1, 1) and box == (0, 0, self.width, self.height):
             return self.crop()
+        if self.mode == "P":
+            raise ValueError("image has wrong mode")
         if box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height:
             raise ValueError("box must be within the image")
         if box[2] <= box[0] or box[3] <= box[1]:
@@ -210,15 +329,7 @@ class Image:
         result.info.update(self.info)
         return result
 
-    def transform(
-        self,
-        size: tuple[int, int],
-        method: int | ImageTransformHandler | SupportsGetData,
-        data: Sequence[object] | None = None,
-        resample: int = Resampling.NEAREST,
-        fill: int = 1,
-        fillcolor: str | int | tuple[int, ...] | None = None,
-    ) -> Image:
+    def transform(self, size: tuple[int, int], method: int | ImageTransformHandler | SupportsGetData, data: Sequence[object] | None = None, resample: int = Resampling.NEAREST, fill: int = 1, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:
         """Map source pixels to a new canvas using a ``Transform`` method.
 
         AFFINE and PERSPECTIVE use inverse mapping coefficients. EXTENT takes
@@ -272,8 +383,7 @@ class Image:
                     mesh.append((box, coordinates(quad, 8)))
             else:
                 mesh = [((0, 0, *size), coordinates(data, 8))]
-            native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE),
-                              color if fillcolor is not None else None)
+            native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE), color if fillcolor is not None else None)
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -296,12 +406,7 @@ class Image:
                 raise ValueError("Coordinate 'lower' is less than 'upper'")
             self.load()
             left, upper, right, lower = (round(value) for value in box)
-            native = ops_canvas(
-                self._native,
-                (right - left, lower - upper),
-                (-left, -upper),
-                [0] * len(self.mode),
-            )
+            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * len(self.mode))
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -317,6 +422,8 @@ class Image:
         method = Resampling.BICUBIC if resample is None else resample
         if method not in range(6):
             raise ValueError(f"Unknown resampling filter ({method})")
+        if self.mode == "P":
+            method = Resampling.NEAREST
         if reducing_gap is not None and reducing_gap < 1.0:
             raise ValueError("reducing_gap must be 1.0 or greater")
         size = tuple(index(value) for value in size)
@@ -327,11 +434,7 @@ class Image:
         box = (0, 0, self.width, self.height) if box is None else tuple(box)
         if len(box) != 4:
             raise TypeError("box must contain four coordinates")
-        if (
-            not all(math.isfinite(value) for value in box)
-            or box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height
-            or box[2] < box[0] or box[3] < box[1]
-        ):
+        if not all(math.isfinite(value) for value in box) or box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height or box[2] < box[0] or box[3] < box[1]:
             raise ValueError("invalid resize box")
         self.load()
         native = self._native
@@ -346,29 +449,15 @@ class Image:
                     support = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}[method] - 0.5
                     sx = support * (box[2] - box[0]) / size[0]
                     sy = support * (box[3] - box[1]) / size[1]
-                    safe = (
-                        max(0, int(box[0] - sx)), max(0, int(box[1] - sy)),
-                        min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)),
-                    )
+                    safe = (max(0, int(box[0] - sx)), max(0, int(box[1] - sy)), min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)))
                     native = ops_reduce(native, (fx, fy), safe)
-                    box = (
-                        (box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy,
-                        (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy,
-                    )
+                    box = ((box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy, (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy)
             native = ops_resize(native, size, method, box)
         result = Image(native)
         result.info.update(self.info)
         return result
 
-    def rotate(
-        self,
-        angle: float,
-        resample: int = Resampling.NEAREST,
-        expand: bool = False,
-        center: tuple[float, float] | None = None,
-        translate: tuple[float, float] | None = None,
-        fillcolor: str | int | tuple[int, ...] | None = None,
-    ) -> Image:
+    def rotate(self, angle: float, resample: int = Resampling.NEAREST, expand: bool = False, center: tuple[float, float] | None = None, translate: tuple[float, float] | None = None, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:
         """Return a copy rotated counterclockwise by an angle in degrees.
 
         Supports NEAREST (default), BILINEAR, and BICUBIC. The default center
@@ -405,8 +494,7 @@ class Image:
             c = a * (-cx - tx) + b * (-cy - ty) + cx
             f = d * (-cx - tx) + e * (-cy - ty) + cy
             if expand:
-                corners = [(a * x + b * y + c, d * x + e * y + f)
-                           for x, y in ((0, 0), (w, 0), (w, h), (0, h))]
+                corners = [(a * x + b * y + c, d * x + e * y + f) for x, y in ((0, 0), (w, 0), (w, h), (0, h))]
                 nw = math.ceil(max(x for x, _ in corners)) - math.floor(min(x for x, _ in corners))
                 nh = math.ceil(max(y for _, y in corners)) - math.floor(min(y for _, y in corners))
                 dx, dy = -(nw - w) / 2, -(nh - h) / 2
@@ -416,10 +504,7 @@ class Image:
             if self.mode == "RGBA" and resample != Resampling.NEAREST and isinstance(fillcolor, str):
                 # Pillow parses strings in its intermediate RGBa mode as RGB.
                 fill[3] = 255
-            result = Image(ops_affine(
-                self._native, (w, h), (a, b, c, d, e, f),
-                resample, fill,
-            ))
+            result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill))
         result.info.update(self.info)
         return result
 
@@ -430,17 +515,22 @@ class Image:
             from PIL import Image as PillowImage
         except ImportError as error:
             raise ImportError("Pillow is required for to_pillow(); install blanket[test] or Pillow") from error
-        return PillowImage.frombytes(self.mode, self.size, self.tobytes())
+        result = PillowImage.frombytes(self.mode, self.size, self.tobytes())
+        if self.palette is not None:
+            result.putpalette(self.palette.tobytes(), self.palette.mode)
+        result.info.update(self.info)
+        return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save this image as PNG, JPEG, or JPEG XL."""
 
         output_format = _output_format(fp, format)
+        self._sync_palette()
         values = _save_options(output_format, options)
         encoded = self._native._encode(output_format, **values)
         _write_bytes(fp, encoded)
 
-    def __enter__(self) -> Image:
+    def __enter__(self) -> Self:
         self.load()
         return self
 
@@ -475,7 +565,10 @@ def frombytes(mode: str, size: tuple[int, int], data: object) -> Image:
         raw = bytes(data)  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
-    return Image(_native_frombytes(mode, size, raw))
+    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw))
+    if mode == "P":
+        result.putpalette(bytes(v for v in range(256) for _ in range(3)))
+    return result
 
 
 def fromarray(obj: object, mode: str | None = None) -> Image:
@@ -548,7 +641,32 @@ def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:
     return value
 
 
-__all__ = ["Image", "Resampling", "Transpose", "Transform", "ImageTransformHandler", "SupportsGetData",
-           "NEAREST", "LANCZOS", "BILINEAR", "BICUBIC", "BOX", "HAMMING",
-           "FLIP_LEFT_RIGHT", "FLIP_TOP_BOTTOM", "ROTATE_90", "ROTATE_180", "ROTATE_270", "TRANSPOSE", "TRANSVERSE",
-           "AFFINE", "EXTENT", "PERSPECTIVE", "QUAD", "MESH", "fromarray", "frombytes", "open"]
+__all__ = [
+    "AFFINE",
+    "BICUBIC",
+    "BILINEAR",
+    "BOX",
+    "EXTENT",
+    "FLIP_LEFT_RIGHT",
+    "FLIP_TOP_BOTTOM",
+    "HAMMING",
+    "LANCZOS",
+    "MESH",
+    "NEAREST",
+    "PERSPECTIVE",
+    "QUAD",
+    "ROTATE_90",
+    "ROTATE_180",
+    "ROTATE_270",
+    "TRANSPOSE",
+    "TRANSVERSE",
+    "Image",
+    "ImageTransformHandler",
+    "Resampling",
+    "SupportsGetData",
+    "Transform",
+    "Transpose",
+    "fromarray",
+    "frombytes",
+    "open",
+]

@@ -7,6 +7,7 @@ mod ops;
 mod ops_simd;
 mod palette;
 mod parallel;
+mod quantize;
 mod raster;
 mod simd;
 
@@ -29,5 +30,6 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     filter::register(module)?;
     ops::register(module)?;
     palette::register(module)?;
+    quantize::register(module)?;
     Ok(())
 }

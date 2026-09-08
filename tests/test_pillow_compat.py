@@ -6,10 +6,8 @@ import numpy as np
 import pytest
 
 PIL = pytest.importorskip("PIL")
-from PIL import Image as PillowImage
-
 from blanket import Image as BlanketImage
-
+from PIL import Image as PillowImage
 from test_api import pixels
 
 
@@ -51,15 +49,11 @@ def test_png_cross_library_roundtrip(mode: str) -> None:
 def test_jpeg_cross_library_loads() -> None:
     raw = pixels("RGB")
     pillow_output = BytesIO()
-    PillowImage.frombytes("RGB", (17, 13), raw).save(
-        pillow_output, "JPEG", quality=85
-    )
+    PillowImage.frombytes("RGB", (17, 13), raw).save(pillow_output, "JPEG", quality=85)
     assert BlanketImage.open(pillow_output).size == (17, 13)
 
     blanket_output = BytesIO()
-    BlanketImage.frombytes("RGB", (17, 13), raw).save(
-        blanket_output, "JPEG", quality=85
-    )
+    BlanketImage.frombytes("RGB", (17, 13), raw).save(blanket_output, "JPEG", quality=85)
     blanket_output.seek(0)
     with PillowImage.open(blanket_output) as loaded:
         loaded.load()
@@ -79,10 +73,7 @@ def test_cmyk_jpeg_loads_as_rgb() -> None:
         actual = BlanketImage.open(output)
 
     assert (actual.mode, actual.size) == ("RGB", (17, 13))
-    differences = [
-        abs(left - right)
-        for left, right in zip(actual.tobytes(), expected.tobytes(), strict=True)
-    ]
+    differences = [abs(left - right) for left, right in zip(actual.tobytes(), expected.tobytes(), strict=True)]
     assert max(differences) <= 1
 
 

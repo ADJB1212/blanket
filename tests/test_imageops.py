@@ -142,9 +142,7 @@ def test_crop_border_error_matches_pillow(border: object) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize(
-    "color", [0, 0x12345678, "red", "RebeccaPurple", "#123", "#abcd", "#12345678", "rgb(12, 34, 56)", "rgb(20%, 30%, 50%)", "rgba(1, 2, 3, 4)", "hsl(120, 30%, 50%)", "hsv(250, 50%, 80%)"]
-)
+@pytest.mark.parametrize("color", [0, 0x12345678, "red", "RebeccaPurple", "#123", "#abcd", "#12345678", "rgb(12, 34, 56)", "rgb(20%, 30%, 50%)", "rgba(1, 2, 3, 4)", "hsl(120, 30%, 50%)", "hsv(250, 50%, 80%)"])
 def test_fill_colors(mode: str, color: object) -> None:
     b, p = pair(mode)
     same(ImageOps.expand(b, (1, 2), color), PILOps.expand(p, (1, 2), color))
@@ -193,16 +191,7 @@ class Deformer:
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [0, 2, 3])
-@pytest.mark.parametrize(
-    "mesh",
-    [
-        [],
-        [((0, 0, 37, 29), (0, 0, 0, 29, 37, 29, 37, 0))],
-        [((2, 3, 32, 26), (1.2, 2.7, -1, 25, 33, 30, 31, 5))],
-        [((0, 0, 37, 29), (37, 0, 37, 29, 0, 29, 0, 0))],
-        [((0, 0, 18, 29), (0, 0, 0, 29, 37, 29, 37, 0)), ((18, 0, 37, 29), (0, 0, 0, 29, 37, 29, 37, 0))],
-    ],
-)
+@pytest.mark.parametrize("mesh", [[], [((0, 0, 37, 29), (0, 0, 0, 29, 37, 29, 37, 0))], [((2, 3, 32, 26), (1.2, 2.7, -1, 25, 33, 30, 31, 5))], [((0, 0, 37, 29), (37, 0, 37, 29, 0, 29, 0, 0))], [((0, 0, 18, 29), (0, 0, 0, 29, 37, 29, 37, 0)), ((18, 0, 37, 29), (0, 0, 0, 29, 37, 29, 37, 0))]])
 def test_deform(mode: str, method: int, mesh: list) -> None:
     b, p = pair(mode)
     deformer = Deformer(mesh)
@@ -278,21 +267,7 @@ def test_unsupported_lut_mode(name: str, kwargs: dict) -> None:
             getattr(ops, name)(image, **kwargs)
 
 
-@pytest.mark.parametrize(
-    "name,args",
-    [
-        ("scale", (0,)),
-        ("scale", (-1,)),
-        ("crop", (100,)),
-        ("crop", ((1, 2, 3),)),
-        ("expand", (-100,)),
-        ("expand", ((1,),)),
-        ("expand", (1, "invalid-color")),
-        ("contain", ((0, 10),)),
-        ("fit", ((0, 10),)),
-        ("scale", (2, 99)),
-    ],
-)
+@pytest.mark.parametrize("name,args", [("scale", (0,)), ("scale", (-1,)), ("crop", (100,)), ("crop", ((1, 2, 3),)), ("expand", (-100,)), ("expand", ((1,),)), ("expand", (1, "invalid-color")), ("contain", ((0, 10),)), ("fit", ((0, 10),)), ("scale", (2, 99))])
 def test_invalid_arguments(name: str, args: tuple) -> None:
     b, p = pair()
     with pytest.raises(Exception) as expected:
@@ -426,18 +401,7 @@ def test_deform_zero_area_box() -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize(
-    "name,kwargs",
-    [
-        ("crop", {"border": (7, 9, 11, 13)}),
-        ("expand", {"border": (3, 5), "fill": "#1234"}),
-        ("flip", {}),
-        ("mirror", {}),
-        ("grayscale", {}),
-        ("fit", {"size": (377, 311), "bleed": 0.07}),
-        ("scale", {"factor": 1.5, "resample": Image.Resampling.NEAREST}),
-    ],
-)
+@pytest.mark.parametrize("name,kwargs", [("crop", {"border": (7, 9, 11, 13)}), ("expand", {"border": (3, 5), "fill": "#1234"}), ("flip", {}), ("mirror", {}), ("grayscale", {}), ("fit", {"size": (377, 311), "bleed": 0.07}), ("scale", {"factor": 1.5, "resample": Image.Resampling.NEAREST})])
 def test_parallel_imageops_match_pillow(mode: str, name: str, kwargs: dict) -> None:
     # Large enough for worker partitions, with unaligned row and SIMD tails.
     b, p = pair(mode, (521, 509))

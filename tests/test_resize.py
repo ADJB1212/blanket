@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -34,19 +33,22 @@ def test_resize_copies_metadata_and_owns_pixels(size: tuple[int, int]) -> None:
     assert len(result.tobytes()) == size[0] * size[1] * 4
 
 
-@pytest.mark.parametrize("kwargs,error", [
-    ({"size": (0, 2)}, ValueError),
-    ({"size": (-1, 2)}, ValueError),
-    ({"size": (2.5, 2)}, TypeError),
-    ({"size": (2,)}, TypeError),
-    ({"resample": 6}, ValueError),
-    ({"reducing_gap": 0.5}, ValueError),
-    ({"box": (-1, 0, 2, 2)}, ValueError),
-    ({"box": (0, 0, 4, 2)}, ValueError),
-    ({"box": (2, 0, 1, 2)}, ValueError),
-    ({"box": (0, 0, float("nan"), 2)}, ValueError),
-    ({"box": (0, 0, 2)}, TypeError),
-])
+@pytest.mark.parametrize(
+    "kwargs,error",
+    [
+        ({"size": (0, 2)}, ValueError),
+        ({"size": (-1, 2)}, ValueError),
+        ({"size": (2.5, 2)}, TypeError),
+        ({"size": (2,)}, TypeError),
+        ({"resample": 6}, ValueError),
+        ({"reducing_gap": 0.5}, ValueError),
+        ({"box": (-1, 0, 2, 2)}, ValueError),
+        ({"box": (0, 0, 4, 2)}, ValueError),
+        ({"box": (2, 0, 1, 2)}, ValueError),
+        ({"box": (0, 0, float("nan"), 2)}, ValueError),
+        ({"box": (0, 0, 2)}, TypeError),
+    ],
+)
 def test_resize_rejects_invalid_arguments(kwargs: dict, error: type[Exception]) -> None:
     image = Image.frombytes("L", (3, 2), bytes(6))
     with pytest.raises(error):

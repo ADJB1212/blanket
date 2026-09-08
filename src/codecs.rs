@@ -14,6 +14,38 @@ use crate::UnidentifiedImageError;
 use crate::raster::{Image, PixelMode};
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+
+pub(crate) fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
+    let pixels = image.pixel_data()?;
+    let (mode, palette) = image.palette.as_ref().expect("palette checked by caller");
+    let mut encoded = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut encoded, image.width, image.height);
+        encoder.set_color(png::ColorType::Indexed);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder.set_compression(match compress_level {
+            0 => png::Compression::NoCompression,
+            1..=3 => png::Compression::Fast,
+            4..=6 => png::Compression::Balanced,
+            _ => png::Compression::High,
+        });
+        let mut rgb = Vec::new();
+        let mut alpha = Vec::new();
+        for color in palette.chunks_exact(mode.channels()) {
+            rgb.extend_from_slice(&color[..3]);
+            if *mode == PixelMode::Rgba {
+                alpha.push(color[3]);
+            }
+        }
+        encoder.set_palette(rgb);
+        if !alpha.is_empty() {
+            encoder.set_trns(alpha);
+        }
+        let mut writer = encoder.write_header().map_err(|e| PyOSError::new_err(e.to_string()))?;
+        writer.write_image_data(pixels).map_err(|e| PyOSError::new_err(e.to_string()))?;
+    }
+    Ok(encoded)
+}
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
 

@@ -159,9 +159,32 @@ def check_bands_statistics() -> int:
         for actual, expected in zip(blanket.split(), pillow.split()):
             assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
             checks += 1
-        for factor in (1, 2, 3, (2, 5)):
-            actual, expected = blanket.reduce(factor), pillow.reduce(factor)
-            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
+        for xy in ((0, 0), (36, 28), (-1, -1), (-37, -29), (12, 13)):
+            assert blanket.getpixel(xy) == pillow.getpixel(xy)
+            checks += 1
+        for factor in (1, 2, 3, (2, 5), (1, 7), (50, 40)):
+            for box in (None, (1, 2, 36, 28)):
+                actual, expected = blanket.reduce(factor, box), pillow.reduce(factor, box)
+                assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
+                checks += 1
+        # Generated palettes need not choose Pillow's exact colors/order.
+        # Check the public contract and compare decoding through Pillow.
+        for method in ((2,) if mode == "RGBA" else (0, 1, 2)):
+            quantized = blanket.quantize(colors=16, method=method)
+            expected = pillow.quantize(colors=16, method=method)
+            assert (quantized.mode, quantized.size) == (expected.mode, expected.size)
+            assert len(set(quantized.tobytes())) <= 16
+            reference = quantized.to_pillow()
+            assert quantized.convert(mode).tobytes() == reference.convert(mode).tobytes()
+            output = BytesIO()
+            quantized.save(output, "PNG")
+            assert PillowImage.open(BytesIO(output.getvalue())).convert(mode).tobytes() == quantized.convert(mode).tobytes()
+            checks += 1
+        if mode == "RGB":
+            palette = blanket.quantize(colors=16)
+            actual = blanket.quantize(palette=palette, dither=BlanketImage.Dither.NONE)
+            expected = pillow.quantize(palette=palette.to_pillow(), dither=PillowImage.Dither.NONE)
+            assert actual.convert("RGB").tobytes() == expected.convert("RGB").tobytes()
             checks += 1
         assert abs(blanket.entropy() - pillow.entropy()) < 1e-12
         checks += 1

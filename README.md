@@ -158,8 +158,23 @@ red_index = palette.getcolor((255, 0, 0, 128))
 mode, data = palette.getdata()
 ```
 
-Palette objects are standalone: Blanket images still support `L`, `RGB`, and
-`RGBA` modes, with no indexed `P`/`PA` image support. Run the palette benchmarks
+`image.getpixel((x, y))` reads a pixel directly from native storage and accepts
+negative coordinates. `image.reduce(factor, box=None)` averages integer blocks;
+the factor may be an integer or an `(x, y)` pair.
+
+`image.quantize(colors=256, method=None, kmeans=0, palette=None,
+dither=Image.Dither.FLOYDSTEINBERG)` returns an indexed `P` image. Native Rust
+implementations provide `Image.Quantize.MEDIANCUT`, `MAXCOVERAGE`, and
+`FASTOCTREE`; RGBA defaults to FASTOCTREE. Generated colors and palette ordering
+may differ from Pillow. LIBIMAGEQUANT is unavailable and raises `RuntimeError`.
+Supplied palettes support nearest-color mapping and Floyd–Steinberg dithering.
+Palette results support `getpalette`, `putpalette`, conversion, copying,
+cropping, nearest-neighbor resizing, PNG saving (including palette alpha),
+and `to_pillow()`. `reduce` rejects indexed images unless it is a full-size copy.
+General pixel processing remains focused on `L`, `RGB`, and `RGBA`; convert
+indexed images to one of these modes before filtering or color operations.
+
+Run palette object benchmarks
 with `uv run --no-sync python scripts/benchmark.py --palette-only -i 100 -w 10`.
 
 ## Pillow interoperability

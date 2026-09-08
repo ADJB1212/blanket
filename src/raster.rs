@@ -1,5 +1,5 @@
 use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
@@ -49,6 +49,7 @@ pub(crate) struct Image {
     pub(crate) mode: PixelMode,
     pub(crate) pixels: Option<Vec<u8>>,
     pub(crate) format: Option<String>,
+    pub(crate) palette: Option<(PixelMode, Vec<u8>)>,
 }
 
 impl Image {
@@ -66,6 +67,7 @@ impl Image {
             mode,
             pixels: Some(pixels),
             format,
+            palette: None,
         })
     }
 
@@ -78,7 +80,7 @@ impl Image {
 impl Image {
     #[getter]
     fn mode(&self) -> &'static str {
-        self.mode.as_str()
+        if self.palette.is_some() { "P" } else { self.mode.as_str() }
     }
 
     #[getter]
@@ -111,7 +113,45 @@ impl Image {
     }
 
     fn copy(&self) -> PyResult<Self> {
-        Self::from_pixels(self.width, self.height, self.mode, self.pixel_data()?.to_vec(), None)
+        self.pixel_data()?;
+        let mut result = self.clone();
+        result.format = None;
+        Ok(result)
+    }
+
+    fn getpixel(&self, py: Python<'_>, xy: (i64, i64)) -> PyResult<Py<PyAny>> {
+        let pixels = self.pixel_data()?;
+        let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
+        let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
+        if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {
+            return Err(PyIndexError::new_err("image index out of range"));
+        }
+        let channels = self.mode.channels();
+        let offset = (y as usize * self.width as usize + x as usize) * channels;
+        Ok(match self.mode {
+            PixelMode::L => pixels[offset].into_pyobject(py)?.into_any().unbind(),
+            PixelMode::Rgb => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
+                .into_pyobject(py)?
+                .into_any()
+                .unbind(),
+            PixelMode::Rgba => (pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3])
+                .into_pyobject(py)?
+                .into_any()
+                .unbind(),
+        })
+    }
+
+    fn palette_data(&self) -> Option<(String, Vec<u8>)> {
+        self.palette.as_ref().map(|(mode, data)| (mode.as_str().to_owned(), data.clone()))
+    }
+
+    fn set_palette(&mut self, mode: &str, data: Vec<u8>) -> PyResult<()> {
+        let mode = PixelMode::parse(mode)?;
+        if self.mode != PixelMode::L || mode == PixelMode::L || data.len() > 256 * mode.channels() || !data.len().is_multiple_of(mode.channels()) {
+            return Err(PyValueError::new_err("invalid palette"));
+        }
+        self.palette = Some((mode, data));
+        Ok(())
     }
 
     fn close(&mut self) {
@@ -119,7 +159,20 @@ impl Image {
     }
 
     fn convert(&self, py: Python<'_>, mode: &str) -> PyResult<Self> {
+        if mode == "P" && self.palette.is_some() {
+            return self.copy();
+        }
         let destination = PixelMode::parse(mode)?;
+        if let Some((palette_mode, palette)) = &self.palette {
+            let channels = palette_mode.channels();
+            let mut expanded = Vec::with_capacity(self.pixel_data()?.len() * channels);
+            for &slot in self.pixel_data()? {
+                let offset = slot as usize * channels;
+                expanded.extend_from_slice(palette.get(offset..offset + channels).unwrap_or(&[0, 0, 0, 255][..channels]));
+            }
+            let converted = py.detach(|| convert_pixels(&expanded, *palette_mode, destination));
+            return Self::from_pixels(self.width, self.height, destination, converted, None);
+        }
         let source = self.mode;
         let pixels = self.pixel_data()?;
         let converted = py.detach(|| convert_pixels(pixels, source, destination));
@@ -139,6 +192,19 @@ impl Image {
             lossless,
             effort,
         };
+        if let Some((palette_mode, _)) = &self.palette {
+            if format == ImageFormat::Png {
+                let encoded = py.detach(|| codecs::encode_palette_png(self, compress_level))?;
+                return Ok(PyBytes::new(py, &encoded).unbind());
+            }
+            if format == ImageFormat::Jpeg {
+                return Err(pyo3::exceptions::PyOSError::new_err("cannot write mode P as JPEG"));
+            }
+            let mode = palette_mode.as_str();
+            let expanded = self.convert(py, mode)?;
+            let encoded = py.detach(|| codecs::encode(&expanded, format, options))?;
+            return Ok(PyBytes::new(py, &encoded).unbind());
+        }
         let encoded = py.detach(|| codecs::encode(self, format, options))?;
         Ok(PyBytes::new(py, &encoded).unbind())
     }

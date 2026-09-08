@@ -4,19 +4,13 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-
 from blanket import Image, UnidentifiedImageError
 
 
 def pixels(mode: str, size: tuple[int, int] = (17, 13)) -> bytes:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
     width, height = size
-    return bytes(
-        (x * 17 + y * 29 + channel * 53) % 256
-        for y in range(height)
-        for x in range(width)
-        for channel in range(channels)
-    )
+    return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
 @pytest.mark.parametrize("mode, channels", [("L", ()), ("RGB", (3,)), ("RGBA", (4,))])
@@ -63,9 +57,7 @@ def test_png_roundtrip(mode: str) -> None:
 def test_jxl_lossless_roundtrip(mode: str) -> None:
     raw = pixels(mode, (8, 6))
     output = BytesIO()
-    Image.frombytes(mode, (8, 6), raw).save(
-        output, "JXL", lossless=True, effort=1
-    )
+    Image.frombytes(mode, (8, 6), raw).save(output, "JXL", lossless=True, effort=1)
     loaded = Image.open(output)
     assert (loaded.format, loaded.mode, loaded.size) == ("JXL", mode, (8, 6))
     assert loaded.tobytes() == raw
@@ -80,7 +72,7 @@ def test_jpeg_roundtrip(mode: str) -> None:
 
 
 def test_path_format_inference(tmp_path: object) -> None:
-    path = tmp_path / "image.png"  # type: ignore[operator]
+    path = tmp_path / "image.png"
     source = Image.frombytes("L", (17, 13), pixels("L"))
     source.save(path)
     assert Image.open(path).tobytes() == source.tobytes()
@@ -98,10 +90,7 @@ def test_conversions_and_context_manager() -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize(
-    "box",
-    [None, (2, 3, 11, 10), (-3, -2, 8, 7), (12, 9, 21, 17), (0.5, 1.5, 9.5, 8.5), (2, 2, 2, 2)],
-)
+@pytest.mark.parametrize("box", [None, (2, 3, 11, 10), (-3, -2, 8, 7), (12, 9, 21, 17), (0.5, 1.5, 9.5, 8.5), (2, 2, 2, 2)])
 def test_crop_matches_pillow(mode: str, box: tuple[float, float, float, float] | None) -> None:
     from PIL import Image as PillowImage
 
@@ -118,10 +107,7 @@ def test_crop_matches_pillow(mode: str, box: tuple[float, float, float, float] |
     assert result.info is not image.info
 
 
-@pytest.mark.parametrize(
-    "box, message",
-    [((2, 0, 1, 1), "right"), ((0, 2, 1, 1), "lower")],
-)
+@pytest.mark.parametrize("box, message", [((2, 0, 1, 1), "right"), ((0, 2, 1, 1), "lower")])
 def test_crop_rejects_reversed_box(box: tuple[int, int, int, int], message: str) -> None:
     image = Image.frombytes("L", (2, 2), b"abcd")
     with pytest.raises(ValueError, match=message):

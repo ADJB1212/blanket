@@ -86,22 +86,7 @@ def test_unsharp(mode: str, args: tuple[float, ...]) -> None:
     compare(mode, (19, 13), ImageFilter.UnsharpMask(*args), PillowFilter.UnsharpMask(*args))
 
 
-@pytest.mark.parametrize(
-    "name,args",
-    [
-        ("Kernel", ((2, 2), [1] * 4)),
-        ("RankFilter", (3, 9)),
-        ("RankFilter", (2, 1)),
-        ("MedianFilter", (0,)),
-        ("MedianFilter", (-1,)),
-        ("MinFilter", (23171,)),
-        ("ModeFilter", (1.5,)),
-        ("BoxBlur", (-1,)),
-        ("BoxBlur", ((1, -1),)),
-        ("GaussianBlur", ((1, 2, 3),)),
-        ("UnsharpMask", (1, 1.5)),
-    ],
-)
+@pytest.mark.parametrize("name,args", [("Kernel", ((2, 2), [1] * 4)), ("RankFilter", (3, 9)), ("RankFilter", (2, 1)), ("MedianFilter", (0,)), ("MedianFilter", (-1,)), ("MinFilter", (23171,)), ("ModeFilter", (1.5,)), ("BoxBlur", (-1,)), ("BoxBlur", ((1, -1),)), ("GaussianBlur", ((1, 2, 3),)), ("UnsharpMask", (1, 1.5))])
 def test_invalid_parameters(name: str, args: tuple[object, ...]) -> None:
     image, pillow = images("RGB", (7, 7))
     with pytest.raises(Exception) as expected:
@@ -134,9 +119,7 @@ def test_color_lut(mode: str, size: int | tuple[int, int, int], channels: int) -
     compare(mode, (37, 29), actual, expected)
 
 
-@pytest.mark.parametrize(
-    "storage", [list, tuple, lambda values: array("f", values), lambda values: np.array(values, dtype=np.float32), lambda values: np.array(values, dtype=np.float64).reshape(2, 2, 2, 3)]
-)
+@pytest.mark.parametrize("storage", [list, tuple, lambda values: array("f", values), lambda values: np.array(values, dtype=np.float32), lambda values: np.array(values, dtype=np.float64).reshape(2, 2, 2, 3)])
 def test_lut_storage_and_clipping(storage: type) -> None:
     values = [random.Random(29 + i).uniform(-4, 4) for i in range(24)]
     actual = ImageFilter.Color3DLUT(2, storage(values))

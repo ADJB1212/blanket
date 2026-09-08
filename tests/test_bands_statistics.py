@@ -1,12 +1,12 @@
 """Band extraction, integer reduction, and entropy parity."""
+
 from __future__ import annotations
 
 import math
 
 import pytest
-from PIL import Image as PILImage
-
 from blanket import Image
+from PIL import Image as PILImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -77,8 +77,7 @@ def test_constant_entropy(mode: str) -> None:
     assert image.entropy() == pytest.approx(math.log2(len(mode)))
 
 
-@pytest.mark.parametrize("factor,box", [(0, None), (-1, None), ((2, 0), None),
-                                       (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
+@pytest.mark.parametrize("factor,box", [(0, None), (-1, None), ((2, 0), None), (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
 def test_invalid_reduce(factor: object, box: object) -> None:
     image, _ = pair("L")
     with pytest.raises(ValueError):

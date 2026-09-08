@@ -22,11 +22,7 @@ def same(actual: Image.Image, expected: PILImage.Image) -> None:
 
 
 def test_public_classes_match_pillow() -> None:
-    expected = {
-        name
-        for name, value in vars(PILEnhance).items()
-        if not name.startswith("_") and inspect.isclass(value) and value.__module__ == PILEnhance.__name__
-    }
+    expected = {name for name, value in vars(PILEnhance).items() if not name.startswith("_") and inspect.isclass(value) and value.__module__ == PILEnhance.__name__}
     assert set(ImageEnhance.__all__) == expected
 
 

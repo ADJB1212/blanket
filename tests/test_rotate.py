@@ -1,21 +1,17 @@
 """Rotation parity with Pillow."""
+
 from __future__ import annotations
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(13, 8), (9, 9), (1, 7)])
 @pytest.mark.parametrize("method", [0, 2, 3])
 @pytest.mark.parametrize("angle", [0, 90, 180, 270, 45, -32.5, 721])
-@pytest.mark.parametrize("options", [
-    {}, {"expand": True}, {"center": (2.25, 4.5)},
-    {"translate": (3, -2)}, {"expand": True, "center": (1, 3), "translate": (-2.5, 1)},
-    {"expand": True, "fillcolor": "#12345680"},
-])
+@pytest.mark.parametrize("options", [{}, {"expand": True}, {"center": (2.25, 4.5)}, {"translate": (3, -2)}, {"expand": True, "center": (1, 3), "translate": (-2.5, 1)}, {"expand": True, "fillcolor": "#12345680"}])
 def test_rotate_parity(mode, size, method, angle, options):
     data = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
     image = Image.frombytes(mode, size, data)
@@ -61,9 +57,7 @@ def test_rotate_rgba_fill(fill, method):
     data = bytes(range(64))
     image = Image.frombytes("RGBA", (4, 4), data)
     reference = PillowImage.frombytes("RGBA", (4, 4), data)
-    assert image.rotate(33, method, expand=True, fillcolor=fill).tobytes() == reference.rotate(
-        33, method, expand=True, fillcolor=fill
-    ).tobytes()
+    assert image.rotate(33, method, expand=True, fillcolor=fill).tobytes() == reference.rotate(33, method, expand=True, fillcolor=fill).tobytes()
 
 
 @pytest.mark.parametrize("option", ["center", "translate"])

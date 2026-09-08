@@ -3,10 +3,9 @@ from __future__ import annotations
 import random
 
 import pytest
+from blanket import Image, ImageOps
 from PIL import Image as PillowImage
 from PIL import ImageOps as PillowOps
-
-from blanket import Image, ImageOps
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -35,9 +34,7 @@ def test_memory_kernels(mode: str, size: tuple[int, int]) -> None:
     box = (1, 2, size[0] - 1, size[1] - 1)
     assert image.crop(box).tobytes() == reference.crop(box).tobytes()
     for border in ((1, 3, 5, 7), (0, 0, 0, 0)):
-        fill = 37 if mode == "L" else (37, 81, 123, 149)[:len(mode)]
+        fill = 37 if mode == "L" else (37, 81, 123, 149)[: len(mode)]
         assert ImageOps.expand(image, border, fill).tobytes() == PillowOps.expand(reference, border, fill).tobytes()
-    for extent in ((0.5, 0.25, size[0] - 0.5, size[1] - 0.25),
-                   (size[0] - 0.5, size[1] - 0.25, 0.5, 0.25),
-                   (-2, -1, size[0] + 3, size[1] + 2)):
+    for extent in ((0.5, 0.25, size[0] - 0.5, size[1] - 0.25), (size[0] - 0.5, size[1] - 0.25, 0.5, 0.25), (-2, -1, size[0] + 3, size[1] + 2)):
         assert image.transform(target, Image.EXTENT, extent).tobytes() == reference.transform(target, PillowImage.Transform.EXTENT, extent).tobytes()

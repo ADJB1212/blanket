@@ -46,7 +46,9 @@ fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
 }
 
 fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
-    Image::from_pixels(size.0, size.1, image.mode, pixels, None)
+    let mut result = Image::from_pixels(size.0, size.1, image.mode, pixels, None)?;
+    result.palette = image.palette.clone();
+    Ok(result)
 }
 
 /// Copy complete rows into a reserved, empty image without first zeroing it.
