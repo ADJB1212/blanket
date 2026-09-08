@@ -444,9 +444,13 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageEnhance", "ImageFilter")
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
+    parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help="sections to benchmark (default: all; quote names containing spaces)")
     parser.add_argument("-i", "--iterations", type=int, default=10)
     parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
@@ -468,6 +472,12 @@ def parse_args() -> argparse.Namespace:
         parser.error("--palette-only and --jxl-only are mutually exclusive")
     if arguments.filter_only and (arguments.palette_only or arguments.jxl_only):
         parser.error("--filter-only is mutually exclusive with --palette-only and --jxl-only")
+    if arguments.sections is not None and (arguments.palette_only or arguments.filter_only or arguments.jxl_only):
+        parser.error("--sections cannot be combined with --palette-only, --filter-only, or --jxl-only")
+    if arguments.sections is None:
+        arguments.sections = ["ImagePalette"] if arguments.palette_only else ["ImageFilter"] if arguments.filter_only else ["Codec I/O"] if arguments.jxl_only else list(SECTION_NAMES)
+    if arguments.no_palette:
+        arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
     return arguments
 
 
@@ -488,7 +498,7 @@ def main() -> None:
     console = Console()
     all_results: list[dict[str, Any]] = []
 
-    if not args.jxl_only and not args.filter_only and not args.no_palette:
+    if "ImagePalette" in args.sections:
         with TemporaryDirectory() as directory:
             results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations)
         for result in results:
@@ -499,25 +509,25 @@ def main() -> None:
             console.rule("ImagePalette (256 entries)")
             console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
 
-    for size_name in [] if args.palette_only else args.sizes:
+    for size_name in args.sizes if any(section != "ImagePalette" for section in args.sections) else []:
         size = SIZES[size_name]
         w, h = size
         mpx = (w * h) / 1_000_000
 
         console.rule(f"[bold]{size_name}[/bold]  {w}×{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
 
-        sections: list[tuple[str, list[Comparison]]] = [("ImageFilter", imagefilter_comparisons(size))] if args.filter_only else [("Codec I/O", codec_comparisons(size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only))]
-        if not args.jxl_only and not args.filter_only:
-            sections += [
-                ("Conversions", conversion_comparisons(size)),
-                ("Resize", resize_comparisons(size)),
-                ("Geometry", geometry_comparisons(size)),
-                ("Bands and statistics", band_statistics_comparisons(size)),
-                ("Memory", memory_comparisons(size)),
-                ("ImageOps", imageops_comparisons(size)),
-                ("ImageEnhance", imageenhance_comparisons(size)),
-                ("ImageFilter", imagefilter_comparisons(size)),
-            ]
+        builders: dict[str, Callable[[], list[Comparison]]] = {
+            "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only),
+            "Conversions": partial(conversion_comparisons, size),
+            "Resize": partial(resize_comparisons, size),
+            "Geometry": partial(geometry_comparisons, size),
+            "Bands": partial(band_statistics_comparisons, size),
+            "Memory": partial(memory_comparisons, size),
+            "ImageOps": partial(imageops_comparisons, size),
+            "ImageEnhance": partial(imageenhance_comparisons, size),
+            "ImageFilter": partial(imagefilter_comparisons, size),
+        }
+        sections = [(name, build()) for name, build in builders.items() if name in args.sections]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:

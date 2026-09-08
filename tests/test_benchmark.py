@@ -40,3 +40,50 @@ def test_slower_results_excludes_faster_and_unpaired_operations() -> None:
     results = [slower, {"operation": "equal", "blanket_speedup": 1.0}, {"operation": "faster", "blanket_speedup": 2.0}, {"operation": "unpaired", "blanket_speedup": None}]
 
     assert benchmark.slower_results(results) == [slower]
+
+
+def test_sections_default_to_all(monkeypatch: Any) -> None:
+    benchmark = load_benchmark()
+    monkeypatch.setattr(sys, "argv", ["benchmark.py"])
+    assert benchmark.parse_args().sections == list(benchmark.SECTION_NAMES)
+
+
+def test_sections_select_multiple_names(monkeypatch: Any) -> None:
+    benchmark = load_benchmark()
+    monkeypatch.setattr(sys, "argv", ["benchmark.py", "--sections", "ImagePalette", "Codec I/O"])
+    assert benchmark.parse_args().sections == ["ImagePalette", "Codec I/O"]
+
+
+def test_sections_reject_invalid_arguments(monkeypatch: Any) -> None:
+    import pytest
+
+    benchmark = load_benchmark()
+    for arguments in (["--sections", "unknown"], ["--sections"], ["--sections", "Resize", "--filter-only"]):
+        monkeypatch.setattr(sys, "argv", ["benchmark.py", *arguments])
+        with pytest.raises(SystemExit) as error:
+            benchmark.parse_args()
+        assert error.value.code == 2
+
+
+def test_sections_only_build_selected_comparisons(monkeypatch: Any, tmp_path: Path) -> None:
+    import json
+
+    benchmark = load_benchmark()
+    calls: list[str] = []
+
+    def builder(name: str) -> Any:
+        def build(*args: Any, **kwargs: Any) -> list[Any]:
+            calls.append(name)
+            return [(name, lambda: None, lambda: None)]
+        return build
+
+    for name in ("codec", "conversion", "resize", "geometry", "band_statistics", "memory", "imageops", "imageenhance", "imagefilter", "imagepalette"):
+        monkeypatch.setattr(benchmark, f"{name}_comparisons", builder(name))
+    for sections, expected in ((["ImagePalette"], ["imagepalette"]), (["Memory", "ImageFilter"], ["memory", "imagefilter"])):
+        calls.clear()
+        output = tmp_path / "results.json"
+        monkeypatch.setattr(sys, "argv", ["benchmark.py", "--sections", *sections, "--sizes", "4K", "-i", "1", "-w", "0", "--json", str(output)])
+        benchmark.main()
+        assert calls == expected
+        results = json.loads(output.read_text())
+        assert {row["section"] for row in results} == set(sections)
