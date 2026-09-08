@@ -175,6 +175,9 @@ class Image:
 
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
         """Return a pixel value, accepting negative coordinates as Pillow does."""
+        if isinstance(xy, (tuple, list)) and len(xy) == 2 and isinstance(xy[0], int) and isinstance(xy[1], int):
+            # Native access already validates the image and coordinates.
+            return self._native.getpixel((xy[0], xy[1]))
         self.load()
         if not isinstance(xy, (tuple, list)):
             raise TypeError("argument must be a sequence")

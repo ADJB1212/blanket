@@ -149,6 +149,27 @@ def test_empty_supplied_palette() -> None:
     assert result.convert("RGB").tobytes() == bytes(3)
 
 
+@pytest.mark.parametrize("mode,method", [("L", 0), ("RGB", 0), ("RGB", 1), ("RGB", 2), ("RGBA", 2)])
+def test_parallel_quantize_preserves_serial_palette(mode: str, method: int) -> None:
+    # Tiling preserves color counts in proportion. Palette decisions and
+    # first-entry ties must survive worker-local histogram merging.
+    raw = bytes((i * 37 + i // 11) % 256 for i in range(1024 * len(mode)))
+    small = Image.frombytes(mode, (32, 32), raw).quantize(16, method)
+    large = Image.frombytes(mode, (1024, 1024), raw * 1024).quantize(16, method)
+    assert small.getpalette(None) == large.getpalette(None)
+    assert large.tobytes() == small.tobytes() * 1024
+
+
+def test_parallel_fixed_palette_matches_pillow() -> None:
+    raw = bytes((i * 37 + i // 13) % 256 for i in range(513 * 517 * 3))
+    image = Image.frombytes("RGB", (513, 517), raw)
+    palette = Image.frombytes("P", (1, 1), b"\x00")
+    palette.putpalette(bytes((i * 71) % 256 for i in range(16 * 3)))
+    actual = image.quantize(palette=palette, dither=0)
+    expected = image.to_pillow().quantize(palette=palette.to_pillow(), dither=0)
+    assert actual.tobytes() == expected.tobytes()
+
+
 def test_closed_pixel_quantize_reduce() -> None:
     image = Image.frombytes("L", (1, 1), b"\x00")
     image.close()

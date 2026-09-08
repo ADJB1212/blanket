@@ -174,6 +174,13 @@ and `to_pillow()`. `reduce` rejects indexed images unless it is a full-size copy
 General pixel processing remains focused on `L`, `RGB`, and `RGBA`; convert
 indexed images to one of these modes before filtering or color operations.
 
+Quantization uses NEON on AArch64 and runtime-detected SSE2 on x86 for palette
+distance searches, with a scalar fallback. Large images use parallel histogram
+construction and independent pixel mapping. Floyd–Steinberg error diffusion
+stays sequential to preserve its results, using cached SIMD palette searches.
+Grayscale 2×2 reduction uses NEON/SSE2 alongside the existing parallel reduction
+paths. Single-pixel access avoids extra Python work rather than starting workers.
+
 Run palette object benchmarks
 with `uv run --no-sync python scripts/benchmark.py --palette-only -i 100 -w 10`.
 

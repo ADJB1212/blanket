@@ -1,9 +1,13 @@
 //! Color palette generation and mapping. All pixel work runs without the GIL.
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
+
+use rayon::prelude::*;
 
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
+use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut};
+use crate::quantize_simd::PaletteSearch;
 use crate::raster::{Image, PixelMode};
 
 type Color = [u8; 4];
@@ -18,14 +22,6 @@ fn distance(a: Color, b: Color) -> u32 {
     a.iter().zip(b).map(|(&a, b)| (i32::from(a) - i32::from(b)).unsigned_abs().pow(2)).sum()
 }
 
-fn nearest(color: Color, palette: &[Color]) -> usize {
-    palette
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, entry)| distance(color, **entry))
-        .map_or(0, |(i, _)| i)
-}
-
 fn average(histogram: &[(Color, u64)]) -> Color {
     let count: u64 = histogram.iter().map(|(_, n)| n).sum();
     std::array::from_fn(|c| {
@@ -35,8 +31,100 @@ fn average(histogram: &[(Color, u64)]) -> Color {
 }
 
 // Pillow's supplied-palette converter searches on a six-bit RGB grid.
-fn palette_nearest(color: Color, palette: &[Color]) -> usize {
-    nearest([color[0] & 252, color[1] & 252, color[2] & 252, 255], palette)
+fn palette_nearest(color: Color, palette: &PaletteSearch<'_>, cache: &mut [u16]) -> usize {
+    let key = ((color[0] as usize >> 2) << 12) | ((color[1] as usize >> 2) << 6) | (color[2] as usize >> 2);
+    if cache[key] == 256 {
+        cache[key] = palette.nearest([color[0] & 252, color[1] & 252, color[2] & 252, 255]) as u16;
+    }
+    cache[key] as usize
+}
+
+fn color_histogram(pixels: &[Color]) -> Histogram {
+    let count = |pixels: &[Color]| {
+        let mut counts = HashMap::new();
+        for &pixel in pixels {
+            *counts.entry(pixel).or_insert(0u64) += 1;
+        }
+        counts
+    };
+    let counts = if pixels.len() >= MIN_PARALLEL_BYTES {
+        pixels.par_chunks(CHUNK_PIXELS * 4).map(count).reduce(HashMap::new, |mut a, mut b| {
+            if a.len() < b.len() {
+                std::mem::swap(&mut a, &mut b);
+            }
+            for (color, n) in b {
+                *a.entry(color).or_default() += n;
+            }
+            a
+        })
+    } else {
+        count(pixels)
+    };
+    let mut histogram: Histogram = counts.into_iter().collect();
+    // Tree ordering is part of the existing palette selection/tie behavior.
+    histogram.sort_unstable_by_key(|(color, _)| *color);
+    histogram
+}
+
+fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -> PyResult<Image> {
+    let (mode, data) = reference
+        .palette
+        .as_ref()
+        .ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
+    let mut entries: Vec<Color> = data.chunks_exact(mode.channels()).map(|v| [v[0], v[1], v[2], 255]).collect();
+    if entries.is_empty() {
+        entries.push([0, 0, 0, 255]);
+    }
+    let search = PaletteSearch::new(&entries);
+    let mut indices = vec![0; image.width as usize * image.height as usize];
+    if image.mode == PixelMode::L {
+        indices.copy_from_slice(source);
+    } else if image.mode != PixelMode::Rgb {
+        return Err(PyValueError::new_err("only RGB or L mode images can be quantized to a palette"));
+    } else if dither == 0 {
+        // Each worker owns its cache and output. No atomics or per-pixel locks.
+        chunks_mut(&mut indices, CHUNK_PIXELS * 8, |chunk, out| {
+            let mut cache = vec![256u16; 64 * 64 * 64];
+            let start = chunk * CHUNK_PIXELS * 8 * 3;
+            for (pixel, index) in source[start..start + out.len() * 3].as_chunks::<3>().0.iter().zip(out) {
+                *index = palette_nearest([pixel[0], pixel[1], pixel[2], 255], &search, &mut cache) as u8;
+            }
+        });
+    } else if !indices.is_empty() {
+        // Error diffusion is ordered across rows; parallelizing it changes the
+        // result. Cache and SIMD accelerate palette searches within that order.
+        let width = image.width as usize;
+        let mut cache = vec![256u16; 64 * 64 * 64];
+        let mut errors = vec![[0i32; 3]; width + 2];
+        let mut next = errors.clone();
+        for (row, out) in source.chunks_exact(width * 3).zip(indices.chunks_exact_mut(width)) {
+            next.fill([0; 3]);
+            let mut blue_errors = [0; 2];
+            for (x, pixel) in row.as_chunks::<3>().0.iter().enumerate() {
+                let mut adjusted = [0, 0, 0, 255];
+                for c in 0..3 {
+                    adjusted[c] = (i32::from(pixel[c]) + errors[x + 1][c] / 16).clamp(0, 255) as u8;
+                }
+                let i = palette_nearest(adjusted, &search, &mut cache);
+                out[x] = i as u8;
+                for c in 0..3 {
+                    let error = i32::from(adjusted[c]) - i32::from(entries[i][c]);
+                    errors[x + 2][c] += error * 7;
+                    next[x][c] += error * 3;
+                    next[x + 1][c] += error * 5;
+                    next[x + 2][c] += error;
+                    if c == 2 {
+                        blue_errors = [blue_errors[1], error];
+                    }
+                }
+            }
+            next[width] = [5 * blue_errors[1] + blue_errors[0], blue_errors[1], blue_errors[1]];
+            std::mem::swap(&mut errors, &mut next);
+        }
+    }
+    let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
+    result.palette = reference.palette.clone();
+    Ok(result)
 }
 
 fn median_cut(histogram: Histogram, colors: usize) -> Vec<Color> {
@@ -134,11 +222,12 @@ fn octree(histogram: Histogram, colors: usize) -> Vec<Color> {
 fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
     let mut previous = vec![usize::MAX; histogram.len()];
     loop {
+        let search = PaletteSearch::new(palette);
         let mut sums = vec![[0u64; 4]; palette.len()];
         let mut counts = vec![0u64; palette.len()];
         let mut changed = 0u64;
         for ((color, count), old) in histogram.iter().zip(&mut previous) {
-            let i = nearest(*color, palette);
+            let i = search.nearest(*color);
             if i != *old {
                 changed += count;
                 *old = i;
@@ -181,32 +270,25 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
         palette.pixel_data()?;
     }
     py.detach(|| {
-        let channels = image.mode.channels();
-        let pixels: Vec<Color> = source
-            .chunks_exact(channels)
-            .map(|p| match image.mode {
-                PixelMode::L => [p[0], p[0], p[0], 255],
-                PixelMode::Rgb => [p[0], p[1], p[2], 255],
-                PixelMode::Rgba => [p[0], p[1], p[2], p[3]],
-            })
-            .collect();
-        let mut counts = BTreeMap::new();
-        for &pixel in &pixels {
-            *counts.entry(pixel).or_insert(0u64) += 1;
+        if let Some(reference) = palette {
+            return fixed_palette(image, source, reference, dither);
         }
-        let histogram: Histogram = counts.into_iter().collect();
+        // Reuse the existing SIMD pixel-layout conversion instead of expanding
+        // RGB/L one pixel at a time in the quantizer.
+        let expanded;
+        let pixels = if image.mode == PixelMode::Rgba {
+            source.as_chunks::<4>().0
+        } else {
+            expanded = crate::simd::convert(source, image.mode, PixelMode::Rgba);
+            expanded.as_chunks::<4>().0
+        };
+        let histogram = color_histogram(pixels);
         let palette_mode = if image.mode == PixelMode::Rgba {
             PixelMode::Rgba
         } else {
             PixelMode::Rgb
         };
-        let mut entries = if let Some(reference) = palette {
-            let (mode, data) = reference
-                .palette
-                .as_ref()
-                .ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
-            data.chunks_exact(mode.channels()).map(|v| [v[0], v[1], v[2], 255]).collect()
-        } else if histogram.is_empty() {
+        let mut entries = if histogram.is_empty() {
             Vec::new()
         } else {
             match method {
@@ -216,69 +298,28 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
                 _ => unreachable!(),
             }
         };
-        if palette.is_some() && entries.is_empty() {
-            entries.push([0, 0, 0, 255]);
-        }
-        if kmeans > 0 && method < 2 && palette.is_none() {
+        if kmeans > 0 && method < 2 {
             refine(&histogram, &mut entries, kmeans);
         }
-        let mut indices = Vec::with_capacity(pixels.len());
-        if palette.is_some() && image.mode == PixelMode::L {
-            indices.extend_from_slice(source);
-        } else if palette.is_some() && dither != 0 && image.mode == PixelMode::Rgb {
-            let width = image.width as usize;
-            let mut errors = vec![[0i32; 3]; width + 2];
-            for row in pixels.chunks(width.max(1)) {
-                let mut next = vec![[0i32; 3]; width + 2];
-                let mut blue_errors = [0; 2];
-                for (x, &pixel) in row.iter().enumerate() {
-                    let mut adjusted = pixel;
-                    for c in 0..3 {
-                        adjusted[c] = (i32::from(pixel[c]) + errors[x + 1][c] / 16).clamp(0, 255) as u8;
-                    }
-                    let i = palette_nearest(adjusted, &entries);
-                    indices.push(i as u8);
-                    for c in 0..3 {
-                        let error = i32::from(adjusted[c]) - i32::from(entries[i][c]);
-                        errors[x + 2][c] += error * 7;
-                        next[x][c] += error * 3;
-                        next[x + 1][c] += error * 5;
-                        next[x + 2][c] += error;
-                        if c == 2 {
-                            blue_errors = [blue_errors[1], error];
-                        }
-                    }
-                }
-                // Preserve Pillow's right-edge carry convention: its final
-                // three error slots are populated from the blue accumulators.
-                next[width] = [5 * blue_errors[1] + blue_errors[0], blue_errors[1], blue_errors[1]];
-                errors = next;
+        let search = PaletteSearch::new(&entries);
+        let entry = |(color, _): &(Color, u64)| (*color, search.nearest(*color) as u8);
+        let lookup: HashMap<Color, u8> = if histogram.len() >= CHUNK_PIXELS {
+            histogram.par_iter().map(entry).collect()
+        } else {
+            histogram.iter().map(entry).collect()
+        };
+        let mut indices = vec![0; pixels.len()];
+        chunks_mut(&mut indices, CHUNK_PIXELS, |chunk, out| {
+            let start = chunk * CHUNK_PIXELS;
+            for (index, color) in out.iter_mut().zip(&pixels[start..]) {
+                *index = lookup[color];
             }
-        } else {
-            let lookup: BTreeMap<Color, u8> = histogram
-                .iter()
-                .map(|(color, _)| {
-                    (
-                        *color,
-                        if palette.is_some() {
-                            palette_nearest(*color, &entries)
-                        } else {
-                            nearest(*color, &entries)
-                        } as u8,
-                    )
-                })
-                .collect();
-            indices.extend(pixels.iter().map(|color| lookup[color]));
-        }
-        let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
-        result.palette = Some(if let Some(reference) = palette {
-            reference.palette.clone().unwrap()
-        } else {
-            (
-                palette_mode,
-                entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect(),
-            )
         });
+        let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
+        result.palette = Some((
+            palette_mode,
+            entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect(),
+        ));
         Ok(result)
     })
 }

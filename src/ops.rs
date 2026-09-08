@@ -541,7 +541,12 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
                 let end = start + (right - left) as usize;
                 let upper = source[start..end].as_chunks::<2>().0;
                 let lower = source[start + width as usize..end + width as usize].as_chunks::<2>().0;
-                for ((dst, upper), lower) in row.as_chunks_mut::<C>().0.iter_mut().zip(upper).zip(lower) {
+                let done = if C == 1 {
+                    crate::ops_simd::reduce_two_l(upper.as_flattened().as_flattened(), lower.as_flattened().as_flattened(), row)
+                } else {
+                    0
+                };
+                for ((dst, upper), lower) in row.as_chunks_mut::<C>().0.iter_mut().zip(upper).zip(lower).skip(done) {
                     for channel in 0..C {
                         let sum =
                             u16::from(upper[0][channel]) + u16::from(upper[1][channel]) + u16::from(lower[0][channel]) + u16::from(lower[1][channel]);

@@ -8,6 +8,7 @@ mod ops_simd;
 mod palette;
 mod parallel;
 mod quantize;
+mod quantize_simd;
 mod raster;
 mod simd;
 

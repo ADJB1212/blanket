@@ -613,8 +613,96 @@ pub(crate) fn reduce_three_l(upper: &[u8], middle: &[u8], lower: &[u8], output: 
     done
 }
 
+/// Write complete groups of eight grayscale 2x2 averages; leave the tail
+/// to the caller's scalar kernel. Loads never cross the supplied row slices.
+pub(crate) fn reduce_two_l(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
+    assert_eq!(upper.len(), output.len() * 2);
+    assert_eq!(lower.len(), upper.len());
+    #[cfg(target_arch = "aarch64")]
+    {
+        use std::arch::aarch64::*;
+        let mut done = 0;
+        // SAFETY: NEON is mandatory; each iteration reads 16 input bytes
+        // and writes eight output bytes inside the checked slices.
+        unsafe {
+            while done + 8 <= output.len() {
+                let a = vpaddlq_u8(vld1q_u8(upper.as_ptr().add(done * 2)));
+                let b = vpaddlq_u8(vld1q_u8(lower.as_ptr().add(done * 2)));
+                let sum = vaddq_u16(vaddq_u16(a, b), vdupq_n_u16(2));
+                vst1_u8(output.as_mut_ptr().add(done), vshrn_n_u16::<2>(sum));
+                done += 8;
+            }
+        }
+        return done;
+    }
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if std::arch::is_x86_feature_detected!("sse2") {
+            // SAFETY: runtime SSE2 detection and checked slice lengths.
+            unsafe { reduce_two_l_sse2(upper, lower, output) }
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+    {
+        0
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
+unsafe fn reduce_two_l_sse2(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+    let mut done = 0;
+    // SAFETY: caller checks features and lengths; only complete groups are
+    // loaded. Unaligned loads/stores do not require aligned image buffers.
+    unsafe {
+        let zero = _mm_setzero_si128();
+        let ones = _mm_set1_epi16(1);
+        let round = _mm_set1_epi32(2);
+        while done + 8 <= output.len() {
+            let a = _mm_loadu_si128(upper.as_ptr().add(done * 2).cast());
+            let b = _mm_loadu_si128(lower.as_ptr().add(done * 2).cast());
+            let lo = _mm_add_epi16(_mm_unpacklo_epi8(a, zero), _mm_unpacklo_epi8(b, zero));
+            let hi = _mm_add_epi16(_mm_unpackhi_epi8(a, zero), _mm_unpackhi_epi8(b, zero));
+            let lo = _mm_srli_epi32::<2>(_mm_add_epi32(_mm_madd_epi16(lo, ones), round));
+            let hi = _mm_srli_epi32::<2>(_mm_add_epi32(_mm_madd_epi16(hi, ones), round));
+            let bytes = _mm_packus_epi16(_mm_packs_epi32(lo, hi), zero);
+            _mm_storel_epi64(output.as_mut_ptr().add(done).cast(), bytes);
+            done += 8;
+        }
+    }
+    done
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reduce_two_l_rounding_tails_and_guards() {
+        for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
+            for value in 0..=255 {
+                let upper = vec![value; count * 2 + 1];
+                let lower: Vec<u8> = (0..count * 2 + 1).map(|i| (i * 37 + value as usize) as u8).collect();
+                let mut output = vec![73; count + 2];
+                let done = super::reduce_two_l(&upper[1..], &lower[1..], &mut output[1..count + 1]);
+                for i in 0..done {
+                    let sum: u32 = [&upper, &lower]
+                        .iter()
+                        .flat_map(|r| &r[1 + i * 2..1 + (i + 1) * 2])
+                        .map(|&v| u32::from(v))
+                        .sum();
+                    assert_eq!(output[i + 1], ((sum + 2) / 4) as u8);
+                }
+                assert_eq!(output[0], 73);
+                assert!(output[done + 1..].iter().all(|&v| v == 73));
+            }
+        }
+    }
+
     #[test]
     fn reduce_three_l_rounding_and_guards() {
         for count in [0, 1, 15, 16, 17, 31, 32, 33] {
