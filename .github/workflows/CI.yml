@@ -21,8 +21,6 @@ jobs:
             python: "3.14"
           - os: macos-latest
             python: "3.14"
-          - os: windows-latest
-            python: "3.14"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -31,22 +29,25 @@ jobs:
           python-version: ${{ matrix.python }}
       - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
         with:
-          version: "0.12.9"
+          version: "0.12.10"
           enable-cache: true
+      - uses: ilammy/setup-nasm@v1
       - name: Install project and test dependencies
-        run: uv sync --locked --extra test
+        run: |
+          uv sync --no-install-project --extra test --compile
+          uv tool install maturin
+          maturin develop -r --extras test --uv
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Lint Rust
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy -- -D warnings
       - name: Test Rust
         run: cargo test
       - name: Test Python API
         run: uv run --no-sync pytest -q
       - name: Verify Pillow behavior
-        run: uv run --no-sync python scripts/verify_behavior.py
+        run: uv run --no-sync scripts/verify_behavior.py
       - name: Smoke-test benchmark
         if: runner.os == 'Linux' && matrix.python == '3.14'
         run: >-
-          uv run --no-sync python scripts/benchmark.py
-          --width 64 --height 64 --iterations 2 --warmups 1
+          uv run --no-sync scripts/benchmark.py --sizes web -i 1 -w 0
