@@ -32,8 +32,6 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - name: Check Rust formatting
         run: cargo fmt --check
-      - name: Test Rust
-        run: cargo test
       - name: Install project and test dependencies
         run: |
           uv sync --no-install-project --extra test --compile

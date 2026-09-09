@@ -204,19 +204,23 @@ fn decode_dng(data: &[u8]) -> Result<Image, String> {
 }
 
 fn decode_webp(data: &[u8]) -> Result<Image, String> {
-    let features = webp::BitstreamFeatures::new(data).ok_or("invalid WebP header")?;
-    validate_dimensions(features.width(), features.height())?;
-    // The static libwebp wrapper does not support animation. Preserve the
-    // existing first-frame behavior for animated containers.
-    if features.has_animation() {
+    let features = webpx::ImageInfo::from_webp(data).map_err(|error| error.to_string())?;
+    validate_dimensions(features.width, features.height)?;
+    // Preserve the existing first-frame behavior for animated containers.
+    if features.has_animation {
         return decode_rust_image(data, RustFormat::WebP, "WEBP");
     }
-    let decoded = webp::Decoder::new(data).decode().ok_or("invalid WebP image")?;
+    let (pixels, width, height) = if features.has_alpha {
+        webpx::decode_rgba(data)
+    } else {
+        webpx::decode_rgb(data)
+    }
+    .map_err(|error| error.to_string())?;
     Image::from_pixels(
-        decoded.width(),
-        decoded.height(),
-        if decoded.is_alpha() { PixelMode::Rgba } else { PixelMode::Rgb },
-        decoded.to_vec(),
+        width,
+        height,
+        if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb },
+        pixels,
         Some("WEBP".into()),
     )
     .map_err(|error| error.to_string())
@@ -341,17 +345,16 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
             let encoder = match image.mode {
                 PixelMode::L => {
                     rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
-                    webp::Encoder::from_rgb(&rgb, image.width, image.height)
+                    webpx::Encoder::new_rgb(&rgb, image.width, image.height)
                 }
-                PixelMode::Rgb => webp::Encoder::from_rgb(pixels, image.width, image.height),
-                PixelMode::Rgba => webp::Encoder::from_rgba(pixels, image.width, image.height),
+                PixelMode::Rgb => webpx::Encoder::new_rgb(pixels, image.width, image.height),
+                PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width, image.height),
             };
-            Ok(if options.lossless {
-                encoder.encode_lossless()
-            } else {
-                encoder.encode(f32::from(options.quality))
-            }
-            .to_vec())
+            encoder
+                .lossless(options.lossless)
+                .quality(if options.lossless { 75.0 } else { f32::from(options.quality) })
+                .encode(webpx::Unstoppable)
+                .map_err(codec_error)
         }
         ImageFormat::Png => encode_png(image, pixels, options.compress_level),
         ImageFormat::Jpeg => encode_jpeg(image, pixels, options.quality),

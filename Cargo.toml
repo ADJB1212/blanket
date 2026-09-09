@@ -20,7 +20,7 @@ pyo3 = "0.29"
 rayon = "1.12"
 image = { version = "0.25", default-features = false, features = ["png", "rayon", "tiff", "webp"] }
 rawler = "0.8"
-webp = "0.3"
+webpx = "0.4"
 libwebp-sys = { version = "0.14", features = ["avx2", "sse41", "neon", "parallel"] }
 jpegxl-rs = { version = "0.15.0", default-features = false }
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
