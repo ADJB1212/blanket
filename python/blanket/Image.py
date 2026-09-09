@@ -19,7 +19,10 @@ from ._blanket import _Image, open_bytes
 from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
-_EXTENSIONS = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL"}
+_EXTENSIONS = {
+    ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL",
+    ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP",
+}
 
 
 class Resampling(IntEnum):
@@ -525,7 +528,7 @@ class Image:
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
-        """Save this image as PNG, JPEG, or JPEG XL."""
+        """Save this image as PNG, JPEG, JPEG XL, TIFF, or WebP."""
 
         output_format = _output_format(fp, format)
         self._sync_palette()
@@ -605,9 +608,9 @@ def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binar
 def _output_format(fp: object, requested: str | None) -> str:
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
-        aliases = {"JPG": "JPEG", "JPEGXL": "JXL"}
+        aliases = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF"}
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"PNG", "JPEG", "JXL"}:
+        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP"}:
             raise ValueError(f"unsupported image format {requested!r}")
         return normalized
     if hasattr(fp, "write"):
@@ -620,7 +623,13 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
-    allowed = {"PNG": {"compress_level"}, "JPEG": {"quality"}, "JXL": {"quality", "lossless", "effort"}}[format]
+    allowed = {
+        "PNG": {"compress_level"},
+        "JPEG": {"quality"},
+        "JXL": {"quality", "lossless", "effort"},
+        "TIFF": set(),
+        "WEBP": {"quality", "lossless"},
+    }[format]
     unknown = supplied.keys() - allowed
     if unknown:
         names = ", ".join(sorted(unknown))

@@ -63,22 +63,31 @@ pub(crate) enum ImageFormat {
     Png,
     Jpeg,
     Jxl,
+    Tiff,
+    Webp,
+    Dng,
 }
 
 impl ImageFormat {
     pub(crate) fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
+            "TIFF" | "TIF" => Ok(Self::Tiff),
+            "WEBP" => Ok(Self::Webp),
+            "DNG" => Ok(Self::Dng),
             "PNG" => Ok(Self::Png),
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, or JXL"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, or DNG"
             ))),
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Tiff => "TIFF",
+            Self::Webp => "WEBP",
+            Self::Dng => "DNG",
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
             Self::Jxl => "JXL",
@@ -92,6 +101,10 @@ impl ImageFormat {
             Some(Self::Jpeg)
         } else if data.starts_with(&[0xff, 0x0a]) || data.starts_with(JXL_CONTAINER_SIGNATURE) {
             Some(Self::Jxl)
+        } else if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") || data.starts_with(b"II+\0") || data.starts_with(b"MM\0+") {
+            Some(if is_dng(data) { Self::Dng } else { Self::Tiff })
+        } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
+            Some(Self::Webp)
         } else {
             None
         }
@@ -127,10 +140,86 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
 
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
+        ImageFormat::Webp => decode_webp(data),
+        ImageFormat::Dng => decode_dng(data),
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
     }
+}
+
+// DNGVersion (50706) belongs to the first classic TIFF IFD. Read only the
+// bounded directory, never scan compressed image payloads for tag bytes.
+fn is_dng(data: &[u8]) -> bool {
+    if !data.starts_with(b"II*\0") && !data.starts_with(b"MM\0*") {
+        return false;
+    }
+    let le = data.starts_with(b"II");
+    let u16_at = |offset: usize| -> Option<u16> {
+        let bytes = data.get(offset..offset.checked_add(2)?)?.try_into().ok()?;
+        Some(if le { u16::from_le_bytes(bytes) } else { u16::from_be_bytes(bytes) })
+    };
+    let Some(bytes) = data.get(4..8).and_then(|v| v.try_into().ok()) else {
+        return false;
+    };
+    let offset = if le { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) } as usize;
+    let Some(count) = u16_at(offset) else { return false };
+    (0..usize::from(count)).any(|i| offset.checked_add(2 + i * 12).and_then(u16_at) == Some(50706))
+}
+
+fn decode_dng(data: &[u8]) -> Result<Image, String> {
+    // Rawler's camera-specific decoders can panic on malformed raw data.
+    std::panic::catch_unwind(|| {
+        use rawler::formats::tiff::{GenericTiffReader, reader::TiffReader};
+        // Check full-resolution IFDs as well as previews before raw allocation.
+        let tiff = GenericTiffReader::new_with_buffer(data, 0, 0, None).map_err(|e| e.to_string())?;
+        for ifd in tiff.find_ifds_with_tag(256_u16) {
+            let width = ifd.get_entry(256_u16).ok_or("missing DNG width")?.force_u32(0);
+            let height = ifd.get_entry(257_u16).ok_or("missing DNG height")?.force_u32(0);
+            validate_dimensions(width, height)?;
+        }
+        let source = rawler::rawsource::RawSource::new_from_slice(data);
+        let raw = rawler::decode(&source, &rawler::decoders::RawDecodeParams::default()).map_err(|e| e.to_string())?;
+        validate_dimensions(
+            u32::try_from(raw.width).map_err(|e| e.to_string())?,
+            u32::try_from(raw.height).map_err(|e| e.to_string())?,
+        )?;
+        let developed = rawler::imgop::develop::RawDevelop::default()
+            .develop_intermediate(&raw)
+            .map_err(|e| e.to_string())?
+            .to_dynamic_image()
+            .ok_or("invalid developed DNG image")?
+            .to_rgb8();
+        Image::from_pixels(
+            developed.width(),
+            developed.height(),
+            PixelMode::Rgb,
+            developed.into_raw(),
+            Some("DNG".into()),
+        )
+        .map_err(|e| e.to_string())
+    })
+    .unwrap_or_else(|_| Err("invalid DNG image".into()))
+}
+
+fn decode_webp(data: &[u8]) -> Result<Image, String> {
+    let features = webp::BitstreamFeatures::new(data).ok_or("invalid WebP header")?;
+    validate_dimensions(features.width(), features.height())?;
+    // The static libwebp wrapper does not support animation. Preserve the
+    // existing first-frame behavior for animated containers.
+    if features.has_animation() {
+        return decode_rust_image(data, RustFormat::WebP, "WEBP");
+    }
+    let decoded = webp::Decoder::new(data).decode().ok_or("invalid WebP image")?;
+    Image::from_pixels(
+        decoded.width(),
+        decoded.height(),
+        if decoded.is_alpha() { PixelMode::Rgba } else { PixelMode::Rgb },
+        decoded.to_vec(),
+        Some("WEBP".into()),
+    )
+    .map_err(|error| error.to_string())
 }
 
 fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, String> {
@@ -239,6 +328,31 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
 pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Dng => Err(PyValueError::new_err("DNG is a read-only format")),
+        ImageFormat::Tiff => {
+            let mut output = Cursor::new(Vec::new());
+            image::codecs::tiff::TiffEncoder::new(&mut output)
+                .write_image(pixels, image.width, image.height, color_type(image.mode))
+                .map_err(codec_error)?;
+            Ok(output.into_inner())
+        }
+        ImageFormat::Webp => {
+            let rgb;
+            let encoder = match image.mode {
+                PixelMode::L => {
+                    rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
+                    webp::Encoder::from_rgb(&rgb, image.width, image.height)
+                }
+                PixelMode::Rgb => webp::Encoder::from_rgb(pixels, image.width, image.height),
+                PixelMode::Rgba => webp::Encoder::from_rgba(pixels, image.width, image.height),
+            };
+            Ok(if options.lossless {
+                encoder.encode_lossless()
+            } else {
+                encoder.encode(f32::from(options.quality))
+            }
+            .to_vec())
+        }
         ImageFormat::Png => encode_png(image, pixels, options.compress_level),
         ImageFormat::Jpeg => encode_jpeg(image, pixels, options.quality),
         ImageFormat::Jxl => encode_jxl(image, pixels, options),

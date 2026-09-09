@@ -3,7 +3,7 @@
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
 converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
-and JPEG XL files.
+JPEG XL, TIFF, and WebP files, plus developing DNG files.
 
 ```python
 from blanket import Image
@@ -21,7 +21,13 @@ installed.
 `Image.open()` accepts paths and binary streams. `Image.fromarray()` accepts
 8-bit array-interface objects with grayscale, RGB, or RGBA shapes, including
 strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
-path extension, or accepts an explicit format for streams. `Image.Image.convert()`
+path extension, or accepts an explicit format for streams. TIFF (`.tif`/`.tiff`)
+and WebP (`.webp`) also support opening and saving. DNG supports opening:
+DNG raw data develops to 8-bit RGB. DNG rendering applies raw development,
+so its appearance can differ from the camera's embedded preview.
+Only the first image/frame is opened for TIFF and WebP; animation and multipage
+editing are not supported. New formats do not currently retain EXIF/XMP metadata.
+`Image.Image.convert()`
 supports all conversions among `L`, `RGB`, and `RGBA`.
 
 `image.split()` returns independent `L` images for each channel.
@@ -62,6 +68,9 @@ Expansion assumes the default center and no translation.
 Supported encoder options are:
 
 - PNG: `compress_level=0..9` (default `6`)
+- TIFF: uncompressed output, no save options
+- WebP: `quality=1..100` (default `90`), `lossless=True|False` (default `False`)
+  Grayscale images are stored as RGB, as required by WebP.
 - JPEG: `quality=1..100` (default `75`)
 - JPEG XL: `quality=1..100` (default `90`), `lossless=True|False`, and
   `effort=1..10` (default `7`)

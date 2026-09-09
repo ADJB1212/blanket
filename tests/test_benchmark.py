@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+from io import BytesIO
+import runpy
+
+import pytest
+from blanket import Image
 import sys
 from pathlib import Path
 from typing import Any
@@ -87,3 +92,44 @@ def test_sections_only_build_selected_comparisons(monkeypatch: Any, tmp_path: Pa
         assert calls == expected
         results = json.loads(output.read_text())
         assert {row["section"] for row in results} == set(sections)
+
+
+@pytest.fixture(scope="module")
+def benchmark() -> dict[str, Any]:
+    return runpy.run_path(str(Path(__file__).resolve().parents[1] / "scripts" / "benchmark.py"))
+
+
+def test_new_codec_benchmarks(benchmark: dict[str, Any]) -> None:
+    comparisons = benchmark["codec_comparisons"]((32, 24), skip_jxl=True)
+    names = {name for name, _, _ in comparisons}
+    for mode in ("L", "RGB", "RGBA"):
+        for action in ("load", "save"):
+            assert f"{action} TIFF {mode}" in names
+            for setting in ("lossless", "q=50", "q=85", "q=95"):
+                assert f"{action} WEBP {mode} {setting}" in names
+    assert {"load DNG LinearRaw", "load DNG CFA"} <= names
+    assert not any("SVG" in name for name in names)
+    for name, blanket, pillow in comparisons:
+        if not any(fmt in name for fmt in ("TIFF", "WEBP", "DNG")):
+            continue
+        result = blanket()
+        if name.startswith("load"):
+            assert result.size == (32, 24)
+        if "DNG" in name:
+            assert pillow is None
+        else:
+            assert pillow is not None
+            pillow()
+
+
+@pytest.mark.parametrize("cfa", [False, True])
+def test_benchmark_dng_dimensions(benchmark: dict[str, Any], cfa: bool) -> None:
+    payload = benchmark["make_dng"]((32, 24), cfa=cfa)
+    result = Image.open(BytesIO(payload))
+    assert (result.format, result.mode, result.size) == ("DNG", "RGB", (32, 24))
+
+
+def test_jxl_only_excludes_other_codecs(benchmark: dict[str, Any]) -> None:
+    comparisons = benchmark["codec_comparisons"]((32, 24), skip_jxl=False, jxl_only=True)
+    assert comparisons
+    assert all("JXL" in name for name, _, _ in comparisons)

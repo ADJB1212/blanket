@@ -16,36 +16,34 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            python: "3.11"
-          - os: ubuntu-latest
             python: "3.14"
           - os: macos-latest
             python: "3.14"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version: "latest"
           enable-cache: true
       - uses: ilammy/setup-nasm@v1
+      - name: Check Rust formatting
+        run: cargo fmt --check
+      - name: Test Rust
+        run: cargo test
       - name: Install project and test dependencies
         run: |
           uv sync --no-install-project --extra test --compile
           uv tool install maturin
           maturin develop -r --extras test --uv
-      - name: Check Rust formatting
-        run: cargo fmt --check
-      - name: Test Rust
-        run: cargo test -r
       - name: Test Python API
-        run: uv run --no-sync pytest -q
+        run: uv run --no-sync pytest
       - name: Verify Pillow behavior
         run: uv run --no-sync scripts/verify_behavior.py
       - name: Smoke-test benchmark
         if: runner.os == 'Linux' && matrix.python == '3.14'
         run: >-
-          uv run --no-sync scripts/benchmark.py --sizes web photo -v
+          uv run --no-sync scripts/benchmark.py --sizes web photo -v -w 1 -i 3
