@@ -18,14 +18,19 @@ permissions:
 
 jobs:
   test:
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             python: "3.14"
+            cpu: x86-64-v2
+            features: vendored,extension-module,x86-simd
           - os: macos-latest
             python: "3.14"
+            cpu: apple-m1
+            features: vendored,extension-module,neon
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -40,10 +45,12 @@ jobs:
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Install project and test dependencies
+        env:
+          RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }}"
         run: |
           uv sync --no-install-project --extra test --compile
           uv tool install maturin
-          maturin develop -r --extras test --uv
+          maturin develop -r --extras test --uv -F ${{ matrix.features }}"
       - name: Test Python API
         run: uv run --no-sync pytest
       - name: Verify Pillow behavior

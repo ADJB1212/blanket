@@ -21,11 +21,16 @@ permissions:
 
 jobs:
   linux:
+    timeout-minutes: 40
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [x86_64, x86_64-unknown-linux-musl]
+        include:
+          - target: x86_64
+            cpu: x86-64-v2
+          - target: x86_64-unknown-linux-musl
+            cpu: x86-64-v2
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -40,6 +45,8 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C target-cpu=${{ matrix.cpu }}"
         with:
           command: build
           target: ${{ matrix.target }}
@@ -56,14 +63,16 @@ jobs:
           path: dist/*.whl
 
   macos:
+    timeout-minutes: 40
     env:
       MACOSX_DEPLOYMENT_TARGET: "15.0"
-      RUSTFLAGS: "-C target-cpu=apple-m1"
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [aarch64]
+        include:
+          - target: aarch64
+            cpu: apple-m1
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -78,6 +87,8 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }} -C link-arg=-fuse-ld=lld"
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features vendored,extension-module,neon -i python3.14 --strip
@@ -87,11 +98,14 @@ jobs:
           path: dist/*.whl
 
   windows:
+    timeout-minutes: 40
     runs-on: windows-latest
     strategy:
       fail-fast: false
       matrix:
-        target: [x64]
+        include:
+          - target: x64
+            cpu: x86-64-v2
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -107,6 +121,8 @@ jobs:
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
+        env:
+          RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }}"
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features vendored,extension-module,x86-simd -i python3.14 --strip
@@ -116,6 +132,7 @@ jobs:
           path: dist/*.whl
 
   sdist:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
