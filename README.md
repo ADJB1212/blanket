@@ -3,7 +3,8 @@
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
 converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
-JPEG XL, TIFF, and WebP files, plus developing DNG files.
+JPEG XL, TIFF, WebP, and HEIC/HEIF files, plus developing DNG files.
+High-bit-depth images retain their samples when opened and saved.
 
 ```python
 from blanket import Image
@@ -22,7 +23,10 @@ installed.
 8-bit array-interface objects with grayscale, RGB, or RGBA shapes, including
 strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
 path extension, or accepts an explicit format for streams. TIFF (`.tif`/`.tiff`)
-and WebP (`.webp`) also support opening and saving. DNG supports opening:
+and WebP (`.webp`) also support opening and saving. HEIC/HEIF (`.heic`/`.heif`)
+supports opening and saving HEVC images; both format names report `image.format == "HEIF"`.
+HEIF opens the primary image and applies container rotations and crops.
+DNG supports opening:
 DNG raw data develops to 8-bit RGB. DNG rendering applies raw development,
 so its appearance can differ from the camera's embedded preview.
 Only the first image/frame is opened for TIFF and WebP; animation and multipage
@@ -74,8 +78,48 @@ Supported encoder options are:
 - JPEG: `quality=1..100` (default `75`)
 - JPEG XL: `quality=1..100` (default `90`), `lossless=True|False`, and
   `effort=1..10` (default `7`)
+- HEIF: `quality=1..100` (default `90`), `lossless=True|False` (default `False`).
+  Grayscale is stored as RGB. Lossless selects lossless HEVC compression;
+  RGB/YUV conversion can still change sample values.
 
 JPEG does not accept `RGBA`; call `image.convert("RGB")` before saving.
+
+## High-bit-depth images
+
+`image.bit_depth` reports 8, 10, 12, or 16 significant bits per channel.
+Modes remain `L`, `RGB`, and `RGBA`; 10-bit samples range from 0 to 1023.
+`getpixel()` returns these full values, and `tobytes()` uses tightly packed,
+little-endian unsigned 16-bit samples for depths above 8.
+
+```python
+import numpy as np
+from blanket import Image
+
+samples = np.full((64, 64, 3), 713, dtype=np.uint16)
+image = Image.fromarray(samples, bit_depth=10)
+image.save("photo.heic", quality=95)
+image.save("exact.png")
+assert Image.open("exact.png").getpixel((0, 0)) == (713, 713, 713)
+image.convert("RGB", bit_depth=8).save("preview.jpg")
+```
+
+`fromarray()` accepts uint16 arrays (including strided and big-endian arrays),
+defaulting to 16 bits; specify `bit_depth=10` for unscaled 10-bit samples.
+`frombytes(..., bit_depth=10)` accepts little-endian uint16 data.
+Values outside the selected range are rejected.
+
+HEIF retains the source 8-, 10-, or 12-bit depth. PNG stores high-bit-depth
+pixels in 16-bit channels with an `sBIT` chunk so Blanket can recover the
+original depth and exact samples. TIFF and JPEG XL use normalized 16-bit
+channels; convert back to the desired depth to recover the original range.
+High-bit-depth PNG, TIFF, and integer JPEG XL inputs are never reduced to 8 bits.
+
+Copy, conversion, pixel access, channel splitting, crop, transpose, and all six
+resize filters preserve high-bit-depth samples. Other processing operations,
+JPEG/WebP saving, and `to_pillow()` require an explicit conversion to 8 bits
+and raise an error instead of silently discarding precision. DNG development
+continues to produce 8-bit RGB. Retaining sample precision does not implement
+HDR tone mapping or retain HEIF HDR/ICC metadata.
 
 ## ImageOps
 
@@ -216,7 +260,11 @@ image core. Pillow is not a Blanket runtime dependency.
 ## Development
 
 JPEG XL encoding statically builds libjxl. Install Rust, CMake, Ninja, and a
-C++ compiler before building.
+C++ compiler before building. HEIF requires system libheif 1.17+ with an HEVC
+decoder (libde265) and encoder (x265). On macOS use `brew install libheif`;
+on Ubuntu install `libheif-dev`, `libheif-plugin-libde265`, and
+`libheif-plugin-x265`. The libheif shared library and codec plugins must also
+be available at runtime. Pillow and pillow-heif are test dependencies only.
 
 ```console
 uv sync --extra test

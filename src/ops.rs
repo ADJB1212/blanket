@@ -46,6 +46,16 @@ fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
 }
 
 fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
+    if image.bit_depth > 8 {
+        return Image::from_samples(
+            size.0,
+            size.1,
+            image.mode,
+            pixels.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect(),
+            image.bit_depth,
+            None,
+        );
+    }
     let mut result = Image::from_pixels(size.0, size.1, image.mode, pixels, None)?;
     result.palette = image.palette.clone();
     Ok(result)
@@ -83,6 +93,20 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
 
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
+    if image.bit_depth > 8 {
+        let source = image.raw_data()?;
+        return py.detach(|| {
+            (0..image.mode.channels())
+                .map(|channel| {
+                    let samples = source
+                        .chunks_exact(image.mode.channels() * 2)
+                        .map(|v| u16::from_le_bytes([v[channel * 2], v[channel * 2 + 1]]))
+                        .collect();
+                    Image::from_samples(image.width, image.height, PixelMode::L, samples, image.bit_depth, None)
+                })
+                .collect()
+        });
+    }
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
     if channels == 1 {
@@ -254,11 +278,19 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 /// Place the source on a filled canvas. Negative offsets clip the source.
 #[pyfunction]
 fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<u8>) -> PyResult<Image> {
-    let source = image.pixel_data()?;
-    let channels = image.mode.channels();
-    if fill.len() != channels {
+    let source = image.raw_data()?;
+    if fill.len() != image.mode.channels() {
         return Err(PyValueError::new_err("invalid fill color"));
     }
+    let fill = if image.bit_depth > 8 {
+        let maximum = (1_u32 << image.bit_depth) - 1;
+        fill.into_iter()
+            .flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes())
+            .collect()
+    } else {
+        fill
+    };
+    let channels = image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
     if offset.0 <= 0
         && offset.1 <= 0
         && offset.0.saturating_add(i64::from(image.width)) >= i64::from(size.0)
@@ -305,7 +337,7 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
 /// EXIF orientation numbers also describe all eight rectangular symmetries.
 #[pyfunction]
 fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Image> {
-    let source = image.pixel_data()?;
+    let source = image.raw_data()?;
     if !(1..=8).contains(&orientation) {
         return Err(PyValueError::new_err("invalid orientation"));
     }
@@ -317,7 +349,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     } else {
         (image.width, image.height)
     };
-    let c = image.mode.channels();
+    let c = image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
     if orientation == 4 {
         let mut pixels = reserved_buffer(size, c)?;
         py.detach(|| {
@@ -330,6 +362,14 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         return output(image, size, pixels);
     }
     let mut pixels = buffer(size, c)?;
+    if image.bit_depth > 8 {
+        py.detach(|| match image.mode {
+            PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::Rgb => transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::Rgba => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        });
+        return output(image, size, pixels);
+    }
     py.detach(|| match image.mode {
         PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
         PixelMode::Rgb => transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
@@ -596,7 +636,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
 
 #[pyfunction]
 fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF) -> PyResult<Image> {
-    let source = image.pixel_data()?;
+    let source = image.raw_data()?;
     if method > 5 {
         return Err(PyValueError::new_err("unknown resampling filter"));
     }
@@ -614,6 +654,9 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
         || b[3] < b[1]
     {
         return Err(PyValueError::new_err("invalid resize box"));
+    }
+    if image.bit_depth > 8 {
+        return py.detach(|| resize_wide(image, size, b, method));
     }
     // Pillow resamples very tall images vertically first to limit temporary
     // storage. Pass order affects 8-bit rounding, so retain it as well.
@@ -669,6 +712,88 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
 
 // Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
 // for every output pixel. Repeated source rows only need one gather per band.
+fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+    let channels = image.mode.channels();
+    let bytes = image.raw_data()?;
+    let mut pixels = buffer(size, channels * 2)?;
+    if image.width == 0 || image.height == 0 {
+        return output(image, size, pixels);
+    }
+    if method == 0 {
+        let xs: Vec<usize> = (0..size.0)
+            .map(|x| ((bounds[0] + (f64::from(x) + 0.5) * (bounds[2] - bounds[0]) / f64::from(size.0)) as usize).min(image.width as usize - 1))
+            .collect();
+        let ys: Vec<usize> = (0..size.1)
+            .map(|y| ((bounds[1] + (f64::from(y) + 0.5) * (bounds[3] - bounds[1]) / f64::from(size.1)) as usize).min(image.height as usize - 1))
+            .collect();
+        match image.mode {
+            PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgb => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgba => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
+        }
+        return output(image, size, pixels);
+    }
+    let maximum = f64::from((1_u32 << image.bit_depth) - 1);
+    let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
+    let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
+    let first = vertical.first().unwrap().0;
+    let (last, tail) = vertical.last().unwrap();
+    let rows = last + tail.len() - first;
+    let stride = size.0 as usize * channels;
+    let length = rows
+        .checked_mul(stride)
+        .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    let mut temp = Vec::new();
+    temp.try_reserve_exact(length)
+        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    temp.resize(length, 0.0);
+    let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
+    for y in 0..rows {
+        for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+            for channel in 0..channels {
+                let value = coefficients
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &weight)| {
+                        let offset = ((y + first) * image.width as usize + start + i) * channels;
+                        let value = sample(offset + channel);
+                        let value = if channels == 4 && channel < 3 {
+                            value * sample(offset + 3) / maximum
+                        } else {
+                            value
+                        };
+                        value * f64::from(weight) / f64::from(1 << 22)
+                    })
+                    .sum::<f64>();
+                temp[y * stride + x * channels + channel] = value;
+            }
+        }
+    }
+    for (y, (start, coefficients)) in vertical.iter().enumerate() {
+        for x in 0..size.0 as usize {
+            let mut values = [0.0; 4];
+            for (channel, value) in values.iter_mut().enumerate().take(channels) {
+                *value = coefficients
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &weight)| temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(1 << 22))
+                    .sum::<f64>()
+                    .clamp(0.0, maximum);
+            }
+            for channel in 0..channels {
+                let value = if channels == 4 && channel < 3 {
+                    if values[3] > 0.0 { values[channel] * maximum / values[3] } else { 0.0 }
+                } else {
+                    values[channel]
+                };
+                let offset = (y * stride + x * channels + channel) * 2;
+                pixels[offset..offset + 2].copy_from_slice(&(value.round().clamp(0.0, maximum) as u16).to_le_bytes());
+            }
+        }
+    }
+    output(image, size, pixels)
+}
+
 fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize]) {
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);

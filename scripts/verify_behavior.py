@@ -385,9 +385,40 @@ def check_imagefilter() -> int:
     return checks
 
 
+def check_heif_and_high_depth() -> int:
+    """Check an independent HEIF implementation and exact 10-bit PNG storage."""
+    import pillow_heif
+
+    checks = 0
+    for channels in (3, 4):
+        samples = (np.arange(32 * 32 * channels, dtype=np.uint16) % 1024).reshape(32, 32, channels)
+        image = BlanketImage.fromarray(samples, bit_depth=10)
+        output = BytesIO()
+        image.save(output, "PNG")
+        result = BlanketImage.open(output)
+        assert result.bit_depth == 10 and result.tobytes() == image.tobytes()
+        checks += 1
+        output = BytesIO()
+        image.save(output, "HEIC", quality=95)
+        result = BlanketImage.open(output)
+        expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
+        assert result.bit_depth == 10
+        assert result.tobytes() == expected.astype("<u2").tobytes()
+        checks += 1
+        external = pillow_heif.from_bytes("RGB;16" if channels == 3 else "RGBA;16", (32, 32), (samples << 6).tobytes())
+        output = BytesIO()
+        external.save(output, bit_depth=10, quality=95)
+        expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
+        result = BlanketImage.open(output)
+        assert result.bit_depth == 10 and result.tobytes() == expected.astype("<u2").tobytes()
+        checks += 1
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
+    checks += check_heif_and_high_depth()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()

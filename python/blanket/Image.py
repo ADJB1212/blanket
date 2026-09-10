@@ -22,6 +22,7 @@ from ._blanket import frombytes as _native_frombytes
 _EXTENSIONS = {
     ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL",
     ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP",
+    ".heic": "HEIF", ".heif": "HEIF",
 }
 
 
@@ -99,7 +100,7 @@ class ImageTransformHandler:
 
 
 class Image:
-    """An 8-bit image whose pixels and supported operations live in Rust."""
+    """An image whose pixels and supported operations live in Rust."""
 
     def __init__(self, native: _Image) -> None:
         self._native = native
@@ -115,6 +116,11 @@ class Image:
     @property
     def mode(self) -> str:
         return self._native.mode
+
+    @property
+    def bit_depth(self) -> int:
+        """Significant bits per channel (8, 10, 12, or 16)."""
+        return self._native.bit_depth
 
     @property
     def size(self) -> tuple[int, int]:
@@ -155,13 +161,13 @@ class Image:
     def close(self) -> None:
         self._native.close()
 
-    def convert(self, mode: str) -> Image:
+    def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
         """Return a new image converted to `L`, `RGB`, or `RGBA`."""
 
         if mode == "P" and self.mode != "P":
             return self.quantize()
         self._sync_palette()
-        result = Image(self._native.convert(mode))
+        result = Image(self._native.convert(mode, bit_depth))
         result.info.update(self.info)
         return result
 
@@ -517,6 +523,9 @@ class Image:
     def to_pillow(self) -> object:
         """Return an equivalent Pillow image when Pillow is installed."""
 
+        if self.bit_depth != 8:
+            raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
+
         try:
             from PIL import Image as PillowImage
         except ImportError as error:
@@ -528,7 +537,7 @@ class Image:
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
-        """Save this image as PNG, JPEG, JPEG XL, TIFF, or WebP."""
+        """Save this image as PNG, JPEG, JPEG XL, TIFF, WebP, or HEIF."""
 
         output_format = _output_format(fp, format)
         self._sync_palette()
@@ -564,23 +573,23 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     return image
 
 
-def frombytes(mode: str, size: tuple[int, int], data: object) -> Image:
-    """Create an image from tightly packed 8-bit pixel data."""
+def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int = 8) -> Image:
+    """Create an image from packed pixels; depths above 8 use little-endian uint16."""
 
     try:
         raw = bytes(data)  # type: ignore[arg-type]
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
-    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw))
+    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth))
     if mode == "P":
         result.putpalette(bytes(v for v in range(256) for _ in range(3)))
     return result
 
 
-def fromarray(obj: object, mode: str | None = None) -> Image:
-    """Create an image from an 8-bit object exposing the array interface."""
+def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
+    """Create an image from uint8 or uint16 samples exposing the array interface."""
 
-    return Image(_native_fromarray(obj, mode))
+    return Image(_native_fromarray(obj, mode, bit_depth))
 
 
 def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
@@ -608,9 +617,9 @@ def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binar
 def _output_format(fp: object, requested: str | None) -> str:
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
-        aliases = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF"}
+        aliases = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF"}
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP"}:
+        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP", "HEIF"}:
             raise ValueError(f"unsupported image format {requested!r}")
         return normalized
     if hasattr(fp, "write"):
@@ -629,6 +638,7 @@ def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]
         "JXL": {"quality", "lossless", "effort"},
         "TIFF": set(),
         "WEBP": {"quality", "lossless"},
+        "HEIF": {"quality", "lossless"},
     }[format]
     unknown = supplied.keys() - allowed
     if unknown:

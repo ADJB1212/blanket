@@ -66,6 +66,7 @@ pub(crate) enum ImageFormat {
     Tiff,
     Webp,
     Dng,
+    Heif,
 }
 
 impl ImageFormat {
@@ -74,11 +75,12 @@ impl ImageFormat {
             "TIFF" | "TIF" => Ok(Self::Tiff),
             "WEBP" => Ok(Self::Webp),
             "DNG" => Ok(Self::Dng),
+            "HEIF" | "HEIC" => Ok(Self::Heif),
             "PNG" => Ok(Self::Png),
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, or DNG"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, or HEIF"
             ))),
         }
     }
@@ -88,6 +90,7 @@ impl ImageFormat {
             Self::Tiff => "TIFF",
             Self::Webp => "WEBP",
             Self::Dng => "DNG",
+            Self::Heif => "HEIF",
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
             Self::Jxl => "JXL",
@@ -105,6 +108,8 @@ impl ImageFormat {
             Some(if is_dng(data) { Self::Dng } else { Self::Tiff })
         } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
             Some(Self::Webp)
+        } else if is_heif(data) {
+            Some(Self::Heif)
         } else {
             None
         }
@@ -143,6 +148,7 @@ fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
         ImageFormat::Webp => decode_webp(data),
         ImageFormat::Dng => decode_dng(data),
+        ImageFormat::Heif => decode_heif(data),
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
@@ -235,6 +241,28 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
     let color = decoder.color_type();
     let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
     let (width, height) = (image.width(), image.height());
+    if matches!(color, ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16) {
+        let (mode, mut samples) = match color {
+            ColorType::L16 => (PixelMode::L, image.into_luma16().into_raw()),
+            ColorType::Rgb16 => (PixelMode::Rgb, image.into_rgb16().into_raw()),
+            _ => (PixelMode::Rgba, image.into_rgba16().into_raw()),
+        };
+        let mut depth = 16;
+        if format == RustFormat::Png {
+            let reader = png::Decoder::new(Cursor::new(data)).read_info().map_err(|e| e.to_string())?;
+            if let Some(bits) = reader.info().sbit.as_deref()
+                && bits.len() == mode.channels()
+                && matches!(bits[0], 10 | 12)
+                && bits.iter().all(|&b| b == bits[0])
+            {
+                depth = bits[0];
+                for sample in &mut samples {
+                    *sample >>= 16 - depth;
+                }
+            }
+        }
+        return Image::from_samples(width, height, mode, samples, depth, Some(format_name.into())).map_err(|e| e.to_string());
+    }
     let (mode, pixels) = match color {
         ColorType::L8 | ColorType::L16 => (PixelMode::L, image.into_luma8().into_raw()),
         ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => (PixelMode::Rgb, image.into_rgb8().into_raw()),
@@ -303,9 +331,32 @@ fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| {
         let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
         let decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
-        decoder.decode_with::<u8>(data).map_err(|error| error.to_string())
+        decoder.decode(data).map_err(|error| error.to_string())
     })?;
     validate_dimensions(info.width, info.height)?;
+
+    let pixels = match pixels {
+        jpegxl_rs::decode::Pixels::Uint8(pixels) => pixels,
+        jpegxl_rs::decode::Pixels::Uint16(pixels) => {
+            let (mode, samples) = match (info.num_color_channels, info.has_alpha_channel) {
+                (1, false) => (PixelMode::L, pixels),
+                (3, false) => (PixelMode::Rgb, pixels),
+                (3, true) => (PixelMode::Rgba, pixels),
+                (1, true) => (
+                    PixelMode::Rgba,
+                    pixels.as_chunks::<2>().0.iter().flat_map(|v| [v[0], v[0], v[0], v[1]]).collect(),
+                ),
+                _ => return Err("unsupported JPEG XL channel layout".into()),
+            };
+            return Image::from_samples(info.width, info.height, mode, samples, 16, Some("JXL".into())).map_err(|e| e.to_string());
+        }
+        // Retain the existing display conversion for floating-point inputs.
+        _ => JXL_DECODE_RUNNER.with(|runner| {
+            let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
+            let decoder = decoder_builder().parallel_runner(runner).build().map_err(|e| e.to_string())?;
+            decoder.decode_with::<u8>(data).map(|(_, pixels)| pixels).map_err(|e| e.to_string())
+        })?,
+    };
 
     let (mode, pixels) = match (info.num_color_channels, info.has_alpha_channel) {
         (1, false) => (PixelMode::L, pixels),
@@ -330,9 +381,16 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
 }
 
 pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if format == ImageFormat::Heif {
+        return encode_heif(image, options);
+    }
+    if image.bit_depth > 8 {
+        return encode_wide(image, format, options);
+    }
     let pixels = image.pixel_data()?;
     match format {
         ImageFormat::Dng => Err(PyValueError::new_err("DNG is a read-only format")),
+        ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => {
             let mut output = Cursor::new(Vec::new());
             image::codecs::tiff::TiffEncoder::new(&mut output)
@@ -460,6 +518,199 @@ fn codec_error(error: impl std::fmt::Display) -> PyErr {
     PyOSError::new_err(error.to_string())
 }
 
+fn is_heif(data: &[u8]) -> bool {
+    if data.get(4..8) != Some(b"ftyp") || data.len() < 16 {
+        return false;
+    }
+    let size = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
+    if size < 16 || size > data.len() || !size.is_multiple_of(4) {
+        return false;
+    }
+    let brands = std::iter::once(&data[8..12]).chain(data[16..size].as_chunks::<4>().0.iter().map(|v| v.as_slice()));
+    brands.into_iter().any(|brand| {
+        matches!(
+            brand,
+            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"
+        )
+    })
+}
+
+fn decode_heif(data: &[u8]) -> Result<Image, String> {
+    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
+    let lib = LibHeif::new();
+    let context = HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
+    let handle = context.primary_image_handle().map_err(|e| e.to_string())?;
+    validate_dimensions(handle.width(), handle.height())?;
+    let depth = handle.luma_bits_per_pixel();
+    if !matches!(depth, 8 | 10 | 12 | 16) {
+        return Err(format!("unsupported HEIF bit depth: {depth}"));
+    }
+    let alpha = handle.has_alpha_channel();
+    let chroma = match (depth > 8, alpha) {
+        (false, false) => RgbChroma::Rgb,
+        (false, true) => RgbChroma::Rgba,
+        (true, false) => RgbChroma::HdrRgbLe,
+        (true, true) => RgbChroma::HdrRgbaLe,
+    };
+    let decoded = lib.decode(&handle, ColorSpace::Rgb(chroma), None).map_err(|e| e.to_string())?;
+    validate_dimensions(decoded.width(), decoded.height())?;
+    let mode = if alpha { PixelMode::Rgba } else { PixelMode::Rgb };
+    let plane = decoded.planes().interleaved.ok_or("missing HEIF pixel plane")?;
+    let row = decoded.width() as usize * mode.channels() * if depth > 8 { 2 } else { 1 };
+    if row > plane.stride {
+        return Err("invalid HEIF row stride".into());
+    }
+    let pixels: Vec<u8> = plane
+        .data
+        .chunks_exact(plane.stride)
+        .take(decoded.height() as usize)
+        .flat_map(|v| v[..row].iter().copied())
+        .collect();
+    if depth == 8 {
+        Image::from_pixels(decoded.width(), decoded.height(), mode, pixels, Some("HEIF".into()))
+    } else {
+        Image::from_samples(
+            decoded.width(),
+            decoded.height(),
+            mode,
+            pixels.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect(),
+            depth,
+            Some("HEIF".into()),
+        )
+    }
+    .map_err(|e| e.to_string())
+}
+
+fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
+    use libheif_rs::{Channel, ColorSpace, CompressionFormat, EncoderQuality, HeifContext, LibHeif, RgbChroma};
+    let pixels = image.raw_data()?;
+    if image.width == 0 || image.height == 0 {
+        return Err(PyValueError::new_err("cannot encode empty HEIF image"));
+    }
+    if !matches!(image.bit_depth, 8 | 10 | 12) {
+        return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
+    }
+    let lib = LibHeif::new();
+    let mut encoder = lib.encoder_for_format(CompressionFormat::Hevc).map_err(codec_error)?;
+    encoder
+        .set_quality(if options.lossless {
+            EncoderQuality::LossLess
+        } else {
+            EncoderQuality::Lossy(options.quality)
+        })
+        .map_err(codec_error)?;
+    let chroma = match (image.bit_depth > 8, image.mode == PixelMode::Rgba) {
+        (false, false) => RgbChroma::Rgb,
+        (false, true) => RgbChroma::Rgba,
+        (true, false) => RgbChroma::HdrRgbLe,
+        (true, true) => RgbChroma::HdrRgbaLe,
+    };
+    let mut native = libheif_rs::Image::new(image.width, image.height, ColorSpace::Rgb(chroma)).map_err(codec_error)?;
+    native
+        .create_plane(Channel::Interleaved, image.width, image.height, image.bit_depth)
+        .map_err(codec_error)?;
+    let expanded;
+    let bytes = if image.mode == PixelMode::L {
+        let size = if image.bit_depth > 8 { 2 } else { 1 };
+        expanded = pixels
+            .chunks_exact(size)
+            .flat_map(|v| v.iter().copied().cycle().take(size * 3))
+            .collect::<Vec<_>>();
+        &expanded
+    } else {
+        pixels
+    };
+    let channels = if image.mode == PixelMode::Rgba { 4 } else { 3 };
+    let row = image.width as usize * channels * if image.bit_depth > 8 { 2 } else { 1 };
+    let plane = native
+        .planes_mut()
+        .interleaved
+        .ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
+    for (source, target) in bytes.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
+        target[..row].copy_from_slice(source);
+    }
+    let mut context = HeifContext::new().map_err(codec_error)?;
+    context.encode_image(&native, &mut encoder, None).map_err(codec_error)?;
+    context.write_to_bytes().map_err(codec_error)
+}
+
+fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    let pixels = image.raw_data()?;
+    if !matches!(format, ImageFormat::Png | ImageFormat::Tiff | ImageFormat::Jxl) {
+        return Err(PyValueError::new_err(
+            "high-bit-depth saving supports HEIF, PNG, TIFF, or JXL; convert to bit_depth=8 explicitly for this format",
+        ));
+    }
+    let maximum = (1_u32 << image.bit_depth) - 1;
+    let samples: Vec<u16> = pixels
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|v| ((u32::from(u16::from_le_bytes([v[0], v[1]])) * 65535 + maximum / 2) / maximum) as u16)
+        .collect();
+    if format == ImageFormat::Jxl {
+        return JXL_ENCODE_RUNNER.with(|runner| {
+            let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+            let mut encoder = encoder_builder()
+                .parallel_runner(runner)
+                .has_alpha(image.mode == PixelMode::Rgba)
+                .lossless(options.lossless)
+                .speed(jxl_encoder_speed(options.effort)?)
+                .decoding_speed(0)
+                .use_container(false)
+                .jpeg_quality(f32::from(options.quality))
+                .uses_original_profile(options.lossless || options.quality == 100)
+                .color_encoding(if image.mode == PixelMode::L {
+                    ColorEncoding::SrgbLuma
+                } else {
+                    ColorEncoding::Srgb
+                })
+                .build()
+                .map_err(codec_error)?;
+            let frame = EncoderFrame::new(&samples).num_channels(image.mode.channels() as u32);
+            let encoded: EncoderResult<u16> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
+            Ok(encoded.data)
+        });
+    }
+    if format == ImageFormat::Tiff {
+        let data: Vec<u8> = samples.into_iter().flat_map(u16::to_ne_bytes).collect();
+        let color = match image.mode {
+            PixelMode::L => ExtendedColorType::L16,
+            PixelMode::Rgb => ExtendedColorType::Rgb16,
+            PixelMode::Rgba => ExtendedColorType::Rgba16,
+        };
+        let mut output = Cursor::new(Vec::new());
+        image::codecs::tiff::TiffEncoder::new(&mut output)
+            .write_image(&data, image.width, image.height, color)
+            .map_err(codec_error)?;
+        return Ok(output.into_inner());
+    }
+    let mut output = Vec::new();
+    {
+        let mut info = png::Info::with_size(image.width, image.height);
+        info.bit_depth = png::BitDepth::Sixteen;
+        info.color_type = match image.mode {
+            PixelMode::L => png::ColorType::Grayscale,
+            PixelMode::Rgb => png::ColorType::Rgb,
+            PixelMode::Rgba => png::ColorType::Rgba,
+        };
+        let mut encoder = png::Encoder::with_info(&mut output, info).map_err(codec_error)?;
+        encoder.set_deflate_compression(if options.compress_level == 0 {
+            png::DeflateCompression::NoCompression
+        } else {
+            png::DeflateCompression::Level(options.compress_level)
+        });
+        let mut writer = encoder.write_header().map_err(codec_error)?;
+        writer
+            .write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()])
+            .map_err(codec_error)?;
+        writer
+            .write_image_data(&samples.into_iter().flat_map(u16::to_be_bytes).collect::<Vec<_>>())
+            .map_err(codec_error)?;
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -470,6 +721,9 @@ mod tests {
         assert_eq!(ImageFormat::detect(&[0xff, 0xd8, 0xff]), Some(ImageFormat::Jpeg));
         assert_eq!(ImageFormat::detect(&[0xff, 0x0a]), Some(ImageFormat::Jxl));
         assert_eq!(ImageFormat::detect(b"not an image"), None);
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x14ftypxxxx\0\0\0\0heix"), Some(ImageFormat::Heif));
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x10ftypheic\0\0\0\0"), Some(ImageFormat::Heif));
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x20ftypheic\0\0\0\0"), None);
     }
 
     #[test]

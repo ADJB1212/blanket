@@ -42,6 +42,8 @@ jobs:
           enable-cache: true
       - name: Install Python from uv
         run: uv python install 3.14
+      - name: Install HEIF codecs (Linux)
+        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -56,6 +58,7 @@ jobs:
             --features vendored,extension-module,x86-simd
             -i python3.14
             --strip
+            --auditwheel=repair
           manylinux: auto
       - uses: actions/upload-artifact@v7
         with:
@@ -84,6 +87,8 @@ jobs:
           enable-cache: true
       - name: Install Python from uv
         run: uv python install 3.14
+      - name: Install HEIF codecs (macOS)
+        run: brew install libheif
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
@@ -91,7 +96,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }} -C link-arg=-fuse-ld=lld"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features vendored,extension-module,neon -i python3.14 --strip
+          args: --release --out dist --features vendored,extension-module,neon -i python3.14 --strip --auditwheel=repair
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.target }}
@@ -125,7 +130,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }}"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features vendored,extension-module,x86-simd -i python3.14 --strip
+          args: --release --out dist --features vendored,extension-module,x86-simd -i python3.14 --strip --auditwheel=repair
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.target }}
