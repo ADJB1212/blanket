@@ -6,6 +6,13 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  RUSTUP_TERM_PROGRESS_WHEN: "never"
+  UV_LINK_MODE: "copy"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+  MACOSX_DEPLOYMENT_TARGET: "15.0"
+
 permissions:
   contents: read
 

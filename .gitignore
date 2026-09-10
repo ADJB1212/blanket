@@ -30,6 +30,7 @@ venv/
 *.egg
 uv.lock
 Cargo.lock
+build_x86.sh
 
 # Installer logs
 pip-log.txt
