@@ -16,13 +16,13 @@ crate-type = ["cdylib"]
 [dependencies]
 png = "0.18"
 garb = "0.2"
-pyo3 = "0.29"
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
 rayon = "1.12"
 image = { version = "0.25", default-features = false, features = ["png", "rayon", "tiff", "webp"] }
 rawler = "0.8"
 webpx = "0.4"
-libwebp-sys = { version = "0.14", features = ["avx2", "sse41", "neon", "parallel"] }
-jpegxl-rs = { version = "0.15.0", default-features = false }
+libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel"] }
+jpegxl-rs = { version = "0.15", default-features = false }
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
 
 [features]
@@ -30,6 +30,8 @@ default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
 dynamic = []
 extension-module = ["pyo3/extension-module"]
+neon = ["libwebp-sys/neon"]
+x86-simd = ["libwebp-sys/avx2", "libwebp-sys/sse41"]
 
 [build-dependencies]
 rustc_version = "0.4"
