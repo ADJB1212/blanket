@@ -4,7 +4,7 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::borrow::Cow;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above};
+use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use crate::raster::{Image, PixelMode};
 
 type BoxI = (i64, i64, i64, i64);
@@ -58,7 +58,7 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
     if len == 0 {
         return;
     }
-    if len < 4 * 1024 * 1024 {
+    if !should_parallel(len, row_bytes.saturating_mul(32), 4 * 1024 * 1024) {
         for y in 0..height {
             pixels.extend_from_slice(source_row(y));
         }
@@ -108,7 +108,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         let [red, green, blue, rest @ ..] = bands.as_mut_slice() else {
             unreachable!()
         };
-        if source.len() < 2 * 1024 * 1024 {
+        if !should_parallel(source.len(), CHUNK_PIXELS * channels, 2 * 1024 * 1024) {
             split(0, red, green, blue, rest.first_mut().map(Vec::as_mut_slice));
         } else if let Some(alpha) = rest.first_mut() {
             red.par_chunks_mut(CHUNK_PIXELS)
@@ -233,7 +233,7 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         }
         bins
     };
-    if source.len() < MIN_PARALLEL_BYTES {
+    if !should_parallel(source.len(), CHUNK_PIXELS * C, MIN_PARALLEL_BYTES) {
         return count(0, source);
     }
     source

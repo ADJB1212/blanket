@@ -8,7 +8,7 @@ use rayon::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut};
+use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use crate::quantize_simd::PaletteSearch;
 use crate::raster::{Image, PixelMode};
 
@@ -109,7 +109,7 @@ fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
         }
         counts
     };
-    let counts = if pixels.len() >= MIN_PARALLEL_BYTES {
+    let counts = if should_parallel(pixels.len(), CHUNK_PIXELS * 4, MIN_PARALLEL_BYTES) {
         pixels.par_chunks(CHUNK_PIXELS * 4).map(count).reduce(ColorMap::default, |mut a, mut b| {
             if a.len() < b.len() {
                 std::mem::swap(&mut a, &mut b);
@@ -267,7 +267,7 @@ fn maximum_coverage(histogram: &Histogram, colors: usize) -> Vec<Color> {
             best
         };
         let later = |a: (u32, usize), b: (u32, usize)| if b.0 > a.0 || (b.0 == a.0 && b.1 > a.1) { b } else { a };
-        let (d, i) = if histogram.len() >= CHUNK_PIXELS {
+        let (d, i) = if should_parallel(histogram.len(), CHUNK_PIXELS, CHUNK_PIXELS) {
             distances
                 .par_chunks_mut(CHUNK_PIXELS)
                 .zip(histogram.par_chunks(CHUNK_PIXELS))
@@ -402,7 +402,7 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
         }
         cube
     };
-    let fine = if pixels.len() >= MIN_PARALLEL_BYTES {
+    let fine = if should_parallel(pixels.len(), CHUNK_PIXELS * 16, MIN_PARALLEL_BYTES) {
         pixels.par_chunks(CHUNK_PIXELS * 16).map(accumulate).reduce(
             || Cube::new(fine_bits),
             |mut a, b| {
@@ -465,7 +465,7 @@ fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
     loop {
         let search = PaletteSearch::new(palette);
         let nearest = |(color, _): &(Color, u64)| search.nearest(*color);
-        let assignments: Vec<usize> = if histogram.len() >= CHUNK_PIXELS {
+        let assignments: Vec<usize> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
             histogram.par_iter().map(nearest).collect()
         } else {
             histogram.iter().map(nearest).collect()
@@ -507,7 +507,7 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
     }
     let search = PaletteSearch::new(&entries);
     let entry = |(color, _): &(Color, u64)| (key(*color), search.nearest(*color) as u8);
-    let lookup: ColorMap<u8> = if histogram.len() >= CHUNK_PIXELS {
+    let lookup: ColorMap<u8> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
         histogram.par_iter().map(entry).collect()
     } else {
         histogram.iter().map(entry).collect()

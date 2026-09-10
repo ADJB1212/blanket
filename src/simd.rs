@@ -96,7 +96,7 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
         4 => 2 * 1024 * 1024,
         _ => 2 * 1024 * 1024,
     };
-    if spare.len() >= parallel_bytes {
+    if crate::parallel::should_parallel(spare.len(), chunk_pixels * C, parallel_bytes) {
         use rayon::prelude::*;
         spare.par_chunks_mut(chunk_pixels * C).enumerate().for_each(|(i, dst)| fill(i, dst));
     } else {

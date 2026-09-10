@@ -4,7 +4,7 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above};
+use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use crate::raster::{Image, PixelMode};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -139,7 +139,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
 }
 
 fn byte_sum(source: &[u8]) -> u64 {
-    if source.len() >= MIN_PARALLEL_BYTES {
+    if should_parallel(source.len(), 1, MIN_PARALLEL_BYTES) {
         source.par_iter().map(|&value| u64::from(value)).sum()
     } else {
         source.iter().map(|&value| u64::from(value)).sum()
@@ -149,7 +149,7 @@ fn byte_sum(source: &[u8]) -> u64 {
 fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
     let pixels = source.as_chunks::<C>().0;
     let luminance = |pixel: &[u8; C]| u64::from(crate::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
-    if source.len() >= MIN_PARALLEL_BYTES {
+    if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) {
         pixels.par_iter().map(luminance).sum()
     } else {
         pixels.iter().map(luminance).sum()
