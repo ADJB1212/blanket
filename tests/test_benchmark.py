@@ -115,7 +115,7 @@ def test_new_codec_benchmarks(benchmark: dict[str, Any]) -> None:
         result = blanket()
         if name.startswith("load"):
             assert result.size == (32, 24)
-        if "DNG" in name:
+        if "DNG" in name or "10-bit" in name:
             assert pillow is None
         else:
             assert pillow is not None
@@ -133,3 +133,39 @@ def test_jxl_only_excludes_other_codecs(benchmark: dict[str, Any]) -> None:
     comparisons = benchmark["codec_comparisons"]((32, 24), skip_jxl=False, jxl_only=True)
     assert comparisons
     assert all("JXL" in name for name, _, _ in comparisons)
+
+
+def test_heif_and_ten_bit_codec_benchmarks(benchmark: dict[str, Any]) -> None:
+    comparisons = benchmark["codec_comparisons"]((32, 24), skip_jxl=False)
+    names = {name for name, _, _ in comparisons}
+    for mode in ("L", "RGB", "RGBA"):
+        assert f"save HEIC/HEIF {mode} lossless" in names
+        for fmt in ("PNG", "TIFF", "JXL", "HEIC/HEIF"):
+            assert f"save {fmt} {mode} 10-bit" in names
+            assert f"load {fmt} {mode} 10-bit source" in names
+    for name, blanket_op, pillow_op in comparisons:
+        if "HEIC/HEIF" in name or "10-bit" in name:
+            result = blanket_op()
+            if name.startswith("load"):
+                assert result.size == (32, 24)
+                if "10-bit" in name:
+                    assert result.bit_depth >= 10
+            if "10-bit" in name:
+                assert pillow_op is None
+            elif pillow_op is not None:
+                pillow_op()
+
+
+def test_ten_bit_operation_benchmarks(benchmark: dict[str, Any]) -> None:
+    for mode in ("L", "RGB", "RGBA"):
+        samples = benchmark["make_ten_bit"]((32, 24), mode)
+        assert samples.min() == 0
+        assert samples.max() == 1023
+    comparisons = benchmark["ten_bit_comparisons"]((32, 24))
+    assert len(comparisons) == 39
+    for name, operation, baseline in comparisons:
+        assert baseline is None
+        result = operation()
+        if isinstance(result, Image.Image):
+            assert result.bit_depth == (8 if "10→8" in name else 10)
+            assert result.size == ((16, 12) if name.startswith("resize") else (32, 24))

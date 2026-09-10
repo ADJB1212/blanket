@@ -7,14 +7,14 @@ rust-version = "1.97"
 description = "A focused Rust-backed image library with a Pillow-shaped Python API"
 authors = ["Andrew Jaffe"]
 license = "MIT"
-exclude = [".github", "tests/", "pyproject.toml", "python/", "scripts"]
+exclude = [".github/*", "tests/*", "pyproject.toml", "python/*", "scripts/*"]
 
 [lib]
 name = "_blanket"
 crate-type = ["cdylib"]
 
 [dependencies]
-png = "0.18"
+png = { version = "0.18", features = ["zlib-rs"]}
 libheif-rs = { version = "3.0", features = ["embedded-libheif"] }
 garb = "0.2"
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
@@ -26,11 +26,11 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["std", "
 jpegxl-rs = { version = "0.15", default-features = false }
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
 
+
 [features]
 default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
 dynamic = []
-extension-module = ["pyo3/extension-module"]
 neon = ["libwebp-sys/neon"]
 x86-simd = ["libwebp-sys/avx2", "libwebp-sys/sse41"]
 

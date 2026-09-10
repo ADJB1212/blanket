@@ -18,6 +18,7 @@ from typing import Any
 
 import numpy as np
 import pillow_jxl
+import pillow_heif
 from blanket import Image as BlanketImage
 from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageFilter as BlanketFilter
@@ -32,6 +33,8 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+pillow_heif.register_heif_opener()
 
 # ── image sizes ──────────────────────────────────────────────────────────
 
@@ -180,6 +183,16 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
                 comps.append((f"load WEBP {mode} {label}", lambda p=webp: BlanketImage.open(BytesIO(p)), lambda p=webp: pillow_load(p)))
                 comps.append((f"save WEBP {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "WEBP", **opts), lambda p=p_img, opts=options: p.save(BytesIO(), "WEBP", **opts)))
 
+        # HEIC is an alias for the same HEIF codec.
+        for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
+            for label, options in (("lossless", {"lossless": True}), ("q=85", {"quality": 85})):
+                p_options = {"quality": -1} if options.get("lossless") else options
+                payload = BytesIO()
+                b_img.save(payload, "HEIF", **options)
+                encoded = payload.getvalue()
+                comps.append((f"load HEIC/HEIF {mode} {label}", lambda p=encoded: BlanketImage.open(BytesIO(p)), lambda p=encoded: pillow_load(p)))
+                comps.append((f"save HEIC/HEIF {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "HEIF", **opts), lambda p=p_img, opts=p_options: p.save(BytesIO(), "HEIF", **opts)))
+
         # ── Read-only formats (no native Pillow decoder) ──────────────
         for label, cfa in (("LinearRaw", False), ("CFA", True)):
             dng = make_dng(size, cfa=cfa)
@@ -202,6 +215,52 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
             ("save JXL q90 eff=7", lambda b=b_rgb: b.save(BytesIO(), "JXL", quality=90, effort=7), lambda p=p_rgb: p.save(BytesIO(), "JXL", quality=90, effort=7)),
         ]
 
+    # Pillow's RGB/RGBA interface cannot preserve these 10-bit samples.
+    formats = [] if jxl_only else [("PNG", {}), ("TIFF", {}), ("HEIC/HEIF", {"quality": 85})]
+    if not skip_jxl:
+        formats.append(("JXL", {"lossless": True, "effort": 1}))
+    for mode in ("L", "RGB", "RGBA"):
+        wide = BlanketImage.fromarray(make_ten_bit(size, mode), mode, bit_depth=10)
+        for label, options in formats:
+            fmt = "HEIF" if label == "HEIC/HEIF" else label
+            output = BytesIO()
+            wide.save(output, fmt, **options)
+            payload = output.getvalue()
+            comps.append((f"load {label} {mode} 10-bit source", lambda p=payload: BlanketImage.open(BytesIO(p)), None))
+            comps.append((f"save {label} {mode} 10-bit", lambda b=wide, f=fmt, opts=options: b.save(BytesIO(), f, **opts), None))
+
+    return comps
+
+
+def make_ten_bit(size: tuple[int, int], mode: str) -> np.ndarray:
+    """Generate uint16 samples spanning 0–1023, including non-8-bit values."""
+    w, h = size
+    channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
+    samples = (np.arange(w * h * channels, dtype=np.uint32) * 37 % 1024).astype(np.uint16)
+    return samples.reshape((h, w) if mode == "L" else (h, w, channels))
+
+
+def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark native wide-pixel operations without an 8-bit baseline."""
+    comps: list[Comparison] = []
+    target = (max(1, size[0] // 2), max(1, size[1] // 2))
+    for mode in ("L", "RGB", "RGBA"):
+        array = make_ten_bit(size, mode)
+        raw = array.astype("<u2").tobytes()
+        wide = BlanketImage.fromarray(array, mode, bit_depth=10)
+        narrow = wide.convert(mode, bit_depth=8)
+        comps.extend([
+            (f"fromarray {mode} 10-bit", lambda a=array, m=mode: BlanketImage.fromarray(a, m, bit_depth=10), None),
+            (f"frombytes {mode} 10-bit", lambda r=raw, m=mode: BlanketImage.frombytes(m, size, r, bit_depth=10), None),
+            (f"tobytes {mode} 10-bit", lambda b=wide: b.tobytes(), None),
+            (f"cvt {mode} 8→10-bit", lambda b=narrow, m=mode: b.convert(m, bit_depth=10), None),
+            (f"cvt {mode} 10→8-bit", lambda b=wide, m=mode: b.convert(m, bit_depth=8), None),
+        ])
+        for destination in ("L", "RGB", "RGBA"):
+            if destination != mode:
+                comps.append((f"cvt {mode}→{destination} 10-bit", lambda b=wide, m=destination: b.convert(m), None))
+        for method in BlanketImage.Resampling:
+            comps.append((f"resize {mode} 10-bit {method.name}", lambda b=wide, r=method: b.resize(target, r), None))
     return comps
 
 
@@ -514,7 +573,7 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageEnhance", "ImageFilter")
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageEnhance", "ImageFilter", "10-bit")
 
 
 def parse_args() -> argparse.Namespace:
@@ -593,6 +652,7 @@ def main() -> None:
             "Geometry": partial(geometry_comparisons, size),
             "Bands": partial(band_statistics_comparisons, size),
             "Memory": partial(memory_comparisons, size),
+            "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),
             "ImageEnhance": partial(imageenhance_comparisons, size),
             "ImageFilter": partial(imagefilter_comparisons, size),

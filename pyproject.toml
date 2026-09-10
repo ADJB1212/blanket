@@ -30,7 +30,7 @@ test = [
 [tool.maturin]
 python-source = "python"
 module-name = "blanket._blanket"
-features = ["extension-module", "vendored"]
+features = ["vendored"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
