@@ -29,8 +29,6 @@ venv/
 *.egg-info/
 .installed.cfg
 *.egg
-uv.lock
-Cargo.lock
 build_x86.sh
 
 # Installer logs

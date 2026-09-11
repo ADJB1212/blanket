@@ -183,6 +183,37 @@ def test_compare_requires_fixed_baseline(monkeypatch: Any, tmp_path: Path) -> No
     assert args.save_baseline is None
 
 
+@pytest.mark.parametrize("existing_baseline", [False, True])
+def test_no_baseline_disables_persistence(monkeypatch: Any, tmp_path: Path, existing_baseline: bool) -> None:
+    import json
+
+    benchmark = load_benchmark()
+    directory = tmp_path / "runs"
+    if existing_baseline:
+        directory.mkdir()
+        (directory / "baseline.json").write_text("invalid baseline must not be read")
+    monkeypatch.setattr(benchmark, "RESULTS_DIRECTORY", directory)
+    monkeypatch.setattr(benchmark, "imagepalette_comparisons", lambda _: [("case", lambda: None, lambda: None)])
+    monkeypatch.setattr(benchmark, "measure", lambda *args: {"median": .01, "p25": .009, "p75": .011})
+    output = tmp_path / "results.json"
+    monkeypatch.setattr(sys, "argv", ["benchmark.py", "--sections", "ImagePalette", "--no-baseline", "--json", str(output)])
+    benchmark.main()
+    assert len(json.loads(output.read_text())) == 1
+    if existing_baseline:
+        assert (directory / "baseline.json").read_text() == "invalid baseline must not be read"
+        assert list(directory.iterdir()) == [directory / "baseline.json"]
+    else:
+        assert not directory.exists()
+
+
+@pytest.mark.parametrize("flag", ["--compare", "--save-baseline"])
+def test_no_baseline_rejects_conflicting_flags(monkeypatch: Any, flag: str) -> None:
+    benchmark = load_benchmark()
+    monkeypatch.setattr(sys, "argv", ["benchmark.py", "--no-baseline", flag])
+    with pytest.raises(SystemExit):
+        benchmark.parse_args()
+
+
 def test_slower_only_argument(monkeypatch: Any) -> None:
     benchmark = load_benchmark()
     monkeypatch.setattr(sys, "argv", ["benchmark.py", "--slower-only"])

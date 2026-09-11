@@ -23,6 +23,14 @@ def test_jxl_cross_library_pixels(mode: str, lossless: bool, effort: int) -> Non
         with BlanketImage.open(BytesIO(payload)) as blanket, PillowImage.open(BytesIO(payload)) as pillow:
             pillow.load()
             assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size) == (mode, size)
-            assert blanket.tobytes() == pillow.tobytes()
+            blanket_pixels = blanket.tobytes()
+            pillow_pixels = pillow.tobytes()
             if lossless:
-                assert blanket.tobytes() == raw
+                assert blanket_pixels == pillow_pixels == raw
+            else:
+                # Independent libjxl builds can round lossy color samples
+                # differently. Limit decoder disagreement to four 8-bit level.
+                differences = [abs(left - right) for left, right in zip(blanket_pixels, pillow_pixels, strict=True)]
+                assert max(differences) <= 4, f"maximum lossy decoder difference: {max(differences)}"
+                if mode == "RGBA":
+                    assert blanket_pixels[3::4] == pillow_pixels[3::4] == raw[3::4]

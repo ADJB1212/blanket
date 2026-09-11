@@ -34,6 +34,17 @@ jobs:
             cpu: x86-64-v2
     steps:
       - uses: actions/checkout@v7
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -44,12 +55,17 @@ jobs:
       - name: Install Python from uv
         run: uv python install 3.14
       - name: Install HEIF codecs (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld
+        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
+      - name: Setup PATH
+        run: |
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
           RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C target-cpu=${{ matrix.cpu }}"
+          CFLAGS: "-O3"
         with:
           command: build
           target: ${{ matrix.target }}
@@ -79,6 +95,17 @@ jobs:
             cpu: apple-m1
     steps:
       - uses: actions/checkout@v7
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-neon-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-neon-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -88,13 +115,22 @@ jobs:
           enable-cache: true
       - name: Install Python from uv
         run: uv python install 3.14
-      - name: Install HEIF codecs (macOS)
-        run: brew install libheif
       - uses: ilammy/setup-nasm@v1
+      - name: Install HEIF codecs (macOS)
+        run: |
+          brew install libheif llvm lld cmake ninja
+          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
+          echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
+      - name: Setup PATH
+        run: |
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
           RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }} -C link-arg=-fuse-ld=lld"
+          CFLAGS: "-O3"
         with:
           target: ${{ matrix.target }}
           args: --release --out dist --features vendored,neon -i python3.14 --strip --auditwheel=repair
@@ -114,6 +150,17 @@ jobs:
             cpu: x86-64-v2
     steps:
       - uses: actions/checkout@v7
+      - name: Cache Rust dependencies and build artifacts
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"

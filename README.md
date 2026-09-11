@@ -276,6 +276,10 @@ is ignored by Git and is always relative to the repository, regardless of your
 working directory. Add `--save-baseline` to make the current run the new reference.
 `--save-baseline` also accepts an explicit output path. `--compare` is a boolean
 flag and always reads `.benchmarks/baseline.json`; it fails if that baseline is missing.
+Use `--no-baseline` in CI to disable baseline saving, comparison, and run history.
+Explicit `--json` output still works; `--no-baseline` cannot be combined with
+`--compare` or `--save-baseline`. CI excludes the benchmark tests with
+`pytest --ignore=tests/test_benchmark.py`.
 
 The comparison shows Blanket's percentage time change by section and size, followed
 by operations ranked by absolute percentage change with before/after times and
