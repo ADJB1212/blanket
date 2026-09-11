@@ -5,8 +5,12 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
+import platform
 import struct
+import subprocess
 from collections.abc import Callable
+from datetime import UTC, datetime, timezone
 from functools import partial
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -17,8 +21,8 @@ from types import ModuleType
 from typing import Any
 
 import numpy as np
-import pillow_jxl
 import pillow_heif
+import pillow_jxl
 from blanket import Image as BlanketImage
 from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageFilter as BlanketFilter
@@ -138,7 +142,7 @@ def measure(operation: Callable[[], object], warmups: int, iterations: int) -> d
 Comparison = tuple[str, Callable[[], object], Callable[[], object] | None]
 
 
-def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool = False) -> list[Comparison]:
+def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool = False, include_unpaired: bool = True) -> list[Comparison]:
     """Build load/save benchmarks for every codec × relevant mode."""
     w, h = size
     raw_rgb = make_rgb(w, h)
@@ -194,7 +198,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
                 comps.append((f"save HEIC/HEIF {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "HEIF", **opts), lambda p=p_img, opts=p_options: p.save(BytesIO(), "HEIF", **opts)))
 
         # ── Read-only formats (no native Pillow decoder) ──────────────
-        for label, cfa in (("LinearRaw", False), ("CFA", True)):
+        for label, cfa in (("LinearRaw", False), ("CFA", True)) if include_unpaired else ():
             dng = make_dng(size, cfa=cfa)
             comps.append((f"load DNG {label}", lambda p=dng: BlanketImage.open(BytesIO(p)), None))
 
@@ -216,6 +220,8 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         ]
 
     # Pillow's RGB/RGBA interface cannot preserve these 10-bit samples.
+    if not include_unpaired:
+        return comps
     formats = [] if jxl_only else [("PNG", {}), ("TIFF", {}), ("HEIC/HEIF", {"quality": 85})]
     if not skip_jxl:
         formats.append(("JXL", {"lossless": True, "effort": 1}))
@@ -249,13 +255,15 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
         raw = array.astype("<u2").tobytes()
         wide = BlanketImage.fromarray(array, mode, bit_depth=10)
         narrow = wide.convert(mode, bit_depth=8)
-        comps.extend([
-            (f"fromarray {mode} 10-bit", lambda a=array, m=mode: BlanketImage.fromarray(a, m, bit_depth=10), None),
-            (f"frombytes {mode} 10-bit", lambda r=raw, m=mode: BlanketImage.frombytes(m, size, r, bit_depth=10), None),
-            (f"tobytes {mode} 10-bit", lambda b=wide: b.tobytes(), None),
-            (f"cvt {mode} 8→10-bit", lambda b=narrow, m=mode: b.convert(m, bit_depth=10), None),
-            (f"cvt {mode} 10→8-bit", lambda b=wide, m=mode: b.convert(m, bit_depth=8), None),
-        ])
+        comps.extend(
+            [
+                (f"fromarray {mode} 10-bit", lambda a=array, m=mode: BlanketImage.fromarray(a, m, bit_depth=10), None),
+                (f"frombytes {mode} 10-bit", lambda r=raw, m=mode: BlanketImage.frombytes(m, size, r, bit_depth=10), None),
+                (f"tobytes {mode} 10-bit", lambda b=wide: b.tobytes(), None),
+                (f"cvt {mode} 8→10-bit", lambda b=narrow, m=mode: b.convert(m, bit_depth=10), None),
+                (f"cvt {mode} 10→8-bit", lambda b=wide, m=mode: b.convert(m, bit_depth=8), None),
+            ]
+        )
         for destination in ("L", "RGB", "RGBA"):
             if destination != mode:
                 comps.append((f"cvt {mode}→{destination} 10-bit", lambda b=wide, m=destination: b.convert(m), None))
@@ -574,45 +582,145 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageEnhance", "ImageFilter", "10-bit")
+DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Resize", "Memory")
+RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
+
+
+def result_key(row: dict[str, Any]) -> tuple[Any, ...]:
+    return tuple(row[field].replace("→", " to ") if field == "operation" and isinstance(row[field], str) else row[field] for field in ("section", "operation", "size", "width", "height"))
+
+
+def load_baseline(path: Path) -> dict[str, Any]:
+    """Accept saved runs and the original --json result lists."""
+    document = json.loads(path.read_text())
+    if isinstance(document, list):
+        document = {"results": document, "metadata": {}}
+    if not isinstance(document, dict) or not isinstance(document.get("results"), list):
+        raise ValueError("expected a run object or a list of results")
+    if not isinstance(document.get("metadata", {}), dict):
+        raise ValueError("metadata must be an object")
+    seen = set()
+    for row in document["results"]:
+        try:
+            key = result_key(row)
+            value = row["blanket_ms"]
+            valid = not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+            if not valid or key in seen:
+                raise ValueError("timings must be positive and finite, and case keys unique")
+            seen.add(key)
+        except (KeyError, TypeError) as error:
+            raise ValueError("invalid benchmark result") from error
+    return document
+
+
+def run_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    def git(*arguments: str) -> str | None:
+        try:
+            return subprocess.check_output(["git", *arguments], cwd=Path(__file__).resolve().parents[1], stderr=subprocess.DEVNULL, text=True).strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    status = git("status", "--porcelain")
+    return {"timestamp": datetime.now(UTC).isoformat(), "commit": git("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None, "platform": platform.platform(), "machine": platform.machine(), "python": platform.python_version(), "iterations": args.iterations, "warmups": args.warmups}
+
+
+def compare_results(results: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int]:
+    previous = {result_key(row): row for row in baseline}
+    current_keys = {result_key(row) for row in results}
+    matched = []
+    for row in results:
+        old = previous.get(result_key(row))
+        if old is not None:
+            matched.append({**row, "baseline_ms": old["blanket_ms"], "change_pct": (row["blanket_ms"] / old["blanket_ms"] - 1) * 100})
+    return matched, len(current_keys - previous.keys()), len(previous.keys() - current_keys)
+
+
+def print_comparison(console: Console, results: list[dict[str, Any]], baseline: dict[str, Any], threshold: float, verbose: bool) -> None:
+    matched, added, missing = compare_results(results, baseline["results"])
+    console.rule("Blanket vs baseline")
+    console.print(f"{len(matched)} matched; {added} new; {missing} baseline cases not run. Negative time change = faster.")
+    console.print(f"Changes within ±{threshold:g}% are below threshold (not a statistical significance test).")
+    if not matched:
+        console.print("No matching cases; use the same sections and sizes as the baseline.")
+        return
+
+    def change_cell(change: float) -> Text:
+        return Text(f"{change:+.1f}%", style="green" if change < -threshold else "red" if change > threshold else "dim")
+
+    table = Table("Section / size", "Time change", "Improved", "Regressed", "Within threshold")
+    groups = dict.fromkeys((row["section"], row["size"]) for row in matched)
+    for section, size in [*groups, ("All matched cases", "")]:
+        rows = matched if not size else [row for row in matched if (row["section"], row["size"]) == (section, size)]
+        improved = sum(row["change_pct"] < -threshold for row in rows)
+        regressed = sum(row["change_pct"] > threshold for row in rows)
+        change = (geometric_mean(row["blanket_ms"] / row["baseline_ms"] for row in rows) - 1) * 100
+        table.add_row(f"{section} {size}".strip(), change_cell(change), str(improved), str(regressed), str(len(rows) - improved - regressed))
+    console.print(table)
+    console.print("Section and overall changes use equally weighted geometric mean time ratios.")
+    details = Table("Section / size / operation", "Before ms", "Now ms", "Delta ms", "Time change")
+    for row in sorted(matched, key=lambda row: abs(row["change_pct"]), reverse=True):
+        if verbose or abs(row["change_pct"]) > threshold:
+            details.add_row(f"{row['section']} / {row['size']} / {row['operation']}", f"{row['baseline_ms']:.3f}", f"{row['blanket_ms']:.3f}", f"{row['blanket_ms'] - row['baseline_ms']:+.3f}", change_cell(row["change_pct"]))
+    if details.row_count:
+        console.print(details)
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
-    parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help="sections to benchmark (default: all; quote names containing spaces)")
-    parser.add_argument("-i", "--iterations", type=int, default=10)
+    parser.add_argument("--all", action="store_true", help="run all benchmark sections, including cases without a Pillow equivalent (size and skip options still apply)")
+    parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help=f"sections to benchmark (default: {', '.join(DEFAULT_SECTIONS)}; quote names containing spaces)")
+    parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
-    parser.add_argument("--palette-only", action="store_true", help="run only the fixed-size ImagePalette benchmarks")
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
-    parser.add_argument("--filter-only", action="store_true", help="run only the ImageFilter benchmarks")
     parser.add_argument("--jxl-only", action="store_true", help="only run JXL codec benchmarks (pillow-jxl-plugin required)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
     parser.add_argument("--json", type=Path, dest="json_path")
+    parser.add_argument("--save-baseline", type=Path, nargs="?", const=RESULTS_DIRECTORY / "baseline.json", help="replace the baseline (optional path; default: .benchmarks/baseline.json)")
+    parser.add_argument("--compare", action="store_true", help="compare against .benchmarks/baseline.json")
+    parser.add_argument("--threshold", type=float, default=4.0, help="minimum absolute time change percentage to highlight (default: 4)")
     arguments = parser.parse_args()
+    default_baseline = RESULTS_DIRECTORY / "baseline.json"
+    arguments.compare_path = default_baseline if arguments.compare else None
+    if not arguments.compare and arguments.save_baseline is None and not default_baseline.exists():
+        arguments.save_baseline = default_baseline
+    if not math.isfinite(arguments.threshold) or arguments.threshold < 0:
+        parser.error("--threshold must be finite and nonnegative")
+    if arguments.compare and any(path and path.resolve() == default_baseline.resolve() for path in (arguments.save_baseline, arguments.json_path)):
+        parser.error("output paths must not overwrite the comparison baseline")
+    if arguments.save_baseline and arguments.json_path and arguments.save_baseline.resolve() == arguments.json_path.resolve():
+        parser.error("--save-baseline and --json require different paths")
+    arguments.baseline = None
+    if arguments.compare:
+        try:
+            arguments.baseline = load_baseline(default_baseline)
+        except (OSError, ValueError) as error:
+            parser.error(f"cannot read baseline: {error}")
     if arguments.iterations < 1:
         parser.error("--iterations must be positive")
     if arguments.warmups < 0:
         parser.error("--warmups cannot be negative")
     if arguments.skip_jxl and arguments.jxl_only:
         parser.error("--skip-jxl and --jxl-only are mutually exclusive")
-    if arguments.palette_only and arguments.jxl_only:
-        parser.error("--palette-only and --jxl-only are mutually exclusive")
-    if arguments.filter_only and (arguments.palette_only or arguments.jxl_only):
-        parser.error("--filter-only is mutually exclusive with --palette-only and --jxl-only")
-    if arguments.sections is not None and (arguments.palette_only or arguments.filter_only or arguments.jxl_only):
-        parser.error("--sections cannot be combined with --palette-only, --filter-only, or --jxl-only")
+    if arguments.sections is not None and arguments.jxl_only:
+        parser.error("--sections cannot be combined with --jxl-only")
+    if arguments.all and (arguments.sections is not None or arguments.jxl_only):
+        parser.error("--all cannot be combined with --sections or --jxl-only")
     if arguments.sections is None:
-        arguments.sections = ["ImagePalette"] if arguments.palette_only else ["ImageFilter"] if arguments.filter_only else ["Codec I/O"] if arguments.jxl_only else list(SECTION_NAMES)
+        arguments.sections = ["Codec I/O"] if arguments.jxl_only else list(SECTION_NAMES if arguments.all else DEFAULT_SECTIONS)
     if arguments.no_palette:
         arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
     return arguments
 
 
-def run_section(comparisons: list[Comparison], warmups: int, iterations: int) -> list[dict[str, Any]]:
+def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *, include_unpaired: bool = True) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for name, blanket_op, pillow_op in comparisons:
+        if pillow_op is None and not include_unpaired:
+            continue
+        name = name.replace("→", " to ")
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
@@ -625,11 +733,18 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int) ->
 def main() -> None:
     args = parse_args()
     console = Console()
+    metadata = run_metadata(args)
+    if args.baseline is not None:
+        previous_metadata = args.baseline.get("metadata", {})
+        console.print(f"Baseline: {args.compare_path} ({previous_metadata.get('commit', 'unknown commit')}, dirty={previous_metadata.get('dirty', 'unknown')})", markup=False)
+        for field in ("platform", "machine", "python", "iterations", "warmups"):
+            if field in previous_metadata and previous_metadata[field] != metadata[field]:
+                console.print(f"Comparison warning: {field} differs: {previous_metadata[field]} → {metadata[field]}", markup=False)
     all_results: list[dict[str, Any]] = []
 
     if "ImagePalette" in args.sections:
         with TemporaryDirectory() as directory:
-            results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations)
+            results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations, include_unpaired=args.all)
         for result in results:
             result.update(section="ImagePalette", size="palette", width=256, height=1)
         all_results.extend(results)
@@ -646,7 +761,7 @@ def main() -> None:
         console.rule(f"[bold]{size_name}[/bold]  {w}×{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
-            "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only),
+            "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),
             "Conversions": partial(conversion_comparisons, size),
             "Resize": partial(resize_comparisons, size),
             "Geometry": partial(geometry_comparisons, size),
@@ -657,11 +772,11 @@ def main() -> None:
             "ImageEnhance": partial(imageenhance_comparisons, size),
             "ImageFilter": partial(imagefilter_comparisons, size),
         }
-        sections = [(name, build()) for name, build in builders.items() if name in args.sections]
+        sections = [(name, build()) for name, build in builders.items() if name in args.sections and (name != "10-bit" or args.all)]
 
         size_results: list[dict[str, Any]] = []
         for section_name, comparisons in sections:
-            results = run_section(comparisons, args.warmups, args.iterations)
+            results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all)
             for r in results:
                 r["section"] = section_name
                 r["size"] = size_name
@@ -690,6 +805,18 @@ def main() -> None:
         )
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
+    if args.baseline is not None:
+        print_comparison(console, all_results, args.baseline, args.threshold, args.verbose)
+    if args.save_baseline is not None:
+        args.save_baseline.parent.mkdir(parents=True, exist_ok=True)
+        args.save_baseline.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "results": all_results}, indent=2) + "\n")
+        console.print(f"Baseline saved: {args.save_baseline}", markup=False)
+    RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
+    commit = (metadata["commit"] or "unknown")[:12]
+    run_path = RESULTS_DIRECTORY / f"run-{timestamp}-{commit}.json"
+    run_path.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "baseline": str(args.compare_path.resolve()) if args.compare else None, "results": all_results}, indent=2) + "\n")
+    console.print(f"Run saved: {run_path}", markup=False)
     if args.json_path is not None:
         output_results = slower_results(all_results) if args.slower_only else all_results
         args.json_path.write_text(json.dumps(output_results, indent=2) + "\n")

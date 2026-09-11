@@ -44,7 +44,7 @@ jobs:
       - name: Install Python from uv
         run: uv python install 3.14
       - name: Install HEIF codecs (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev
+        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld
       - uses: ilammy/setup-nasm@v1
       - name: Build wheels
         uses: PyO3/maturin-action@v1
