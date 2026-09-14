@@ -30,7 +30,6 @@ turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "r
 [features]
 default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
-dynamic = []
 neon = ["libwebp-sys/neon"]
 x86-simd = ["libwebp-sys/avx2", "libwebp-sys/sse41"]
 

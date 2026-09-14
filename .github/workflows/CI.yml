@@ -58,7 +58,8 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "latest"
-          enable-cache: false
+          enable-cache: "false"
+          save-cache: "false"
       - name: Install HEIF codecs (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
@@ -74,6 +75,8 @@ jobs:
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
+        with:
+          version: 3.02
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Install project and test dependencies

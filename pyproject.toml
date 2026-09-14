@@ -41,7 +41,7 @@ line-length = 200
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-ignore = ["F401", "N999"]
+ignore = ["F401", "N999", "TRY004"]
 
 [tool.ruff.format]
 quote-style = "double"

@@ -51,7 +51,8 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: "false"
+          save-cache: "false"
       - name: Install Python from uv
         run: uv python install 3.14
       - name: Install HEIF codecs (Linux)
@@ -61,6 +62,8 @@ jobs:
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
+        with:
+          version: 3.02
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
@@ -112,10 +115,13 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: "false"
+          save-cache: "false"
       - name: Install Python from uv
         run: uv python install 3.14
       - uses: ilammy/setup-nasm@v1
+        with:
+          version: 3.02
       - name: Install HEIF codecs (macOS)
         run: |
           brew install libheif llvm lld cmake ninja
@@ -168,10 +174,13 @@ jobs:
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           version: "latest"
-          enable-cache: true
+          enable-cache: "false"
+          save-cache: "false"
       - name: Install Python from uv
         run: uv python install 3.14
       - uses: ilammy/setup-nasm@v1
+        with:
+          version: 3.02
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         env:
