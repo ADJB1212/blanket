@@ -62,11 +62,11 @@ jobs:
           save-cache: "false"
       - name: Install HEIF codecs (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
       - name: Install HEIF codecs (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install libheif llvm lld cmake ninja
+          brew install dav1d libheif llvm lld cmake ninja
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"

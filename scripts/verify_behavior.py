@@ -415,10 +415,26 @@ def check_heif_and_high_depth() -> int:
     return checks
 
 
+def check_avif_interop() -> int:
+    checks = 0
+    for mode, color in (("L", 120), ("RGB", (60, 120, 180)), ("RGBA", (60, 120, 180, 150))):
+        source = PillowImage.new(mode, (19, 13), color)
+        for writer in (source, BlanketImage.frombytes(mode, source.size, source.tobytes())):
+            output = BytesIO()
+            writer.save(output, "AVIF", quality=95)
+            actual = BlanketImage.open(BytesIO(output.getvalue()))
+            expected = PillowImage.open(BytesIO(output.getvalue())).convert("RGBA")
+            assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "AVIF")
+            assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes())) <= 3
+            checks += 1
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
     checks += check_heif_and_high_depth()
+    checks += check_avif_interop()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()

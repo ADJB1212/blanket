@@ -67,11 +67,13 @@ pub(crate) enum ImageFormat {
     Webp,
     Dng,
     Heif,
+    Avif,
 }
 
 impl ImageFormat {
     pub(crate) fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
+            "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
             "WEBP" => Ok(Self::Webp),
             "DNG" => Ok(Self::Dng),
@@ -80,13 +82,14 @@ impl ImageFormat {
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, or HEIF"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, or AVIF"
             ))),
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
             Self::Webp => "WEBP",
             Self::Dng => "DNG",
@@ -108,6 +111,8 @@ impl ImageFormat {
             Some(if is_dng(data) { Self::Dng } else { Self::Tiff })
         } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
             Some(Self::Webp)
+        } else if is_avif(data) {
+            Some(Self::Avif)
         } else if is_heif(data) {
             Some(Self::Heif)
         } else {
@@ -145,6 +150,7 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
 
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
         ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
         ImageFormat::Webp => decode_webp(data),
         ImageFormat::Dng => decode_dng(data),
@@ -389,6 +395,20 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
     }
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Avif => {
+            let rgb;
+            let (pixels, color) = if image.mode == PixelMode::L {
+                rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
+                (rgb.as_slice(), ExtendedColorType::Rgb8)
+            } else {
+                (pixels, color_type(image.mode))
+            };
+            let mut output = Vec::new();
+            image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, 11 - options.effort, options.quality)
+                .write_image(pixels, image.width, image.height, color)
+                .map_err(codec_error)?;
+            Ok(output)
+        }
         ImageFormat::Dng => Err(PyValueError::new_err("DNG is a read-only format")),
         ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => {
@@ -516,6 +536,23 @@ fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
 
 fn codec_error(error: impl std::fmt::Display) -> PyErr {
     PyOSError::new_err(error.to_string())
+}
+
+fn is_avif(data: &[u8]) -> bool {
+    has_brand(data, &[b"avif", b"avis"])
+}
+
+fn has_brand(data: &[u8], accepted: &[&[u8; 4]]) -> bool {
+    if data.get(4..8) != Some(b"ftyp") || data.len() < 16 {
+        return false;
+    }
+    let size = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
+    if size < 16 || size > data.len() || !size.is_multiple_of(4) {
+        return false;
+    }
+    std::iter::once(&data[8..12])
+        .chain(data[16..size].as_chunks::<4>().0.iter().map(|v| v.as_slice()))
+        .any(|brand| accepted.iter().any(|candidate| brand == candidate.as_slice()))
 }
 
 fn is_heif(data: &[u8]) -> bool {
@@ -714,6 +751,20 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detects_avif_brands_before_generic_heif() {
+        for data in [
+            b"\0\0\0\x14ftypavif\0\0\0\0mif1".as_slice(),
+            b"\0\0\0\x14ftypmif1\0\0\0\0avif",
+            b"\0\0\0\x10ftypavis\0\0\0\0",
+        ] {
+            assert_eq!(ImageFormat::detect(data), Some(ImageFormat::Avif));
+        }
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x20ftypavif\0\0\0\0"), None);
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x10ftypxxxxavif"), None);
+        assert_eq!(ImageFormat::detect(b"\0\0\0\x10ftypxxxx\0\0\0\0avif"), None);
+    }
 
     #[test]
     fn detects_supported_signatures() {

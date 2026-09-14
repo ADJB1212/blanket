@@ -3,7 +3,7 @@
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
 converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
-JPEG XL, TIFF, WebP, and HEIC/HEIF files, plus developing DNG files.
+JPEG XL, TIFF, WebP, AVIF, and HEIC/HEIF files, plus developing DNG files.
 High-bit-depth images retain their samples when opened and saved.
 
 ```python
@@ -23,7 +23,7 @@ installed.
 8-bit array-interface objects with grayscale, RGB, or RGBA shapes, including
 strided NumPy arrays. `Image.Image.save()` infers PNG, JPEG, or JPEG XL from a
 path extension, or accepts an explicit format for streams. TIFF (`.tif`/`.tiff`)
-and WebP (`.webp`) also support opening and saving. HEIC/HEIF (`.heic`/`.heif`)
+WebP (`.webp`), and AVIF (`.avif`) also support opening and saving. HEIC/HEIF (`.heic`/`.heif`)
 supports opening and saving HEVC images; both format names report `image.format == "HEIF"`.
 HEIF opens the primary image and applies container rotations and crops.
 DNG supports opening:
@@ -73,6 +73,10 @@ Supported encoder options are:
 
 - PNG: `compress_level=0..9` (default `6`)
 - TIFF: uncompressed output, no save options
+- AVIF (`.avif`): `quality=1..100` (default `90`), `effort=1..10` (default `7`).
+  Higher effort encodes more slowly. Uses the `image` crate for reading and writing;
+  decoded images use RGBA, and grayscale is stored as RGB. Saving supports 8-bit images and does not offer a
+  lossless option. Opens the primary image; animation is not supported.
 - WebP: `quality=1..100` (default `90`), `lossless=True|False` (default `False`)
   Grayscale images are stored as RGB, as required by WebP.
 - JPEG: `quality=1..100` (default `75`)
@@ -305,7 +309,9 @@ independent of the existing Pillow comparison tables.
 ## Development
 
 JPEG XL encoding statically builds libjxl. Install Rust, CMake, Ninja, and a
-C++ compiler before building. HEIF requires system libheif 1.17+ with an HEVC
+C++ compiler before building. AVIF requires system dav1d 1.3+ (`brew install dav1d`
+on macOS or `apt-get install libdav1d-dev` on Ubuntu), also present at runtime.
+HEIF requires system libheif 1.17+ with an HEVC
 decoder (libde265) and encoder (x265). On macOS use `brew install libheif`;
 on Ubuntu install `libheif-dev`, `libheif-plugin-libde265`, and
 `libheif-plugin-x265`. The libheif shared library and codec plugins must also

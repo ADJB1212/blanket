@@ -56,7 +56,7 @@ jobs:
       - name: Install Python from uv
         run: uv python install 3.14
       - name: Install HEIF codecs (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
       - name: Setup PATH
         run: |
           echo "CC=clang" >> "$GITHUB_ENV"
@@ -124,7 +124,7 @@ jobs:
           version: 3.02
       - name: Install HEIF codecs (macOS)
         run: |
-          brew install libheif llvm lld cmake ninja
+          brew install libheif llvm lld cmake ninja dav1d
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
