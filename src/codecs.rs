@@ -68,11 +68,13 @@ pub(crate) enum ImageFormat {
     Dng,
     Heif,
     Avif,
+    Pdf,
 }
 
 impl ImageFormat {
     pub(crate) fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
+            "PDF" => Ok(Self::Pdf),
             "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
             "WEBP" => Ok(Self::Webp),
@@ -82,13 +84,14 @@ impl ImageFormat {
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, or AVIF"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, AVIF, or PDF"
             ))),
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Pdf => "PDF",
             Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
             Self::Webp => "WEBP",
@@ -150,6 +153,7 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
 
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Pdf => Err("PDF is a write-only format".into()),
         ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
         ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
         ImageFormat::Webp => decode_webp(data),
@@ -395,6 +399,7 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
     }
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Pdf => encode_pdf(image, pixels),
         ImageFormat::Avif => {
             let rgb;
             let (pixels, color) = if image.mode == PixelMode::L {
@@ -438,6 +443,68 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
         ImageFormat::Jpeg => encode_jpeg(image, pixels, options.quality),
         ImageFormat::Jxl => encode_jxl(image, pixels, options),
     }
+}
+
+// PDF 1.4 image XObjects with an optional grayscale soft mask. Raw streams
+// retain exact samples without adding a runtime dependency or a lossy codec.
+fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
+    if image.width == 0 || image.height == 0 {
+        return Err(PyValueError::new_err("cannot encode empty PDF image"));
+    }
+    let (width, height) = (image.width, image.height);
+    let mut output = b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n".to_vec();
+    let mut offsets = Vec::new();
+    let mut object = |dictionary: &str, stream: Option<&[u8]>| {
+        offsets.push(output.len());
+        output.extend_from_slice(format!("{} 0 obj\n<< {dictionary}", offsets.len()).as_bytes());
+        if let Some(data) = stream {
+            output.extend_from_slice(format!(" /Length {} >>\nstream\n", data.len()).as_bytes());
+            output.extend_from_slice(data);
+            output.extend_from_slice(b"\nendstream\nendobj\n");
+        } else {
+            output.extend_from_slice(b" >>\nendobj\n");
+        }
+    };
+    object("/Type /Catalog /Pages 2 0 R", None);
+    object("/Type /Pages /Kids [3 0 R] /Count 1", None);
+    object(
+        &format!("/Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R"),
+        None,
+    );
+    let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
+    object("", Some(content.as_bytes()));
+    let rgb;
+    let color = if image.mode == PixelMode::L { "DeviceGray" } else { "DeviceRGB" };
+    let (samples, mask) = if image.mode == PixelMode::Rgba {
+        rgb = pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|pixel| pixel[..3].iter().copied())
+            .collect::<Vec<_>>();
+        (rgb.as_slice(), " /SMask 6 0 R")
+    } else {
+        (pixels, "")
+    };
+    object(
+        &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{color} /BitsPerComponent 8{mask}"),
+        Some(samples),
+    );
+    if image.mode == PixelMode::Rgba {
+        let alpha: Vec<u8> = pixels.as_chunks::<4>().0.iter().map(|pixel| pixel[3]).collect();
+        object(
+            &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8"),
+            Some(&alpha),
+        );
+    }
+    let xref = output.len();
+    let size = offsets.len() + 1;
+    output.extend_from_slice(format!("xref\n0 {size}\n0000000000 65535 f \n").as_bytes());
+    for offset in offsets {
+        output.extend_from_slice(format!("{offset:010} 00000 n \n").as_bytes());
+    }
+    output.extend_from_slice(format!("trailer\n<< /Size {size} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n").as_bytes());
+    Ok(output)
 }
 
 fn color_type(mode: PixelMode) -> ExtendedColorType {

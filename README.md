@@ -6,6 +6,12 @@ converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
 JPEG XL, TIFF, WebP, AVIF, and HEIC/HEIF files, plus developing DNG files.
 High-bit-depth images retain their samples when opened and saved.
 
+Save an 8-bit image as a single-page PDF with `image.save("output.pdf")`, or
+`image.save(stream, format="PDF")`. PDF output preserves grayscale, RGB pixels,
+and RGBA transparency using uncompressed, lossless image streams. Page size is
+one point per pixel (72 DPI). PDF reading, multipage output, metadata, and PDF
+save options are not supported; convert high-bit-depth images to 8-bit first.
+
 ```python
 from blanket import Image
 
