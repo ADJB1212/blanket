@@ -1,4 +1,5 @@
 use std::io::Cursor;
+use std::sync::LazyLock;
 
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
@@ -48,6 +49,11 @@ pub(crate) fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<
 }
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
+
+// libheif owns a process-wide plugin registry. Keep its initialization guard
+// alive so each image does not tear down and recreate the codec plugins.
+// Contexts, encoders, and pixel planes remain local to each operation.
+static HEIF_LIBRARY: LazyLock<libheif_rs::LibHeif> = LazyLock::new(libheif_rs::LibHeif::new);
 
 thread_local! {
     // A runner is used by only its owning calling thread. Reuse its workers
@@ -640,8 +646,8 @@ fn is_heif(data: &[u8]) -> bool {
 }
 
 fn decode_heif(data: &[u8]) -> Result<Image, String> {
-    use libheif_rs::{ColorSpace, HeifContext, LibHeif, RgbChroma};
-    let lib = LibHeif::new();
+    use libheif_rs::{ColorSpace, DecodingOptions, HeifContext, RgbChroma};
+    let lib = &*HEIF_LIBRARY;
     let context = HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
     let handle = context.primary_image_handle().map_err(|e| e.to_string())?;
     validate_dimensions(handle.width(), handle.height())?;
@@ -656,7 +662,16 @@ fn decode_heif(data: &[u8]) -> Result<Image, String> {
         (true, false) => RgbChroma::HdrRgbLe,
         (true, true) => RgbChroma::HdrRgbaLe,
     };
-    let decoded = lib.decode(&handle, ColorSpace::Rgb(chroma), None).map_err(|e| e.to_string())?;
+    let mut options = DecodingOptions::new().ok_or("cannot allocate HEIF decoding options")?;
+    // The context's tile-thread limit does not enable HEVC codec workers.
+    // Small images do not have enough CTU rows to amortize starting workers.
+    let threads = if u64::from(handle.width()) * u64::from(handle.height()) >= 256 * 1024 {
+        std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
+    } else {
+        1
+    };
+    options.set_num_codec_threads(threads as u32);
+    let decoded = lib.decode(&handle, ColorSpace::Rgb(chroma), Some(options)).map_err(|e| e.to_string())?;
     validate_dimensions(decoded.width(), decoded.height())?;
     let mode = if alpha { PixelMode::Rgba } else { PixelMode::Rgb };
     let plane = decoded.planes().interleaved.ok_or("missing HEIF pixel plane")?;
@@ -664,20 +679,24 @@ fn decode_heif(data: &[u8]) -> Result<Image, String> {
     if row > plane.stride {
         return Err("invalid HEIF row stride".into());
     }
-    let pixels: Vec<u8> = plane
-        .data
-        .chunks_exact(plane.stride)
-        .take(decoded.height() as usize)
-        .flat_map(|v| v[..row].iter().copied())
-        .collect();
+    let rows = plane.data.chunks_exact(plane.stride).take(decoded.height() as usize);
     if depth == 8 {
+        let mut pixels = Vec::with_capacity(row * decoded.height() as usize);
+        if row == plane.stride {
+            pixels.extend_from_slice(&plane.data[..row * decoded.height() as usize]);
+        } else {
+            for source in rows {
+                pixels.extend_from_slice(&source[..row]);
+            }
+        }
         Image::from_pixels(decoded.width(), decoded.height(), mode, pixels, Some("HEIF".into()))
     } else {
         Image::from_samples(
             decoded.width(),
             decoded.height(),
             mode,
-            pixels.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect(),
+            rows.flat_map(|source| source[..row].as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)))
+                .collect(),
             depth,
             Some("HEIF".into()),
         )
@@ -686,7 +705,7 @@ fn decode_heif(data: &[u8]) -> Result<Image, String> {
 }
 
 fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
-    use libheif_rs::{Channel, ColorSpace, CompressionFormat, EncoderQuality, HeifContext, LibHeif, RgbChroma};
+    use libheif_rs::{Channel, ColorSpace, CompressionFormat, EncoderParameterValue, EncoderQuality, HeifContext, RgbChroma};
     let pixels = image.raw_data()?;
     if image.width == 0 || image.height == 0 {
         return Err(PyValueError::new_err("cannot encode empty HEIF image"));
@@ -694,8 +713,16 @@ fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
     if !matches!(image.bit_depth, 8 | 10 | 12) {
         return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
     }
-    let lib = LibHeif::new();
+    let lib = &*HEIF_LIBRARY;
     let mut encoder = lib.encoder_for_format(CompressionFormat::Hevc).map_err(codec_error)?;
+    // x265 defaults to "slow". Prefer medium for image I/O while retaining
+    // the requested quality/lossless setting. Other HEVC plugins keep their
+    // own defaults rather than receiving an x265-specific parameter.
+    if encoder.name().starts_with("x265 ") {
+        encoder
+            .set_parameter_value("preset", EncoderParameterValue::String("medium".into()))
+            .map_err(codec_error)?;
+    }
     encoder
         .set_quality(if options.lossless {
             EncoderQuality::LossLess
@@ -709,29 +736,30 @@ fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
         (true, false) => RgbChroma::HdrRgbLe,
         (true, true) => RgbChroma::HdrRgbaLe,
     };
-    let mut native = libheif_rs::Image::new(image.width, image.height, ColorSpace::Rgb(chroma)).map_err(codec_error)?;
+    let grayscale = image.mode == PixelMode::L;
+    let color_space = if grayscale { ColorSpace::Monochrome } else { ColorSpace::Rgb(chroma) };
+    let channel = if grayscale { Channel::Y } else { Channel::Interleaved };
+    let mut native = libheif_rs::Image::new(image.width, image.height, color_space).map_err(codec_error)?;
     native
-        .create_plane(Channel::Interleaved, image.width, image.height, image.bit_depth)
+        .create_plane(channel, image.width, image.height, image.bit_depth)
         .map_err(codec_error)?;
-    let expanded;
-    let bytes = if image.mode == PixelMode::L {
-        let size = if image.bit_depth > 8 { 2 } else { 1 };
-        expanded = pixels
-            .chunks_exact(size)
-            .flat_map(|v| v.iter().copied().cycle().take(size * 3))
-            .collect::<Vec<_>>();
-        &expanded
+    let row = image.width as usize * image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
+    let planes = native.planes_mut();
+    let plane = if grayscale { planes.y } else { planes.interleaved }.ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
+    // Monochrome HEVC avoids RGB expansion, color conversion, and encoding
+    // two constant chroma planes. Wide monochrome planes use native endian.
+    if grayscale && image.bit_depth > 8 && cfg!(target_endian = "big") {
+        for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
+            for (sample, dest) in source.as_chunks::<2>().0.iter().zip(target[..row].as_chunks_mut::<2>().0) {
+                *dest = u16::from_le_bytes(*sample).to_ne_bytes();
+            }
+        }
+    } else if row == plane.stride {
+        plane.data[..pixels.len()].copy_from_slice(pixels);
     } else {
-        pixels
-    };
-    let channels = if image.mode == PixelMode::Rgba { 4 } else { 3 };
-    let row = image.width as usize * channels * if image.bit_depth > 8 { 2 } else { 1 };
-    let plane = native
-        .planes_mut()
-        .interleaved
-        .ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
-    for (source, target) in bytes.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
-        target[..row].copy_from_slice(source);
+        for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
+            target[..row].copy_from_slice(source);
+        }
     }
     let mut context = HeifContext::new().map_err(codec_error)?;
     context.encode_image(&native, &mut encoder, None).map_err(codec_error)?;

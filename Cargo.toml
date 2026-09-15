@@ -14,13 +14,13 @@ name = "_blanket"
 crate-type = ["cdylib"]
 
 [dependencies]
-png = { version = "0.18", features = ["zlib-rs"]}
-libheif-rs = { version = "3.0", features = ["embedded-libheif"] }
+png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
+libheif-rs = { version = "3.0", default-features = false, features = ["latest", "embedded-libheif"] }
 garb = "0.2"
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
-rayon = "1.12"
+rayon = {version = "1.12", default-features = false }
 image = { version = "0.25", default-features = false, features = ["png", "rayon", "tiff", "webp", "avif", "avif-native", "nasm"] }
-rawler = "0.8"
+rawler = {version = "0.8", default-features = false }
 webpx = "0.4"
 libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel"] }
 jpegxl-rs = { version = "0.15", default-features = false }

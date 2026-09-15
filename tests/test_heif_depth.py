@@ -56,6 +56,9 @@ def test_heif_roundtrip(depth: int, mode: str, channels: int) -> None:
     external = pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False)
     assert external.info["bit_depth"] == depth
     decoded = np.asarray(external)
+    if mode == "L":
+        assert external.mode.startswith("L") or external.mode.startswith("I;")
+        decoded = np.repeat(decoded[:, :, None], 3, axis=2)
     expected = np.frombuffer(loaded.tobytes(), dtype=np.uint8 if depth == 8 else "<u2").reshape(decoded.shape)
     np.testing.assert_array_equal(decoded, expected)
     with pytest.raises(UnidentifiedImageError):
@@ -67,6 +70,43 @@ def test_heif_extension(tmp_path: Path, extension: str) -> None:
     path = tmp_path / f"image.{extension}"
     Image.frombytes("RGB", (16, 16), bytes([1, 2, 3] * 256)).save(path)
     assert Image.open(path).format == "HEIF"
+
+
+@pytest.mark.parametrize("depth", [8, 10, 12])
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize("size", [(64, 32), (67, 35), (513, 515)])
+def test_heif_pixel_rows(depth: int, mode: str, channels: int, size: tuple[int, int]) -> None:
+    """Exercise packed and padded rows with distinct pixels, including wide alpha."""
+    width, height = size
+    samples = (np.arange(width * height * channels, dtype=np.uint32) * 37 % (1 << depth)).astype(np.uint8 if depth == 8 else "<u2")
+    source = Image.frombytes(mode, size, samples.tobytes(), bit_depth=depth)
+    output = BytesIO()
+    source.save(output, "HEIF", lossless=True)
+    result = Image.open(output)
+    expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
+    if mode == "L":
+        expected = np.repeat(expected[:, :, None], 3, axis=2)
+    assert (result.mode, result.size, result.bit_depth) == ("RGB" if mode == "L" else mode, size, depth)
+    assert result.tobytes() == expected.astype(np.uint8 if depth == 8 else "<u2").tobytes()
+    if mode == "L":
+        # Monochrome HEVC must retain each complete sample without color conversion.
+        assert result.tobytes() == np.repeat(samples, 3).tobytes()
+    elif mode == "RGBA":
+        np.testing.assert_array_equal(expected[:, :, 3].ravel(), samples.reshape(-1, 4)[:, 3])
+
+
+def test_heif_concurrent_codec_lifetimes() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def roundtrip(value: int) -> bytes:
+        source = Image.frombytes("RGB", (32, 32), bytes([value] * (32 * 32 * 3)))
+        output = BytesIO()
+        source.save(output, "HEIF", lossless=True)
+        return Image.open(output).tobytes()
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(roundtrip, range(12)))
+    assert results == [bytes([value] * (32 * 32 * 3)) for value in range(12)]
 
 
 def test_high_depth_validation_and_lifecycle() -> None:

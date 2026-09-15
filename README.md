@@ -89,8 +89,10 @@ Supported encoder options are:
 - JPEG XL: `quality=1..100` (default `90`), `lossless=True|False`, and
   `effort=1..10` (default `7`)
 - HEIF: `quality=1..100` (default `90`), `lossless=True|False` (default `False`).
-  Grayscale is stored as RGB. Lossless selects lossless HEVC compression;
-  RGB/YUV conversion can still change sample values.
+  The x265 encoder uses its `medium` preset for faster saves; file sizes and
+  lossy pixels can differ from its `slow` default. Grayscale is stored as
+  monochrome HEVC and opens as RGB in Blanket. Lossless selects lossless
+  HEVC compression; RGB/YUV conversion can still change color sample values.
 
 JPEG does not accept `RGBA`; call `image.convert("RGB")` before saving.
 
