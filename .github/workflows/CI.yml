@@ -31,13 +31,9 @@ jobs:
           - os: ubuntu-latest
             python: "3.14"
             cpu: x86-64-v2
-            features: vendored,x86-simd
-            cache-features: vendored-x86-simd
           - os: macos-latest
             python: "3.14"
             cpu: apple-m1
-            features: vendored,neon
-            cache-features: vendored-neon
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -48,10 +44,10 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.cpu }}-${{ matrix.cache-features }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.cpu }}-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.cpu }}-${{ matrix.cache-features }}-
             ${{ runner.os }}-cargo-${{ matrix.cpu }}-
+            ${{ runner.os }}-cargo-
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
@@ -83,9 +79,9 @@ jobs:
         env:
           RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }}"
         run: |
-          uv sync --no-install-project --extra test --compile
+          uv sync --no-install-project --extra test
           uv tool install maturin
-          maturin develop --extras test --uv -F ${{ matrix.features }} --profile dev
+          maturin develop --extras test --uv --profile dev
       - name: Test Python API
         env:
           CI: 1

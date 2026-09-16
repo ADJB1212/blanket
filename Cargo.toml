@@ -26,12 +26,16 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["std", "
 jpegxl-rs = { version = "0.15", default-features = false }
 turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
 
+[target.'cfg(target_arch = "aarch64")'.dependencies]
+libwebp-sys = { version = "0.14", default-features = false, features = ["neon"] }
+
+[target.'cfg(target_arch = "x86_64")'.dependencies]
+libwebp-sys = { version = "0.14", default-features = false, features = ["avx2", "sse41"] }
+
 
 [features]
 default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
-neon = ["libwebp-sys/neon"]
-x86-simd = ["libwebp-sys/avx2", "libwebp-sys/sse41"]
 
 [build-dependencies]
 rustc_version = "0.4"

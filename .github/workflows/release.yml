@@ -41,9 +41,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-
             ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
@@ -75,7 +75,7 @@ jobs:
           args: >-
             --release
             --out dist
-            --features vendored,x86-simd
+            --features vendored
             -i python3.14
             --strip
             --auditwheel=repair
@@ -105,9 +105,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-neon-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-neon-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-
             ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
@@ -139,7 +139,7 @@ jobs:
           CFLAGS: "-O3"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features vendored,neon -i python3.14 --strip --auditwheel=repair
+          args: --release --out dist --features vendored -i python3.14 --strip --auditwheel=repair
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.target }}
@@ -163,9 +163,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
-            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-x86-simd-
+            ${{ runner.os }}-cargo-${{ matrix.target }}-vendored-
             ${{ runner.os }}-cargo-${{ matrix.target }}-
       - uses: actions/setup-python@v7
         with:
@@ -187,7 +187,7 @@ jobs:
           RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }}"
         with:
           target: ${{ matrix.target }}
-          args: --release --out dist --features vendored,x86-simd -i python3.14 --strip --auditwheel=repair
+          args: --release --out dist --features vendored -i python3.14 --strip --auditwheel=repair
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-windows-${{ matrix.target }}
