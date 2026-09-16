@@ -1,5 +1,18 @@
 # Blanket
 
+Image assembly APIs include `Image.new(mode, size, color=0)`,
+`image.paste(source_or_color, box=None, mask=None)`,
+`Image.alpha_composite(background, overlay)`,
+`image.alpha_composite(overlay, dest=(0, 0), source=(0, 0))`,
+`image.putalpha(alpha)`, and `Image.merge(mode, bands)`.
+These operate on 8-bit images. Paste accepts L or RGBA masks and clips at
+image boundaries; alpha compositing requires RGBA images. `putalpha` accepts
+an L image or integer, promoting RGB images to RGBA. Grayscale and palette
+`putalpha` are unsupported because Blanket does not implement LA or PA modes.
+Merge accepts L bands and produces L, RGB, or RGBA images. The benchmark's
+`Bands` section includes these operations, with copy costs included for
+mutating operations on both libraries.
+
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
 converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,

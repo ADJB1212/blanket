@@ -280,6 +280,66 @@ class Image:
         result.info.update(self.info)
         return result
 
+    def paste(self, im: Image | str | int | tuple[int, ...], box: Image | tuple[int, ...] | None = None, mask: Image | None = None) -> None:
+        """Paste pixels or a color, optionally interpolating through an L/RGBA mask."""
+        from ._blanket import image_paste
+
+        if isinstance(box, Image):
+            if mask is not None:
+                raise ValueError("If using second argument as mask, third argument must be None")
+            mask, box = box, None
+        box = (0, 0) if box is None else tuple(index(v) for v in box)
+        if len(box) == 2:
+            size = im.size if isinstance(im, Image) else mask.size if isinstance(mask, Image) else None
+            if size is None:
+                raise ValueError("cannot determine region size; use 4-item box")
+            box += (box[0] + size[0], box[1] + size[1])
+        if len(box) != 4:
+            raise TypeError("box must be a 2- or 4-item sequence")
+        size = (box[2] - box[0], box[3] - box[1])
+        if min(size) < 0:
+            raise ValueError("invalid paste region")
+        self._sync_palette()
+        if isinstance(im, Image):
+            im.load()
+            if im.size != size:
+                raise ValueError("images do not match")
+            source = im if im.mode == self.mode else im.convert(self.mode)
+        else:
+            if self.mode == "P" and isinstance(im, (str, tuple)) and not (isinstance(im, tuple) and len(im) == 1):
+                raise TypeError("color must be int or single-element tuple")
+            source = new(self.mode, size, im)
+        self._native = image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
+
+    def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0)) -> None:
+        """Composite an RGBA source region onto this image in place."""
+        if not isinstance(source, (list, tuple)) or len(source) not in (2, 4):
+            raise ValueError("Source must be a sequence of length 2 or 4")
+        if not isinstance(dest, (list, tuple)) or len(dest) != 2:
+            raise ValueError("Destination must be a sequence of length 2")
+        source = tuple(index(v) for v in source)
+        dest = tuple(index(v) for v in dest)
+        if min(source) < 0:
+            raise ValueError("Source must be non-negative")
+        region = source + im.size if len(source) == 2 else source
+        overlay = im if region == (0, 0) + im.size else im.crop(region)
+        box = dest + (dest[0] + overlay.width, dest[1] + overlay.height)
+        background = self if box == (0, 0) + self.size else self.crop(box)
+        self.paste(alpha_composite(background, overlay), box)
+
+    def putalpha(self, alpha: Image | int) -> None:
+        """Replace alpha in place; RGB images become RGBA.
+
+        L and P inputs are unsupported because Blanket does not implement LA/PA.
+        """
+        from ._blanket import image_putalpha
+
+        if self.mode not in ("RGB", "RGBA"):
+            raise ValueError("putalpha requires RGB or RGBA; LA and PA modes are not supported")
+        band = alpha if isinstance(alpha, Image) else new("L", self.size, index(alpha))
+        self._native = image_putalpha(self._native, band._native)
+        self.palette = None
+
     def split(self) -> tuple[Image, ...]:
         """Return independent L images for each band, in channel order."""
         from ._blanket import ops_split
@@ -556,6 +616,45 @@ class Image:
 
     def __repr__(self) -> str:
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
+
+
+def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | None = 0) -> Image:
+    """Create an 8-bit L, RGB, RGBA, or indexed image filled with color."""
+    from ._blanket import image_new
+    from ._color import color_pixel
+
+    if not isinstance(size, (list, tuple)) or len(size) != 2:
+        raise ValueError("Size must be a list or tuple of length 2")
+    dimensions = tuple(index(v) for v in size)
+    if min(dimensions) < 0:
+        raise ValueError("Width and height must be >= 0")
+    native_mode = "L" if mode == "P" else mode
+    if mode not in ("L", "RGB", "RGBA", "P"):
+        raise ValueError(f"unsupported image mode {mode!r}")
+    palette_color = mode == "P" and (isinstance(color, str) or isinstance(color, tuple) and len(color) in (3, 4))
+    result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
+    if mode == "P":
+        result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else bytes(768))
+    return result
+
+
+def merge(mode: str, bands: Sequence[Image]) -> Image:
+    """Interleave L bands into an independent L, RGB, or RGBA image."""
+    from ._blanket import filter_merge
+
+    bands = tuple(bands)
+    if any(band.mode != "L" for band in bands):
+        raise ValueError("mode mismatch")
+    return Image(filter_merge(mode, [band._native for band in bands]))
+
+
+def alpha_composite(im1: Image, im2: Image) -> Image:
+    """Return im2 composited over im1; both must be equal-sized 8-bit RGBA."""
+    from ._blanket import image_alpha_composite
+
+    result = Image(image_alpha_composite(im1._native, im2._native))
+    result.info.update(im1.info)
+    return result
 
 
 def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None) -> Image:

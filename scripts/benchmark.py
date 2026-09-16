@@ -371,6 +371,26 @@ def band_statistics_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comps
 
 
+def compositing_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Include equal copy costs for operations that mutate their destination."""
+    comparisons: list[Comparison] = []
+    bmask = BlanketImage.frombytes("L", size, make_gray(*size))
+    pmask = PillowImage.frombytes("L", size, bmask.tobytes())
+    for mode, raw in (("L", make_gray(*size)), ("RGB", make_rgb(*size)), ("RGBA", make_rgba(*size))):
+        actual = BlanketImage.frombytes(mode, size, raw)
+        expected = PillowImage.frombytes(mode, size, raw)
+        comparisons.append((f"new {mode}", partial(BlanketImage.new, mode, size, "navy"), partial(PillowImage.new, mode, size, "navy")))
+        comparisons.append((f"merge {mode}", partial(BlanketImage.merge, mode, actual.split()), partial(PillowImage.merge, mode, expected.split())))
+        comparisons.append((f"paste {mode} (copy included)", lambda im=actual: im.copy().paste(im), lambda im=expected: im.copy().paste(im)))
+        comparisons.append((f"paste masked {mode} (copy included)", lambda im=actual: im.copy().paste(im, mask=bmask), lambda im=expected: im.copy().paste(im, mask=pmask)))
+        if mode != "L":
+            comparisons.append((f"putalpha {mode} (copy included)", lambda im=actual: im.copy().putalpha(bmask), lambda im=expected: im.copy().putalpha(pmask)))
+        if mode == "RGBA":
+            comparisons.append(("alpha_composite RGBA", partial(BlanketImage.alpha_composite, actual, actual), partial(PillowImage.alpha_composite, expected, expected)))
+            comparisons.append(("alpha_composite in place (copy included)", lambda im=actual: im.copy().alpha_composite(im), lambda im=expected: im.copy().alpha_composite(im)))
+    return comparisons
+
+
 def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Benchmark array/byte construction, extraction, and Pillow conversion."""
     raw = make_rgb(*size)
@@ -768,7 +788,7 @@ def main() -> None:
             "Conversions": partial(conversion_comparisons, size),
             "Resize": partial(resize_comparisons, size),
             "Geometry": partial(geometry_comparisons, size),
-            "Bands": partial(band_statistics_comparisons, size),
+            "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size),
             "Memory": partial(memory_comparisons, size),
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),

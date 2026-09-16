@@ -430,11 +430,44 @@ def check_avif_interop() -> int:
     return checks
 
 
+def check_compositing() -> int:
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        actual = BlanketImage.new(mode, (37, 29), "navy")
+        expected = PillowImage.new(mode, actual.size, "navy")
+        assert actual.tobytes() == expected.tobytes()
+        checks += 1
+        raw = pixels(mode)
+        source = BlanketImage.frombytes(mode, actual.size, raw)
+        reference = PillowImage.frombytes(mode, actual.size, raw)
+        mask = BlanketImage.frombytes("L", actual.size, pixels("L"))
+        pmask = PillowImage.frombytes("L", actual.size, pixels("L"))
+        actual.paste(source, (-3, 2), mask)
+        expected.paste(reference, (-3, 2), pmask)
+        assert actual.tobytes() == expected.tobytes()
+        checks += 1
+        assert BlanketImage.merge(mode, actual.split()).tobytes() == PillowImage.merge(mode, expected.split()).tobytes()
+        checks += 1
+        if mode != "L":
+            actual.putalpha(mask)
+            expected.putalpha(pmask)
+            assert actual.tobytes() == expected.tobytes()
+            checks += 1
+        if mode == "RGBA":
+            assert BlanketImage.alpha_composite(actual, source).tobytes() == PillowImage.alpha_composite(expected, reference).tobytes()
+            actual.alpha_composite(source, (-2, 3), (1, 2, 30, 20))
+            expected.alpha_composite(reference, (-2, 3), (1, 2, 30, 20))
+            assert actual.tobytes() == expected.tobytes()
+            checks += 2
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
+    checks += check_compositing()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()
