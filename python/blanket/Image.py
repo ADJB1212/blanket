@@ -309,7 +309,11 @@ class Image:
             if self.mode == "P" and isinstance(im, (str, tuple)) and not (isinstance(im, tuple) and len(im) == 1):
                 raise TypeError("color must be int or single-element tuple")
             source = new(self.mode, size, im)
-        self._native = image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
+        # Snapshot aliases before acquiring the native mutable destination borrow.
+        source = source.copy() if source._native is self._native else source
+        if mask is not None and mask._native is self._native:
+            mask = mask.copy()
+        image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
 
     def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0)) -> None:
         """Composite an RGBA source region onto this image in place."""
@@ -324,6 +328,12 @@ class Image:
         region = source + im.size if len(source) == 2 else source
         overlay = im if region == (0, 0) + im.size else im.crop(region)
         box = dest + (dest[0] + overlay.width, dest[1] + overlay.height)
+        if box == (0, 0) + self.size:
+            from ._blanket import image_alpha_composite_inplace
+
+            overlay = overlay.copy() if overlay._native is self._native else overlay
+            image_alpha_composite_inplace(self._native, overlay._native)
+            return
         background = self if box == (0, 0) + self.size else self.crop(box)
         self.paste(alpha_composite(background, overlay), box)
 
@@ -337,7 +347,9 @@ class Image:
         if self.mode not in ("RGB", "RGBA"):
             raise ValueError("putalpha requires RGB or RGBA; LA and PA modes are not supported")
         band = alpha if isinstance(alpha, Image) else new("L", self.size, index(alpha))
-        self._native = image_putalpha(self._native, band._native)
+        if band.mode != "L" or band.size != self.size:
+            raise ValueError("illegal image mode or size for alpha")
+        image_putalpha(self._native, band._native)
         self.palette = None
 
     def split(self) -> tuple[Image, ...]:

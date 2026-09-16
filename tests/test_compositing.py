@@ -113,6 +113,7 @@ def test_validation_and_closed_images():
         lambda: image.paste(image, mask=Image.new("RGB", image.size)),
         lambda: image.paste(image, mask=Image.new("L", (1, 1))),
         lambda: image.putalpha(Image.new("RGB", image.size)),
+        lambda: image.putalpha(image),
         lambda: Image.new("L", image.size).putalpha(255),
         lambda: Image.new("P", image.size).putalpha(255),
         lambda: Image.alpha_composite(image, Image.new("RGB", image.size)),
@@ -162,3 +163,60 @@ def test_empty_and_alias_alpha():
     image.putalpha(alpha)
     alpha.paste(0, (0, 0, 2, 3))
     assert image.getpixel((0, 0)) == (42, 42, 42, 42)
+
+
+@pytest.mark.parametrize("width", [15, 16, 17, 31, 32, 33, 257])
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
+def test_masked_paste_vector_boundaries(width, mode, mask_mode):
+    rng = random.Random(492)
+    size = (width, 5)
+    source = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
+    background = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
+    mask = PIL.frombytes(mask_mode, size, rng.randbytes(width * 5 * len(mask_mode)))
+    actual = Image.frombytes(mode, size, background.tobytes())
+    bsource = Image.frombytes(mode, size, source.tobytes())
+    bmask = Image.frombytes(mask_mode, size, mask.tobytes())
+    for position in [(0, 0), (-1, 1)]:
+        actual.paste(bsource, position, bmask)
+        background.paste(source, position, mask)
+        assert_same(actual, background)
+    # Test the distinct color-fill rule on transparent RGBA pixels in vectors
+    # and tails, including zero mask values.
+    actual = Image.new(mode, size)
+    background = PIL.new(mode, size)
+    actual.paste("red", mask=bmask)
+    background.paste("red", mask=mask)
+    assert_same(actual, background)
+
+
+def test_paste_mask_alias_and_failed_mutation():
+    rng = random.Random(20)
+    raw = rng.randbytes(33 * 4 * 3)
+    actual = Image.frombytes("RGBA", (33, 3), raw)
+    expected = PIL.frombytes("RGBA", (33, 3), raw)
+    source = Image.new("RGBA", actual.size, "red")
+    reference = PIL.new("RGBA", expected.size, "red")
+    actual.paste(source, mask=actual)
+    expected.paste(reference, mask=expected.copy())
+    assert_same(actual, expected)
+    before = actual.tobytes()
+    bad_mask = Image.new("L", actual.size)
+    bad_mask.close()
+    with pytest.raises(ValueError, match="closed"):
+        actual.paste(source, mask=bad_mask)
+    assert actual.tobytes() == before
+
+
+@pytest.mark.parametrize("size", [(17, 3), (513, 513)])
+def test_merge_and_alpha_kernel_boundaries(size):
+    rng = random.Random(745)
+    for mode in ("RGB", "RGBA"):
+        raw = rng.randbytes(size[0] * size[1] * len(mode))
+        actual = Image.frombytes(mode, size, raw)
+        expected = PIL.frombytes(mode, size, raw)
+        assert_same(Image.merge(mode, actual.split()), PIL.merge(mode, expected.split()))
+        alpha_raw = rng.randbytes(size[0] * size[1])
+        actual.putalpha(Image.frombytes("L", size, alpha_raw))
+        expected.putalpha(PIL.frombytes("L", size, alpha_raw))
+        assert_same(actual, expected)

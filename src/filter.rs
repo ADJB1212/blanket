@@ -394,6 +394,11 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         return Err(PyValueError::new_err("images do not match"));
     }
     let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
+    if mode == PixelMode::L {
+        // A single band only needs a copy, not a zeroed allocation followed by
+        // another full-buffer write. This matters once the band exceeds cache.
+        return Image::from_pixels(width, height, mode, py.detach(|| sources[0].to_vec()), None);
+    }
     let mut pixels = buffer(
         sources[0]
             .len()
@@ -409,11 +414,37 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
 }
 
 fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
-    chunks_mut(pixels, CHUNK_PIXELS * C, |chunk, dst| {
-        let start = chunk * CHUNK_PIXELS;
+    const CHUNK: usize = 256 * 1024;
+    crate::parallel::chunks_mut_above(pixels, CHUNK * C, 4 * 1024 * 1024, |chunk, dst| {
+        let start = chunk * CHUNK;
         let dst = dst.as_chunks_mut::<C>().0;
         let bands: [&[u8]; C] = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
-        for (i, pixel) in dst.iter_mut().enumerate() {
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            let mut offset = 0;
+            use std::arch::aarch64::*;
+            // Bands and output have matching pixel counts. Every store writes
+            // exactly 16 complete pixels within the current output partition.
+            unsafe {
+                while offset + 16 <= dst.len() {
+                    let r = vld1q_u8(bands[0].as_ptr().add(offset));
+                    let g = vld1q_u8(bands[1].as_ptr().add(offset));
+                    let b = vld1q_u8(bands[2].as_ptr().add(offset));
+                    let ptr = dst.as_mut_ptr().add(offset).cast::<u8>();
+                    if C == 3 {
+                        vst3q_u8(ptr, uint8x16x3_t(r, g, b));
+                    } else {
+                        let a = vld1q_u8(bands[3].as_ptr().add(offset));
+                        vst4q_u8(ptr, uint8x16x4_t(r, g, b, a));
+                    }
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        for (i, pixel) in dst.iter_mut().enumerate().skip(offset) {
             *pixel = std::array::from_fn(|c| bands[c][i]);
         }
     });
