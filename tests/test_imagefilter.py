@@ -61,6 +61,13 @@ def test_neighborhood_filters(name: str, mode: str, size: int) -> None:
     compare(mode, (7, 5), getattr(ImageFilter, name)(*args), getattr(PillowFilter, name)(*args))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("size", [(1, 1), (1, 17), (19, 1), (23, 19)])
+@pytest.mark.parametrize("rank", [0, 1, 12, 23, 24])
+def test_rank_histogram_groups_and_replicated_edges(mode: str, size: tuple[int, int], rank: int) -> None:
+    compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
+
+
 @pytest.mark.parametrize("size", [-3, -1, 0, 2, 4, 12])
 def test_mode_filter_special_sizes(size: int) -> None:
     compare("RGB", (7, 5), ImageFilter.ModeFilter(size), PillowFilter.ModeFilter(size))
@@ -79,6 +86,20 @@ def test_mode_filter_ties_and_rare_values() -> None:
 @pytest.mark.parametrize("size", [(1, 1), (1, 7), (17, 13)])
 def test_blurs(name: str, mode: str, radius: float | tuple[float, float], size: tuple[int, int]) -> None:
     compare(mode, size, getattr(ImageFilter, name)(radius), getattr(PillowFilter, name)(radius))
+
+
+@pytest.mark.parametrize("name", ["BoxBlur", "GaussianBlur"])
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("radius", [(0, 0.5), (0, 2), (0, 10.5), (2.5, 80.75), (0, 300)])
+def test_vertical_blur_band_boundaries(name: str, mode: str, radius: tuple[float, float]) -> None:
+    # Cross row bands, including a partial final band and radii
+    # extending beyond both image edges.
+    compare(mode, (131, 137), getattr(ImageFilter, name)(radius), getattr(PillowFilter, name)(radius))
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_vertical_blur_parallel_bands(mode: str) -> None:
+    compare(mode, (257, 1031), ImageFilter.GaussianBlur((1.5, 10.5)), PillowFilter.GaussianBlur((1.5, 10.5)))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

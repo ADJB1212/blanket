@@ -157,6 +157,7 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                 };
                 for channel in 0..channels {
                     let mut histogram = [0_u64; 256];
+                    let mut coarse = [0_u64; 16];
                     for yy in top..=bottom {
                         let weight = vertical_weight(yy);
                         for xx in 0..=radius.min(width - 1) {
@@ -166,12 +167,19 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                             } else {
                                 1
                             };
-                            histogram[source[(yy * width + xx) * channels + channel] as usize] += weight * horizontal;
+                            let value = source[(yy * width + xx) * channels + channel] as usize;
+                            histogram[value] += weight * horizontal;
+                            if rank.is_some() {
+                                coarse[value >> 4] += weight * horizontal;
+                            }
                         }
                     }
                     for x in 0..width {
                         let original = source[(y * width + x) * channels + channel];
-                        row[x * channels + channel] = select_value(&histogram, rank, original);
+                        row[x * channels + channel] = match rank {
+                            Some(rank) => select_rank(&histogram, &coarse, rank),
+                            None => select_mode(&histogram, original),
+                        };
                         if x + 1 == width {
                             break;
                         }
@@ -179,11 +187,19 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                             let weight = vertical_weight(yy);
                             if rank.is_some() || x >= radius {
                                 let xx = x.saturating_sub(radius);
-                                histogram[source[(yy * width + xx) * channels + channel] as usize] -= weight;
+                                let value = source[(yy * width + xx) * channels + channel] as usize;
+                                histogram[value] -= weight;
+                                if rank.is_some() {
+                                    coarse[value >> 4] -= weight;
+                                }
                             }
                             if rank.is_some() || x + radius + 1 < width {
                                 let xx = (x + radius + 1).min(width - 1);
-                                histogram[source[(yy * width + xx) * channels + channel] as usize] += weight;
+                                let value = source[(yy * width + xx) * channels + channel] as usize;
+                                histogram[value] += weight;
+                                if rank.is_some() {
+                                    coarse[value >> 4] += weight;
+                                }
                             }
                         }
                     }
@@ -194,16 +210,30 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
     output(image, pixels)
 }
 
-fn select_value(histogram: &[u64; 256], rank: Option<u64>, original: u8) -> u8 {
+// Locate the occupied group before scanning its sixteen values. Updating the
+// group counts with the sliding window bounds rank selection to 32 bins.
+fn select_rank(histogram: &[u64; 256], coarse: &[u64; 16], mut rank: u64) -> u8 {
+    for (group, &frequency) in coarse.iter().enumerate() {
+        if rank >= frequency {
+            rank -= frequency;
+            continue;
+        }
+        let start = group << 4;
+        for (offset, &frequency) in histogram[start..start + 16].iter().enumerate() {
+            if rank < frequency {
+                return (start + offset) as u8;
+            }
+            rank -= frequency;
+        }
+    }
+    unreachable!("rank is within the populated histogram")
+}
+
+fn select_mode(histogram: &[u64; 256], original: u8) -> u8 {
     let mut count = 0;
     let mut result = original;
     for (value, &frequency) in histogram.iter().enumerate() {
-        if let Some(rank) = rank {
-            count += frequency;
-            if count > rank {
-                return value as u8;
-            }
-        } else if frequency > count {
+        if frequency > count {
             count = frequency;
             if count > 2 {
                 result = value as u8;
@@ -232,28 +262,73 @@ fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let input = &source[(band * 16 + i) * width..][..width];
             let row = row.as_chunks_mut::<C>().0;
-            for channel in 0..C {
-                let mut sum = u64::from(input[0][channel]) * (integer as u64 + 1);
-                for pixel in &input[1..=integer.min(width - 1)] {
-                    sum += u64::from(pixel[channel]);
+            let mut sums = input[0].map(|value| u64::from(value) * (integer as u64 + 1));
+            for pixel in &input[1..=integer.min(width - 1)] {
+                for channel in 0..C {
+                    sums[channel] += u64::from(pixel[channel]);
                 }
-                sum += u64::from(input[width - 1][channel]) * integer.saturating_sub(width - 1) as u64;
-                for x in 0..width {
-                    let left = x.saturating_sub(integer + 1);
-                    let right = (x + integer + 1).min(width - 1);
+            }
+            for channel in 0..C {
+                sums[channel] += u64::from(input[width - 1][channel]) * integer.saturating_sub(width - 1) as u64;
+            }
+            for (x, pixel) in row.iter_mut().enumerate() {
+                let left = x.saturating_sub(integer + 1);
+                let right = (x + integer + 1).min(width - 1);
+                let leaving = x.saturating_sub(integer);
+                for channel in 0..C {
                     let ends = u64::from(input[left][channel]) + u64::from(input[right][channel]);
-                    row[x][channel] = ((sum * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
-                    if x + 1 < width {
-                        sum -= u64::from(input[x.saturating_sub(integer)][channel]);
-                        sum += u64::from(input[right][channel]);
-                    }
+                    pixel[channel] = ((sums[channel] * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
+                    sums[channel] = sums[channel] - u64::from(input[leaving][channel]) + u64::from(input[right][channel]);
                 }
             }
         }
     });
 }
 
+fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
+    let height = source.len() / stride;
+    let integer = radius as usize;
+    let weight = ((1_u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u64;
+    let far_weight = u64::from((1_u32 << 24).wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+    // Each band maintains one sum per byte column, allowing contiguous loads
+    // and vectorization across columns without transposing the image.
+    // Grow bands with the radius so rebuilding their initial sums stays
+    // linear in image size, even when the radius exceeds the image height.
+    let band_rows = 64.max(integer.min(height));
+    chunks_mut(pixels, stride * band_rows, |band, rows| {
+        let first = band * band_rows;
+        let top = first.saturating_sub(integer);
+        let bottom = (first + integer).min(height - 1);
+        let mut sums = vec![0_u64; stride];
+        for row in source[top * stride..(bottom + 1) * stride].chunks_exact(stride) {
+            for (sum, &value) in sums.iter_mut().zip(row) {
+                *sum += u64::from(value);
+            }
+        }
+        let upper_repeat = integer.saturating_sub(first) as u64;
+        let lower_repeat = (first + integer).saturating_sub(height - 1) as u64;
+        for ((sum, &upper), &lower) in sums.iter_mut().zip(&source[..stride]).zip(&source[(height - 1) * stride..]) {
+            *sum += u64::from(upper) * upper_repeat + u64::from(lower) * lower_repeat;
+        }
+        for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+            let y = first + i;
+            let left = y.saturating_sub(integer + 1) * stride;
+            let right = (y + integer + 1).min(height - 1) * stride;
+            let leaving = y.saturating_sub(integer) * stride;
+            let upper = &source[left..left + stride];
+            let lower = &source[right..right + stride];
+            let leaving = &source[leaving..leaving + stride];
+            for ((((dst, sum), &upper), &lower), &leaving) in row.iter_mut().zip(&mut sums).zip(upper).zip(lower).zip(leaving) {
+                let ends = u64::from(upper) + u64::from(lower);
+                *dst = ((*sum * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
+                *sum = *sum - u64::from(leaving) + u64::from(lower);
+            }
+        }
+    });
+}
+
 fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+    debug_assert_eq!(source.len(), width * height * C);
     let mut pixels = buffer(source.len())?;
     pixels.copy_from_slice(source);
     if pixels.is_empty() {
@@ -276,15 +351,10 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
         }
     }
     if radii.1 > 0.0 {
-        // The cache-tiled rotation kernel turns the vertical pass horizontal.
-        crate::ops::transpose::<C>(&pixels, &mut scratch, width, height, 5);
-        std::mem::swap(&mut pixels, &mut scratch);
         for _ in 0..passes {
-            box_horizontal::<C>(&pixels, &mut scratch, height, radii.1);
+            box_vertical(&pixels, &mut scratch, width * C, radii.1);
             std::mem::swap(&mut pixels, &mut scratch);
         }
-        crate::ops::transpose::<C>(&pixels, &mut scratch, height, width, 5);
-        std::mem::swap(&mut pixels, &mut scratch);
     }
     Ok(pixels)
 }
@@ -484,7 +554,7 @@ mod tests {
     }
 
     #[test]
-    fn vertical_blur_uses_transposed_passes() {
+    fn vertical_blur_matches_horizontal_pass() {
         // A 1x3 column blurred vertically equals the 3x1 row blurred horizontally.
         let column = blurred::<1>(&[0, 90, 0], 1, 3, (0.0, 1.0), false).unwrap();
         let row = blurred::<1>(&[0, 90, 0], 3, 1, (1.0, 0.0), false).unwrap();
@@ -497,10 +567,25 @@ mod tests {
         let mut histogram = [0; 256];
         histogram[1] = 2;
         histogram[2] = 2;
-        assert_eq!(select_value(&histogram, None, 99), 99);
+        assert_eq!(select_mode(&histogram, 99), 99);
         histogram[1] = 3;
         histogram[2] = 3;
-        assert_eq!(select_value(&histogram, None, 99), 1);
-        assert_eq!(select_value(&histogram, Some(3), 99), 2);
+        assert_eq!(select_mode(&histogram, 99), 1);
+    }
+
+    #[test]
+    fn hierarchical_rank_matches_sorted_values() {
+        let mut histogram = [0; 256];
+        let mut coarse = [0; 16];
+        let mut sorted = Vec::new();
+        for value in 0..256 {
+            let count = ((value * 37) % 7) as u64;
+            histogram[value] = count;
+            coarse[value >> 4] += count;
+            sorted.extend(std::iter::repeat_n(value as u8, count as usize));
+        }
+        for (rank, expected) in sorted.into_iter().enumerate() {
+            assert_eq!(select_rank(&histogram, &coarse, rank as u64), expected);
+        }
     }
 }
