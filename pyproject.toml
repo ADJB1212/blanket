@@ -40,7 +40,7 @@ line-length = 200
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-ignore = ["F401", "N999", "TRY004"]
+ignore = ["F401", "N999", "TRY004", "B023"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -50,7 +50,7 @@ skip-magic-trailing-comma = true
 split-on-trailing-comma = false
 
 [tool.ty.src]
-exclude = ["python/blanket", "scripts", "tests"]
+exclude = ["python/blanket", "scripts", "tests", "docs"]
 
 [tool.uv]
 compile-bytecode = true

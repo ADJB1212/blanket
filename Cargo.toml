@@ -7,7 +7,7 @@ rust-version = "1.97"
 description = "A focused Rust-backed image library with a Pillow-shaped Python API"
 authors = ["Andrew Jaffe"]
 license = "MIT"
-exclude = [".github/*", "tests/*", "pyproject.toml", "python/*", "scripts/*"]
+exclude = [".github/*", "tests/*", "pyproject.toml", "python/*", "scripts/*", "docs/*"]
 
 [lib]
 name = "_blanket"
