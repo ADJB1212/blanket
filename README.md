@@ -20,7 +20,7 @@ with Image.open("photo.jpg") as image:
 ```
 
 [Installation](#installation) · [Examples](#examples) ·
-[Formats](#supported-formats) · [API notes](docs/usage.md) ·
+[Formats](#supported-formats) · [API notes](docs/index.md) ·
 [Contributing](#contributing)
 
 ## Why Blanket?
@@ -65,7 +65,7 @@ sudo apt-get install build-essential cmake ninja-build nasm libdav1d-dev \
 
 AVIF requires dav1d 1.3+; HEIF requires libheif 1.17+ with libde265 and x265
 codecs. Native shared libraries and codec plugins must also be available at
-runtime. See the [development notes](docs/usage.md#development) for more context.
+runtime. See the [development notes](docs/development.md) for more context.
 
 ## Examples
 
@@ -139,7 +139,7 @@ image.convert("RGB", bit_depth=8).save("preview.jpg")
 `image.bit_depth` reports sample precision. Copying, conversion, pixel access,
 splitting, cropping, transposition, and resizing preserve high-bit-depth
 samples. Other processing operations require conversion to 8 bits.
-See [high-bit-depth images](docs/usage.md#high-bit-depth-images) for storage
+See [high-bit-depth images](docs/Image.md#high-bit-depth-images) for storage
 and format-specific behavior.
 
 ## Supported formats
@@ -157,7 +157,7 @@ and format-specific behavior.
 | PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency |
 
 Encoder settings and their defaults are listed in the
-[API notes](docs/usage.md#supported-api). HEIF lossless compression can still
+[API notes](docs/Image.md#supported-api). HEIF lossless compression can still
 change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
@@ -173,7 +173,7 @@ change RGB values during RGB/YUV conversion.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
   installed. High-bit-depth images must first be converted to 8 bits.
 
-See the [usage and API notes](docs/usage.md) for operation-specific restrictions,
+See the [usage and API notes](docs/index.md) for operation-specific restrictions,
 palette support, and interoperability examples.
 
 ## Performance
@@ -189,7 +189,7 @@ uv run --no-sync scripts/benchmark.py --sizes web
 
 Use `--all` for the full suite or `--sections Resize ImageOps` to select
 operations. Results depend on image size, operation, codec settings, and
-hardware. The [benchmark guide](docs/usage.md#comparing-performance-across-changes)
+hardware. The [benchmark guide](docs/benchmarking.md)
 explains baseline comparisons and reproducible runs.
 
 ## Contributing
