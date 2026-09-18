@@ -60,12 +60,13 @@ brew install cmake ninja dav1d libheif
 
 # Ubuntu
 sudo apt-get install build-essential cmake ninja-build nasm libdav1d-dev \
-    libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev
+    libheif-dev libde265-dev libx265-dev libnuma-dev
 ```
 
-AVIF requires dav1d 1.3+; HEIF requires libheif 1.17+ with libde265 and x265
-codecs. Native shared libraries and codec plugins must also be available at
-runtime. See the [development notes](docs/development.md) for more context.
+AVIF requires dav1d 1.3+. The embedded libheif build requires libde265 and x265
+development libraries to compile HEIF support; external libheif plugins are not
+loaded. Native shared codec libraries must also be available at runtime. See the
+[development notes](docs/development.md) for more context.
 
 ## Examples
 
@@ -166,20 +167,20 @@ and format-specific behavior.
 
 ## Supported formats
 
-| Format      | Read | Write | Notes                                                |
-| ----------- | :--: | :---: | ---------------------------------------------------- |
-| PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output          |
-| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving      |
-| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support            |
-| TIFF        | Yes  |  Yes  | First image only; uncompressed output                |
-| WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                  |
-| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output              |
-| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth        |
-| DNG         | Yes  |   —   | Raw development to 8-bit RGB                         |
-| PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency |
-| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                         |
+| Format      | Read | Write | Notes                                                                     |
+| ----------- | :--: | :---: | ------------------------------------------------------------------------- |
+| PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                               |
+| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                           |
+| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                                 |
+| TIFF        | Yes  |  Yes  | First image only; uncompressed output                                     |
+| WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                                       |
+| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                   |
+| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                             |
+| DNG         | Yes  |   —   | Raw development to 8-bit RGB                                              |
+| PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency                      |
+| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                |
 | GIF         | Yes  |  Yes  | First frame only; single-frame output, 256 colors and binary transparency |
-| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension |
+| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension   |
 
 Encoder settings and their defaults are listed in the
 [API notes](docs/Image.md#supported-api). HEIF lossless compression can still

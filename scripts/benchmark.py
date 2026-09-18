@@ -391,6 +391,65 @@ def compositing_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comparisons
 
 
+def image_method_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Compare pixel APIs with materialized outputs and repeatable mutations.
+
+    Copy costs are included for both libraries on mutating operations. Input
+    lists and LUTs are prepared outside timing. Pillow getdata is materialized
+    so its lazy sequence is not compared with Blanket's complete pixel list.
+    """
+    w, h = size
+    target = (max(1, w // 8), max(1, h // 8))
+    mask_raw = make_gray(w, h)
+    b_mask = BlanketImage.frombytes("L", size, mask_raw)
+    p_mask = PillowImage.frombytes("L", size, mask_raw)
+    comparisons: list[Comparison] = []
+
+    def mutate(image: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+        result = image.copy()
+        getattr(result, method)(*args, **kwargs)
+        return result
+
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(w, h)
+        actual = BlanketImage.frombytes(mode, size, raw)
+        expected = PillowImage.frombytes(mode, size, raw)
+        other_actual = BlanketImage.frombytes(mode, size, raw[::-1])
+        other_expected = PillowImage.frombytes(mode, size, raw[::-1])
+        channels = len(mode)
+        lut = list(range(255, -1, -1)) * channels
+        # Reuse a small set of tuples rather than retaining millions of
+        # distinct Python objects at the larger benchmark sizes.
+        tile = [raw[i] if channels == 1 else tuple(raw[i:i + channels]) for i in range(0, min(w * h, 256) * channels, channels)]
+        data = (tile * math.ceil(w * h / len(tile)))[:w * h] if tile else []
+        value = 127 if mode == "L" else (17, 83, 149, 211)[:channels]
+        comparisons.extend([
+            (f"getbands {mode}", actual.getbands, expected.getbands),
+            (f"getchannel {mode}", partial(actual.getchannel, channels - 1), partial(expected.getchannel, channels - 1)),
+            (f"getextrema {mode}", actual.getextrema, expected.getextrema),
+            (f"getbbox {mode}", actual.getbbox, expected.getbbox),
+            (f"histogram {mode}", actual.histogram, expected.histogram),
+            (f"histogram masked {mode}", partial(actual.histogram, b_mask), partial(expected.histogram, p_mask)),
+            (f"point LUT {mode}", partial(actual.point, lut), partial(expected.point, lut)),
+            (f"point callable {mode}", partial(actual.point, lambda v: 255 - v), partial(expected.point, lambda v: 255 - v)),
+            (f"thumbnail {mode} (copy included)", partial(mutate, actual, "thumbnail", target), partial(mutate, expected, "thumbnail", target)),
+            (f"getdata list {mode}", actual.getdata, lambda im=expected: list(im.getdata())),
+            (f"get_flattened_data {mode}", actual.get_flattened_data, expected.get_flattened_data),
+            (f"getdata band {mode}", partial(actual.getdata, channels - 1), lambda im=expected, band=channels - 1: list(im.getdata(band))),
+            (f"getcolors 256 {mode}", actual.getcolors, expected.getcolors),
+            (f"getcolors limit=16 {mode}", partial(actual.getcolors, 16), partial(expected.getcolors, 16)),
+            (f"putpixel {mode} (copy included)", partial(mutate, actual, "putpixel", (w // 2, h // 2), value), partial(mutate, expected, "putpixel", (w // 2, h // 2), value)),
+            (f"putdata {mode} (copy included)", partial(mutate, actual, "putdata", data), partial(mutate, expected, "putdata", data)),
+            (f"blend {mode}", partial(BlanketImage.blend, actual, other_actual, 0.35), partial(PillowImage.blend, expected, other_expected, 0.35)),
+            (f"composite {mode}", partial(BlanketImage.composite, actual, other_actual, b_mask), partial(PillowImage.composite, expected, other_expected, p_mask)),
+        ])
+        if mode == "L":
+            comparisons.append(("putdata scaled L (copy included)", partial(mutate, actual, "putdata", data, 0.75, 20), partial(mutate, expected, "putdata", data, 0.75, 20)))
+        if mode == "RGBA":
+            comparisons.append(("getbbox all channels RGBA", partial(actual.getbbox, alpha_only=False), partial(expected.getbbox, alpha_only=False)))
+    return comparisons
+
+
 def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Benchmark array/byte construction, extraction, and Pillow conversion."""
     raw = make_rgb(*size)
@@ -788,7 +847,7 @@ def main() -> None:
             "Conversions": partial(conversion_comparisons, size),
             "Resize": partial(resize_comparisons, size),
             "Geometry": partial(geometry_comparisons, size),
-            "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size),
+            "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size) + image_method_comparisons(size),
             "Memory": partial(memory_comparisons, size),
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),

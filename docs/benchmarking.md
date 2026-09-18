@@ -2,6 +2,20 @@
 
 [Back to the README](../README.md) · [All modules](index.md)
 
+The `Bands` section includes pixel access and mutation, histograms, extrema,
+bounding boxes, channel extraction, lookup tables, thumbnails, blending, and
+masked compositing in L, RGB, and RGBA modes:
+
+```sh
+maturin develop -r --extras test --uv
+uv run --no-sync scripts/benchmark.py --sections Bands --sizes web --no-baseline
+```
+
+Mutating cases include a fresh copy for both libraries on every iteration.
+Pixel input lists and lookup tables are prepared outside timing. The `getdata`
+comparison materializes Pillow's sequence into a list to match Blanket's
+snapshot; `get_flattened_data` compares tuple snapshots directly.
+
 Run the benchmark before editing, then rebuild and run the same command again:
 
 ```sh

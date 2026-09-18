@@ -37,6 +37,51 @@ editing are not supported. New formats do not currently retain EXIF/XMP metadata
 supports all conversions among `L`, `RGB`, and `RGBA`.
 
 `image.split()` returns independent `L` images for each channel.
+
+`image.getbands()` returns channel names, and `image.getchannel(name_or_index)`
+returns an independent `L` image for one channel, including high-bit-depth samples.
+
+`image.histogram(mask=None, extrema=None)` returns 256 bins per channel for
+8-bit images. An `L` mask selects nonzero pixels; `extrema` is ignored.
+`image.getextrema()` returns a minimum/maximum pair for each channel,
+or `None` for an empty image.
+Extrema and single-channel extraction use dedicated Rust kernels and support
+high-bit-depth samples.
+
+`image.getdata(band=None)` returns a flat list snapshot of pixels in row order;
+unlike Pillow's legacy sequence, this list is independent of subsequent image
+mutations. `image.get_flattened_data(band=None)` returns a tuple snapshot.
+Both support high-bit-depth samples and optional channel indices.
+
+`image.getcolors(maxcolors=256)` counts distinct pixels in Rust and returns
+unordered `(count, pixel)` pairs, or `None` when the limit is exceeded.
+Palette images count indices, and high-bit-depth images count full sample values.
+
+`image.putpixel((x, y), value)` writes one 8-bit pixel, with negative coordinates
+and clipped channel values. For palette images, supply an index; allocating a
+palette entry from an RGB tuple is unsupported.
+`image.putdata(data, scale=1.0, offset=0.0)` writes a sequence in row order using
+the Rust backend. A shorter sequence leaves remaining pixels unchanged.
+Scale and offset apply to single-band numeric values; multiband input accepts
+pixel tuples or packed integers. These mutation methods require 8-bit images.
+
+`Image.blend(im1, im2, alpha)` uses the native blending kernel for equally sized
+8-bit L/RGB/RGBA images. Values outside `[0, 1]` extrapolate and clip.
+`Image.composite(image1, image2, mask)` uses native masked paste, selecting
+image1 where the mask is white and image2 where it is black. Masks may be L
+or RGBA; RGBA masks use alpha. Inputs remain unchanged.
+
+`image.getbbox(alpha_only=True)` returns the nonzero bounding rectangle or
+`None`. RGBA images use only alpha by default; pass `alpha_only=False` to
+consider every channel. This also supports high-bit-depth samples.
+
+`image.point(lut, mode=None)` applies an 8-bit lookup table containing 256
+entries per channel, or a callable evaluated once for each possible value.
+It preserves the mode, palette, and metadata; output mode conversion is unsupported.
+
+`image.thumbnail(size, resample=Image.Resampling.BICUBIC, reducing_gap=2.0)`
+shrinks an image in place to fit the requested dimensions, preserving its
+aspect ratio and metadata. It never enlarges an image and returns `None`.
 `image.reduce(factor, box=None)` averages integer pixel blocks; `factor` can
 be an integer or a `(horizontal, vertical)` pair. Output dimensions round up,
 and RGBA reduction accounts for alpha.

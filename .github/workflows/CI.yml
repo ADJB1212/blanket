@@ -59,7 +59,7 @@ jobs:
           save-cache: "false"
       - name: Install HEIF codecs (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang llvm lld ninja-build
       - name: Install HEIF codecs (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -84,8 +84,6 @@ jobs:
           uv tool install maturin
           maturin develop --extras test --uv --profile dev
       - name: Test Python API
-        env:
-          CI: 1
-        run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --ignore=tests/test_compression_benchmark.py
+        run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --ignore=tests/test_compression_benchmark.py --color=no --code-highlight=no
       - name: Verify Pillow behavior
         run: uv run --no-sync scripts/verify_behavior.py

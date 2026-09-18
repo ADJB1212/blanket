@@ -56,7 +56,7 @@ jobs:
       - name: Install Python from uv
         run: uv python install 3.14
       - name: Install HEIF codecs (Linux)
-        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libheif-plugin-libde265 libheif-plugin-x265 libnuma-dev clang llvm lld ninja-build
+        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang llvm lld ninja-build
       - name: Setup PATH
         run: |
           echo "CC=clang" >> "$GITHUB_ENV"

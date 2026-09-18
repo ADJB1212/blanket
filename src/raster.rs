@@ -1,9 +1,30 @@
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use std::collections::HashMap;
 
 use crate::codecs::{self, ImageFormat, SaveOptions};
+
+fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
+    if let Ok(number) = value.extract::<i64>() {
+        return Ok(if channels == 1 {
+            [number.clamp(0, 255) as u8, 0, 0, 0]
+        } else {
+            std::array::from_fn(|i| ((number >> (i * 8)) & 255) as u8)
+        });
+    }
+    let tuple = value.cast::<PyTuple>().map_err(|_| PyTypeError::new_err("color must be int or tuple"))?;
+    let count = tuple.len();
+    if !(count == channels || channels >= 3 && matches!(count, 3 | 4)) {
+        return Err(PyTypeError::new_err("wrong number of color components"));
+    }
+    let mut pixel = [0, 0, 0, 255];
+    for (i, component) in tuple.iter().take(channels).enumerate() {
+        pixel[i] = component.extract::<i64>()?.clamp(0, 255) as u8;
+    }
+    Ok(pixel)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PixelMode {
@@ -107,6 +128,146 @@ impl Image {
 
 #[pymethods]
 impl Image {
+    fn getextrema(&self, py: Python<'_>) -> PyResult<Vec<(u16, u16)>> {
+        let data = self.raw_data()?;
+        let channels = self.mode.channels();
+        Ok(py.detach(|| {
+            if data.is_empty() {
+                return Vec::new();
+            }
+            let mut ranges = vec![(u16::MAX, 0); channels];
+            if self.bit_depth == 8 {
+                for (i, &value) in data.iter().enumerate() {
+                    let range = &mut ranges[i % channels];
+                    range.0 = range.0.min(u16::from(value));
+                    range.1 = range.1.max(u16::from(value));
+                }
+            } else {
+                for (i, bytes) in data.as_chunks::<2>().0.iter().enumerate() {
+                    let value = u16::from_le_bytes(*bytes);
+                    let range = &mut ranges[i % channels];
+                    range.0 = range.0.min(value);
+                    range.1 = range.1.max(value);
+                }
+            }
+            ranges
+        }))
+    }
+
+    fn getchannel(&self, py: Python<'_>, channel: usize) -> PyResult<Self> {
+        let data = self.raw_data()?;
+        let channels = self.mode.channels();
+        if channel >= channels {
+            return Err(PyValueError::new_err("band index out of range"));
+        }
+        py.detach(|| {
+            if self.bit_depth == 8 {
+                let pixels = data.chunks_exact(channels).map(|pixel| pixel[channel]).collect();
+                Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)
+            } else {
+                let samples = data
+                    .chunks_exact(channels * 2)
+                    .map(|pixel| u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]))
+                    .collect();
+                Self::from_samples(self.width, self.height, PixelMode::L, samples, self.bit_depth, None)
+            }
+        })
+    }
+
+    fn getdata(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+        self.raw_data()?;
+        let result = PyList::empty(py);
+        for y in 0..self.height {
+            for x in 0..self.width {
+                result.append(self.getpixel(py, (i64::from(x), i64::from(y)))?)?;
+            }
+        }
+        Ok(result.unbind())
+    }
+
+    fn getcolors(&self, py: Python<'_>, maxcolors: usize) -> PyResult<Option<Py<PyList>>> {
+        let data = self.raw_data()?;
+        let stride = self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
+        let counts = py.detach(|| {
+            let mut counts = HashMap::<&[u8], (usize, usize)>::new();
+            for (i, pixel) in data.chunks_exact(stride).enumerate() {
+                let entry = counts.entry(pixel).or_insert((0, i));
+                entry.0 += 1;
+                if counts.len() > maxcolors {
+                    return None;
+                }
+            }
+            Some(counts)
+        });
+        let Some(counts) = counts else { return Ok(None) };
+        let result = PyList::empty(py);
+        for (count, i) in counts.into_values() {
+            let pixel = self.getpixel(py, ((i % self.width as usize) as i64, (i / self.width as usize) as i64))?;
+            result.append((count, pixel))?;
+        }
+        Ok(Some(result.unbind()))
+    }
+
+    fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.pixel_data()?;
+        let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
+        let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
+        if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {
+            return Err(PyIndexError::new_err("image index out of range"));
+        }
+        let channels = self.mode.channels();
+        let pixel = parse_pixel(value, channels)?;
+        let offset = (y as usize * self.width as usize + x as usize) * channels;
+        self.pixels.as_mut().unwrap()[offset..offset + channels].copy_from_slice(&pixel[..channels]);
+        Ok(())
+    }
+
+    fn putdata(&mut self, data: &Bound<'_, PyAny>, scale: f64, offset: f64) -> PyResult<()> {
+        self.pixel_data()?;
+        let length = data.len()?;
+        if length > self.width as usize * self.height as usize {
+            return Err(PyTypeError::new_err("too many data entries"));
+        }
+        let channels = self.mode.channels();
+        let pixels = self.pixels.as_mut().unwrap();
+        for i in 0..length {
+            let value = data.get_item(i)?;
+            let pixel = if channels == 1 {
+                let number = value.extract::<f64>()?;
+                [(number * scale + offset).clamp(0.0, 255.0) as u8, 0, 0, 0]
+            } else {
+                parse_pixel(&value, channels)?
+            };
+            pixels[i * channels..(i + 1) * channels].copy_from_slice(&pixel[..channels]);
+        }
+        Ok(())
+    }
+
+    fn getbbox(&self, py: Python<'_>, alpha_only: bool) -> PyResult<Option<(u32, u32, u32, u32)>> {
+        let pixels = self.raw_data()?;
+        let channels = self.mode.channels();
+        let sample_bytes = if self.bit_depth == 8 { 1 } else { 2 };
+        Ok(py.detach(|| {
+            let mut bounds = (self.width, self.height, 0, 0);
+            for (i, pixel) in pixels.chunks_exact(channels * sample_bytes).enumerate() {
+                let values = if alpha_only && self.mode == PixelMode::Rgba {
+                    &pixel[3 * sample_bytes..]
+                } else {
+                    pixel
+                };
+                if values.iter().any(|&v| v != 0) {
+                    let x = (i % self.width as usize) as u32;
+                    let y = (i / self.width as usize) as u32;
+                    bounds.0 = bounds.0.min(x);
+                    bounds.1 = bounds.1.min(y);
+                    bounds.2 = bounds.2.max(x + 1);
+                    bounds.3 = bounds.3.max(y + 1);
+                }
+            }
+            (bounds.2 != 0).then_some(bounds)
+        }))
+    }
+
     #[getter]
     fn bit_depth(&self) -> u8 {
         self.bit_depth

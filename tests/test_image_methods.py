@@ -1,0 +1,86 @@
+from __future__ import annotations
+
+import pytest
+from PIL import Image as PIL
+
+from blanket import Image
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
+def test_statistics_channels_and_point(mode: str) -> None:
+    data = bytes((i * 37) % 256 for i in range(63 * len(mode)))
+    actual = Image.frombytes(mode, (9, 7), data)
+    expected = PIL.frombytes(mode, (9, 7), data)
+    assert actual.getbands() == expected.getbands()
+    assert actual.histogram() == expected.histogram()
+    assert actual.getextrema() == expected.getextrema()
+    for channel in (*range(len(mode)), *mode):
+        assert actual.getchannel(channel).tobytes() == expected.getchannel(channel).tobytes()
+    for lut in (lambda v: v / 2, list(range(255, -1, -1)) * len(mode)):
+        assert actual.point(lut).tobytes() == expected.point(lut).tobytes()
+    mask_data = bytes(i % 3 for i in range(63))
+    assert actual.histogram(Image.frombytes("L", (9, 7), mask_data)) == expected.histogram(PIL.frombytes("L", (9, 7), mask_data))
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
+@pytest.mark.parametrize("size", [(13, 11), (1, 8), (8, 1), (100, 100), (7.9, 5.2)])
+def test_thumbnail(mode: str, size: tuple[float, float]) -> None:
+    data = bytes((i * 19) % 256 for i in range(31 * 23 * len(mode)))
+    actual = Image.frombytes(mode, (31, 23), data)
+    expected = PIL.frombytes(mode, (31, 23), data)
+    actual.info["custom"] = 42
+    assert actual.thumbnail(size) is None
+    expected.thumbnail(size)
+    assert actual.size == expected.size
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.info["custom"] == 42
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
+@pytest.mark.parametrize("alpha_only", [True, False])
+def test_bbox(mode: str, alpha_only: bool) -> None:
+    actual = Image.new(mode, (7, 5))
+    expected = PIL.new(mode, (7, 5))
+    assert actual.getbbox(alpha_only=alpha_only) is None
+    color = (10, 20, 30, 0) if mode == "RGBA" else 12
+    actual.paste(color, (2, 1, 5, 4))
+    expected.paste(color, (2, 1, 5, 4))
+    assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
+
+
+def test_validation_and_empty_images() -> None:
+    image = Image.new("RGB", (2, 2))
+    for channel in (-1, 3, "A"):
+        with pytest.raises(ValueError):
+            image.getchannel(channel)
+    with pytest.raises(ValueError):
+        image.point([0] * 256)
+    with pytest.raises(ValueError):
+        image.histogram(Image.new("L", (1, 1)))
+    assert Image.new("L", (0, 0)).getextrema() is None
+    assert Image.new("RGBA", (0, 0)).getbbox() is None
+    image.close()
+    for operation in (image.getbbox, image.histogram, image.getextrema):
+        with pytest.raises(ValueError):
+            operation()
+
+
+def test_palette_and_independent_channel() -> None:
+    image = Image.frombytes("P", (2, 1), b"\x01\x02")
+    image.putpalette(bytes(range(30)))
+    image.info["custom"] = 42
+    mapped = image.point(lambda v: 255 - v)
+    assert mapped.getpalette() == image.getpalette()
+    assert mapped.info == image.info
+    channel = image.getchannel("P")
+    channel.paste(99, (0, 0, 2, 1))
+    assert image.tobytes() == b"\x01\x02"
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_high_depth_bbox(depth: int) -> None:
+    image = Image.frombytes("RGBA", (2, 1), b"\x00" * 8 + b"\x00\x01" * 4, bit_depth=depth)
+    assert image.getbbox() == (1, 0, 2, 1)
+    assert image.getchannel("A").getpixel((1, 0)) == 256
+    with pytest.raises(ValueError, match="8-bit"):
+        image.histogram()

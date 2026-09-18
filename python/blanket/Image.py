@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 import math
 import os
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from enum import IntEnum
 from operator import index
 from pathlib import Path
@@ -206,6 +206,32 @@ class Image:
             return [v for i, v in enumerate(data) if i % 4 != 3]
         return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
 
+    def putpixel(self, xy: tuple[int, int], value: int | tuple[int, ...]) -> None:
+        """Write an 8-bit pixel, accepting negative coordinates and clipping values.
+
+        Palette images accept numeric indices, not RGB color allocation.
+        """
+        if self.mode == "P" and isinstance(value, tuple) and len(value) != 1:
+            raise ValueError("palette putpixel requires an index")
+        self._native.putpixel(tuple(index(v) for v in xy), value)
+
+    def getdata(self, band: int | None = None) -> list[int | tuple[int, ...]]:
+        """Return a flat pixel snapshot, optionally selecting one band."""
+        source = self if band is None else self.getchannel(index(band))
+        return source._native.getdata()
+
+    def get_flattened_data(self, band: int | None = None) -> tuple[int | tuple[int, ...], ...]:
+        """Return an immutable flat pixel snapshot, as in recent Pillow versions."""
+        return tuple(self.getdata(band))
+
+    def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
+        """Write 8-bit pixels in row order; scale/offset apply to single-band data."""
+        self._native.putdata(data, scale, offset)
+
+    def getcolors(self, maxcolors: int = 256) -> list[tuple[int, int | tuple[int, ...]]] | None:
+        """Return unordered (count, pixel) pairs, or None above maxcolors."""
+        return self._native.getcolors(max(0, index(maxcolors)))
+
     def putpalette(self, data: Sequence[int] | bytes | ImagePalette, rawmode: str = "RGB") -> None:
         """Attach an RGB or RGBA palette to an L or P image."""
         from .ImagePalette import ImagePalette
@@ -354,6 +380,82 @@ class Image:
         for band in bands:
             band.info.update(self.info)
         return bands
+
+    def getbands(self) -> tuple[str, ...]:
+        """Return channel names in pixel order."""
+        return tuple(self.mode)
+
+    def getchannel(self, channel: int | str) -> Image:
+        """Return an independent L image for a channel name or index."""
+        self.load()
+        if isinstance(channel, str):
+            try:
+                channel = self.getbands().index(channel)
+            except ValueError as error:
+                raise ValueError(f'The image has no channel "{channel}"') from error
+        channel = index(channel)
+        if not 0 <= channel < len(self.getbands()):
+            raise ValueError("band index out of range")
+        result = Image(self._native.getchannel(channel))
+        result.info.update(self.info)
+        return result
+
+    def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:
+        """Return 256 bins per band for 8-bit pixels; extrema is ignored."""
+        from ._blanket import ops_histogram
+
+        self.load()
+        if mask is not None:
+            mask.load()
+            if mask.mode != "L":
+                raise ValueError("bad transparency mask")
+        return ops_histogram(self._native, None if mask is None else mask._native)
+
+    def getextrema(self) -> tuple[int, int] | tuple[tuple[int, int], ...] | None:
+        """Return the minimum and maximum sample value of each band."""
+        ranges = self._native.getextrema()
+        if not ranges:
+            return None
+        return ranges[0] if len(ranges) == 1 else tuple(ranges)
+
+    def getbbox(self, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
+        """Return the nonzero bounding box, using RGBA alpha by default."""
+        return self._native.getbbox(alpha_only)
+
+    def point(self, lut: Sequence[float] | Callable[[int], float], mode: str | None = None) -> Image:
+        """Map 8-bit channels through a table or a function evaluated 256 times."""
+        from ._blanket import ops_lut
+
+        self.load()
+        if mode is not None and mode != self.mode:
+            raise ValueError("point mode conversion is not supported")
+        values = [lut(i) for i in range(256)] * len(self.getbands()) if callable(lut) else list(lut)
+        if len(values) != 256 * len(self.getbands()):
+            raise ValueError("wrong number of lut entries")
+        result = Image(ops_lut(self._native, [max(0, min(255, round(v))) for v in values]))
+        result.info.update(self.info)
+        return result
+
+    def thumbnail(self, size: tuple[float, float], resample: int = Resampling.BICUBIC, reducing_gap: float | None = 2.0) -> None:
+        """Shrink in place to fit size, preserving aspect ratio without upscaling."""
+        self.load()
+        x, y = (math.floor(v) for v in size)
+        if x <= 0 or y <= 0:
+            raise ValueError("height and width must be > 0")
+        if x >= self.width and y >= self.height:
+            return
+        if not self.width or not self.height:
+            return
+        aspect = self.width / self.height
+        if x / y >= aspect:
+            value = y * aspect
+            x = max(1, min(math.floor(value), math.ceil(value), key=lambda n: abs(aspect - n / y)))
+        else:
+            value = x / aspect
+            y = max(1, min(math.floor(value), math.ceil(value), key=lambda n: 0 if n == 0 else abs(aspect - x / n)))
+        resized = self.resize((x, y), resample, reducing_gap=reducing_gap)
+        self._native = resized._native
+        self.palette = resized.palette
 
     def reduce(self, factor: int | tuple[int, int], box: tuple[int, int, int, int] | None = None) -> Image:
         """Average integer blocks, rounding the output dimensions up.
@@ -662,6 +764,28 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
     return Image(filter_merge(mode, [band._native for band in bands]))
 
 
+def blend(im1: Image, im2: Image, alpha: float) -> Image:
+    """Interpolate equal-sized 8-bit images, clipping extrapolated values."""
+    from ._blanket import enhance_blend
+
+    im1.load()
+    im2.load()
+    if im1.mode == "P" or im2.mode == "P":
+        raise ValueError("image has wrong mode")
+    result = Image(enhance_blend(im1._native, im2._native, alpha))
+    result.info.update(im1.info)
+    return result
+
+
+def composite(image1: Image, image2: Image, mask: Image) -> Image:
+    """Select between images using an L or RGBA mask through native paste."""
+    if image1.size != image2.size:
+        raise ValueError("images do not match")
+    result = image2.copy()
+    result.paste(image1, (0, 0), mask)
+    return result
+
+
 def alpha_composite(im1: Image, im2: Image) -> Image:
     """Return im2 composited over im1; both must be equal-sized 8-bit RGBA."""
     from ._blanket import image_alpha_composite
@@ -797,6 +921,8 @@ __all__ = [
     "Transform",
     "Transpose",
     "fromarray",
+    "blend",
+    "composite",
     "frombytes",
     "open",
 ]
