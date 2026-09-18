@@ -80,6 +80,22 @@ def check_png_interop() -> int:
     return checks
 
 
+def check_bmp_gif_ico_interop() -> int:
+    checks = 0
+    for format in ("BMP", "GIF", "ICO"):
+        for mode in ("L", "RGB", "RGBA"):
+            source = PillowImage.new(mode, (32, 32), 120 if mode == "L" else (60, 120, 180) if mode == "RGB" else (60, 120, 180, 255))
+            for writer in (source, BlanketImage.frombytes(mode, source.size, source.tobytes())):
+                output = BytesIO()
+                writer.save(output, format)
+                actual = BlanketImage.open(output, formats=[format])
+                expected = PillowImage.open(output).convert("RGBA")
+                assert (actual.size, actual.format) == (source.size, format)
+                assert actual.convert("RGBA").tobytes() == expected.tobytes()
+                checks += 1
+    return checks
+
+
 def check_jpeg_interop() -> int:
     raw = pixels("RGB")
     for producer in ("Pillow", "Blanket"):
@@ -467,6 +483,7 @@ def main() -> None:
     imageops_checks = check_imageops()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
+    checks += check_bmp_gif_ico_interop()
     checks += check_compositing()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()

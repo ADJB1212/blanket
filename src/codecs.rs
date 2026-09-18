@@ -66,6 +66,9 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ImageFormat {
+    Bmp,
+    Gif,
+    Ico,
     Png,
     Jpeg,
     Jxl,
@@ -80,6 +83,9 @@ pub(crate) enum ImageFormat {
 impl ImageFormat {
     pub(crate) fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
+            "BMP" => Ok(Self::Bmp),
+            "GIF" => Ok(Self::Gif),
+            "ICO" => Ok(Self::Ico),
             "PDF" => Ok(Self::Pdf),
             "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
@@ -90,13 +96,16 @@ impl ImageFormat {
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, AVIF, or PDF"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, AVIF, PDF, BMP, GIF, or ICO"
             ))),
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Bmp => "BMP",
+            Self::Gif => "GIF",
+            Self::Ico => "ICO",
             Self::Pdf => "PDF",
             Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
@@ -110,7 +119,13 @@ impl ImageFormat {
     }
 
     fn detect(data: &[u8]) -> Option<Self> {
-        if data.starts_with(PNG_SIGNATURE) {
+        if data.starts_with(b"BM") {
+            Some(Self::Bmp)
+        } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
+            Some(Self::Gif)
+        } else if data.starts_with(b"\0\0\x01\0") {
+            Some(Self::Ico)
+        } else if data.starts_with(PNG_SIGNATURE) {
             Some(Self::Png)
         } else if data.starts_with(&[0xff, 0xd8, 0xff]) {
             Some(Self::Jpeg)
@@ -159,6 +174,9 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
 
 fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Bmp => decode_rust_image(data, RustFormat::Bmp, "BMP"),
+        ImageFormat::Gif => decode_rust_image(data, RustFormat::Gif, "GIF"),
+        ImageFormat::Ico => decode_ico(data),
         ImageFormat::Pdf => Err("PDF is a write-only format".into()),
         ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
         ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
@@ -169,6 +187,37 @@ fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
     }
+}
+
+fn decode_ico(data: &[u8]) -> Result<Image, String> {
+    let count = data.get(4..6).ok_or("truncated ICO header")?;
+    let count = usize::from(u16::from_le_bytes([count[0], count[1]]));
+    let directory = data.get(6..6 + count * 16).ok_or("truncated ICO directory")?;
+    let dimension = |v: u8| if v == 0 { 256_u32 } else { u32::from(v) };
+    let entry = directory
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .max_by_key(|entry| (dimension(entry[0]) * dimension(entry[1]), u16::from_le_bytes([entry[6], entry[7]])))
+        .ok_or("empty ICO directory")?;
+    let length = u32::from_le_bytes(entry[8..12].try_into().unwrap()) as usize;
+    let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
+    let end = offset.checked_add(length).ok_or("ICO payload overflow")?;
+    let payload = data.get(offset..end).ok_or("truncated ICO payload")?;
+    if payload.starts_with(PNG_SIGNATURE) {
+        let image = decode_rust_image(payload, RustFormat::Png, "ICO")?;
+        if image.width != dimension(entry[0]) || image.height != dimension(entry[1]) {
+            return Err("ICO directory and PNG dimensions differ".into());
+        }
+        return Ok(image);
+    }
+    // Keep the bitmap decoder's AND-mask handling, selecting the same entry
+    // as the PNG path regardless of the original directory ordering.
+    let mut selected = b"\0\0\x01\0\x01\0".to_vec();
+    selected.extend_from_slice(entry);
+    selected[18..22].copy_from_slice(&22_u32.to_le_bytes());
+    selected.extend_from_slice(payload);
+    decode_rust_image(&selected, RustFormat::Ico, "ICO")
 }
 
 // DNGVersion (50706) belongs to the first classic TIFF IFD. Read only the
@@ -405,6 +454,40 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
     }
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Bmp | ImageFormat::Gif | ImageFormat::Ico => {
+            if image.width == 0 || image.height == 0 {
+                return Err(PyValueError::new_err("cannot encode an empty image"));
+            }
+            if format == ImageFormat::Ico && (image.width > 256 || image.height > 256) {
+                return Err(PyValueError::new_err("ICO dimensions must be between 1 and 256"));
+            }
+            if format == ImageFormat::Gif && (image.width > 65535 || image.height > 65535) {
+                return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
+            }
+            let mut output = Vec::new();
+            match format {
+                ImageFormat::Bmp => image::codecs::bmp::BmpEncoder::new(&mut output)
+                    .write_image(pixels, image.width, image.height, color_type(image.mode))
+                    .map_err(codec_error)?,
+                ImageFormat::Ico => image::codecs::ico::IcoEncoder::new(&mut output)
+                    .write_image(pixels, image.width, image.height, color_type(image.mode))
+                    .map_err(codec_error)?,
+                ImageFormat::Gif => {
+                    let rgb;
+                    let (pixels, color) = if image.mode == PixelMode::L {
+                        rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
+                        (rgb.as_slice(), ExtendedColorType::Rgb8)
+                    } else {
+                        (pixels, color_type(image.mode))
+                    };
+                    image::codecs::gif::GifEncoder::new(&mut output)
+                        .encode(pixels, image.width, image.height, color)
+                        .map_err(codec_error)?;
+                }
+                _ => unreachable!(),
+            }
+            Ok(output)
+        }
         ImageFormat::Pdf => encode_pdf(image, pixels),
         ImageFormat::Avif => {
             let rgb;

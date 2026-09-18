@@ -20,6 +20,7 @@ from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
 _EXTENSIONS = {
+    ".bmp": "BMP", ".gif": "GIF", ".ico": "ICO",
     ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL",
     ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP",
     ".heic": "HEIF", ".heif": "HEIF",
@@ -611,7 +612,7 @@ class Image:
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
-        """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, or a single-page PDF."""
+        """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF."""
 
         output_format = _output_format(fp, format)
         self._sync_palette()
@@ -732,7 +733,7 @@ def _output_format(fp: object, requested: str | None) -> str:
         normalized = requested.upper().replace(" ", "")
         aliases = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF"}
         normalized = aliases.get(normalized, normalized)
-        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP", "HEIF", "AVIF", "PDF"}:
+        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP", "HEIF", "AVIF", "PDF", "BMP", "GIF", "ICO"}:
             raise ValueError(f"unsupported image format {requested!r}")
         return normalized
     if hasattr(fp, "write"):
@@ -746,6 +747,9 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
     allowed = {
+        "BMP": set(),
+        "GIF": set(),
+        "ICO": set(),
         "PNG": {"compress_level"},
         "JPEG": {"quality"},
         "JXL": {"quality", "lossless", "effort"},

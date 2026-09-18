@@ -30,7 +30,7 @@ with Image.open("photo.jpg") as image:
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
-  PNG, JPEG, and TIFF. Develop DNG files and export single-page PDFs.
+  PNG, JPEG, TIFF, BMP, GIF, and ICO. Develop DNG files and export single-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
   workflows, and choose when to convert to 8 bits.
 - **Python interoperability.** Import array data, work with binary streams,
@@ -155,6 +155,9 @@ and format-specific behavior.
 | HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth        |
 | DNG         | Yes  |   —   | Raw development to 8-bit RGB                         |
 | PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency |
+| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                         |
+| GIF         | Yes  |  Yes  | First frame only; single-frame output, 256 colors and binary transparency |
+| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension |
 
 Encoder settings and their defaults are listed in the
 [API notes](docs/Image.md#supported-api). HEIF lossless compression can still

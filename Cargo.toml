@@ -20,7 +20,7 @@ libheif-rs = { version = "3.0", default-features = false, features = ["latest", 
 garb = "0.2"
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
 rayon = {version = "1.12", default-features = false }
-image = { version = "0.25", default-features = false, features = ["png", "rayon", "tiff", "webp", "avif", "avif-native", "nasm"] }
+image = { version = "0.25", default-features = false, features = ["png", "bmp", "gif", "ico", "rayon", "tiff", "webp", "avif", "avif-native", "nasm"] }
 rawler = {version = "0.8", default-features = false }
 webpx = "0.4"
 libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel"] }
