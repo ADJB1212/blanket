@@ -19,14 +19,7 @@ from ._blanket import _Image, open_bytes
 from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
-_EXTENSIONS = {
-    ".bmp": "BMP", ".gif": "GIF", ".ico": "ICO",
-    ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL",
-    ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP",
-    ".heic": "HEIF", ".heif": "HEIF",
-    ".avif": "AVIF",
-    ".pdf": "PDF",
-}
+_EXTENSIONS = {".bmp": "BMP", ".gif": "GIF", ".ico": "ICO", ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL", ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP", ".heic": "HEIF", ".heif": "HEIF", ".avif": "AVIF", ".pdf": "PDF"}
 
 
 class Resampling(IntEnum):
@@ -612,12 +605,20 @@ class Image:
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
-        """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF."""
+        """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF.
 
+        Pass ``compressor=LosslessImageCompressor(...)`` to optimize this save.
+        Omitting it (or passing None) uses the normal encoder settings.
+        """
+        from .Compressor import LosslessImageCompressor
+
+        compressor = options.pop("compressor", None)
+        if compressor is not None and not isinstance(compressor, LosslessImageCompressor):
+            raise TypeError("compressor must be a LosslessImageCompressor or None")
         output_format = _output_format(fp, format)
         self._sync_palette()
         values = _save_options(output_format, options)
-        encoded = self._native._encode(output_format, **values)
+        encoded = self._native._encode(output_format, **values, compressor=None if compressor is None else compressor._native)
         _write_bytes(fp, encoded)
 
     def __enter__(self) -> Self:
@@ -746,19 +747,7 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
-    allowed = {
-        "BMP": set(),
-        "GIF": set(),
-        "ICO": set(),
-        "PNG": {"compress_level"},
-        "JPEG": {"quality"},
-        "JXL": {"quality", "lossless", "effort"},
-        "TIFF": set(),
-        "PDF": set(),
-        "WEBP": {"quality", "lossless"},
-        "HEIF": {"quality", "lossless"},
-        "AVIF": {"quality", "effort"},
-    }[format]
+    allowed = {"BMP": set(), "GIF": set(), "ICO": set(), "PNG": {"compress_level"}, "JPEG": {"quality"}, "JXL": {"quality", "lossless", "effort"}, "TIFF": set(), "PDF": set(), "WEBP": {"quality", "lossless"}, "HEIF": {"quality", "lossless"}, "AVIF": {"quality", "effort"}}[format]
     unknown = supplied.keys() - allowed
     if unknown:
         names = ", ".join(sorted(unknown))

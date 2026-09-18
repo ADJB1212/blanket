@@ -2,6 +2,8 @@
 
 mod codecs;
 mod composite;
+mod compressor;
+mod compressor_simd;
 mod enhance;
 mod filter;
 mod ops;
@@ -30,6 +32,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     enhance::register(module)?;
     composite::register(module)?;
+    compressor::register(module)?;
     filter::register(module)?;
     ops::register(module)?;
     palette::register(module)?;

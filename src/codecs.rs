@@ -5,7 +5,6 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
-use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -59,9 +58,9 @@ thread_local! {
     // A runner is used by only its owning calling thread. Reuse its workers
     // across decodes; each image still gets a fresh decoder and metadata state.
     static JXL_DECODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
-    // Encoding likewise reuses one worker pool instead of spawning a thread
-    // per CPU for every save.
-    static JXL_ENCODE_RUNNER: Option<ThreadsRunner<'static>> = ThreadsRunner::new(None, None);
+    // Reuse workers, but let libjxl size the pool for each frame. Tiny images
+    // should not pay the synchronization cost of a full-machine thread pool.
+    static JXL_ENCODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,7 +171,7 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
     py.detach(|| decode(data, format)).map_err(UnidentifiedImageError::new_err)
 }
 
-fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
+pub(crate) fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
         ImageFormat::Bmp => decode_rust_image(data, RustFormat::Bmp, "BMP"),
         ImageFormat::Gif => decode_rust_image(data, RustFormat::Gif, "GIF"),
@@ -604,7 +603,7 @@ fn color_type(mode: PixelMode) -> ExtendedColorType {
     }
 }
 
-fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
+pub(crate) fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
@@ -788,65 +787,87 @@ fn decode_heif(data: &[u8]) -> Result<Image, String> {
 }
 
 fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
-    use libheif_rs::{Channel, ColorSpace, CompressionFormat, EncoderParameterValue, EncoderQuality, HeifContext, RgbChroma};
-    let pixels = image.raw_data()?;
-    if image.width == 0 || image.height == 0 {
-        return Err(PyValueError::new_err("cannot encode empty HEIF image"));
-    }
-    if !matches!(image.bit_depth, 8 | 10 | 12) {
-        return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
-    }
-    let lib = &*HEIF_LIBRARY;
-    let mut encoder = lib.encoder_for_format(CompressionFormat::Hevc).map_err(codec_error)?;
-    // x265 defaults to "slow". Prefer medium for image I/O while retaining
-    // the requested quality/lossless setting. Other HEVC plugins keep their
-    // own defaults rather than receiving an x265-specific parameter.
-    if encoder.name().starts_with("x265 ") {
-        encoder
-            .set_parameter_value("preset", EncoderParameterValue::String("medium".into()))
+    encode_heif_with_preset(image, options, "medium")
+}
+
+pub(crate) fn encode_heif_with_preset(image: &Image, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
+    PreparedHeif::new(image)?.encode(options, preset)
+}
+
+/// Own pixel planes once for a preset search. Each encoding still gets a fresh
+/// encoder and container, preventing preset or metadata state from leaking.
+pub(crate) struct PreparedHeif {
+    native: libheif_rs::Image,
+}
+
+impl PreparedHeif {
+    pub(crate) fn new(image: &Image) -> PyResult<Self> {
+        use libheif_rs::{Channel, ColorSpace, RgbChroma};
+
+        let pixels = image.raw_data()?;
+        if image.width == 0 || image.height == 0 {
+            return Err(PyValueError::new_err("cannot encode empty HEIF image"));
+        }
+        if !matches!(image.bit_depth, 8 | 10 | 12) {
+            return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
+        }
+        let _library = &*HEIF_LIBRARY;
+        let chroma = match (image.bit_depth > 8, image.mode == PixelMode::Rgba) {
+            (false, false) => RgbChroma::Rgb,
+            (false, true) => RgbChroma::Rgba,
+            (true, false) => RgbChroma::HdrRgbLe,
+            (true, true) => RgbChroma::HdrRgbaLe,
+        };
+        let grayscale = image.mode == PixelMode::L;
+        let color_space = if grayscale { ColorSpace::Monochrome } else { ColorSpace::Rgb(chroma) };
+        let channel = if grayscale { Channel::Y } else { Channel::Interleaved };
+        let mut native = libheif_rs::Image::new(image.width, image.height, color_space).map_err(codec_error)?;
+        native
+            .create_plane(channel, image.width, image.height, image.bit_depth)
             .map_err(codec_error)?;
-    }
-    encoder
-        .set_quality(if options.lossless {
-            EncoderQuality::LossLess
+        let row = image.width as usize * image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
+        let planes = native.planes_mut();
+        let plane = if grayscale { planes.y } else { planes.interleaved }.ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
+        // Monochrome HEVC avoids RGB expansion, color conversion, and encoding
+        // two constant chroma planes. Wide monochrome planes use native endian.
+        if grayscale && image.bit_depth > 8 && cfg!(target_endian = "big") {
+            for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
+                for (sample, dest) in source.as_chunks::<2>().0.iter().zip(target[..row].as_chunks_mut::<2>().0) {
+                    *dest = u16::from_le_bytes(*sample).to_ne_bytes();
+                }
+            }
+        } else if row == plane.stride {
+            plane.data[..pixels.len()].copy_from_slice(pixels);
         } else {
-            EncoderQuality::Lossy(options.quality)
-        })
-        .map_err(codec_error)?;
-    let chroma = match (image.bit_depth > 8, image.mode == PixelMode::Rgba) {
-        (false, false) => RgbChroma::Rgb,
-        (false, true) => RgbChroma::Rgba,
-        (true, false) => RgbChroma::HdrRgbLe,
-        (true, true) => RgbChroma::HdrRgbaLe,
-    };
-    let grayscale = image.mode == PixelMode::L;
-    let color_space = if grayscale { ColorSpace::Monochrome } else { ColorSpace::Rgb(chroma) };
-    let channel = if grayscale { Channel::Y } else { Channel::Interleaved };
-    let mut native = libheif_rs::Image::new(image.width, image.height, color_space).map_err(codec_error)?;
-    native
-        .create_plane(channel, image.width, image.height, image.bit_depth)
-        .map_err(codec_error)?;
-    let row = image.width as usize * image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
-    let planes = native.planes_mut();
-    let plane = if grayscale { planes.y } else { planes.interleaved }.ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
-    // Monochrome HEVC avoids RGB expansion, color conversion, and encoding
-    // two constant chroma planes. Wide monochrome planes use native endian.
-    if grayscale && image.bit_depth > 8 && cfg!(target_endian = "big") {
-        for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
-            for (sample, dest) in source.as_chunks::<2>().0.iter().zip(target[..row].as_chunks_mut::<2>().0) {
-                *dest = u16::from_le_bytes(*sample).to_ne_bytes();
+            for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
+                target[..row].copy_from_slice(source);
             }
         }
-    } else if row == plane.stride {
-        plane.data[..pixels.len()].copy_from_slice(pixels);
-    } else {
-        for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
-            target[..row].copy_from_slice(source);
-        }
+        Ok(Self { native })
     }
-    let mut context = HeifContext::new().map_err(codec_error)?;
-    context.encode_image(&native, &mut encoder, None).map_err(codec_error)?;
-    context.write_to_bytes().map_err(codec_error)
+
+    pub(crate) fn encode(&self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
+        use libheif_rs::{CompressionFormat, EncoderParameterValue, EncoderQuality, HeifContext};
+
+        let mut encoder = HEIF_LIBRARY.encoder_for_format(CompressionFormat::Hevc).map_err(codec_error)?;
+        // Other HEVC plugins keep their defaults rather than receiving an
+        // x265-specific parameter.
+        if encoder.name().starts_with("x265 ") {
+            encoder
+                .set_parameter_value("preset", EncoderParameterValue::String(preset.into()))
+                .map_err(codec_error)?;
+        }
+        encoder
+            .set_quality(if options.lossless {
+                EncoderQuality::LossLess
+            } else {
+                EncoderQuality::Lossy(options.quality)
+            })
+            .map_err(codec_error)?;
+        let mut context = HeifContext::new().map_err(codec_error)?;
+        context.encode_image(&self.native, &mut encoder, None).map_err(codec_error)?;
+        context.write_to_bytes().map_err(codec_error)
+    }
 }
 
 fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -856,13 +877,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             "high-bit-depth saving supports HEIF, PNG, TIFF, or JXL; convert to bit_depth=8 explicitly for this format",
         ));
     }
-    let maximum = (1_u32 << image.bit_depth) - 1;
-    let samples: Vec<u16> = pixels
-        .as_chunks::<2>()
-        .0
-        .iter()
-        .map(|v| ((u32::from(u16::from_le_bytes([v[0], v[1]])) * 65535 + maximum / 2) / maximum) as u16)
-        .collect();
+    let samples = crate::compressor_simd::normalize_u16(pixels, image.bit_depth);
     if format == ImageFormat::Jxl {
         return JXL_ENCODE_RUNNER.with(|runner| {
             let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
@@ -929,6 +944,33 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_heif_planes_match_fresh_planes_across_presets_and_quality() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [8, 10, 12] {
+                let count = 17 * 19 * mode.channels();
+                let samples: Vec<u16> = (0..count).map(|i| ((i * 37) % (1 << depth)) as u16).collect();
+                let image = if depth == 8 {
+                    Image::from_pixels(17, 19, mode, samples.iter().map(|&v| v as u8).collect(), None).unwrap()
+                } else {
+                    Image::from_samples(17, 19, mode, samples, depth, None).unwrap()
+                };
+                let prepared = PreparedHeif::new(&image).unwrap();
+                for (preset, lossless) in [("fast", false), ("slow", true), ("fast", false)] {
+                    let options = SaveOptions {
+                        quality: 71,
+                        compress_level: 6,
+                        lossless,
+                        effort: 7,
+                    };
+                    let reused = prepared.encode(options, preset).unwrap();
+                    let fresh = PreparedHeif::new(&image).unwrap().encode(options, preset).unwrap();
+                    assert_eq!(reused, fresh, "mode={mode:?}, depth={depth}, preset={preset}");
+                }
+            }
+        }
+    }
 
     #[test]
     fn detects_avif_brands_before_generic_heif() {

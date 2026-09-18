@@ -91,6 +91,28 @@ with Image.open("input.png") as image:
     png_bytes = buffer.getvalue()
 ```
 
+### Optimize a save without additional loss
+
+```python
+from blanket import Image
+from blanket.Compressor import LosslessImageCompressor
+
+compressor = LosslessImageCompressor(effort=7)
+with Image.open("input.png") as image:
+    image.save("optimized.png", compressor=compressor)
+    image.convert("RGB").save("optimized.jpg", quality=90, compressor=compressor)
+    image.save("optimized.jxl", lossless=True, compressor=compressor)
+    image.save("optimized.heic", lossless=True, compressor=compressor)
+```
+
+The compressor keeps the smallest encoding that preserves the normal save's
+decoded pixels. It supports PNG, JPEG, JPEG XL, and HEIF/HEIC; higher effort
+tries more settings and takes longer. JPEG optimization preserves DCT
+coefficients. This optimizes the requested save, not the original source file:
+lossy save settings still introduce their normal loss. See the
+[Compressor module](docs/Compressor.md) for the API, format-specific behavior,
+and compression benchmarks.
+
 ### Resize, enhance, and filter
 
 ```python

@@ -38,7 +38,7 @@ module-name = "blanket._blanket"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--no-header", "--no-summary", "--lf", "--sw-skip"]
+addopts = ["--no-header", "--no-summary"]
 console_output_style = "none"
 
 [tool.ruff]

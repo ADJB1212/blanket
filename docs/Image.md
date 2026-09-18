@@ -138,6 +138,73 @@ save options are not supported; convert high-bit-depth images to 8-bit first.
 
 JPEG does not accept `RGBA`; call `image.convert("RGB")` before saving.
 
+## Save compression
+
+See the [Compressor module](Compressor.md) for API examples, losslessness
+guarantees, format-specific behavior, and compression benchmarks.
+
+Run `uv run --no-sync scripts/benchmark_compression.py` to measure PNG
+compression on nine deterministic fixtures, including noise, palettes, and
+transparent images. The report shows baseline and optimized byte sizes,
+percentage savings, median save times, and the time ratio. For an effort sweep:
+
+```sh
+uv run --no-sync scripts/benchmark_compression.py --efforts 1 7 10 --repeats 3 --json compression.json
+```
+
+Select other codecs with `--formats PNG JPEG JXL HEIF`, and adjust dimensions
+with `--width` and `--height`. Timings exclude fixture generation, decoding,
+and verification; `--warmups` controls untimed saves. Every measured output is
+checked for exact decoded RGBA equality, including colors under transparent
+pixels relative to a normal save with identical options (quality 90 for JPEG,
+lossless for JXL/HEIF). PNG is also checked against the input. A pixel mismatch, size increase,
+or codec error produces a nonzero exit status. Synthetic fixture timings are
+informational and should not be treated as representative of all images.
+
+Pass `compressor=LosslessImageCompressor(effort=7)` to `save()`, importing the
+class from `blanket.Compressor`. The object is reusable across images and
+formats. Effort must be an integer from 1 through 10. The source image, its
+pixels, and its metadata are not modified. `compressor=None` uses normal saving.
+
+The normal save at the requested quality, lossless setting, and codec effort is
+the baseline. The compressor never selects a larger output. Equal-sized
+candidates retain the earlier encoding, with the baseline tried first.
+
+| Output | Optimization |
+| --- | --- |
+| 8-bit PNG | Row filters including minimum entropy, grayscale/opaque-alpha reductions, grayscale-plus-alpha for gray RGBA images with arbitrary transparency, packed grayscale, color-key transparency, and exact palettes with packed indices and reordered entries. Efforts 8–10 also try wider palette indices, which can compress better after filtering; efforts 9–10 search DEFLATE levels. Reopening may report a reduced mode. |
+| JPEG | Optimized Huffman coding; effort 3–10 also tries progressive scans. DCT coefficients, quantization, subsampling, and partial edge blocks are preserved. Arithmetic coding is not used. |
+| JPEG XL | Searches encoder efforts 1 through the compressor's effort, retaining the normal save as a candidate. Supports 8-, 10-, 12-, and 16-bit input with the normal codec's depth conversion. |
+| HEIF / HEIC | Searches x265 presets from `ultrafast` through the selected effort (`medium` at 6, `slow` at 7, `placebo` at 10). Supports 8-, 10-, and 12-bit input. Other HEVC plugins retain their preset defaults. |
+
+PNG grayscale packing is exact: 1-bit storage requires values 0/255, 2-bit
+requires multiples of 85, and 4-bit requires multiples of 17. Wider encodings
+remain candidates because filtering can make them smaller. Transparency keys
+require binary alpha, one transparent RGB color, and no opaque pixel with that
+color; otherwise the alpha channel or an exact palette is retained. Nonzero
+transparency keys in 2-/4-bit grayscale are avoided for Pillow compatibility.
+Palette
+ordering tries first occurrence, transparency/frequency, and transparency/color
+order, preserving every color and shortening the transparency table where
+possible. These techniques do not quantize or discard invisible RGB values.
+
+For JPEG XL and HEIF/HEIC, each smaller candidate is decoded and compared with
+the baseline's dimensions, mode, depth, and every sample, including alpha and
+colors in transparent pixels. Candidates with any difference are discarded.
+Lossy saves also try lossless encoding of the baseline's decoded pixels; those
+candidates must pass the same comparison. Higher effort can involve many full
+encodes and decodes, so it is intended for saves where size matters more than
+latency.
+
+The guarantee is no additional loss relative to the requested save, not to an
+opened file's original bitstream. JPEG encoding still applies the requested
+quality; HEIF retains its normal RGB/YUV conversion behavior even with
+`lossless=True`. The compressor does not retain or transcode source bitstreams,
+restore discarded detail, or add metadata retention. High-bit-depth and indexed
+PNG and other output formats retain their normal encoding behavior. Indexed
+input is expanded for JPEG XL and HEIF/HEIC before optimization; JPEG keeps its
+normal rejection of indexed input.
+
 ## EXIF and metadata
 
 Opening PNG and JPEG retains EXIF/XMP in `image.info` for `exif_transpose`;

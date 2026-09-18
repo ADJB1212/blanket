@@ -279,7 +279,12 @@ impl Image {
     }
 
     #[pyo3(name = "_encode")]
-    fn encode(&self, py: Python<'_>, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8) -> PyResult<Py<PyBytes>> {
+    #[pyo3(signature = (format, quality, compress_level, lossless, effort, compressor=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn encode(
+        &self, py: Python<'_>, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8,
+        compressor: Option<&crate::compressor::LosslessImageCompressor>,
+    ) -> PyResult<Py<PyBytes>> {
         let format = ImageFormat::parse(format)?;
         let options = SaveOptions {
             quality,
@@ -297,10 +302,16 @@ impl Image {
             }
             let mode = palette_mode.as_str();
             let expanded = self.convert(py, mode, None)?;
-            let encoded = py.detach(|| codecs::encode(&expanded, format, options))?;
+            let encoded = py.detach(|| match compressor {
+                Some(compressor) => compressor.encode(&expanded, format, options),
+                None => codecs::encode(&expanded, format, options),
+            })?;
             return Ok(PyBytes::new(py, &encoded).unbind());
         }
-        let encoded = py.detach(|| codecs::encode(self, format, options))?;
+        let encoded = py.detach(|| match compressor {
+            Some(compressor) => compressor.encode(self, format, options),
+            None => codecs::encode(self, format, options),
+        })?;
         Ok(PyBytes::new(py, &encoded).unbind())
     }
 
