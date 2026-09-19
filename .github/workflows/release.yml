@@ -93,20 +93,74 @@ jobs:
         run: |
           uv python install 3.14
           uv tool install 'maturin[patchelf]>=1.15,<2'
-      - uses: ilammy/setup-nasm@v1
-        with:
-          version: 3.02
       - name: Install HEIF codecs and LLVM 21
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libheif-dev libnuma-dev clang-21 llvm-21 lld-21 ninja-build cmake meson pkg-config
+          sudo apt-get install -y libnuma-dev clang-21 llvm-21 lld-21 ninja-build cmake meson pkg-config mold
       - name: Setup PATH
         run: |
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
           echo "CC=clang-21" >> "$GITHUB_ENV"
           echo "CXX=clang++-21" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang-21" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++-21" >> "$GITHUB_ENV"
+          echo "CFLAGS=-O3" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_FLAGS=-O3 -w ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_C_FLAGS=-O3 -w ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
+      - uses: ilammy/setup-nasm@v1
+        with:
+          version: 3.02
+      - name: Cache x265
+        id: cache-x265
+        uses: actions/cache@v6
+        with:
+          path: ~/deps/x265
+          key: x265-${{ runner.os }}-${{ matrix.target }}-${{ env.X265_VERSION }}
+
+      - name: Build x265
+        if: steps.cache-x265.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$X265_VERSION" \
+            --depth 1 \
+            https://bitbucket.org/multicoreware/x265_git.git \
+            "$RUNNER_TEMP/x265"
+
+          # Build private high-bit-depth encoders for the shared 8-bit dispatcher.
+          # These static archives need PIC because they become part of libx265.so.
+          for depth in 12 10; do
+            cmake \
+              -S "$RUNNER_TEMP/x265/source" \
+              -B "$RUNNER_TEMP/x265/build-$depth" \
+              -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+              -DHIGH_BIT_DEPTH=ON \
+              -DMAIN12="$([ "$depth" = 12 ] && echo ON || echo OFF)" \
+              -DEXPORT_C_API=OFF \
+              -DENABLE_SHARED=OFF \
+              -DENABLE_CLI=OFF
+            cmake --build "$RUNNER_TEMP/x265/build-$depth" --parallel
+          done
+
+          cmake \
+            -S "$RUNNER_TEMP/x265/source" \
+            -B "$RUNNER_TEMP/x265/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/x265" \
+            -DENABLE_SHARED=ON \
+            -DENABLE_CLI=OFF \
+            -DHIGH_BIT_DEPTH=OFF \
+            -DLINKED_10BIT=ON \
+            -DLINKED_12BIT=ON \
+            -DEXTRA_LIB="$RUNNER_TEMP/x265/build-10/libx265.a;$RUNNER_TEMP/x265/build-12/libx265.a"
+
+          cmake --build "$RUNNER_TEMP/x265/build" --parallel
+          cmake --install "$RUNNER_TEMP/x265/build"
       - name: Cache dav1d
         id: cache-dav1d
         uses: actions/cache@v6
@@ -159,32 +213,6 @@ jobs:
 
           cmake --build "$RUNNER_TEMP/aom/build" --parallel
           cmake --install "$RUNNER_TEMP/aom/build"
-      - name: Cache x265
-        id: cache-x265
-        uses: actions/cache@v6
-        with:
-          path: ~/deps/x265
-          key: x265-${{ runner.os }}-${{ matrix.target }}-${{ env.X265_VERSION }}
-
-      - name: Build x265
-        if: steps.cache-x265.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$X265_VERSION" \
-            --depth 1 \
-            https://bitbucket.org/multicoreware/x265_git.git \
-            "$RUNNER_TEMP/x265"
-
-          cmake \
-            -S "$RUNNER_TEMP/x265/source" \
-            -B "$RUNNER_TEMP/x265/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/x265" \
-            -DENABLE_SHARED=ON
-
-          cmake --build "$RUNNER_TEMP/x265/build" --parallel
-          cmake --install "$RUNNER_TEMP/x265/build"
       - name: Cache libde265
         id: cache-libde265
         uses: actions/cache@v6
@@ -224,7 +252,7 @@ jobs:
           echo "$HOME/deps/x265/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libde265/bin" >> "$GITHUB_PATH"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/x86_64-linux-gnu/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig" >> "$GITHUB_ENV"
 
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265" >> "$GITHUB_ENV"
 
@@ -237,17 +265,13 @@ jobs:
           pkg-config --modversion x265
           pkg-config --modversion libde265
       - name: Build wheels
-        env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3"
-          CFLAGS: "-O3"
-          CXXFLAGS: "-O3"
         run: |
           uv sync --no-install-project
-          maturin build --release --out dist --features vendored -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair
+          maturin build --release --out dist --features vendored -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3
       - name: Install and verify wheels
         run: |
           uv sync --extra test --no-install-project
-          uv pip install --python .venv/bin/python dist/*.whl
+          uv pip install dist/*.whl
           uv run --no-sync scripts/verify_behavior.py
       - uses: actions/upload-artifact@v7
         with:
@@ -309,24 +333,26 @@ jobs:
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
-      - name: Setup PATH
+      - name: Setup ENV
         run: |
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "CFLAGS=-O3" >> "$GITHUB_ENV"
+          echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_FLAGS=-O3 -w ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_C_FLAGS=-O3 -w ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
       - name: Build wheels
-        env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3"
-          CFLAGS: "-O3"
-          CXXFLAGS: "-O3"
         run: |
           uv sync --no-install-project
-          maturin build --release --out dist-unrepaired --features vendored -i python3.14 --strip --auditwheel=skip
+          maturin build --release --out dist-unrepaired --features vendored -i python3.14 --strip --auditwheel=skip -- -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3
       - name: Repair macOS wheels
         run: delocate-wheel --require-archs=arm64 -v -w dist dist-unrepaired/*.whl
       - name: Install and Verify wheels
         run: |
           uv sync --extra test --no-install-project
-          uv pip install --python .venv/bin/python dist/*.whl
+          uv pip install dist/*.whl
           uv run --no-sync scripts/verify_behavior.py
       - uses: actions/upload-artifact@v7
         with:
