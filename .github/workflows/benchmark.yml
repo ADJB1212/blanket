@@ -47,4 +47,4 @@ jobs:
           uv tool install maturin
           maturin develop --extras test --uv -r
       - name: Run benchmarks
-        run: uv run --no-sync scripts/benchmark.py --all -v --no-baseline -w 2 -i 8
+        run: uv run --no-sync scripts/benchmark.py --all -v --no-baseline -w 2 -i 8 --sizes web 4K
