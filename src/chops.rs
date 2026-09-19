@@ -39,6 +39,23 @@ enum Operation {
 }
 
 impl Operation {
+    fn clip_scaled(value: f32) -> u8 {
+        // Pillow's CHOP macro stores arithmetic in an int before clipping.
+        // Conversions that overflow (or are non-finite) behave like INT_MIN in practice.
+        let temp = if !value.is_finite() || value > i32::MAX as f32 || value < i32::MIN as f32 {
+            i32::MIN
+        } else {
+            value as i32
+        };
+        if temp <= 0 {
+            0
+        } else if temp >= 255 {
+            255
+        } else {
+            temp as u8
+        }
+    }
+
     fn parse(name: &str) -> PyResult<Self> {
         Ok(match name {
             "difference" => Self::Difference,
@@ -66,9 +83,9 @@ impl Operation {
             Self::Screen => (255 - (255 - x) * (255 - y) / 255) as u8,
             Self::Lighter => a.max(b),
             Self::Darker => a.min(b),
-            // Pillow uses single precision, truncation, and clipping, including alpha.
-            Self::Add => ((x + y) as f32 / scale + offset as f32) as u8,
-            Self::Subtract => ((i32::from(a) - i32::from(b)) as f32 / scale + offset as f32) as u8,
+            // Pillow uses single precision, int truncation, and clipping, including alpha.
+            Self::Add => Self::clip_scaled((x + y) as f32 / scale + offset as f32),
+            Self::Subtract => Self::clip_scaled((i32::from(a) - i32::from(b)) as f32 / scale + offset as f32),
             Self::AddModulo => a.wrapping_add(b),
             Self::SubtractModulo => a.wrapping_sub(b),
             Self::SoftLight => (((255 - x) * x * y / 65536) + x * (255 - (255 - x) * (255 - y) / 255) / 255) as u8,
