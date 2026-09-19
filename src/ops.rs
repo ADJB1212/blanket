@@ -557,6 +557,21 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y0 = top + (band * 8 + i) as u32 * fy;
             let y1 = y0.saturating_add(fy).min(bottom);
+            if fx == 1 {
+                let count = u64::from(y1 - y0);
+                let multiplier = ((1_u64 << 24) as f32 / count as f32) as u64;
+                let mut sums = vec![0_u64; row.len()];
+                for sy in y0..y1 {
+                    let start = sy as usize * width as usize + left as usize;
+                    for (sum, &sample) in sums.iter_mut().zip(source[start..start + size.0 as usize].as_flattened()) {
+                        *sum += u64::from(sample);
+                    }
+                }
+                for (dst, sum) in row.iter_mut().zip(sums) {
+                    *dst = (((sum + count / 2) * multiplier) >> 24) as u8;
+                }
+                continue;
+            }
             if fx == 3 && fy == 3 && y1 - y0 == 3 {
                 let full = ((right - left) / 3) as usize;
                 let start = y0 as usize * width as usize + left as usize;
@@ -604,6 +619,24 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
                         let sum =
                             u16::from(upper[0][channel]) + u16::from(upper[1][channel]) + u16::from(lower[0][channel]) + u16::from(lower[1][channel]);
                         dst[channel] = ((sum + 2) >> 2) as u8;
+                    }
+                }
+                continue;
+            }
+            if fx == 4 && fy == 4 && y1 - y0 == 4 && (right - left).is_multiple_of(4) {
+                let start = y0 as usize * width as usize + left as usize;
+                let count = (right - left) as usize;
+                let stride = width as usize;
+                let rows = std::array::from_fn::<_, 4, _>(|i| source[start + i * stride..start + i * stride + count].as_chunks::<4>().0);
+                for (x, dst) in row.as_chunks_mut::<C>().0.iter_mut().enumerate() {
+                    for c in 0..C {
+                        let mut sum = 8_u16;
+                        for samples in &rows {
+                            for pixel in &samples[x] {
+                                sum += u16::from(pixel[c]);
+                            }
+                        }
+                        dst[c] = (sum >> 4) as u8;
                     }
                 }
                 continue;

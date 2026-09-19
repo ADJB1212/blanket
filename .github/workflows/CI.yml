@@ -32,8 +32,10 @@ jobs:
         include:
           - os: ubuntu-24.04
             python: "3.14"
+            fuse-linker: "mold"
           - os: macos-latest
             python: "3.14"
+            fuse-linker: "lld"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -60,7 +62,7 @@ jobs:
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-21 llvm-21 lld-21 ninja-build
+          sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-21 llvm-21 lld-21 ninja-build mold
           echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
       - name: Install HEIF codecs (macOS)
         if: runner.os == 'macOS'
@@ -73,19 +75,19 @@ jobs:
         run: |
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
         with:
           version: 3.02
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Install project and test dependencies
-        env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld"
         run: |
           uv sync --no-install-project --extra test
           uv tool install maturin
-          maturin develop --extras test --uv --profile dev
+          maturin develop --extras test --uv --profile dev -- -C link-arg=-fuse-ld=${{ matrix.fuse-linker }}
       - name: Test Python API
-        run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --ignore=tests/test_compression_benchmark.py --color=no --code-highlight=no
+        run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --color=no --code-highlight=no
       - name: Verify Pillow behavior
         run: uv run --no-sync scripts/verify_behavior.py

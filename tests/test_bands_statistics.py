@@ -41,7 +41,7 @@ def test_split(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("factor", [1, 2, 3, 4, 5, (1, 3), (3, 1), (2, 5), (100, 100)])
+@pytest.mark.parametrize("factor", [1, 2, 3, 4, 5, (1, 3), (1, 7), (1, 100), (3, 1), (2, 5), (100, 100)])
 @pytest.mark.parametrize("box", [None, (1, 2, 16, 12), (0, 0, 16, 12)])
 def test_reduce(mode: str, factor: object, box: object) -> None:
     image, reference = pair(mode)

@@ -1,5 +1,6 @@
 #![cfg_attr(RUSTC_IS_NIGHTLY, feature(portable_simd))]
 
+mod chops;
 mod codecs;
 mod composite;
 mod compressor;
@@ -14,6 +15,7 @@ mod quantize;
 mod quantize_simd;
 mod raster;
 mod simd;
+mod stat;
 
 use codecs::open_bytes;
 use pyo3::prelude::*;
@@ -31,11 +33,13 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     enhance::register(module)?;
+    chops::register(module)?;
     composite::register(module)?;
     compressor::register(module)?;
     filter::register(module)?;
     ops::register(module)?;
     palette::register(module)?;
     quantize::register(module)?;
+    stat::register(module)?;
     Ok(())
 }

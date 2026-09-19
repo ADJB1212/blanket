@@ -51,12 +51,10 @@ codegen-units = 1
 
 [profile.dev]
 incremental = true
-opt-level = 0
+opt-level = 1
 debug = "line-directives-only"
-
-[profile.dev.package."*"]
-debug = false
-incremental = true
+lto = "off"
+codegen-units = 256
 
 [lints.clippy]
 needless_return = "allow"

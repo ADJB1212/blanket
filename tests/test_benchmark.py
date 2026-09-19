@@ -278,9 +278,9 @@ def test_sections_only_build_selected_comparisons(monkeypatch: Any, tmp_path: Pa
             return [(name, lambda: None, lambda: None)]
         return build
 
-    for name in ("codec", "conversion", "resize", "geometry", "band_statistics", "memory", "imageops", "imageenhance", "imagefilter", "imagepalette"):
+    for name in ("codec", "conversion", "resize", "geometry", "band_statistics", "memory", "imageops", "imagechops", "imagestat", "imageenhance", "imagefilter", "imagepalette"):
         monkeypatch.setattr(benchmark, f"{name}_comparisons", builder(name))
-    for sections, expected in ((["ImagePalette"], ["imagepalette"]), (["Memory", "ImageFilter"], ["memory", "imagefilter"])):
+    for sections, expected in ((["ImagePalette"], ["imagepalette"]), (["Memory", "ImageFilter"], ["memory", "imagefilter"]), (["ImageChops", "ImageStat"], ["imagechops", "imagestat"])):
         calls.clear()
         output = tmp_path / "results.json"
         monkeypatch.setattr(sys, "argv", ["benchmark.py", "--sections", *sections, "--sizes", "4K", "-i", "1", "-w", "0", "--json", str(output)])
@@ -358,10 +358,74 @@ def test_ten_bit_operation_benchmarks(benchmark: dict[str, Any]) -> None:
         assert samples.min() == 0
         assert samples.max() == 1023
     comparisons = benchmark["ten_bit_comparisons"]((32, 24))
-    assert len(comparisons) == 39
+    assert len(comparisons) == 42
     for name, operation, baseline in comparisons:
         assert baseline is None
         result = operation()
         if isinstance(result, Image.Image):
             assert result.bit_depth == (8 if "10→8" in name else 10)
             assert result.size == ((16, 12) if name.startswith("resize") else (32, 24))
+
+
+def test_imagechops_benchmarks_cover_public_functions_and_match_pillow(benchmark: dict[str, Any]) -> None:
+    comparisons = benchmark["imagechops_comparisons"]((19, 11))
+    names = [name for name, _, _ in comparisons]
+    assert len(names) == len(set(names))
+    for mode in ("L", "RGB", "RGBA", "P"):
+        for name in benchmark["BlanketChops"].__all__:
+            if mode != "P" or name != "blend":
+                assert f"{name} {mode}" in names
+        for name in ("add scaled", "subtract scaled", "offset default-y"):
+            assert f"{name} {mode}" in names
+    for name, blanket_op, pillow_op in comparisons:
+        assert pillow_op is not None
+        actual, expected = blanket_op(), pillow_op()
+        assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), name
+        assert blanket_op().tobytes() == actual.tobytes(), name
+
+
+def test_imagestat_benchmarks_cover_properties_and_match_pillow(benchmark: dict[str, Any]) -> None:
+    from functools import cached_property
+
+    comparisons = benchmark["imagestat_comparisons"]((19, 11))
+    names = [name for name, _, _ in comparisons]
+    properties = {name for name, value in vars(benchmark["BlanketStat"].Stat).items() if isinstance(value, cached_property)}
+    assert len(names) == len(set(names))
+    assert set(names) == {f"{name} {kind} {mode}" for name in properties | {"all"} for kind in ("image", "masked", "histogram") for mode in ("L", "RGB", "RGBA", "P")}
+    for name, blanket_op, pillow_op in comparisons:
+        assert pillow_op is not None
+        actual, expected = blanket_op(), pillow_op()
+        np = benchmark["np"]
+        if name.startswith("all "):
+            assert len(actual) == len(properties)
+            for result, reference in zip(actual, expected, strict=True):
+                assert np.allclose(result, reference, rtol=1e-14, atol=1e-12), name
+        else:
+            assert np.allclose(actual, expected, rtol=1e-14, atol=1e-12), name
+        assert blanket_op() is not actual, "each invocation must recompute lazy properties"
+
+
+def test_imagestat_timing_creates_fresh_instances_and_forces_results(monkeypatch: Any) -> None:
+    benchmark = load_benchmark()
+    comparisons = benchmark.imagestat_comparisons((19, 11))
+    for module in (benchmark.BlanketStat, benchmark.PillowStat):
+        real_stat = module.Stat
+        instances: list[Any] = []
+
+        def tracking_stat(*args: Any, **kwargs: Any) -> Any:
+            stat = real_stat(*args, **kwargs)
+            instances.append(stat)
+            return stat
+
+        with monkeypatch.context() as patch:
+            patch.setattr(module, "Stat", tracking_stat)
+            column = 1 if module is benchmark.BlanketStat else 2
+            for row in comparisons:
+                name, operation = row[0], row[column]
+                for _ in range(2):
+                    before = len(instances)
+                    operation()
+                    assert len(instances) == before + 1
+                    requested = name.split()[0]
+                    properties = benchmark.STATISTICS if requested == "all" else (requested,)
+                    assert all(prop in instances[-1].__dict__ for prop in properties)

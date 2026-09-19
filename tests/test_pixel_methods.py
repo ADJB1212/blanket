@@ -8,6 +8,63 @@ from PIL import Image as PIL
 from blanket import Image
 
 
+@pytest.mark.parametrize("container", [list, tuple])
+def test_putdata_preserves_sequence_overrides(container: type) -> None:
+    class Values(container):
+        def __getitem__(self, index: int) -> int:
+            return super().__getitem__(index) + 10
+
+    image = Image.new("L", (3, 1))
+    image.putdata(Values([1, 2, 3]))
+    assert image.getdata() == [11, 12, 13]
+
+
+def test_tuple_pixel_subclass_keeps_index_conversion() -> None:
+    class Pixel(tuple):
+        def __index__(self) -> int:
+            return 0x030201
+
+    image = Image.new("RGB", (1, 1))
+    image.putdata([Pixel((9, 8, 7))])
+    assert image.getpixel((0, 0)) == (1, 2, 3)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("alpha_only", [False, True])
+def test_bbox_sparse_edges(mode: str, alpha_only: bool) -> None:
+    actual, expected = Image.new(mode, (37, 19)), PIL.new(mode, (37, 19))
+    for xy in [(18, 9), (5, 12), (31, 3), (0, 18), (36, 0)]:
+        value = 7 if mode == "L" else (7, 0, 0) if mode == "RGB" else (7, 0, 0, 0)
+        actual.putpixel(xy, value)
+        expected.putpixel(xy, value)
+        assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
+    if mode == "RGBA":
+        actual.putpixel((20, 10), (0, 0, 0, 1))
+        expected.putpixel((20, 10), (0, 0, 0, 1))
+        assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_extrema_late_band_extremes(mode: str) -> None:
+    values = [127] * (1025 * len(mode))
+    for band in range(len(mode)):
+        values[band * 257 * len(mode) + band] = 0
+        values[(1024 - band * 257) * len(mode) + band] = 255
+    raw = bytes(values)
+    actual = Image.frombytes(mode, (1025, 1), raw)
+    expected = PIL.frombytes(mode, (1025, 1), raw)
+    assert actual.getextrema() == expected.getextrema()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("limit", [0, 1, 255, 256, 257, 1000])
+def test_color_count_table_limits(mode: str, limit: int) -> None:
+    raw = bytes(component for i in range(256) for component in (i, (i * 73) % 256, 0, 255)[:len(mode)]) * 3
+    actual = Image.frombytes(mode, (256, 3), raw).getcolors(limit)
+    expected = PIL.frombytes(mode, (256, 3), raw).getcolors(limit)
+    assert (None if actual is None else sorted(actual)) == (None if expected is None else sorted(expected))
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_data_and_colors(mode: str) -> None:
     raw = bytes((i * 31) % 256 for i in range(18 * len(mode)))

@@ -9,6 +9,7 @@ import math
 import platform
 import struct
 import subprocess
+import warnings
 from collections.abc import Callable
 from datetime import UTC, datetime, timezone
 from functools import partial
@@ -20,19 +21,25 @@ from time import perf_counter
 from types import ModuleType
 from typing import Any
 
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+
 import numpy as np
 import pillow_heif
 import pillow_jxl
 from blanket import Image as BlanketImage
+from blanket import ImageChops as BlanketChops
 from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageFilter as BlanketFilter
 from blanket import ImageOps as BlanketOps
 from blanket import ImagePalette as BlanketPalette
+from blanket import ImageStat as BlanketStat
 from PIL import Image as PillowImage
+from PIL import ImageChops as PillowChops
 from PIL import ImageEnhance as PillowEnhance
 from PIL import ImageFilter as PillowFilter
 from PIL import ImageOps as PillowOps
 from PIL import ImagePalette as PillowPalette
+from PIL import ImageStat as PillowStat
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -260,6 +267,7 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
                 (f"fromarray {mode} 10-bit", lambda a=array, m=mode: BlanketImage.fromarray(a, m, bit_depth=10), None),
                 (f"frombytes {mode} 10-bit", lambda r=raw, m=mode: BlanketImage.frombytes(m, size, r, bit_depth=10), None),
                 (f"tobytes {mode} 10-bit", lambda b=wide: b.tobytes(), None),
+                (f"offset {mode} 10-bit", partial(BlanketChops.offset, wide, 17, -23), None),
                 (f"cvt {mode} 8→10-bit", lambda b=narrow, m=mode: b.convert(m, bit_depth=10), None),
                 (f"cvt {mode} 10→8-bit", lambda b=wide, m=mode: b.convert(m, bit_depth=8), None),
             ]
@@ -420,29 +428,31 @@ def image_method_comparisons(size: tuple[int, int]) -> list[Comparison]:
         lut = list(range(255, -1, -1)) * channels
         # Reuse a small set of tuples rather than retaining millions of
         # distinct Python objects at the larger benchmark sizes.
-        tile = [raw[i] if channels == 1 else tuple(raw[i:i + channels]) for i in range(0, min(w * h, 256) * channels, channels)]
-        data = (tile * math.ceil(w * h / len(tile)))[:w * h] if tile else []
+        tile = [raw[i] if channels == 1 else tuple(raw[i : i + channels]) for i in range(0, min(w * h, 256) * channels, channels)]
+        data = (tile * math.ceil(w * h / len(tile)))[: w * h] if tile else []
         value = 127 if mode == "L" else (17, 83, 149, 211)[:channels]
-        comparisons.extend([
-            (f"getbands {mode}", actual.getbands, expected.getbands),
-            (f"getchannel {mode}", partial(actual.getchannel, channels - 1), partial(expected.getchannel, channels - 1)),
-            (f"getextrema {mode}", actual.getextrema, expected.getextrema),
-            (f"getbbox {mode}", actual.getbbox, expected.getbbox),
-            (f"histogram {mode}", actual.histogram, expected.histogram),
-            (f"histogram masked {mode}", partial(actual.histogram, b_mask), partial(expected.histogram, p_mask)),
-            (f"point LUT {mode}", partial(actual.point, lut), partial(expected.point, lut)),
-            (f"point callable {mode}", partial(actual.point, lambda v: 255 - v), partial(expected.point, lambda v: 255 - v)),
-            (f"thumbnail {mode} (copy included)", partial(mutate, actual, "thumbnail", target), partial(mutate, expected, "thumbnail", target)),
-            (f"getdata list {mode}", actual.getdata, lambda im=expected: list(im.getdata())),
-            (f"get_flattened_data {mode}", actual.get_flattened_data, expected.get_flattened_data),
-            (f"getdata band {mode}", partial(actual.getdata, channels - 1), lambda im=expected, band=channels - 1: list(im.getdata(band))),
-            (f"getcolors 256 {mode}", actual.getcolors, expected.getcolors),
-            (f"getcolors limit=16 {mode}", partial(actual.getcolors, 16), partial(expected.getcolors, 16)),
-            (f"putpixel {mode} (copy included)", partial(mutate, actual, "putpixel", (w // 2, h // 2), value), partial(mutate, expected, "putpixel", (w // 2, h // 2), value)),
-            (f"putdata {mode} (copy included)", partial(mutate, actual, "putdata", data), partial(mutate, expected, "putdata", data)),
-            (f"blend {mode}", partial(BlanketImage.blend, actual, other_actual, 0.35), partial(PillowImage.blend, expected, other_expected, 0.35)),
-            (f"composite {mode}", partial(BlanketImage.composite, actual, other_actual, b_mask), partial(PillowImage.composite, expected, other_expected, p_mask)),
-        ])
+        comparisons.extend(
+            [
+                (f"getbands {mode}", actual.getbands, expected.getbands),
+                (f"getchannel {mode}", partial(actual.getchannel, channels - 1), partial(expected.getchannel, channels - 1)),
+                (f"getextrema {mode}", actual.getextrema, expected.getextrema),
+                (f"getbbox {mode}", actual.getbbox, expected.getbbox),
+                (f"histogram {mode}", actual.histogram, expected.histogram),
+                (f"histogram masked {mode}", partial(actual.histogram, b_mask), partial(expected.histogram, p_mask)),
+                (f"point LUT {mode}", partial(actual.point, lut), partial(expected.point, lut)),
+                (f"point callable {mode}", partial(actual.point, lambda v: 255 - v), partial(expected.point, lambda v: 255 - v)),
+                (f"thumbnail {mode} (copy included)", partial(mutate, actual, "thumbnail", target), partial(mutate, expected, "thumbnail", target)),
+                (f"getdata list {mode}", actual.getdata, lambda im=expected: list(im.getdata())),
+                (f"get_flattened_data {mode}", actual.get_flattened_data, expected.get_flattened_data),
+                (f"getdata band {mode}", partial(actual.getdata, channels - 1), lambda im=expected, band=channels - 1: list(im.getdata(band))),
+                (f"getcolors 256 {mode}", actual.getcolors, expected.getcolors),
+                (f"getcolors limit=16 {mode}", partial(actual.getcolors, 16), partial(expected.getcolors, 16)),
+                (f"putpixel {mode} (copy included)", partial(mutate, actual, "putpixel", (w // 2, h // 2), value), partial(mutate, expected, "putpixel", (w // 2, h // 2), value)),
+                (f"putdata {mode} (copy included)", partial(mutate, actual, "putdata", data), partial(mutate, expected, "putdata", data)),
+                (f"blend {mode}", partial(BlanketImage.blend, actual, other_actual, 0.35), partial(PillowImage.blend, expected, other_expected, 0.35)),
+                (f"composite {mode}", partial(BlanketImage.composite, actual, other_actual, b_mask), partial(PillowImage.composite, expected, other_expected, p_mask)),
+            ]
+        )
         if mode == "L":
             comparisons.append(("putdata scaled L (copy included)", partial(mutate, actual, "putdata", data, 0.75, 20), partial(mutate, expected, "putdata", data, 0.75, 20)))
         if mode == "RGBA":
@@ -515,6 +525,74 @@ def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
             label = f"ImageOps.crop border={border}" if name == "crop" else name
             comps.append((f"{label} {mode}", partial(getattr(BlanketOps, name), blanket, **options), partial(getattr(PillowOps, name), pillow, **options)))
     return comps
+
+
+def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Compare all channel operations with distinct, reusable source images."""
+    comparisons: list[Comparison] = []
+    mask_raw = make_gray(*size)
+    bmask = BlanketImage.frombytes("L", size, mask_raw)
+    pmask = PillowImage.frombytes("L", size, mask_raw)
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba), ("P", make_gray)):
+        raw = make_pixels(*size)
+        source_mode = "L" if mode == "P" else mode
+        first = BlanketImage.frombytes(source_mode, size, raw)
+        second = BlanketImage.frombytes(source_mode, size, bytes(255 - value for value in raw))
+        reference = PillowImage.frombytes(source_mode, size, raw)
+        other = PillowImage.frombytes(source_mode, size, second.tobytes())
+        if mode == "P":
+            for image in (first, second, reference, other):
+                image.putpalette(bytes(range(256)) * 3)
+        for name in BlanketChops.__all__:
+            if name in ("invert", "duplicate"):
+                args, reference_args = (first,), (reference,)
+            elif name == "constant":
+                args, reference_args = (first, 73), (reference, 73)
+            elif name == "offset":
+                args, reference_args = (first, 17, -23), (reference, 17, -23)
+            elif name == "blend":
+                if mode == "P":
+                    continue  # Blend requires non-palette images in both libraries.
+                args, reference_args = (first, second, 0.37), (reference, other, 0.37)
+            elif name == "composite":
+                args, reference_args = (first, second, bmask), (reference, other, pmask)
+            else:
+                args, reference_args = (first, second), (reference, other)
+            comparisons.append((f"{name} {mode}", partial(getattr(BlanketChops, name), *args), partial(getattr(PillowChops, name), *reference_args)))
+        for name in ("add", "subtract"):
+            comparisons.append((f"{name} scaled {mode}", partial(getattr(BlanketChops, name), first, second, 1.7, -13), partial(getattr(PillowChops, name), reference, other, 1.7, -13)))
+        comparisons.append((f"offset default-y {mode}", partial(BlanketChops.offset, first, -17), partial(PillowChops.offset, reference, -17)))
+    return comparisons
+
+
+STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
+
+
+def _evaluate_statistics(module: ModuleType, source: Any, mask: Any, statistic: str) -> object:
+    """Construct a fresh Stat each time, then force the requested lazy results."""
+    stat = module.Stat(source, mask)
+    return tuple(getattr(stat, name) for name in STATISTICS) if statistic == "all" else getattr(stat, statistic)
+
+
+def imagestat_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Separate image scan costs from reductions over precomputed histograms."""
+    comparisons: list[Comparison] = []
+    mask_raw = bytes((0, 1, 128, 255)[i % 4] for i in range(size[0] * size[1]))
+    bmask = BlanketImage.frombytes("L", size, mask_raw)
+    pmask = PillowImage.frombytes("L", size, mask_raw)
+    for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba), ("P", make_gray)):
+        raw = make_pixels(*size)
+        source_mode = "L" if mode == "P" else mode
+        image = BlanketImage.frombytes(source_mode, size, raw)
+        reference = PillowImage.frombytes(source_mode, size, raw)
+        if mode == "P":
+            for item in (image, reference):
+                item.putpalette(bytes(range(256)) * 3)
+        cases = [("image", image, reference, None, None), ("masked", image, reference, bmask, pmask), ("histogram", image.histogram(), reference.histogram(), None, None)]
+        for kind, source, expected, mask, expected_mask in cases:
+            for name in (*STATISTICS, "all"):
+                comparisons.append((f"{name} {kind} {mode}", partial(_evaluate_statistics, BlanketStat, source, mask, name), partial(_evaluate_statistics, PillowStat, expected, expected_mask, name)))
+    return comparisons
 
 
 def imageenhance_comparisons(size: tuple[int, int]) -> list[Comparison]:
@@ -660,7 +738,7 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageEnhance", "ImageFilter", "10-bit")
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
 DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
@@ -851,6 +929,8 @@ def main() -> None:
             "Memory": partial(memory_comparisons, size),
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),
+            "ImageChops": partial(imagechops_comparisons, size),
+            "ImageStat": partial(imagestat_comparisons, size),
             "ImageEnhance": partial(imageenhance_comparisons, size),
             "ImageFilter": partial(imagefilter_comparisons, size),
         }

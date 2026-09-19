@@ -16,6 +16,23 @@ Pixel input lists and lookup tables are prepared outside timing. The `getdata`
 comparison materializes Pillow's sequence into a list to match Blanket's
 snapshot; `get_flattened_data` compares tuple snapshots directly.
 
+The `ImageChops` section covers all 18 functions in L, RGB, and RGBA modes,
+plus supported palette operations, scaled arithmetic, and wraparound offsets.
+The `10-bit` section also includes native high-depth offsets without a Pillow
+baseline. The `ImageStat` section covers all nine properties individually and
+together, using images, masked images, and precomputed histograms in L, RGB,
+RGBA, and P modes. Each timed call creates a fresh `Stat` and evaluates the
+requested properties, so repeated iterations measure computation rather than
+cached attribute access. Histogram inputs and masks are prepared outside timing.
+`Global` shares the `Stat` implementation and does not add duplicate cases.
+
+Both sections are included in `--all`, or can be selected directly:
+
+```sh
+maturin develop -r --extras test --uv
+uv run --no-sync scripts/benchmark.py --sections ImageChops ImageStat --sizes web --no-baseline
+```
+
 Run the benchmark before editing, then rebuild and run the same command again:
 
 ```sh
