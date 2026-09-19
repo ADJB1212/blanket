@@ -25,8 +25,8 @@ with Image.open("photo.jpg") as image:
 
 ## Why Blanket?
 
-- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageEnhance`,
-  `ImageFilter`, and `ImagePalette`.
+- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageEnhance`,
+  `ImageFilter`, `ImagePalette`, and `ImageStat`.
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
@@ -39,6 +39,29 @@ with Image.open("photo.jpg") as image:
 Blanket is currently **alpha software**. It implements a focused subset of
 Pillow's API, centered on `L`, `RGB`, and `RGBA` images, with limited indexed
 `P` support. It is not a drop-in replacement for `PIL`.
+
+`ImageChops` provides native channel arithmetic (`difference`, `add`, `subtract`,
+`add_modulo`, `subtract_modulo`, `multiply`, `screen`, `lighter`, `darker`), blend
+modes (`soft_light`, `hard_light`, `overlay`), `invert`, wraparound `offset`, and
+the `constant`, `duplicate`, `blend`, and `composite` helpers. Arithmetic operates
+on 8-bit channels, including alpha and palette indices; binary arithmetic uses
+the top-left overlap when image sizes differ. `offset` also preserves high-depth
+samples. Bilevel logical operations are not implemented.
+
+`ImageStat.Stat(image, mask=None)` computes per-band `extrema`, `count`, `sum`,
+`sum2`, `mean`, `median`, `rms`, `var`, and `stddev` using native histogram and
+statistical kernels. It accepts 8-bit images or precomputed histograms with
+256 nonnegative integer bins per band (each count up to `2**64 - 1`). An `L`
+mask includes every pixel whose mask value is nonzero. Properties are computed
+on demand and cached; `ImageStat.Global` is an alias for `Stat`.
+
+```python
+from blanket import ImageStat
+
+statistics = ImageStat.Stat(image)
+average_channels = statistics.mean
+channel_variance = statistics.var
+```
 
 ## Installation
 

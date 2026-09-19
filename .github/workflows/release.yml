@@ -108,8 +108,8 @@ jobs:
           echo "CMAKE_CXX_COMPILER=clang++-21" >> "$GITHUB_ENV"
           echo "CFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_FLAGS=-O3 -w ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
-          echo "CMAKE_C_FLAGS=-O3 -w ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_FLAGS=-O3 ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
+          echo "CMAKE_C_FLAGS=-O3 ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
         with:
           version: 3.02

@@ -1,0 +1,164 @@
+//! Channel arithmetic and wraparound translation for ImageChops.
+
+use pyo3::exceptions::{PyMemoryError, PyValueError};
+use pyo3::prelude::*;
+
+use crate::parallel::{CHUNK_PIXELS, chunks_mut};
+use crate::raster::{Image, PixelMode};
+
+pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(chops_binary, module)?)?;
+    module.add_function(wrap_pyfunction!(chops_invert, module)?)?;
+    module.add_function(wrap_pyfunction!(chops_offset, module)?)?;
+    Ok(())
+}
+
+fn buffer(len: usize) -> PyResult<Vec<u8>> {
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(len)
+        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.resize(len, 0);
+    Ok(pixels)
+}
+
+#[derive(Clone, Copy)]
+enum Operation {
+    Difference,
+    Multiply,
+    Screen,
+    Lighter,
+    Darker,
+    Add,
+    Subtract,
+    AddModulo,
+    SubtractModulo,
+    SoftLight,
+    HardLight,
+    Overlay,
+}
+
+impl Operation {
+    fn parse(name: &str) -> PyResult<Self> {
+        Ok(match name {
+            "difference" => Self::Difference,
+            "multiply" => Self::Multiply,
+            "screen" => Self::Screen,
+            "lighter" => Self::Lighter,
+            "darker" => Self::Darker,
+            "add" => Self::Add,
+            "subtract" => Self::Subtract,
+            "add_modulo" => Self::AddModulo,
+            "subtract_modulo" => Self::SubtractModulo,
+            "soft_light" => Self::SoftLight,
+            "hard_light" => Self::HardLight,
+            "overlay" => Self::Overlay,
+            _ => return Err(PyValueError::new_err("unknown channel operation")),
+        })
+    }
+
+    fn apply(self, a: u8, b: u8, scale: f32, offset: i32) -> u8 {
+        let x = u32::from(a);
+        let y = u32::from(b);
+        match self {
+            Self::Difference => a.abs_diff(b),
+            Self::Multiply => (x * y / 255) as u8,
+            Self::Screen => (255 - (255 - x) * (255 - y) / 255) as u8,
+            Self::Lighter => a.max(b),
+            Self::Darker => a.min(b),
+            // Pillow uses single precision, truncation, and clipping, including alpha.
+            Self::Add => ((x + y) as f32 / scale + offset as f32) as u8,
+            Self::Subtract => ((i32::from(a) - i32::from(b)) as f32 / scale + offset as f32) as u8,
+            Self::AddModulo => a.wrapping_add(b),
+            Self::SubtractModulo => a.wrapping_sub(b),
+            Self::SoftLight => (((255 - x) * x * y / 65536) + x * (255 - (255 - x) * (255 - y) / 255) / 255) as u8,
+            Self::HardLight | Self::Overlay => {
+                let selector = if matches!(self, Self::HardLight) { y } else { x };
+                if selector < 128 {
+                    (x * y / 127) as u8
+                } else {
+                    (255 - (255 - x) * (255 - y) / 127) as u8
+                }
+            }
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (first, second, operation, scale=1.0, offset=0))]
+fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, scale: f32, offset: i32) -> PyResult<Image> {
+    let operation = Operation::parse(operation)?;
+    let a = first.pixel_data()?;
+    let b = second.pixel_data()?;
+    if first.mode != second.mode {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    // Like Pillow, differently sized inputs use their top-left intersection.
+    let width = first.width.min(second.width);
+    let height = first.height.min(second.height);
+    let channels = first.mode.channels();
+    let row = width as usize * channels;
+    let mut pixels = buffer(row * height as usize)?;
+    let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
+    py.detach(|| {
+        chunks_mut(&mut pixels, row.max(1) * rows_per_chunk, |chunk, dst| {
+            for (i, output_row) in dst.chunks_exact_mut(row).enumerate() {
+                let y = chunk * rows_per_chunk + i;
+                let a_start = y * first.width as usize * channels;
+                let b_start = y * second.width as usize * channels;
+                for ((value, &a), &b) in output_row.iter_mut().zip(&a[a_start..a_start + row]).zip(&b[b_start..b_start + row]) {
+                    *value = operation.apply(a, b, scale, offset);
+                }
+            }
+        });
+    });
+    let mut result = Image::from_pixels(width, height, first.mode, pixels, None)?;
+    // Channel arithmetic creates an empty output palette, as Pillow does.
+    result.palette = first.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
+    Ok(result)
+}
+
+#[pyfunction]
+fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    let source = image.pixel_data()?;
+    let mut pixels = buffer(source.len())?;
+    py.detach(|| {
+        chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
+            for (value, &sample) in dst.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
+                *value = 255 - sample;
+            }
+        });
+    });
+    let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
+    result.palette = image.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
+    Ok(result)
+}
+
+#[pyfunction]
+fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> PyResult<Image> {
+    let source = image.raw_data()?;
+    let mut pixels = buffer(source.len())?;
+    if image.width != 0 && image.height != 0 {
+        let bytes_per_pixel = image.mode.channels() * if image.bit_depth == 8 { 1 } else { 2 };
+        let row = image.width as usize * bytes_per_pixel;
+        let head = xoffset.rem_euclid(i64::from(image.width)) as usize * bytes_per_pixel;
+        let shift_y = yoffset.rem_euclid(i64::from(image.height)) as usize;
+        py.detach(|| {
+            chunks_mut(&mut pixels, row, |y, dst| {
+                let source_y = (y + image.height as usize - shift_y) % image.height as usize;
+                let src = &source[source_y * row..(source_y + 1) * row];
+                dst[..head].copy_from_slice(&src[row - head..]);
+                dst[head..].copy_from_slice(&src[..row - head]);
+            });
+        });
+    }
+    Ok(Image {
+        width: image.width,
+        height: image.height,
+        mode: image.mode,
+        pixels: Some(pixels),
+        bit_depth: image.bit_depth,
+        format: None,
+        palette: image.palette.clone(),
+    })
+}

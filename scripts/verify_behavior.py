@@ -9,15 +9,19 @@ from tempfile import TemporaryDirectory
 
 import numpy as np
 from blanket import Image as BlanketImage
+from blanket import ImageChops as BlanketChops
 from blanket import ImageEnhance as BlanketEnhance
 from blanket import ImageFilter as BlanketFilter
 from blanket import ImageOps as BlanketOps
 from blanket import ImagePalette as BlanketPalette
+from blanket import ImageStat as BlanketStat
 from PIL import Image as PillowImage
+from PIL import ImageChops as PillowChops
 from PIL import ImageEnhance as PillowEnhance
 from PIL import ImageFilter
 from PIL import ImageOps as PillowOps
 from PIL import ImagePalette as PillowPalette
+from PIL import ImageStat as PillowStat
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
@@ -478,6 +482,57 @@ def check_compositing() -> int:
     return checks
 
 
+def check_imagechops() -> int:
+    """Check native channel arithmetic, wraparound offsets, and helpers."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        raw = pixels(mode)
+        first = BlanketImage.frombytes(mode, (37, 29), raw)
+        reference = PillowImage.frombytes(mode, first.size, raw)
+        second = BlanketImage.frombytes(mode, first.size, raw[::-1])
+        other = PillowImage.frombytes(mode, first.size, raw[::-1])
+        mask = BlanketImage.frombytes("L", first.size, pixels("L"))
+        reference_mask = PillowImage.frombytes("L", first.size, pixels("L"))
+        for name in BlanketChops.__all__:
+            if name in ("invert", "duplicate"):
+                args, reference_args = (first,), (reference,)
+            elif name in ("constant", "offset"):
+                args, reference_args = (first, 73), (reference, 73)
+            elif name == "blend":
+                args, reference_args = (first, second, 0.37), (reference, other, 0.37)
+            elif name == "composite":
+                args, reference_args = (first, second, mask), (reference, other, reference_mask)
+            elif name in ("add", "subtract"):
+                args, reference_args = (first, second, 1.7, -13), (reference, other, 1.7, -13)
+            else:
+                args, reference_args = (first, second), (reference, other)
+            actual = getattr(BlanketChops, name)(*args)
+            expected = getattr(PillowChops, name)(*reference_args)
+            assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), (mode, name)
+            checks += 1
+    return checks
+
+
+def check_imagestat() -> int:
+    """Compare each native statistic for images, masks, and histograms."""
+    checks = 0
+    for mode in ("L", "RGB", "RGBA"):
+        image = BlanketImage.frombytes(mode, (37, 29), pixels(mode))
+        reference = PillowImage.frombytes(mode, image.size, pixels(mode))
+        mask = BlanketImage.frombytes("L", image.size, pixels("L"))
+        reference_mask = PillowImage.frombytes("L", image.size, pixels("L"))
+        pairs = [
+            (BlanketStat.Stat(image), PillowStat.Stat(reference)),
+            (BlanketStat.Stat(image, mask), PillowStat.Stat(reference, reference_mask)),
+            (BlanketStat.Stat(image.histogram()), PillowStat.Stat(reference.histogram())),
+        ]
+        for actual, expected in pairs:
+            for name in ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev"):
+                assert np.allclose(getattr(actual, name), getattr(expected, name), rtol=1e-14, atol=1e-12), (mode, name)
+                checks += 1
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
@@ -485,6 +540,8 @@ def main() -> None:
     checks += check_avif_interop()
     checks += check_bmp_gif_ico_interop()
     checks += check_compositing()
+    checks += check_imagechops()
+    checks += check_imagestat()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()
