@@ -16,6 +16,7 @@ env:
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   FORCE_COLOR: "1"
   RUST_BACKTRACE: "1"
+  PYTHONFAULTHANDLER: "1"
 
 permissions:
   contents: write
@@ -51,14 +52,18 @@ jobs:
 
   linux:
     needs: prepare
-    timeout-minutes: 40
+    timeout-minutes: 60
     runs-on: ubuntu-24.04
+    env:
+      DAV1D_VERSION: "1.5.4"
+      AOM_VERSION: "v3.15.0"
+      X265_VERSION: "4.2"
+      LIBDE265_VERSION: "v1.1.3"
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: x86_64-unknown-linux-gnu
-            cpu: x86-64-v2
     steps:
       - uses: actions/checkout@v7
         with:
@@ -88,23 +93,162 @@ jobs:
         run: |
           uv python install 3.14
           uv tool install 'maturin[patchelf]>=1.15,<2'
-      - name: Install HEIF codecs
-        run: sudo apt-get update && sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang llvm lld ninja-build
-      - name: Setup PATH
-        run: |
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
       - uses: ilammy/setup-nasm@v1
         with:
           version: 3.02
+      - name: Install HEIF codecs and LLVM 21
+        run: |
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
+          sudo apt-get update
+          sudo apt-get install -y libheif-dev libnuma-dev clang-21 llvm-21 lld-21 ninja-build cmake meson pkg-config
+      - name: Setup PATH
+        run: |
+          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          echo "CC=clang-21" >> "$GITHUB_ENV"
+          echo "CXX=clang++-21" >> "$GITHUB_ENV"
+      - name: Cache dav1d
+        id: cache-dav1d
+        uses: actions/cache@v6
+        with:
+          path: ~/deps/dav1d
+          key: dav1d-${{ runner.os }}-${{ matrix.target }}-${{ env.DAV1D_VERSION }}
+
+      - name: Build dav1d
+        if: steps.cache-dav1d.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$DAV1D_VERSION" \
+            --depth 1 \
+            https://github.com/videolan/dav1d.git \
+            "$RUNNER_TEMP/dav1d"
+
+          meson setup \
+            "$RUNNER_TEMP/dav1d/build" \
+            "$RUNNER_TEMP/dav1d" \
+            --prefix="$HOME/deps/dav1d" \
+            --buildtype=release \
+            --default-library=shared
+
+          ninja -C "$RUNNER_TEMP/dav1d/build" install
+      - name: Cache AOM
+        id: cache-aom
+        uses: actions/cache@v6
+        with:
+          path: ~/deps/aom
+          key: aom-${{ runner.os }}-${{ matrix.target }}-${{ env.AOM_VERSION }}
+
+      - name: Build AOM
+        if: steps.cache-aom.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$AOM_VERSION" \
+            --depth 1 \
+            https://aomedia.googlesource.com/aom \
+            "$RUNNER_TEMP/aom"
+
+          cmake \
+            -S "$RUNNER_TEMP/aom" \
+            -B "$RUNNER_TEMP/aom/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/aom" \
+            -DBUILD_SHARED_LIBS=1 \
+            -DENABLE_TESTS=0 \
+            -DENABLE_DOCS=0
+
+          cmake --build "$RUNNER_TEMP/aom/build" --parallel
+          cmake --install "$RUNNER_TEMP/aom/build"
+      - name: Cache x265
+        id: cache-x265
+        uses: actions/cache@v6
+        with:
+          path: ~/deps/x265
+          key: x265-${{ runner.os }}-${{ matrix.target }}-${{ env.X265_VERSION }}
+
+      - name: Build x265
+        if: steps.cache-x265.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$X265_VERSION" \
+            --depth 1 \
+            https://bitbucket.org/multicoreware/x265_git.git \
+            "$RUNNER_TEMP/x265"
+
+          cmake \
+            -S "$RUNNER_TEMP/x265/source" \
+            -B "$RUNNER_TEMP/x265/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/x265" \
+            -DENABLE_SHARED=ON
+
+          cmake --build "$RUNNER_TEMP/x265/build" --parallel
+          cmake --install "$RUNNER_TEMP/x265/build"
+      - name: Cache libde265
+        id: cache-libde265
+        uses: actions/cache@v6
+        with:
+          path: ~/deps/libde265
+          key: libde265-${{ runner.os }}-${{ matrix.target }}-${{ env.LIBDE265_VERSION }}
+
+      - name: Build libde265
+        if: steps.cache-libde265.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$LIBDE265_VERSION" \
+            --depth 1 \
+            https://github.com/strukturag/libde265.git \
+            "$RUNNER_TEMP/libde265"
+
+          cmake \
+            -S "$RUNNER_TEMP/libde265" \
+            -B "$RUNNER_TEMP/libde265/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DENABLE_DECODER=off \
+            -DENABLE_SHERLOCK265=off \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/libde265"
+
+          cmake --build "$RUNNER_TEMP/libde265/build" --parallel
+          cmake --install "$RUNNER_TEMP/libde265/build"
+
+      # ----------------------------------------------------------------
+      # Make our codec builds take precedence over Ubuntu packages
+      # ----------------------------------------------------------------
+
+      - name: Setup codec dependencies
+        run: |
+          echo "$HOME/deps/dav1d/bin" >> "$GITHUB_PATH"
+          echo "$HOME/deps/aom/bin" >> "$GITHUB_PATH"
+          echo "$HOME/deps/x265/bin" >> "$GITHUB_PATH"
+          echo "$HOME/deps/libde265/bin" >> "$GITHUB_PATH"
+
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig" >> "$GITHUB_ENV"
+
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265" >> "$GITHUB_ENV"
+
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib" >> "$GITHUB_ENV"
+
+      - name: Verify codec versions
+        run: |
+          pkg-config --modversion dav1d
+          pkg-config --modversion aom
+          pkg-config --modversion x265
+          pkg-config --modversion libde265
       - name: Build wheels
         env:
-          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C target-cpu=${{ matrix.cpu }} -C link-arg=-Wl,-O3"
+          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3"
           CFLAGS: "-O3"
           CXXFLAGS: "-O3"
         run: |
           uv sync --no-install-project
           maturin build --release --out dist --features vendored -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair
+      - name: Install and verify wheels
+        run: |
+          uv sync --extra test --no-install-project
+          uv pip install --python .venv/bin/python dist/*.whl
+          uv run --no-sync scripts/verify_behavior.py
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
@@ -114,18 +258,25 @@ jobs:
     needs: prepare
     timeout-minutes: 40
     env:
-      MACOSX_DEPLOYMENT_TARGET: "15.0"
+      MACOSX_DEPLOYMENT_TARGET: "26.0"
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
         include:
           - target: aarch64
-            cpu: apple-m1
     steps:
       - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.event.release.tag_name }}
+      - name: Check out verification tools from the workflow commit
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-tools
+          sparse-checkout: scripts/verify_macos_wheel.py
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
       - name: Cache Rust dependencies and build artifacts
         uses: actions/cache@v6
         with:
@@ -151,12 +302,10 @@ jobs:
         run: |
           uv python install 3.14
           uv tool install maturin
-      - uses: ilammy/setup-nasm@v1
-        with:
-          version: 3.02
+          uv tool install delocate
       - name: Install HEIF codecs
         run: |
-          brew install dav1d libheif llvm lld cmake ninja
+          brew install dav1d libheif llvm lld cmake ninja nasm
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
@@ -166,12 +315,19 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
       - name: Build wheels
         env:
-          RUSTFLAGS: "-C target-cpu=${{ matrix.cpu }} -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3"
+          RUSTFLAGS: "-C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3"
           CFLAGS: "-O3"
           CXXFLAGS: "-O3"
         run: |
           uv sync --no-install-project
-          maturin build --release --out dist --features vendored -i python3.14 --strip --auditwheel=repair
+          maturin build --release --out dist-unrepaired --features vendored -i python3.14 --strip --auditwheel=skip
+      - name: Repair macOS wheels
+        run: delocate-wheel --require-archs=arm64 -v -w dist dist-unrepaired/*.whl
+      - name: Install and Verify wheels
+        run: |
+          uv sync --extra test --no-install-project
+          uv pip install --python .venv/bin/python dist/*.whl
+          uv run --no-sync scripts/verify_behavior.py
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-${{ matrix.target }}
