@@ -5,11 +5,22 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 pub(crate) const MIN_PARALLEL_BYTES: usize = 256 * 1024;
 pub(crate) const CHUNK_PIXELS: usize = 16 * 1024;
 
+/// Live exclusive bound. Encoders may recheck it after expensive work, before
+/// copying or decoding a candidate that a concurrent job has already beaten.
+pub(crate) struct CandidateLimit(AtomicUsize);
+
+impl CandidateLimit {
+    pub(crate) fn get(&self) -> usize {
+        self.0.load(Ordering::Relaxed)
+    }
+}
+
 /// Independent single-threaded codec candidates, with deterministic ties.
+#[cfg(test)]
 pub(crate) fn try_candidates<T: Sync, E: Send>(
     output: &mut Vec<u8>, jobs: &[T], work_bytes: usize, encode: impl Fn(&T) -> Result<Vec<u8>, E> + Sync,
 ) -> Result<(), E> {
-    if let Some(candidate) = best_candidate(jobs, work_bytes, output.len(), |job| encode(job).map(Some))? {
+    if let Some(candidate) = best_candidate(jobs, work_bytes, output.len(), |job, _| encode(job).map(Some))? {
         *output = candidate;
     }
     Ok(())
@@ -19,18 +30,24 @@ pub(crate) fn try_candidates<T: Sync, E: Send>(
 /// Each retains only its smallest result; slow filters cannot hold up the next
 /// batch. Indices, rather than completion order, break ties and order errors.
 /// `None` lets native codecs discard losing buffers without copying to a Vec.
+/// The encoder receives an exclusive size bound, tightened after each winner.
+/// Allow ties with that winner because an earlier job may still be running.
 pub(crate) fn best_candidate<T: Sync, E: Send>(
-    jobs: &[T], work_bytes: usize, limit: usize, encode: impl Fn(&T) -> Result<Option<Vec<u8>>, E> + Sync,
+    jobs: &[T], work_bytes: usize, limit: usize, encode: impl Fn(&T, &CandidateLimit) -> Result<Option<Vec<u8>>, E> + Sync,
 ) -> Result<Option<Vec<u8>>, E> {
     let workers = candidate_workers(work_bytes, jobs.len());
     let next = AtomicUsize::new(0);
+    let bound = CandidateLimit(AtomicUsize::new(limit));
     let run = |_| {
         let mut result = CandidateResult::default();
         loop {
             let index = next.fetch_add(1, Ordering::Relaxed);
             let Some(job) = jobs.get(index) else { break };
-            match encode(job) {
-                Ok(Some(candidate)) if candidate.len() < limit => result.keep(index, candidate),
+            match encode(job, &bound) {
+                Ok(Some(candidate)) if candidate.len() < limit => {
+                    bound.0.fetch_min(candidate.len() + 1, Ordering::Relaxed);
+                    result.keep(index, candidate);
+                }
                 Ok(_) => (),
                 Err(error) => {
                     result.error = Some((index, error));
@@ -151,14 +168,78 @@ mod tests {
                 })
                 .unwrap();
                 assert_eq!(output, vec![11; 5]);
-                let empty = best_candidate::<_, ()>(&jobs, 256 * 1024, 5, |_| Ok(None)).unwrap();
+                let empty = best_candidate::<_, ()>(&jobs, 256 * 1024, 5, |_, _| Ok(None)).unwrap();
                 assert!(empty.is_none());
-                let error = best_candidate(&jobs, 256 * 1024, 5, |&index| {
+                let error = best_candidate(&jobs, 256 * 1024, 5, |&index, _| {
                     if index == 7 || index == 19 { Err(index) } else { Ok(Some(vec![0; 4])) }
                 });
                 assert_eq!(error, Err(7));
             });
         }
+    }
+
+    #[test]
+    fn live_candidate_bound_skips_verification_after_a_concurrent_winner() {
+        rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap().install(|| {
+            let (send, receive) = std::sync::mpsc::channel();
+            let receive = std::sync::Mutex::new(receive);
+            let verified = AtomicUsize::new(0);
+            let winner = best_candidate::<_, ()>(&[0, 1, 2], 256 * 1024, 100, |&index, limit| {
+                if index == 0 {
+                    // Simulate an encode finishing after job 1 publishes its
+                    // winner and job 2 observes the tightened bound.
+                    receive.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+                    if 50 >= limit.get() {
+                        return Ok(None);
+                    }
+                    verified.fetch_add(1, Ordering::Relaxed);
+                    Ok(Some(vec![0; 50]))
+                } else if index == 1 {
+                    Ok(Some(vec![1; 5]))
+                } else {
+                    assert_eq!(limit.get(), 6);
+                    send.send(()).unwrap();
+                    Ok(None)
+                }
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(winner, [1; 5]);
+            assert_eq!(verified.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    #[test]
+    fn candidate_bounds_tighten_without_discarding_earlier_ties() {
+        let mut observed = Vec::new();
+        let bounds = std::sync::Mutex::new(&mut observed);
+        let winner = best_candidate::<_, ()>(&[9, 7, 7, 5], 0, 20, |&size, limit| {
+            bounds.lock().unwrap().push(limit.get());
+            Ok((size < limit.get()).then(|| vec![0; size]))
+        })
+        .unwrap()
+        .unwrap();
+        assert_eq!(winner.len(), 5);
+        assert_eq!(observed, [20, 10, 8, 8]);
+
+        // Job 0 finishes after job 1 has tightened the bound. Job 2 sees
+        // that bound and releases job 0; equal sizes must still favor job 0.
+        rayon::ThreadPoolBuilder::new().num_threads(2).build().unwrap().install(|| {
+            let (send, receive) = std::sync::mpsc::channel();
+            let receive = std::sync::Mutex::new(receive);
+            let winner = best_candidate::<_, ()>(&[0, 1, 2], 256 * 1024, 20, |&index, limit| {
+                if index == 0 {
+                    receive.lock().unwrap().recv_timeout(std::time::Duration::from_secs(10)).unwrap();
+                } else if index == 2 {
+                    assert_eq!(limit.get(), 6);
+                    send.send(()).unwrap();
+                }
+                Ok((5 < limit.get()).then(|| vec![index; 5]))
+            })
+            .unwrap()
+            .unwrap();
+            assert_eq!(winner, [0; 5]);
+        });
     }
 
     #[test]

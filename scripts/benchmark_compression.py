@@ -1,7 +1,7 @@
 """Measure save compression size, time, and exact decoded-pixel preservation.
 
 Run with: uv run --no-sync scripts/benchmark_compression.py --help
-Uses deterministic 8-bit fixtures; requires no Pillow or external image assets.
+Loads real test images from the ``test_images/`` directory.
 """
 
 from __future__ import annotations
@@ -10,8 +10,7 @@ import argparse
 import io
 import json
 import platform
-import random
-from collections.abc import Callable, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 from statistics import median
 from time import perf_counter
@@ -19,23 +18,27 @@ from time import perf_counter
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor
 
+TEST_IMAGES_DIR = Path(__file__).resolve().parent.parent / "test_images"
 
-def fixtures(size: tuple[int, int]) -> Iterator[tuple[str, Image.Image]]:
-    width, height = size
-    rng = random.Random(42)
-    noise = rng.randbytes(width * height * 3)
-    builders: dict[str, tuple[str, Callable[[int, int], bytes]]] = {
-        "binary": ("L", lambda x, y: bytes([255 * ((x // 8 + y // 8) % 2)])),
-        "gray-gradient": ("L", lambda x, y: bytes([(x + y) % 256])),
-        "palette": ("RGB", lambda x, y: bytes(((x // 8 % 4) * 85, (y // 8 % 4) * 85, 85))),
-        "rgb-gradient": ("RGB", lambda x, y: bytes((x % 256, y % 256, (x + y) % 256))),
-        "gray-alpha": ("RGBA", lambda x, y: bytes([(x + y) % 256] * 3 + [(x * 17 + y * 31) % 256])),
-        "color-key": ("RGBA", lambda x, y: bytes((19, 73, 151, 0)) if x % 8 == 0 else bytes((x % 256, y % 256, 0, 255))),
-    }
-    for name, (mode, build) in builders.items():
-        yield name, Image.frombytes(mode, size, b"".join(build(x, y) for y in range(height) for x in range(width)))
-    yield "rgb-noise", Image.frombytes("RGB", size, noise)
-    yield "opaque-rgba", Image.frombytes("RGBA", size, b"".join(noise[i : i + 3] + b"\xff" for i in range(0, len(noise), 3)))
+
+def fixtures() -> Iterator[tuple[str, Image.Image]]:
+    """Yield ``(stem, image)`` pairs from the ``test_images/`` directory.
+
+    Each unique stem (e.g. ``hdr_16b``, ``manning``) is loaded once from
+    whichever source file is found first (PNG preferred).
+    """
+    if not TEST_IMAGES_DIR.is_dir():
+        raise SystemExit(f"test_images directory not found: {TEST_IMAGES_DIR}")
+    seen: set[str] = set()
+    # Prefer PNG sources since they are lossless.
+    paths = sorted(TEST_IMAGES_DIR.iterdir(), key=lambda p: (p.suffix != ".png", p.name))
+    for path in paths:
+        if path.suffix.lstrip(".") not in ("png", "jpg", "jpeg", "jxl", "heic") or path.name.startswith("."):
+            continue
+        if path.stem in seen:
+            continue
+        seen.add(path.stem)
+        yield path.stem, Image.open(path)
 
 
 def decoded_samples(encoded: bytes) -> tuple[tuple[int, int], bytes]:
@@ -109,7 +112,7 @@ def positive(value: str) -> int:
 
 
 def _row_key(row: dict[str, object]) -> tuple[str, str, int]:
-    return (str(row["fixture"]), str(row["format"]), int(row["effort"]))  # type: ignore[arg-type]
+    return (str(row["fixture"]), str(row["format"]), int(row["effort"]))
 
 
 def _delta(old: float, new: float) -> str:
@@ -131,12 +134,8 @@ def compare_results(path_a: Path, path_b: Path) -> int:
     data_a = json.loads(path_a.read_text())
     data_b = json.loads(path_b.read_text())
 
-    lookup_a: dict[tuple[str, str, int], dict[str, object]] = {
-        _row_key(r): r for r in data_a["results"] if "error" not in r
-    }
-    lookup_b: dict[tuple[str, str, int], dict[str, object]] = {
-        _row_key(r): r for r in data_b["results"] if "error" not in r
-    }
+    lookup_a: dict[tuple[str, str, int], dict[str, object]] = {_row_key(r): r for r in data_a["results"] if "error" not in r}
+    lookup_b: dict[tuple[str, str, int], dict[str, object]] = {_row_key(r): r for r in data_b["results"] if "error" not in r}
     overlap = sorted(lookup_a.keys() & lookup_b.keys())
     if not overlap:
         print("No overlapping tests found between the two files.")
@@ -147,12 +146,7 @@ def compare_results(path_a: Path, path_b: Path) -> int:
 
     table = Table(
         title=f"Comparison: [bold]{label_a}[/bold] vs [bold]{label_b}[/bold]",
-        caption=(
-            f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} "
-            f"({data_a.get('width', '?')}×{data_a.get('height', '?')}, {data_a.get('repeats', '?')} repeats)\n"
-            f"B: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} "
-            f"({data_b.get('width', '?')}×{data_b.get('height', '?')}, {data_b.get('repeats', '?')} repeats)"
-        ),
+        caption=(f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)\nB: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)"),
         show_lines=True,
     )
     table.add_column("Fixture", style="cyan")
@@ -170,31 +164,18 @@ def compare_results(path_a: Path, path_b: Path) -> int:
 
     for key in overlap:
         a, b = lookup_a[key], lookup_b[key]
-        a_opt = float(a["optimized_bytes"])  # type: ignore[arg-type]
-        b_opt = float(b["optimized_bytes"])  # type: ignore[arg-type]
-        a_pct = float(a["reduction_percent"])  # type: ignore[arg-type]
-        b_pct = float(b["reduction_percent"])  # type: ignore[arg-type]
-        a_ms = float(a["optimized_ms"])  # type: ignore[arg-type]
-        b_ms = float(b["optimized_ms"])  # type: ignore[arg-type]
+        a_opt = float(a["optimized_bytes"])
+        b_opt = float(b["optimized_bytes"])
+        a_pct = float(a["reduction_percent"])
+        b_pct = float(b["reduction_percent"])
+        a_ms = float(a["optimized_ms"])
+        b_ms = float(b["optimized_ms"])
         a_pass = a.get("lossless", False) and a.get("non_growing", False)
         b_pass = b.get("lossless", False) and b.get("non_growing", False)
         check_a = "[green]✓[/green]" if a_pass else "[red]✗[/red]"
         check_b = "[green]✓[/green]" if b_pass else "[red]✗[/red]"
 
-        table.add_row(
-            key[0],
-            key[1],
-            str(key[2]),
-            f"{a_opt:.0f}",
-            f"{b_opt:.0f}",
-            _delta(a_opt, b_opt),
-            f"{a_pct:.2f}",
-            f"{b_pct:.2f}",
-            f"{a_ms:.2f}",
-            f"{b_ms:.2f}",
-            _delta(a_ms, b_ms),
-            f"{check_a} {check_b}",
-        )
+        table.add_row(key[0], key[1], str(key[2]), f"{a_opt:.0f}", f"{b_opt:.0f}", _delta(a_opt, b_opt), f"{a_pct:.2f}", f"{b_pct:.2f}", f"{a_ms:.2f}", f"{b_ms:.2f}", _delta(a_ms, b_ms), f"{check_a} {check_b}")
 
     console = Console()
     console.print(table)
@@ -210,8 +191,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("-f", "--formats", nargs="+", choices=["PNG", "JPEG", "JXL", "HEIF"], default=["PNG", "JPEG", "JXL", "HEIF"])
     parser.add_argument("-e", "--efforts", nargs="+", type=int, choices=range(1, 11), default=[7])
-    parser.add_argument("--width", type=positive, default=1920)
-    parser.add_argument("--height", type=positive, default=1080)
     parser.add_argument("--repeats", type=positive, default=3)
     parser.add_argument("--warmups", type=int, choices=range(11), default=1)
     parser.add_argument("--json", type=Path, help="write machine-readable results and individual timing samples")
@@ -221,27 +200,31 @@ def main() -> int:
         return compare_results(args.compare[0], args.compare[1])
     print("Times are median in-memory saves; decoding/verification is excluded.")
     print("Lossless means exact RGBA samples, including hidden colors; JPEG compares to the normal lossy save.")
-    print(f"{'Fixture':<15} {'Format':<8} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'Was Lossless':>13}")
+    print(f"{'Fixture':<12} {'Size':<11} {'Format':<8} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'Was Lossless':>13}")
     rows: list[dict[str, object]] = []
     failed = False
-    for name, original in fixtures((args.width, args.height)):
+    for name, original in fixtures():
+        w, h = original.size
+        size_label = f"{w}×{h}"
         for fmt in dict.fromkeys(args.formats):
+            if "16b" in name and fmt in ("JPEG", "HEIF"):
+                continue
             image = original.convert("RGB") if fmt == "JPEG" else original
             for effort in dict.fromkeys(args.efforts):
-                row: dict[str, object] = {"fixture": name, "format": fmt, "effort": effort}
+                row: dict[str, object] = {"fixture": name, "width": w, "height": h, "format": fmt, "effort": effort}
                 try:
                     result = benchmark(image, fmt, effort, args.repeats, args.warmups)
                     row.update(result)
                     passed = result["lossless"] and result["non_growing"]
                     failed |= not passed
-                    print(f"{name:<15} {fmt:<8} {effort:>6} {result['baseline_bytes']:>15.0f} {result['optimized_bytes']:>15.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'YES' if passed else 'NO':>13}", flush=True)
+                    print(f"{name:<12} {size_label:<11} {fmt:<8} {effort:>6} {result['baseline_bytes']:>15.0f} {result['optimized_bytes']:>15.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'YES' if passed else 'NO':>13}", flush=True)
                 except Exception as error:
                     failed = True
                     row["error"] = str(error)
                     print(f"{name} {fmt} effort={effort}: ERROR: {error}", flush=True)
                 rows.append(row)
     if args.json:
-        args.json.write_text(json.dumps({"platform": platform.platform(), "python": platform.python_version(), "width": args.width, "height": args.height, "repeats": args.repeats, "warmups": args.warmups, "results": rows}, indent=2) + "\n")
+        args.json.write_text(json.dumps({"platform": platform.platform(), "python": platform.python_version(), "repeats": args.repeats, "warmups": args.warmups, "results": rows}, indent=2) + "\n")
     print(f"{len(rows)} cases: {'FAILED (pixel mismatch, size increase, or codec error)' if failed else 'all checks passed'}")
     return int(failed)
 

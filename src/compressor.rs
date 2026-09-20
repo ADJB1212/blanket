@@ -55,13 +55,13 @@ impl LosslessImageCompressor {
         // supported by many consumers. Both candidates retain all coefficients,
         // quantization tables, subsampling, partial edge blocks, and markers.
         let jobs = &[false, true][..if self.effort >= 3 { 2 } else { 1 }];
-        let candidate = parallel::best_candidate(jobs, work_bytes, baseline.len(), |&progressive| {
+        let candidate = parallel::best_candidate(jobs, work_bytes, baseline.len(), |&progressive, limit| {
             let mut transformer = turbojpeg::Transformer::new().map_err(codec_error)?;
             let mut transform = turbojpeg::Transform::default();
             transform.optimize = true;
             transform.progressive = progressive;
             let candidate = transformer.transform_to_owned(&transform, &baseline).map_err(codec_error)?;
-            Ok::<_, PyErr>((candidate.len() < baseline.len()).then(|| candidate.to_vec()))
+            Ok::<_, PyErr>((candidate.len() < limit.get()).then(|| candidate.to_vec()))
         })?;
         Ok(candidate.unwrap_or(baseline))
     }
@@ -72,7 +72,10 @@ impl LosslessImageCompressor {
         // whether multiple encoders fit the candidate memory budget.
         let work_bytes = image.raw_data()?.len().saturating_mul(4);
         let candidate_count = usize::from(self.effort) - usize::from(options.effort <= self.effort);
-        if format == ImageFormat::Jxl && image.raw_data()?.len() >= 32 * 1024 && parallel::candidate_workers(work_bytes, candidate_count) > 1 {
+        if format == ImageFormat::Jxl
+            && image.raw_data()?.len() >= codecs::JXL_PARALLEL_MIN_BYTES
+            && parallel::candidate_workers(work_bytes, candidate_count) > 1
+        {
             return self.optimize_jxl_parallel(image, options, work_bytes);
         }
         let mut prepared = PreparedSampleCodec::new(image, format)?;
@@ -141,9 +144,9 @@ impl LosslessImageCompressor {
         let baseline = prepared.encode(options)?;
         let reference = OnceLock::new();
         let jobs: Vec<_> = (1..=self.effort).filter(|&effort| effort != options.effort).collect();
-        let candidate = parallel::best_candidate(&jobs, work_bytes, baseline.len(), |&effort| {
+        let candidate = parallel::best_candidate(&jobs, work_bytes, baseline.len(), |&effort, limit| {
             let candidate = prepared.encode_with_threads(SaveOptions { effort, ..options }, true)?;
-            if candidate.len() >= baseline.len() {
+            if candidate.len() >= limit.get() {
                 return Ok(None);
             }
             // Decode the baseline at most once, and only if a candidate could
@@ -163,7 +166,7 @@ impl LosslessImageCompressor {
                 .map_err(codec_error)?;
             let prepared = codecs::PreparedJxl::new(reference)?;
             let jobs: Vec<_> = (1..=self.effort).collect();
-            let candidate = parallel::best_candidate(&jobs, work_bytes, output.len(), |&effort| {
+            let candidate = parallel::best_candidate(&jobs, work_bytes, output.len(), |&effort, limit| {
                 let candidate = prepared.encode_with_threads(
                     SaveOptions {
                         effort,
@@ -173,7 +176,7 @@ impl LosslessImageCompressor {
                     },
                     true,
                 )?;
-                if candidate.len() >= output.len() {
+                if candidate.len() >= limit.get() {
                     return Ok(None);
                 }
                 Ok::<_, PyErr>(equivalent(&candidate, reference, ImageFormat::Jxl)?.then_some(candidate))
@@ -254,10 +257,17 @@ impl LosslessImageCompressor {
     }
 
     fn search_png(&self, image: &Image, candidate: &PngCandidate<'_>, compress_level: u8, baseline: bool, output: &mut Vec<u8>) -> PyResult<()> {
+        if candidate.minimum_size() >= output.len() {
+            return Ok(());
+        }
         let jobs = self.png_jobs(compress_level, baseline);
-        parallel::try_candidates(output, &jobs, candidate.pixels.len(), |&(level, filter)| {
-            candidate.encode(image, filter, level)
-        })
+        let limit = output.len();
+        if let Some(best) = parallel::best_candidate(&jobs, candidate.pixels.len(), limit, |&(level, filter), limit| {
+            candidate.encode_bounded(image, filter, level, limit.get())
+        })? {
+            *output = best;
+        }
+        Ok(())
     }
 
     fn optimize_gray_or_key(&self, image: &Image, pixels: &[u8], compress_level: u8, output: &mut Vec<u8>) -> PyResult<()> {
@@ -642,9 +652,25 @@ struct PngCandidate<'a> {
 }
 
 impl PngCandidate<'_> {
+    fn minimum_size(&self) -> usize {
+        // Signature, IHDR, one IDAT header/CRC, and IEND. Ignore the zlib
+        // payload to keep this a conservative bound for every filter/level.
+        let chunk_size = |data: &[u8]| if data.is_empty() { 0 } else { 12 + data.len() };
+        8 + 25 + 12 + 12 + chunk_size(self.palette) + chunk_size(self.transparency)
+    }
+
+    #[cfg(test)]
     fn encode(&self, image: &Image, filter: png::Filter, level: u8) -> PyResult<Vec<u8>> {
-        let mut output = Vec::new();
-        {
+        Ok(self.encode_bounded(image, filter, level, usize::MAX)?.expect("unbounded PNG"))
+    }
+
+    fn encode_bounded(&self, image: &Image, filter: png::Filter, level: u8, limit: usize) -> PyResult<Option<Vec<u8>>> {
+        let mut output = CandidateWriter {
+            bytes: Vec::new(),
+            limit,
+            exceeded: false,
+        };
+        let result = (|| {
             let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
             encoder.set_color(self.color);
             encoder.set_depth(self.depth);
@@ -656,11 +682,58 @@ impl PngCandidate<'_> {
             if !self.transparency.is_empty() {
                 encoder.set_trns(self.transparency);
             }
-            let mut writer = encoder.write_header().map_err(codec_error)?;
-            writer.write_image_data(self.pixels).map_err(codec_error)?;
-            writer.finish().map_err(codec_error)?;
+            let mut writer = encoder.write_header()?;
+            writer.write_image_data(self.pixels)?;
+            writer.finish()?;
+            Ok::<_, png::EncodingError>(())
+        })();
+        match result {
+            Err(png::EncodingError::IoError(error)) if error.get_ref().is_some_and(|error| error.is::<CandidateLimitReached>()) => Ok(None),
+            Err(error) => Err(codec_error(error)),
+            Ok(()) => Ok(Some(output.bytes)),
         }
-        Ok(output)
+    }
+}
+
+/// Stop collecting a candidate as soon as it cannot strictly beat the baseline.
+/// Track our own cancellation so unrelated encoder errors still propagate.
+struct CandidateWriter {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded: bool,
+}
+
+#[derive(Debug)]
+struct CandidateLimitReached;
+
+impl std::fmt::Display for CandidateLimitReached {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PNG candidate cannot improve the baseline")
+    }
+}
+
+impl std::error::Error for CandidateLimitReached {}
+
+impl std::io::Write for CandidateWriter {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if self.exceeded || (!bytes.is_empty() && bytes.len() >= self.limit.saturating_sub(self.bytes.len())) {
+            self.exceeded = true;
+            return Err(std::io::Error::other(CandidateLimitReached));
+        }
+        let required = self.bytes.len() + bytes.len();
+        if required > self.bytes.capacity() {
+            // Retain amortized growth without Vec's doubling overshooting
+            // the maximum useful candidate size. reserve_exact takes an
+            // amount relative to length, not existing capacity.
+            let capacity = self.bytes.capacity().saturating_mul(2).max(required).min(self.limit.saturating_sub(1));
+            self.bytes.reserve_exact(capacity - self.bytes.len());
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }
 
@@ -763,7 +836,13 @@ impl<'a> PreparedSampleCodec<'a> {
             "placebo",
         ];
         match self {
-            Self::Jxl(prepared) => prepared.encode(options),
+            Self::Jxl(prepared) => {
+                if baseline {
+                    prepared.encode(options)
+                } else {
+                    prepared.encode_candidate(options)
+                }
+            }
             Self::Heif(prepared) => prepared.encode(options, if baseline { "medium" } else { PRESETS[usize::from(options.effort - 1)] }),
         }
     }
@@ -917,6 +996,104 @@ mod tests {
                 assert_eq!(palette_entries(&source, channels), expected);
             }
         }
+    }
+
+    #[test]
+    fn png_chunk_bound_skips_impossible_representations() {
+        let image = Image::from_pixels(1, 1, PixelMode::L, vec![0], None).unwrap();
+        for (palette, transparency) in [(&[][..], &[][..]), (&[0, 0, 0][..], &[][..]), (&[0, 0, 0][..], &[0][..])] {
+            let candidate = PngCandidate {
+                color: if palette.is_empty() {
+                    png::ColorType::Grayscale
+                } else {
+                    png::ColorType::Indexed
+                },
+                depth: png::BitDepth::Eight,
+                pixels: &[0],
+                palette,
+                transparency,
+            };
+            let encoded = candidate.encode(&image, png::Filter::Adaptive, 6).unwrap();
+            assert!(candidate.minimum_size() < encoded.len());
+            let minimum = 57 + if palette.is_empty() { 0 } else { 15 } + if transparency.is_empty() { 0 } else { 13 };
+            assert_eq!(candidate.minimum_size(), minimum);
+            // Invalid samples prove no encoder is invoked when mandatory
+            // chunk bytes alone rule out an improvement.
+            let invalid = PngCandidate { pixels: &[], ..candidate };
+            let mut output = vec![19; minimum];
+            let compressor = LosslessImageCompressor { effort: 10 };
+            compressor.search_png(&image, &invalid, 6, false, &mut output).unwrap();
+            assert_eq!(output, vec![19; minimum]);
+            output.push(19);
+            assert!(compressor.search_png(&image, &invalid, 6, false, &mut output).is_err());
+        }
+    }
+
+    #[test]
+    fn candidate_writer_caps_capacity_growth() {
+        use std::io::Write;
+        for limit in [2, 12, 257, 1025] {
+            let mut writer = CandidateWriter {
+                bytes: Vec::new(),
+                limit,
+                exceeded: false,
+            };
+            for _ in 1..limit {
+                writer.write_all(&[42]).unwrap();
+                assert!(writer.bytes.capacity() < limit);
+            }
+            assert_eq!(writer.bytes, vec![42; limit - 1]);
+            assert!(writer.write_all(&[42]).is_err());
+            assert!(writer.bytes.capacity() < limit);
+        }
+    }
+
+    #[test]
+    fn bounded_png_preserves_winners_and_rejects_ties() {
+        for (mode, color) in [
+            (PixelMode::L, png::ColorType::Grayscale),
+            (PixelMode::Rgb, png::ColorType::Rgb),
+            (PixelMode::Rgba, png::ColorType::Rgba),
+        ] {
+            let samples = (0..17 * 9 * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
+            let image = Image::from_pixels(17, 9, mode, samples, None).unwrap();
+            let candidate = PngCandidate {
+                color,
+                depth: png::BitDepth::Eight,
+                pixels: image.pixel_data().unwrap(),
+                palette: &[],
+                transparency: &[],
+            };
+            for (level, filter) in (LosslessImageCompressor { effort: 10 }).png_jobs(6, false) {
+                let expected = candidate.encode(&image, filter, level).unwrap();
+                for limit in [0, 8, 33, expected.len() - 1, expected.len()] {
+                    assert!(candidate.encode_bounded(&image, filter, level, limit).unwrap().is_none());
+                }
+                assert_eq!(
+                    candidate.encode_bounded(&image, filter, level, expected.len() + 1).unwrap(),
+                    Some(expected)
+                );
+            }
+            let invalid = PngCandidate { pixels: &[], ..candidate };
+            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, usize::MAX).is_err());
+            // Dropping the writer after an input error attempts IEND. That
+            // cleanup exceeding the limit must not hide the original error.
+            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, 34).is_err());
+        }
+    }
+
+    #[test]
+    fn candidate_writer_never_retains_a_losing_chunk() {
+        use std::io::Write;
+        let mut writer = CandidateWriter {
+            bytes: Vec::new(),
+            limit: 10,
+            exceeded: false,
+        };
+        writer.write_all(&[1; 9]).unwrap();
+        assert!(writer.write_all(&[2; 1024]).is_err());
+        assert_eq!(writer.bytes, [1; 9]);
+        assert!(writer.write_all(&[3]).is_err());
     }
 
     #[test]

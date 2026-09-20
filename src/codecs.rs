@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Cursor;
 use std::sync::LazyLock;
 
@@ -48,6 +49,7 @@ pub(crate) fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<
 }
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
+pub(crate) const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
 
 // libheif owns a process-wide plugin registry. Keep its initialization guard
 // alive so each image does not tear down and recreate the codec plugins.
@@ -60,7 +62,7 @@ thread_local! {
     static JXL_DECODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
     // Reuse workers, but let libjxl size the pool for each frame. Tiny images
     // should not pay the synchronization cost of a full-machine thread pool.
-    static JXL_ENCODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
+    static JXL_ENCODE_RUNNER: std::cell::OnceCell<Option<ResizableRunner<'static>>> = const { std::cell::OnceCell::new() };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -652,9 +654,15 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         PixelMode::Rgba => (ColorEncoding::Srgb, true),
     };
     let speed = jxl_encoder_speed(options.effort)?;
-    JXL_ENCODE_RUNNER.with(|runner| {
-        let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+    let input_bytes = match &pixels {
+        JxlSamples::Byte(samples) => samples.len(),
+        JxlSamples::Wide(samples) => std::mem::size_of_val(*samples),
+    };
+    let encode = |runner: Option<&ResizableRunner<'_>>| {
         let builder = encoder_builder()
+            // jpegxl-rs otherwise zero-fills 512 KiB even for tiny candidates.
+            // It grows this buffer when needed and shrinks it after encoding.
+            .init_buffer_size(input_bytes.saturating_add(1024).clamp(4096, 512 * 1024))
             .has_alpha(has_alpha)
             .lossless(options.lossless)
             .speed(speed)
@@ -663,10 +671,10 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
             .jpeg_quality(f32::from(options.quality))
             .uses_original_profile(options.lossless || options.quality == 100)
             .color_encoding(color_encoding);
-        let mut encoder = if single_threaded {
-            builder.build()
-        } else {
+        let mut encoder = if let Some(runner) = runner {
             builder.parallel_runner(runner).build()
+        } else {
+            builder.build()
         }
         .map_err(codec_error)?;
         match pixels {
@@ -681,25 +689,56 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
                 Ok(encoded.data)
             }
         }
-    })
+    };
+    if single_threaded {
+        // Do not even initialize the thread-local pool for Rayon candidates.
+        // Besides allocating unused state, pool creation could fail despite
+        // the single-threaded encoder not needing a runner at all.
+        encode(None)
+    } else {
+        JXL_ENCODE_RUNNER.with(|runner| {
+            let runner = runner.get_or_init(|| ResizableRunner::new(None));
+            let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+            encode(Some(runner))
+        })
+    }
 }
 
 /// Normalize wide samples once per effort search, rather than once per encode.
-/// Eight-bit input is borrowed directly from the immutable source image.
+/// Eight-bit and aligned native-endian 16-bit input borrow the source image.
 pub(crate) struct PreparedJxl<'a> {
     image: &'a Image,
-    wide: Option<Vec<u16>>,
+    wide: Option<Cow<'a, [u16]>>,
+}
+
+fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
+    #[cfg(target_endian = "little")]
+    if depth == 16 {
+        // SAFETY: every bit pattern is a valid u16; align_to checks alignment
+        // and bounds. The immutable borrow cannot outlive the input buffer.
+        let (prefix, samples, suffix) = unsafe { raw.align_to::<u16>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            return Cow::Borrowed(samples);
+        }
+    }
+    Cow::Owned(crate::compressor_simd::normalize_u16(raw, depth))
 }
 
 impl<'a> PreparedJxl<'a> {
     pub(crate) fn new(image: &'a Image) -> PyResult<Self> {
         let raw = image.raw_data()?;
-        let wide = (image.bit_depth > 8).then(|| crate::compressor_simd::normalize_u16(raw, image.bit_depth));
+        let wide = (image.bit_depth > 8).then(|| jxl_wide_samples(raw, image.bit_depth));
         Ok(Self { image, wide })
     }
 
     pub(crate) fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
         self.encode_with_threads(options, false)
+    }
+
+    pub(crate) fn encode_candidate(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
+        // Match the outer search's small-image cutoff. Larger serial trials
+        // still benefit from libjxl's pool; parallel trials force one thread.
+        self.encode_with_threads(options, self.image.raw_data()?.len() < JXL_PARALLEL_MIN_BYTES)
     }
 
     pub(crate) fn encode_with_threads(&self, options: SaveOptions, single_threaded: bool) -> PyResult<Vec<u8>> {
@@ -979,6 +1018,115 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn jxl_wide_preparation_borrows_only_native_aligned_samples() {
+        #[repr(align(2))]
+        struct Aligned([u8; 10]);
+        let storage = Aligned([0, 0, 255, 255, 1, 128, 17, 23, 42, 0]);
+        for raw in [&storage.0[..8], &storage.0[1..9]] {
+            let prepared = jxl_wide_samples(raw, 16);
+            assert_eq!(prepared.as_ref(), crate::compressor_simd::normalize_u16(raw, 16));
+            assert_eq!(
+                matches!(prepared, Cow::Borrowed(_)),
+                cfg!(target_endian = "little") && raw.as_ptr().addr().is_multiple_of(2)
+            );
+        }
+        for depth in [10, 12] {
+            let raw: Vec<_> = [0_u16, 1, 71, (1 << depth) - 1].into_iter().flat_map(u16::to_le_bytes).collect();
+            let prepared = jxl_wide_samples(&raw, depth);
+            assert!(matches!(prepared, Cow::Owned(_)));
+            assert_eq!(prepared.as_ref(), crate::compressor_simd::normalize_u16(&raw, depth));
+            assert_eq!(prepared[3], u16::MAX);
+        }
+    }
+
+    #[test]
+    fn jxl_output_buffers_fit_small_images_and_grow_for_large_images() {
+        for side in [17, 513] {
+            let mut state = 19_u32;
+            let pixels: Vec<_> = (0..side * side * 4)
+                .map(|_| {
+                    state ^= state << 13;
+                    state ^= state >> 17;
+                    state ^= state << 5;
+                    state as u8
+                })
+                .collect();
+            let image = Image::from_pixels(side, side, PixelMode::Rgba, pixels.clone(), None).unwrap();
+            let options = SaveOptions {
+                quality: 100,
+                compress_level: 6,
+                lossless: true,
+                effort: 1,
+            };
+            let output = PreparedJxl::new(&image).unwrap().encode_with_threads(options, true).unwrap();
+            if side == 17 {
+                assert!(output.capacity() <= 4096);
+            } else {
+                assert!(output.len() > 512 * 1024);
+                assert!(output.capacity() >= output.len());
+            }
+            assert_eq!(decode(&output, ImageFormat::Jxl).unwrap().raw_data().unwrap(), pixels);
+            // Initial capacity must not affect the codestream, including
+            // when incompressible data forces the buffer to grow repeatedly.
+            let mut encoder = encoder_builder()
+                .has_alpha(true)
+                .lossless(true)
+                .speed(EncoderSpeed::Lightning)
+                .decoding_speed(0)
+                .use_container(false)
+                .jpeg_quality(100.0)
+                .uses_original_profile(true)
+                .color_encoding(ColorEncoding::Srgb)
+                .build()
+                .unwrap();
+            let frame = EncoderFrame::new(&pixels).num_channels(4);
+            let reference: EncoderResult<u8> = encoder.encode_frame(&frame, side, side).unwrap();
+            assert_eq!(output, reference.data);
+        }
+    }
+
+    #[test]
+    fn jxl_candidates_preserve_bytes_without_unused_thread_pools() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [8, 10, 12, 16] {
+                for (width, height) in [(17, 19), (257, 129)] {
+                    // A fresh thread makes pool initialization observable,
+                    // independently of which other codec tests ran first.
+                    std::thread::spawn(move || {
+                        let samples: Vec<u16> = (0..width * height * mode.channels())
+                            .map(|i| ((i * 71 + i / 13) % (1 << depth)) as u16)
+                            .collect();
+                        let image = if depth == 8 {
+                            Image::from_pixels(width as u32, height as u32, mode, samples.into_iter().map(|v| v as u8).collect(), None).unwrap()
+                        } else {
+                            Image::from_samples(width as u32, height as u32, mode, samples, depth, None).unwrap()
+                        };
+                        let prepared = PreparedJxl::new(&image).unwrap();
+                        let options = SaveOptions {
+                            quality: 71,
+                            compress_level: 6,
+                            lossless: true,
+                            effort: 3,
+                        };
+                        let single = prepared.encode_with_threads(options, true).unwrap();
+                        JXL_ENCODE_RUNNER.with(|runner| assert!(runner.get().is_none()));
+                        let candidate = prepared.encode_candidate(options).unwrap();
+                        JXL_ENCODE_RUNNER.with(|runner| {
+                            assert_eq!(runner.get().is_some(), image.raw_data().unwrap().len() >= JXL_PARALLEL_MIN_BYTES);
+                        });
+                        assert_eq!(candidate, single);
+                        assert_eq!(candidate, prepared.encode(options).unwrap());
+                        let lossy = SaveOptions { lossless: false, ..options };
+                        assert_eq!(prepared.encode_candidate(lossy).unwrap(), prepared.encode(lossy).unwrap());
+                    })
+                    .join()
+                    .unwrap();
+                }
+            }
+        }
+    }
 
     #[test]
     fn reused_heif_planes_match_fresh_planes_across_presets_and_quality() {
