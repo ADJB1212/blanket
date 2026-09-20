@@ -7,7 +7,6 @@ import gc
 import json
 import math
 import platform
-import struct
 import subprocess
 import warnings
 from collections.abc import Callable
@@ -71,60 +70,6 @@ def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> byt
     output = BytesIO()
     image.save(output, fmt, **options)
     return output.getvalue()
-
-
-def make_dng(size: tuple[int, int], *, cfa: bool = False) -> bytes:
-    """Generate an uncompressed 16-bit LinearRaw DNG without camera assets."""
-    width, height = size
-    entries: list[tuple[int, int, int, bytes]] = []
-
-    def shorts(tag: int, *values: int) -> None:
-        entries.append((tag, 3, len(values), struct.pack("<" + "H" * len(values), *values)))
-
-    def longs(tag: int, *values: int) -> None:
-        entries.append((tag, 4, len(values), struct.pack("<" + "I" * len(values), *values)))
-
-    longs(256, width)
-    longs(257, height)
-    shorts(258, *([16] if cfa else [16, 16, 16]))
-    shorts(259, 1)
-    shorts(262, 32803 if cfa else 34892)
-    longs(273, 0)
-    shorts(277, 1 if cfa else 3)
-    longs(278, height)
-    longs(279, width * height * (1 if cfa else 3) * 2)
-    shorts(284, 1)
-    entries.append((50706, 1, 4, bytes([1, 4, 0, 0])))
-    entries.append((50707, 1, 4, bytes([1, 1, 0, 0])))
-    longs(50717, *([65535] if cfa else [65535, 65535, 65535]))
-    if cfa:
-        shorts(33421, 2, 2)
-        entries.append((33422, 1, 4, bytes([0, 1, 1, 2])))
-    matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1]
-    entries.append((50721, 10, 9, b"".join(struct.pack("<ii", v, 1) for v in matrix)))
-    entries.append((50728, 5, 3, struct.pack("<IIIIII", 1, 1, 1, 1, 1, 1)))
-    shorts(50778, 21)
-    entries.sort()
-    payload_offset = 8 + 2 + len(entries) * 12 + 4
-    payload = bytearray()
-    directory = bytearray()
-    pixel_offset = payload_offset + sum(len(value) for _, _, _, value in entries if len(value) > 4)
-    for tag, kind, count, value in entries:
-        if tag == 273:
-            value = struct.pack("<I", pixel_offset)
-        directory.extend(struct.pack("<HHI", tag, kind, count))
-        if len(value) > 4:
-            directory.extend(struct.pack("<I", payload_offset + len(payload)))
-            payload.extend(value)
-        else:
-            directory.extend(value.ljust(4, b"\0"))
-    if cfa:
-        tile = np.array([[16000, 24000], [24000, 32000]], dtype="<u2")
-        samples = np.tile(tile, ((height + 1) // 2, (width + 1) // 2))[:height, :width]
-    else:
-        samples = np.tile(np.array([16000, 24000, 32000], dtype="<u2"), width * height)
-    pixels = samples.tobytes()
-    return b"II*\0\x08\0\0\0" + struct.pack("<H", len(entries)) + directory + bytes(4) + payload + pixels
 
 
 def measure(operation: Callable[[], object], warmups: int, iterations: int) -> dict[str, float]:
@@ -203,11 +148,6 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
                 encoded = payload.getvalue()
                 comps.append((f"load HEIC/HEIF {mode} {label}", lambda p=encoded: BlanketImage.open(BytesIO(p)), lambda p=encoded: pillow_load(p)))
                 comps.append((f"save HEIC/HEIF {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "HEIF", **opts), lambda p=p_img, opts=p_options: p.save(BytesIO(), "HEIF", **opts)))
-
-        # ── Read-only formats (no native Pillow decoder) ──────────────
-        for label, cfa in (("LinearRaw", False), ("CFA", True)) if include_unpaired else ():
-            dng = make_dng(size, cfa=cfa)
-            comps.append((f"load DNG {label}", lambda p=dng: BlanketImage.open(BytesIO(p)), None))
 
     # ── JXL (Pillow support via pillow-jxl-plugin) ────────────────────
     if not skip_jxl:

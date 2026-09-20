@@ -23,7 +23,7 @@ By default, benchmarks cover Codec I/O, Conversions, Resize, and Memory. Use
 `--all` for the full suite, including codecs, or `--sections` to select specific
 sections. For a smaller run, use `--sizes web`; `--all --sizes web` runs every
 section at web size.
-Cases without a Pillow equivalent, including DNG and 10-bit I/O, require
+Cases without a Pillow equivalent, including 10-bit I/O, require
 `--all` and are otherwise skipped even with an explicit section selection.
 
 The benchmark uses equal in-memory inputs, forces Pillow to decode eagerly,

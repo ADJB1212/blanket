@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import importlib.util
-from io import BytesIO
 import runpy
 
 import pytest
@@ -70,7 +69,6 @@ def test_paired_codecs_skip_unpaired_setup(monkeypatch: Any) -> None:
     def unexpected(*args: Any, **kwargs: Any) -> None:
         pytest.fail("unpaired codec setup must be skipped")
 
-    monkeypatch.setattr(benchmark, "make_dng", unexpected)
     monkeypatch.setattr(benchmark, "make_ten_bit", unexpected)
     comparisons = benchmark.codec_comparisons((32, 24), skip_jxl=False, include_unpaired=False)
     assert comparisons
@@ -303,26 +301,18 @@ def test_new_codec_benchmarks(benchmark: dict[str, Any]) -> None:
             assert f"{action} TIFF {mode}" in names
             for setting in ("lossless", "q=50", "q=85", "q=95"):
                 assert f"{action} WEBP {mode} {setting}" in names
-    assert {"load DNG LinearRaw", "load DNG CFA"} <= names
-    assert not any("SVG" in name for name in names)
+    assert not any(fmt in name for name in names for fmt in ("SVG", "DNG"))
     for name, blanket, pillow in comparisons:
-        if not any(fmt in name for fmt in ("TIFF", "WEBP", "DNG")):
+        if not any(fmt in name for fmt in ("TIFF", "WEBP")):
             continue
         result = blanket()
         if name.startswith("load"):
             assert result.size == (32, 24)
-        if "DNG" in name or "10-bit" in name:
+        if "10-bit" in name:
             assert pillow is None
         else:
             assert pillow is not None
             pillow()
-
-
-@pytest.mark.parametrize("cfa", [False, True])
-def test_benchmark_dng_dimensions(benchmark: dict[str, Any], cfa: bool) -> None:
-    payload = benchmark["make_dng"]((32, 24), cfa=cfa)
-    result = Image.open(BytesIO(payload))
-    assert (result.format, result.mode, result.size) == ("DNG", "RGB", (32, 24))
 
 
 def test_jxl_only_excludes_other_codecs(benchmark: dict[str, Any]) -> None:

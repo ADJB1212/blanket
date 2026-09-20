@@ -151,9 +151,11 @@ jobs:
               -DCMAKE_BUILD_TYPE=Release \
               -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
               -DHIGH_BIT_DEPTH=ON \
+              -DENABLE_HDR10_PLUS=ON \
               -DMAIN12="$([ "$depth" = 12 ] && echo ON || echo OFF)" \
               -DEXPORT_C_API=OFF \
               -DENABLE_SHARED=OFF \
+              -DBUILD_SHARED_LIBS=OFF \
               -DENABLE_CLI=OFF
             cmake --build "$RUNNER_TEMP/x265/build-$depth" --parallel
           done
@@ -242,6 +244,7 @@ jobs:
             -DCMAKE_INSTALL_PREFIX="$HOME/deps/aom" \
             -DBUILD_SHARED_LIBS=1 \
             -DENABLE_TESTS=0 \
+            -DENABLE_EXAMPLES=0 \
             -DENABLE_DOCS=0
 
           cmake --build "$RUNNER_TEMP/aom/build" --parallel

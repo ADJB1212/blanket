@@ -5,7 +5,7 @@
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and
 converting and processing 8-bit `L`, `RGB`, and `RGBA` images in PNG, JPEG,
-JPEG XL, TIFF, WebP, AVIF, and HEIC/HEIF files, plus developing DNG files.
+JPEG XL, TIFF, WebP, AVIF, and HEIC/HEIF files.
 High-bit-depth images retain their samples when opened and saved.
 
 Blanket is not the `PIL` package and does not depend on Pillow at runtime.
@@ -28,9 +28,6 @@ path extension, or accepts an explicit format for streams. TIFF (`.tif`/`.tiff`)
 WebP (`.webp`), and AVIF (`.avif`) also support opening and saving. HEIC/HEIF (`.heic`/`.heif`)
 supports opening and saving HEVC images; both format names report `image.format == "HEIF"`.
 HEIF opens the primary image and applies container rotations and crops.
-DNG supports opening:
-DNG raw data develops to 8-bit RGB. DNG rendering applies raw development,
-so its appearance can differ from the camera's embedded preview.
 Only the first image/frame is opened for TIFF and WebP; animation and multipage
 editing are not supported. New formats do not currently retain EXIF/XMP metadata.
 `Image.Image.convert()`
@@ -291,6 +288,6 @@ High-bit-depth PNG, TIFF, and integer JPEG XL inputs are never reduced to 8 bits
 Copy, conversion, pixel access, channel splitting, crop, transpose, and all six
 resize filters preserve high-bit-depth samples. Other processing operations,
 JPEG/WebP saving, and `to_pillow()` require an explicit conversion to 8 bits
-and raise an error instead of silently discarding precision. DNG development
-continues to produce 8-bit RGB. Retaining sample precision does not implement
+and raise an error instead of silently discarding precision.
+Retaining sample precision does not implement
 HDR tone mapping or retain HEIF HDR/ICC metadata.

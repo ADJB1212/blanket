@@ -75,7 +75,6 @@ pub(crate) enum ImageFormat {
     Jxl,
     Tiff,
     Webp,
-    Dng,
     Heif,
     Avif,
     Pdf,
@@ -91,13 +90,12 @@ impl ImageFormat {
             "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
             "WEBP" => Ok(Self::Webp),
-            "DNG" => Ok(Self::Dng),
             "HEIF" | "HEIC" => Ok(Self::Heif),
             "PNG" => Ok(Self::Png),
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
             _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, DNG, HEIF, AVIF, PDF, BMP, GIF, or ICO"
+                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, HEIF, AVIF, PDF, BMP, GIF, or ICO"
             ))),
         }
     }
@@ -111,7 +109,6 @@ impl ImageFormat {
             Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
             Self::Webp => "WEBP",
-            Self::Dng => "DNG",
             Self::Heif => "HEIF",
             Self::Png => "PNG",
             Self::Jpeg => "JPEG",
@@ -133,7 +130,7 @@ impl ImageFormat {
         } else if data.starts_with(&[0xff, 0x0a]) || data.starts_with(JXL_CONTAINER_SIGNATURE) {
             Some(Self::Jxl)
         } else if data.starts_with(b"II*\0") || data.starts_with(b"MM\0*") || data.starts_with(b"II+\0") || data.starts_with(b"MM\0+") {
-            Some(if is_dng(data) { Self::Dng } else { Self::Tiff })
+            if is_dng(data) { None } else { Some(Self::Tiff) }
         } else if data.starts_with(b"RIFF") && data.get(8..12) == Some(b"WEBP") {
             Some(Self::Webp)
         } else if is_avif(data) {
@@ -182,7 +179,6 @@ pub(crate) fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> 
         ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
         ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
         ImageFormat::Webp => decode_webp(data),
-        ImageFormat::Dng => decode_dng(data),
         ImageFormat::Heif => decode_heif(data),
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
         ImageFormat::Jpeg => decode_jpeg(data),
@@ -223,6 +219,7 @@ fn decode_ico(data: &[u8]) -> Result<Image, String> {
 
 // DNGVersion (50706) belongs to the first classic TIFF IFD. Read only the
 // bounded directory, never scan compressed image payloads for tag bytes.
+// Reject DNG containers instead of opening their previews as ordinary TIFFs.
 fn is_dng(data: &[u8]) -> bool {
     if !data.starts_with(b"II*\0") && !data.starts_with(b"MM\0*") {
         return false;
@@ -238,41 +235,6 @@ fn is_dng(data: &[u8]) -> bool {
     let offset = if le { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) } as usize;
     let Some(count) = u16_at(offset) else { return false };
     (0..usize::from(count)).any(|i| offset.checked_add(2 + i * 12).and_then(u16_at) == Some(50706))
-}
-
-fn decode_dng(data: &[u8]) -> Result<Image, String> {
-    // Rawler's camera-specific decoders can panic on malformed raw data.
-    std::panic::catch_unwind(|| {
-        use rawler::formats::tiff::{GenericTiffReader, reader::TiffReader};
-        // Check full-resolution IFDs as well as previews before raw allocation.
-        let tiff = GenericTiffReader::new_with_buffer(data, 0, 0, None).map_err(|e| e.to_string())?;
-        for ifd in tiff.find_ifds_with_tag(256_u16) {
-            let width = ifd.get_entry(256_u16).ok_or("missing DNG width")?.force_u32(0);
-            let height = ifd.get_entry(257_u16).ok_or("missing DNG height")?.force_u32(0);
-            validate_dimensions(width, height)?;
-        }
-        let source = rawler::rawsource::RawSource::new_from_slice(data);
-        let raw = rawler::decode(&source, &rawler::decoders::RawDecodeParams::default()).map_err(|e| e.to_string())?;
-        validate_dimensions(
-            u32::try_from(raw.width).map_err(|e| e.to_string())?,
-            u32::try_from(raw.height).map_err(|e| e.to_string())?,
-        )?;
-        let developed = rawler::imgop::develop::RawDevelop::default()
-            .develop_intermediate(&raw)
-            .map_err(|e| e.to_string())?
-            .to_dynamic_image()
-            .ok_or("invalid developed DNG image")?
-            .to_rgb8();
-        Image::from_pixels(
-            developed.width(),
-            developed.height(),
-            PixelMode::Rgb,
-            developed.into_raw(),
-            Some("DNG".into()),
-        )
-        .map_err(|e| e.to_string())
-    })
-    .unwrap_or_else(|_| Err("invalid DNG image".into()))
 }
 
 fn decode_webp(data: &[u8]) -> Result<Image, String> {
@@ -504,7 +466,6 @@ pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -
                 .map_err(codec_error)?;
             Ok(output)
         }
-        ImageFormat::Dng => Err(PyValueError::new_err("DNG is a read-only format")),
         ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => {
             let mut output = Cursor::new(Vec::new());

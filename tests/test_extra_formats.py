@@ -119,25 +119,15 @@ def make_dng(cfa: bool = False) -> bytes:
 
 
 @pytest.mark.parametrize("cfa", [False, True])
-def test_dng_develops_raw_pixels(cfa: bool) -> None:
-    result = Image.open(BytesIO(make_dng(cfa)), formats=["DNG"])
-    assert (result.format, result.mode, result.size) == ("DNG", "RGB", (16, 16))
-    assert len(result.tobytes()) == 768
-    assert any(result.tobytes())
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(make_dng()), formats=["TIFF"])
+@pytest.mark.parametrize("formats", [None, ["DNG"], ["TIFF"]])
+def test_dng_is_unsupported(cfa: bool, formats: list[str] | None) -> None:
+    with pytest.raises(UnidentifiedImageError, match="cannot identify image file"):
+        Image.open(BytesIO(make_dng(cfa)), formats=formats)
 
 
 @pytest.mark.parametrize("data", [b"<svg", b"<html/>", b"II*\0", b"RIFF\0\0\0\0WEBP", make_dng()[:32]])
 def test_invalid_new_formats(data: bytes) -> None:
     with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
-
-
-def test_dng_dimensions_checked_before_decoding() -> None:
-    data = bytearray(make_dng())
-    struct.pack_into("<I", data, 18, 100_000_000)
-    with pytest.raises(UnidentifiedImageError, match="dimensions|pixels"):
         Image.open(BytesIO(data))
 
 
