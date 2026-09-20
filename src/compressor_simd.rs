@@ -87,6 +87,12 @@ pub(crate) fn properties(source: &[u8], channels: usize) -> (bool, bool) {
     }
     let chunk = CHUNK_PIXELS * channels;
     if should_parallel(source.len(), chunk, MEMORY_PARALLEL_BYTES) {
+        // Photographic RGB and nonopaque RGBA usually disprove both possible
+        // reductions immediately. Avoid scheduling a scan of every chunk.
+        let prefix = properties_chunk(&source[..source.len().min(64 * channels)], channels);
+        if !prefix.0 && (!prefix.1 || channels == 3) {
+            return prefix;
+        }
         source
             .par_chunks(chunk)
             .map(|src| properties_chunk(src, channels))
@@ -252,14 +258,52 @@ pub(crate) fn remap(source: &[u8], table: &[u8; 256]) -> Vec<u8> {
 }
 
 pub(crate) fn pack_rows(samples: &[u8], width: usize, bits: usize) -> Vec<u8> {
+    pack_rows_impl(samples, width, bits, PackTransform::Identity)
+}
+
+pub(crate) fn pack_gray_rows(samples: &[u8], width: usize, bits: usize) -> Vec<u8> {
+    pack_rows_impl(samples, width, bits, PackTransform::Shift((8 - bits) as u8))
+}
+
+pub(crate) fn pack_mapped_rows(samples: &[u8], width: usize, bits: usize, mapping: &[u8; 256]) -> Vec<u8> {
+    pack_rows_impl(samples, width, bits, PackTransform::Map(mapping))
+}
+
+#[derive(Clone, Copy)]
+enum PackTransform<'a> {
+    Identity,
+    Shift(u8),
+    Map(&'a [u8; 256]),
+}
+
+/// Transform in cache-sized scratch buffers, then immediately pack the rows.
+/// This avoids writing and rereading a full image of temporary byte indices.
+fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTransform<'_>) -> Vec<u8> {
     if bits == 8 {
-        return samples.to_vec();
+        return match transform {
+            PackTransform::Identity | PackTransform::Shift(0) => samples.to_vec(),
+            PackTransform::Shift(shift) => select(samples, 1, false, shift),
+            PackTransform::Map(mapping) => remap(samples, mapping),
+        };
     }
     let row_bytes = (width * bits).div_ceil(8);
     let rows_per_chunk = (CHUNK_PIXELS / width).max(1);
     let mut output = vec![0; row_bytes * (samples.len() / width)];
-    let fill = |i: usize, dst: &mut [u8]| {
-        let source = &samples[i * rows_per_chunk * width..];
+    let fill = |i: usize, dst: &mut [u8], scratch: &mut Vec<u8>| {
+        let start = i * rows_per_chunk * width;
+        let source = &samples[start..start + dst.len() / row_bytes * width];
+        let source = match transform {
+            PackTransform::Identity => source,
+            _ => {
+                scratch.resize(source.len(), 0);
+                match transform {
+                    PackTransform::Shift(shift) => select_chunk(source, scratch, 1, false, shift),
+                    PackTransform::Map(mapping) => crate::ops_simd::lut::<1>(source, scratch, mapping),
+                    PackTransform::Identity => unreachable!(),
+                }
+                scratch.as_slice()
+            }
+        };
         for (src, dst) in source.chunks_exact(width).zip(dst.chunks_exact_mut(row_bytes)) {
             pack_row(src, dst, bits);
         }
@@ -268,12 +312,13 @@ pub(crate) fn pack_rows(samples: &[u8], width: usize, bits: usize) -> Vec<u8> {
         output
             .par_chunks_mut(rows_per_chunk * row_bytes)
             .enumerate()
-            .for_each(|(i, dst)| fill(i, dst));
+            .for_each_init(Vec::new, |scratch, (i, dst)| fill(i, dst, scratch));
     } else {
+        let mut scratch = Vec::new();
         output
             .chunks_mut(rows_per_chunk * row_bytes)
             .enumerate()
-            .for_each(|(i, dst)| fill(i, dst));
+            .for_each(|(i, dst)| fill(i, dst, &mut scratch));
     }
     output
 }
@@ -581,6 +626,25 @@ mod tests {
     }
 
     #[test]
+    fn fused_packing_matches_separate_transforms() {
+        for bits in [1_usize, 2, 4, 8] {
+            let mask = ((1_usize << bits) - 1) as u8;
+            let mapping = std::array::from_fn(|i| (255 - i) as u8 & mask);
+            for width in [1, 7, 17, 65, 257, 65_537] {
+                let source: Vec<_> = (0..width * 3).map(|i| (i * 71 + i / 7) as u8).collect();
+                assert_eq!(
+                    pack_mapped_rows(&source, width, bits, &mapping),
+                    pack_rows(&remap(&source, &mapping), width, bits)
+                );
+                assert_eq!(
+                    pack_gray_rows(&source, width, bits),
+                    pack_rows(&select(&source, 1, false, (8 - bits) as u8), width, bits)
+                );
+            }
+        }
+    }
+
+    #[test]
     fn transparency_key_rejects_changed_alpha_and_invisible_colors() {
         let key = [19, 37, 71];
         let mut src: Vec<_> = (0..65).flat_map(|i| if i % 2 == 0 { [19, 37, 71, 0] } else { [0, 0, 0, 255] }).collect();
@@ -615,12 +679,15 @@ mod tests {
             })
             .collect();
         let table = std::array::from_fn(|i| (255 - i) as u8);
+        let packed_table = std::array::from_fn(|i| (i % 16) as u8);
         let run = || {
             (
                 properties(&source, 4),
                 select(&source, 4, false, 4),
                 remap(&source, &table),
                 pack_rows(&source.iter().map(|v| v >> 4).collect::<Vec<_>>(), 1024, 4),
+                pack_gray_rows(&source, 1024, 4),
+                pack_mapped_rows(&source, 1024, 4, &packed_table),
             )
         };
         let serial = rayon::ThreadPoolBuilder::new().num_threads(1).build().unwrap().install(run);
@@ -632,5 +699,18 @@ mod tests {
         right[left.len() - 1] = 0;
         assert!(!equal(&left, &right));
         assert!(!equal(&left, &right[..right.len() - 1]));
+    }
+
+    #[test]
+    fn property_preflight_does_not_hide_late_alpha_or_color() {
+        let mut source = [19, 37, 71, 255].repeat(1024 * 1025);
+        assert_eq!(properties(&source, 4), (false, true));
+        *source.last_mut().unwrap() = 0;
+        assert_eq!(properties(&source, 4), (false, false));
+        source.chunks_exact_mut(4).for_each(|p| p.copy_from_slice(&[71, 71, 71, 0]));
+        assert_eq!(properties(&source, 4), (true, false));
+        let last = source.len() - 4;
+        source[last] = 72;
+        assert_eq!(properties(&source, 4), (false, false));
     }
 }

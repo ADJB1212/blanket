@@ -637,6 +637,15 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
 }
 
 fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
+    encode_jxl_samples(image, JxlSamples::Byte(pixels), options, false)
+}
+
+enum JxlSamples<'a> {
+    Byte(&'a [u8]),
+    Wide(&'a [u16]),
+}
+
+fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, single_threaded: bool) -> PyResult<Vec<u8>> {
     let (color_encoding, has_alpha) = match image.mode {
         PixelMode::L => (ColorEncoding::SrgbLuma, false),
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
@@ -645,8 +654,7 @@ fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Ve
     let speed = jxl_encoder_speed(options.effort)?;
     JXL_ENCODE_RUNNER.with(|runner| {
         let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
-        let mut encoder = encoder_builder()
-            .parallel_runner(runner)
+        let builder = encoder_builder()
             .has_alpha(has_alpha)
             .lossless(options.lossless)
             .speed(speed)
@@ -654,13 +662,52 @@ fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Ve
             .use_container(false)
             .jpeg_quality(f32::from(options.quality))
             .uses_original_profile(options.lossless || options.quality == 100)
-            .color_encoding(color_encoding)
-            .build()
-            .map_err(codec_error)?;
-        let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-        let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
-        Ok(encoded.data)
+            .color_encoding(color_encoding);
+        let mut encoder = if single_threaded {
+            builder.build()
+        } else {
+            builder.parallel_runner(runner).build()
+        }
+        .map_err(codec_error)?;
+        match pixels {
+            JxlSamples::Byte(pixels) => {
+                let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
+                let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
+                Ok(encoded.data)
+            }
+            JxlSamples::Wide(pixels) => {
+                let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
+                let encoded: EncoderResult<u16> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
+                Ok(encoded.data)
+            }
+        }
     })
+}
+
+/// Normalize wide samples once per effort search, rather than once per encode.
+/// Eight-bit input is borrowed directly from the immutable source image.
+pub(crate) struct PreparedJxl<'a> {
+    image: &'a Image,
+    wide: Option<Vec<u16>>,
+}
+
+impl<'a> PreparedJxl<'a> {
+    pub(crate) fn new(image: &'a Image) -> PyResult<Self> {
+        let raw = image.raw_data()?;
+        let wide = (image.bit_depth > 8).then(|| crate::compressor_simd::normalize_u16(raw, image.bit_depth));
+        Ok(Self { image, wide })
+    }
+
+    pub(crate) fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
+        self.encode_with_threads(options, false)
+    }
+
+    pub(crate) fn encode_with_threads(&self, options: SaveOptions, single_threaded: bool) -> PyResult<Vec<u8>> {
+        match &self.wide {
+            Some(samples) => encode_jxl_samples(self.image, JxlSamples::Wide(samples), options, single_threaded),
+            None => encode_jxl_samples(self.image, JxlSamples::Byte(self.image.raw_data()?), options, single_threaded),
+        }
+    }
 }
 
 fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
@@ -794,10 +841,12 @@ pub(crate) fn encode_heif_with_preset(image: &Image, options: SaveOptions, prese
     PreparedHeif::new(image)?.encode(options, preset)
 }
 
-/// Own pixel planes once for a preset search. Each encoding still gets a fresh
-/// encoder and container, preventing preset or metadata state from leaking.
+/// Own pixel planes and encoder parameter metadata once for a preset search.
+/// Every encoding resets its quality/preset and gets a fresh container.
 pub(crate) struct PreparedHeif {
     native: libheif_rs::Image,
+    encoder: libheif_rs::Encoder<'static>,
+    presets: bool,
 }
 
 impl PreparedHeif {
@@ -843,21 +892,28 @@ impl PreparedHeif {
                 target[..row].copy_from_slice(source);
             }
         }
-        Ok(Self { native })
+        let encoder = HEIF_LIBRARY
+            .encoder_for_format(libheif_rs::CompressionFormat::Hevc)
+            .map_err(codec_error)?;
+        let presets = encoder.name().starts_with("x265 ");
+        Ok(Self { native, encoder, presets })
     }
 
-    pub(crate) fn encode(&self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
-        use libheif_rs::{CompressionFormat, EncoderParameterValue, EncoderQuality, HeifContext};
+    pub(crate) fn supports_presets(&self) -> bool {
+        self.presets
+    }
 
-        let mut encoder = HEIF_LIBRARY.encoder_for_format(CompressionFormat::Hevc).map_err(codec_error)?;
+    pub(crate) fn encode(&mut self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
+        use libheif_rs::{EncoderParameterValue, EncoderQuality, HeifContext};
+
         // Other HEVC plugins keep their defaults rather than receiving an
         // x265-specific parameter.
-        if encoder.name().starts_with("x265 ") {
-            encoder
+        if self.presets {
+            self.encoder
                 .set_parameter_value("preset", EncoderParameterValue::String(preset.into()))
                 .map_err(codec_error)?;
         }
-        encoder
+        self.encoder
             .set_quality(if options.lossless {
                 EncoderQuality::LossLess
             } else {
@@ -865,7 +921,7 @@ impl PreparedHeif {
             })
             .map_err(codec_error)?;
         let mut context = HeifContext::new().map_err(codec_error)?;
-        context.encode_image(&self.native, &mut encoder, None).map_err(codec_error)?;
+        context.encode_image(&self.native, &mut self.encoder, None).map_err(codec_error)?;
         context.write_to_bytes().map_err(codec_error)
     }
 }
@@ -879,28 +935,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
     }
     let samples = crate::compressor_simd::normalize_u16(pixels, image.bit_depth);
     if format == ImageFormat::Jxl {
-        return JXL_ENCODE_RUNNER.with(|runner| {
-            let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
-            let mut encoder = encoder_builder()
-                .parallel_runner(runner)
-                .has_alpha(image.mode == PixelMode::Rgba)
-                .lossless(options.lossless)
-                .speed(jxl_encoder_speed(options.effort)?)
-                .decoding_speed(0)
-                .use_container(false)
-                .jpeg_quality(f32::from(options.quality))
-                .uses_original_profile(options.lossless || options.quality == 100)
-                .color_encoding(if image.mode == PixelMode::L {
-                    ColorEncoding::SrgbLuma
-                } else {
-                    ColorEncoding::Srgb
-                })
-                .build()
-                .map_err(codec_error)?;
-            let frame = EncoderFrame::new(&samples).num_channels(image.mode.channels() as u32);
-            let encoded: EncoderResult<u16> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
-            Ok(encoded.data)
-        });
+        return encode_jxl_samples(image, JxlSamples::Wide(&samples), options, false);
     }
     if format == ImageFormat::Tiff {
         let data: Vec<u8> = samples.into_iter().flat_map(u16::to_ne_bytes).collect();
@@ -956,7 +991,7 @@ mod tests {
                 } else {
                     Image::from_samples(17, 19, mode, samples, depth, None).unwrap()
                 };
-                let prepared = PreparedHeif::new(&image).unwrap();
+                let mut prepared = PreparedHeif::new(&image).unwrap();
                 for (preset, lossless) in [("fast", false), ("slow", true), ("fast", false)] {
                     let options = SaveOptions {
                         quality: 71,

@@ -108,19 +108,120 @@ def positive(value: str) -> int:
     return number
 
 
+def _row_key(row: dict[str, object]) -> tuple[str, str, int]:
+    return (str(row["fixture"]), str(row["format"]), int(row["effort"]))  # type: ignore[arg-type]
+
+
+def _delta(old: float, new: float) -> str:
+    """Format a relative change as a colored string."""
+    if old == 0:
+        return "N/A"
+    pct = 100 * (new - old) / abs(old)
+    sign = "+" if pct >= 0 else ""
+    # Green for improvement (negative size / negative time), red for regression.
+    color = "green" if pct < -0.5 else ("red" if pct > 0.5 else "dim")
+    return f"[{color}]{sign}{pct:.2f}%[/{color}]"
+
+
+def compare_results(path_a: Path, path_b: Path) -> int:
+    """Load two JSON result files and print a rich table comparing overlapping tests."""
+    from rich.console import Console
+    from rich.table import Table
+
+    data_a = json.loads(path_a.read_text())
+    data_b = json.loads(path_b.read_text())
+
+    lookup_a: dict[tuple[str, str, int], dict[str, object]] = {
+        _row_key(r): r for r in data_a["results"] if "error" not in r
+    }
+    lookup_b: dict[tuple[str, str, int], dict[str, object]] = {
+        _row_key(r): r for r in data_b["results"] if "error" not in r
+    }
+    overlap = sorted(lookup_a.keys() & lookup_b.keys())
+    if not overlap:
+        print("No overlapping tests found between the two files.")
+        return 1
+
+    label_a = path_a.stem
+    label_b = path_b.stem
+
+    table = Table(
+        title=f"Comparison: [bold]{label_a}[/bold] vs [bold]{label_b}[/bold]",
+        caption=(
+            f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} "
+            f"({data_a.get('width', '?')}×{data_a.get('height', '?')}, {data_a.get('repeats', '?')} repeats)\n"
+            f"B: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} "
+            f"({data_b.get('width', '?')}×{data_b.get('height', '?')}, {data_b.get('repeats', '?')} repeats)"
+        ),
+        show_lines=True,
+    )
+    table.add_column("Fixture", style="cyan")
+    table.add_column("Fmt")
+    table.add_column("Eff", justify="right")
+    table.add_column(f"Opt B ({label_a})", justify="right")
+    table.add_column(f"Opt B ({label_b})", justify="right")
+    table.add_column("Δ Size", justify="right")
+    table.add_column(f"Saved% ({label_a})", justify="right")
+    table.add_column(f"Saved% ({label_b})", justify="right")
+    table.add_column(f"Opt ms ({label_a})", justify="right")
+    table.add_column(f"Opt ms ({label_b})", justify="right")
+    table.add_column("Δ Time", justify="right")
+    table.add_column("Check", justify="center")
+
+    for key in overlap:
+        a, b = lookup_a[key], lookup_b[key]
+        a_opt = float(a["optimized_bytes"])  # type: ignore[arg-type]
+        b_opt = float(b["optimized_bytes"])  # type: ignore[arg-type]
+        a_pct = float(a["reduction_percent"])  # type: ignore[arg-type]
+        b_pct = float(b["reduction_percent"])  # type: ignore[arg-type]
+        a_ms = float(a["optimized_ms"])  # type: ignore[arg-type]
+        b_ms = float(b["optimized_ms"])  # type: ignore[arg-type]
+        a_pass = a.get("lossless", False) and a.get("non_growing", False)
+        b_pass = b.get("lossless", False) and b.get("non_growing", False)
+        check_a = "[green]✓[/green]" if a_pass else "[red]✗[/red]"
+        check_b = "[green]✓[/green]" if b_pass else "[red]✗[/red]"
+
+        table.add_row(
+            key[0],
+            key[1],
+            str(key[2]),
+            f"{a_opt:.0f}",
+            f"{b_opt:.0f}",
+            _delta(a_opt, b_opt),
+            f"{a_pct:.2f}",
+            f"{b_pct:.2f}",
+            f"{a_ms:.2f}",
+            f"{b_ms:.2f}",
+            _delta(a_ms, b_ms),
+            f"{check_a} {check_b}",
+        )
+
+    console = Console()
+    console.print(table)
+    console.print(f"\n[bold]{len(overlap)}[/bold] overlapping tests compared.")
+    skipped_a = len(lookup_a) - len(overlap)
+    skipped_b = len(lookup_b) - len(overlap)
+    if skipped_a or skipped_b:
+        console.print(f"[dim]Skipped {skipped_a} test(s) only in A, {skipped_b} only in B.[/dim]")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--formats", nargs="+", choices=["PNG", "JPEG", "JXL", "HEIF"], default=["PNG", "JPEG", "JXL", "HEIF"])
-    parser.add_argument("--efforts", nargs="+", type=int, choices=range(1, 11), default=[7])
+    parser.add_argument("-f", "--formats", nargs="+", choices=["PNG", "JPEG", "JXL", "HEIF"], default=["PNG", "JPEG", "JXL", "HEIF"])
+    parser.add_argument("-e", "--efforts", nargs="+", type=int, choices=range(1, 11), default=[7])
     parser.add_argument("--width", type=positive, default=1920)
     parser.add_argument("--height", type=positive, default=1080)
     parser.add_argument("--repeats", type=positive, default=3)
     parser.add_argument("--warmups", type=int, choices=range(11), default=1)
     parser.add_argument("--json", type=Path, help="write machine-readable results and individual timing samples")
+    parser.add_argument("--compare", nargs=2, type=Path, metavar=("A.json", "B.json"), help="compare two JSON result files and exit (no benchmark is run)")
     args = parser.parse_args()
+    if args.compare:
+        return compare_results(args.compare[0], args.compare[1])
     print("Times are median in-memory saves; decoding/verification is excluded.")
     print("Lossless means exact RGBA samples, including hidden colors; JPEG compares to the normal lossy save.")
-    print(f"{'Fixture':<15} {'Format':<6} {'Effort':>6} {'Before B':>10} {'After B':>10} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'Check':>6}")
+    print(f"{'Fixture':<15} {'Format':<8} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'Was Lossless':>13}")
     rows: list[dict[str, object]] = []
     failed = False
     for name, original in fixtures((args.width, args.height)):
@@ -133,7 +234,7 @@ def main() -> int:
                     row.update(result)
                     passed = result["lossless"] and result["non_growing"]
                     failed |= not passed
-                    print(f"{name:<15} {fmt:<6} {effort:>6} {result['baseline_bytes']:>10.0f} {result['optimized_bytes']:>10.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'PASS' if passed else 'FAIL':>6}", flush=True)
+                    print(f"{name:<15} {fmt:<8} {effort:>6} {result['baseline_bytes']:>15.0f} {result['optimized_bytes']:>15.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'YES' if passed else 'NO':>13}", flush=True)
                 except Exception as error:
                     failed = True
                     row["error"] = str(error)
