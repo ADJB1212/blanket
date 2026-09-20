@@ -29,7 +29,7 @@ venv/
 *.egg-info/
 .installed.cfg
 *.egg
-build_x86.sh
+*.json
 
 # Installer logs
 pip-log.txt

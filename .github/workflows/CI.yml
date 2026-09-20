@@ -8,6 +8,10 @@ on:
       - "LICENSE"
       - ".gitignore"
       - "docs/*"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/benchmark.yml"
+      - "scripts/benchmark_compression.py"
+      - "scripts/benchmark.py"
   pull_request:
   workflow_dispatch:
 
@@ -67,7 +71,7 @@ jobs:
       - name: Install HEIF codecs (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d libheif llvm lld cmake ninja
+          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
@@ -86,7 +90,7 @@ jobs:
         run: |
           uv sync --no-install-project --extra test
           uv tool install maturin
-          maturin develop --extras test --uv --profile dev -- -C link-arg=-fuse-ld=${{ matrix.fuse-linker }}
+          maturin develop --extras test --uv --profile dev --features embedded-libheif,vendored -- -C link-arg=-fuse-ld=${{ matrix.fuse-linker }}
       - name: Test Python API
         run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --color=no --code-highlight=no
       - name: Verify Pillow behavior
