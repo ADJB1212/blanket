@@ -60,6 +60,7 @@ jobs:
       X265_VERSION: "4.2"
       LIBDE265_VERSION: "v1.1.3"
       LIBHEIF_VERSION: "v1.23.4"
+      LIBWEBP_VERSION: "v1.6.0"
     strategy:
       fail-fast: false
       matrix:
@@ -197,7 +198,7 @@ jobs:
           git clone \
             --branch "$DAV1D_VERSION" \
             --depth 1 \
-            https://github.com/videolan/dav1d.git \
+            https://code.videolan.org/videolan/dav1d.git \
             "$RUNNER_TEMP/dav1d"
 
           meson setup \
@@ -279,8 +280,9 @@ jobs:
             -B "$RUNNER_TEMP/libde265/build" \
             -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_DECODER=off \
-            -DENABLE_SHERLOCK265=off \
+            -DENABLE_DECODER=OFF \
+            -DENABLE_SDL=OFF \
+            -DENABLE_SHERLOCK265=OFF \
             -DCMAKE_INSTALL_PREFIX="$HOME/deps/libde265"
 
           cmake --build "$RUNNER_TEMP/libde265/build" --parallel
@@ -348,6 +350,58 @@ jobs:
           path: ~/deps/libheif
           key: ${{ steps.cache-libheif.outputs.cache-primary-key }}
 
+      - name: Cache libwebp
+        id: cache-libwebp
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libwebp
+          key: libwebp-${{ runner.os }}-${{ matrix.target }}-${{ env.LIBWEBP_VERSION }}
+
+      - name: Build libwebp
+        id: build-libwebp
+        env:
+          CPPFLAGS: ""
+        if: steps.cache-libwebp.outputs.cache-hit != 'true'
+        run: |
+          git clone \
+            --branch "$LIBWEBP_VERSION" \
+            --depth 1 \
+            https://chromium.googlesource.com/webm/libwebp \
+            "$RUNNER_TEMP/libwebp"
+
+          cmake \
+            -S "$RUNNER_TEMP/libwebp" \
+            -B "$RUNNER_TEMP/libwebp/build" \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX="$HOME/deps/libwebp" \
+            -DBUILD_SHARED_LIBS=ON \
+            -DWEBP_BUILD_ANIM_UTILS=OFF \
+            -DWEBP_BUILD_CWEBP=OFF \
+            -DWEBP_BUILD_DWEBP=OFF \
+            -DWEBP_BUILD_GIF2WEBP=OFF \
+            -DWEBP_BUILD_IMG2WEBP=OFF \
+            -DWEBP_BUILD_VWEBP=OFF \
+            -DWEBP_BUILD_WEBPINFO=OFF \
+            -DWEBP_BUILD_WEBPMUX=OFF \
+            -DWEBP_BUILD_LIBWEBPMUX=OFF \
+            -DWEBP_BUILD_EXTRAS=OFF \
+            -DWEBP_BUILD_WEBP_JS=OFF \
+            -DWEBP_BUILD_FUZZTEST=OFF \
+            -DWEBP_ENABLE_SIMD=ON \
+            -DWEBP_USE_THREAD=ON
+
+
+          cmake --build "$RUNNER_TEMP/libwebp/build" --parallel
+          cmake --install "$RUNNER_TEMP/libwebp/build"
+
+      - name: Save libwebp Cache
+        if: steps.cache-libwebp.outputs.cache-hit != 'true' && steps.build-libwebp.outcome == 'success'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/deps/libwebp
+          key: ${{ steps.cache-libwebp.outputs.cache-primary-key }}
+
       - name: Setup codec dependencies
         run: |
           echo "$HOME/deps/dav1d/bin" >> "$GITHUB_PATH"
@@ -356,11 +410,11 @@ jobs:
           echo "$HOME/deps/libde265/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/x86_64-linux-gnu/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/x86_64-linux-gnu/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
 
-          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp" >> "$GITHUB_ENV"
 
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
 
       - name: Verify codec versions
         run: |
@@ -369,12 +423,13 @@ jobs:
           pkg-config --modversion x265
           pkg-config --modversion libde265
           pkg-config --modversion libheif
+          pkg-config --modversion libwebp
 
       - name: Build wheels
         id: build-wheel
         run: |
           uv sync --no-install-project
-          maturin build --release --out dist --features vendored -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3
+          maturin build --release --out dist --features vendored,build-webp -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3
 
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
