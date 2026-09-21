@@ -82,8 +82,15 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
             }
             offset
         };
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
         let offset = 0;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let offset = if S == 1 && C == 3 && std::arch::is_x86_feature_detected!("ssse3") {
+            // SAFETY: SSSE3 detected; spare capacity holds three bytes per input.
+            unsafe { crate::x86_pixels::gray_to_rgb(src, dst) }
+        } else {
+            0
+        };
         for (src, pixel) in src[offset * S..].as_chunks::<S>().0.iter().zip(dst[offset * C..].as_chunks_mut::<C>().0) {
             for (channel, value) in pixel.iter_mut().enumerate() {
                 value.write(if channel == 3 { 255 } else { src[if S == 1 { 0 } else { channel }] });

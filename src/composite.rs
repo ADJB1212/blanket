@@ -111,8 +111,15 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
 }
 
 fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) {
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
     let offset = 0;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 detected; caller validates equal pixel counts.
+        unsafe { crate::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
+    } else {
+        0
+    };
     #[cfg(target_arch = "aarch64")]
     let offset = {
         let mut offset = 0;
@@ -240,8 +247,15 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     if image.mode == PixelMode::Rgb {
         let mut pixels = vec![0; alpha.len() * 4];
         py.detach(|| {
-            #[cfg(not(target_arch = "aarch64"))]
+            #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
             let offset = 0;
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+            let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+                // SAFETY: SSSE3 detected; validated matching RGB/alpha/output sizes.
+                unsafe { crate::x86_pixels::putalpha_rgb(source, alpha, &mut pixels) }
+            } else {
+                0
+            };
             #[cfg(target_arch = "aarch64")]
             let offset = {
                 let mut offset = 0;
@@ -274,8 +288,15 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     let pixels = image.pixels.as_mut().expect("validated open image");
     py.detach(|| {
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
         let offset = 0;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+            // SAFETY: SSSE3 detected; validated matching RGBA/alpha sizes.
+            unsafe { crate::x86_pixels::putalpha_rgba(pixels, alpha) }
+        } else {
+            0
+        };
         #[cfg(target_arch = "aarch64")]
         let offset = {
             use std::arch::aarch64::*;
