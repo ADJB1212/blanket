@@ -132,8 +132,15 @@ pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
     assert_eq!(source.len(), output.len());
     assert!(source.len().is_multiple_of(3));
     let pixels = source.len() / 3;
-    #[cfg(not(target_arch = "aarch64"))]
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
     let done = 0;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let done = if std::arch::is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 detected; equal complete RGB buffers checked above.
+        unsafe { crate::x86_pixels::reverse_rgb(source, output) }
+    } else {
+        0
+    };
     #[cfg(target_arch = "aarch64")]
     let done = {
         let mut done = 0;
@@ -550,6 +557,11 @@ pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
     assert_eq!(source.len(), output.len() * 2);
     #[allow(unused_mut)]
     let mut done = 0;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if C == 3 && std::arch::is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 detected; source contains twice the output pixels.
+        done = unsafe { crate::x86_pixels::nearest_half_rgb(source, output) };
+    }
     #[cfg(target_arch = "aarch64")]
     if C == 3 {
         use std::arch::aarch64::*;
@@ -584,6 +596,11 @@ pub(crate) fn reduce_three_l(upper: &[u8], middle: &[u8], lower: &[u8], output: 
     assert_eq!(lower.len(), upper.len());
     #[allow(unused_mut)]
     let mut done = 0;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if std::arch::is_x86_feature_detected!("ssse3") {
+        // SAFETY: SSSE3 detected; all three row extents checked above.
+        done = unsafe { crate::x86_pixels::reduce_three_l([upper, middle, lower], output) };
+    }
     #[cfg(target_arch = "aarch64")]
     {
         use std::arch::aarch64::*;
@@ -712,6 +729,17 @@ mod tests {
                 let lower = vec![value; count * 3 + 1];
                 let mut output = vec![73; count + 2];
                 let done = super::reduce_three_l(&upper[1..], &middle[1..], &lower[1..], &mut output[1..count + 1]);
+                #[cfg(target_arch = "aarch64")]
+                assert_eq!(done, count / 16 * 16);
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                assert_eq!(
+                    done,
+                    if std::arch::is_x86_feature_detected!("ssse3") {
+                        count / 16 * 16
+                    } else {
+                        0
+                    }
+                );
                 for i in 0..done {
                     let sum: u32 = [&upper, &middle, &lower]
                         .iter()

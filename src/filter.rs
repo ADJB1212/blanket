@@ -489,8 +489,15 @@ fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
         let start = chunk * CHUNK;
         let dst = dst.as_chunks_mut::<C>().0;
         let bands: [&[u8]; C] = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
-        #[cfg(not(target_arch = "aarch64"))]
+        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
         let offset = 0;
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+            // SAFETY: SSSE3 detected; bands and destination have equal pixel counts.
+            unsafe { crate::x86_pixels::merge(bands, dst) }
+        } else {
+            0
+        };
         #[cfg(target_arch = "aarch64")]
         let offset = {
             let mut offset = 0;

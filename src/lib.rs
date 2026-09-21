@@ -16,6 +16,8 @@ mod quantize_simd;
 mod raster;
 mod simd;
 mod stat;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod x86_pixels;
 
 use codecs::open_bytes;
 use pyo3::prelude::*;

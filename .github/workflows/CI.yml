@@ -92,5 +92,7 @@ jobs:
           maturin develop --extras test --uv --profile dev --features embedded-libheif,vendored -- -C link-arg=-fuse-ld=$FUSE_LINKER
       - name: Test Python API
         run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --color=no --code-highlight=no
+      - name: Test native SIMD kernels
+        run: cargo test --lib --features embedded-libheif,vendored
       - name: Verify Pillow behavior
         run: uv run --no-sync scripts/verify_behavior.py
