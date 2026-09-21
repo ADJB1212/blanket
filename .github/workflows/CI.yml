@@ -53,21 +53,25 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
         with:
           version: "latest"
           enable-cache: "false"
           save-cache: "false"
-      - name: Install Deps (Linux)
+      - name: Install Deps and Setup PATH (Linux)
         if: runner.os == 'Linux'
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-21 llvm-21 lld-21 ninja-build mold
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
+          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
-      - name: Install Deps (macOS)
+          echo "CC=clang-23" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+      - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm
@@ -75,15 +79,10 @@ jobs:
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=lld" >> "$GITHUB_ENV"
-      - name: Setup PATH
-        run: |
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-      - uses: ilammy/setup-nasm@v1
-        with:
-          version: 3.02
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Install project and test dependencies

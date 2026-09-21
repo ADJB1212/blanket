@@ -101,20 +101,20 @@ jobs:
           uv python install 3.14
           uv tool install 'maturin[patchelf]>=1.15,<2'
 
-      - name: Install HEIF codecs and LLVM 21
+      - name: Install Deps
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-21 main" | sudo tee /etc/apt/sources.list.d/llvm-21.list > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libnuma-dev clang-21 llvm-21 lld-21 ninja-build cmake meson pkg-config mold
+          sudo apt-get install -y libnuma-dev clang-23 llvm-23 lld-23 ninja-build cmake meson pkg-config mold
 
       - name: Setup PATH
         run: |
-          echo "/usr/lib/llvm-21/bin" >> "$GITHUB_PATH"
-          echo "CC=clang-21" >> "$GITHUB_ENV"
-          echo "CXX=clang++-21" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang-21" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=clang++-21" >> "$GITHUB_ENV"
+          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
+          echo "CC=clang-23" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "CFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_FLAGS=-O3 ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
@@ -445,7 +445,7 @@ jobs:
           uv tool install maturin
           uv tool install delocate
 
-      - name: Install HEIF codecs
+      - name: Install Deps
         run: |
           brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
