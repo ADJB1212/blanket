@@ -152,6 +152,44 @@ def test_invalid_histogram_count(value: object, error: type[Exception]) -> None:
         _ = stat.count
 
 
+@pytest.mark.parametrize("property_name", ["count", "extrema"])
+@pytest.mark.parametrize("position", [0, 127, 255, 256, 767])
+@pytest.mark.parametrize("value,error", [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
+def test_histogram_reductions_validate_every_bin(property_name: str, position: int, value: object, error: type[Exception]) -> None:
+    histogram = [1] * 768
+    histogram[position] = value
+    with pytest.raises(error):
+        getattr(ImageStat.Stat(histogram), property_name)
+
+
+def test_histogram_reductions_accept_integer_protocol_and_list_subclasses() -> None:
+    class Count:
+        def __index__(self) -> int:
+            return 7
+
+    histogram = [0] * 256
+    histogram[37] = Count()
+    stat = ImageStat.Stat(histogram)
+    assert stat.count == [7]
+    assert stat.extrema == [(37, 37)]
+    class Histogram(list):
+        def __iter__(self):
+            return iter(histogram)
+
+    stat = ImageStat.Stat(Histogram([0] * 256))
+    assert stat.count == [7]
+    assert stat.extrema == [(37, 37)]
+
+
+def test_lazy_band_indices_preserve_construction_count() -> None:
+    histogram = [0] * 768
+    stat = ImageStat.Stat(histogram)
+    histogram.extend([0] * 256)
+    assert stat.bands == [0, 1, 2]
+    stat.bands.append(7)
+    assert stat.bands == [0, 1, 2, 7]
+
+
 def test_invalid_masks_and_closed_images() -> None:
     image = Image.new("RGBA", (3, 2))
     with pytest.raises(ValueError, match="mask"):

@@ -128,11 +128,13 @@ pub(crate) fn chunks_mut(output: &mut [u8], chunk_size: usize, operation: impl F
 }
 
 /// Memory-only work needs more bytes to amortize scheduling than arithmetic.
-pub(crate) fn chunks_mut_above(output: &mut [u8], chunk_size: usize, minimum_bytes: usize, operation: impl Fn(usize, &mut [u8]) + Sync + Send) {
+pub(crate) fn chunks_mut_above<T: Send>(
+    output: &mut [T], chunk_size: usize, minimum_bytes: usize, operation: impl Fn(usize, &mut [T]) + Sync + Send,
+) {
     if output.is_empty() {
         return;
     }
-    if should_parallel(output.len(), chunk_size, minimum_bytes) {
+    if should_parallel(output.len(), chunk_size, minimum_bytes.div_ceil(std::mem::size_of::<T>().max(1))) {
         output.par_chunks_mut(chunk_size).enumerate().for_each(|(i, chunk)| operation(i, chunk));
     } else {
         output.chunks_mut(chunk_size).enumerate().for_each(|(i, chunk)| operation(i, chunk));

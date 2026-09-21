@@ -8,6 +8,18 @@ from PIL import Image as PIL
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+@pytest.mark.parametrize("limit", [16, 127, 200, 256])
+def test_color_counts_merge_partitions_and_partial_tail(mode: str, limit: int) -> None:
+    chunk = 128 * 1024
+    tiles = [b"".join(bytes((v, v ^ 31, v ^ 127, v ^ 255)[: len(mode)]) for v in range(start, start + 128)) for start in (0, 128)]
+    raw = tiles[0] * (chunk // 128) + tiles[1] * (chunk // 128) + tiles[0][: 17 * len(mode)]
+    size = (chunk * 2 + 17, 1)
+    actual = Image.frombytes(mode, size, raw).getcolors(limit)
+    expected = PIL.frombytes(mode, size, raw).getcolors(limit)
+    assert (sorted(actual) if actual is not None else None) == (sorted(expected) if expected is not None else None)
+
+
 @pytest.mark.parametrize("container", [list, tuple])
 def test_putdata_preserves_sequence_overrides(container: type) -> None:
     class Values(container):

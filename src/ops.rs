@@ -548,7 +548,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
     let source = source.as_chunks::<C>().0;
     let row_bytes = size.0 as usize * C;
     // Reduction reads many more bytes than it writes. Schedule by source work.
-    let threshold = if cfg!(target_arch = "aarch64") && C == 1 && fx == 3 && fy == 3 {
+    let threshold = if cfg!(target_arch = "aarch64") && C == 1 && matches!((fx, fy), (3, 3) | (4, 4)) {
         128 * 1024
     } else {
         MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1)

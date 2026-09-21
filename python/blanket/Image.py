@@ -20,6 +20,7 @@ from ._blanket import fromarray as _native_fromarray
 from ._blanket import frombytes as _native_frombytes
 
 _EXTENSIONS = {".bmp": "BMP", ".gif": "GIF", ".ico": "ICO", ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL", ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP", ".heic": "HEIF", ".heif": "HEIF", ".avif": "AVIF", ".pdf": "PDF"}
+_BANDS = {"L": ("L",), "P": ("P",), "RGB": ("R", "G", "B"), "RGBA": ("R", "G", "B", "A")}
 
 
 class Resampling(IntEnum):
@@ -100,6 +101,7 @@ class Image:
 
     def __init__(self, native: _Image) -> None:
         self._native = native
+        self._bands = _BANDS[native.mode]
         self.filename: str | bytes = ""
         self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
@@ -242,6 +244,7 @@ class Image:
         palette = data.copy() if isinstance(data, ImagePalette) else ImagePalette(rawmode, bytes(data))
         self._native.set_palette(palette.mode, palette.tobytes())
         self.palette = palette
+        self._bands = _BANDS["P"]
 
     def quantize(self, colors: int = 256, method: int | None = None, kmeans: int = 0, palette: Image | None = None, dither: Dither = Dither.FLOYDSTEINBERG) -> Image:
         """Return an indexed P image using a generated or supplied palette.
@@ -371,6 +374,7 @@ class Image:
             raise ValueError("illegal image mode or size for alpha")
         image_putalpha(self._native, band._native)
         self.palette = None
+        self._bands = _BANDS["RGBA"]
 
     def split(self) -> tuple[Image, ...]:
         """Return independent L images for each band, in channel order."""
@@ -383,7 +387,7 @@ class Image:
 
     def getbands(self) -> tuple[str, ...]:
         """Return channel names in pixel order."""
-        return tuple(self.mode)
+        return self._bands
 
     def getchannel(self, channel: int | str) -> Image:
         """Return an independent L image for a channel name or index."""
@@ -920,9 +924,9 @@ __all__ = [
     "SupportsGetData",
     "Transform",
     "Transpose",
-    "fromarray",
     "blend",
     "composite",
+    "fromarray",
     "frombytes",
     "open",
 ]

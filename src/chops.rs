@@ -14,11 +14,16 @@ pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn buffer(len: usize) -> PyResult<Vec<u8>> {
+    let mut pixels = reserved_buffer(len)?;
+    pixels.resize(len, 0);
+    Ok(pixels)
+}
+
+fn reserved_buffer(len: usize) -> PyResult<Vec<u8>> {
     let mut pixels = Vec::new();
     pixels
         .try_reserve_exact(len)
         .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    pixels.resize(len, 0);
     Ok(pixels)
 }
 
@@ -112,14 +117,16 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     let height = first.height.min(second.height);
     let channels = first.mode.channels();
     let row = width as usize * channels;
-    let mut pixels = buffer(row * height as usize)?;
+    let length = row * height as usize;
+    let mut pixels = reserved_buffer(length)?;
     let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
     let threshold = match operation {
-        Operation::AddModulo | Operation::SubtractModulo | Operation::Lighter | Operation::Darker | Operation::Difference => 4 * 1024 * 1024,
+        Operation::AddModulo | Operation::SubtractModulo | Operation::Lighter | Operation::Darker | Operation::Difference => 16 * 1024 * 1024,
         _ => crate::parallel::MIN_PARALLEL_BYTES,
     };
     py.detach(|| {
-        chunks_mut_above(&mut pixels, row.max(1) * rows_per_chunk, threshold, |chunk, dst| {
+        let output = &mut pixels.spare_capacity_mut()[..length];
+        chunks_mut_above(output, row.max(1) * rows_per_chunk, threshold, |chunk, dst| {
             for (i, output_row) in dst.chunks_exact_mut(row).enumerate() {
                 let y = chunk * rows_per_chunk + i;
                 let a_start = y * first.width as usize * channels;
@@ -133,7 +140,7 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                             .zip(&a[a_start..a_start + row])
                             .zip(&b[b_start..b_start + row])
                         {
-                            *value = $f(a, b);
+                            value.write($f(a, b));
                         }
                     };
                 }
@@ -154,6 +161,8 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
             }
         });
     });
+    // Every output sample is initialized by the disjoint row partitions.
+    unsafe { pixels.set_len(length) };
     let mut result = Image::from_pixels(width, height, first.mode, pixels, None)?;
     // Channel arithmetic creates an empty output palette, as Pillow does.
     result.palette = first.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
@@ -163,14 +172,21 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
 #[pyfunction]
 fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = reserved_buffer(source.len())?;
     py.detach(|| {
-        chunks_mut_above(&mut pixels, CHUNK_PIXELS, 4 * 1024 * 1024, |chunk, dst| {
-            for (value, &sample) in dst.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
-                *value = 255 - sample;
-            }
-        });
+        chunks_mut_above(
+            &mut pixels.spare_capacity_mut()[..source.len()],
+            CHUNK_PIXELS,
+            16 * 1024 * 1024,
+            |chunk, dst| {
+                for (value, &sample) in dst.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
+                    value.write(255 - sample);
+                }
+            },
+        );
     });
+    // The loop initializes exactly source.len() bytes, including the tail.
+    unsafe { pixels.set_len(source.len()) };
     let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
     result.palette = image.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
     Ok(result)

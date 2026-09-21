@@ -2,6 +2,7 @@
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyList;
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(stat_count, module)?)?;
@@ -21,25 +22,78 @@ fn bands(histogram: &[u64]) -> PyResult<&[[u64; 256]]> {
     Ok(bands)
 }
 
-#[pyfunction]
-fn stat_count(py: Python<'_>, histogram: Vec<u64>) -> PyResult<Vec<u128>> {
-    let bands = bands(&histogram)?;
-    Ok(py.detach(|| bands.iter().map(|band| band.iter().map(|&n| u128::from(n)).sum()).collect()))
+fn list_count(histogram: &Bound<'_, PyList>, index: usize) -> PyResult<u64> {
+    let py = histogram.py();
+    // The critical section keeps a borrowed list item alive during conversion
+    // on free-threaded Python too; it is a no-op when the GIL is enabled.
+    // GetItem checks bounds even if an earlier __index__ call mutated the list.
+    pyo3::sync::critical_section::with_critical_section(histogram.as_any(), || unsafe {
+        let item = pyo3::ffi::PyList_GetItem(histogram.as_ptr(), index as pyo3::ffi::Py_ssize_t);
+        if item.is_null() {
+            return Err(PyErr::fetch(py));
+        }
+        let value = pyo3::ffi::PyLong_AsUnsignedLongLong(item);
+        if value == u64::MAX && !pyo3::ffi::PyErr_Occurred().is_null() {
+            let item = Bound::<PyAny>::from_borrowed_ptr(py, item);
+            let error = PyErr::fetch(py);
+            if error.is_instance_of::<pyo3::exceptions::PyTypeError>(py) {
+                // Preserve integer-like objects with __index__ on the slow path.
+                return item.extract();
+            }
+            return Err(error);
+        }
+        Ok(value)
+    })
 }
 
 #[pyfunction]
-fn stat_extrema(py: Python<'_>, histogram: Vec<u64>) -> PyResult<Vec<(u8, u8)>> {
-    let bands = bands(&histogram)?;
-    Ok(py.detach(|| {
-        bands
+fn stat_count(histogram: &Bound<'_, PyList>) -> PyResult<Vec<u128>> {
+    if !histogram.is_exact_instance_of::<PyList>() {
+        let values = histogram.extract::<Vec<u64>>()?;
+        return Ok(bands(&values)?.iter().map(|band| band.iter().map(|&n| u128::from(n)).sum()).collect());
+    }
+    if !histogram.len().is_multiple_of(256) {
+        return Err(PyValueError::new_err("histogram must contain 256 bins per band"));
+    }
+    let mut counts = vec![0_u128; histogram.len() / 256];
+    // Access list entries directly: materializing a Vec through Python's
+    // iterator costs more than these small reductions themselves.
+    for (i, count) in counts.iter_mut().enumerate() {
+        for bin in 0..256 {
+            *count += u128::from(list_count(histogram, i * 256 + bin)?);
+        }
+    }
+    Ok(counts)
+}
+
+#[pyfunction]
+fn stat_extrema(histogram: &Bound<'_, PyList>) -> PyResult<Vec<(u8, u8)>> {
+    if !histogram.is_exact_instance_of::<PyList>() {
+        let values = histogram.extract::<Vec<u64>>()?;
+        return Ok(bands(&values)?
             .iter()
             .map(|band| {
-                let minimum = band.iter().position(|&n| n != 0).unwrap_or(255);
-                let maximum = band.iter().rposition(|&n| n != 0).unwrap_or(0);
-                (minimum as u8, maximum as u8)
+                (
+                    band.iter().position(|&n| n != 0).unwrap_or(255) as u8,
+                    band.iter().rposition(|&n| n != 0).unwrap_or(0) as u8,
+                )
             })
-            .collect()
-    }))
+            .collect());
+    }
+    if !histogram.len().is_multiple_of(256) {
+        return Err(PyValueError::new_err("histogram must contain 256 bins per band"));
+    }
+    let mut result = vec![(255, 0); histogram.len() / 256];
+    for (i, (minimum, maximum)) in result.iter_mut().enumerate() {
+        for bin in 0..256 {
+            // Validate every count, including bins between the extrema.
+            if list_count(histogram, i * 256 + bin)? != 0 {
+                *minimum = (*minimum).min(bin as u8);
+                *maximum = bin as u8;
+            }
+        }
+    }
+    Ok(result)
 }
 
 fn weighted_sum(histogram: &[u64; 256], squared: bool) -> f64 {

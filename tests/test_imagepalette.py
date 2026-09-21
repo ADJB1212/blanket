@@ -19,6 +19,16 @@ def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.Im
     assert actual.getdata() == expected.getdata()
 
 
+@pytest.mark.parametrize("mode", ["", "L", "RGB", "RGBA", "custom"])
+@pytest.mark.parametrize("length", [0, 1, 7, 769])
+def test_save_pads_partial_entries_and_truncates(mode: str, length: int) -> None:
+    data = bytes(i % 256 for i in range(length))
+    actual, expected = StringIO(), StringIO()
+    ImagePalette.ImagePalette(mode, data).save(actual)
+    PillowPalette.ImagePalette(mode, data).save(expected)
+    assert actual.getvalue() == expected.getvalue()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("storage", [bytes, bytearray, list, tuple, lambda values: array("B", values)])
 def test_storage_copy_and_cache(mode: str, storage: type) -> None:

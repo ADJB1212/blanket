@@ -91,7 +91,8 @@ class ImagePalette:
 
     def getcolor(self, color: tuple[int, ...], image: Image | _PaletteImage | None = None) -> int:
         """Find or allocate a color, optionally reusing an unused image index."""
-        self._check_raw()
+        if self.rawmode:
+            raise ValueError("palette contains raw palette data")
         if not isinstance(color, tuple):
             raise ValueError(f"unknown color specifier: {color!r}")
         if self.mode == "RGB" and len(color) == 4:
@@ -100,8 +101,11 @@ class ImagePalette:
             color = color[:3]
         elif self.mode == "RGBA" and len(color) == 3:
             color += (255,)
+        colors = self._colors
+        if colors is None:
+            colors = self.colors
         try:
-            return self.colors[color]
+            return colors[color]
         except KeyError as error:
             slot = self._new_color_index(image, error)
         self.colors[color] = slot
@@ -117,12 +121,17 @@ class ImagePalette:
     def save(self, fp: str | IO[str]) -> None:
         """Write a 256-entry text palette to a filename or text stream."""
         self._check_raw()
+        channels = len(self.mode)
+        palette = self.palette
+        # Pad once, rather than repeatedly checking bounds and properties for
+        # each component of every output entry.
+        values = list(palette[: 256 * channels])
+        values.extend([0] * (256 * channels - len(values)))
         with open(fp, "w") if isinstance(fp, str) else nullcontext(fp) as stream:
             stream.write(f"# Palette\n# Mode: {self.mode}\n")
             for slot in range(256):
-                offset = slot * len(self.mode)
-                values = [self.palette[i] if i < len(self.palette) else 0 for i in range(offset, offset + len(self.mode))]
-                stream.write(str(slot) + "".join(f" {value}" for value in values) + "\n")
+                offset = slot * channels
+                stream.write(" ".join(map(str, (slot, *values[offset : offset + channels]))) + "\n")
 
 
 def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:

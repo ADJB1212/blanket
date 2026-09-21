@@ -11,8 +11,8 @@ BINARY = ["difference", "multiply", "screen", "lighter", "darker", "add", "subtr
 
 
 @pytest.mark.parametrize("name", ["difference", "lighter", "darker", "add_modulo", "subtract_modulo", "invert"])
-def test_memory_operations_large_parallel_tail(name: str) -> None:
-    size = (1025, 1027)
+@pytest.mark.parametrize("size", [(1025, 1027), (2049, 2051)])
+def test_memory_operations_large_parallel_tail(name: str, size: tuple[int, int]) -> None:
     raw = (bytes(range(256)) * ((size[0] * size[1] * 4 + 255) // 256))[: size[0] * size[1] * 4]
     actual = Image.frombytes("RGBA", size, raw)
     expected = PILImage.frombytes("RGBA", size, raw)

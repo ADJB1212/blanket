@@ -30,6 +30,45 @@ fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
 
 type ColorCounts = [(u64, usize, usize); 512];
 
+fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
+    let top = pixels.chunks_exact(width).position(|row| row.iter().any(|&v| v != 0))?;
+    let bottom = pixels.chunks_exact(width).rposition(|row| row.iter().any(|&v| v != 0)).unwrap();
+    let first = &pixels[top * width..(top + 1) * width];
+    let mut left = first.iter().position(|&v| v != 0).unwrap();
+    let mut right = first.iter().rposition(|&v| v != 0).unwrap() + 1;
+    let remaining = &pixels[(top + 1) * width..(bottom + 1) * width];
+    if left > 8 || width - right > 8 {
+        // Wide empty margins are cheaper to scan contiguously by row.
+        for row in remaining.chunks_exact(width) {
+            if let Some(x) = row[..left].iter().position(|&v| v != 0) {
+                left = x;
+            }
+            if let Some(x) = row[right..].iter().rposition(|&v| v != 0) {
+                right += x + 1;
+            }
+            if left == 0 && right == width {
+                break;
+            }
+        }
+        return Some((left, top, right, bottom + 1));
+    }
+    // Search only columns outside the first occupied row's bounds. Separate
+    // edges avoid revisiting an already complete right edge on every row.
+    for x in 0..left {
+        if remaining.chunks_exact(width).any(|row| row[x] != 0) {
+            left = x;
+            break;
+        }
+    }
+    for x in (right..width).rev() {
+        if remaining.chunks_exact(width).any(|row| row[x] != 0) {
+            right = x + 1;
+            break;
+        }
+    }
+    Some((left, top, right, bottom + 1))
+}
+
 fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
     let mut minimum = [255_u8; C];
     let mut maximum = [0_u8; C];
@@ -48,6 +87,42 @@ fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
 }
 
 fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
+    const CHUNK: usize = 128 * 1024;
+    if maxcolors >= 64 && crate::parallel::should_parallel(data.len() / N, CHUNK, CHUNK * 2) {
+        use rayon::prelude::*;
+        let tables: Option<Vec<_>> = data
+            .par_chunks(CHUNK * N)
+            .map(|chunk| count_colors_serial::<N>(chunk, maxcolors))
+            .collect();
+        let mut merged = [(0, 0, 0); 512];
+        let mut used = 0;
+        for (chunk, table) in tables?.into_iter().enumerate() {
+            for (key, count, index) in table.into_iter().filter(|entry| entry.1 != 0) {
+                let mut slot = (key.wrapping_mul(0x9e3779b97f4a7c15) >> 55) as usize;
+                loop {
+                    let entry = &mut merged[slot];
+                    if entry.1 == 0 {
+                        used += 1;
+                        if used > maxcolors {
+                            return None;
+                        }
+                        *entry = (key, count, chunk * CHUNK + index);
+                        break;
+                    }
+                    if entry.0 == key {
+                        entry.1 += count;
+                        break;
+                    }
+                    slot = (slot + 1) & 511;
+                }
+            }
+        }
+        return Some(merged);
+    }
+    count_colors_serial::<N>(data, maxcolors)
+}
+
+fn count_colors_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
     let mut table = [(0_u64, 0_usize, 0_usize); 512];
     let mut used = 0;
     for (i, pixel) in data.as_chunks::<N>().0.iter().enumerate() {
@@ -371,6 +446,10 @@ impl Image {
                 return None;
             }
             let stride = channels * sample_bytes;
+            if stride == 1 {
+                return bounding_box_l(pixels, self.width as usize)
+                    .map(|(left, top, right, bottom)| (left as u32, top as u32, right as u32, bottom as u32));
+            }
             let row_bytes = self.width as usize * stride;
             let occupied = |pixel: &[u8]| {
                 let values = if alpha_only && self.mode == PixelMode::Rgba {
@@ -442,11 +521,29 @@ impl Image {
         self.raw_data().map(|_| ())
     }
 
-    fn copy(&self) -> PyResult<Self> {
-        self.raw_data()?;
-        let mut result = self.clone();
-        result.format = None;
-        Ok(result)
+    fn copy(&self, py: Python<'_>) -> PyResult<Self> {
+        let source = self.raw_data()?;
+        let mut pixels = Vec::<u8>::with_capacity(source.len());
+        let row = self.width as usize * self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
+        let chunk = if source.len() >= 4 * 1024 * 1024 { 256 * 1024 } else { row.max(4096) };
+        py.detach(|| {
+            crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 * 1024 * 1024, |i, dst| {
+                // Disjoint output partitions initialize the entire reserved buffer.
+                // Source and destination are separate allocations of equal length.
+                unsafe { std::ptr::copy_nonoverlapping(source[i * chunk..].as_ptr(), dst.as_mut_ptr().cast::<u8>(), dst.len()) };
+            });
+        });
+        // Every byte is initialized above, including any partial final partition.
+        unsafe { pixels.set_len(source.len()) };
+        Ok(Self {
+            width: self.width,
+            height: self.height,
+            mode: self.mode,
+            pixels: Some(pixels),
+            bit_depth: self.bit_depth,
+            format: None,
+            palette: self.palette.clone(),
+        })
     }
 
     fn getpixel(&self, py: Python<'_>, xy: (i64, i64)) -> PyResult<Py<PyAny>> {
@@ -506,7 +603,7 @@ impl Image {
     #[pyo3(signature = (mode, bit_depth=None))]
     fn convert(&self, py: Python<'_>, mode: &str, bit_depth: Option<u8>) -> PyResult<Self> {
         if mode == "P" && self.palette.is_some() {
-            return self.copy();
+            return self.copy(py);
         }
         let destination = PixelMode::parse(mode)?;
         let depth = bit_depth.unwrap_or(self.bit_depth);

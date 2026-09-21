@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import pytest
-from PIL import Image as PIL
-
 from blanket import Image
+from PIL import Image as PIL
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
@@ -84,3 +83,54 @@ def test_high_depth_bbox(depth: int) -> None:
     assert image.getchannel("A").getpixel((1, 0)) == 256
     with pytest.raises(ValueError, match="8-bit"):
         image.histogram()
+
+
+def test_getbands_tracks_in_place_mode_changes() -> None:
+    image = Image.new("L", (2, 2))
+    assert image.getbands() == ("L",)
+    image.putpalette(bytes(range(256)) * 3)
+    assert image.getbands() == ("P",)
+    image = Image.new("RGB", (2, 2))
+    assert image.getbands() == ("R", "G", "B")
+    image.putalpha(127)
+    assert image.getbands() == ("R", "G", "B", "A")
+
+
+@pytest.mark.parametrize("width", [1, 17, 1024])
+def test_l_bbox_scans_empty_edge_columns(width: int) -> None:
+    raw = bytes(width) + (b"\0" + bytes([7]) * (width - 1)) * 31 + bytes(width)
+    image = Image.frombytes("L", (width, 33), raw)
+    reference = PIL.frombytes("L", (width, 33), raw)
+    assert image.getbbox() == reference.getbbox()
+
+
+@pytest.mark.parametrize("size", [(800, 600), (1024, 1024), (803, 607)])
+def test_l_thumbnail_integer_reduction_matches_pillow(size: tuple[int, int]) -> None:
+    raw = bytes((i * 37 + i // 11) % 256 for i in range(size[0] * size[1]))
+    image = Image.frombytes("L", size, raw)
+    reference = PIL.frombytes("L", size, raw)
+    target = (size[0] // 8, size[1] // 8)
+    image.thumbnail(target)
+    reference.thumbnail(target)
+    assert image.size == reference.size
+    assert image.tobytes() == reference.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [8, 16])
+@pytest.mark.parametrize("size", [(0, 3), (1, 1031), (1031, 1), (37, 41), (1025, 1027)])
+def test_copy_preserves_pixels_metadata_and_independent_storage(mode: str, depth: int, size: tuple[int, int]) -> None:
+    raw = bytes(i % 256 for i in range(size[0] * size[1] * len(mode) * (depth // 8)))
+    image = Image.frombytes(mode, size, raw, bit_depth=depth)
+    image.info["note"] = "retained"
+    result = image.copy()
+    assert (result.mode, result.size, result.bit_depth) == (mode, size, depth)
+    assert result.tobytes() == raw
+    assert result.info == image.info
+    result.info["note"] = "changed"
+    if depth == 8 and size[0] and size[1]:
+        result.putpixel((0, 0), 0)
+        assert image.tobytes() == raw
+    image.close()
+    assert result.tobytes() is not None
+    assert image.info["note"] == "retained"

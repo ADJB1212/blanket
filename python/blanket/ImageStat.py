@@ -19,15 +19,21 @@ class Stat:
     """
 
     def __init__(self, image_or_list: Image.Image | list[int], mask: Image.Image | None = None) -> None:
-        if isinstance(image_or_list, Image.Image):
-            self.h = image_or_list.histogram(mask)
-        elif isinstance(image_or_list, list):
+        if isinstance(image_or_list, list):
             self.h = image_or_list
+        elif isinstance(image_or_list, Image.Image):
+            self.h = image_or_list.histogram(mask)
         else:
             raise TypeError("first argument must be image or list")
-        if len(self.h) % 256:
+        length = len(self.h)
+        if length % 256:
             raise ValueError("histogram must contain 256 bins per band")
-        self.bands = list(range(len(self.h) // 256))
+        self._band_count = length // 256
+
+    @cached_property
+    def bands(self) -> list[int]:
+        """Band indices, materialized only when requested."""
+        return list(range(self._band_count))
 
     @cached_property
     def extrema(self) -> list[tuple[int, int]]:
