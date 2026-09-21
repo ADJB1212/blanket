@@ -86,8 +86,8 @@ pub(crate) unsafe fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
                     hi = _mm_add_epi16(hi, _mm_unpackhi_epi8(v, zero));
                 }
             }
-            // floor(sum / 9), exact for the entire rounded sum range 4..=2299.
-            let divisor = _mm_set1_epi16(7282);
+            // Match the scalar Pillow-compatible reciprocal ((sum * 1_864_135) >> 24).
+            let divisor = _mm_set1_epi16(7281);
             let value = _mm_packus_epi16(_mm_mulhi_epu16(lo, divisor), _mm_mulhi_epu16(hi, divisor));
             _mm_storeu_si128(dst.as_mut_ptr().add(i).cast(), value);
         }
@@ -241,7 +241,7 @@ mod tests {
             // SAFETY: detected SSSE3; each unaligned row has 3 * 17 bytes.
             let end = unsafe { reduce_three_l([&rows[0][1..], &rows[1][1..], &rows[2][1..]], &mut dst[1..18]) };
             assert_eq!(end, 16);
-            assert_eq!(&dst[1..17], &[((sum + 4) / 9) as u8; 16]);
+            assert_eq!(&dst[1..17], &[(((sum + 4) * 1_864_135) >> 24) as u8; 16]);
             assert_eq!(dst[0], 93);
             assert_eq!(&dst[17..], &[93; 2]);
         }
