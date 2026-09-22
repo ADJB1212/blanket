@@ -209,7 +209,7 @@ def main() -> int:
     failed = False
     for name, original in fixtures():
         w, h = original.size
-        size_label = f"{w}×{h}"
+        size_label = f"{w}x{h}"
         for fmt in dict.fromkeys(args.formats):
             if "16b" in name and fmt in ("JPEG", "HEIF"):
                 continue

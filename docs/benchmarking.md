@@ -1,6 +1,6 @@
 # Comparing performance across changes
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 The `Bands` section includes pixel access and mutation, histograms, extrema,
 bounding boxes, channel extraction, lookup tables, thumbnails, blending, and

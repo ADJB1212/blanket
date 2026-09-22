@@ -55,7 +55,7 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
         if len(color) != 1:
             raise TypeError("color must be int or single-element tuple")
     elif len(color) == 3 and mode == "RGBA":
-        color = color + (255,)
+        color = (*color, 255)
     elif mode == "RGB" and len(color) == 4:
         color = color[:3]
     elif len(color) != len(mode):

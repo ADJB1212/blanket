@@ -1,6 +1,6 @@
 # ImageFilter
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 `from blanket import ImageFilter` provides Pillow-compatible built-in convolution
 filters, custom `Kernel` filters, `RankFilter`, `MedianFilter`, `MinFilter`,

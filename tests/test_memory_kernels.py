@@ -3,8 +3,9 @@ from __future__ import annotations
 import random
 
 import pytest
-from blanket import Image, ImageOps
 from PIL import Image as PillowImage, ImageOps as PillowOps
+
+from blanket import Image, ImageOps
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

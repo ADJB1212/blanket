@@ -1,6 +1,6 @@
 # ImageOps
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 `from blanket import ImageOps` provides all 18 functions in Pillow's
 [`ImageOps` submodule](https://pillow.readthedocs.io/en/stable/reference/ImageOps.html):

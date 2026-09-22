@@ -5,8 +5,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from blanket import Image
 from PIL import Image as PILImage
+
+from blanket import Image
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

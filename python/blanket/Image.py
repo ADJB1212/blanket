@@ -362,15 +362,15 @@ class Image:
         if min(source) < 0:
             raise ValueError("Source must be non-negative")
         region = source + im.size if len(source) == 2 else source
-        overlay = im if region == (0, 0) + im.size else im.crop(region)
-        box = dest + (dest[0] + overlay.width, dest[1] + overlay.height)
-        if box == (0, 0) + self.size:
+        overlay = im if region == (0, 0, *im.size) else im.crop(region)
+        box = (*dest, dest[0] + overlay.width, dest[1] + overlay.height)
+        if box == (0, 0, *self.size):
             from ._blanket import image_alpha_composite_inplace
 
             overlay = overlay.copy() if overlay._native is self._native else overlay
             image_alpha_composite_inplace(self._native, overlay._native)
             return
-        background = self if box == (0, 0) + self.size else self.crop(box)
+        background = self if box == (0, 0, *self.size) else self.crop(box)
         self.paste(alpha_composite(background, overlay), box)
 
     def putalpha(self, alpha: Image | int) -> None:
@@ -780,7 +780,7 @@ def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | N
     native_mode = "L" if mode == "P" else mode
     if mode not in ("L", "RGB", "RGBA", "P"):
         raise ValueError(f"unsupported image mode {mode!r}")
-    palette_color = mode == "P" and (isinstance(color, str) or isinstance(color, tuple) and len(color) in (3, 4))
+    palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
     if mode == "P":
         result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else bytes(768))

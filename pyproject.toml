@@ -31,6 +31,10 @@ test = [
     "pytest>=9,<10",
     "rich>=15",
 ]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.1",
+]
 
 [tool.maturin]
 python-source = "python"
@@ -38,16 +42,18 @@ module-name = "blanket._blanket"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--color=no", "--code-highlight=no", "--no-header"]
+addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=native", "--strict-markers", "--strict-config"]
 console_output_style = "none"
+xfail_strict = true
 
 [tool.ruff]
 fix = true
 line-length = 200
+target-version = "py312"
 
 [tool.ruff.lint]
+extend-select = ["TID", "RUF", "PERF", "E", "UP"]
 ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402"]
-exclude = ["scripts"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -56,11 +62,15 @@ docstring-code-format = true
 docstring-code-line-length = "dynamic"
 
 [tool.ruff.lint.isort]
+known-first-party = ["blanket"]
 split-on-trailing-comma = false
 combine-as-imports = true
 
 [tool.ty.src]
-exclude = ["python/blanket", "scripts", "tests", "docs"]
+exclude = ["scripts", "tests", "docs"]
+
+[tool.ty.analysis]
+allowed-unresolved-imports = ["blanket._blanket"]
 
 [tool.uv]
 compile-bytecode = true

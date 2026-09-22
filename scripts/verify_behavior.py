@@ -8,6 +8,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
+from PIL import Image as PillowImage, ImageChops as PillowChops, ImageEnhance as PillowEnhance, ImageFilter, ImageOps as PillowOps, ImagePalette as PillowPalette, ImageStat as PillowStat
+
 from blanket import (
     Image as BlanketImage,
     ImageChops as BlanketChops,
@@ -17,7 +19,6 @@ from blanket import (
     ImagePalette as BlanketPalette,
     ImageStat as BlanketStat,
 )
-from PIL import Image as PillowImage, ImageChops as PillowChops, ImageEnhance as PillowEnhance, ImageFilter, ImageOps as PillowOps, ImagePalette as PillowPalette, ImageStat as PillowStat
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:

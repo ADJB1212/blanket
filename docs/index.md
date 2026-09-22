@@ -1,6 +1,6 @@
 # Blanket Documentation
 
-[Back to the README](../README.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md)
 
 ## Modules
 

@@ -6,9 +6,10 @@ import numpy as np
 import pytest
 
 PIL = pytest.importorskip("PIL")
-from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 from test_api import pixels
+
+from blanket import Image as BlanketImage
 
 
 @pytest.mark.parametrize("shape", [(13, 17), (13, 17, 3), (13, 17, 4)])

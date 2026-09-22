@@ -1,6 +1,6 @@
 # Image
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 Blanket is a deliberately focused, Rust-backed image package with a familiar
 Pillow-shaped Python API. Its supported surface is loading, saving, and

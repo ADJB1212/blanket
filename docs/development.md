@@ -1,6 +1,6 @@
 # Development
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 JPEG XL encoding statically builds libjxl. Install Rust, CMake, Ninja, and a
 C++ compiler before building. AVIF requires system dav1d 1.3+ (`brew install dav1d`

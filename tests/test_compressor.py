@@ -8,9 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from PIL import Image as PillowImage
+
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor
-from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("effort", [1, 7])

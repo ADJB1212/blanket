@@ -6,8 +6,9 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
-from blanket import Image, ImagePalette
 from PIL import Image as PillowImage, ImagePalette as PillowPalette
+
+from blanket import Image, ImagePalette
 
 
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:

@@ -19,7 +19,7 @@ class LosslessImageCompressor:
     row filters, including minimum-entropy filtering. Exact palettes use packed
     indices and try frequency and color ordering. Grayscale samples try packed
     1-, 2-, and 4-bit storage when exact; compatible binary alpha tries a PNG
-    transparency key. Efforts 9–10 also search DEFLATE levels. The smallest
+    transparency key. Efforts 9-10 also search DEFLATE levels. The smallest
     encoding wins, including the normal baseline, without quantizing colors or
     discarding RGB values in transparent pixels.
     The image's mode and pixels stay unchanged; reopening a saved PNG may report

@@ -3,8 +3,9 @@ from __future__ import annotations
 import random
 
 import pytest
-from blanket import Image
 from PIL import Image as PIL
+
+from blanket import Image
 
 
 def assert_same(actual: Image.Image, expected: PIL.Image) -> None:

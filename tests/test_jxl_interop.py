@@ -5,9 +5,10 @@ from io import BytesIO
 import pytest
 
 pytest.importorskip("pillow_jxl")
-from blanket import Image as BlanketImage
 from PIL import Image as PillowImage
 from test_api import pixels
+
+from blanket import Image as BlanketImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

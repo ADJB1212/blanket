@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import random
+import re
 from array import array
 from io import BytesIO
 
 import numpy as np
 import pytest
-from blanket import Image, ImageFilter
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
+
+from blanket import Image, ImageFilter
 
 BUILTINS = ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")
 NEIGHBORHOOD_SIZES = [pytest.param(1, marks=pytest.mark.skip(reason="Pillow crashes with filter size 1")), 3, 5, 9]
@@ -205,7 +207,7 @@ def test_lut_transform_copy_and_mutation() -> None:
     for normals in (False, True):
 
         def callback(*values):
-            return tuple(1 - value for value in values[-3:]) + (0.5,)
+            return (*tuple(1 - value for value in values[-3:]), 0.5)
 
         transformed = actual.transform(callback, normals, 4, "RGBA")
         reference = expected.transform(callback, normals, 4, "RGBA")
@@ -256,7 +258,7 @@ def test_custom_filters_and_errors() -> None:
     for custom in (CopyBand, CopyBand(), CopyImage, CopyImage(), lambda: CopyBand()):
         assert image.filter(custom).tobytes() == image.tobytes()
     for invalid in (None, 1, "blur", object()):
-        with pytest.raises(TypeError, match="filter argument should be ImageFilter.Filter instance or class"):
+        with pytest.raises(TypeError, match=re.escape("filter argument should be ImageFilter.Filter instance or class")):
             image.filter(invalid)
     with pytest.raises(TypeError):
         ImageFilter.Filter()

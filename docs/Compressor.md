@@ -149,7 +149,7 @@ not a promise of further size reduction, and JPEG uses the same two
 candidates at efforts 3–10. Benchmark representative images before choosing
 settings for latency-sensitive saves.
 
-The [compression benchmark](../scripts/benchmark_compression.py) measures size,
+The [compression benchmark](https://github.com/ADJB1212/blanket/blob/main/scripts/benchmark_compression.py) measures size,
 save time, and exact decoded-pixel preservation using nine deterministic
 fixtures, including gradients, noise, palettes, long color runs, and alpha.
 Run it from the repository after the development setup. Use a release build

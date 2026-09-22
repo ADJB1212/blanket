@@ -1,6 +1,6 @@
 # ImageEnhance
 
-[Back to the README](../README.md) · [All modules](index.md)
+[Back to the README](https://github.com/ADJB1212/blanket/blob/main/README.md) · [All modules](index.md)
 
 `from blanket import ImageEnhance` provides Pillow-compatible `Color`,
 `Contrast`, `Brightness`, and `Sharpness` enhancer classes for all three

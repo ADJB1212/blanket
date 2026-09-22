@@ -5,8 +5,9 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from blanket import Image
 from PIL import Image as PillowImage
+
+from blanket import Image
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

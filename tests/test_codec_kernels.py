@@ -5,8 +5,9 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
-from blanket import Image, UnidentifiedImageError
 from PIL import Image as PillowImage
+
+from blanket import Image, UnidentifiedImageError
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

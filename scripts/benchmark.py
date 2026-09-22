@@ -25,15 +25,6 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 import numpy as np
 import pillow_heif
 import pillow_jxl
-from blanket import (
-    Image as BlanketImage,
-    ImageChops as BlanketChops,
-    ImageEnhance as BlanketEnhance,
-    ImageFilter as BlanketFilter,
-    ImageOps as BlanketOps,
-    ImagePalette as BlanketPalette,
-    ImageStat as BlanketStat,
-)
 from PIL import (
     Image as PillowImage,
     ImageChops as PillowChops,
@@ -47,6 +38,16 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 from rich.text import Text
+
+from blanket import (
+    Image as BlanketImage,
+    ImageChops as BlanketChops,
+    ImageEnhance as BlanketEnhance,
+    ImageFilter as BlanketFilter,
+    ImageOps as BlanketOps,
+    ImagePalette as BlanketPalette,
+    ImageStat as BlanketStat,
+)
 
 pillow_heif.register_heif_opener()
 
@@ -99,7 +100,7 @@ Comparison = tuple[str, Callable[[], object], Callable[[], object] | None]
 
 
 def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool = False, include_unpaired: bool = True) -> list[Comparison]:
-    """Build load/save benchmarks for every codec × relevant mode."""
+    """Build load/save benchmarks for every codec."""
     w, h = size
     raw_rgb = make_rgb(w, h)
     raw_rgba = make_rgba(w, h)
@@ -123,15 +124,18 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         for label, b_img, p_img, mode in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
             png = pillow_payload(p_img, "PNG", compress_level=6)
             comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)), lambda p=png: pillow_load(p)))
-        for level in (1, 6, 9):
-            comps.append((f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv)))
+            comps.extend(
+                (f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv))
+                for level in (1, 6, 9)
+            )
 
         # ── JPEG ──────────────────────────────────────────────────────
         for label, b_img, p_img in (("RGB", b_rgb, p_rgb), ("L", b_gray, p_gray)):
             jpeg = pillow_payload(p_img, "JPEG", quality=85)
             comps.append((f"load JPEG {label}", lambda p=jpeg: BlanketImage.open(BytesIO(p)), lambda p=jpeg: pillow_load(p)))
-        for quality in (50, 85, 95):
-            comps.append((f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)))
+        comps.extend(
+            (f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)) for quality in (50, 85, 95)
+        )
 
         # ── TIFF and WebP ─────────────────────────────────────────────
         for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
@@ -190,7 +194,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
 
 
 def make_ten_bit(size: tuple[int, int], mode: str) -> np.ndarray:
-    """Generate uint16 samples spanning 0–1023, including non-8-bit values."""
+    """Generate uint16 samples spanning 0-1023, including non-8-bit values."""
     w, h = size
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
     samples = (np.arange(w * h * channels, dtype=np.uint32) * 37 % 1024).astype(np.uint16)
@@ -216,11 +220,8 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
                 (f"cvt {mode} 10→8-bit", lambda b=wide, m=mode: b.convert(m, bit_depth=8), None),
             ]
         )
-        for destination in ("L", "RGB", "RGBA"):
-            if destination != mode:
-                comps.append((f"cvt {mode}→{destination} 10-bit", lambda b=wide, m=destination: b.convert(m), None))
-        for method in BlanketImage.Resampling:
-            comps.append((f"resize {mode} 10-bit {method.name}", lambda b=wide, r=method: b.resize(target, r), None))
+        comps.extend((f"cvt {mode}→{destination} 10-bit", lambda b=wide, m=destination: b.convert(m), None) for destination in ("L", "RGB", "RGBA") if destination != mode)
+        comps.extend((f"resize {mode} 10-bit {method.name}", lambda b=wide, r=method: b.resize(target, r), None) for method in BlanketImage.Resampling)
     return comps
 
 
@@ -293,8 +294,7 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
         pillow = PillowImage.frombytes(mode, size, raw)
         for label, box in (("copy", None), ("inset", inset), ("padded", (-w // 10, -h // 10, w, h))):
             comps.append((f"Image.crop {label} {mode}", partial(blanket.crop, box=box), partial(pillow.crop, box=box)))
-        for method in BlanketImage.Transpose:
-            comps.append((f"transpose {method.name} {mode}", partial(blanket.transpose, method), partial(pillow.transpose, int(method))))
+        comps.extend((f"transpose {method.name} {mode}", partial(blanket.transpose, method), partial(pillow.transpose, int(method))) for method in BlanketImage.Transpose)
         comps.append((f"rotate 90 expand {mode}", partial(blanket.rotate, 90, expand=True), partial(pillow.rotate, 90, expand=True)))
         for resample in (BlanketImage.Resampling.NEAREST, BlanketImage.Resampling.BILINEAR, BlanketImage.Resampling.BICUBIC):
             for label, options in (("17", {}), ("17 expand fill", {"expand": True, "fillcolor": "navy"})):
@@ -325,15 +325,15 @@ def band_statistics_comparisons(size: tuple[int, int]) -> list[Comparison]:
         comps.append((f"entropy {mode}", blanket.entropy, pillow.entropy))
         comps.append((f"entropy masked {mode}", partial(blanket.entropy, b_mask), partial(pillow.entropy, p_mask)))
         comps.append((f"getpixel {mode}", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))))
-        for method in (2,) if mode == "RGBA" else (0, 1, 2):
-            comps.append((f"quantize 256 method={method} {mode}", partial(blanket.quantize, 256, method), partial(pillow.quantize, 256, method)))
+        comps.extend((f"quantize 256 method={method} {mode}", partial(blanket.quantize, 256, method), partial(pillow.quantize, 256, method)) for method in ((2,) if mode == "RGBA" else (0, 1, 2)))
         if mode == "RGB":
             palette = blanket.quantize(16)
             pillow_palette = palette.to_pillow()
-            for dither in (0, 3):
-                comps.append((f"quantize palette dither={dither} RGB", partial(blanket.quantize, palette=palette, dither=dither), partial(pillow.quantize, palette=pillow_palette, dither=dither)))
-        for factor in (2, 3, (2, 3), (1, 7)):
-            comps.append((f"reduce {factor} {mode}", partial(blanket.reduce, factor), partial(pillow.reduce, factor)))
+            comps.extend(
+                (f"quantize palette dither={dither} RGB", partial(blanket.quantize, palette=palette, dither=dither), partial(pillow.quantize, palette=pillow_palette, dither=dither))
+                for dither in (0, 3)
+            )
+        comps.extend((f"reduce {factor} {mode}", partial(blanket.reduce, factor), partial(pillow.reduce, factor)) for factor in (2, 3, (2, 3), (1, 7)))
         box = (w // 10, h // 10, w - w // 10, h - h // 10)
         comps.append((f"reduce box {mode}", partial(blanket.reduce, 3, box=box), partial(pillow.reduce, 3, box=box)))
     return comps
@@ -519,8 +519,9 @@ def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
             else:
                 args, reference_args = (first, second), (reference, other)
             comparisons.append((f"{name} {mode}", partial(getattr(BlanketChops, name), *args), partial(getattr(PillowChops, name), *reference_args)))
-        for name in ("add", "subtract"):
-            comparisons.append((f"{name} scaled {mode}", partial(getattr(BlanketChops, name), first, second, 1.7, -13), partial(getattr(PillowChops, name), reference, other, 1.7, -13)))
+        comparisons.extend(
+            (f"{name} scaled {mode}", partial(getattr(BlanketChops, name), first, second, 1.7, -13), partial(getattr(PillowChops, name), reference, other, 1.7, -13)) for name in ("add", "subtract")
+        )
         comparisons.append((f"offset default-y {mode}", partial(BlanketChops.offset, first, -17), partial(PillowChops.offset, reference, -17)))
     return comparisons
 
@@ -549,9 +550,11 @@ def imagestat_comparisons(size: tuple[int, int]) -> list[Comparison]:
             for item in (image, reference):
                 item.putpalette(bytes(range(256)) * 3)
         cases = [("image", image, reference, None, None), ("masked", image, reference, bmask, pmask), ("histogram", image.histogram(), reference.histogram(), None, None)]
-        for kind, source, expected, mask, expected_mask in cases:
-            for name in (*STATISTICS, "all"):
-                comparisons.append((f"{name} {kind} {mode}", partial(_evaluate_statistics, BlanketStat, source, mask, name), partial(_evaluate_statistics, PillowStat, expected, expected_mask, name)))
+        comparisons.extend(
+            (f"{name} {kind} {mode}", partial(_evaluate_statistics, BlanketStat, source, mask, name), partial(_evaluate_statistics, PillowStat, expected, expected_mask, name))
+            for kind, source, expected, mask, expected_mask in cases
+            for name in (*STATISTICS, "all")
+        )
     return comparisons
 
 
@@ -590,7 +593,10 @@ def imagefilter_comparisons(size: tuple[int, int]) -> list[Comparison]:
             label = f"{name} {mode}" + (f" {args}" if args and name != "Kernel" else "")
             comparisons.append((label, partial(actual.filter, actual_filter), partial(expected.filter, expected_filter)))
         if mode != "L":
-            callback = lambda r, g, b: (1 - r, g * g, b)
+
+            def callback(r: float, g: float, b: float) -> tuple[float, float, float]:
+                return 1 - r, g * g, b
+
             comparisons.append(
                 (f"Color3DLUT {mode} (17)", partial(actual.filter, BlanketFilter.Color3DLUT.generate(17, callback)), partial(expected.filter, PillowFilter.Color3DLUT.generate(17, callback)))
             )
@@ -611,9 +617,7 @@ def imagepalette_comparisons(directory: Path) -> list[Comparison]:
             palette.getcolor((value, 255 - value, value // 2))
         return palette
 
-    comparisons: list[Comparison] = []
-    for name in ("wedge", "negative", "sepia", "random"):
-        comparisons.append((f"ImagePalette.{name}", getattr(BlanketPalette, name), getattr(PillowPalette, name)))
+    comparisons: list[Comparison] = [(f"ImagePalette.{name}", getattr(BlanketPalette, name), getattr(PillowPalette, name)) for name in ("wedge", "negative", "sepia", "random")]
     comparisons.extend(
         [
             ("ImagePalette.linear LUT", lambda: BlanketPalette.make_linear_lut(0, 240), lambda: PillowPalette.make_linear_lut(0, 240)),
@@ -904,7 +908,7 @@ def main() -> None:
         w, h = size
         mpx = (w * h) / 1_000_000
 
-        console.rule(f"[bold]{size_name}[/bold]  {w}×{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
+        console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
             "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),

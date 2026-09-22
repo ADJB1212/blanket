@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import pytest
-from blanket import Image, ImageStat
 from PIL import Image as PILImage, ImageStat as PILStat
+
+from blanket import Image, ImageStat
 
 STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
 

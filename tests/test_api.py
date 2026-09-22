@@ -4,6 +4,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+
 from blanket import Image, UnidentifiedImageError
 
 

@@ -7,6 +7,7 @@ from pathlib import Path
 import numpy as np
 import pillow_heif
 import pytest
+
 from blanket import Image, UnidentifiedImageError
 
 

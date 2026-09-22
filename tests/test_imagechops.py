@@ -3,8 +3,9 @@ from __future__ import annotations
 import math
 
 import pytest
-from blanket import Image, ImageChops
 from PIL import Image as PILImage, ImageChops as PILChops
+
+from blanket import Image, ImageChops
 
 BINARY = ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"]
 
@@ -111,7 +112,7 @@ def test_closed_unary_inputs(name: str) -> None:
         getattr(ImageChops, name)(image, 1) if name == "offset" else getattr(ImageChops, name)(image)
 
 
-@pytest.mark.parametrize("name", BINARY + ["invert", "offset"])
+@pytest.mark.parametrize("name", [*BINARY, "invert", "offset"])
 def test_palette_indices_and_palette_copy(name: str) -> None:
     first, pil_first = pair("L", (19, 11))
     second, pil_second = pair("L", first.size, 29)

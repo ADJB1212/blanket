@@ -7,9 +7,10 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from blanket import Image, ImageOps
 from PIL import Image as PILImage, ImageOps as PILOps
 from PIL.PngImagePlugin import PngInfo
+
+from blanket import Image, ImageOps
 
 
 def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:
