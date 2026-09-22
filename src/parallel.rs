@@ -10,8 +10,17 @@ pub(crate) const CHUNK_PIXELS: usize = 16 * 1024;
 pub(crate) struct CandidateLimit(AtomicUsize);
 
 impl CandidateLimit {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self(AtomicUsize::new(limit))
+    }
+
     pub(crate) fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set(&self, limit: usize) {
+        self.0.store(limit, Ordering::Relaxed);
     }
 }
 
@@ -37,7 +46,7 @@ pub(crate) fn best_candidate<T: Sync, E: Send>(
 ) -> Result<Option<Vec<u8>>, E> {
     let workers = candidate_workers(work_bytes, jobs.len());
     let next = AtomicUsize::new(0);
-    let bound = CandidateLimit(AtomicUsize::new(limit));
+    let bound = CandidateLimit::new(limit);
     let run = |_| {
         let mut result = CandidateResult::default();
         loop {
@@ -82,12 +91,10 @@ pub(crate) fn best_candidate<T: Sync, E: Send>(
 
 pub(crate) fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
     if work_bytes >= 128 * 1024 && jobs > 1 {
+        // Candidates are single-threaded, so every pool thread can run one.
         // Allow roughly four input-sized working buffers per encoder within
         // a 256 MiB budget. Very large images stay serial to bound memory.
-        rayon::current_num_threads()
-            .min(4)
-            .min(jobs)
-            .min((64 * 1024 * 1024 / work_bytes.max(1)).max(1))
+        rayon::current_num_threads().min(jobs).min((64 * 1024 * 1024 / work_bytes.max(1)).max(1))
     } else {
         1
     }

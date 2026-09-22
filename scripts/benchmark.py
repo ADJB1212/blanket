@@ -25,20 +25,24 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 import numpy as np
 import pillow_heif
 import pillow_jxl
-from blanket import Image as BlanketImage
-from blanket import ImageChops as BlanketChops
-from blanket import ImageEnhance as BlanketEnhance
-from blanket import ImageFilter as BlanketFilter
-from blanket import ImageOps as BlanketOps
-from blanket import ImagePalette as BlanketPalette
-from blanket import ImageStat as BlanketStat
-from PIL import Image as PillowImage
-from PIL import ImageChops as PillowChops
-from PIL import ImageEnhance as PillowEnhance
-from PIL import ImageFilter as PillowFilter
-from PIL import ImageOps as PillowOps
-from PIL import ImagePalette as PillowPalette
-from PIL import ImageStat as PillowStat
+from blanket import (
+    Image as BlanketImage,
+    ImageChops as BlanketChops,
+    ImageEnhance as BlanketEnhance,
+    ImageFilter as BlanketFilter,
+    ImageOps as BlanketOps,
+    ImagePalette as BlanketPalette,
+    ImageStat as BlanketStat,
+)
+from PIL import (
+    Image as PillowImage,
+    ImageChops as PillowChops,
+    ImageEnhance as PillowEnhance,
+    ImageFilter as PillowFilter,
+    ImageOps as PillowOps,
+    ImagePalette as PillowPalette,
+    ImageStat as PillowStat,
+)
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -258,7 +262,11 @@ def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
         for method in BlanketImage.Resampling:
             for direction, target in (("down", down), ("up", up)):
                 comps.append((f"resize {direction} {method.name} {mode}", partial(blanket.resize, target, resample=method), partial(pillow.resize, target, resample=int(method))))
-        cases = [("box BICUBIC", down, {"box": box}), ("thumb LANCZOS", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS}), ("thumb LANCZOS gap=3", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS, "reducing_gap": 3.0})]
+        cases = [
+            ("box BICUBIC", down, {"box": box}),
+            ("thumb LANCZOS", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS}),
+            ("thumb LANCZOS gap=3", thumbnail, {"resample": BlanketImage.Resampling.LANCZOS, "reducing_gap": 3.0}),
+        ]
         for label, target, options in cases:
             comps.append((f"resize {label} {mode}", partial(blanket.resize, target, **options), partial(pillow.resize, target, **options)))
     return comps
@@ -271,7 +279,13 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
     inset = (w * 0.1, h * 0.1, w * 0.9, h * 0.9)
     quad = (w * 0.05, h * 0.1, w * 0.1, h * 0.95, w * 0.9, h * 0.9, w * 0.95, h * 0.05)
     mesh = [((0, 0, *target), quad)]
-    transforms = [(BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)), (BlanketImage.Transform.EXTENT, inset), (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)), (BlanketImage.Transform.QUAD, quad), (BlanketImage.Transform.MESH, mesh)]
+    transforms = [
+        (BlanketImage.Transform.AFFINE, (1.1, 0.2, -w * 0.05, -0.1, 1.2, h * 0.05)),
+        (BlanketImage.Transform.EXTENT, inset),
+        (BlanketImage.Transform.PERSPECTIVE, (1.1, 0.1, 0, -0.1, 1.2, 0, 0.1 / w, -0.1 / h)),
+        (BlanketImage.Transform.QUAD, quad),
+        (BlanketImage.Transform.MESH, mesh),
+    ]
     comps: list[Comparison] = []
     for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
         raw = make_pixels(w, h)
@@ -286,7 +300,13 @@ def geometry_comparisons(size: tuple[int, int]) -> list[Comparison]:
             for label, options in (("17", {}), ("17 expand fill", {"expand": True, "fillcolor": "navy"})):
                 comps.append((f"rotate {label} {resample.name} {mode}", partial(blanket.rotate, 17, resample=resample, **options), partial(pillow.rotate, 17, resample=int(resample), **options)))
             for method, data in transforms:
-                comps.append((f"transform {method.name} {resample.name} {mode}", partial(blanket.transform, target, method, data, resample=resample), partial(pillow.transform, target, int(method), data, resample=int(resample))))
+                comps.append(
+                    (
+                        f"transform {method.name} {resample.name} {mode}",
+                        partial(blanket.transform, target, method, data, resample=resample),
+                        partial(pillow.transform, target, int(method), data, resample=int(resample)),
+                    )
+                )
     return comps
 
 
@@ -571,7 +591,9 @@ def imagefilter_comparisons(size: tuple[int, int]) -> list[Comparison]:
             comparisons.append((label, partial(actual.filter, actual_filter), partial(expected.filter, expected_filter)))
         if mode != "L":
             callback = lambda r, g, b: (1 - r, g * g, b)
-            comparisons.append((f"Color3DLUT {mode} (17)", partial(actual.filter, BlanketFilter.Color3DLUT.generate(17, callback)), partial(expected.filter, PillowFilter.Color3DLUT.generate(17, callback))))
+            comparisons.append(
+                (f"Color3DLUT {mode} (17)", partial(actual.filter, BlanketFilter.Color3DLUT.generate(17, callback)), partial(expected.filter, PillowFilter.Color3DLUT.generate(17, callback)))
+            )
     return comparisons
 
 
@@ -718,7 +740,16 @@ def run_metadata(args: argparse.Namespace) -> dict[str, Any]:
             return None
 
     status = git("status", "--porcelain")
-    return {"timestamp": datetime.now(UTC).isoformat(), "commit": git("rev-parse", "HEAD"), "dirty": bool(status) if status is not None else None, "platform": platform.platform(), "machine": platform.machine(), "python": platform.python_version(), "iterations": args.iterations, "warmups": args.warmups}
+    return {
+        "timestamp": datetime.now(UTC).isoformat(),
+        "commit": git("rev-parse", "HEAD"),
+        "dirty": bool(status) if status is not None else None,
+        "platform": platform.platform(),
+        "machine": platform.machine(),
+        "python": platform.python_version(),
+        "iterations": args.iterations,
+        "warmups": args.warmups,
+    }
 
 
 def compare_results(results: list[dict[str, Any]], baseline: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int, int]:
@@ -757,7 +788,13 @@ def print_comparison(console: Console, results: list[dict[str, Any]], baseline: 
     details = Table("Section / size / operation", "Before ms", "Now ms", "Delta ms", "Time change")
     for row in sorted(matched, key=lambda row: abs(row["change_pct"]), reverse=True):
         if verbose or abs(row["change_pct"]) > threshold:
-            details.add_row(f"{row['section']} / {row['size']} / {row['operation']}", f"{row['baseline_ms']:.3f}", f"{row['blanket_ms']:.3f}", f"{row['blanket_ms'] - row['baseline_ms']:+.3f}", change_cell(row["change_pct"]))
+            details.add_row(
+                f"{row['section']} / {row['size']} / {row['operation']}",
+                f"{row['baseline_ms']:.3f}",
+                f"{row['blanket_ms']:.3f}",
+                f"{row['blanket_ms'] - row['baseline_ms']:+.3f}",
+                change_cell(row["change_pct"]),
+            )
     if details.row_count:
         console.print(details)
 
@@ -824,7 +861,16 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *,
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
-            results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
+            results.append(
+                {
+                    "operation": name,
+                    "blanket_ms": b["median"] * 1000,
+                    "blanket_p25_ms": b["p25"] * 1000,
+                    "blanket_p75_ms": b["p75"] * 1000,
+                    "pillow_ms": p["median"] * 1000,
+                    "blanket_speedup": p["median"] / b["median"],
+                }
+            )
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
     return results
@@ -902,9 +948,7 @@ def main() -> None:
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = (
-            f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
-        )
+        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
         console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.baseline is not None:

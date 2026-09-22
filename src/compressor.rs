@@ -14,7 +14,8 @@ use std::sync::OnceLock;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::codecs::{self, ImageFormat, SaveOptions};
+use crate::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
+use crate::parallel::CandidateLimit;
 use crate::raster::{Image, PixelMode};
 use crate::{compressor_simd as pixels, parallel};
 
@@ -44,26 +45,38 @@ impl LosslessImageCompressor {
     pub(crate) fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
         match format {
             ImageFormat::Png if image.bit_depth == 8 => self.optimize_png(image, options.compress_level),
-            ImageFormat::Jpeg => self.optimize_jpeg(codecs::encode(image, format, options)?, image.raw_data()?.len()),
+            ImageFormat::Jpeg => self.optimize_jpeg(image, options),
             ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options),
             _ => codecs::encode(image, format, options),
         }
     }
 
-    fn optimize_jpeg(&self, baseline: Vec<u8>, work_bytes: usize) -> PyResult<Vec<u8>> {
+    fn optimize_jpeg(&self, image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
         // Keep ordinary Huffman JPEG compatibility; arithmetic coding is not
-        // supported by many consumers. Both candidates retain all coefficients,
-        // quantization tables, subsampling, partial edge blocks, and markers.
-        let jobs = &[false, true][..if self.effort >= 3 { 2 } else { 1 }];
-        let candidate = parallel::best_candidate(jobs, work_bytes, baseline.len(), |&progressive, limit| {
-            let mut transformer = turbojpeg::Transformer::new().map_err(codec_error)?;
-            let mut transform = turbojpeg::Transform::default();
-            transform.optimize = true;
-            transform.progressive = progressive;
-            let candidate = transformer.transform_to_owned(&transform, &baseline).map_err(codec_error)?;
-            Ok::<_, PyErr>((candidate.len() < limit.get()).then(|| candidate.to_vec()))
+        // supported by many consumers. Every candidate shares the normal
+        // save's coefficients, quantization tables, subsampling, partial edge
+        // blocks, and markers: only the entropy coding differs. Encoding each
+        // directly from pixels is cheaper than the normal save followed by a
+        // full entropy decode and re-encode of it, and lets the normal save
+        // run alongside the candidates. The normal save is job zero, so it
+        // wins ties and reports its validation errors first.
+        const JOBS: [JpegCoding; 3] = [
+            JpegCoding::BASELINE,
+            JpegCoding {
+                optimize: true,
+                progressive: false,
+            },
+            JpegCoding {
+                optimize: true,
+                progressive: true,
+            },
+        ];
+        let jobs = &JOBS[..if self.effort >= 3 { 3 } else { 2 }];
+        let work_bytes = image.raw_data()?.len();
+        let output = parallel::best_candidate(jobs, work_bytes, usize::MAX, |&coding, _| {
+            codecs::encode_jpeg_variant(image, options, coding).map(Some)
         })?;
-        Ok(candidate.unwrap_or(baseline))
+        Ok(output.expect("the normal save always produces a candidate"))
     }
 
     fn optimize_sample_codec(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -144,8 +157,14 @@ impl LosslessImageCompressor {
         let baseline = prepared.encode(options)?;
         let reference = OnceLock::new();
         let jobs: Vec<_> = (1..=self.effort).filter(|&effort| effort != options.effort).collect();
+        // The memory budget may admit fewer concurrent candidates than there
+        // are threads. Split the remaining threads among the candidates so
+        // the slowest encoder, which bounds the whole search, does not run
+        // alone on one core while the rest of the pool idles.
+        let threads = |jobs: usize| JxlThreads::Fixed(codecs::jxl_candidate_threads(image, parallel::candidate_workers(work_bytes, jobs)));
+        let candidate_threads = threads(jobs.len());
         let candidate = parallel::best_candidate(&jobs, work_bytes, baseline.len(), |&effort, limit| {
-            let candidate = prepared.encode_with_threads(SaveOptions { effort, ..options }, true)?;
+            let candidate = prepared.encode_with_threads(SaveOptions { effort, ..options }, candidate_threads)?;
             if candidate.len() >= limit.get() {
                 return Ok(None);
             }
@@ -166,6 +185,7 @@ impl LosslessImageCompressor {
                 .map_err(codec_error)?;
             let prepared = codecs::PreparedJxl::new(reference)?;
             let jobs: Vec<_> = (1..=self.effort).collect();
+            let candidate_threads = threads(jobs.len());
             let candidate = parallel::best_candidate(&jobs, work_bytes, output.len(), |&effort, limit| {
                 let candidate = prepared.encode_with_threads(
                     SaveOptions {
@@ -174,7 +194,7 @@ impl LosslessImageCompressor {
                         quality: 100,
                         ..options
                     },
-                    true,
+                    candidate_threads,
                 )?;
                 if candidate.len() >= limit.get() {
                     return Ok(None);
@@ -190,29 +210,26 @@ impl LosslessImageCompressor {
 
     fn optimize_png(&self, image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
         let pixels = image.pixel_data()?;
-        // Keep the normal save as the size baseline, then search each pixel
-        // representation here rather than repeating the codec's own search.
-        let mut output = codecs::encode_png(image, pixels, compress_level)?;
-        self.search_png(
-            image,
-            &PngCandidate {
-                color: match image.mode {
-                    PixelMode::L => png::ColorType::Grayscale,
-                    PixelMode::Rgb => png::ColorType::Rgb,
-                    PixelMode::Rgba => png::ColorType::Rgba,
-                },
-                depth: png::BitDepth::Eight,
-                pixels,
-                palette: &[],
-                transparency: &[],
+        // Prepare every pixel representation first, then search all of their
+        // filter and level trials in one queue alongside the normal save.
+        // Preparation is a few cheap passes over the pixels; the trials are
+        // whole deflate runs, so one queue keeps every worker busy instead of
+        // draining the pool between representations.
+        let mut candidates = vec![PngCandidate {
+            color: match image.mode {
+                PixelMode::L => png::ColorType::Grayscale,
+                PixelMode::Rgb => png::ColorType::Rgb,
+                PixelMode::Rgba => png::ColorType::Rgba,
             },
-            compress_level,
-            true,
-            &mut output,
-        )?;
-        self.optimize_palette_png(image, pixels, compress_level, &mut output)?;
-        self.optimize_gray_or_key(image, pixels, compress_level, &mut output)?;
-        Ok(output)
+            depth: png::BitDepth::Eight,
+            pixels: Cow::Borrowed(pixels),
+            palette: Vec::new(),
+            transparency: Vec::new(),
+            source: true,
+        }];
+        self.palette_candidates(image, pixels, &mut candidates);
+        self.gray_or_key_candidates(image, pixels, &mut candidates);
+        self.search_png(image, &candidates, compress_level, None)
     }
 
     fn png_levels(&self, compress_level: u8) -> Vec<u8> {
@@ -256,21 +273,37 @@ impl LosslessImageCompressor {
             .collect()
     }
 
-    fn search_png(&self, image: &Image, candidate: &PngCandidate<'_>, compress_level: u8, baseline: bool, output: &mut Vec<u8>) -> PyResult<()> {
-        if candidate.minimum_size() >= output.len() {
-            return Ok(());
+    /// Search every representation's filter and level trials as one queue.
+    /// Ties favor earlier jobs: the normal save, then representations and
+    /// their trials in order. With `baseline`, that existing encoding is the
+    /// fallback and the initial exclusive bound instead of the normal save.
+    fn search_png(&self, image: &Image, candidates: &[PngCandidate<'_>], compress_level: u8, baseline: Option<Vec<u8>>) -> PyResult<Vec<u8>> {
+        let pixels = image.pixel_data()?;
+        let mut jobs = Vec::new();
+        if baseline.is_none() {
+            jobs.push(PngJob::NormalSave);
         }
-        let jobs = self.png_jobs(compress_level, baseline);
-        let limit = output.len();
-        if let Some(best) = parallel::best_candidate(&jobs, candidate.pixels.len(), limit, |&(level, filter), limit| {
-            candidate.encode_bounded(image, filter, level, limit.get())
-        })? {
-            *output = best;
+        for (candidate, representation) in candidates.iter().enumerate() {
+            let trials = self.png_jobs(compress_level, representation.source);
+            jobs.extend(trials.into_iter().map(|(level, filter)| PngJob::Trial { candidate, level, filter }));
         }
-        Ok(())
+        let limit = baseline.as_ref().map_or(usize::MAX, Vec::len);
+        let best = parallel::best_candidate(&jobs, pixels.len(), limit, |job, bound| match *job {
+            PngJob::NormalSave => codecs::encode_png(image, pixels, compress_level).map(Some),
+            PngJob::Trial { candidate, level, filter } => {
+                let candidate = &candidates[candidate];
+                // Skip representations whose mandatory bytes alone cannot beat
+                // the current winner, without running the encoder.
+                if candidate.minimum_size(image) >= bound.get() {
+                    return Ok(None);
+                }
+                candidate.encode_bounded(image, filter, level, bound)
+            }
+        })?;
+        Ok(best.or(baseline).expect("the normal save always produces an encoding"))
     }
 
-    fn optimize_gray_or_key(&self, image: &Image, pixels: &[u8], compress_level: u8, output: &mut Vec<u8>) -> PyResult<()> {
+    fn gray_or_key_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) {
         let channels = image.mode.channels();
         let (grayscale, opaque) = pixels::properties(pixels, channels);
         if image.mode == PixelMode::Rgba && (opaque || grayscale) {
@@ -281,32 +314,27 @@ impl LosslessImageCompressor {
             } else {
                 (png::ColorType::GrayscaleAlpha, pixels::select(pixels, channels, true, 0))
             };
-            self.search_png(
-                image,
-                &PngCandidate {
-                    color,
-                    depth: png::BitDepth::Eight,
-                    pixels: &reduced,
-                    palette: &[],
-                    transparency: &[],
-                },
-                compress_level,
-                false,
-                output,
-            )?;
+            candidates.push(PngCandidate {
+                color,
+                depth: png::BitDepth::Eight,
+                pixels: Cow::Owned(reduced),
+                palette: Vec::new(),
+                transparency: Vec::new(),
+                source: false,
+            });
         }
         let mut key: Option<&[u8]> = None;
         if image.mode == PixelMode::Rgba && !opaque {
             let first = pixels.as_chunks::<4>().0.iter().find(|p| p[3] != 255).expect("non-opaque image");
             if first[3] != 0 || !pixels::matches_key(pixels, [first[0], first[1], first[2]]) {
-                return Ok(());
+                return;
             }
             key = Some(&first[..3]);
         }
         if !grayscale && key.is_none() {
-            return Ok(());
+            return;
         }
-        let gray = if grayscale && channels == 1 {
+        let mut gray: Cow<'a, [u8]> = if grayscale && channels == 1 {
             Cow::Borrowed(pixels)
         } else if grayscale {
             Cow::Owned(pixels::select(pixels, channels, false, 0))
@@ -323,7 +351,7 @@ impl LosslessImageCompressor {
             .expect("8-bit samples always fit");
         for &bits in depths {
             if bits == 8 && image.mode == PixelMode::L {
-                // Already searched the unchanged source representation.
+                // The unchanged source representation is already a candidate.
                 continue;
             }
             // Pillow expands 2/4-bit gray pixels to L8 but leaves the tRNS
@@ -339,7 +367,8 @@ impl LosslessImageCompressor {
             let packed = if grayscale && bits < 8 {
                 Cow::Owned(pixels::pack_gray_rows(&gray, image.width as usize, bits))
             } else if grayscale {
-                Cow::Borrowed(gray.as_ref())
+                // Eight bits is the last depth, so hand over the samples.
+                std::mem::replace(&mut gray, Cow::Borrowed(&[][..]))
             } else {
                 Cow::Owned(crate::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
             };
@@ -348,32 +377,26 @@ impl LosslessImageCompressor {
                 Some(key) => key.iter().flat_map(|&v| u16::from(v).to_be_bytes()).collect(),
                 None => Vec::new(),
             };
-            self.search_png(
-                image,
-                &PngCandidate {
-                    color: if grayscale { png::ColorType::Grayscale } else { png::ColorType::Rgb },
-                    depth: png_depth(bits),
-                    pixels: &packed,
-                    palette: &[],
-                    transparency: &transparency,
-                },
-                compress_level,
-                false,
-                output,
-            )?;
+            candidates.push(PngCandidate {
+                color: if grayscale { png::ColorType::Grayscale } else { png::ColorType::Rgb },
+                depth: png_depth(bits),
+                pixels: packed,
+                palette: Vec::new(),
+                transparency,
+                source: false,
+            });
         }
-        Ok(())
     }
 
     /// Build an exact palette, never quantizing or discarding invisible colors.
-    fn optimize_palette_png(&self, image: &Image, pixels: &[u8], compress_level: u8, output: &mut Vec<u8>) -> PyResult<()> {
+    fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) {
         let channels = image.mode.channels();
         let mut lookup = ColorLookup::new();
         let mut palette = Vec::new();
         let mut alpha = Vec::new();
         let mut frequencies = Vec::new();
         let Some(entries) = palette_entries(pixels, channels) else {
-            return Ok(());
+            return;
         };
         let colors = entries.len();
         let mut gray_mapping = [0; 256];
@@ -391,13 +414,13 @@ impl LosslessImageCompressor {
             alpha.push(if channels == 4 { pixel[3] } else { 255 });
         }
         let bits = match colors {
-            0 => return Ok(()),
+            0 => return,
             1..=2 => 1,
             3..=4 => 2,
             5..=16 => 4,
             _ => 8,
         };
-        let indices = if channels == 1 {
+        let mut indices = if channels == 1 {
             pixels::remap(pixels, &gray_mapping)
         } else {
             let mut indices = vec![0; pixels.len() / channels];
@@ -435,6 +458,7 @@ impl LosslessImageCompressor {
                 orders.push(color);
             }
         }
+        let order_count = orders.len();
         for (order_index, order) in orders.into_iter().enumerate() {
             let mut mapping = [0_u8; 256];
             let mut rgb = Vec::new();
@@ -448,10 +472,10 @@ impl LosslessImageCompressor {
             // First-occurrence ordering already has these indices. Borrow it
             // instead of allocating and applying an identity LUT to the image.
             let fuse_mapping = order_index != 0 && self.effort < 8 && bits < 8;
-            let remapped = if order_index == 0 || fuse_mapping {
-                Cow::Borrowed(indices.as_slice())
+            let mut remapped = if order_index == 0 || fuse_mapping {
+                None
             } else {
-                Cow::Owned(pixels::remap(&indices, &mapping))
+                Some(pixels::remap(&indices, &mapping))
             };
             // Wider indices can produce more compressible filter residuals.
             // Keep this extra search at high effort, retaining packed trials.
@@ -459,34 +483,40 @@ impl LosslessImageCompressor {
                 if depth < bits || (depth != bits && self.effort < 8) {
                     continue;
                 }
-                let packed;
                 let samples = if depth == 8 {
-                    remapped.as_ref()
+                    // Eight bits is the last depth, so the buffers are free to
+                    // hand over. Fused orders never reach this depth, so only
+                    // later orders still need the first-occurrence indices.
+                    match remapped.take() {
+                        Some(remapped) => remapped,
+                        None if order_index + 1 == order_count => std::mem::take(&mut indices),
+                        None => indices.clone(),
+                    }
+                } else if fuse_mapping {
+                    pixels::pack_mapped_rows(&indices, image.width as usize, depth, &mapping)
                 } else {
-                    packed = if fuse_mapping {
-                        pixels::pack_mapped_rows(&indices, image.width as usize, depth, &mapping)
-                    } else {
-                        pack_rows(&remapped, image.width as usize, depth)
-                    };
-                    &packed
+                    pack_rows(remapped.as_deref().unwrap_or(&indices), image.width as usize, depth)
                 };
-                self.search_png(
-                    image,
-                    &PngCandidate {
-                        color: png::ColorType::Indexed,
-                        depth: png_depth(depth),
-                        pixels: samples,
-                        palette: &rgb,
-                        transparency: &transparency,
-                    },
-                    compress_level,
-                    false,
-                    output,
-                )?;
+                candidates.push(PngCandidate {
+                    color: png::ColorType::Indexed,
+                    depth: png_depth(depth),
+                    pixels: Cow::Owned(samples),
+                    palette: rgb.clone(),
+                    transparency: transparency.clone(),
+                    source: false,
+                });
             }
         }
-        Ok(())
     }
+}
+
+/// One unit of the PNG search queue.
+#[derive(Clone, Copy)]
+enum PngJob {
+    /// The normal save: the size baseline and the fallback output.
+    NormalSave,
+    /// Encode one representation with one filter and deflate level.
+    Trial { candidate: usize, level: u8, filter: png::Filter },
 }
 
 #[cfg(test)]
@@ -643,28 +673,55 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
     )
 }
 
+/// One exact pixel representation of the image, ready to encode.
 struct PngCandidate<'a> {
     color: png::ColorType,
     depth: png::BitDepth,
-    pixels: &'a [u8],
-    palette: &'a [u8],
-    transparency: &'a [u8],
+    pixels: Cow<'a, [u8]>,
+    palette: Vec<u8>,
+    transparency: Vec<u8>,
+    /// The normal save already encoded this representation with Adaptive
+    /// filtering at the requested level; skip repeating that trial.
+    source: bool,
 }
 
-impl PngCandidate<'_> {
-    fn minimum_size(&self) -> usize {
-        // Signature, IHDR, one IDAT header/CRC, and IEND. Ignore the zlib
-        // payload to keep this a conservative bound for every filter/level.
+impl<'a> PngCandidate<'a> {
+    /// Smallest PNG any filter and level could produce for this candidate.
+    fn minimum_size(&self, image: &Image) -> usize {
+        // Signature, IHDR, one IDAT header/CRC, and IEND.
         let chunk_size = |data: &[u8]| if data.is_empty() { 0 } else { 12 + data.len() };
-        8 + 25 + 12 + 12 + chunk_size(self.palette) + chunk_size(self.transparency)
+        let containers = 8 + 25 + 12 + 12 + chunk_size(&self.palette) + chunk_size(&self.transparency);
+        // The zlib stream wraps deflate in a 2-byte header and 4-byte Adler-32.
+        // Deflate sees every packed sample plus one filter byte per row, and
+        // a length-258 match against a 1-bit literal/length and 1-bit
+        // distance code is its densest encoding: 258 bytes per 2 bits.
+        let row_bytes = (image.width as usize * self.color.samples() * self.depth as usize).div_ceil(8);
+        let raw = image.height as usize * (1 + row_bytes);
+        containers + 6 + raw.div_ceil(258 * 4)
+    }
+
+    #[cfg(test)]
+    fn plain(color: png::ColorType, depth: png::BitDepth, pixels: &'a [u8]) -> PngCandidate<'a> {
+        PngCandidate {
+            color,
+            depth,
+            pixels: Cow::Borrowed(pixels),
+            palette: Vec::new(),
+            transparency: Vec::new(),
+            source: false,
+        }
     }
 
     #[cfg(test)]
     fn encode(&self, image: &Image, filter: png::Filter, level: u8) -> PyResult<Vec<u8>> {
-        Ok(self.encode_bounded(image, filter, level, usize::MAX)?.expect("unbounded PNG"))
+        Ok(self
+            .encode_bounded(image, filter, level, &CandidateLimit::new(usize::MAX))?
+            .expect("unbounded PNG"))
     }
 
-    fn encode_bounded(&self, image: &Image, filter: png::Filter, level: u8, limit: usize) -> PyResult<Option<Vec<u8>>> {
+    /// Encode unless the output reaches `limit`, which concurrent winners may
+    /// tighten while this encoder runs.
+    fn encode_bounded(&self, image: &Image, filter: png::Filter, level: u8, limit: &CandidateLimit) -> PyResult<Option<Vec<u8>>> {
         let mut output = CandidateWriter {
             bytes: Vec::new(),
             limit,
@@ -677,13 +734,13 @@ impl PngCandidate<'_> {
             encoder.set_filter(filter);
             encoder.set_deflate_compression(png::DeflateCompression::Level(level));
             if !self.palette.is_empty() {
-                encoder.set_palette(self.palette);
+                encoder.set_palette(self.palette.as_slice());
             }
             if !self.transparency.is_empty() {
-                encoder.set_trns(self.transparency);
+                encoder.set_trns(self.transparency.as_slice());
             }
             let mut writer = encoder.write_header()?;
-            writer.write_image_data(self.pixels)?;
+            writer.write_image_data(&self.pixels)?;
             writer.finish()?;
             Ok::<_, png::EncodingError>(())
         })();
@@ -695,11 +752,12 @@ impl PngCandidate<'_> {
     }
 }
 
-/// Stop collecting a candidate as soon as it cannot strictly beat the baseline.
+/// Stop collecting a candidate as soon as it cannot strictly beat the bound.
 /// Track our own cancellation so unrelated encoder errors still propagate.
-struct CandidateWriter {
+struct CandidateWriter<'a> {
     bytes: Vec<u8>,
-    limit: usize,
+    /// Shared with concurrent trials, so a winner elsewhere stops this one.
+    limit: &'a CandidateLimit,
     exceeded: bool,
 }
 
@@ -714,9 +772,10 @@ impl std::fmt::Display for CandidateLimitReached {
 
 impl std::error::Error for CandidateLimitReached {}
 
-impl std::io::Write for CandidateWriter {
+impl std::io::Write for CandidateWriter<'_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-        if self.exceeded || (!bytes.is_empty() && bytes.len() >= self.limit.saturating_sub(self.bytes.len())) {
+        let limit = self.limit.get();
+        if self.exceeded || (!bytes.is_empty() && bytes.len() >= limit.saturating_sub(self.bytes.len())) {
             self.exceeded = true;
             return Err(std::io::Error::other(CandidateLimitReached));
         }
@@ -725,7 +784,7 @@ impl std::io::Write for CandidateWriter {
             // Retain amortized growth without Vec's doubling overshooting
             // the maximum useful candidate size. reserve_exact takes an
             // amount relative to length, not existing capacity.
-            let capacity = self.bytes.capacity().saturating_mul(2).max(required).min(self.limit.saturating_sub(1));
+            let capacity = self.bytes.capacity().saturating_mul(2).max(required).min(limit.saturating_sub(1));
             self.bytes.reserve_exact(capacity - self.bytes.len());
         }
         self.bytes.extend_from_slice(bytes);
@@ -949,6 +1008,212 @@ mod tests {
     }
 
     #[test]
+    fn direct_jpeg_coding_matches_transforming_the_normal_save() {
+        // Partial MCUs on both edges must survive unchanged in every coding.
+        for mode in [PixelMode::L, PixelMode::Rgb] {
+            for (width, height) in [(1, 1), (67, 35), (256, 8)] {
+                let samples = (0..width * height * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
+                let image = Image::from_pixels(width as u32, height as u32, mode, samples, None).unwrap();
+                for quality in [1, 75, 100] {
+                    let options = SaveOptions {
+                        quality,
+                        compress_level: 6,
+                        lossless: false,
+                        effort: 7,
+                    };
+                    let baseline = codecs::encode(&image, ImageFormat::Jpeg, options).unwrap();
+                    assert_eq!(codecs::encode_jpeg_variant(&image, options, JpegCoding::BASELINE).unwrap(), baseline);
+                    for progressive in [false, true] {
+                        let mut transformer = turbojpeg::Transformer::new().unwrap();
+                        let mut transform = turbojpeg::Transform::default();
+                        transform.optimize = true;
+                        transform.progressive = progressive;
+                        let expected = transformer.transform_to_owned(&transform, &baseline).unwrap().to_vec();
+                        let coding = JpegCoding { optimize: true, progressive };
+                        assert_eq!(
+                            codecs::encode_jpeg_variant(&image, options, coding).unwrap(),
+                            expected,
+                            "{mode:?} {width}x{height} quality {quality} progressive {progressive}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn jpeg_search_keeps_the_normal_save_unless_a_candidate_is_smaller() {
+        let image = Image::from_pixels(64, 48, PixelMode::Rgb, (0..64 * 48 * 3).map(|i| (i * 71 + i / 13) as u8).collect(), None).unwrap();
+        let options = SaveOptions {
+            quality: 90,
+            compress_level: 6,
+            lossless: false,
+            effort: 7,
+        };
+        let baseline = codecs::encode(&image, ImageFormat::Jpeg, options).unwrap();
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                for effort in [1, 3, 10] {
+                    let mut expected = baseline.clone();
+                    for progressive in [false, true].into_iter().take(if effort >= 3 { 2 } else { 1 }) {
+                        let candidate = codecs::encode_jpeg_variant(&image, options, JpegCoding { optimize: true, progressive }).unwrap();
+                        if candidate.len() < expected.len() {
+                            expected = candidate;
+                        }
+                    }
+                    let output = LosslessImageCompressor { effort }.encode(&image, ImageFormat::Jpeg, options).unwrap();
+                    assert_eq!(output, expected, "effort {effort}, threads {threads}");
+                    assert!(output.len() < baseline.len());
+                }
+            });
+        }
+        // Codec validation still rejects unsupported input before any search.
+        let rgba = Image::from_pixels(4, 4, PixelMode::Rgba, vec![0; 64], None).unwrap();
+        assert!(codecs::encode(&rgba, ImageFormat::Jpeg, options).is_err());
+        assert!(LosslessImageCompressor { effort: 7 }.encode(&rgba, ImageFormat::Jpeg, options).is_err());
+    }
+
+    #[test]
+    fn png_queue_matches_sequential_representation_search() {
+        let width = 37;
+        let height = 23;
+        let count = width * height;
+        // Opaque color, exact palette with transparency, gray with a key,
+        // and packable gray: every representation family in one test.
+        let images = [
+            Image::from_pixels(
+                width,
+                height,
+                PixelMode::Rgba,
+                (0..count).flat_map(|i| [(i * 7) as u8, (i * 13) as u8, (i / 37) as u8, 255]).collect(),
+                None,
+            )
+            .unwrap(),
+            Image::from_pixels(
+                width,
+                height,
+                PixelMode::Rgba,
+                (0..count)
+                    .flat_map(|i| [(i % 5 * 50) as u8, (i % 3 * 100) as u8, 7, if i % 11 == 0 { 0 } else { 255 }])
+                    .collect(),
+                None,
+            )
+            .unwrap(),
+            Image::from_pixels(
+                width,
+                height,
+                PixelMode::Rgba,
+                (0..count)
+                    .flat_map(|i| {
+                        if i % 9 == 0 {
+                            [3, 3, 3, 0]
+                        } else {
+                            [(i * 31) as u8, (i * 31) as u8, (i * 31) as u8, 255]
+                        }
+                    })
+                    .collect(),
+                None,
+            )
+            .unwrap(),
+            Image::from_pixels(width, height, PixelMode::L, (0..count).map(|i| (i % 4 * 85) as u8).collect(), None).unwrap(),
+            Image::from_pixels(
+                width,
+                height,
+                PixelMode::Rgb,
+                (0..count).flat_map(|i| [(i * 71) as u8; 3]).collect(),
+                None,
+            )
+            .unwrap(),
+        ];
+        for image in &images {
+            let pixels = image.pixel_data().unwrap();
+            for effort in [1, 3, 5, 7, 8, 10] {
+                let compressor = LosslessImageCompressor { effort };
+                for compress_level in [0, 6, 9] {
+                    let mut candidates = vec![PngCandidate {
+                        color: match image.mode {
+                            PixelMode::L => png::ColorType::Grayscale,
+                            PixelMode::Rgb => png::ColorType::Rgb,
+                            PixelMode::Rgba => png::ColorType::Rgba,
+                        },
+                        depth: png::BitDepth::Eight,
+                        pixels: Cow::Borrowed(pixels),
+                        palette: Vec::new(),
+                        transparency: Vec::new(),
+                        source: true,
+                    }];
+                    compressor.palette_candidates(image, pixels, &mut candidates);
+                    compressor.gray_or_key_candidates(image, pixels, &mut candidates);
+                    // Reference: the normal save, then each representation's
+                    // trials in order, accepting only strictly smaller output.
+                    let mut expected = codecs::encode_png(image, pixels, compress_level).unwrap();
+                    for candidate in &candidates {
+                        for (level, filter) in compressor.png_jobs(compress_level, candidate.source) {
+                            let encoded = candidate.encode(image, filter, level).unwrap();
+                            if encoded.len() < expected.len() {
+                                expected = encoded;
+                            }
+                        }
+                    }
+                    for threads in [1, 4] {
+                        let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
+                        let output = pool
+                            .install(|| {
+                                compressor.encode(
+                                    image,
+                                    ImageFormat::Png,
+                                    SaveOptions {
+                                        quality: 90,
+                                        compress_level,
+                                        lossless: false,
+                                        effort: 7,
+                                    },
+                                )
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            output, expected,
+                            "{:?} effort {effort} level {compress_level} threads {threads}",
+                            image.mode
+                        );
+                    }
+                    let decoded = codecs::decode(&expected, ImageFormat::Png).unwrap();
+                    assert_eq!(decoded.width, image.width);
+                    assert_eq!(decoded.height, image.height);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn candidate_writer_follows_a_tightening_bound() {
+        use std::io::Write;
+        let bound = CandidateLimit::new(100);
+        let mut writer = CandidateWriter {
+            bytes: Vec::new(),
+            limit: &bound,
+            exceeded: false,
+        };
+        writer.write_all(&[1; 40]).unwrap();
+        // A concurrent winner of 45 bytes leaves no room to beat it.
+        bound.set(46);
+        assert!(writer.write_all(&[2; 6]).is_err());
+        assert_eq!(writer.bytes, [1; 40]);
+        // Unlike a rejected write, tightening never truncates collected bytes.
+        let bound = CandidateLimit::new(100);
+        let mut writer = CandidateWriter {
+            bytes: Vec::new(),
+            limit: &bound,
+            exceeded: false,
+        };
+        writer.write_all(&[1; 40]).unwrap();
+        bound.set(46);
+        writer.write_all(&[2; 5]).unwrap();
+        assert_eq!(writer.bytes.len(), 45);
+        assert!(writer.write_all(&[3]).is_err());
+    }
+
+    #[test]
     fn ranked_verification_preserves_first_candidate_ties() {
         let encode = |tag: &str, value: u8| {
             let mut output = Vec::new();
@@ -1009,33 +1274,85 @@ mod tests {
                     png::ColorType::Indexed
                 },
                 depth: png::BitDepth::Eight,
-                pixels: &[0],
-                palette,
-                transparency,
+                pixels: Cow::Borrowed(&[0]),
+                palette: palette.to_vec(),
+                transparency: transparency.to_vec(),
+                source: false,
             };
             let encoded = candidate.encode(&image, png::Filter::Adaptive, 6).unwrap();
-            assert!(candidate.minimum_size() < encoded.len());
-            let minimum = 57 + if palette.is_empty() { 0 } else { 15 } + if transparency.is_empty() { 0 } else { 13 };
-            assert_eq!(candidate.minimum_size(), minimum);
+            assert!(candidate.minimum_size(&image) < encoded.len());
+            // Chunk containers, zlib header/trailer, and one byte of deflate
+            // for the two raw bytes (filter byte plus sample).
+            let minimum = 57 + 6 + 1 + if palette.is_empty() { 0 } else { 15 } + if transparency.is_empty() { 0 } else { 13 };
+            assert_eq!(candidate.minimum_size(&image), minimum);
             // Invalid samples prove no encoder is invoked when mandatory
             // chunk bytes alone rule out an improvement.
-            let invalid = PngCandidate { pixels: &[], ..candidate };
-            let mut output = vec![19; minimum];
+            let invalid = [PngCandidate {
+                pixels: Cow::Borrowed(&[]),
+                ..candidate
+            }];
             let compressor = LosslessImageCompressor { effort: 10 };
-            compressor.search_png(&image, &invalid, 6, false, &mut output).unwrap();
+            let output = compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap();
             assert_eq!(output, vec![19; minimum]);
-            output.push(19);
-            assert!(compressor.search_png(&image, &invalid, 6, false, &mut output).is_err());
+            assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1])).is_err());
         }
+    }
+
+    #[test]
+    fn png_payload_bound_tracks_geometry_and_stays_below_every_encoding() {
+        let compressor = LosslessImageCompressor { effort: 10 };
+        // Constant images are the most compressible input deflate can see.
+        // Tall, narrow images make the row count dwarf the encoded size, so
+        // counting each filter byte as an output byte would prune winners.
+        for (mode, color) in [
+            (PixelMode::L, png::ColorType::Grayscale),
+            (PixelMode::Rgb, png::ColorType::Rgb),
+            (PixelMode::Rgba, png::ColorType::Rgba),
+        ] {
+            for (width, height) in [(1, 1), (1, 4096), (4096, 1), (300, 200)] {
+                let image = Image::from_pixels(width, height, mode, vec![0; (width * height) as usize * mode.channels()], None).unwrap();
+                let candidate = PngCandidate::plain(color, png::BitDepth::Eight, image.pixel_data().unwrap());
+                let minimum = candidate.minimum_size(&image);
+                let raw = height as usize * (1 + width as usize * mode.channels());
+                assert_eq!(minimum, 57 + 6 + raw.div_ceil(1032));
+                for (level, filter) in compressor.png_jobs(6, false) {
+                    let encoded = candidate.encode(&image, filter, level).unwrap();
+                    assert!(
+                        minimum < encoded.len(),
+                        "{mode:?} {width}x{height} level {level} {filter:?}: {minimum} >= {}",
+                        encoded.len()
+                    );
+                }
+                // A baseline at the bound rules the candidate out without
+                // encoding; one byte more must run the encoder on the samples.
+                let invalid = [PngCandidate {
+                    pixels: Cow::Borrowed(&[]),
+                    ..candidate
+                }];
+                assert_eq!(
+                    compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap(),
+                    vec![19; minimum]
+                );
+                assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1])).is_err());
+            }
+        }
+        // Packed depths shrink rows, and the bound must follow the packed width.
+        let image = Image::from_pixels(1000, 100, PixelMode::L, vec![0; 100_000], None).unwrap();
+        let bound = |depth| PngCandidate::plain(png::ColorType::Grayscale, depth, &[]).minimum_size(&image);
+        assert_eq!(bound(png::BitDepth::Eight), 63 + (100 * 1001_usize).div_ceil(1032));
+        assert_eq!(bound(png::BitDepth::Four), 63 + (100 * 501_usize).div_ceil(1032));
+        assert_eq!(bound(png::BitDepth::Two), 63 + (100 * 251_usize).div_ceil(1032));
+        assert_eq!(bound(png::BitDepth::One), 63 + (100 * 126_usize).div_ceil(1032));
     }
 
     #[test]
     fn candidate_writer_caps_capacity_growth() {
         use std::io::Write;
         for limit in [2, 12, 257, 1025] {
+            let bound = CandidateLimit::new(limit);
             let mut writer = CandidateWriter {
                 bytes: Vec::new(),
-                limit,
+                limit: &bound,
                 exceeded: false,
             };
             for _ in 1..limit {
@@ -1057,37 +1374,50 @@ mod tests {
         ] {
             let samples = (0..17 * 9 * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
             let image = Image::from_pixels(17, 9, mode, samples, None).unwrap();
-            let candidate = PngCandidate {
-                color,
-                depth: png::BitDepth::Eight,
-                pixels: image.pixel_data().unwrap(),
-                palette: &[],
-                transparency: &[],
-            };
+            let candidate = PngCandidate::plain(color, png::BitDepth::Eight, image.pixel_data().unwrap());
             for (level, filter) in (LosslessImageCompressor { effort: 10 }).png_jobs(6, false) {
                 let expected = candidate.encode(&image, filter, level).unwrap();
                 for limit in [0, 8, 33, expected.len() - 1, expected.len()] {
-                    assert!(candidate.encode_bounded(&image, filter, level, limit).unwrap().is_none());
+                    assert!(
+                        candidate
+                            .encode_bounded(&image, filter, level, &CandidateLimit::new(limit))
+                            .unwrap()
+                            .is_none()
+                    );
                 }
                 assert_eq!(
-                    candidate.encode_bounded(&image, filter, level, expected.len() + 1).unwrap(),
+                    candidate
+                        .encode_bounded(&image, filter, level, &CandidateLimit::new(expected.len() + 1))
+                        .unwrap(),
                     Some(expected)
                 );
             }
-            let invalid = PngCandidate { pixels: &[], ..candidate };
-            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, usize::MAX).is_err());
+            let invalid = PngCandidate {
+                pixels: Cow::Borrowed(&[]),
+                ..candidate
+            };
+            assert!(
+                invalid
+                    .encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(usize::MAX))
+                    .is_err()
+            );
             // Dropping the writer after an input error attempts IEND. That
             // cleanup exceeding the limit must not hide the original error.
-            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, 34).is_err());
+            assert!(
+                invalid
+                    .encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(34))
+                    .is_err()
+            );
         }
     }
 
     #[test]
     fn candidate_writer_never_retains_a_losing_chunk() {
         use std::io::Write;
+        let bound = CandidateLimit::new(10);
         let mut writer = CandidateWriter {
             bytes: Vec::new(),
-            limit: 10,
+            limit: &bound,
             exceeded: false,
         };
         writer.write_all(&[1; 9]).unwrap();
@@ -1123,16 +1453,10 @@ mod tests {
             for (width, height) in [(1, 1), (17, 9), (257, 129)] {
                 let samples = (0..width * height * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
                 let image = Image::from_pixels(width as u32, height as u32, mode, samples, None).unwrap();
-                let candidate = PngCandidate {
-                    color,
-                    depth: png::BitDepth::Eight,
-                    pixels: image.pixel_data().unwrap(),
-                    palette: &[],
-                    transparency: &[],
-                };
+                let candidate = PngCandidate::plain(color, png::BitDepth::Eight, image.pixel_data().unwrap());
                 for level in 1..=9 {
                     assert_eq!(
-                        codecs::encode_png(&image, candidate.pixels, level).unwrap(),
+                        codecs::encode_png(&image, &candidate.pixels, level).unwrap(),
                         candidate.encode(&image, png::Filter::Adaptive, level).unwrap()
                     );
                 }

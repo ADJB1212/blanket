@@ -8,20 +8,16 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from blanket import Image as BlanketImage
-from blanket import ImageChops as BlanketChops
-from blanket import ImageEnhance as BlanketEnhance
-from blanket import ImageFilter as BlanketFilter
-from blanket import ImageOps as BlanketOps
-from blanket import ImagePalette as BlanketPalette
-from blanket import ImageStat as BlanketStat
-from PIL import Image as PillowImage
-from PIL import ImageChops as PillowChops
-from PIL import ImageEnhance as PillowEnhance
-from PIL import ImageFilter
-from PIL import ImageOps as PillowOps
-from PIL import ImagePalette as PillowPalette
-from PIL import ImageStat as PillowStat
+from blanket import (
+    Image as BlanketImage,
+    ImageChops as BlanketChops,
+    ImageEnhance as BlanketEnhance,
+    ImageFilter as BlanketFilter,
+    ImageOps as BlanketOps,
+    ImagePalette as BlanketPalette,
+    ImageStat as BlanketStat,
+)
+from PIL import Image as PillowImage, ImageChops as PillowChops, ImageEnhance as PillowEnhance, ImageFilter, ImageOps as PillowOps, ImagePalette as PillowPalette, ImageStat as PillowStat
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
@@ -189,7 +185,7 @@ def check_bands_statistics() -> int:
                 checks += 1
         # Generated palettes need not choose Pillow's exact colors/order.
         # Check the public contract and compare decoding through Pillow.
-        for method in ((2,) if mode == "RGBA" else (0, 1, 2)):
+        for method in (2,) if mode == "RGBA" else (0, 1, 2):
             quantized = blanket.quantize(colors=16, method=method)
             expected = pillow.quantize(colors=16, method=method)
             assert (quantized.mode, quantized.size) == (expected.mode, expected.size)

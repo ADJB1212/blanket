@@ -5,7 +5,9 @@ use std::sync::LazyLock;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageEncoder, ImageFormat as RustFormat};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
+use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
+use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -63,6 +65,18 @@ thread_local! {
     // Reuse workers, but let libjxl size the pool for each frame. Tiny images
     // should not pay the synchronization cost of a full-machine thread pool.
     static JXL_ENCODE_RUNNER: std::cell::OnceCell<Option<ResizableRunner<'static>>> = const { std::cell::OnceCell::new() };
+    // Fixed-size pools for search candidates that share the machine with
+    // concurrent candidates. Each worker thread keeps its most recent pool.
+    static JXL_CANDIDATE_RUNNER: std::cell::RefCell<Option<(usize, ThreadsRunner<'static>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Thread use for one JPEG XL encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum JxlThreads {
+    /// The calling thread's resizable pool, sized by libjxl for the frame.
+    Pool,
+    /// Exactly this many worker threads; one means no runner at all.
+    Fixed(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -574,7 +588,37 @@ pub(crate) fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> Py
     Ok(output)
 }
 
+/// Entropy coding choices for one JPEG encoding of the same DCT coefficients.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct JpegCoding {
+    pub(crate) optimize: bool,
+    pub(crate) progressive: bool,
+}
+
+impl JpegCoding {
+    pub(crate) const BASELINE: Self = Self {
+        optimize: false,
+        progressive: false,
+    };
+}
+
 fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
+    encode_jpeg_coded(image, pixels, quality, JpegCoding::BASELINE)
+}
+
+/// Encode with the normal save's validation, quality, and subsampling, but
+/// with the given entropy coding. Quantized coefficients do not depend on the
+/// entropy coder, so this equals losslessly transforming the normal save while
+/// avoiding a second entropy decode and re-encode of the whole image.
+pub(crate) fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
+    if image.bit_depth > 8 {
+        // Match `encode`, which routes wide samples through `encode_wide`.
+        return encode_wide(image, ImageFormat::Jpeg, options);
+    }
+    encode_jpeg_coded(image, image.pixel_data()?, options.quality, coding)
+}
+
+fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
     if image.mode == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
@@ -588,6 +632,12 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
     let mut encoder = Compressor::new().map_err(codec_error)?;
     encoder.set_quality(i32::from(quality)).map_err(codec_error)?;
     encoder.set_subsamp(subsampling).map_err(codec_error)?;
+    if coding.optimize {
+        encoder.set_optimize(true).map_err(codec_error)?;
+    }
+    if coding.progressive {
+        encoder.set_progressive(true).map_err(codec_error)?;
+    }
     encoder
         .compress_to_vec(turbojpeg::Image {
             pixels,
@@ -600,7 +650,7 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
 }
 
 fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
-    encode_jxl_samples(image, JxlSamples::Byte(pixels), options, false)
+    encode_jxl_samples(image, JxlSamples::Byte(pixels), options, JxlThreads::Pool)
 }
 
 enum JxlSamples<'a> {
@@ -608,7 +658,7 @@ enum JxlSamples<'a> {
     Wide(&'a [u16]),
 }
 
-fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, single_threaded: bool) -> PyResult<Vec<u8>> {
+fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
     let (color_encoding, has_alpha) = match image.mode {
         PixelMode::L => (ColorEncoding::SrgbLuma, false),
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
@@ -619,7 +669,7 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         JxlSamples::Byte(samples) => samples.len(),
         JxlSamples::Wide(samples) => std::mem::size_of_val(*samples),
     };
-    let encode = |runner: Option<&ResizableRunner<'_>>| {
+    let encode = |runner: Option<&dyn ParallelRunner>| {
         let builder = encoder_builder()
             // jpegxl-rs otherwise zero-fills 512 KiB even for tiny candidates.
             // It grows this buffer when needed and shrinks it after encoding.
@@ -651,18 +701,33 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
             }
         }
     };
-    if single_threaded {
-        // Do not even initialize the thread-local pool for Rayon candidates.
-        // Besides allocating unused state, pool creation could fail despite
-        // the single-threaded encoder not needing a runner at all.
-        encode(None)
-    } else {
-        JXL_ENCODE_RUNNER.with(|runner| {
+    match threads {
+        // Do not even initialize a thread-local pool for single-threaded
+        // Rayon candidates. Besides allocating unused state, pool creation
+        // could fail despite the encoder not needing a runner at all.
+        JxlThreads::Fixed(0 | 1) => encode(None),
+        JxlThreads::Fixed(workers) => JXL_CANDIDATE_RUNNER.with(|cached| {
+            let mut cached = cached.borrow_mut();
+            if cached.as_ref().is_none_or(|(size, _)| *size != workers) {
+                let runner = ThreadsRunner::new(None, Some(workers)).ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+                *cached = Some((workers, runner));
+            }
+            encode(Some(&cached.as_ref().expect("pool cached above").1))
+        }),
+        JxlThreads::Pool => JXL_ENCODE_RUNNER.with(|runner| {
             let runner = runner.get_or_init(|| ResizableRunner::new(None));
             let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
             encode(Some(runner))
-        })
+        }),
     }
+}
+
+/// Worker threads worth giving one search candidate when `workers` candidates
+/// encode concurrently on the Rayon pool. libjxl parallelizes over 256-pixel
+/// groups, so more threads than groups would only add synchronization.
+pub(crate) fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
+    let groups = (image.width as usize).div_ceil(256) * (image.height as usize).div_ceil(256);
+    (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
 }
 
 /// Normalize wide samples once per effort search, rather than once per encode.
@@ -693,19 +758,24 @@ impl<'a> PreparedJxl<'a> {
     }
 
     pub(crate) fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
-        self.encode_with_threads(options, false)
+        self.encode_with_threads(options, JxlThreads::Pool)
     }
 
     pub(crate) fn encode_candidate(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
         // Match the outer search's small-image cutoff. Larger serial trials
-        // still benefit from libjxl's pool; parallel trials force one thread.
-        self.encode_with_threads(options, self.image.raw_data()?.len() < JXL_PARALLEL_MIN_BYTES)
+        // still benefit from libjxl's pool; parallel trials size their own.
+        let threads = if self.image.raw_data()?.len() < JXL_PARALLEL_MIN_BYTES {
+            JxlThreads::Fixed(1)
+        } else {
+            JxlThreads::Pool
+        };
+        self.encode_with_threads(options, threads)
     }
 
-    pub(crate) fn encode_with_threads(&self, options: SaveOptions, single_threaded: bool) -> PyResult<Vec<u8>> {
+    pub(crate) fn encode_with_threads(&self, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
         match &self.wide {
-            Some(samples) => encode_jxl_samples(self.image, JxlSamples::Wide(samples), options, single_threaded),
-            None => encode_jxl_samples(self.image, JxlSamples::Byte(self.image.raw_data()?), options, single_threaded),
+            Some(samples) => encode_jxl_samples(self.image, JxlSamples::Wide(samples), options, threads),
+            None => encode_jxl_samples(self.image, JxlSamples::Byte(self.image.raw_data()?), options, threads),
         }
     }
 }
@@ -935,7 +1005,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
     }
     let samples = crate::compressor_simd::normalize_u16(pixels, image.bit_depth);
     if format == ImageFormat::Jxl {
-        return encode_jxl_samples(image, JxlSamples::Wide(&samples), options, false);
+        return encode_jxl_samples(image, JxlSamples::Wide(&samples), options, JxlThreads::Pool);
     }
     if format == ImageFormat::Tiff {
         let data: Vec<u8> = samples.into_iter().flat_map(u16::to_ne_bytes).collect();
@@ -1021,7 +1091,10 @@ mod tests {
                 lossless: true,
                 effort: 1,
             };
-            let output = PreparedJxl::new(&image).unwrap().encode_with_threads(options, true).unwrap();
+            let output = PreparedJxl::new(&image)
+                .unwrap()
+                .encode_with_threads(options, JxlThreads::Fixed(1))
+                .unwrap();
             if side == 17 {
                 assert!(output.capacity() <= 4096);
             } else {
@@ -1071,7 +1144,7 @@ mod tests {
                             lossless: true,
                             effort: 3,
                         };
-                        let single = prepared.encode_with_threads(options, true).unwrap();
+                        let single = prepared.encode_with_threads(options, JxlThreads::Fixed(1)).unwrap();
                         JXL_ENCODE_RUNNER.with(|runner| assert!(runner.get().is_none()));
                         let candidate = prepared.encode_candidate(options).unwrap();
                         JXL_ENCODE_RUNNER.with(|runner| {
@@ -1081,11 +1154,39 @@ mod tests {
                         assert_eq!(candidate, prepared.encode(options).unwrap());
                         let lossy = SaveOptions { lossless: false, ..options };
                         assert_eq!(prepared.encode_candidate(lossy).unwrap(), prepared.encode(lossy).unwrap());
+                        // Fixed-size candidate pools change only the thread
+                        // count, never the bytes, and are reused per size.
+                        for workers in [2, 3] {
+                            JXL_CANDIDATE_RUNNER.with(|cached| cached.borrow_mut().take());
+                            assert_eq!(prepared.encode_with_threads(options, JxlThreads::Fixed(workers)).unwrap(), single);
+                            assert_eq!(
+                                prepared.encode_with_threads(lossy, JxlThreads::Fixed(workers)).unwrap(),
+                                prepared.encode(lossy).unwrap()
+                            );
+                            JXL_CANDIDATE_RUNNER.with(|cached| assert_eq!(cached.borrow().as_ref().map(|(size, _)| *size), Some(workers)));
+                        }
                     })
                     .join()
                     .unwrap();
                 }
             }
+        }
+    }
+
+    #[test]
+    fn jxl_candidate_threads_split_the_pool_and_stop_at_group_count() {
+        let large = Image::from_pixels(1024, 768, PixelMode::L, vec![0; 1024 * 768], None).unwrap();
+        let small = Image::from_pixels(200, 100, PixelMode::L, vec![0; 200 * 100], None).unwrap();
+        let two_groups = Image::from_pixels(257, 100, PixelMode::L, vec![0; 257 * 100], None).unwrap();
+        for threads in [1, 3, 8, 12] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                assert_eq!(jxl_candidate_threads(&large, 1), threads.min(12));
+                assert_eq!(jxl_candidate_threads(&large, 3), (threads / 3).max(1));
+                assert_eq!(jxl_candidate_threads(&large, threads), 1);
+                assert_eq!(jxl_candidate_threads(&large, 0), threads.min(12));
+                assert_eq!(jxl_candidate_threads(&small, 1), 1);
+                assert_eq!(jxl_candidate_threads(&two_groups, 1), threads.min(2));
+            });
         }
     }
 

@@ -146,7 +146,9 @@ def compare_results(path_a: Path, path_b: Path) -> int:
 
     table = Table(
         title=f"Comparison: [bold]{label_a}[/bold] vs [bold]{label_b}[/bold]",
-        caption=(f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)\nB: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)"),
+        caption=(
+            f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)\nB: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)"
+        ),
         show_lines=True,
     )
     table.add_column("Fixture", style="cyan")
@@ -175,7 +177,9 @@ def compare_results(path_a: Path, path_b: Path) -> int:
         check_a = "[green]✓[/green]" if a_pass else "[red]✗[/red]"
         check_b = "[green]✓[/green]" if b_pass else "[red]✗[/red]"
 
-        table.add_row(key[0], key[1], str(key[2]), f"{a_opt:.0f}", f"{b_opt:.0f}", _delta(a_opt, b_opt), f"{a_pct:.2f}", f"{b_pct:.2f}", f"{a_ms:.2f}", f"{b_ms:.2f}", _delta(a_ms, b_ms), f"{check_a} {check_b}")
+        table.add_row(
+            key[0], key[1], str(key[2]), f"{a_opt:.0f}", f"{b_opt:.0f}", _delta(a_opt, b_opt), f"{a_pct:.2f}", f"{b_pct:.2f}", f"{a_ms:.2f}", f"{b_ms:.2f}", _delta(a_ms, b_ms), f"{check_a} {check_b}"
+        )
 
     console = Console()
     console.print(table)
@@ -217,7 +221,10 @@ def main() -> int:
                     row.update(result)
                     passed = result["lossless"] and result["non_growing"]
                     failed |= not passed
-                    print(f"{name:<12} {size_label:<11} {fmt:<8} {effort:>6} {result['baseline_bytes']:>15.0f} {result['optimized_bytes']:>15.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'YES' if passed else 'NO':>13}", flush=True)
+                    print(
+                        f"{name:<12} {size_label:<11} {fmt:<8} {effort:>6} {result['baseline_bytes']:>15.0f} {result['optimized_bytes']:>15.0f} {result['reduction_percent']:>8.2f} {result['baseline_ms']:>10.2f} {result['optimized_ms']:>10.2f} {result['time_ratio']:>8.2f} {'YES' if passed else 'NO':>13}",
+                        flush=True,
+                    )
                 except Exception as error:
                     failed = True
                     row["error"] = str(error)
