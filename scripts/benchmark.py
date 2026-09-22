@@ -578,7 +578,9 @@ def imageenhance_comparisons(size: tuple[int, int]) -> list[Comparison]:
 def imagefilter_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Compare filtering, including alpha, fractional radii, and 3D LUTs."""
     comparisons: list[Comparison] = []
-    specifications = [(name, ()) for name in ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")]
+    specifications: list[tuple[str, tuple[object, ...]]] = [
+        (name, ()) for name in ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")
+    ]
     specifications += [("Kernel", ((3, 3), [0, 1, 0, -1, 2, 1, 0, 1, 0], 4, 3))]
     specifications += [("RankFilter", (5, 7)), ("MedianFilter", (3,)), ("MedianFilter", (5,)), ("MinFilter", (5,)), ("MaxFilter", (5,)), ("ModeFilter", (3,))]
     specifications += [(name, (radius,)) for name in ("BoxBlur", "GaussianBlur") for radius in (2, 10.5)]

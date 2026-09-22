@@ -1,11 +1,36 @@
 from __future__ import annotations
 
 from collections import Counter
+from typing import SupportsIndex, overload
 
 import pytest
 from PIL import Image as PIL
 
 from blanket import Image
+
+
+class ListValues(list[int]):
+    @overload
+    def __getitem__(self, item: SupportsIndex) -> int: ...
+
+    @overload
+    def __getitem__(self, item: slice) -> list[int]: ...
+
+    def __getitem__(self, item: SupportsIndex | slice) -> int | list[int]:
+        value = super().__getitem__(item)
+        return value if isinstance(item, slice) else value + 10
+
+
+class TupleValues(tuple[int, ...]):
+    @overload
+    def __getitem__(self, item: SupportsIndex) -> int: ...
+
+    @overload
+    def __getitem__(self, item: slice) -> tuple[int, ...]: ...
+
+    def __getitem__(self, item: SupportsIndex | slice) -> int | tuple[int, ...]:
+        value = super().__getitem__(item)
+        return value if isinstance(item, slice) else value + 10
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
@@ -20,14 +45,10 @@ def test_color_counts_merge_partitions_and_partial_tail(mode: str, limit: int) -
     assert (sorted(actual) if actual is not None else None) == (sorted(expected) if expected is not None else None)
 
 
-@pytest.mark.parametrize("container", [list, tuple])
-def test_putdata_preserves_sequence_overrides(container: type) -> None:
-    class Values(container):
-        def __getitem__(self, index: int) -> int:
-            return super().__getitem__(index) + 10
-
+@pytest.mark.parametrize("container", [ListValues, TupleValues])
+def test_putdata_preserves_sequence_overrides(container: type[list[int] | tuple[int, ...]]) -> None:
     image = Image.new("L", (3, 1))
-    image.putdata(Values([1, 2, 3]))
+    image.putdata(container([1, 2, 3]))
     assert image.getdata() == [11, 12, 13]
 
 

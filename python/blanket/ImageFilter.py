@@ -236,12 +236,12 @@ class Color3DLUT(MultibandFilter):
     @staticmethod
     def _check_size(size: Any) -> tuple[int, int, int]:
         try:
-            _, _, _ = size
+            x, y, z = size
         except ValueError as error:
             raise ValueError("Size should be either an integer or a tuple of three integers.") from error
         except TypeError:
-            size = (size, size, size)
-        dimensions = tuple(int(value) for value in size)
+            x = y = z = size
+        dimensions = int(x), int(y), int(z)
         if any(not 2 <= value <= 65 for value in dimensions):
             raise ValueError("Size should be in [2, 65] range.")
         return dimensions

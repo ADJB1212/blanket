@@ -60,11 +60,11 @@ def _lut(image: Image.Image, table: list[int]) -> Image.Image:
 def _border(border: Border) -> tuple[int, int, int, int]:
     if isinstance(border, tuple):
         if len(border) == 2:
-            return border * 2
+            return border[0], border[1], border[0], border[1]
         if len(border) == 4:
-            return border
+            return border[0], border[1], border[2], border[3]
         raise ValueError("border must be an integer, or a tuple of two or four elements")
-    return (border,) * 4
+    return border, border, border, border
 
 
 def _resize(image: Image.Image, size: tuple[int, int], method: int, box: tuple[float, float, float, float] | None = None) -> Image.Image:
