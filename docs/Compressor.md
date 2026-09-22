@@ -79,15 +79,26 @@ error scale without first rounding to eight bits.
 
 | Format | Lossy search |
 | --- | --- |
-| 8-bit non-indexed PNG | Round color samples to progressively coarser steps, then apply lossless PNG optimization; alpha is unchanged |
-| JPEG, WebP, JPEG XL, AVIF, HEIF/HEIC | Try lower quality settings, decode smaller candidates, and check the error bound |
+| 8-bit non-indexed PNG | Use histogram-guided color quantization, then optimize the best trial losslessly; alpha is unchanged |
+| JPEG, WebP, JPEG XL, AVIF, HEIF/HEIC | Adaptively search lower quality settings using decoded error; optimize the winning JPEG's entropy coding |
 | Indexed or high-bit-depth PNG, other formats | Retain the lossless compressor's behavior |
 
-The search starts with lossless optimization. At most `effort` additional
-candidates are tried. Higher efforts extend a fixed set of sample steps or
-quality reductions; they do not promise a global optimum. PNG sample steps
-are 2, 3, 4, 6, 8, 12, 16, 24, 32, and 64. Codec quality reductions are
-1, 2, 4, 8, 12, 20, 30, 45, 65, and 99 points, clamped to quality 1.
+The search retains the normal save, with lossless optimization applied before
+searching except for JPEG, which optimizes entropy coding after choosing quality.
+At most `effort` quantization or quality trials are encoded. PNG evaluates
+quantization bin widths from 256 down to 2 using a color histogram.
+Trials include uniform rounding and mapping each
+occupied bin to its rounded weighted mean, minimizing squared error within
+that bin. Uniform rounding retains regular sample spacing for PNG filters.
+Invalid and duplicate tables are skipped before encoding. Ordinary PNG saves
+rank the eligible trials;
+only the smallest trial receives the full lossless optimization search.
+Codec searches start one quality point below the requested quality and double
+the quality drop until a trial exceeds the error bound. They then bisect the
+bracketed range according to measured error. They stop when the
+range is exhausted or the trial budget is reached. Codec error and encoded
+size need not be monotonic, so this is a heuristic, not a global optimum.
+Every accepted candidate satisfies the error bound independently.
 Codec `save(..., effort=...)` retains its ordinary meaning independently of
 the compressor's search effort.
 

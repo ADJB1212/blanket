@@ -508,6 +508,20 @@ mod neon {
                     offset += 48;
                 }
                 super::scalar_lut::<C>(&source[offset..], &mut output[offset..], tables);
+            } else if C == 4 {
+                let r = load_table(&tables[..256]);
+                let g = load_table(&tables[256..512]);
+                let b = load_table(&tables[512..768]);
+                let a = load_table(&tables[768..1024]);
+                while offset + 64 <= source.len() {
+                    let src = vld4q_u8(source.as_ptr().add(offset));
+                    vst4q_u8(
+                        output.as_mut_ptr().add(offset),
+                        uint8x16x4_t(lookup(&r, src.0), lookup(&g, src.1), lookup(&b, src.2), lookup(&a, src.3)),
+                    );
+                    offset += 64;
+                }
+                super::scalar_lut::<C>(&source[offset..], &mut output[offset..], tables);
             } else {
                 super::scalar_lut::<C>(source, output, tables);
             }

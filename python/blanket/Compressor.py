@@ -18,8 +18,9 @@ class LossyImageCompressor:
     This is a sample error bound, not a perceptual quality guarantee.
 
     ``effort`` from 1 through 10 controls the number of candidate trials.
-    PNG tries rounded color samples for 8-bit non-indexed images. JPEG,
-    WebP, JPEG XL, AVIF, and HEIF/HEIC try lower codec quality settings.
+    PNG uses histogram-guided color quantization for 8-bit non-indexed images.
+    JPEG, WebP, JPEG XL, AVIF, and HEIF/HEIC adaptively search lower codec
+    quality settings using the measured error of each trial.
     Explicit ``lossless=True`` disables additional loss. Other formats and
     indexed or high-bit-depth PNG retain lossless optimization behavior.
     The normal save remains eligible, so output cannot grow relative to it.

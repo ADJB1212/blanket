@@ -78,6 +78,31 @@ def test_quality_endpoints_and_maximum_effort(quality: int) -> None:
     assert_bounded(baseline, output, 4)
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_png_histogram_quantization_at_low_effort(mode: str) -> None:
+    rng = random.Random(105)
+    channels = len(mode)
+    raw = bytes(rng.randrange(120, 128) if mode != "RGBA" or i % 4 != 3 else 0 for i in range(65 * 33 * channels))
+    source = Image.frombytes(mode, (65, 33), raw)
+    baseline = encode(source, "PNG")
+    output = encode(source, "PNG", compressor=LossyImageCompressor(max_rmse=4, effort=1))
+    assert len(output) < len(baseline) // 4
+    assert_bounded(baseline, output, 4)
+    assert source.tobytes() == raw
+
+
+def test_jpeg_search_refines_between_fixed_quality_drops() -> None:
+    source = Image.frombytes("RGB", (129, 67), random.Random(37).randbytes(129 * 67 * 3))
+    baseline = encode(source, "JPEG", quality=90)
+    target = encode(source, "JPEG", quality=85, compressor=LosslessImageCompressor(effort=10))
+    before = Image.open(io.BytesIO(baseline)).convert("RGB").tobytes()
+    after = Image.open(io.BytesIO(target)).convert("RGB").tobytes()
+    bound = math.sqrt(sum((a - b) ** 2 for a, b in zip(before, after)) / len(before)) + 1e-6
+    output = encode(source, "JPEG", quality=90, compressor=LossyImageCompressor(max_rmse=bound, effort=10))
+    assert len(output) <= len(target)
+    assert_bounded(baseline, output, bound)
+
+
 def test_looser_bound_allows_more_png_loss() -> None:
     source = Image.frombytes("RGBA", (65, 33), random.Random(27).randbytes(65 * 33 * 4))
     baseline = encode(source, "PNG")
