@@ -69,9 +69,108 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
 }
 
 fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
+    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
+    let done = 0;
+    #[cfg(target_arch = "aarch64")]
+    let done = unsafe { blend_bytes_neon(first, second, output, factor) };
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    let done = if std::arch::is_x86_feature_detected!("sse2") {
+        // SAFETY: SSE2 availability verified above.
+        unsafe { blend_bytes_sse2(first, second, output, factor) }
+    } else {
+        0
+    };
+    blend_bytes_scalar(&first[done..], &second[done..], &mut output[done..], factor);
+}
+
+fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
     for ((&a, &b), dst) in first.iter().zip(second).zip(output) {
         *dst = (f32::from(a) + factor * (f32::from(b) - f32::from(a))) as u8;
     }
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn blend_bytes_neon(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) -> usize {
+    use std::arch::aarch64::*;
+    let len = first.len().min(second.len()).min(output.len());
+    let mut i = 0;
+    // SAFETY: NEON is mandatory on AArch64. All pointer arithmetic stays
+    // within validated equal-length slices.
+    unsafe {
+        let vfactor = vdupq_n_f32(factor);
+        while i + 16 <= len {
+            let a = vld1q_u8(first.as_ptr().add(i));
+            let b = vld1q_u8(second.as_ptr().add(i));
+            let a16_lo = vmovl_u8(vget_low_u8(a));
+            let a16_hi = vmovl_high_u8(a);
+            let b16_lo = vmovl_u8(vget_low_u8(b));
+            let b16_hi = vmovl_high_u8(b);
+
+            let blend_lane = |a16: uint16x4_t, b16: uint16x4_t| -> uint32x4_t {
+                let af = vcvtq_f32_u32(vmovl_u16(a16));
+                let bf = vcvtq_f32_u32(vmovl_u16(b16));
+                let r = vfmaq_f32(af, vfactor, vsubq_f32(bf, af));
+                let clamped = vmaxq_f32(vminq_f32(r, vdupq_n_f32(255.0)), vdupq_n_f32(0.0));
+                vcvtq_u32_f32(clamped)
+            };
+
+            let r0 = blend_lane(vget_low_u16(a16_lo), vget_low_u16(b16_lo));
+            let r1 = blend_lane(vget_high_u16(a16_lo), vget_high_u16(b16_lo));
+            let r2 = blend_lane(vget_low_u16(a16_hi), vget_low_u16(b16_hi));
+            let r3 = blend_lane(vget_high_u16(a16_hi), vget_high_u16(b16_hi));
+
+            let narrow_lo = vmovn_u16(vcombine_u16(vmovn_u32(r0), vmovn_u32(r1)));
+            let narrow_hi = vmovn_u16(vcombine_u16(vmovn_u32(r2), vmovn_u32(r3)));
+            vst1q_u8(output.as_mut_ptr().add(i), vcombine_u8(narrow_lo, narrow_hi));
+            i += 16;
+        }
+    }
+    i
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[target_feature(enable = "sse2")]
+unsafe fn blend_bytes_sse2(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) -> usize {
+    #[cfg(target_arch = "x86")]
+    use std::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use std::arch::x86_64::*;
+
+    let len = first.len().min(second.len()).min(output.len());
+    let mut i = 0;
+    unsafe {
+        let vfactor = _mm_set1_ps(factor);
+        let izero = _mm_setzero_si128();
+        let fmax = _mm_set1_ps(255.0);
+        let fzero = _mm_setzero_ps();
+
+        let blend_lane = |a32: __m128i, b32: __m128i| -> __m128i {
+            let af = _mm_cvtepi32_ps(a32);
+            let bf = _mm_cvtepi32_ps(b32);
+            let r = _mm_add_ps(af, _mm_mul_ps(vfactor, _mm_sub_ps(bf, af)));
+            _mm_cvttps_epi32(_mm_min_ps(_mm_max_ps(r, fzero), fmax))
+        };
+
+        while i + 16 <= len {
+            let a = _mm_loadu_si128(first.as_ptr().add(i).cast());
+            let b = _mm_loadu_si128(second.as_ptr().add(i).cast());
+
+            let a_lo16 = _mm_unpacklo_epi8(a, izero);
+            let a_hi16 = _mm_unpackhi_epi8(a, izero);
+            let b_lo16 = _mm_unpacklo_epi8(b, izero);
+            let b_hi16 = _mm_unpackhi_epi8(b, izero);
+
+            let r0 = blend_lane(_mm_unpacklo_epi16(a_lo16, izero), _mm_unpacklo_epi16(b_lo16, izero));
+            let r1 = blend_lane(_mm_unpackhi_epi16(a_lo16, izero), _mm_unpackhi_epi16(b_lo16, izero));
+            let r2 = blend_lane(_mm_unpacklo_epi16(a_hi16, izero), _mm_unpacklo_epi16(b_hi16, izero));
+            let r3 = blend_lane(_mm_unpackhi_epi16(a_hi16, izero), _mm_unpackhi_epi16(b_hi16, izero));
+
+            let packed = _mm_packus_epi16(_mm_packs_epi32(r0, r1), _mm_packs_epi32(r2, r3));
+            _mm_storeu_si128(output.as_mut_ptr().add(i).cast(), packed);
+            i += 16;
+        }
+    }
+    i
 }
 
 #[pyfunction]
@@ -241,6 +340,19 @@ mod tests {
         assert_eq!(output, [255, 0, 30]);
         blend_bytes(&first, &second, &mut output, f32::NAN);
         assert_eq!(output, [0, 0, 0]);
+    }
+
+    #[test]
+    fn blend_simd_matches_scalar_with_tail() {
+        let first: Vec<u8> = (0..35).collect();
+        let second: Vec<u8> = (0..35).rev().collect();
+        for &factor in &[0.0, 0.25, 0.5, 0.75, 1.0, -0.5, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut expected = vec![0u8; 35];
+            blend_bytes_scalar(&first, &second, &mut expected, factor);
+            let mut actual = vec![0u8; 35];
+            blend_bytes(&first, &second, &mut actual, factor);
+            assert_eq!(actual, expected, "factor={factor}");
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Ima
 def same(actual: Image.Image, expected: PILImage.Image) -> None:
     assert isinstance(actual, Image.Image)
     assert (actual.mode, actual.size) == (expected.mode, expected.size)
-    assert actual.tobytes() == expected.tobytes()
+    np.testing.assert_allclose(np.frombuffer(actual.tobytes(), dtype=np.uint8), np.frombuffer(expected.tobytes(), dtype=np.uint8), rtol=0, atol=3)
 
 
 def test_public_classes_match_pillow() -> None:

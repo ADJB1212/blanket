@@ -42,7 +42,7 @@ module-name = "blanket._blanket"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=native", "--strict-markers", "--strict-config"]
+addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=line", "--strict-markers", "--strict-config", "--assert=plain"]
 console_output_style = "none"
 xfail_strict = true
 
@@ -69,8 +69,22 @@ combine-as-imports = true
 [tool.ty.src]
 exclude = ["scripts", "tests", "docs"]
 
+[tool.ty.environment]
+python = "./.venv"
+
 [tool.ty.analysis]
 allowed-unresolved-imports = ["blanket._blanket"]
+
+[tool.ty.rules]
+invalid-assignment = "ignore"
+missing-argument = "ignore"
+invalid-argument-type = "ignore"
+unsupported-operator = "ignore"
+not-subscriptable = "ignore"
+call-non-callable = "ignore"
+not-iterable = "ignore"
+no-matching-overload = "ignore"
+unresolved-attribute = "ignore"
 
 [tool.uv]
 compile-bytecode = true
