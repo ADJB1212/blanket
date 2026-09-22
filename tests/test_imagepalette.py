@@ -7,8 +7,7 @@ from pathlib import Path
 
 import pytest
 from blanket import Image, ImagePalette
-from PIL import Image as PillowImage
-from PIL import ImagePalette as PillowPalette
+from PIL import Image as PillowImage, ImagePalette as PillowPalette
 
 
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:

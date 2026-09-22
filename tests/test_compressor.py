@@ -1,17 +1,16 @@
 from __future__ import annotations
 
 import io
-import random
 import os
+import random
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("effort", [1, 7])
@@ -115,7 +114,7 @@ def test_output_format_controls_optimization(tmp_path: Path) -> None:
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 def test_exact_palette_png(colors: int, depth: int, mode: str) -> None:
     rng = random.Random(42)
-    palette = [bytes((i, (i * 71) % 256, (i * 133) % 256, i % 3 * 127))[:len(mode)] for i in range(colors)]
+    palette = [bytes((i, (i * 71) % 256, (i * 133) % 256, i % 3 * 127))[: len(mode)] for i in range(colors)]
     # Odd widths exercise byte padding independently at every row.
     pixels = b"".join(palette[rng.randrange(colors)] for _ in range(129 * 127))
     original = Image.frombytes(mode, (129, 127), pixels)
@@ -271,9 +270,9 @@ def test_png_palette_reordering_shortens_transparency() -> None:
     position = 8
     transparency = None
     while position < len(encoded):
-        length = int.from_bytes(encoded[position:position + 4], "big")
-        if encoded[position + 4:position + 8] == b"tRNS":
-            transparency = encoded[position + 8:position + 8 + length]
+        length = int.from_bytes(encoded[position : position + 4], "big")
+        if encoded[position + 4 : position + 8] == b"tRNS":
+            transparency = encoded[position + 8 : position + 8 + length]
         position += length + 12
     assert transparency == b"\x00"
     with PillowImage.open(output) as decoded:

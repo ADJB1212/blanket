@@ -4,9 +4,8 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import PdfParser
-
 from blanket import Image, UnidentifiedImageError
+from PIL import PdfParser
 
 
 @pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])

@@ -6,8 +6,7 @@ import math
 import numpy as np
 import pytest
 from blanket import Image, ImageEnhance
-from PIL import Image as PILImage
-from PIL import ImageEnhance as PILEnhance
+from PIL import Image as PILImage, ImageEnhance as PILEnhance
 
 
 def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:

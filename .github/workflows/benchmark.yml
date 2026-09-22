@@ -316,6 +316,7 @@ jobs:
           echo "$HOME/deps/x265/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libde265/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
+          echo "$HOME/deps/libwebp/bin" >> "$GITHUB_PATH"
 
           echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/x86_64-linux-gnu/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
 

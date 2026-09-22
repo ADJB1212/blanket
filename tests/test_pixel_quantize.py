@@ -85,7 +85,18 @@ def test_fixed_palette(mode: str, dither: int) -> None:
     assert result.palette is not palette.palette
 
 
-@pytest.mark.parametrize("kwargs,exception", [({"colors": 0}, ValueError), ({"colors": 257}, ValueError), ({"colors": 1.5}, TypeError), ({"method": -1}, ValueError), ({"method": 4}, ValueError), ({"method": 3}, RuntimeError), ({"kmeans": -1}, ValueError)])
+@pytest.mark.parametrize(
+    "kwargs,exception",
+    [
+        ({"colors": 0}, ValueError),
+        ({"colors": 257}, ValueError),
+        ({"colors": 1.5}, TypeError),
+        ({"method": -1}, ValueError),
+        ({"method": 4}, ValueError),
+        ({"method": 3}, RuntimeError),
+        ({"kmeans": -1}, ValueError),
+    ],
+)
 def test_quantize_validation(kwargs: dict[str, object], exception: type[Exception]) -> None:
     with pytest.raises(exception):
         Image.frombytes("RGB", (1, 1), bytes(3)).quantize(**kwargs)
@@ -100,7 +111,12 @@ def test_rgba_rejects_rgb_methods(method: int) -> None:
 def test_palette_roundtrip_and_geometry() -> None:
     image = Image.frombytes("RGBA", (2, 1), bytes([255, 0, 0, 128, 0, 255, 0, 255])).quantize(colors=2)
     reference = image.to_pillow()
-    for result, expected in [(image.copy(), reference.copy()), (image.crop((0, 0, 1, 1)), reference.crop((0, 0, 1, 1))), (image.resize((4, 3)), reference.resize((4, 3))), (image.transpose(Image.FLIP_LEFT_RIGHT), reference.transpose(PillowImage.Transpose.FLIP_LEFT_RIGHT))]:
+    for result, expected in [
+        (image.copy(), reference.copy()),
+        (image.crop((0, 0, 1, 1)), reference.crop((0, 0, 1, 1))),
+        (image.resize((4, 3)), reference.resize((4, 3))),
+        (image.transpose(Image.FLIP_LEFT_RIGHT), reference.transpose(PillowImage.Transpose.FLIP_LEFT_RIGHT)),
+    ]:
         assert result.mode == "P"
         assert result.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
         assert result.getpalette("RGBA") == expected.getpalette("RGBA")

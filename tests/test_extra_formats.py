@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import struct
 from io import BytesIO
 from pathlib import Path
-import struct
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image, UnidentifiedImageError
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("format", ["TIFF", "WEBP"])
@@ -59,9 +58,12 @@ def test_compressed_tiff(compression: str) -> None:
 @pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf \n", b'<?xml version="1.0"?><!-- test -->\n'])
 @pytest.mark.parametrize("formats", [None, ["SVG"]])
 def test_svg_is_unsupported(prefix: bytes, formats: list[str] | None) -> None:
-    data = prefix + b'''<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+    data = (
+        prefix
+        + b"""<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
       <rect width="2" height="2" fill="red" fill-opacity="0.5"/>
-    </svg>'''
+    </svg>"""
+    )
     with pytest.raises(UnidentifiedImageError, match="cannot identify image file"):
         Image.open(BytesIO(data), formats=formats)
 

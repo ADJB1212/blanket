@@ -15,7 +15,27 @@ from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, 
 from ._color import color_pixel
 from ._exif import transpose_metadata
 
-__all__ = ["SupportsGetMesh", "autocontrast", "colorize", "contain", "cover", "crop", "deform", "equalize", "exif_transpose", "expand", "fit", "flip", "grayscale", "invert", "mirror", "pad", "posterize", "scale", "solarize"]
+__all__ = [
+    "SupportsGetMesh",
+    "autocontrast",
+    "colorize",
+    "contain",
+    "cover",
+    "crop",
+    "deform",
+    "equalize",
+    "exif_transpose",
+    "expand",
+    "fit",
+    "flip",
+    "grayscale",
+    "invert",
+    "mirror",
+    "pad",
+    "posterize",
+    "scale",
+    "solarize",
+]
 
 Color = str | int | tuple[int, ...]
 Border = int | tuple[int, ...]

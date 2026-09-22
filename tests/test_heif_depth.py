@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import struct
 from io import BytesIO
 from pathlib import Path
-import struct
 
 import numpy as np
-import pytest
 import pillow_heif
-
+import pytest
 from blanket import Image, UnidentifiedImageError
 
 

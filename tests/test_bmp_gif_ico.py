@@ -4,9 +4,8 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image, UnidentifiedImageError
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("format", ["BMP", "GIF", "ICO"])
@@ -18,8 +17,7 @@ def test_interoperability(format: str, mode: str) -> None:
     for y in range(32):
         for x in range(32):
             value = (x + y) % 2
-            color = {"L": value * 255, "RGB": (value * 255, 50, 100),
-                     "RGBA": (value * 255, 50, 100, value * 255), "P": value}[mode]
+            color = {"L": value * 255, "RGB": (value * 255, 50, 100), "RGBA": (value * 255, 50, 100, value * 255), "P": value}[mode]
             source.putpixel((x, y), color)
     blanket = Image.frombytes(mode, source.size, source.tobytes())
     if mode == "P":

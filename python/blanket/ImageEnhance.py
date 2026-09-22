@@ -1,13 +1,11 @@
 """Pillow-compatible image enhancement classes backed by native kernels."""
 
-# ruff: noqa: N999 -- Preserve Pillow's public submodule spelling.
-
 from __future__ import annotations
 
 from . import Image
 from ._blanket import enhance_blend, enhance_brightness, enhance_color, enhance_contrast, enhance_sharpness
 
-__all__ = ["Color", "Contrast", "Brightness", "Sharpness"]
+__all__ = ["Brightness", "Color", "Contrast", "Sharpness"]
 
 
 class _Enhance:

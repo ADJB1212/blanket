@@ -4,9 +4,8 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from PIL import Image as PillowImage
-
 from blanket import Image, UnidentifiedImageError
+from PIL import Image as PillowImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -58,11 +57,10 @@ def test_avif_nonuniform_pixels_and_alpha() -> None:
     assert max(abs(a - b) for a, b in zip(actual.tobytes()[3::4], raw[3::4])) <= 1
 
 
-@pytest.mark.parametrize("options,error", [
-    ({"quality": 0}, ValueError), ({"quality": 101}, ValueError),
-    ({"effort": 0}, ValueError), ({"effort": 11}, ValueError),
-    ({"quality": True}, TypeError), ({"lossless": True}, TypeError),
-])
+@pytest.mark.parametrize(
+    "options,error",
+    [({"quality": 0}, ValueError), ({"quality": 101}, ValueError), ({"effort": 0}, ValueError), ({"effort": 11}, ValueError), ({"quality": True}, TypeError), ({"lossless": True}, TypeError)],
+)
 def test_avif_invalid_options(options: dict[str, object], error: type[Exception]) -> None:
     with pytest.raises(error):
         Image.frombytes("RGB", (8, 8), bytes(8 * 8 * 3)).save(BytesIO(), "AVIF", **options)

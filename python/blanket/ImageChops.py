@@ -11,9 +11,24 @@ from . import Image
 from ._blanket import chops_binary, chops_invert, chops_offset
 
 __all__ = [
-    "add", "add_modulo", "blend", "composite", "constant", "darker",
-    "difference", "duplicate", "hard_light", "invert", "lighter", "multiply",
-    "offset", "overlay", "screen", "soft_light", "subtract", "subtract_modulo",
+    "add",
+    "add_modulo",
+    "blend",
+    "composite",
+    "constant",
+    "darker",
+    "difference",
+    "duplicate",
+    "hard_light",
+    "invert",
+    "lighter",
+    "multiply",
+    "offset",
+    "overlay",
+    "screen",
+    "soft_light",
+    "subtract",
+    "subtract_modulo",
 ]
 
 

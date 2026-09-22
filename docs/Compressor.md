@@ -39,8 +39,7 @@ from blanket.Compressor import LosslessImageCompressor
 
 image = Image.new("RGB", (128, 128), (12, 31, 79))
 output = BytesIO()
-image.save(output, "PNG", compress_level=6,
-           compressor=LosslessImageCompressor(effort=3))
+image.save(output, "PNG", compress_level=6, compressor=LosslessImageCompressor(effort=3))
 encoded = output.getvalue()
 ```
 

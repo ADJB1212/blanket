@@ -4,8 +4,7 @@ import math
 
 import pytest
 from blanket import Image, ImageChops
-from PIL import Image as PILImage
-from PIL import ImageChops as PILChops
+from PIL import Image as PILImage, ImageChops as PILChops
 
 BINARY = ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"]
 

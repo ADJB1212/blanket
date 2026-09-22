@@ -4,8 +4,7 @@ from __future__ import annotations
 
 import pytest
 from blanket import Image
-from PIL import Image as PILImage
-from PIL import ImageTransform
+from PIL import Image as PILImage, ImageTransform
 
 
 def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:

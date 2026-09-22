@@ -110,7 +110,7 @@ jobs:
           uv tool install maturin
           maturin develop --extras test --uv --profile dev --features $BUILD_FEATURES -- -C link-arg=-fuse-ld=$FUSE_LINKER
       - name: Test Python API
-        run: uv run --no-sync pytest --color=no --code-highlight=no
+        run: uv run --no-sync pytest
       - name: Test x86 SIMD kernels
         if: runner.os == 'Linux'
         run: cargo test --features $BUILD_FEATURES

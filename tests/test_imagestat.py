@@ -2,8 +2,7 @@ from __future__ import annotations
 
 import pytest
 from blanket import Image, ImageStat
-from PIL import Image as PILImage
-from PIL import ImageStat as PILStat
+from PIL import Image as PILImage, ImageStat as PILStat
 
 STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
 
@@ -172,6 +171,7 @@ def test_histogram_reductions_accept_integer_protocol_and_list_subclasses() -> N
     stat = ImageStat.Stat(histogram)
     assert stat.count == [7]
     assert stat.extrema == [(37, 37)]
+
     class Histogram(list):
         def __iter__(self):
             return iter(histogram)

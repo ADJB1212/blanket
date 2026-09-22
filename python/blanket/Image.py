@@ -15,11 +15,24 @@ if TYPE_CHECKING:
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
-from ._blanket import _Image, open_bytes
-from ._blanket import fromarray as _native_fromarray
-from ._blanket import frombytes as _native_frombytes
+from ._blanket import _Image, fromarray as _native_fromarray, frombytes as _native_frombytes, open_bytes
 
-_EXTENSIONS = {".bmp": "BMP", ".gif": "GIF", ".ico": "ICO", ".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".jxl": "JXL", ".tif": "TIFF", ".tiff": "TIFF", ".webp": "WEBP", ".heic": "HEIF", ".heif": "HEIF", ".avif": "AVIF", ".pdf": "PDF"}
+_EXTENSIONS = {
+    ".bmp": "BMP",
+    ".gif": "GIF",
+    ".ico": "ICO",
+    ".png": "PNG",
+    ".jpg": "JPEG",
+    ".jpeg": "JPEG",
+    ".jxl": "JXL",
+    ".tif": "TIFF",
+    ".tiff": "TIFF",
+    ".webp": "WEBP",
+    ".heic": "HEIF",
+    ".heif": "HEIF",
+    ".avif": "AVIF",
+    ".pdf": "PDF",
+}
 _BANDS = {"L": ("L",), "P": ("P",), "RGB": ("R", "G", "B"), "RGBA": ("R", "G", "B", "A")}
 
 
@@ -515,7 +528,15 @@ class Image:
         result.info.update(self.info)
         return result
 
-    def transform(self, size: tuple[int, int], method: int | ImageTransformHandler | SupportsGetData, data: Sequence[object] | None = None, resample: int = Resampling.NEAREST, fill: int = 1, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:
+    def transform(
+        self,
+        size: tuple[int, int],
+        method: int | ImageTransformHandler | SupportsGetData,
+        data: Sequence[object] | None = None,
+        resample: int = Resampling.NEAREST,
+        fill: int = 1,
+        fillcolor: str | int | tuple[int, ...] | None = None,
+    ) -> Image:
         """Map source pixels to a new canvas using a ``Transform`` method.
 
         AFFINE and PERSPECTIVE use inverse mapping coefficients. EXTENT takes
@@ -643,7 +664,15 @@ class Image:
         result.info.update(self.info)
         return result
 
-    def rotate(self, angle: float, resample: int = Resampling.NEAREST, expand: bool = False, center: tuple[float, float] | None = None, translate: tuple[float, float] | None = None, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:
+    def rotate(
+        self,
+        angle: float,
+        resample: int = Resampling.NEAREST,
+        expand: bool = False,
+        center: tuple[float, float] | None = None,
+        translate: tuple[float, float] | None = None,
+        fillcolor: str | int | tuple[int, ...] | None = None,
+    ) -> Image:
         """Return a copy rotated counterclockwise by an angle in degrees.
 
         Supports NEAREST (default), BILINEAR, and BICUBIC. The default center
@@ -875,7 +904,19 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
-    allowed = {"BMP": set(), "GIF": set(), "ICO": set(), "PNG": {"compress_level"}, "JPEG": {"quality"}, "JXL": {"quality", "lossless", "effort"}, "TIFF": set(), "PDF": set(), "WEBP": {"quality", "lossless"}, "HEIF": {"quality", "lossless"}, "AVIF": {"quality", "effort"}}[format]
+    allowed = {
+        "BMP": set(),
+        "GIF": set(),
+        "ICO": set(),
+        "PNG": {"compress_level"},
+        "JPEG": {"quality"},
+        "JXL": {"quality", "lossless", "effort"},
+        "TIFF": set(),
+        "PDF": set(),
+        "WEBP": {"quality", "lossless"},
+        "HEIF": {"quality", "lossless"},
+        "AVIF": {"quality", "effort"},
+    }[format]
     unknown = supplied.keys() - allowed
     if unknown:
         names = ", ".join(sorted(unknown))

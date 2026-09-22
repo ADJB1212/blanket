@@ -4,8 +4,7 @@ import random
 
 import pytest
 from blanket import Image, ImageOps
-from PIL import Image as PillowImage
-from PIL import ImageOps as PillowOps
+from PIL import Image as PillowImage, ImageOps as PillowOps
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

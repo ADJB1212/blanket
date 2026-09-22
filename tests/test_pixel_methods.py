@@ -3,9 +3,8 @@ from __future__ import annotations
 from collections import Counter
 
 import pytest
-from PIL import Image as PIL
-
 from blanket import Image
+from PIL import Image as PIL
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
@@ -71,7 +70,7 @@ def test_extrema_late_band_extremes(mode: str) -> None:
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("limit", [0, 1, 255, 256, 257, 1000])
 def test_color_count_table_limits(mode: str, limit: int) -> None:
-    raw = bytes(component for i in range(256) for component in (i, (i * 73) % 256, 0, 255)[:len(mode)]) * 3
+    raw = bytes(component for i in range(256) for component in (i, (i * 73) % 256, 0, 255)[: len(mode)]) * 3
     actual = Image.frombytes(mode, (256, 3), raw).getcolors(limit)
     expected = PIL.frombytes(mode, (256, 3), raw).getcolors(limit)
     assert (None if actual is None else sorted(actual)) == (None if expected is None else sorted(expected))
@@ -86,7 +85,7 @@ def test_data_and_colors(mode: str) -> None:
     assert actual.get_flattened_data() == expected.get_flattened_data()
     for band in range(len(mode)):
         assert actual.getdata(band) == list(expected.get_flattened_data(band))
-    assert Counter(dict((v, n) for n, v in actual.getcolors())) == Counter(actual.getdata())
+    assert Counter({v: n for n, v in actual.getcolors()}) == Counter(actual.getdata())
     assert sorted(actual.getcolors()) == sorted(expected.getcolors())
     assert actual.getcolors(1) is None
     values = actual.getdata()[::-1][:5]

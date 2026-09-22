@@ -38,21 +38,26 @@ module-name = "blanket._blanket"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = ["--color=no", "--code-highlight=no", "--no-header"]
 console_output_style = "none"
 
 [tool.ruff]
+fix = true
 line-length = 200
 
 [tool.ruff.lint]
-fixable = ["ALL"]
-ignore = ["F401", "N999", "TRY004", "B023", "BLE001"]
+ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402"]
+exclude = ["scripts"]
 
 [tool.ruff.format]
 quote-style = "double"
 skip-magic-trailing-comma = true
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
 
 [tool.ruff.lint.isort]
 split-on-trailing-comma = false
+combine-as-imports = true
 
 [tool.ty.src]
 exclude = ["python/blanket", "scripts", "tests", "docs"]

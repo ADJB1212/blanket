@@ -7,8 +7,7 @@ from io import BytesIO
 import numpy as np
 import pytest
 from blanket import Image, ImageFilter
-from PIL import Image as PillowImage
-from PIL import ImageFilter as PillowFilter
+from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 BUILTINS = ("BLUR", "CONTOUR", "DETAIL", "EDGE_ENHANCE", "EDGE_ENHANCE_MORE", "EMBOSS", "FIND_EDGES", "SHARPEN", "SMOOTH", "SMOOTH_MORE")
 NEIGHBORHOOD_SIZES = [pytest.param(1, marks=pytest.mark.skip(reason="Pillow crashes with filter size 1")), 3, 5, 9]
@@ -108,7 +107,22 @@ def test_unsharp(mode: str, args: tuple[float, ...]) -> None:
     compare(mode, (19, 13), ImageFilter.UnsharpMask(*args), PillowFilter.UnsharpMask(*args))
 
 
-@pytest.mark.parametrize("name,args", [("Kernel", ((2, 2), [1] * 4)), ("RankFilter", (3, 9)), ("RankFilter", (2, 1)), ("MedianFilter", (0,)), ("MedianFilter", (-1,)), ("MinFilter", (23171,)), ("ModeFilter", (1.5,)), ("BoxBlur", (-1,)), ("BoxBlur", ((1, -1),)), ("GaussianBlur", ((1, 2, 3),)), ("UnsharpMask", (1, 1.5))])
+@pytest.mark.parametrize(
+    "name,args",
+    [
+        ("Kernel", ((2, 2), [1] * 4)),
+        ("RankFilter", (3, 9)),
+        ("RankFilter", (2, 1)),
+        ("MedianFilter", (0,)),
+        ("MedianFilter", (-1,)),
+        ("MinFilter", (23171,)),
+        ("ModeFilter", (1.5,)),
+        ("BoxBlur", (-1,)),
+        ("BoxBlur", ((1, -1),)),
+        ("GaussianBlur", ((1, 2, 3),)),
+        ("UnsharpMask", (1, 1.5)),
+    ],
+)
 def test_invalid_parameters(name: str, args: tuple[object, ...]) -> None:
     image, pillow = images("RGB", (7, 7))
     with pytest.raises(Exception) as expected:
@@ -132,7 +146,9 @@ def test_parallel_filters(name: str, args: tuple[object, ...]) -> None:
 @pytest.mark.parametrize("size", [2, 3, (3, 4, 5), 17, 65])
 @pytest.mark.parametrize("channels", [3, 4])
 def test_color_lut(mode: str, size: int | tuple[int, int, int], channels: int) -> None:
-    callback = lambda r, g, b: (r * r + b * 0.2, 1.2 - g, b - r * 0.3) + ((r * g,) if channels == 4 else ())
+    def callback(r, g, b):
+        return (r * r + b * 0.2, 1.2 - g, b - r * 0.3) + ((r * g,) if channels == 4 else ())
+
     target = "RGBA" if channels == 4 else None
     actual = ImageFilter.Color3DLUT.generate(size, callback, channels, target)
     expected = PillowFilter.Color3DLUT.generate(size, callback, channels, target)
@@ -141,7 +157,9 @@ def test_color_lut(mode: str, size: int | tuple[int, int, int], channels: int) -
     compare(mode, (37, 29), actual, expected)
 
 
-@pytest.mark.parametrize("storage", [list, tuple, lambda values: array("f", values), lambda values: np.array(values, dtype=np.float32), lambda values: np.array(values, dtype=np.float64).reshape(2, 2, 2, 3)])
+@pytest.mark.parametrize(
+    "storage", [list, tuple, lambda values: array("f", values), lambda values: np.array(values, dtype=np.float32), lambda values: np.array(values, dtype=np.float64).reshape(2, 2, 2, 3)]
+)
 def test_lut_storage_and_clipping(storage: type) -> None:
     values = [random.Random(29 + i).uniform(-4, 4) for i in range(24)]
     actual = ImageFilter.Color3DLUT(2, storage(values))
@@ -185,7 +203,10 @@ def test_lut_transform_copy_and_mutation() -> None:
     actual = ImageFilter.Color3DLUT.generate((2, 3, 4), lambda r, g, b: (r, g, b))
     expected = PillowFilter.Color3DLUT.generate((2, 3, 4), lambda r, g, b: (r, g, b))
     for normals in (False, True):
-        callback = lambda *values: tuple(1 - value for value in values[-3:]) + (0.5,)
+
+        def callback(*values):
+            return tuple(1 - value for value in values[-3:]) + (0.5,)
+
         transformed = actual.transform(callback, normals, 4, "RGBA")
         reference = expected.transform(callback, normals, 4, "RGBA")
         assert transformed.table == reference.table

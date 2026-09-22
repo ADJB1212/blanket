@@ -7,7 +7,7 @@ from functools import cached_property
 from . import Image
 from ._blanket import stat_count, stat_extrema, stat_median, stat_normalize, stat_sqrt, stat_sum
 
-__all__ = ["Stat", "Global"]
+__all__ = ["Global", "Stat"]
 
 
 class Stat:

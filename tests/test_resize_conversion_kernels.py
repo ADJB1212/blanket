@@ -27,7 +27,7 @@ def test_parallel_thumbnail_reduction(mode: str, target: tuple[int, int], size: 
     raw = random.Random(81).randbytes(size[0] * size[1] * len(mode))
     image = Image.frombytes(mode, size, raw)
     reference = PillowImage.frombytes(mode, size, raw)
-    options = dict(resample=Image.Resampling.LANCZOS, reducing_gap=3.0)
+    options = {"resample": Image.Resampling.LANCZOS, "reducing_gap": 3.0}
     assert image.resize(target, **options).tobytes() == reference.resize(target, **options).tobytes()
 
 
