@@ -20,13 +20,30 @@ use crate::raster::{Image, PixelMode};
 use crate::{compressor_simd as pixels, parallel};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_class::<LosslessImageCompressor>()
+    module.add_class::<LosslessImageCompressor>()?;
+    module.add_class::<crate::lossy_compressor::LossyImageCompressor>()
 }
 
-#[pyclass(name = "_LosslessImageCompressor", module = "blanket._blanket", frozen)]
+#[derive(FromPyObject)]
+pub(crate) enum Compressor {
+    Lossless(LosslessImageCompressor),
+    Lossy(crate::lossy_compressor::LossyImageCompressor),
+}
+
+impl Compressor {
+    pub(crate) fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+        match self {
+            Self::Lossless(compressor) => compressor.encode(image, format, options),
+            Self::Lossy(compressor) => compressor.encode(image, format, options),
+        }
+    }
+}
+
+#[pyclass(name = "_LosslessImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
+#[derive(Clone, Copy)]
 pub(crate) struct LosslessImageCompressor {
     #[pyo3(get)]
-    effort: u8,
+    pub(crate) effort: u8,
 }
 
 #[pymethods]

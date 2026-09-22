@@ -1,9 +1,8 @@
 # Compressor
 
-`blanket.Compressor` provides optional lossless optimization for individual
-`Image.save()` calls. It searches alternative encodings and keeps the smallest
-one that preserves the normal save's output. PNG, JPEG, JPEG XL, and HEIF/HEIC
-have dedicated optimization paths.
+`blanket.Compressor` provides optional lossless and quality-bounded lossy
+optimization for individual `Image.save()` calls. Both search alternative
+encodings and keep the smallest qualifying result, including the normal save.
 
 ```python
 from blanket import Image
@@ -49,6 +48,55 @@ objects passed as `compressor` raise `TypeError`.
 
 The same compressor can be used for multiple images and formats. Optimization
 does not change the input image's pixels, mode, bit depth, or metadata.
+
+### `LossyImageCompressor(*, max_rmse=2.0, effort=7)`
+
+Search for smaller encodings while bounding **additional** sample error
+relative to the normal save with the same options. The normal save's existing
+loss is not included in this bound. This measures pixel differences, not
+perceptual similarity or error relative to an opened image's original file.
+
+```python
+from blanket.Compressor import LossyImageCompressor
+
+compressor = LossyImageCompressor(max_rmse=2.0, effort=7)
+image.save("smaller.png", compressor=compressor)
+image.convert("RGB").save("smaller.jpg", quality=90, compressor=compressor)
+```
+
+`max_rmse` must be a finite number from 0 through 255. Booleans and nonnumeric
+values raise `TypeError`; out-of-range values raise `ValueError`. `effort`
+accepts integers from 1 through 10 with the same validation as the lossless
+compressor. Both properties are read-only.
+
+For each candidate, decoded samples are normalized to the 0–255 scale,
+grayscale is expanded to RGB, and the root mean square error is computed over
+all RGB samples. Hidden RGB beneath transparent pixels is included. Alpha
+must match exactly; it is excluded from the error average. Each candidate is
+compared to the fixed normal-save reference, never to the previous winner.
+Dimensions are preserved. High-bit-depth codec samples use the same normalized
+error scale without first rounding to eight bits.
+
+| Format | Lossy search |
+| --- | --- |
+| 8-bit non-indexed PNG | Round color samples to progressively coarser steps, then apply lossless PNG optimization; alpha is unchanged |
+| JPEG, WebP, JPEG XL, AVIF, HEIF/HEIC | Try lower quality settings, decode smaller candidates, and check the error bound |
+| Indexed or high-bit-depth PNG, other formats | Retain the lossless compressor's behavior |
+
+The search starts with lossless optimization. At most `effort` additional
+candidates are tried. Higher efforts extend a fixed set of sample steps or
+quality reductions; they do not promise a global optimum. PNG sample steps
+are 2, 3, 4, 6, 8, 12, 16, 24, 32, and 64. Codec quality reductions are
+1, 2, 4, 8, 12, 20, 30, 45, 65, and 99 points, clamped to quality 1.
+Codec `save(..., effort=...)` retains its ordinary meaning independently of
+the compressor's search effort.
+
+`max_rmse=0` uses lossless optimization only. Explicit `lossless=True` also
+disables additional loss for codecs supporting that save option. The smallest
+qualifying result wins, so output is never larger than the normal save.
+Results may remain identical when no smaller candidate meets the bound.
+As with the lossless compressor, the source is unchanged, metadata follows
+ordinary save behavior, and the configuration is reusable across saves.
 
 ## What “lossless” means
 
@@ -150,8 +198,10 @@ candidates at efforts 3–10. Benchmark representative images before choosing
 settings for latency-sensitive saves.
 
 The [compression benchmark](https://github.com/ADJB1212/blanket/blob/main/scripts/benchmark_compression.py) measures size,
-save time, and exact decoded-pixel preservation using nine deterministic
-fixtures, including gradients, noise, palettes, long color runs, and alpha.
+save time, and decoded-pixel error using images from `test_images/`.
+It benchmarks both compressors by default; `--compressor lossless` or
+`--compressor lossy` selects one. `--max-rmse` sets the lossy error limit
+(default 2.0).
 Run it from the repository after the development setup. Use a release build
 for meaningful timing measurements:
 
@@ -159,20 +209,25 @@ for meaningful timing measurements:
 maturin develop -r --extras test --uv
 uv run --no-sync scripts/benchmark_compression.py
 uv run --no-sync scripts/benchmark_compression.py --efforts 1 7 8 10 --repeats 3 --json compression.json
-uv run --no-sync scripts/benchmark_compression.py --formats JPEG JXL HEIF --width 129 --height 127
+uv run --no-sync scripts/benchmark_compression.py --formats JPEG JXL HEIF --compressor lossless
+uv run --no-sync scripts/benchmark_compression.py --compressor lossy --max-rmse 4
 ```
 
 The report includes baseline and optimized byte sizes, percentage saved,
 median save times, and the optimized/baseline time ratio. A ratio above 1 means
 optimization took longer. JSON output also includes individual timing samples
-and the save options used.
+and the save options used. Each row identifies the compressor, measured RGB
+RMSE, alpha preservation, and validation outcome. JSON comparisons distinguish
+compressor types and lossy error limits; older JSON rows are treated as lossless.
 
-`--width` and `--height` set fixture dimensions; `--warmups` controls untimed
-saves. Timings exclude fixture generation, decoding, and verification. The
-benchmark uses quality 90 for JPEG and lossless saves for JXL/HEIF. It compares
-every measured result against its normal save using exact RGBA samples,
-including hidden colors; PNG is also checked against the input.
+`--warmups` controls untimed saves. Timings exclude image loading, decoding,
+and verification. JPEG uses quality 90. JXL/HEIF use lossless saves for the
+lossless compressor and quality 90 for the lossy compressor, so lossy searches
+are enabled. Each result is checked against its own normal save: exact RGBA
+for lossless, or bounded RGB RMSE plus exact alpha for lossy. High-bit-depth
+samples retain their precision during verification. Normal PNG encoding is
+also checked against the input.
 
-A pixel mismatch, size increase, or codec error produces a nonzero exit
-status. Synthetic fixture results are informational and do not represent all
-images or hardware.
+A failed quality check, size increase, or codec error produces a nonzero exit
+status. Benchmark results are informational and do not represent all images
+or hardware.

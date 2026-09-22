@@ -1,10 +1,49 @@
-"""Optional lossless optimization settings for Image.save()."""
+"""Optional optimization settings for Image.save()."""
 
 from __future__ import annotations
 
-from ._blanket import _LosslessImageCompressor
+import math
 
-__all__ = ["LosslessImageCompressor"]
+from ._blanket import _LosslessImageCompressor, _LossyImageCompressor
+
+__all__ = ["LosslessImageCompressor", "LossyImageCompressor"]
+
+
+class LossyImageCompressor:
+    """Search for smaller saves within an additional decoded-pixel error limit.
+
+    ``max_rmse`` is the maximum RGB root-mean-square error relative to the
+    normal save, on a 0-255 scale (including for high-bit-depth images).
+    Alpha must match exactly. Hidden RGB values count toward the error.
+    This is a sample error bound, not a perceptual quality guarantee.
+
+    ``effort`` from 1 through 10 controls the number of candidate trials.
+    PNG tries rounded color samples for 8-bit non-indexed images. JPEG,
+    WebP, JPEG XL, AVIF, and HEIF/HEIC try lower codec quality settings.
+    Explicit ``lossless=True`` disables additional loss. Other formats and
+    indexed or high-bit-depth PNG retain lossless optimization behavior.
+    The normal save remains eligible, so output cannot grow relative to it.
+    The source image is unchanged and this configuration is reusable.
+    """
+
+    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7) -> None:
+        if isinstance(max_rmse, bool) or not isinstance(max_rmse, (int, float)):
+            raise TypeError("max_rmse must be a number")
+        if not 0 <= max_rmse <= 255 or not math.isfinite(max_rmse):
+            raise ValueError("max_rmse must be finite and between 0 and 255")
+        if isinstance(effort, bool) or not isinstance(effort, int):
+            raise TypeError("effort must be an integer")
+        if not 1 <= effort <= 10:
+            raise ValueError("effort must be between 1 and 10")
+        self._native = _LossyImageCompressor(max_rmse=float(max_rmse), effort=effort)
+
+    @property
+    def max_rmse(self) -> float:
+        return self._native.max_rmse
+
+    @property
+    def effort(self) -> int:
+        return self._native.effort
 
 
 class LosslessImageCompressor:

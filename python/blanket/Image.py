@@ -742,14 +742,15 @@ class Image:
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF.
 
-        Pass ``compressor=LosslessImageCompressor(...)`` to optimize this save.
+        Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
+        ``compressor`` to optimize this save.
         Omitting it (or passing None) uses the normal encoder settings.
         """
-        from .Compressor import LosslessImageCompressor
+        from .Compressor import LosslessImageCompressor, LossyImageCompressor
 
         compressor = options.pop("compressor", None)
-        if compressor is not None and not isinstance(compressor, LosslessImageCompressor):
-            raise TypeError("compressor must be a LosslessImageCompressor or None")
+        if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
+            raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
         self._sync_palette()
         values = _save_options(output_format, options)
@@ -849,7 +850,7 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
     """Create an image from packed pixels; depths above 8 use little-endian uint16."""
 
     try:
-        raw = bytes(data)  # type: ignore[arg-type]
+        raw = bytes(data)
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth))
@@ -868,10 +869,10 @@ def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
     if hasattr(fp, "read"):
         stream = fp
         try:
-            stream.seek(0)  # type: ignore[union-attr]
+            stream.seek(0)
         except (AttributeError, OSError):
             pass
-        data = stream.read()  # type: ignore[union-attr]
+        data = stream.read()
         if not isinstance(data, bytes):
             raise ValueError("binary data must be used to open an image")
         return data
@@ -880,7 +881,7 @@ def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
 
 def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, data: bytes) -> None:
     if hasattr(fp, "write"):
-        fp.write(data)  # type: ignore[union-attr]
+        fp.write(data)
         return
     with builtins.open(fp, "wb") as output:
         output.write(data)

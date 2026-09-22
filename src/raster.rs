@@ -676,7 +676,7 @@ impl Image {
     #[allow(clippy::too_many_arguments)]
     fn encode(
         &self, py: Python<'_>, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8,
-        compressor: Option<&crate::compressor::LosslessImageCompressor>,
+        compressor: Option<crate::compressor::Compressor>,
     ) -> PyResult<Py<PyBytes>> {
         let format = ImageFormat::parse(format)?;
         let options = SaveOptions {

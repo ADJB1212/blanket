@@ -137,6 +137,12 @@ lossy save settings still introduce their normal loss. See the
 [Compressor module](docs/Compressor.md) for the API, format-specific behavior,
 and compression benchmarks.
 
+For smaller output with bounded additional pixel error, pass
+`LossyImageCompressor(max_rmse=2.0, effort=7)` from `blanket.Compressor`.
+It searches PNG color precision or lower JPEG, WebP, JPEG XL, AVIF, and
+HEIF/HEIC quality settings, preserving alpha and checking decoded RGB error
+against the normal save. The result never exceeds the normal save's size.
+
 ### Resize, enhance, and filter
 
 ```python

@@ -7,6 +7,7 @@ mod compressor;
 mod compressor_simd;
 mod enhance;
 mod filter;
+mod lossy_compressor;
 mod ops;
 mod ops_simd;
 mod palette;

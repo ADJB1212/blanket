@@ -204,13 +204,18 @@ or codec error produces a nonzero exit status. Synthetic fixture timings are
 informational and should not be treated as representative of all images.
 
 Pass `compressor=LosslessImageCompressor(effort=7)` to `save()`, importing the
-class from `blanket.Compressor`. The object is reusable across images and
+class from `blanket.Compressor`. For bounded additional loss, use
+`LossyImageCompressor(max_rmse=2.0, effort=7)` instead; see the
+[Compressor module](Compressor.md) for the decoded-pixel error definition and
+supported formats. The object is reusable across images and
 formats. Effort must be an integer from 1 through 10. The source image, its
 pixels, and its metadata are not modified. `compressor=None` uses normal saving.
 
 The normal save at the requested quality, lossless setting, and codec effort is
 the baseline. The compressor never selects a larger output. Equal-sized
 candidates retain the earlier encoding, with the baseline tried first.
+
+The following table describes `LosslessImageCompressor`:
 
 | Output | Optimization |
 | --- | --- |
