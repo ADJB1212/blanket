@@ -23,6 +23,10 @@ env:
   FORCE_COLOR: "1"
   MACOSX_DEPLOYMENT_TARGET: "26.0"
   PYTHONFAULTHANDLER: "1"
+  DO_NOT_TRACK: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
 
 permissions:
   contents: read
@@ -42,6 +46,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Cache Rust dependencies and build artifacts
+        id: cargo-cache
         uses: actions/cache@v6
         with:
           path: |
@@ -53,28 +58,33 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python }}
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7
         with:
           version: "latest"
           enable-cache: "false"
           save-cache: "false"
+      - name: Set up Homebrew
+        if: runner.os == 'macOS'
+        id: set-up-homebrew
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
       - name: Install Deps and Setup PATH (Linux)
         if: runner.os == 'Linux'
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
+          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
           echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
           echo "CC=clang-23" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=vendored,user-provided-webp,embedded-libheif" >> "$GITHUB_ENV"
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm
+          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm webp
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
@@ -83,16 +93,26 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=vendored,user-provided-webp" >> "$GITHUB_ENV"
       - name: Check Rust formatting
         run: cargo fmt --check
+      - name: Force rebuild crates that use homebrew dylibs
+        if: runner.os == 'macOS'
+        run: |
+          cargo clean -p libheif-rs
+          cargo clean -p libwebp-sys
+          cargo clean -p libheif-sys
+          cargo clean -p dav1d-sys
+          cargo clean -p webpx
       - name: Install project and test dependencies
         run: |
           uv sync --no-install-project --extra test
           uv tool install maturin
-          maturin develop --extras test --uv --profile dev --features embedded-libheif,vendored -- -C link-arg=-fuse-ld=$FUSE_LINKER
+          maturin develop --extras test --uv --profile dev --features $BUILD_FEATURES -- -C link-arg=-fuse-ld=$FUSE_LINKER
       - name: Test Python API
-        run: uv run --no-sync pytest --ignore=tests/test_benchmark.py --color=no --code-highlight=no
-      - name: Test native SIMD kernels
-        run: cargo test --lib --features embedded-libheif,vendored
+        run: uv run --no-sync pytest --color=no --code-highlight=no
+      - name: Test x86 SIMD kernels
+        if: runner.os == 'Linux'
+        run: cargo test --features $BUILD_FEATURES
       - name: Verify Pillow behavior
         run: uv run --no-sync scripts/verify_behavior.py

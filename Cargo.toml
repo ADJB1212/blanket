@@ -32,12 +32,11 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["neon"] 
 [target.'cfg(target_arch = "x86_64")'.dependencies]
 libwebp-sys = { version = "0.14", default-features = false, features = ["avx2", "sse41"] }
 
-
 [features]
 default = ["vendored"]
 vendored = ["jpegxl-rs/vendored"]
 embedded-libheif = ["libheif-rs/embedded-libheif"]
-build-webp = ["libwebp-sys/system-dylib"]
+user-provided-webp = ["libwebp-sys/system-dylib"]
 
 [build-dependencies]
 rustc_version = "0.4"
