@@ -11,6 +11,7 @@ env:
   RUST_BACKTRACE: "1"
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
+  UV_NO_SYNC: "1"
 
 permissions:
   contents: read
@@ -326,9 +327,9 @@ jobs:
 
       - name: Install project and benchmark dependencies
         run: |
-          uv sync --no-install-project --extra test
+          uv sync --no-install-project --only-group test
           maturin build --release --out dist --features vendored,user-provided-webp -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
           uv pip install --compile-bytecode dist/*.whl
-          uv run --no-sync scripts/benchmark.py --all -v --no-baseline -w 1 -i 10 --sizes web 4K
+          uv run scripts/benchmark.py --all -v --no-baseline -w 1 -i 10 --sizes web 4K

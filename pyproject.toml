@@ -18,11 +18,14 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
 ]
 
-
 [project.urls]
 Repository = "https://github.com/ADJB1212/blanket"
 
-[project.optional-dependencies]
+[dependency-groups]
+dev = [
+  {include-group = "test"},
+  {include-group = "docs"}
+]
 test = [
     "numpy>=2.5",
     "Pillow>=12.3.0",
@@ -32,7 +35,7 @@ test = [
     "rich>=15",
 ]
 docs = [
-    "mkdocs>=1.5.0",
+    "mkdocs>=1.5.0,<2",
     "mkdocs-material>=9.1",
 ]
 
@@ -52,14 +55,17 @@ line-length = 200
 target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["TID", "RUF", "PERF", "E", "UP", "PIE", "ISC", "C4", "FLY", "B", "F", "Q"]
+fixable = ["ALL"]
+extend-select = ["I", "E", "B", "F", "Q", "C4", "UP", "TID", "RUF", "PIE", "ISC", "FLY", "PERF", "FURB"]
 ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402"]
+future-annotations = true
 
 [tool.ruff.format]
 quote-style = "double"
 skip-magic-trailing-comma = true
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+line-ending = "lf"
 
 [tool.ruff.lint.isort]
 known-first-party = ["blanket"]

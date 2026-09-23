@@ -18,6 +18,7 @@ env:
   RUST_BACKTRACE: "1"
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
+  UV_NO_SYNC: "1"
 
 permissions:
   contents: write
@@ -430,7 +431,7 @@ jobs:
       - name: Build wheels
         id: build-wheel
         run: |
-          uv sync --no-install-project
+          uv sync --no-install-project --only-group test
           maturin build --release --out dist --features vendored,user-provided-webp -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3
 
       - name: Save Rust Cache
@@ -445,10 +446,9 @@ jobs:
 
       - name: Install and verify wheels
         run: |
-          uv sync --extra test --no-install-project
           uv pip install --compile-bytecode dist/*.whl
-          uv run --no-sync scripts/verify_behavior.py
-          uv run --no-sync pytest
+          uv run scripts/verify_behavior.py
+          uv run pytest
 
       - uses: actions/upload-artifact@v7
         with:
@@ -536,7 +536,7 @@ jobs:
       - name: Build wheels
         id: build-wheel
         run: |
-          uv sync --no-install-project
+          uv sync --no-install-project --only-group test
           maturin build --release --out dist-unrepaired --features vendored,user-provided-webp -i python3.14 --strip --auditwheel=skip -- -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3
 
       - name: Save Rust Cache
@@ -554,10 +554,9 @@ jobs:
 
       - name: Install and Verify wheels
         run: |
-          uv sync --extra test --no-install-project
           uv pip install --compile-bytecode dist/*.whl
-          uv run --no-sync scripts/verify_behavior.py
-          uv run --no-sync pytest
+          uv run scripts/verify_behavior.py
+          uv run pytest
 
       - uses: actions/upload-artifact@v7
         with:

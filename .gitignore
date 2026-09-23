@@ -17,6 +17,7 @@ bin/
 build/
 develop-eggs/
 dist/
+site/
 eggs/
 lib/
 lib64/
@@ -48,6 +49,9 @@ test_images
 
 # Translations
 *.mo
+
+# MkDocs
+/site
 
 # Mr Developer
 .mr.developer.cfg
