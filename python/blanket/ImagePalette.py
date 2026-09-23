@@ -25,6 +25,19 @@ class ImagePalette:
     """An interleaved color palette, with RGB entries by default."""
 
     def __init__(self, mode: str = "RGB", palette: Sequence[int] | bytes | bytearray | None = None) -> None:
+        """Configure ImagePalette.
+
+        Args:
+            mode: Palette channel layout, normally `RGB` or `RGBA`.
+            palette: Interleaved channel values, or None for an empty palette.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.ImagePalette("RGB", [0, 0, 0, 255, 0, 0])
+            ```
+        """
         self.mode = mode
         self.rawmode: str | None = None
         self.palette = palette or bytearray()
@@ -32,6 +45,16 @@ class ImagePalette:
 
     @property
     def palette(self) -> Sequence[int] | bytes | bytearray:
+        """Mutable interleaved palette entries.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            print(palette.palette)
+            ```
+        """
         return self._palette
 
     @palette.setter
@@ -41,6 +64,16 @@ class ImagePalette:
 
     @property
     def colors(self) -> dict[tuple[int, ...], int]:
+        """Map channel tuples to their first palette index.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            print(palette.colors)
+            ```
+        """
         if self._colors is None:
             self._colors = palette_colors(self.palette, len(self.mode))
         return self._colors
@@ -50,7 +83,16 @@ class ImagePalette:
         self._colors = colors
 
     def copy(self) -> ImagePalette:
-        """Copy the palette data and flags, rebuilding color lookup on demand."""
+        """Copy the palette data and flags, rebuilding color lookup on demand.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            result = palette.copy()
+            ```
+        """
         result = ImagePalette(self.mode)
         result.rawmode = self.rawmode
         result.palette = self.palette[:]
@@ -58,11 +100,29 @@ class ImagePalette:
         return result
 
     def getdata(self) -> tuple[str, Sequence[int] | bytes | bytearray]:
-        """Return the raw mode and data, or the mode and serialized entries."""
+        """Return the raw mode and data, or the mode and serialized entries.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            mode, entries = palette.getdata()
+            ```
+        """
         return (self.rawmode, self.palette) if self.rawmode else (self.mode, self.tobytes())
 
     def tobytes(self) -> bytes:
-        """Serialize a non-raw palette to bytes."""
+        """Serialize a non-raw palette to bytes.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            entries = palette.tobytes()
+            ```
+        """
         self._check_raw()
         return self.palette if isinstance(self.palette, bytes) else array("B", self.palette).tobytes()
 
@@ -90,7 +150,21 @@ class ImagePalette:
         return slot
 
     def getcolor(self, color: tuple[int, ...], image: Image | _PaletteImage | None = None) -> int:
-        """Find or allocate a color, optionally reusing an unused image index."""
+        """Find or allocate a color, optionally reusing an unused image index.
+
+        Args:
+            color: RGB or RGBA tuple matching the palette mode.
+            image: Optional indexed image whose unused entries may be reused.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            palette = ImagePalette.ImagePalette("RGB")
+            index = palette.getcolor((255, 0, 0))
+            ```
+        """
         if self.rawmode:
             raise ValueError("palette contains raw palette data")
         if not isinstance(color, tuple):
@@ -119,7 +193,22 @@ class ImagePalette:
         return slot
 
     def save(self, fp: str | IO[str]) -> None:
-        """Write a 256-entry text palette to a filename or text stream."""
+        """Write a 256-entry text palette to a filename or text stream.
+
+        Args:
+            fp: Filename or writable text stream.
+
+        Examples:
+            ```python
+            from blanket import ImagePalette
+
+            palette = ImagePalette.wedge()
+            from io import StringIO
+
+            output = StringIO()
+            palette.save(output)
+            ```
+        """
         self._check_raw()
         channels = len(self.mode)
         palette = self.palette
@@ -135,7 +224,19 @@ class ImagePalette:
 
 
 def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:
-    """Wrap encoded palette data without interpreting its layout."""
+    """Wrap encoded palette data without interpreting its layout.
+
+    Args:
+        rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
+        data: Raw encoded palette entries.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.raw("RGB", bytes([0, 0, 0, 255, 0, 0]))
+        ```
+    """
     result = ImagePalette()
     result.rawmode = rawmode
     result.palette = data
@@ -144,6 +245,19 @@ def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:
 
 
 def make_linear_lut(black: int, white: float) -> list[int]:
+    """Return a 256-entry linear intensity lookup table.
+
+    Args:
+        black: Black endpoint; only 0 is supported.
+        white: White endpoint of the linear ramp.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.make_linear_lut(0, 255)
+        ```
+    """
     if black != 0:
         raise NotImplementedError("unavailable when black is non-zero")
     if isinstance(white, int) and -(1 << 45) <= white <= 1 << 45:
@@ -152,22 +266,70 @@ def make_linear_lut(black: int, white: float) -> list[int]:
 
 
 def make_gamma_lut(exp: float) -> list[int]:
+    """Return a 256-entry gamma correction lookup table.
+
+    Args:
+        exp: Gamma exponent applied to normalized intensity values.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.make_gamma_lut(2.2)
+        ```
+    """
     if isinstance(exp, (int, float)) and 0 <= exp <= 1e300 and math.isfinite(exp):
         return palette_gamma(exp)
     return [int((value / 255.0) ** exp * 255.0 + 0.5) for value in range(256)]
 
 
 def negative(mode: str = "RGB") -> ImagePalette:
+    """Create a descending grayscale palette.
+
+    Args:
+        mode: Palette channel layout, normally `RGB` or `RGBA`.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.negative()
+        ```
+    """
     return ImagePalette(mode, palette_ramp(len(mode), True))
 
 
 def random(mode: str = "RGB") -> ImagePalette:
+    """Create a palette with 256 random colors.
+
+    Args:
+        mode: Palette channel layout, normally `RGB` or `RGBA`.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.random()
+        ```
+    """
     from random import randint
 
     return ImagePalette(mode, [randint(0, 255) for _ in range(256 * len(mode))])
 
 
 def sepia(white: str = "#fff0c0") -> ImagePalette:
+    """Create a black-to-sepia RGB palette.
+
+    Args:
+        white: CSS color for the lightest palette entry.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.sepia("#fff0c0")
+        ```
+    """
     channels = _rgb(white)
     if all(-(1 << 45) <= channel <= 1 << 45 for channel in channels):
         return ImagePalette("RGB", palette_sepia(channels[:3]))
@@ -176,10 +338,38 @@ def sepia(white: str = "#fff0c0") -> ImagePalette:
 
 
 def wedge(mode: str = "RGB") -> ImagePalette:
+    """Create an ascending grayscale palette.
+
+    Args:
+        mode: Palette channel layout, normally `RGB` or `RGBA`.
+
+    Examples:
+        ```python
+        from blanket import ImagePalette
+
+        result = ImagePalette.wedge()
+        ```
+    """
     return ImagePalette(mode, palette_ramp(len(mode), False))
 
 
 def load(filename: str) -> tuple[bytes, str]:
-    """Load a text palette, GIMP palette, or GIMP RGB gradient."""
+    """Load a text palette, GIMP palette, or GIMP RGB gradient.
+
+    Args:
+        filename: Path to a text palette, GIMP palette, or GIMP gradient.
+
+    Examples:
+        ```python
+        from pathlib import Path
+        from tempfile import TemporaryDirectory
+        from blanket import ImagePalette
+
+        with TemporaryDirectory() as directory:
+            path = str(Path(directory) / "palette.txt")
+            ImagePalette.wedge().save(path)
+            entries, mode = ImagePalette.load(path)
+        ```
+    """
     with open(filename, "rb") as stream:
         return load_palette(stream)

@@ -41,67 +41,251 @@ def _binary(image1: Image.Image, image2: Image.Image, operation: str, scale: flo
 
 
 def difference(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the absolute difference between corresponding channel values."""
+    """Return the absolute difference between corresponding channel values.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.difference(image, other)
+        ```
+    """
     return _binary(image1, image2, "difference")
 
 
 def multiply(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Multiply corresponding channel values and divide by 255."""
+    """Multiply corresponding channel values and divide by 255.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.multiply(image, other)
+        ```
+    """
     return _binary(image1, image2, "multiply")
 
 
 def screen(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Invert, multiply, and invert again to lighten the inputs."""
+    """Invert, multiply, and invert again to lighten the inputs.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.screen(image, other)
+        ```
+    """
     return _binary(image1, image2, "screen")
 
 
 def lighter(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the larger value in each channel."""
+    """Return the larger value in each channel.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.lighter(image, other)
+        ```
+    """
     return _binary(image1, image2, "lighter")
 
 
 def darker(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the smaller value in each channel."""
+    """Return the smaller value in each channel.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.darker(image, other)
+        ```
+    """
     return _binary(image1, image2, "darker")
 
 
 def add(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: int = 0) -> Image.Image:
-    """Add channels, divide by scale, add offset, and clip to 0..255."""
+    """Add channels, divide by scale, add offset, and clip to 0..255.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+        scale: Divisor applied before the offset; must be nonzero.
+        offset: Value added after scaling.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.add(image, other)
+        ```
+    """
     return _binary(image1, image2, "add", scale, offset)
 
 
 def subtract(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: int = 0) -> Image.Image:
-    """Subtract channels, divide by scale, add offset, and clip to 0..255."""
+    """Subtract channels, divide by scale, add offset, and clip to 0..255.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+        scale: Divisor applied before the offset; must be nonzero.
+        offset: Value added after scaling.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.subtract(image, other)
+        ```
+    """
     return _binary(image1, image2, "subtract", scale, offset)
 
 
 def add_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Add channels with wraparound modulo 256."""
+    """Add channels with wraparound modulo 256.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.add_modulo(image, other)
+        ```
+    """
     return _binary(image1, image2, "add_modulo")
 
 
 def subtract_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Subtract channels with wraparound modulo 256."""
+    """Subtract channels with wraparound modulo 256.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.subtract_modulo(image, other)
+        ```
+    """
     return _binary(image1, image2, "subtract_modulo")
 
 
 def soft_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Combine images using Pillow's soft-light blend."""
+    """Combine images using Pillow's soft-light blend.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.soft_light(image, other)
+        ```
+    """
     return _binary(image1, image2, "soft_light")
 
 
 def hard_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Multiply or screen according to the second image's channel values."""
+    """Multiply or screen according to the second image's channel values.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.hard_light(image, other)
+        ```
+    """
     return _binary(image1, image2, "hard_light")
 
 
 def overlay(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Multiply or screen according to the first image's channel values."""
+    """Multiply or screen according to the first image's channel values.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.overlay(image, other)
+        ```
+    """
     return _binary(image1, image2, "overlay")
 
 
 def invert(image: Image.Image) -> Image.Image:
-    """Subtract every channel, including alpha, from 255."""
+    """Subtract every channel, including alpha, from 255.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageChops.invert(image)
+        ```
+    """
     image.load()
     result = Image.Image(chops_invert(image._native))
     result.info.update(image.info)
@@ -109,7 +293,21 @@ def invert(image: Image.Image) -> Image.Image:
 
 
 def offset(image: Image.Image, xoffset: int, yoffset: int | None = None) -> Image.Image:
-    """Translate with wraparound; the vertical offset defaults to xoffset."""
+    """Translate with wraparound; the vertical offset defaults to xoffset.
+
+    Args:
+        image: Input image.
+        xoffset: Horizontal translation in pixels; pixels wrap around.
+        yoffset: Vertical translation, or None to use the horizontal offset.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageChops.offset(image, xoffset=2, yoffset=1)
+        ```
+    """
     image.load()
     result = Image.Image(chops_offset(image._native, xoffset, xoffset if yoffset is None else yoffset))
     result.info.update(image.info)
@@ -117,20 +315,76 @@ def offset(image: Image.Image, xoffset: int, yoffset: int | None = None) -> Imag
 
 
 def constant(image: Image.Image, value: int) -> Image.Image:
-    """Return a constant L image with the input's dimensions."""
+    """Return a constant L image with the input's dimensions.
+
+    Args:
+        image: Input image.
+        value: Pixel value or channel tuple.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageChops.constant(image, value=128)
+        ```
+    """
     return Image.new("L", image.size, value)
 
 
 def duplicate(image: Image.Image) -> Image.Image:
-    """Return an independent copy of an image."""
+    """Return an independent copy of an image.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageChops.duplicate(image)
+        ```
+    """
     return image.copy()
 
 
 def blend(image1: Image.Image, image2: Image.Image, alpha: float) -> Image.Image:
-    """Interpolate two images with a constant blending factor."""
+    """Interpolate two images with a constant blending factor.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+        alpha: Blending weight: 0 selects the first image and 1 the second; values outside this range extrapolate.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = ImageChops.blend(image, other, alpha=0.5)
+        ```
+    """
     return Image.blend(image1, image2, alpha)
 
 
 def composite(image1: Image.Image, image2: Image.Image, mask: Image.Image) -> Image.Image:
-    """Select between images using an L or RGBA mask."""
+    """Select between images using an L or RGBA mask.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        mask = Image.new("L", image.size, 128)
+        result = ImageChops.composite(image, other, mask)
+        ```
+    """
     return Image.composite(image1, image2, mask)

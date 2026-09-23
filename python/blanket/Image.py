@@ -99,13 +99,54 @@ AFFINE, EXTENT, PERSPECTIVE, QUAD, MESH = Transform
 
 
 class SupportsGetData(Protocol):
-    def getdata(self) -> tuple[int, Sequence[object]]: ...
+    """Protocol for objects supplying a transformation method and coefficients."""
+
+    def getdata(self) -> tuple[int, Sequence[object]]:
+        """Return the transformation identifier and its associated data.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+
+            class IdentityTransform:
+                def getdata(self):
+                    return Image.Transform.AFFINE, (1, 0, 0, 0, 1, 0)
+
+
+            image = Image.new("RGB", (8, 8), "navy")
+            result = image.transform(image.size, IdentityTransform())
+            ```
+        """
+        ...
 
 
 class ImageTransformHandler:
     """Base class for custom transformation handlers."""
 
     def transform(self, size: tuple[int, int], image: Image, resample: int = Resampling.NEAREST, fill: int = 1) -> Image:
+        """Implement this method in a custom handler to return a transformed image.
+
+        Args:
+            size: Output `(width, height)` in pixels.
+            image: Input image.
+            resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+            fill: Pillow-compatible fill flag.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+
+            class CopyHandler(Image.ImageTransformHandler):
+                def transform(self, size, image, resample=Image.Resampling.NEAREST, fill=1):
+                    return image.resize(size, resample)
+
+
+            image = Image.new("RGB", (8, 8), "navy")
+            result = image.transform((16, 16), CopyHandler())
+            ```
+        """
         raise NotImplementedError
 
 
@@ -126,54 +167,173 @@ class Image:
 
     @property
     def mode(self) -> str:
+        """Pixel mode of this image.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.mode)
+            ```
+        """
         return self._native.mode
 
     @property
     def bit_depth(self) -> int:
-        """Significant bits per channel (8, 10, 12, or 16)."""
+        """Significant bits per channel (8, 10, 12, or 16).
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.bit_depth)
+            ```
+        """
         return self._native.bit_depth
 
     @property
     def size(self) -> tuple[int, int]:
+        """Image dimensions as (width, height).
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.size)
+            ```
+        """
         return self._native.size
 
     @property
     def width(self) -> int:
+        """Image width in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.width)
+            ```
+        """
         return self._native.width
 
     @property
     def height(self) -> int:
+        """Image height in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.height)
+            ```
+        """
         return self._native.height
 
     @property
     def format(self) -> str | None:
+        """Detected input format, or None for a newly created image.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.format)
+            ```
+        """
         return self._native.format
 
     @property
     def info(self) -> dict[object, object]:
+        """Mutable metadata dictionary.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.info)
+            ```
+        """
         return self._info
 
     @property
     def is_animated(self) -> bool:
-        """Blanket exposes a single frame for every supported image."""
+        """Blanket exposes a single frame for every supported image.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.is_animated)
+            ```
+        """
         return False
 
     @property
     def has_transparency_data(self) -> bool:
-        """Whether alpha or transparency metadata exists, even if opaque."""
+        """Whether alpha or transparency metadata exists, even if opaque.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(image.has_transparency_data)
+            ```
+        """
         return self.mode == "RGBA" or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> None:
-        """Validate that this eagerly loaded image remains open."""
+        """Validate that this eagerly loaded image remains open.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.load()
+            ```
+        """
 
         self._native.load()
         self._sync_palette()
 
     def close(self) -> None:
+        """Release the image's pixel buffer.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.close()
+            ```
+        """
         self._native.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
-        """Return a new image converted to `L`, `RGB`, or `RGBA`."""
+        """Return a new image converted to `L`, `RGB`, or `RGBA`.
+
+        Args:
+            mode: Destination mode: `L`, `RGB`, or `RGBA`.
+            bit_depth: Output sample depth, or None to retain the input depth.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.convert("L")
+            ```
+        """
 
         if mode == "P" and self.mode != "P":
             return self.quantize()
@@ -187,14 +347,35 @@ class Image:
             self._native.set_palette(self.palette.mode, self.palette.tobytes())
 
     def copy(self) -> Image:
-        """Return an independent copy of the pixels, palette, and metadata."""
+        """Return an independent copy of the pixels, palette, and metadata.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.copy()
+            ```
+        """
         self._sync_palette()
         result = Image(self._native.copy())
         result.info.update(self.info)
         return result
 
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
-        """Return a pixel value, accepting negative coordinates as Pillow does."""
+        """Return a pixel value, accepting negative coordinates as Pillow does.
+
+        Args:
+            xy: Pixel `(x, y)` coordinates. Negative coordinates count from the right or bottom.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixel = image.getpixel((0, 0))
+            ```
+        """
         if isinstance(xy, (tuple, list)) and len(xy) == 2 and isinstance(xy[0], int) and isinstance(xy[1], int):
             # Native access already validates the image and coordinates.
             return self._native.getpixel((xy[0], xy[1]))
@@ -207,7 +388,19 @@ class Image:
         return self._native.getpixel(coordinates)
 
     def getpalette(self, rawmode: str | None = "RGB") -> list[int] | None:
-        """Return interleaved palette entries, or None for non-palette images."""
+        """Return interleaved palette entries, or None for non-palette images.
+
+        Args:
+            rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            palette = image.quantize(colors=8).getpalette()
+            ```
+        """
         self.load()
         if self.palette is None:
             return None
@@ -225,30 +418,106 @@ class Image:
         """Write an 8-bit pixel, accepting negative coordinates and clipping values.
 
         Palette images accept numeric indices, not RGB color allocation.
+
+        Args:
+            xy: Pixel `(x, y)` coordinates. Negative coordinates count from the right or bottom.
+            value: Pixel value or channel tuple.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.putpixel((0, 0), (255, 0, 0))
+            ```
         """
         if self.mode == "P" and isinstance(value, tuple) and len(value) != 1:
             raise ValueError("palette putpixel requires an index")
         self._native.putpixel(tuple(index(v) for v in xy), value)
 
     def getdata(self, band: int | None = None) -> list[int | tuple[int, ...]]:
-        """Return a flat pixel snapshot, optionally selecting one band."""
+        """Return a flat pixel snapshot, optionally selecting one band.
+
+        Args:
+            band: Zero-based channel index, or None for all channels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixels = image.getdata()
+            ```
+        """
         source = self if band is None else self.getchannel(index(band))
         return source._native.getdata()
 
     def get_flattened_data(self, band: int | None = None) -> tuple[int | tuple[int, ...], ...]:
-        """Return an immutable flat pixel snapshot, as in recent Pillow versions."""
+        """Return an immutable flat pixel snapshot, as in recent Pillow versions.
+
+        Args:
+            band: Zero-based channel index, or None for all channels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixels = image.get_flattened_data()
+            ```
+        """
         return tuple(self.getdata(band))
 
     def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
-        """Write 8-bit pixels in row order; scale/offset apply to single-band data."""
+        """Write 8-bit pixels in row order; scale/offset apply to single-band data.
+
+        Args:
+            data: Pixel values in row order. Short input leaves remaining pixels unchanged.
+            scale: Multiplier for single-band input values.
+            offset: Offset added after multiplying single-band values.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.putdata([(255, 0, 0)] * 64)
+            ```
+        """
         self._native.putdata(data, scale, offset)
 
     def getcolors(self, maxcolors: int = 256) -> list[tuple[int, int | tuple[int, ...]]] | None:
-        """Return unordered (count, pixel) pairs, or None above maxcolors."""
+        """Return unordered (count, pixel) pairs, or None above maxcolors.
+
+        Args:
+            maxcolors: Maximum number of distinct colors to return; exceeding it returns None.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            counts = image.getcolors(maxcolors=256)
+            ```
+        """
         return self._native.getcolors(max(0, index(maxcolors)))
 
     def putpalette(self, data: Sequence[int] | bytes | ImagePalette, rawmode: str = "RGB") -> None:
-        """Attach an RGB or RGBA palette to an L or P image."""
+        """Attach an RGB or RGBA palette to an L or P image.
+
+        Args:
+            data: Interleaved palette entries or an ImagePalette object.
+            rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image = Image.new("P", (8, 8))
+            image.putpalette([0, 0, 0, 255, 0, 0])
+            ```
+        """
         from .ImagePalette import ImagePalette
 
         self.load()
@@ -265,6 +534,21 @@ class Image:
         MEDIANCUT, MAXCOVERAGE, and FASTOCTREE run in the native backend.
         LIBIMAGEQUANT is unavailable in this build. Generated palette ordering
         and color choices may differ from Pillow's implementations.
+
+        Args:
+            colors: Maximum palette size, from 1 through 256.
+            method: Quantizer from `Image.Quantize`; defaults to FASTOCTREE for RGBA and MEDIANCUT otherwise.
+            kmeans: Number of k-means refinement iterations for supported quantizers.
+            palette: Optional indexed image supplying the destination palette.
+            dither: Dithering mode from `Image.Dither`.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.quantize(colors=8)
+            ```
         """
         from ._blanket import quantize
 
@@ -295,10 +579,34 @@ class Image:
         return result
 
     def tobytes(self) -> bytes:
+        """Return packed pixels; high-depth samples use little-endian uint16 storage.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixels = image.tobytes()
+            ```
+        """
         return self._native.tobytes()
 
     def filter(self, filter: Filter | type[Filter]) -> Image:
-        """Return a filtered image, accepting a filter instance or class."""
+        """Return a filtered image, accepting a filter instance or class.
+
+        Args:
+            filter: Filter instance or filter class from `ImageFilter`.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from blanket import ImageFilter
+
+            result = image.filter(ImageFilter.GaussianBlur(radius=2))
+            ```
+        """
         from ._blanket import filter_merge
         from .ImageFilter import MultibandFilter
 
@@ -317,7 +625,21 @@ class Image:
         return result
 
     def paste(self, im: Image | str | int | tuple[int, ...], box: Image | tuple[int, ...] | None = None, mask: Image | None = None) -> None:
-        """Paste pixels or a color, optionally interpolating through an L/RGBA mask."""
+        """Paste pixels or a color, optionally interpolating through an L/RGBA mask.
+
+        Args:
+            im: Source image or fill color.
+            box: Destination origin or rectangle, or a mask image as the second positional argument.
+            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.paste("red", (0, 0, 4, 4))
+            ```
+        """
         from ._blanket import image_paste
 
         if isinstance(box, Image):
@@ -352,7 +674,23 @@ class Image:
         image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
 
     def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0)) -> None:
-        """Composite an RGBA source region onto this image in place."""
+        """Composite an RGBA source region onto this image in place.
+
+        Args:
+            im: RGBA source image.
+            dest: Destination `(x, y)` position.
+            source: Source `(x, y)` origin or `(left, top, right, bottom)` region.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image = image.convert("RGBA")
+            overlay = Image.new("RGBA", (4, 4), (255, 0, 0, 128))
+            image.alpha_composite(overlay, dest=(2, 2))
+            ```
+        """
         if not isinstance(source, (list, tuple)) or len(source) not in (2, 4):
             raise ValueError("Source must be a sequence of length 2 or 4")
         if not isinstance(dest, (list, tuple)) or len(dest) != 2:
@@ -377,6 +715,17 @@ class Image:
         """Replace alpha in place; RGB images become RGBA.
 
         L and P inputs are unsupported because Blanket does not implement LA/PA.
+
+        Args:
+            alpha: L image matching the image size, or a constant alpha value from 0 through 255.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.putalpha(128)
+            ```
         """
         from ._blanket import image_putalpha
 
@@ -390,7 +739,16 @@ class Image:
         self._bands = _BANDS["RGBA"]
 
     def split(self) -> tuple[Image, ...]:
-        """Return independent L images for each band, in channel order."""
+        """Return independent L images for each band, in channel order.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            red, green, blue = image.split()
+            ```
+        """
         from ._blanket import ops_split
 
         bands = tuple(Image(native) for native in ops_split(self._native))
@@ -399,11 +757,32 @@ class Image:
         return bands
 
     def getbands(self) -> tuple[str, ...]:
-        """Return channel names in pixel order."""
+        """Return channel names in pixel order.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            bands = image.getbands()
+            ```
+        """
         return self._bands
 
     def getchannel(self, channel: int | str) -> Image:
-        """Return an independent L image for a channel name or index."""
+        """Return an independent L image for a channel name or index.
+
+        Args:
+            channel: Channel name, such as `R`, or zero-based channel index.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            red = image.getchannel("R")
+            ```
+        """
         self.load()
         if isinstance(channel, str):
             try:
@@ -418,7 +797,20 @@ class Image:
         return result
 
     def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:
-        """Return 256 bins per band for 8-bit pixels; extrema is ignored."""
+        """Return 256 bins per band for 8-bit pixels; extrema is ignored.
+
+        Args:
+            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            extrema: Accepted for Pillow compatibility; ignored.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            counts = image.histogram()
+            ```
+        """
         from ._blanket import ops_histogram
 
         self.load()
@@ -429,18 +821,52 @@ class Image:
         return ops_histogram(self._native, None if mask is None else mask._native)
 
     def getextrema(self) -> tuple[int, int] | tuple[tuple[int, int], ...] | None:
-        """Return the minimum and maximum sample value of each band."""
+        """Return the minimum and maximum sample value of each band.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            extrema = image.getextrema()
+            ```
+        """
         ranges = self._native.getextrema()
         if not ranges:
             return None
         return ranges[0] if len(ranges) == 1 else tuple(ranges)
 
     def getbbox(self, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
-        """Return the nonzero bounding box, using RGBA alpha by default."""
+        """Return the nonzero bounding box, using RGBA alpha by default.
+
+        Args:
+            alpha_only: For RGBA images, inspect only alpha when true; otherwise inspect all channels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            box = image.getbbox()
+            ```
+        """
         return self._native.getbbox(alpha_only)
 
     def point(self, lut: Sequence[float] | Callable[[int], float], mode: str | None = None) -> Image:
-        """Map 8-bit channels through a table or a function evaluated 256 times."""
+        """Map 8-bit channels through a table or a function evaluated 256 times.
+
+        Args:
+            lut: 256 entries per input channel, or a callable evaluated for each possible 8-bit value.
+            mode: Optional output mode; must match the input mode.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.point(lambda value: 255 - value)
+            ```
+        """
         from ._blanket import ops_lut
 
         self.load()
@@ -454,7 +880,21 @@ class Image:
         return result
 
     def thumbnail(self, size: tuple[float, float], resample: int = Resampling.BICUBIC, reducing_gap: float | None = 2.0) -> None:
-        """Shrink in place to fit size, preserving aspect ratio without upscaling."""
+        """Shrink in place to fit size, preserving aspect ratio without upscaling.
+
+        Args:
+            size: Output `(width, height)` in pixels.
+            resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+            reducing_gap: Optional pre-reduction optimization threshold; must be at least 1.0.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            image.thumbnail((4, 4))
+            ```
+        """
         self.load()
         x, y = (math.floor(v) for v in size)
         if x <= 0 or y <= 0:
@@ -479,6 +919,18 @@ class Image:
 
         factor can specify horizontal and vertical factors separately.
         box selects a nonempty source rectangle within the image.
+
+        Args:
+            factor: Positive integer reduction factor, or separate `(x, y)` factors.
+            box: Optional source `(left, top, right, bottom)` rectangle.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.reduce(2)
+            ```
         """
         from ._blanket import ops_reduce
 
@@ -509,6 +961,18 @@ class Image:
 
         An L mask selects pixels with nonzero values. As in Pillow, extrema
         is ignored for the supported 8-bit modes.
+
+        Args:
+            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            extrema: Accepted for Pillow compatibility; ignored.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            entropy = image.entropy()
+            ```
         """
         from ._blanket import ops_entropy
 
@@ -518,7 +982,19 @@ class Image:
         return ops_entropy(self._native, None if mask is None else mask._native)
 
     def transpose(self, method: int) -> Image:
-        """Return a flipped or right-angle rotated copy using ``Transpose``."""
+        """Return a flipped or right-angle rotated copy using ``Transpose``.
+
+        Args:
+            method: Flip or right-angle rotation from `Image.Transpose`.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.transpose(Image.Transpose.ROTATE_90)
+            ```
+        """
         from ._blanket import ops_transpose
 
         method = index(method)
@@ -543,6 +1019,22 @@ class Image:
         a source rectangle. QUAD takes NW, SW, SE, NE source corners; MESH
         takes (destination rectangle, source quad) pairs in drawing order.
         Supports NEAREST, BILINEAR and BICUBIC, plus optional fillcolor.
+
+        Args:
+            size: Output `(width, height)` in pixels.
+            method: Method from `Image.Transform`, a getdata() object, or an ImageTransformHandler.
+            data: Coefficients, source rectangle, quadrilateral, or mesh for the selected transform.
+            resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+            fill: Pillow-compatible fill flag.
+            fillcolor: Color for pixels outside the source image.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.transform((8, 8), Image.Transform.AFFINE, (1, 0, 1, 0, 1, 0))
+            ```
         """
         from ._blanket import ops_affine, ops_warp
         from ._color import color_pixel
@@ -600,6 +1092,17 @@ class Image:
 
         Coordinates are ``(left, upper, right, lower)``. Areas outside the
         source image are padded with zero-valued pixels, as in Pillow.
+
+        Args:
+            box: `(left, top, right, bottom)` rectangle, or None to copy the image; outside pixels are zero-filled.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.crop((1, 1, 7, 7))
+            ```
         """
         from ._blanket import ops_canvas, ops_transpose
 
@@ -623,6 +1126,20 @@ class Image:
 
         ``box`` selects a source rectangle within the image. ``reducing_gap``
         optionally enables integer reduction before filtering (at least 1.0).
+
+        Args:
+            size: Output `(width, height)` in pixels.
+            resample: Filter from `Image.Resampling`; None selects BICUBIC, or NEAREST for indexed images.
+            box: Optional floating-point source rectangle.
+            reducing_gap: Optional pre-reduction optimization threshold; must be at least 1.0.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.resize((16, 16), Image.Resampling.LANCZOS)
+            ```
         """
         from ._blanket import ops_reduce, ops_resize, ops_transpose
 
@@ -679,6 +1196,22 @@ class Image:
         is the image midpoint; translate shifts the result after rotation.
         expand enlarges the canvas assuming the default center and no translation.
         fillcolor colors pixels outside the source image.
+
+        Args:
+            angle: Counterclockwise angle in degrees.
+            resample: NEAREST, BILINEAR, or BICUBIC from `Image.Resampling`.
+            expand: Expand the output canvas to contain the rotated image.
+            center: Rotation center in pixel coordinates, or None for the image center.
+            translate: Optional `(x, y)` translation after rotation.
+            fillcolor: Color for pixels outside the source image.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.rotate(30, expand=True)
+            ```
         """
         from ._blanket import ops_affine, ops_transpose
         from ._color import color_pixel
@@ -724,7 +1257,16 @@ class Image:
         return result
 
     def to_pillow(self) -> object:
-        """Return an equivalent Pillow image when Pillow is installed."""
+        """Return an equivalent Pillow image for interoperability.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pillow_image = image.to_pillow()
+            ```
+        """
 
         if self.bit_depth != 8:
             raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
@@ -745,6 +1287,22 @@ class Image:
         Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
         ``compressor`` to optimize this save.
         Omitting it (or passing None) uses the normal encoder settings.
+
+        Args:
+            fp: Filename, path-like object, or binary stream.
+            format: Output format name; inferred from the filename when omitted.
+            **options: Format-specific encoder options and optional `compressor`; see the formats guide.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+
+            output = BytesIO()
+            image.save(output, format="PNG")
+            ```
         """
         from .Compressor import LosslessImageCompressor, LossyImageCompressor
 
@@ -769,7 +1327,20 @@ class Image:
 
 
 def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | None = 0) -> Image:
-    """Create an 8-bit L, RGB, RGBA, or indexed image filled with color."""
+    """Create an 8-bit L, RGB, RGBA, or indexed image filled with color.
+
+    Args:
+        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        size: Output `(width, height)` in pixels.
+        color: Fill value, channel tuple, or CSS color string.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (64, 64), "navy")
+        ```
+    """
     from ._blanket import image_new
     from ._color import color_pixel
 
@@ -789,7 +1360,21 @@ def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | N
 
 
 def merge(mode: str, bands: Sequence[Image]) -> Image:
-    """Interleave L bands into an independent L, RGB, or RGBA image."""
+    """Interleave L bands into an independent L, RGB, or RGBA image.
+
+    Args:
+        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        bands: Sequence of single-channel L images, one per output band.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        red, green, blue = image.split()
+        result = Image.merge("RGB", (blue, green, red))
+        ```
+    """
     from ._blanket import filter_merge
 
     bands = tuple(bands)
@@ -799,7 +1384,22 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
 
 
 def blend(im1: Image, im2: Image, alpha: float) -> Image:
-    """Interpolate equal-sized 8-bit images, clipping extrapolated values."""
+    """Interpolate equal-sized 8-bit images, clipping extrapolated values.
+
+    Args:
+        im1: First image; both inputs must have the same mode and dimensions.
+        im2: Second image.
+        alpha: Blending weight: 0 selects the first image and 1 the second; values outside this range extrapolate.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        result = Image.blend(image, other, 0.25)
+        ```
+    """
     from ._blanket import enhance_blend
 
     im1.load()
@@ -812,7 +1412,23 @@ def blend(im1: Image, im2: Image, alpha: float) -> Image:
 
 
 def composite(image1: Image, image2: Image, mask: Image) -> Image:
-    """Select between images using an L or RGBA mask through native paste."""
+    """Select between images using an L or RGBA mask through native paste.
+
+    Args:
+        image1: First input image; its mode and dimensions must match the second image.
+        image2: Second input image.
+        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        other = Image.new("RGB", image.size, "white")
+        mask = Image.new("L", image.size, 128)
+        result = Image.composite(image, other, mask)
+        ```
+    """
     if image1.size != image2.size:
         raise ValueError("images do not match")
     result = image2.copy()
@@ -821,7 +1437,21 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
 
 
 def alpha_composite(im1: Image, im2: Image) -> Image:
-    """Return im2 composited over im1; both must be equal-sized 8-bit RGBA."""
+    """Return im2 composited over im1; both must be equal-sized 8-bit RGBA.
+
+    Args:
+        im1: First image; both inputs must have the same mode and dimensions.
+        im2: Second image.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        background = Image.new("RGBA", (8, 8), "navy")
+        overlay = Image.new("RGBA", (8, 8), (255, 0, 0, 128))
+        result = Image.alpha_composite(background, overlay)
+        ```
+    """
     from ._blanket import image_alpha_composite
 
     result = Image(image_alpha_composite(im1._native, im2._native))
@@ -830,7 +1460,27 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
 
 
 def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None) -> Image:
-    """Open and eagerly decode a supported image."""
+    """Open and eagerly decode a supported image.
+
+    Args:
+        fp: Image filename, path-like object, or binary stream. Decoding is eager.
+        mode: Read mode; only `r` is supported.
+        formats: Optional allowlist of format names to attempt.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        from io import BytesIO
+
+        encoded = BytesIO()
+        image.save(encoded, format="PNG")
+        encoded.seek(0)
+        with Image.open(encoded) as reopened:
+            print(reopened.size)
+        ```
+    """
 
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
@@ -847,7 +1497,21 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
 
 
 def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int = 8) -> Image:
-    """Create an image from packed pixels; depths above 8 use little-endian uint16."""
+    """Create an image from packed pixels; depths above 8 use little-endian uint16.
+
+    Args:
+        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        size: Output `(width, height)` in pixels.
+        data: Contiguous packed pixel buffer; depths above 8 use little-endian uint16 samples.
+        bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.frombytes("RGB", (2, 1), bytes([255, 0, 0, 0, 255, 0]))
+        ```
+    """
 
     try:
         raw = bytes(data)
@@ -860,7 +1524,22 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
 
 
 def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
-    """Create an image from uint8 or uint16 samples exposing the array interface."""
+    """Create an image from uint8 or uint16 samples exposing the array interface.
+
+    Args:
+        obj: Object exposing the array interface with uint8 or uint16 samples.
+        mode: Optional mode matching the array's channel layout.
+        bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
+
+    Examples:
+        ```python
+        import numpy as np
+        from blanket import Image
+
+        pixels = np.zeros((8, 8, 3), dtype=np.uint8)
+        image = Image.fromarray(pixels)
+        ```
+    """
 
     return Image(_native_fromarray(obj, mode, bit_depth))
 

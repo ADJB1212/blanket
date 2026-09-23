@@ -19,6 +19,21 @@ class Stat:
     """
 
     def __init__(self, image_or_list: Image.Image | list[int], mask: Image.Image | None = None) -> None:
+        """Configure Stat.
+
+        Args:
+            image_or_list: An 8-bit image or a histogram with 256 nonnegative integer counts per band.
+            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.mean)
+            ```
+        """
         if isinstance(image_or_list, list):
             self.h = image_or_list
         elif isinstance(image_or_list, Image.Image):
@@ -32,52 +47,152 @@ class Stat:
 
     @cached_property
     def bands(self) -> list[int]:
-        """Band indices, materialized only when requested."""
+        """Band indices, materialized only when requested.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.bands)
+            ```
+        """
         return list(range(self._band_count))
 
     @cached_property
     def extrema(self) -> list[tuple[int, int]]:
-        """Lowest and highest occupied bin per band; (255, 0) if empty."""
+        """Lowest and highest occupied bin per band; (255, 0) if empty.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.extrema)
+            ```
+        """
         return stat_extrema(self.h)
 
     @cached_property
     def count(self) -> list[int]:
-        """Number of selected pixels in each band."""
+        """Number of selected pixels in each band.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.count)
+            ```
+        """
         return stat_count(self.h)
 
     @cached_property
     def sum(self) -> list[float]:
-        """Sum of pixel values in each band."""
+        """Sum of pixel values in each band.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.sum)
+            ```
+        """
         return stat_sum(self.h, False)
 
     @cached_property
     def sum2(self) -> list[float]:
-        """Sum of squared pixel values in each band."""
+        """Sum of squared pixel values in each band.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.sum2)
+            ```
+        """
         return stat_sum(self.h, True)
 
     @cached_property
     def mean(self) -> list[float]:
-        """Arithmetic mean in each band, or zero for empty bands."""
+        """Arithmetic mean in each band, or zero for empty bands.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.mean)
+            ```
+        """
         return stat_normalize(self.sum, self.count)
 
     @cached_property
     def median(self) -> list[int]:
-        """Upper median in each band, or 255 for empty bands."""
+        """Upper median in each band, or 255 for empty bands.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.median)
+            ```
+        """
         return stat_median(self.h, self.count)
 
     @cached_property
     def rms(self) -> list[float]:
-        """Root mean square in each band, or zero for empty bands."""
+        """Root mean square in each band, or zero for empty bands.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.rms)
+            ```
+        """
         return stat_sqrt(stat_normalize(self.sum2, self.count))
 
     @cached_property
     def var(self) -> list[float]:
-        """Population variance in each band, or zero for empty bands."""
+        """Population variance in each band, or zero for empty bands.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.var)
+            ```
+        """
         return stat_normalize(self.sum2, self.count, self.sum)
 
     @cached_property
     def stddev(self) -> list[float]:
-        """Population standard deviation in each band."""
+        """Population standard deviation in each band.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageStat
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            statistics = ImageStat.Stat(image)
+            print(statistics.stddev)
+            ```
+        """
         return stat_sqrt(self.var)
 
 

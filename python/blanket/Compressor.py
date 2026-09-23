@@ -28,6 +28,25 @@ class LossyImageCompressor:
     """
 
     def __init__(self, *, max_rmse: float = 2.0, effort: int = 7) -> None:
+        """Configure LossyImageCompressor.
+
+        Args:
+            max_rmse: Maximum additional RGB root mean square error relative to the normal save, from 0 through 255. Alpha must match exactly.
+            effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+            from blanket.Compressor import LossyImageCompressor
+
+            compressor = LossyImageCompressor(effort=1)
+            output = BytesIO()
+            image.save(output, format="PNG", compressor=compressor)
+            ```
+        """
         if isinstance(max_rmse, bool) or not isinstance(max_rmse, (int, float)):
             raise TypeError("max_rmse must be a number")
         if not 0 <= max_rmse <= 255 or not math.isfinite(max_rmse):
@@ -40,10 +59,38 @@ class LossyImageCompressor:
 
     @property
     def max_rmse(self) -> float:
+        """Configured maximum additional RGB error.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+            from blanket.Compressor import LossyImageCompressor
+
+            compressor = LossyImageCompressor(effort=1)
+            print(compressor.max_rmse)
+            ```
+        """
         return self._native.max_rmse
 
     @property
     def effort(self) -> int:
+        """Configured search effort.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+            from blanket.Compressor import LossyImageCompressor
+
+            compressor = LossyImageCompressor(effort=1)
+            print(compressor.effort)
+            ```
+        """
         return self._native.effort
 
 
@@ -81,6 +128,24 @@ class LosslessImageCompressor:
     """
 
     def __init__(self, *, effort: int = 7) -> None:
+        """Configure LosslessImageCompressor.
+
+        Args:
+            effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+            from blanket.Compressor import LosslessImageCompressor
+
+            compressor = LosslessImageCompressor(effort=1)
+            output = BytesIO()
+            image.save(output, format="PNG", compressor=compressor)
+            ```
+        """
         if isinstance(effort, bool) or not isinstance(effort, int):
             raise TypeError("effort must be an integer")
         if not 1 <= effort <= 10:
@@ -89,4 +154,18 @@ class LosslessImageCompressor:
 
     @property
     def effort(self) -> int:
+        """Configured search effort.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            from io import BytesIO
+            from blanket.Compressor import LosslessImageCompressor
+
+            compressor = LosslessImageCompressor(effort=1)
+            print(compressor.effort)
+            ```
+        """
         return self._native.effort

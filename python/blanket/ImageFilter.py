@@ -36,6 +36,22 @@ class Kernel(BuiltinFilter):
     name = "Kernel"
 
     def __init__(self, size: tuple[int, int], kernel: Sequence[float], scale: float | None = None, offset: float = 0) -> None:
+        """Configure Kernel.
+
+        Args:
+            size: Kernel dimensions: `(3, 3)` or `(5, 5)`.
+            kernel: Row-major convolution coefficients for a 3 by 3 or 5 by 5 kernel.
+            scale: Divisor for the kernel coefficients; None uses their sum, or 1 when the sum is zero.
+            offset: Value added after scaling.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.Kernel((3, 3), [1] * 9, scale=9))
+            ```
+        """
         if scale is None:
             scale = reduce(add, kernel)
         if size[0] * size[1] != len(kernel):
@@ -49,6 +65,20 @@ class RankFilter(Filter):
     name = "Rank"
 
     def __init__(self, size: int, rank: int) -> None:
+        """Configure RankFilter.
+
+        Args:
+            size: Odd neighborhood width in pixels.
+            rank: Zero-based rank within the window, from 0 through size squared minus 1.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.RankFilter(size=3, rank=4))
+            ```
+        """
         if size % 2 == 0:
             raise ValueError("bad filter size")
         if size * size * 4 > 2**31 - 1:
@@ -68,6 +98,19 @@ class MedianFilter(RankFilter):
     name = "Median"
 
     def __init__(self, size: int = 3) -> None:
+        """Configure MedianFilter.
+
+        Args:
+            size: Odd neighborhood width in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.MedianFilter(size=3))
+            ```
+        """
         super().__init__(size, size * size // 2)
 
 
@@ -75,6 +118,19 @@ class MinFilter(RankFilter):
     name = "Min"
 
     def __init__(self, size: int = 3) -> None:
+        """Configure MinFilter.
+
+        Args:
+            size: Odd neighborhood width in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.MinFilter(size=3))
+            ```
+        """
         super().__init__(size, 0)
 
 
@@ -82,6 +138,19 @@ class MaxFilter(RankFilter):
     name = "Max"
 
     def __init__(self, size: int = 3) -> None:
+        """Configure MaxFilter.
+
+        Args:
+            size: Odd neighborhood width in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.MaxFilter(size=3))
+            ```
+        """
         super().__init__(size, size * size - 1)
 
 
@@ -91,6 +160,19 @@ class ModeFilter(Filter):
     name = "Mode"
 
     def __init__(self, size: int = 3) -> None:
+        """Configure ModeFilter.
+
+        Args:
+            size: Odd neighborhood width in pixels.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.ModeFilter(size=3))
+            ```
+        """
         self.size = size
 
     def filter(self, image: _Image) -> _Image:
@@ -111,6 +193,19 @@ class GaussianBlur(MultibandFilter):
     name = "GaussianBlur"
 
     def __init__(self, radius: float | Sequence[float] = 2) -> None:
+        """Configure GaussianBlur.
+
+        Args:
+            radius: Nonnegative blur radius, or separate horizontal and vertical radii.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.GaussianBlur(radius=2))
+            ```
+        """
         self.radius = radius
 
     def filter(self, image: _Image) -> _Image:
@@ -123,6 +218,19 @@ class BoxBlur(MultibandFilter):
     name = "BoxBlur"
 
     def __init__(self, radius: float | Sequence[float]) -> None:
+        """Configure BoxBlur.
+
+        Args:
+            radius: Nonnegative blur radius, or separate horizontal and vertical radii.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.BoxBlur(radius=2))
+            ```
+        """
         xy: Any = radius if isinstance(radius, (tuple, list)) else (radius, radius)
         if xy[0] < 0 or xy[1] < 0:
             raise ValueError("radius must be >= 0")
@@ -136,6 +244,21 @@ class UnsharpMask(MultibandFilter):
     name = "UnsharpMask"
 
     def __init__(self, radius: float = 2, percent: int = 150, threshold: int = 3) -> None:
+        """Configure UnsharpMask.
+
+        Args:
+            radius: Nonnegative Gaussian blur radius.
+            percent: Sharpening strength as a percentage.
+            threshold: Intensity threshold, on the 0 through 255 scale.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+            ```
+        """
         self.radius = radius
         self.percent = percent
         self.threshold = threshold
@@ -145,51 +268,181 @@ class UnsharpMask(MultibandFilter):
 
 
 class BLUR(BuiltinFilter):
+    """Blur with a fixed 5 by 5 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.BLUR)
+        ```
+    """
+
     name = "Blur"
     filterargs = (5, 5), 16, 0, (1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1)
 
 
 class CONTOUR(BuiltinFilter):
+    """Emphasize outlines with a 3 by 3 contour kernel.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.CONTOUR)
+        ```
+    """
+
     name = "Contour"
     filterargs = (3, 3), 1, 255, (-1, -1, -1, -1, 8, -1, -1, -1, -1)
 
 
 class DETAIL(BuiltinFilter):
+    """Enhance fine detail with a 3 by 3 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.DETAIL)
+        ```
+    """
+
     name = "Detail"
     filterargs = (3, 3), 6, 0, (0, -1, 0, -1, 10, -1, 0, -1, 0)
 
 
 class EDGE_ENHANCE(BuiltinFilter):
+    """Enhance edges with a 3 by 3 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.EDGE_ENHANCE)
+        ```
+    """
+
     name = "Edge-enhance"
     filterargs = (3, 3), 2, 0, (-1, -1, -1, -1, 10, -1, -1, -1, -1)
 
 
 class EDGE_ENHANCE_MORE(BuiltinFilter):
+    """Apply a stronger 3 by 3 edge enhancement.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.EDGE_ENHANCE_MORE)
+        ```
+    """
+
     name = "Edge-enhance More"
     filterargs = (3, 3), 1, 0, (-1, -1, -1, -1, 9, -1, -1, -1, -1)
 
 
 class EMBOSS(BuiltinFilter):
+    """Create an embossed appearance.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.EMBOSS)
+        ```
+    """
+
     name = "Emboss"
     filterargs = (3, 3), 1, 128, (-1, 0, 0, 0, 1, 0, 0, 0, 0)
 
 
 class FIND_EDGES(BuiltinFilter):
+    """Extract edges with a 3 by 3 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.FIND_EDGES)
+        ```
+    """
+
     name = "Find Edges"
     filterargs = (3, 3), 1, 0, (-1, -1, -1, -1, 8, -1, -1, -1, -1)
 
 
 class SHARPEN(BuiltinFilter):
+    """Sharpen with a fixed 3 by 3 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.SHARPEN)
+        ```
+    """
+
     name = "Sharpen"
     filterargs = (3, 3), 16, 0, (-2, -2, -2, -2, 32, -2, -2, -2, -2)
 
 
 class SMOOTH(BuiltinFilter):
+    """Smooth with a fixed 3 by 3 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.SMOOTH)
+        ```
+    """
+
     name = "Smooth"
     filterargs = (3, 3), 13, 0, (1, 1, 1, 1, 5, 1, 1, 1, 1)
 
 
 class SMOOTH_MORE(BuiltinFilter):
+    """Apply stronger smoothing with a 5 by 5 convolution.
+
+    This filter takes no parameters. Pass the class or an instance to Image.filter.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.SMOOTH_MORE)
+        ```
+    """
+
     name = "Smooth More"
     filterargs = (5, 5), 100, 0, (1, 1, 1, 1, 1, 1, 5, 5, 5, 1, 1, 5, 44, 5, 1, 1, 5, 5, 5, 1, 1, 1, 1, 1, 1)
 
@@ -200,6 +453,25 @@ class Color3DLUT(MultibandFilter):
     name = "Color 3D LUT"
 
     def __init__(self, size: int | tuple[int, int, int], table: Sequence[float] | Sequence[Sequence[float]] | Any, channels: int = 3, target_mode: str | None = None, **kwargs: bool) -> None:
+        """Configure Color3DLUT.
+
+        Args:
+            size: Grid size from 2 through 65, or separate sizes for the red, green, and blue axes.
+            table: Flat or nested RGB/RGBA values for every table point, with red varying fastest; values use the 0 through 1 scale.
+            channels: Number of output channels, 3 or 4.
+            target_mode: Optional output mode, such as `RGB` or `RGBA`.
+            **kwargs: Internal table-copy option; leave omitted for normal use.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            table = [(r, g, b) for b in (0, 1) for g in (0, 1) for r in (0, 1)]
+            lut = ImageFilter.Color3DLUT(2, table)
+            result = image.filter(lut)
+            ```
+        """
         if channels not in (3, 4):
             raise ValueError("Only 3 or 4 output channels are supported")
         self.size = self._check_size(size)
@@ -248,6 +520,23 @@ class Color3DLUT(MultibandFilter):
 
     @classmethod
     def generate(cls, size: int | tuple[int, int, int], callback: Callable[[float, float, float], tuple[float, ...]], channels: int = 3, target_mode: str | None = None) -> Color3DLUT:
+        """Create a color lookup table by evaluating a callback on a regular grid.
+
+        Args:
+            size: Grid size from 2 through 65, or separate sizes for the red, green, and blue axes.
+            callback: Callable receiving normalized red, green, blue coordinates and returning one output tuple.
+            channels: Number of output channels, 3 or 4.
+            target_mode: Optional output mode, such as `RGB` or `RGBA`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            lut = ImageFilter.Color3DLUT.generate(3, lambda r, g, b: (1 - r, g, b))
+            result = image.filter(lut)
+            ```
+        """
         dimensions = cls._check_size(size)
         if channels not in (3, 4):
             raise ValueError("Only 3 or 4 output channels are supported")
@@ -261,6 +550,24 @@ class Color3DLUT(MultibandFilter):
         return cls(dimensions, table, channels, target_mode, _copy_table=False)
 
     def transform(self, callback: Callable[..., tuple[float, ...]], with_normals: bool = False, channels: int | None = None, target_mode: str | None = None) -> Color3DLUT:
+        """Return a new lookup table by transforming the current table entries.
+
+        Args:
+            callback: Callable receiving current table channel values and returning new output values.
+            with_normals: Prepend normalized red, green, blue coordinates to the callback's input channel values.
+            channels: Output channel count, or None to retain the existing count.
+            target_mode: Optional output mode, such as `RGB` or `RGBA`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            lut = ImageFilter.Color3DLUT.generate(3, lambda r, g, b: (r, g, b))
+            adjusted = lut.transform(lambda r, g, b: (r * 0.8, g, b))
+            result = image.filter(adjusted)
+            ```
+        """
         if channels not in (None, 3, 4):
             raise ValueError("Only 3 or 4 output channels are supported")
         channels = channels or self.channels

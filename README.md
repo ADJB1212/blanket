@@ -20,7 +20,7 @@ with Image.open("photo.jpg") as image:
 ```
 
 [Installation](#installation) · [Examples](#examples) ·
-[Formats](#supported-formats) · [API notes](docs/index.md) ·
+[Formats](#supported-formats) · [API notes](https://adjb1212.github.io/blanket-docs/) ·
 [Contributing](#contributing)
 
 ## Why Blanket?
@@ -40,28 +40,10 @@ Blanket is currently **alpha software**. It implements a focused subset of
 Pillow's API, centered on `L`, `RGB`, and `RGBA` images, with limited indexed
 `P` support. It is not a drop-in replacement for `PIL`.
 
-`ImageChops` provides native channel arithmetic (`difference`, `add`, `subtract`,
-`add_modulo`, `subtract_modulo`, `multiply`, `screen`, `lighter`, `darker`), blend
-modes (`soft_light`, `hard_light`, `overlay`), `invert`, wraparound `offset`, and
-the `constant`, `duplicate`, `blend`, and `composite` helpers. Arithmetic operates
-on 8-bit channels, including alpha and palette indices; binary arithmetic uses
-the top-left overlap when image sizes differ. `offset` also preserves high-depth
-samples. Bilevel logical operations are not implemented.
-
-`ImageStat.Stat(image, mask=None)` computes per-band `extrema`, `count`, `sum`,
-`sum2`, `mean`, `median`, `rms`, `var`, and `stddev` using native histogram and
-statistical kernels. It accepts 8-bit images or precomputed histograms with
-256 nonnegative integer bins per band (each count up to `2**64 - 1`). An `L`
-mask includes every pixel whose mask value is nonzero. Properties are computed
-on demand and cached; `ImageStat.Global` is an alias for `Stat`.
-
-```python
-from blanket import ImageStat
-
-statistics = ImageStat.Stat(image)
-average_channels = statistics.mean
-channel_variance = statistics.var
-```
+See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
+arithmetic and blend modes, and
+[ImageStat](https://adjb1212.github.io/blanket-docs/ImageStat/) for per-band
+statistics.
 
 ## Installation
 
@@ -89,7 +71,7 @@ sudo apt-get install build-essential cmake ninja-build nasm libdav1d-dev \
 AVIF requires dav1d 1.3+. The embedded libheif build requires libde265 and x265
 development libraries to compile HEIF support; external libheif plugins are not
 loaded. Native shared codec libraries must also be available at runtime. See the
-[development notes](docs/development.md) for more context.
+[development notes](https://adjb1212.github.io/blanket-docs/development/) for more context.
 
 ## Examples
 
@@ -134,7 +116,7 @@ decoded pixels. It supports PNG, JPEG, JPEG XL, and HEIF/HEIC; higher effort
 tries more settings and takes longer. JPEG optimization preserves DCT
 coefficients. This optimizes the requested save, not the original source file:
 lossy save settings still introduce their normal loss. See the
-[Compressor module](docs/Compressor.md) for the API, format-specific behavior,
+[Compressor module](https://adjb1212.github.io/blanket-docs/Compressor/) for the API, format-specific behavior,
 and compression benchmarks.
 
 For smaller output with bounded additional pixel error, pass
@@ -191,7 +173,7 @@ image.convert("RGB", bit_depth=8).save("preview.jpg")
 `image.bit_depth` reports sample precision. Copying, conversion, pixel access,
 splitting, cropping, transposition, and resizing preserve high-bit-depth
 samples. Other processing operations require conversion to 8 bits.
-See [high-bit-depth images](docs/Image.md#high-bit-depth-images) for storage
+See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/) for storage
 and format-specific behavior.
 
 ## Supported formats
@@ -211,7 +193,7 @@ and format-specific behavior.
 | ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension   |
 
 Encoder settings and their defaults are listed in the
-[API notes](docs/Image.md#supported-api). HEIF lossless compression can still
+[format guide](https://adjb1212.github.io/blanket-docs/formats/). HEIF lossless compression can still
 change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
@@ -227,7 +209,7 @@ change RGB values during RGB/YUV conversion.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
   installed. High-bit-depth images must first be converted to 8 bits.
 
-See the [usage and API notes](docs/index.md) for operation-specific restrictions,
+See the [usage and API notes](https://adjb1212.github.io/blanket-docs/) for operation-specific restrictions,
 palette support, and interoperability examples.
 
 ## Performance
@@ -243,7 +225,7 @@ uv run --no-sync scripts/benchmark.py --sizes web
 
 Use `--all` for the full suite or `--sections Resize ImageOps` to select
 operations. Results depend on image size, operation, codec settings, and
-hardware. The [benchmark guide](docs/benchmarking.md)
+hardware. The [benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/)
 explains baseline comparisons and reproducible runs.
 
 ## Contributing

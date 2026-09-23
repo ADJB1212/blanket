@@ -76,6 +76,21 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
 
     ``cutoff`` is a percentage, or separate (low, high) percentages.
     ``preserve_tone`` uses one luminance histogram for all color channels.
+
+    Args:
+        image: Input image.
+        cutoff: Percentage discarded from histogram tails, or separate `(low, high)` percentages.
+        ignore: Pixel value or sequence of values excluded from the histogram.
+        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+        preserve_tone: Use a shared luminance histogram to preserve relative channel tone.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.autocontrast(image, cutoff=1)
+        ```
     """
     source = image.convert("L") if preserve_tone else image
     histogram = ops_histogram(source._native, None if mask is None else mask._native)
@@ -108,7 +123,25 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
 
 
 def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None = None, blackpoint: int = 0, whitepoint: int = 255, midpoint: int = 127) -> Image.Image:
-    """Map an L image to an RGB gradient with two or three color stops."""
+    """Map an L image to an RGB gradient with two or three color stops.
+
+    Args:
+        image: Input image.
+        black: Color mapped to the black point.
+        white: Color mapped to the white point.
+        mid: Optional color at the midpoint for a three-color gradient.
+        blackpoint: Input intensity mapped to black, in 0 through 255.
+        whitepoint: Input intensity mapped to white, in 0 through 255.
+        midpoint: Input intensity mapped to the middle color.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.colorize(image.convert("L"), "navy", "white")
+        ```
+    """
     assert image.mode == "L"
     assert 0 <= blackpoint <= whitepoint <= 255
     if mid is not None:
@@ -128,7 +161,21 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
 
 
 def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:
-    """Resize to fit inside size while preserving the aspect ratio."""
+    """Resize to fit inside size while preserving the aspect ratio.
+
+    Args:
+        image: Input image.
+        size: Output `(width, height)` in pixels.
+        method: Resampling filter from `Image.Resampling`.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.contain(image, (4, 6))
+        ```
+    """
     ratio = image.width / image.height
     target = size[0] / size[1]
     if ratio > target:
@@ -139,7 +186,21 @@ def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resam
 
 
 def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:
-    """Resize to cover size while preserving the aspect ratio."""
+    """Resize to cover size while preserving the aspect ratio.
+
+    Args:
+        image: Input image.
+        size: Output `(width, height)` in pixels.
+        method: Resampling filter from `Image.Resampling`.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.cover(image, (4, 6))
+        ```
+    """
     ratio = image.width / image.height
     target = size[0] / size[1]
     if ratio < target:
@@ -150,7 +211,23 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
 
 
 def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, color: Color | None = None, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
-    """Contain the image and pad it to size with the selected background."""
+    """Contain the image and pad it to size with the selected background.
+
+    Args:
+        image: Input image.
+        size: Output `(width, height)` in pixels.
+        method: Resampling filter from `Image.Resampling`.
+        color: Fill value, channel tuple, or CSS color string.
+        centering: Horizontal and vertical alignment in 0 through 1; 0.5 centers each axis.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.pad(image, (12, 8), color="white")
+        ```
+    """
     resized = contain(image, size, method)
     if resized.size == tuple(size):
         return resized
@@ -163,13 +240,39 @@ def crop(image: Image.Image, border: int = 0) -> Image.Image:
 
     Like Pillow, also accepts (horizontal, vertical) or (left, top, right,
     bottom) border tuples. Use image.crop(box) to select a rectangle instead.
+
+    Args:
+        image: Input image.
+        border: Border width in pixels.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.crop(image, border=1)
+        ```
     """
     left, top, right, bottom = _border(border)
     return image.crop((left, top, image.width - right, image.height - bottom))
 
 
 def scale(image: Image.Image, factor: float, resample: int = Image.Resampling.BICUBIC) -> Image.Image:
-    """Resize by a positive scale factor, rounding dimensions to pixels."""
+    """Resize by a positive scale factor, rounding dimensions to pixels.
+
+    Args:
+        image: Input image.
+        factor: Positive multiplier for both image dimensions.
+        resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.scale(image, 0.5)
+        ```
+    """
     if factor == 1:
         return _copy(image)
     if factor <= 0:
@@ -180,11 +283,58 @@ def scale(image: Image.Image, factor: float, resample: int = Image.Resampling.BI
 class SupportsGetMesh(Protocol):
     """A deformer returning destination boxes and source TL, BL, BR, TR quads."""
 
-    def getmesh(self, image: Image.Image) -> list[tuple[tuple[int, int, int, int], tuple[float, float, float, float, float, float, float, float]]]: ...
+    def getmesh(self, image: Image.Image) -> list[tuple[tuple[int, int, int, int], tuple[float, float, float, float, float, float, float, float]]]:
+        """Describe destination rectangles and their source quadrilaterals.
+
+        Args:
+            image: Image being deformed, used to determine source dimensions.
+
+        Returns:
+            Pairs of destination (left, top, right, bottom) rectangles and source
+            coordinates in top-left, bottom-left, bottom-right, top-right order.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageOps
+
+
+            class IdentityMesh:
+                def getmesh(self, image):
+                    width, height = image.size
+                    return [((0, 0, width, height), (0, 0, 0, height, width, height, width, 0))]
+
+
+            image = Image.new("RGB", (8, 8), "navy")
+            result = ImageOps.deform(image, IdentityMesh())
+            ```
+        """
+        ...
 
 
 def deform(image: Image.Image, deformer: SupportsGetMesh, resample: int = Image.Resampling.BILINEAR) -> Image.Image:
-    """Warp using a deformer mesh with nearest, bilinear or bicubic sampling."""
+    """Warp using a deformer mesh with nearest, bilinear or bicubic sampling.
+
+    Args:
+        image: Input image.
+        deformer: Object implementing `getmesh(image)` and returning destination boxes with source quadrilaterals.
+        resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+
+
+        class IdentityMesh:
+            def getmesh(self, image):
+                width, height = image.size
+                return [((0, 0, width, height), (0, 0, 0, height, width, height, width, 0))]
+
+
+        result = ImageOps.deform(image, IdentityMesh())
+        ```
+    """
     mesh = deformer.getmesh(image)
     if any(box[0] == box[2] or box[1] == box[3] for box, quad in mesh):
         raise ZeroDivisionError("division by zero")
@@ -194,7 +344,20 @@ def deform(image: Image.Image, deformer: SupportsGetMesh, resample: int = Image.
 
 
 def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image:
-    """Equalize each channel using the histogram selected by an optional mask."""
+    """Equalize each channel using the histogram selected by an optional mask.
+
+    Args:
+        image: Input image.
+        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.equalize(image)
+        ```
+    """
     histogram = ops_histogram(image._native, None if mask is None else mask._native)
     table = []
     for offset in range(0, len(histogram), 256):
@@ -212,7 +375,21 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
 
 
 def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Image:
-    """Add a border filled with a pixel value or CSS color."""
+    """Add a border filled with a pixel value or CSS color.
+
+    Args:
+        image: Input image.
+        border: Integer, `(horizontal, vertical)`, or `(left, top, right, bottom)` widths.
+        fill: Border value, channel tuple, or CSS color.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.expand(image, border=2, fill="white")
+        ```
+    """
     left, top, right, bottom = _border(border)
     size = (image.width + left + right, image.height + top + bottom)
     if min(size) < 0:
@@ -221,7 +398,23 @@ def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Ima
 
 
 def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, bleed: float = 0.0, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
-    """Crop to the requested aspect ratio and resize, with optional edge bleed."""
+    """Crop to the requested aspect ratio and resize, with optional edge bleed.
+
+    Args:
+        image: Input image.
+        size: Output `(width, height)` in pixels.
+        method: Resampling filter from `Image.Resampling`.
+        bleed: Fraction to remove from each edge before fitting; must be less than 0.5.
+        centering: Horizontal and vertical alignment in 0 through 1; 0.5 centers each axis.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.fit(image, (4, 6))
+        ```
+    """
     cx, cy = (v if 0 <= v <= 1 else 0.5 for v in centering)
     if not 0 <= bleed < 0.5:
         bleed = 0.0
@@ -237,33 +430,107 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
 
 
 def flip(image: Image.Image) -> Image.Image:
-    """Flip vertically."""
+    """Flip vertically.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.flip(image)
+        ```
+    """
     return _result(image, ops_transpose(image._native, 4))
 
 
 def grayscale(image: Image.Image) -> Image.Image:
-    """Convert to 8-bit luminance."""
+    """Convert to 8-bit luminance.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.grayscale(image)
+        ```
+    """
     return _result(image, image.convert("L")._native)
 
 
 def invert(image: Image.Image) -> Image.Image:
-    """Replace each channel value with 255 minus that value."""
+    """Replace each channel value with 255 minus that value.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.invert(image)
+        ```
+    """
     return _lut(image, list(range(255, -1, -1)))
 
 
 def mirror(image: Image.Image) -> Image.Image:
-    """Flip horizontally."""
+    """Flip horizontally.
+
+    Args:
+        image: Input image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.mirror(image)
+        ```
+    """
     return _result(image, ops_transpose(image._native, 2))
 
 
 def posterize(image: Image.Image, bits: int) -> Image.Image:
-    """Keep the highest bits of each channel (0 through 8)."""
+    """Keep the highest bits of each channel (0 through 8).
+
+    Args:
+        image: Input image.
+        bits: Number of high bits to retain per channel, from 0 through 8.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.posterize(image, bits=4)
+        ```
+    """
     mask = ~(2 ** (8 - bits) - 1)
     return _lut(image, [v & mask for v in range(256)])
 
 
 def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
-    """Invert channel values greater than or equal to threshold."""
+    """Invert channel values greater than or equal to threshold.
+
+    Args:
+        image: Input image.
+        threshold: Intensity threshold, on the 0 through 255 scale.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.solarize(image, threshold=128)
+        ```
+    """
     return _lut(image, [v if v < threshold else 255 - v for v in range(256)])
 
 
@@ -280,6 +547,18 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
 
     Return a copy by default, or update the original and return None when
     ``in_place=True``. Other EXIF entries and their offsets are preserved.
+
+    Args:
+        image: Input image.
+        in_place: Modify the input and return None when true; otherwise return a transformed copy.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.exif_transpose(image)
+        ```
     """
     image.load()
     orientation, info = transpose_metadata(image.info)
