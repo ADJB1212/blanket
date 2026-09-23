@@ -1,0 +1,39 @@
+name: Publish to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: GitHub release tag
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-26.04
+
+    environment:
+      name: pypi
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir dist
+          gh release download "${{ inputs.tag }}" \
+            --dir dist \
+            --pattern "*.whl" \
+            --pattern "*.tar.gz"
+
+      - name: Show distributions
+        run: ls -lh dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1

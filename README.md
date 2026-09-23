@@ -51,9 +51,7 @@ Blanket requires **Python 3.12+**. Install from this repository after setting
 up the native build prerequisites below:
 
 ```sh
-git clone https://github.com/ADJB1212/blanket.git
-cd blanket
-python -m pip install .
+pip install pyblanket
 ```
 
 Source builds require Rust 1.97+, CMake, Ninja, a C/C++ compiler, and NASM
