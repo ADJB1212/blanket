@@ -248,9 +248,9 @@ def test_exact_methods_handle_many_colors(method: int) -> None:
     # Every pixel maps to the palette entry nearest to its color.
     palette = result.getpalette()
     entries = [tuple(palette[i : i + 3]) for i in range(0, len(palette), 3)]
-    for pixel, index in zip(zip(*[iter(raw)] * 3), result.tobytes(), strict=True):
-        best = min(sum((a - b) ** 2 for a, b in zip(pixel, entry)) for entry in entries)
-        assert sum((a - b) ** 2 for a, b in zip(pixel, entries[index])) == best
+    for pixel, index in zip(zip(*[iter(raw)] * 3, strict=False), result.tobytes(), strict=True):
+        best = min(sum((a - b) ** 2 for a, b in zip(pixel, entry, strict=False)) for entry in entries)
+        assert sum((a - b) ** 2 for a, b in zip(pixel, entries[index], strict=False)) == best
 
 
 def test_wide_dither_matches_pillow() -> None:

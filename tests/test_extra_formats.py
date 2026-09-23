@@ -45,7 +45,7 @@ def test_lossy_webp() -> None:
     Image.frombytes("RGB", (16, 16), bytes([50, 100, 150] * 256)).save(stream, "WEBP", quality=90)
     result = Image.open(stream)
     assert result.size == (16, 16)
-    assert max(abs(a - b) for a, b in zip(result.tobytes(), bytes([50, 100, 150] * 256))) < 8
+    assert max(abs(a - b) for a, b in zip(result.tobytes(), bytes([50, 100, 150] * 256), strict=False)) < 8
 
 
 @pytest.mark.parametrize("compression", ["tiff_lzw", "tiff_adobe_deflate", "packbits"])

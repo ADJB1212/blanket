@@ -121,7 +121,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
 
     if not jxl_only:
         # ── PNG ───────────────────────────────────────────────────────
-        for label, b_img, p_img, mode in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
+        for label, _, p_img, _ in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
             png = pillow_payload(p_img, "PNG", compress_level=6)
             comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)), lambda p=png: pillow_load(p)))
             comps.extend(
@@ -130,7 +130,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
             )
 
         # ── JPEG ──────────────────────────────────────────────────────
-        for label, b_img, p_img in (("RGB", b_rgb, p_rgb), ("L", b_gray, p_gray)):
+        for label, _, p_img in (("RGB", b_rgb, p_rgb), ("L", b_gray, p_gray)):
             jpeg = pillow_payload(p_img, "JPEG", quality=85)
             comps.append((f"load JPEG {label}", lambda p=jpeg: BlanketImage.open(BytesIO(p)), lambda p=jpeg: pillow_load(p)))
         comps.extend(

@@ -88,7 +88,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
             counts[value] = 0
         total = sum(counts)
         if cutoff:
-            for percent, indices in zip(tails, (range(256), range(255, -1, -1))):
+            for percent, indices in zip(tails, (range(256), range(255, -1, -1)), strict=False):
                 remaining = int(total * percent // 100)
                 for value in indices:
                     removed = min(remaining, counts[value])
@@ -154,7 +154,7 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     resized = contain(image, size, method)
     if resized.size == tuple(size):
         return resized
-    offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering))
+    offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
     return Image.Image(ops_canvas(resized._native, size, offset, color_pixel(color, image.mode)))
 
 

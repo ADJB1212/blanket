@@ -52,7 +52,7 @@ line-length = 200
 target-version = "py312"
 
 [tool.ruff.lint]
-extend-select = ["TID", "RUF", "PERF", "E", "UP"]
+extend-select = ["TID", "RUF", "PERF", "E", "UP", "PIE", "ISC", "C4", "FLY", "B", "F", "Q"]
 ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402"]
 
 [tool.ruff.format]

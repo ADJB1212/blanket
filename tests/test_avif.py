@@ -26,8 +26,8 @@ def test_avif_interop(mode: str, writer: str) -> None:
     assert actual.size == expected.size == source.size
     assert actual.mode == expected.mode == "RGBA"
     # Independent AV1 decoders can round YUV conversions differently.
-    assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes())) <= 3
-    assert max(abs(a - b) for a, b in zip(actual.tobytes(), source.convert(actual.mode).tobytes())) <= 5
+    assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=False)) <= 3
+    assert max(abs(a - b) for a, b in zip(actual.tobytes(), source.convert(actual.mode).tobytes(), strict=False)) <= 5
     with pytest.raises(UnidentifiedImageError):
         Image.open(BytesIO(data), formats=["HEIF"])
     with pytest.raises(UnidentifiedImageError):
@@ -54,8 +54,8 @@ def test_avif_nonuniform_pixels_and_alpha() -> None:
     expected = PillowImage.open(BytesIO(output.getvalue()))
     assert actual.mode == expected.mode == "RGBA"
     assert actual.size == expected.size == (19, 13)
-    assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes())) <= 3
-    assert max(abs(a - b) for a, b in zip(actual.tobytes()[3::4], raw[3::4])) <= 1
+    assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=False)) <= 3
+    assert max(abs(a - b) for a, b in zip(actual.tobytes()[3::4], raw[3::4], strict=False)) <= 1
 
 
 @pytest.mark.parametrize(

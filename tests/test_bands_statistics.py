@@ -30,7 +30,7 @@ def test_split(mode: str) -> None:
     image.info["custom"] = 42
     bands = image.split()
     assert isinstance(bands, tuple) and len(bands) == len(mode)
-    for band, expected in zip(bands, reference.split()):
+    for band, expected in zip(bands, reference.split(), strict=False):
         assert band.mode == "L" and band.size == image.size
         assert band.tobytes() == expected.tobytes()
         assert band.info == image.info and band.info is not image.info

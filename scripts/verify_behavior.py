@@ -173,7 +173,7 @@ def check_bands_statistics() -> int:
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
-        for actual, expected in zip(blanket.split(), pillow.split()):
+        for actual, expected in zip(blanket.split(), pillow.split(), strict=False):
             assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
             checks += 1
         for xy in ((0, 0), (36, 28), (-1, -1), (-37, -29), (12, 13)):
@@ -442,7 +442,7 @@ def check_avif_interop() -> int:
             actual = BlanketImage.open(BytesIO(output.getvalue()))
             expected = PillowImage.open(BytesIO(output.getvalue())).convert("RGBA")
             assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "AVIF")
-            assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes())) <= 3
+            assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=False)) <= 3
             checks += 1
     return checks
 

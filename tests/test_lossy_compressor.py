@@ -27,7 +27,7 @@ def assert_bounded(baseline: bytes, output: bytes, bound: float) -> None:
     before = [int.from_bytes(before_raw[i : i + 2], "little") for i in range(0, len(before_raw), 2)]
     after = [int.from_bytes(after_raw[i : i + 2], "little") for i in range(0, len(after_raw), 2)]
     assert before[3::4] == after[3::4]
-    error = sum(((a - b) / 257) ** 2 for i, (a, b) in enumerate(zip(before, after)) if i % 4 != 3)
+    error = sum(((a - b) / 257) ** 2 for i, (a, b) in enumerate(zip(before, after, strict=False)) if i % 4 != 3)
     assert math.sqrt(error / (actual.width * actual.height * 3)) <= bound + 0.004
 
 
@@ -97,7 +97,7 @@ def test_jpeg_search_refines_between_fixed_quality_drops() -> None:
     target = encode(source, "JPEG", quality=85, compressor=LosslessImageCompressor(effort=10))
     before = Image.open(io.BytesIO(baseline)).convert("RGB").tobytes()
     after = Image.open(io.BytesIO(target)).convert("RGB").tobytes()
-    bound = math.sqrt(sum((a - b) ** 2 for a, b in zip(before, after)) / len(before)) + 1e-6
+    bound = math.sqrt(sum((a - b) ** 2 for a, b in zip(before, after, strict=False)) / len(before)) + 1e-6
     output = encode(source, "JPEG", quality=90, compressor=LossyImageCompressor(max_rmse=bound, effort=10))
     assert len(output) <= len(target)
     assert_bounded(baseline, output, bound)
