@@ -10,6 +10,7 @@ on:
       - "docs/*"
       - ".github/workflows/release.yml"
       - ".github/workflows/benchmark.yml"
+      - ".github/workflows/publish.yml"
       - "scripts/benchmark_compression.py"
       - "scripts/benchmark.py"
   pull_request:

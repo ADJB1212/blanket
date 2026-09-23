@@ -28,6 +28,7 @@ jobs:
         run: |
           mkdir dist
           gh release download "${{ inputs.tag }}" \
+            --repo "${{ github.repository }}" \
             --dir dist \
             --pattern "*.whl" \
             --pattern "*.tar.gz"

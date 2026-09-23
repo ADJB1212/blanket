@@ -3,7 +3,7 @@ requires = ["maturin>=1.15,<2.0"]
 build-backend = "maturin"
 
 [project]
-name = "blanket"
+name = "pyblanket"
 description = "A Rust-backed image library with a Pillow-shaped Python API"
 readme = "README.md"
 authors = [{ name = "Andrew Jaffe", email = "adjaffeb@gmail.com" }]
