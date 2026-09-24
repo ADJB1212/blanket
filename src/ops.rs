@@ -1004,6 +1004,40 @@ fn nearest_fixed<const C: usize>(source: &[u8], row: &mut [u8], size: (u32, u32)
     }
 }
 
+struct NearestWarp<'a> {
+    size: (u32, u32),
+    q: &'a [f64; 8],
+    coefficients: [f64; 6],
+    perspective: bool,
+    fill: Option<&'a [u8]>,
+    preserve_invalid: bool,
+}
+
+fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &NearestWarp<'_>, v: f64) {
+    let source = source.as_chunks::<C>().0;
+    let fill = warp.fill.map(|pixel| pixel.try_into().unwrap()).unwrap_or([0; C]);
+    let [ax, bx, cx, ay, by, cy] = warp.coefficients;
+    let width = warp.size.0 as f64;
+    let height = warp.size.1 as f64;
+    for (x, dst) in row.as_chunks_mut::<C>().0.iter_mut().enumerate() {
+        let u = x as f64 + 0.5;
+        let (sx, sy) = if warp.perspective {
+            let divisor = affine_coordinate(warp.q[6], warp.q[7], 1.0, u, v);
+            (
+                affine_coordinate(warp.q[0], warp.q[1], warp.q[2], u, v) / divisor,
+                affine_coordinate(warp.q[3], warp.q[4], warp.q[5], u, v) / divisor,
+            )
+        } else {
+            (quad_coordinate(warp.q[0], ax, bx, cx, u, v), quad_coordinate(warp.q[1], ay, by, cy, u, v))
+        };
+        if sx >= 0.0 && sy >= 0.0 && sx < width && sy < height {
+            *dst = source[sy as usize * warp.size.0 as usize + sx as usize];
+        } else if !warp.preserve_invalid {
+            *dst = fill;
+        }
+    }
+}
+
 /// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
 #[pyfunction]
 fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, fill: Vec<u8>) -> PyResult<Image> {
@@ -1184,8 +1218,16 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
     if result.is_empty() {
         return output(image, size, result);
     }
+    let full_nearest = method == 0
+        && mesh.len() == 1
+        && mesh[0].0.0 <= 0
+        && mesh[0].0.1 <= 0
+        && mesh[0].0.2 >= i64::from(size.0)
+        && mesh[0].0.3 >= i64::from(size.1);
     py.detach(|| {
-        if let Some(fill) = &fill {
+        if let Some(fill) = &fill
+            && !full_nearest
+        {
             for pixel in result.chunks_exact_mut(c) {
                 pixel.copy_from_slice(fill);
             }
@@ -1209,6 +1251,19 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
             let first = top.clamp(0, i64::from(size.1)) as usize;
             let last = bottom.clamp(0, i64::from(size.1)) as usize;
             let row_bytes = size.0 as usize * c;
+            let start = left.max(0) as usize;
+            let end = right.min(i64::from(size.0)) as usize;
+            if start >= end {
+                continue;
+            }
+            let warp = NearestWarp {
+                size: (image.width, image.height),
+                q: &q,
+                coefficients: [ax, bx, cx, ay, by, cy],
+                perspective,
+                fill: fill.as_deref(),
+                preserve_invalid: fill.is_some() && !full_nearest,
+            };
             // Mesh entries retain their order (later boxes overwrite earlier
             // ones); only disjoint rows within an entry execute concurrently.
             chunks_mut_above(
@@ -1218,9 +1273,18 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                 |band, rows| {
                     for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                         let y = (first + band * 16 + i) as i64;
-                        for x in left.max(0)..right.min(i64::from(size.0)) {
-                            let u = (x - left.max(0)) as f64 + 0.5;
-                            let v = (y - top.max(0)) as f64 + 0.5;
+                        let v = (y - top.max(0)) as f64 + 0.5;
+                        if method == 0 {
+                            let dst = &mut row[start * c..end * c];
+                            match image.mode {
+                                PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
+                                PixelMode::Rgb => warp_nearest_row::<3>(&source, dst, &warp, v),
+                                PixelMode::Rgba => warp_nearest_row::<4>(&source, dst, &warp, v),
+                            }
+                            continue;
+                        }
+                        for x in start..end {
+                            let u = (x - start) as f64 + 0.5;
                             let (sx, sy) = if perspective {
                                 let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
                                 (
@@ -1230,7 +1294,7 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                             } else {
                                 (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
                             };
-                            let dst = x as usize * c;
+                            let dst = x * c;
                             if fill.is_none() || (sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64) {
                                 sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
                             }

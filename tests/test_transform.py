@@ -79,6 +79,23 @@ def test_transform_parity(mode: str, resample: int, fillcolor: object, size: tup
     assert result.info == image.info and result.info is not image.info
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("fillcolor", [None, 17])
+@pytest.mark.parametrize(
+    "method,data",
+    [
+        (Image.PERSPECTIVE, (0.87, 0.14, -1.3, -0.12, 1.06, 0.7, 0.015, -0.009)),
+        (Image.QUAD, (-1.4, 0.8, 1.7, 9.3, 12.6, 8.1, 14.2, -1.6)),
+        (Image.MESH, [((-3, -2, 22, 16), (-1.4, 0.8, 1.7, 9.3, 12.6, 8.1, 14.2, -1.6)), ((5, 4, 28, 19), (0.3, -0.8, -0.5, 9.4, 13.1, 8.2, 12.5, 0.7))]),
+    ],
+)
+def test_nearest_warp_fractional_clipped(mode: str, fillcolor: object, method: int, data: object) -> None:
+    image, reference = pair(mode)
+    actual = image.transform((25, 18), method, data, Image.Resampling.NEAREST, fillcolor=fillcolor)
+    expected = reference.transform((25, 18), method, data, PILImage.Resampling.NEAREST, fillcolor=fillcolor)
+    assert actual.tobytes() == expected.tobytes()
+
+
 def test_transform_getdata() -> None:
     image, reference = pair("RGB")
     method = ImageTransform.AffineTransform((1, 0, -2, 0, 1, 3))
