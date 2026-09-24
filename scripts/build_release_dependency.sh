@@ -9,6 +9,21 @@ shared_ext=so
 if [[ "$RUNNER_OS" == macOS ]]; then
   shared_ext=dylib
 fi
+case "$RUNNER_ARCH" in
+  X64)
+    export CFLAGS="${CFLAGS:-} -O3 -march=x86-64-v2 -mtune=generic"
+    export CXXFLAGS="${CXXFLAGS:-} -O3 -march=x86-64-v2 -mtune=generic"
+    ;;
+  ARM64)
+    if [[ "$RUNNER_OS" == macOS ]]; then
+      export CFLAGS="${CFLAGS:-} -O3 -arch arm64 -mcpu=apple-m1"
+      export CXXFLAGS="${CXXFLAGS:-} -O3 -arch arm64 -mcpu=apple-m1"
+    else
+      export CFLAGS="${CFLAGS:-} -O3 -march=armv8-a"
+      export CXXFLAGS="${CXXFLAGS:-} -O3 -march=armv8-a"
+    fi
+    ;;
+esac
 
 case "$name" in
   aom) repository=https://aomedia.googlesource.com/aom ;;
@@ -46,9 +61,6 @@ case "$name" in
       "${x265_neon_flag[@]}"
     ;;
   dav1d)
-    if [[ "$RUNNER_OS" == macOS ]]; then
-      export CFLAGS="${CFLAGS:-} -arch arm64"
-    fi
     meson setup "$source_dir/build" "$source_dir" \
       -Denable_tools=false -Denable_tests=false -Denable_docs=false \
       --prefix="$prefix" --libdir=lib --buildtype=release --default-library=shared

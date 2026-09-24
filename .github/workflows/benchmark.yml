@@ -132,10 +132,6 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "CFLAGS=-O3" >> "$GITHUB_ENV"
-          echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_FLAGS=-O3 ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
-          echo "CMAKE_C_FLAGS=-O3 ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
 
       - name: Restore x265
         uses: actions/cache/restore@v6

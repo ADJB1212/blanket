@@ -53,8 +53,6 @@ jobs:
       - name: Build x265
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          CPPFLAGS: ""
         run: bash scripts/build_release_dependency.sh x265 "${{ inputs.version }}"
       - name: Save x265
         if: steps.cache.outputs.cache-hit != 'true'

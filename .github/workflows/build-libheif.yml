@@ -97,8 +97,6 @@ jobs:
       - name: Build libheif
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          CPPFLAGS: ""
         run: bash scripts/build_release_dependency.sh libheif "${{ inputs.version }}"
       - name: Save libheif
         if: steps.cache.outputs.cache-hit != 'true'

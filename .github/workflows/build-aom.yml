@@ -53,8 +53,6 @@ jobs:
       - name: Build aom
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          CPPFLAGS: ""
         run: bash scripts/build_release_dependency.sh aom "${{ inputs.version }}"
       - name: Save aom
         if: steps.cache.outputs.cache-hit != 'true'

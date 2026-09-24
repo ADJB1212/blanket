@@ -53,8 +53,6 @@ jobs:
       - name: Build dav1d
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
-        env:
-          CPPFLAGS: ""
         run: bash scripts/build_release_dependency.sh dav1d "${{ inputs.version }}"
       - name: Save dav1d
         if: steps.cache.outputs.cache-hit != 'true'
