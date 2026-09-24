@@ -15,6 +15,76 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
 }
 
+pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
+    let channels = to.channels();
+    let mut output = vec![0; source.len() / 2 * channels];
+    chunks_mut(&mut output, CHUNK_PIXELS * channels, |chunk, dst| {
+        let start = chunk * CHUNK_PIXELS * 2;
+        let src = &source[start..start + dst.len() / channels * 2];
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            unsafe {
+                while offset + 16 <= src.len() / 2 {
+                    let pair = vld2q_u8(src.as_ptr().add(offset * 2));
+                    let out = dst.as_mut_ptr().add(offset * channels);
+                    match to {
+                        PixelMode::L => vst1q_u8(out, pair.0),
+                        PixelMode::Rgb => vst3q_u8(out, uint8x16x3_t(pair.0, pair.0, pair.0)),
+                        PixelMode::Rgba => vst4q_u8(out, uint8x16x4_t(pair.0, pair.0, pair.0, pair.1)),
+                        _ => unreachable!(),
+                    }
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (pair, pixel) in src[offset * 2..]
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(dst[offset * channels..].chunks_exact_mut(channels))
+        {
+            match to {
+                PixelMode::L => pixel[0] = pair[0],
+                PixelMode::Rgb => pixel.copy_from_slice(&[pair[0]; 3]),
+                PixelMode::Rgba => pixel.copy_from_slice(&[pair[0], pair[0], pair[0], pair[1]]),
+                _ => unreachable!(),
+            }
+        }
+    });
+    output
+}
+
+pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
+    let mut output = vec![0; source.len() / 2];
+    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, dst| {
+        let src = &source[chunk * CHUNK_PIXELS * 2..(chunk * CHUNK_PIXELS + dst.len()) * 2];
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            unsafe {
+                while offset + 16 <= dst.len() {
+                    let pair = vld2q_u8(src.as_ptr().add(offset * 2));
+                    vst1q_u8(dst.as_mut_ptr().add(offset), if channel == 0 { pair.0 } else { pair.1 });
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (value, pair) in dst[offset..].iter_mut().zip(src[offset * 2..].as_chunks::<2>().0) {
+            *value = pair[channel];
+        }
+    });
+    output
+}
+
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
     let count = source.len() / S;
     #[cfg(not(target_arch = "aarch64"))]

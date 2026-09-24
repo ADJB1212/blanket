@@ -38,17 +38,7 @@ __all__ = [
 def _logical(image1: Image.Image, image2: Image.Image, operation: str) -> Image.Image:
     if image1.mode != "1" or image2.mode != "1":
         raise ValueError("image has wrong mode")
-    width = min(image1.width, image2.width)
-    height = min(image1.height, image2.height)
-    first = image1.crop((0, 0, width, height)).tobytes()
-    second = image2.crop((0, 0, width, height)).tobytes()
-    if operation == "and":
-        pixels = bytes(a & b for a, b in zip(first, second, strict=True))
-    elif operation == "or":
-        pixels = bytes(a | b for a, b in zip(first, second, strict=True))
-    else:
-        pixels = bytes(a ^ b for a, b in zip(first, second, strict=True))
-    return Image.frombytes("1", (width, height), pixels)
+    return Image.Image(chops_binary(image1._native, image2._native, operation, 1.0, 0))
 
 
 def logical_and(image1: Image.Image, image2: Image.Image) -> Image.Image:

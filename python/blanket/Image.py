@@ -351,7 +351,7 @@ class Image:
         if mode == "PA" and self.mode == "PA":
             return self.copy()
         if mode == "P" and self.mode == "PA":
-            result = frombytes("P", self.size, self.tobytes()[::2])
+            result = self.getchannel("P")
             if self.palette is not None:
                 result.putpalette(self.palette)
             return result

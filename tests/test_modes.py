@@ -39,6 +39,16 @@ def test_la_conversion_and_png_roundtrip() -> None:
     assert Image.open(BytesIO(output.getvalue())).tobytes() == image.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["1", "LA"])
+@pytest.mark.parametrize("destination", ["L", "RGB", "RGBA"])
+def test_mode_conversion_matches_pillow_at_simd_boundaries(mode: str, destination: str) -> None:
+    size = (37, 3)
+    raw = bytes((i * 53 + 17) % 256 for i in range(size[1] * ((size[0] + 7) // 8 if mode == "1" else size[0] * 2)))
+    blanket = Image.frombytes(mode, size, raw)
+    pillow = PillowImage.frombytes(mode, size, raw)
+    assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+
+
 def test_pa_palette_alpha_conversion() -> None:
     image = Image.frombytes("PA", (2, 1), bytes([0, 128, 1, 255]))
     image.putpalette([255, 0, 0, 0, 0, 255])
@@ -48,6 +58,15 @@ def test_pa_palette_alpha_conversion() -> None:
     output = BytesIO()
     image.save(output, "PNG")
     assert Image.open(BytesIO(output.getvalue())).convert("RGBA").getdata() == image.convert("RGBA").getdata()
+
+
+def test_pa_conversion_with_short_palette() -> None:
+    image = Image.frombytes("PA", (3, 1), bytes([0, 128, 1, 200, 2, 255]))
+    image.putpalette([255, 0, 0, 0, 0, 255])
+    assert image.convert("L").getdata() == [76, 29, 0]
+    assert image.convert("RGB").getdata() == [(255, 0, 0), (0, 0, 255), (0, 0, 0)]
+    assert image.convert("RGBA").getdata() == [(255, 0, 0, 128), (0, 0, 255, 200), (0, 0, 0, 255)]
+    assert image.convert("P").getdata() == [0, 1, 2]
 
 
 def test_rgba_to_pa_retains_pixel_alpha() -> None:
@@ -104,3 +123,18 @@ def test_bilevel_png_and_logical_operations() -> None:
     reopened = Image.open(BytesIO(output.getvalue()))
     assert reopened.mode == "1"
     assert reopened.tobytes() == first.tobytes()
+
+
+@pytest.mark.parametrize("widths", [(9, 9), (17, 11), (7, 19)])
+def test_bilevel_logical_operations_with_different_widths(widths: tuple[int, int]) -> None:
+    from PIL import ImageChops as PillowChops
+
+    first = Image.frombytes("1", (widths[0], 3), bytes((i * 53 + 17) % 256 for i in range((widths[0] + 7) // 8 * 3)))
+    second = Image.frombytes("1", (widths[1], 2), bytes((i * 41 + 29) % 256 for i in range((widths[1] + 7) // 8 * 2)))
+    pillow_first = PillowImage.frombytes("1", first.size, first.tobytes())
+    pillow_second = PillowImage.frombytes("1", second.size, second.tobytes())
+    for operation in ("logical_and", "logical_or", "logical_xor"):
+        expected = getattr(PillowChops, operation)(pillow_first, pillow_second)
+        actual = getattr(ImageChops, operation)(first, second)
+        assert actual.size == expected.size
+        assert actual.tobytes() == expected.tobytes()

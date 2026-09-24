@@ -4,6 +4,66 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use std::collections::HashMap;
 
+const fn bilevel_bytes() -> [u64; 256] {
+    let mut table = [0; 256];
+    let mut value = 0;
+    while value < 256 {
+        let mut bit = 0;
+        while bit < 8 {
+            if value & (128 >> bit) != 0 {
+                table[value] |= 255_u64 << (bit * 8);
+            }
+            bit += 1;
+        }
+        value += 1;
+    }
+    table
+}
+
+const BILEVEL_BYTES: [u64; 256] = bilevel_bytes();
+
+fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+
+    let mut pixels = vec![0; width * height];
+    if width == 0 {
+        return pixels;
+    }
+    let row_bytes = width.div_ceil(8);
+    pixels.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
+        let packed = &data[y * row_bytes..(y + 1) * row_bytes];
+        let (groups, tail) = row.as_chunks_mut::<8>();
+        for (byte, dst) in packed.iter().zip(groups) {
+            dst.copy_from_slice(&BILEVEL_BYTES[*byte as usize].to_le_bytes());
+        }
+        for (x, dst) in tail.iter_mut().enumerate() {
+            *dst = if packed[width / 8] & (128 >> x) != 0 { 255 } else { 0 };
+        }
+    });
+    pixels
+}
+
+fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
+    use rayon::prelude::*;
+
+    let row_bytes = width.div_ceil(8);
+    let mut packed = vec![0; row_bytes * height];
+    if width == 0 {
+        return packed;
+    }
+    packed.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
+        let pixels = &pixels[y * width..(y + 1) * width];
+        for (byte, group) in row.iter_mut().zip(pixels.chunks(8)) {
+            let mut bits = 0;
+            for (bit, &value) in group.iter().enumerate() {
+                bits |= u8::from(value != 0) << (7 - bit);
+            }
+            *byte = bits;
+        }
+    });
+    packed
+}
+
 fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
     if !value.is_exact_instance_of::<PyTuple>()
         && let Ok(number) = value.extract::<i64>()
@@ -327,7 +387,7 @@ impl Image {
             if self.bit_depth == 8 {
                 let pixels = match self.mode {
                     PixelMode::One | PixelMode::L => data.to_vec(),
-                    PixelMode::La | PixelMode::Pa => data.as_chunks::<2>().0.iter().map(|pixel| pixel[channel]).collect(),
+                    PixelMode::La | PixelMode::Pa => crate::simd::extract_two_channel(data, channel),
                     PixelMode::Rgb => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
                     PixelMode::Rgba => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
                 };
@@ -686,6 +746,9 @@ impl Image {
             let indices = self.pixel_data()?;
             let converted = py.detach(|| {
                 if self.mode == PixelMode::Pa {
+                    if matches!(destination, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+                        return expand_pa(indices, *palette_mode, palette, destination);
+                    }
                     let mut rgba = Vec::with_capacity(indices.len() * 2);
                     for pair in indices.as_chunks::<2>().0 {
                         let entry = pair[0] as usize * palette_mode.channels();
@@ -717,16 +780,8 @@ impl Image {
 
     pub fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
         if self.mode == PixelMode::One {
-            let width = self.width as usize;
-            let row_bytes = width.div_ceil(8);
-            let mut packed = vec![0; row_bytes * self.height as usize];
-            for (y, row) in self.raw_data()?.chunks_exact(width.max(1)).enumerate() {
-                for (x, &value) in row.iter().enumerate().take(width) {
-                    if value != 0 {
-                        packed[y * row_bytes + x / 8] |= 128 >> (x % 8);
-                    }
-                }
-            }
+            let source = self.raw_data()?;
+            let packed = py.detach(|| pack_bilevel(source, self.width as usize, self.height as usize));
             return Ok(PyBytes::new(py, &packed).unbind());
         }
         Ok(PyBytes::new(py, self.raw_data()?).unbind())
@@ -751,7 +806,7 @@ impl Image {
 }
 
 #[pyfunction(signature = (mode, size, data, bit_depth=8))]
-pub fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
+pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
     if mode == PixelMode::One {
         if bit_depth != 8 {
@@ -761,9 +816,7 @@ pub fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> Py
         if data.len() != row_bytes * size.1 as usize {
             return Err(PyValueError::new_err("wrong amount of image data"));
         }
-        let pixels = (0..size.1 as usize)
-            .flat_map(|y| (0..size.0 as usize).map(move |x| if data[y * row_bytes + x / 8] & (128 >> (x % 8)) != 0 { 255 } else { 0 }))
-            .collect();
+        let pixels = py.detach(|| unpack_bilevel(data, size.0 as usize, size.1 as usize));
         return Image::from_pixels(size.0, size.1, mode, pixels, None);
     }
     if matches!(mode, PixelMode::La | PixelMode::Pa) && bit_depth != 8 {
@@ -871,9 +924,23 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     if from == to {
         return source.to_vec();
     }
+    if from == PixelMode::One {
+        return match to {
+            PixelMode::L => source.to_vec(),
+            PixelMode::Rgb | PixelMode::Rgba => crate::simd::convert(source, PixelMode::L, to),
+            _ => convert_pixels_generic(source, from, to),
+        };
+    }
+    if from == PixelMode::La && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+        return crate::simd::convert_la(source, to);
+    }
     if matches!(from, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
         return crate::simd::convert(source, from, to);
     }
+    convert_pixels_generic(source, from, to)
+}
+
+fn convert_pixels_generic(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     let mut result = Vec::with_capacity(source.len() / from.channels() * to.channels());
     for pixel in source.chunks_exact(from.channels()) {
         let (r, g, b, a) = match from {
@@ -912,6 +979,29 @@ fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> Vec<u8> {
         }
     });
     expanded
+}
+
+fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> Vec<u8> {
+    let table: [[u8; 3]; 256] = std::array::from_fn(|slot| {
+        let entry = slot * palette_mode.channels();
+        palette.get(entry..entry + 3).unwrap_or(&[0, 0, 0]).try_into().unwrap()
+    });
+    let channels = destination.channels();
+    let mut output = vec![0; indices.len() / 2 * channels];
+    crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * channels, |chunk, dst| {
+        let start = chunk * crate::parallel::CHUNK_PIXELS * 2;
+        let source = &indices[start..start + dst.len() / channels * 2];
+        for (pair, pixel) in source.as_chunks::<2>().0.iter().zip(dst.chunks_mut(channels)) {
+            let rgb = table[pair[0] as usize];
+            match destination {
+                PixelMode::L => pixel[0] = crate::simd::pillow_luma(rgb[0], rgb[1], rgb[2]),
+                PixelMode::Rgb => pixel.copy_from_slice(&rgb),
+                PixelMode::Rgba => pixel.copy_from_slice(&[rgb[0], rgb[1], rgb[2], pair[1]]),
+                _ => unreachable!(),
+            }
+        }
+    });
+    output
 }
 
 #[cfg(test)]
