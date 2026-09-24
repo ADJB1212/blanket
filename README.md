@@ -38,7 +38,7 @@ with Image.open("photo.jpg") as image:
 
 Blanket is currently **alpha software**. It implements a focused subset of
 Pillow's API, centered on `L`, `RGB`, and `RGBA` images, with limited indexed
-`P` support. It is not a drop-in replacement for `PIL`.
+`P` support. It is not a drop-in replacement for `PIL` (yet).
 
 See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
 arithmetic and blend modes, and
