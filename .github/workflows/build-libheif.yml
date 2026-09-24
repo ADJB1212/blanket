@@ -1,0 +1,108 @@
+name: Build libheif
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+      aom-version:
+        required: true
+        type: string
+      x265-version:
+        required: true
+        type: string
+      libde265-version:
+        required: true
+        type: string
+      dav1d-version:
+        required: true
+        type: string
+env:
+  DO_NOT_TRACK: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
+  MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Set up Homebrew (Linux)
+        if: runner.os == 'Linux'
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+      - name: Install build tools
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            brew install cmake ninja meson nasm pkg-config
+          else
+            sudo apt-get update
+            sudo apt-get install -y libnuma-dev
+            brew install llvm lld cmake meson nasm ninja pkg-config
+            echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+            echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Select compiler
+        shell: bash
+        run: |
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+      - name: Restore libheif
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libheif
+          key: libheif-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ inputs.aom-version }}-${{ inputs.x265-version }}-${{ inputs.libde265-version }}-${{ inputs.dav1d-version }}
+      - name: Restore aom
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/aom
+          key: aom-${{ runner.os }}-${{ runner.arch }}-${{ inputs.aom-version }}
+          fail-on-cache-miss: true
+      - name: Restore x265
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/x265
+          key: x265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.x265-version }}
+          fail-on-cache-miss: true
+      - name: Restore libde265
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libde265
+          key: libde265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.libde265-version }}
+          fail-on-cache-miss: true
+      - name: Restore dav1d
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/dav1d
+          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dav1d-version }}
+          fail-on-cache-miss: true
+      - name: Set codec paths
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "PKG_CONFIG_PATH=$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/dav1d/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/dav1d" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/dav1d/lib" >> "$GITHUB_ENV"
+      - name: Build libheif
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          CPPFLAGS: ""
+        run: bash scripts/build_release_dependency.sh libheif "${{ inputs.version }}"
+      - name: Save libheif
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/deps/libheif
+          key: ${{ steps.cache.outputs.cache-primary-key }}

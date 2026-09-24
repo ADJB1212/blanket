@@ -7,13 +7,19 @@ on:
       - "**.md"
       - "LICENSE"
       - ".gitignore"
-      - "docs/*"
-      - ".github/workflows/release.yml"
-      - ".github/workflows/benchmark.yml"
-      - ".github/workflows/publish.yml"
-      - "scripts/benchmark_compression.py"
-      - "scripts/benchmark.py"
+      - ".github/**"
+      - "!.github/workflows/CI.yml"
+      - "scripts/**"
+      - "!scripts/verify_behavior.py"
   pull_request:
+    paths-ignore:
+      - "**.md"
+      - "LICENSE"
+      - ".gitignore"
+      - ".github/**"
+      - "!.github/workflows/CI.yml"
+      - "scripts/**"
+      - "!scripts/verify_behavior.py"
   workflow_dispatch:
 
 env:
@@ -42,6 +48,8 @@ jobs:
         include:
           - os: ubuntu-24.04
             python: "3.14"
+          - os: ubuntu-24.04-arm
+            python: "3.14"
           - os: macos-latest
             python: "3.14"
     runs-on: ${{ matrix.os }}
@@ -66,22 +74,22 @@ jobs:
           enable-cache: "false"
           save-cache: "false"
       - name: Set up Homebrew
-        if: runner.os == 'macOS'
         id: set-up-homebrew
         uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
       - name: Install Deps and Setup PATH (Linux)
         if: runner.os == 'Linux'
         run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
-          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev mold
+          brew install llvm lld cmake meson nasm ninja pkg-config
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
-          echo "CC=clang-23" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=/usr/lib/$(dpkg-architecture -qDEB_HOST_MULTIARCH)/pkgconfig:/usr/share/pkgconfig" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=vendored,user-provided-webp,embedded-libheif" >> "$GITHUB_ENV"
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
@@ -114,7 +122,7 @@ jobs:
       - name: Test Python API
         run: uv run pytest
       - name: Test x86 SIMD kernels
-        if: runner.os == 'Linux'
+        if: runner.arch == 'X64'
         run: cargo test --features $BUILD_FEATURES
       - name: Verify Pillow behavior
         run: uv run scripts/verify_behavior.py

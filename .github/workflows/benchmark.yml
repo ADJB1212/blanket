@@ -12,21 +12,84 @@ env:
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
   UV_NO_SYNC: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
 
 permissions:
   contents: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      aom-version: ${{ steps.versions.outputs.aom }}
+      x265-version: ${{ steps.versions.outputs.x265 }}
+      libde265-version: ${{ steps.versions.outputs.libde265 }}
+      dav1d-version: ${{ steps.versions.outputs.dav1d }}
+      libheif-version: ${{ steps.versions.outputs.libheif }}
+      libwebp-version: ${{ steps.versions.outputs.libwebp }}
+    steps:
+      - name: Set codec versions
+        id: versions
+        run: |
+          echo "aom=v3.15.1" >> "$GITHUB_OUTPUT"
+          echo "x265=4.2" >> "$GITHUB_OUTPUT"
+          echo "libde265=v1.1.3" >> "$GITHUB_OUTPUT"
+          echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
+          echo "libheif=v1.23.5" >> "$GITHUB_OUTPUT"
+          echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
+
+  aom:
+    needs: prepare
+    uses: ./.github/workflows/build-aom.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.aom-version }}
+
+  x265:
+    needs: prepare
+    uses: ./.github/workflows/build-x265.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.x265-version }}
+
+  libde265:
+    needs: prepare
+    uses: ./.github/workflows/build-libde265.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.libde265-version }}
+
+  dav1d:
+    needs: prepare
+    uses: ./.github/workflows/build-dav1d.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.dav1d-version }}
+
+  libheif:
+    needs: [prepare, aom, x265, libde265, dav1d]
+    uses: ./.github/workflows/build-libheif.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.libheif-version }}
+      aom-version: ${{ needs.prepare.outputs.aom-version }}
+      x265-version: ${{ needs.prepare.outputs.x265-version }}
+      libde265-version: ${{ needs.prepare.outputs.libde265-version }}
+      dav1d-version: ${{ needs.prepare.outputs.dav1d-version }}
+
+  libwebp:
+    needs: prepare
+    uses: ./.github/workflows/build-libwebp.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.libwebp-version }}
+
   benchmark:
+    needs: [prepare, libheif, libwebp]
     timeout-minutes: 60
     runs-on: ubuntu-24.04
-    env:
-      DAV1D_VERSION: "1.5.4"
-      AOM_VERSION: "v3.15.1"
-      X265_VERSION: "4.2"
-      LIBDE265_VERSION: "v1.1.3"
-      LIBHEIF_VERSION: "v1.23.5"
-      LIBWEBP_VERSION: "v1.6.0"
     strategy:
       matrix:
         include:
@@ -44,6 +107,9 @@ jobs:
           enable-cache: "false"
           save-cache: "false"
 
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+
       - name: Install Rust
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable
 
@@ -54,261 +120,64 @@ jobs:
 
       - name: Install system dependencies
         run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libnuma-dev clang-23 llvm-23 lld-23 ninja-build cmake meson pkg-config mold
+          sudo apt-get install -y libnuma-dev mold
+          brew install llvm lld cmake meson nasm ninja pkg-config
 
       - name: Setup PATH
         run: |
-          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
-          echo "CC=clang-23" >> "$GITHUB_ENV"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "CFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_FLAGS=-O3 ${CMAKE_CXX_FLAGS:-}" >> "$GITHUB_ENV"
           echo "CMAKE_C_FLAGS=-O3 ${CMAKE_C_FLAGS:-}" >> "$GITHUB_ENV"
 
-      - uses: ilammy/setup-nasm@v1
-        with:
-          version: 3.02
-
-      - name: Cache x265
-        id: cache-x265
+      - name: Restore x265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: x265-${{ runner.os }}-${{ matrix.target }}-${{ env.X265_VERSION }}
+          key: x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          fail-on-cache-miss: true
 
-      - name: Build x265
-        id: build-x265
-        if: steps.cache-x265.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$X265_VERSION" \
-            --depth 1 \
-            https://bitbucket.org/multicoreware/x265_git.git \
-            "$RUNNER_TEMP/x265"
-
-          # Build private high-bit-depth encoders for the shared 8-bit dispatcher.
-          # These static archives need PIC because they become part of libx265.so.
-          for depth in 12 10; do
-            cmake \
-              -S "$RUNNER_TEMP/x265/source" \
-              -B "$RUNNER_TEMP/x265/build-$depth" \
-              -G Ninja \
-              -DCMAKE_BUILD_TYPE=Release \
-              -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
-              -DHIGH_BIT_DEPTH=ON \
-              -DENABLE_HDR10_PLUS=ON \
-              -DMAIN12="$([ "$depth" = 12 ] && echo ON || echo OFF)" \
-              -DEXPORT_C_API=OFF \
-              -DENABLE_SHARED=OFF \
-              -DBUILD_SHARED_LIBS=OFF \
-              -DENABLE_CLI=OFF
-            cmake --build "$RUNNER_TEMP/x265/build-$depth" --parallel
-          done
-
-          cmake \
-            -S "$RUNNER_TEMP/x265/source" \
-            -B "$RUNNER_TEMP/x265/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/x265" \
-            -DENABLE_SHARED=ON \
-            -DENABLE_CLI=OFF \
-            -DHIGH_BIT_DEPTH=OFF \
-            -DLINKED_10BIT=ON \
-            -DLINKED_12BIT=ON \
-            -DEXTRA_LIB="$RUNNER_TEMP/x265/build-10/libx265.a;$RUNNER_TEMP/x265/build-12/libx265.a"
-
-          cmake --build "$RUNNER_TEMP/x265/build" --parallel
-          cmake --install "$RUNNER_TEMP/x265/build"
-
-      - name: Cache dav1d
-        id: cache-dav1d
+      - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: dav1d-${{ runner.os }}-${{ matrix.target }}-${{ env.DAV1D_VERSION }}
+          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          fail-on-cache-miss: true
 
-      - name: Build dav1d
-        id: build-dav1d
-        if: steps.cache-dav1d.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$DAV1D_VERSION" \
-            --depth 1 \
-            https://code.videolan.org/videolan/dav1d.git \
-            "$RUNNER_TEMP/dav1d"
-
-          meson setup \
-            "$RUNNER_TEMP/dav1d/build" \
-            "$RUNNER_TEMP/dav1d" \
-            -Denable_tools=false \
-            -Denable_tests=false \
-            -Denable_docs=false \
-            --prefix="$HOME/deps/dav1d" \
-            --buildtype=release \
-            --default-library=shared
-
-          ninja -C "$RUNNER_TEMP/dav1d/build" install
-
-      - name: Cache AOM
-        id: cache-aom
+      - name: Restore aom
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: aom-${{ runner.os }}-${{ matrix.target }}-${{ env.AOM_VERSION }}
+          key: aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          fail-on-cache-miss: true
 
-      - name: Build AOM
-        id: build-aom
-        if: steps.cache-aom.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$AOM_VERSION" \
-            --depth 1 \
-            https://aomedia.googlesource.com/aom \
-            "$RUNNER_TEMP/aom"
-
-          cmake \
-            -S "$RUNNER_TEMP/aom" \
-            -B "$RUNNER_TEMP/aom/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/aom" \
-            -DBUILD_SHARED_LIBS=1 \
-            -DENABLE_TESTS=0 \
-            -DENABLE_EXAMPLES=0 \
-            -DENABLE_DOCS=0
-
-          cmake --build "$RUNNER_TEMP/aom/build" --parallel
-          cmake --install "$RUNNER_TEMP/aom/build"
-
-      - name: Cache libde265
-        id: cache-libde265
+      - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: libde265-${{ runner.os }}-${{ matrix.target }}-${{ env.LIBDE265_VERSION }}
+          key: libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          fail-on-cache-miss: true
 
-      - name: Build libde265
-        id: build-libde265
-        if: steps.cache-libde265.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$LIBDE265_VERSION" \
-            --depth 1 \
-            https://github.com/strukturag/libde265.git \
-            "$RUNNER_TEMP/libde265"
-
-          cmake \
-            -S "$RUNNER_TEMP/libde265" \
-            -B "$RUNNER_TEMP/libde265/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_DECODER=OFF \
-            -DENABLE_SDL=OFF \
-            -DENABLE_SHERLOCK265=OFF \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/libde265"
-
-          cmake --build "$RUNNER_TEMP/libde265/build" --parallel
-          cmake --install "$RUNNER_TEMP/libde265/build"
-
-      - name: Cache libheif
-        id: cache-libheif
+      - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: libheif-${{ runner.os }}-${{ matrix.target }}-${{ env.LIBHEIF_VERSION }}
+          key: libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          fail-on-cache-miss: true
 
-      - name: Build libheif
-        id: build-libheif
-        if: steps.cache-libheif.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$LIBHEIF_VERSION" \
-            --depth 1 \
-            https://github.com/strukturag/libheif.git \
-            "$RUNNER_TEMP/libheif"
-
-          cmake --preset=release-noplugins \
-            -S "$RUNNER_TEMP/libheif" \
-            -B "$RUNNER_TEMP/libheif/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/libheif" \
-            -DWITH_DAV1D=ON \
-            -DBUILD_SHARED_LIBS=ON \
-            -DENABLE_MULTITHREADING_SUPPORT=ON \
-            -DENABLE_PARALLEL_TILE_DECODING=ON \
-            -DWITH_LIBSHARPYUV=OFF \
-            -DWITH_X264=OFF \
-            -DBUILD_TESTING=OFF \
-            -DWITH_EXAMPLES=OFF \
-            -DBUILD_DOCUMENTATION=OFF \
-            -DWITH_EXAMPLE_HEIF_THUMB=OFF \
-            -DWITH_EXAMPLE_HEIF_VIEW=OFF \
-            -DWITH_GDK_PIXBUF=OFF \
-            -DBUILD_TESTING=OFF \
-            -DLIBDE265_INCLUDE_DIR="$HOME/deps/libde265/include" \
-            -DLIBDE265_LIBRARY="$HOME/deps/libde265/lib/libde265.so" \
-            -DX265_INCLUDE_DIR="$HOME/deps/x265/include" \
-            -DX265_LIBRARY="$HOME/deps/x265/lib/libx265.so" \
-            -DDAV1D_INCLUDE_DIR="$HOME/deps/dav1d/include" \
-            -DDAV1D_LIBRARY="$HOME/deps/dav1d/lib/x86_64-linux-gnu/libdav1d.so" \
-            -DAOM_INCLUDE_DIR="$HOME/deps/aom/include" \
-            -DAOM_LIBRARY="$HOME/deps/aom/lib/libaom.so"
-
-          cmake --build "$RUNNER_TEMP/libheif/build" --parallel
-          cmake --install "$RUNNER_TEMP/libheif/build"
-
-      - name: Cache libwebp
-        id: cache-libwebp
+      - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: libwebp-${{ runner.os }}-${{ matrix.target }}-${{ env.LIBWEBP_VERSION }}
-
-      - name: Build libwebp
-        id: build-libwebp
-        env:
-          CPPFLAGS: ""
-        if: steps.cache-libwebp.outputs.cache-hit != 'true'
-        run: |
-          git clone \
-            --branch "$LIBWEBP_VERSION" \
-            --depth 1 \
-            https://chromium.googlesource.com/webm/libwebp \
-            "$RUNNER_TEMP/libwebp"
-
-          cmake \
-            -S "$RUNNER_TEMP/libwebp" \
-            -B "$RUNNER_TEMP/libwebp/build" \
-            -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_INSTALL_PREFIX="$HOME/deps/libwebp" \
-            -DBUILD_SHARED_LIBS=ON \
-            -DWEBP_BUILD_ANIM_UTILS=OFF \
-            -DWEBP_BUILD_CWEBP=OFF \
-            -DWEBP_BUILD_DWEBP=OFF \
-            -DWEBP_BUILD_GIF2WEBP=OFF \
-            -DWEBP_BUILD_IMG2WEBP=OFF \
-            -DWEBP_BUILD_VWEBP=OFF \
-            -DWEBP_BUILD_WEBPINFO=OFF \
-            -DWEBP_BUILD_WEBPMUX=OFF \
-            -DWEBP_BUILD_LIBWEBPMUX=OFF \
-            -DWEBP_BUILD_EXTRAS=OFF \
-            -DWEBP_BUILD_WEBP_JS=OFF \
-            -DWEBP_BUILD_FUZZTEST=OFF \
-            -DWEBP_ENABLE_SIMD=ON \
-            -DWEBP_USE_THREAD=ON
-
-
-          cmake --build "$RUNNER_TEMP/libwebp/build" --parallel
-          cmake --install "$RUNNER_TEMP/libwebp/build"
+          key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          fail-on-cache-miss: true
 
       - name: Setup codec dependencies
         run: |
@@ -319,7 +188,7 @@ jobs:
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libwebp/bin" >> "$GITHUB_PATH"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/x86_64-linux-gnu/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
 
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp" >> "$GITHUB_ENV"
 
