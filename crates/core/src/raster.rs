@@ -178,7 +178,10 @@ fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PixelMode {
+    One,
     L,
+    La,
+    Pa,
     Rgb,
     Rgba,
 }
@@ -186,18 +189,22 @@ pub enum PixelMode {
 impl PixelMode {
     pub fn parse(value: &str) -> PyResult<Self> {
         match value {
+            "1" => Ok(Self::One),
             "L" => Ok(Self::L),
+            "LA" => Ok(Self::La),
+            "PA" => Ok(Self::Pa),
             "RGB" => Ok(Self::Rgb),
             "RGBA" => Ok(Self::Rgba),
-            _ => Err(PyValueError::new_err(format!(
-                "unsupported image mode {value:?}; expected 'L', 'RGB', or 'RGBA'"
-            ))),
+            _ => Err(PyValueError::new_err(format!("unsupported image mode {value:?}"))),
         }
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
+            Self::One => "1",
             Self::L => "L",
+            Self::La => "LA",
+            Self::Pa => "PA",
             Self::Rgb => "RGB",
             Self::Rgba => "RGBA",
         }
@@ -205,7 +212,8 @@ impl PixelMode {
 
     pub const fn channels(self) -> usize {
         match self {
-            Self::L => 1,
+            Self::One | Self::L => 1,
+            Self::La | Self::Pa => 2,
             Self::Rgb => 3,
             Self::Rgba => 4,
         }
@@ -258,6 +266,9 @@ impl Image {
     }
 
     pub fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
+        if !matches!(mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+            return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
+        }
         if !matches!(bit_depth, 10 | 12 | 16) {
             return Err(PyValueError::new_err("bit_depth must be 8, 10, 12, or 16"));
         }
@@ -289,7 +300,8 @@ impl Image {
                 // Once every band spans the entire domain, no later pixel
                 // can change the answer. Check only once per block.
                 return match self.mode {
-                    PixelMode::L => extrema::<1>(data),
+                    PixelMode::One | PixelMode::L => extrema::<1>(data),
+                    PixelMode::La | PixelMode::Pa => extrema::<2>(data),
                     PixelMode::Rgb => extrema::<3>(data),
                     PixelMode::Rgba => extrema::<4>(data),
                 };
@@ -314,7 +326,8 @@ impl Image {
         py.detach(|| {
             if self.bit_depth == 8 {
                 let pixels = match self.mode {
-                    PixelMode::L => data.to_vec(),
+                    PixelMode::One | PixelMode::L => data.to_vec(),
+                    PixelMode::La | PixelMode::Pa => data.as_chunks::<2>().0.iter().map(|pixel| pixel[channel]).collect(),
                     PixelMode::Rgb => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
                     PixelMode::Rgba => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
                 };
@@ -333,7 +346,8 @@ impl Image {
         let data = self.raw_data()?;
         if self.bit_depth == 8 {
             return Ok(match self.mode {
-                PixelMode::L => PyList::new(py, data.iter().copied())?,
+                PixelMode::One | PixelMode::L => PyList::new(py, data.iter().copied())?,
+                PixelMode::La | PixelMode::Pa => PyList::new(py, data.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))?,
                 PixelMode::Rgb => PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?,
                 PixelMode::Rgba => PyList::new(py, data.as_chunks::<4>().0.iter().map(|p| (p[0], p[1], p[2], p[3])))?,
             }
@@ -415,7 +429,11 @@ impl Image {
             return Err(PyIndexError::new_err("image index out of range"));
         }
         let channels = self.mode.channels();
-        let pixel = parse_pixel(value, channels)?;
+        let pixel = if self.mode == PixelMode::One {
+            [value.extract::<i64>()?.clamp(0, 255) as u8, 0, 0, 0]
+        } else {
+            parse_pixel(value, channels)?
+        };
         let offset = (y as usize * self.width as usize + x as usize) * channels;
         self.pixels.as_mut().unwrap()[offset..offset + channels].copy_from_slice(&pixel[..channels]);
         Ok(())
@@ -429,7 +447,8 @@ impl Image {
         }
         let pixels = self.pixels.as_mut().unwrap();
         match self.mode {
-            PixelMode::L => put_pixels::<1>(pixels, data, length, scale, offset),
+            PixelMode::One | PixelMode::L => put_pixels::<1>(pixels, data, length, scale, offset),
+            PixelMode::La | PixelMode::Pa => put_pixels::<2>(pixels, data, length, scale, offset),
             PixelMode::Rgb => put_pixels::<3>(pixels, data, length, scale, offset),
             PixelMode::Rgba => put_pixels::<4>(pixels, data, length, scale, offset),
         }
@@ -450,8 +469,8 @@ impl Image {
             }
             let row_bytes = self.width as usize * stride;
             let occupied = |pixel: &[u8]| {
-                let values = if alpha_only && self.mode == PixelMode::Rgba {
-                    &pixel[3 * sample_bytes..]
+                let values = if alpha_only && matches!(self.mode, PixelMode::Rgba | PixelMode::La | PixelMode::Pa) {
+                    &pixel[(channels - 1) * sample_bytes..]
                 } else {
                     pixel
                 };
@@ -487,7 +506,13 @@ impl Image {
 
     #[getter]
     pub fn mode(&self) -> &'static str {
-        if self.palette.is_some() { "P" } else { self.mode.as_str() }
+        if self.mode == PixelMode::Pa {
+            "PA"
+        } else if self.palette.is_some() {
+            "P"
+        } else {
+            self.mode.as_str()
+        }
     }
 
     #[getter]
@@ -556,7 +581,8 @@ impl Image {
         if self.bit_depth > 8 {
             let sample = |i: usize| u16::from_le_bytes([pixels[2 * i], pixels[2 * i + 1]]);
             return Ok(match self.mode {
-                PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
+                PixelMode::One | PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
+                PixelMode::La | PixelMode::Pa => (sample(offset), sample(offset + 1)).into_pyobject(py)?.into_any().unbind(),
                 PixelMode::Rgb => (sample(offset), sample(offset + 1), sample(offset + 2))
                     .into_pyobject(py)?
                     .into_any()
@@ -568,7 +594,8 @@ impl Image {
             });
         }
         Ok(match self.mode {
-            PixelMode::L => pixels[offset].into_pyobject(py)?.into_any().unbind(),
+            PixelMode::One | PixelMode::L => pixels[offset].into_pyobject(py)?.into_any().unbind(),
+            PixelMode::La | PixelMode::Pa => (pixels[offset], pixels[offset + 1]).into_pyobject(py)?.into_any().unbind(),
             PixelMode::Rgb => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
                 .into_pyobject(py)?
                 .into_any()
@@ -587,7 +614,11 @@ impl Image {
     pub fn set_palette(&mut self, mode: &str, data: Vec<u8>) -> PyResult<()> {
         self.pixel_data()?;
         let mode = PixelMode::parse(mode)?;
-        if self.mode != PixelMode::L || mode == PixelMode::L || data.len() > 256 * mode.channels() || !data.len().is_multiple_of(mode.channels()) {
+        if !matches!(self.mode, PixelMode::L | PixelMode::Pa)
+            || !matches!(mode, PixelMode::Rgb | PixelMode::Rgba)
+            || data.len() > 256 * mode.channels()
+            || !data.len().is_multiple_of(mode.channels())
+        {
             return Err(PyValueError::new_err("invalid palette"));
         }
         self.palette = Some((mode, data));
@@ -608,6 +639,12 @@ impl Image {
         if !matches!(depth, 8 | 10 | 12 | 16) {
             return Err(PyValueError::new_err("bit_depth must be 8, 10, 12, or 16"));
         }
+        if (self.mode != PixelMode::L && self.mode != PixelMode::Rgb && self.mode != PixelMode::Rgba
+            || destination != PixelMode::L && destination != PixelMode::Rgb && destination != PixelMode::Rgba)
+            && depth != 8
+        {
+            return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
+        }
         if self.bit_depth > 8 || depth > 8 {
             if self.palette.is_some() {
                 let expanded = self.convert(py, mode, Some(8))?;
@@ -627,6 +664,7 @@ impl Image {
                     PixelMode::L => (pixel[0], pixel[0], pixel[0], source_max as u16),
                     PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], source_max as u16),
                     PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
+                    _ => unreachable!("high-bit-depth mode validated above"),
                 };
                 let scale = |v: u16| ((u32::from(v) * target_max + source_max / 2) / source_max) as u16;
                 match destination {
@@ -635,6 +673,7 @@ impl Image {
                     )),
                     PixelMode::Rgb => output.extend([scale(r), scale(g), scale(b)]),
                     PixelMode::Rgba => output.extend([scale(r), scale(g), scale(b), scale(a)]),
+                    _ => unreachable!("high-bit-depth mode validated above"),
                 }
             }
             return if depth == 8 {
@@ -646,10 +685,21 @@ impl Image {
         if let Some((palette_mode, palette)) = &self.palette {
             let indices = self.pixel_data()?;
             let converted = py.detach(|| {
+                if self.mode == PixelMode::Pa {
+                    let mut rgba = Vec::with_capacity(indices.len() * 2);
+                    for pair in indices.as_chunks::<2>().0 {
+                        let entry = pair[0] as usize * palette_mode.channels();
+                        let rgb = palette.get(entry..entry + 3).unwrap_or(&[0, 0, 0]);
+                        rgba.extend_from_slice(rgb);
+                        rgba.push(pair[1]);
+                    }
+                    return convert_pixels(&rgba, PixelMode::Rgba, destination);
+                }
                 let expanded = match palette_mode {
                     PixelMode::L => expand_palette::<1>(indices, palette),
                     PixelMode::Rgb => expand_palette::<3>(indices, palette),
                     PixelMode::Rgba => expand_palette::<4>(indices, palette),
+                    _ => unreachable!("palette mode validated"),
                 };
                 if *palette_mode == destination {
                     expanded
@@ -666,6 +716,19 @@ impl Image {
     }
 
     pub fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        if self.mode == PixelMode::One {
+            let width = self.width as usize;
+            let row_bytes = width.div_ceil(8);
+            let mut packed = vec![0; row_bytes * self.height as usize];
+            for (y, row) in self.raw_data()?.chunks_exact(width.max(1)).enumerate() {
+                for (x, &value) in row.iter().enumerate().take(width) {
+                    if value != 0 {
+                        packed[y * row_bytes + x / 8] |= 128 >> (x % 8);
+                    }
+                }
+            }
+            return Ok(PyBytes::new(py, &packed).unbind());
+        }
         Ok(PyBytes::new(py, self.raw_data()?).unbind())
     }
 
@@ -690,6 +753,22 @@ impl Image {
 #[pyfunction(signature = (mode, size, data, bit_depth=8))]
 pub fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
+    if mode == PixelMode::One {
+        if bit_depth != 8 {
+            return Err(PyValueError::new_err("mode 1 requires 8-bit pixels"));
+        }
+        let row_bytes = (size.0 as usize).div_ceil(8);
+        if data.len() != row_bytes * size.1 as usize {
+            return Err(PyValueError::new_err("wrong amount of image data"));
+        }
+        let pixels = (0..size.1 as usize)
+            .flat_map(|y| (0..size.0 as usize).map(move |x| if data[y * row_bytes + x / 8] & (128 >> (x % 8)) != 0 { 255 } else { 0 }))
+            .collect();
+        return Image::from_pixels(size.0, size.1, mode, pixels, None);
+    }
+    if matches!(mode, PixelMode::La | PixelMode::Pa) && bit_depth != 8 {
+        return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
+    }
     if bit_depth != 8 {
         if !data.len().is_multiple_of(2) {
             return Err(PyValueError::new_err("16-bit storage requires an even byte count"));
@@ -716,7 +795,8 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     let mode = mode.map_or(Ok(inferred_mode), PixelMode::parse)?;
 
     let maximum_dimensions = match mode {
-        PixelMode::L => 2,
+        PixelMode::One | PixelMode::L => 2,
+        PixelMode::La | PixelMode::Pa => 3,
         PixelMode::Rgb => 3,
         PixelMode::Rgba => 4,
     };
@@ -791,8 +871,29 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     if from == to {
         return source.to_vec();
     }
-
-    crate::simd::convert(source, from, to)
+    if matches!(from, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+        return crate::simd::convert(source, from, to);
+    }
+    let mut result = Vec::with_capacity(source.len() / from.channels() * to.channels());
+    for pixel in source.chunks_exact(from.channels()) {
+        let (r, g, b, a) = match from {
+            PixelMode::One | PixelMode::L => (pixel[0], pixel[0], pixel[0], 255),
+            PixelMode::La => (pixel[0], pixel[0], pixel[0], pixel[1]),
+            PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], 255),
+            PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
+            PixelMode::Pa => (pixel[0], pixel[0], pixel[0], pixel[1]),
+        };
+        let gray = ((u32::from(r) * 19595 + u32::from(g) * 38470 + u32::from(b) * 7471 + 32768) >> 16) as u8;
+        match to {
+            PixelMode::One => result.push(if gray >= 128 { 255 } else { 0 }),
+            PixelMode::L => result.push(gray),
+            PixelMode::La => result.extend_from_slice(&[gray, a]),
+            PixelMode::Rgb => result.extend_from_slice(&[r, g, b]),
+            PixelMode::Rgba => result.extend_from_slice(&[r, g, b, a]),
+            PixelMode::Pa => result.extend_from_slice(&[gray, a]),
+        }
+    }
+    result
 }
 
 /// Resolve palette indices through a complete 256-entry table. Missing

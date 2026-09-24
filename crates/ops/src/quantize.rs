@@ -554,12 +554,14 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
                 PixelMode::L => octree::<1>(source, colors, false),
                 PixelMode::Rgb => octree::<3>(source, colors, false),
                 PixelMode::Rgba => octree::<4>(source, colors, true),
+                _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         } else {
             match image.mode {
                 PixelMode::L => exact::<1>(source, colors, method, kmeans),
                 PixelMode::Rgb => exact::<3>(source, colors, method, kmeans),
                 PixelMode::Rgba => exact::<4>(source, colors, method, kmeans),
+                _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         };
         let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;

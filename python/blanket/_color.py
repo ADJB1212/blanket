@@ -41,20 +41,24 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
         return [0] * len(mode)
     if isinstance(color, str):
         rgb = _rgb(color)
-        if mode == "L":
+        if mode in ("1", "L", "LA"):
             color = (rgb[0] * 19595 + rgb[1] * 38470 + rgb[2] * 7471 + 32768) >> 16
+            if mode == "LA":
+                color = (color, rgb[3] if len(rgb) == 4 else 255)
         else:
             color = rgb[:3] + ((rgb[3] if len(rgb) == 4 else 255,) if mode == "RGBA" else ())
     if isinstance(color, int):
+        if mode == "1":
+            return [max(0, min(255, color))]
         if mode == "L":
             return [max(0, min(255, color))]
         return [(color >> (8 * i)) & 255 for i in range(len(mode))]
     if not isinstance(color, tuple):
         raise TypeError("color must be int or tuple")
-    if mode == "L":
+    if mode in ("1", "L"):
         if len(color) != 1:
             raise TypeError("color must be int or single-element tuple")
-    elif len(color) == 3 and mode == "RGBA":
+    elif (len(color) == 1 and mode == "LA") or (len(color) == 3 and mode == "RGBA"):
         color = (*color, 255)
     elif mode == "RGB" and len(color) == 4:
         color = color[:3]
@@ -62,4 +66,6 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
         raise TypeError("color must be int, or tuple of the appropriate channel count")
     if not all(isinstance(v, int) for v in color):
         raise TypeError("color components must be integers")
+    if mode == "1":
+        return [max(0, min(255, color[0]))]
     return [max(0, min(255, v)) for v in color]

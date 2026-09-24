@@ -29,7 +29,8 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {
-            PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
+            PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
+            PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
             PixelMode::Rgb => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba => fill_pixels::<4>(spare, &color),
         }
@@ -96,6 +97,8 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
                 match (c, mc) {
                     (1, 1) => paste_masked::<1, 1>(dst, src, mask, fill),
                     (1, 4) => paste_masked::<1, 4>(dst, src, mask, fill),
+                    (2, 1) => paste_masked::<2, 1>(dst, src, mask, fill),
+                    (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
                     (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
                     (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
                     (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill),
@@ -114,7 +117,7 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
     let offset = 0;
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+    let offset = if C != 2 && std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; caller validates equal pixel counts.
         unsafe { blanket_core::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
     } else {
@@ -127,7 +130,7 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
         // Each iteration reads and writes 16 complete pixels. NEON is mandatory
         // on AArch64, and all three buffers have validated equal pixel counts.
         unsafe {
-            while offset + 16 <= dst.len() / C {
+            while C != 2 && offset + 16 <= dst.len() / C {
                 let dp = dst.as_mut_ptr().add(offset * C);
                 let sp = src.as_ptr().add(offset * C);
                 let mp = mask.as_ptr().add(offset * M);

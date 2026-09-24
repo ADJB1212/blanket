@@ -71,6 +71,18 @@ def make_gray(width: int, height: int) -> bytes:
     return bytes((index * 37) & 0xFF for index in range(width * height))
 
 
+def make_one(width: int, height: int) -> bytes:
+    return bytes((index * 37 + 0xA5) & 0xFF for index in range(((width + 7) // 8) * height))
+
+
+def make_la(width: int, height: int) -> bytes:
+    return bytes(value for index in range(width * height) for value in ((index * 37) & 0xFF, (index * 53) & 0xFF))
+
+
+def make_pa(width: int, height: int) -> bytes:
+    return bytes(value for index in range(width * height) for value in (index & 0xFF, (index * 53) & 0xFF))
+
+
 def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> bytes:
     output = BytesIO()
     image.save(output, fmt, **options)
@@ -246,6 +258,55 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
         ("cvt L→RGB", lambda b=b_gray: b.convert("RGB"), lambda p=p_gray: p.convert("RGB")),
         ("cvt L→RGBA", lambda b=b_gray: b.convert("RGBA"), lambda p=p_gray: p.convert("RGBA")),
     ]
+
+
+def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark creation, conversion, and common operations for phase-one modes."""
+    w, h = size
+    target = (max(1, w // 2), max(1, h // 2))
+    box = (w // 10, h // 10, w - w // 10, h - h // 10)
+    palette = bytes(range(256)) * 3
+    comparisons: list[Comparison] = []
+    images: dict[str, tuple[BlanketImage.Image, PillowImage.Image]] = {}
+
+    for mode, make_pixels, fill, pixel in (("1", make_one, 1, 255), ("LA", make_la, (47, 128), (47, 128)), ("PA", make_pa, (3, 128), (3, 128))):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        if mode == "PA":
+            blanket.putpalette(palette)
+            pillow.putpalette(palette)
+        images[mode] = (blanket, pillow)
+        comparisons.extend(
+            [
+                (f"new {mode}", partial(BlanketImage.new, mode, size, fill), partial(PillowImage.new, mode, size, fill)),
+                (f"frombytes {mode}", partial(BlanketImage.frombytes, mode, size, raw), partial(PillowImage.frombytes, mode, size, raw)),
+                (f"tobytes {mode}", blanket.tobytes, pillow.tobytes),
+                (f"getpixel {mode}", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+                (f"putpixel {mode} (copy included)", lambda im=blanket, v=pixel: im.copy().putpixel((w // 2, h // 2), v), lambda im=pillow, v=pixel: im.copy().putpixel((w // 2, h // 2), v)),
+                (f"crop {mode}", partial(blanket.crop, box), partial(pillow.crop, box)),
+                (f"transpose {mode}", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+                (f"resize NEAREST {mode}", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+            ]
+        )
+        comparisons.extend((f"cvt {mode}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA") if destination != mode)
+        if mode == "LA":
+            comparisons.append(("resize BILINEAR LA", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)))
+        if mode == "PA":
+            comparisons.append(("cvt PA→P", partial(blanket.convert, "P"), partial(pillow.convert, "P")))
+            comparisons.append(("save PNG PA (expands RGBA)", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.convert("RGBA").save(BytesIO(), "PNG")))
+        else:
+            payload = pillow_payload(pillow, "PNG")
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
+
+    first, reference = images["1"]
+    second = BlanketImage.frombytes("1", size, bytes(value ^ 0xA5 for value in first.tobytes()))
+    other = PillowImage.frombytes("1", size, second.tobytes())
+    comparisons.extend(
+        (name + " 1", partial(getattr(BlanketChops, name), first, second), partial(getattr(PillowChops, name), reference, other)) for name in ("logical_and", "logical_or", "logical_xor")
+    )
+    return comparisons
 
 
 def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
@@ -504,6 +565,8 @@ def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
             for image in (first, second, reference, other):
                 image.putpalette(bytes(range(256)) * 3)
         for name in BlanketChops.__all__:
+            if name.startswith("logical_"):
+                continue
             if name in ("invert", "duplicate"):
                 args, reference_args = (first,), (reference,)
             elif name == "constant":
@@ -706,8 +769,8 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
-DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Resize", "Memory")
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
+DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Mode Parity", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
 
@@ -915,6 +978,7 @@ def main() -> None:
         builders: dict[str, Callable[[], list[Comparison]]] = {
             "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),
             "Conversions": partial(conversion_comparisons, size),
+            "Mode Parity": partial(mode_parity_comparisons, size),
             "Resize": partial(resize_comparisons, size),
             "Geometry": partial(geometry_comparisons, size),
             "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size) + image_method_comparisons(size),

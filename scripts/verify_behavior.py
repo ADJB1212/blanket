@@ -491,6 +491,8 @@ def check_imagechops() -> int:
         mask = BlanketImage.frombytes("L", first.size, pixels("L"))
         reference_mask = PillowImage.frombytes("L", first.size, pixels("L"))
         for name in BlanketChops.__all__:
+            if name.startswith("logical_"):
+                continue
             if name in ("invert", "duplicate"):
                 args, reference_args = (first,), (reference,)
             elif name in ("constant", "offset"):
@@ -507,6 +509,13 @@ def check_imagechops() -> int:
             expected = getattr(PillowChops, name)(*reference_args)
             assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), (mode, name)
             checks += 1
+    first = BlanketImage.frombytes("1", (9, 1), b"\xa5\x80")
+    second = BlanketImage.frombytes("1", (9, 1), b"\x3c\x00")
+    reference = PillowImage.frombytes("1", first.size, first.tobytes())
+    other = PillowImage.frombytes("1", second.size, second.tobytes())
+    for name in ("logical_and", "logical_or", "logical_xor"):
+        assert getattr(BlanketChops, name)(first, second).tobytes() == getattr(PillowChops, name)(reference, other).tobytes()
+        checks += 1
     return checks
 
 

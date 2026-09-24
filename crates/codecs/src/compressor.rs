@@ -238,6 +238,7 @@ impl LosslessImageCompressor {
                 PixelMode::L => png::ColorType::Grayscale,
                 PixelMode::Rgb => png::ColorType::Rgb,
                 PixelMode::Rgba => png::ColorType::Rgba,
+                _ => return Err(PyValueError::new_err("unsupported mode for PNG optimization")),
             },
             depth: png::BitDepth::Eight,
             pixels: Cow::Borrowed(pixels),

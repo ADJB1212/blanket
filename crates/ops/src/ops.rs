@@ -181,7 +181,8 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     }
     let mut pixels = buffer((image.width, image.height), channels)?;
     py.detach(|| match image.mode {
-        PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
+        PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
+        PixelMode::La | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
         PixelMode::Rgb => apply_lut::<3>(source, &mut pixels, &lut),
         PixelMode::Rgba => apply_lut::<4>(source, &mut pixels, &lut),
     });
@@ -226,7 +227,8 @@ fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResul
         None
     };
     Ok(py.detach(|| match image.mode {
-        PixelMode::L => histogram::<1>(source, mask),
+        PixelMode::One | PixelMode::L => histogram::<1>(source, mask),
+        PixelMode::La | PixelMode::Pa => histogram::<2>(source, mask),
         PixelMode::Rgb => histogram::<3>(source, mask),
         PixelMode::Rgba => histogram::<4>(source, mask),
     }))
@@ -364,14 +366,16 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     let mut pixels = buffer(size, c)?;
     if image.bit_depth > 8 {
         py.detach(|| match image.mode {
-            PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::La | PixelMode::Pa => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
             PixelMode::Rgb => transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
             PixelMode::Rgba => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
         });
         return output(image, size, pixels);
     }
     py.detach(|| match image.mode {
-        PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::La | PixelMode::Pa => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
         PixelMode::Rgb => transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
         PixelMode::Rgba => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
     });
@@ -514,6 +518,21 @@ fn unpremultiply(pixels: &mut [u8]) {
     });
 }
 
+fn premultiply_la(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<2>().0 {
+        let value = u32::from(pixel[0]) * u32::from(pixel[1]) + 128;
+        pixel[0] = (((value >> 8) + value) >> 8) as u8;
+    }
+}
+
+fn unpremultiply_la(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<2>().0 {
+        if pixel[1] != 0 && pixel[1] != 255 {
+            pixel[0] = (u32::from(pixel[0]) * 255 / u32::from(pixel[1])).min(255) as u8;
+        }
+    }
+}
+
 /// Integer box reduction used by resize's reducing_gap optimization.
 #[pyfunction]
 fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32)) -> PyResult<Image> {
@@ -527,7 +546,14 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
     let c = image.mode.channels();
     let mut pixels = buffer(size, c)?;
     py.detach(|| match image.mode {
-        PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::La => {
+            let mut source = source.to_vec();
+            premultiply_la(&mut source);
+            reduce_pixels::<2>(&source, &mut pixels, image.width, size, factor, bounds);
+            unpremultiply_la(&mut pixels);
+        }
+        PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
         PixelMode::Rgb => reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds),
         PixelMode::Rgba => {
             let mut source = source.to_vec();
@@ -720,7 +746,8 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
             let xs = positions(b[0], dx, size.0, image.width);
             let ys = positions(b[1], dy, size.1, image.height);
             match image.mode {
-                PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::La | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width, &xs, &ys),
                 PixelMode::Rgb => resize_nearest::<3>(source, &mut result, image.width, &xs, &ys),
                 PixelMode::Rgba => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
             }
@@ -729,14 +756,19 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
         let mut source = Cow::Borrowed(source);
         if c == 4 {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La {
+            premultiply_la(source.to_mut());
         }
         match image.mode {
-            PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
+            PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
+            PixelMode::La | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
             PixelMode::Rgb => resample::<3>(&source, &mut result, image, size, b, method)?,
             PixelMode::Rgba => resample::<4>(&source, &mut result, image, size, b, method)?,
         }
         if c == 4 {
             unpremultiply(&mut result);
+        } else if image.mode == PixelMode::La {
+            unpremultiply_la(&mut result);
         }
         Ok(())
     })?;
@@ -760,7 +792,8 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
             .map(|y| ((bounds[1] + (f64::from(y) + 0.5) * (bounds[3] - bounds[1]) / f64::from(size.1)) as usize).min(image.height as usize - 1))
             .collect();
         match image.mode {
-            PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::La | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width, &xs, &ys),
             PixelMode::Rgb => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
             PixelMode::Rgba => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
         }
@@ -1064,6 +1097,8 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
         let mut source = Cow::Borrowed(source);
         if channels == 4 && method != 0 {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La && method != 0 {
+            premultiply_la(source.to_mut());
         }
         // Nearest's floating path advances coordinates incrementally. Direct
         // multiplication can pick a different pixel at fractional boundaries.
@@ -1119,7 +1154,8 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                 match image.mode {
                     PixelMode::Rgb => resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys),
                     PixelMode::Rgba => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
-                    PixelMode::L => unreachable!(),
+                    PixelMode::One | PixelMode::L => unreachable!(),
+                    PixelMode::La | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width, &xs, &ys),
                 }
                 return;
             }
@@ -1152,7 +1188,8 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                         continue;
                     }
                     match image.mode {
-                        PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
+                        PixelMode::One | PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
+                        PixelMode::La | PixelMode::Pa => nearest_columns::<2>(source_row, row, columns, &fill),
                         PixelMode::Rgb => nearest_columns::<3>(source_row, row, columns, &fill),
                         PixelMode::Rgba => nearest_columns::<4>(source_row, row, columns, &fill),
                     }
@@ -1164,7 +1201,8 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     let steps = (a, d);
                     let size = (image.width, image.height);
                     match image.mode {
-                        PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
+                        PixelMode::One | PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
+                        PixelMode::La | PixelMode::Pa => nearest_fixed::<2>(&source, row, size, origin, steps, &fill),
                         PixelMode::Rgb => nearest_fixed::<3>(&source, row, size, origin, steps, &fill),
                         PixelMode::Rgba => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
                     }
@@ -1193,6 +1231,8 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
         // Fill values also belong to Pillow's intermediate premultiplied mode.
         if channels == 4 && method != 0 {
             unpremultiply(&mut pixels);
+        } else if image.mode == PixelMode::La && method != 0 {
+            unpremultiply_la(&mut pixels);
         }
     });
     output(image, size, pixels)
@@ -1235,6 +1275,8 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
         let mut source = Cow::Borrowed(source);
         if c == 4 && method != 0 {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La && method != 0 {
+            premultiply_la(source.to_mut());
         }
         for ((left, top, right, bottom), q) in mesh {
             if right <= left || bottom <= top {
@@ -1277,7 +1319,8 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                         if method == 0 {
                             let dst = &mut row[start * c..end * c];
                             match image.mode {
-                                PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
+                                PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
+                                PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
                                 PixelMode::Rgb => warp_nearest_row::<3>(&source, dst, &warp, v),
                                 PixelMode::Rgba => warp_nearest_row::<4>(&source, dst, &warp, v),
                             }
@@ -1305,6 +1348,8 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
         }
         if c == 4 && method != 0 {
             unpremultiply(&mut result);
+        } else if image.mode == PixelMode::La && method != 0 {
+            unpremultiply_la(&mut result);
         }
     });
     output(image, size, result)

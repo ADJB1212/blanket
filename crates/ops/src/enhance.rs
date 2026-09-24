@@ -176,13 +176,13 @@ unsafe fn blend_bytes_sse2(first: &[u8], second: &[u8], output: &mut [u8], facto
 #[pyfunction]
 fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    if image.mode == PixelMode::L {
+    if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
         return copy(image, source);
     }
 
     let mut pixels = buffer(source.len())?;
     py.detach(|| match image.mode {
-        PixelMode::L => unreachable!(),
+        PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
         PixelMode::Rgb => color_degenerate::<3>(source, &mut pixels),
         PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels),
     });
@@ -208,7 +208,8 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
 fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let sum = py.detach(|| match image.mode {
-        PixelMode::L => byte_sum(source),
+        PixelMode::One | PixelMode::L => byte_sum(source),
+        PixelMode::La | PixelMode::Pa => source.as_chunks::<2>().0.iter().map(|pixel| u64::from(pixel[0])).sum(),
         PixelMode::Rgb => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
     });
@@ -221,7 +222,12 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
 
     let mut pixels = buffer(source.len())?;
     py.detach(|| match image.mode {
-        PixelMode::L => pixels.fill(mean),
+        PixelMode::One | PixelMode::L => pixels.fill(mean),
+        PixelMode::La | PixelMode::Pa => {
+            for (src, dst) in source.as_chunks::<2>().0.iter().zip(pixels.as_chunks_mut::<2>().0) {
+                dst.copy_from_slice(&[mean, src[1]]);
+            }
+        }
         PixelMode::Rgb => chunks_mut(&mut pixels, CHUNK_PIXELS * 3, |_, dst| {
             for pixel in dst.as_chunks_mut::<3>().0 {
                 pixel.fill(mean);
@@ -288,7 +294,8 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 
     let width = image.width as usize;
     py.detach(|| match image.mode {
-        PixelMode::L => smooth::<1>(source, &mut pixels, width),
+        PixelMode::One | PixelMode::L => smooth::<1>(source, &mut pixels, width),
+        PixelMode::La | PixelMode::Pa => smooth::<2>(source, &mut pixels, width),
         PixelMode::Rgb => smooth::<3>(source, &mut pixels, width),
         PixelMode::Rgba => smooth::<4>(source, &mut pixels, width),
     });

@@ -37,8 +37,8 @@ with Image.open("photo.jpg") as image:
   and convert explicitly to Pillow when you need it.
 
 Blanket is currently **alpha software**. It implements a focused subset of
-Pillow's API, centered on `L`, `RGB`, and `RGBA` images, with limited indexed
-`P` support. It is not a drop-in replacement for `PIL` (yet).
+Pillow's API, centered on `1`, `L`, `LA`, `RGB`, and `RGBA` images, with limited indexed
+`P` and `PA` support. It is not a drop-in replacement for `PIL` (yet).
 
 See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
 arithmetic and blend modes, and
@@ -181,8 +181,8 @@ change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
 
-- **Image modes:** general processing uses `L`, `RGB`, and `RGBA`. Quantization
-  produces indexed `P` images with a smaller supported operation set.
+- **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, and `RGBA`.
+  Indexed `P` and `PA` images have a smaller supported operation set.
 - **Metadata:** PNG, JPEG, and uncompressed JPEG XL metadata boxes supply
   EXIF/XMP for orientation handling. Saving writes pixels only; metadata is
   not preserved.

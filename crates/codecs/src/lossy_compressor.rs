@@ -343,7 +343,8 @@ fn rgba_sample(image: &Image, data: &[u8], index: usize) -> [f64; 4] {
         }
     };
     match image.mode {
-        PixelMode::L => [sample(0), sample(0), sample(0), 255.0],
+        PixelMode::One | PixelMode::L => [sample(0), sample(0), sample(0), 255.0],
+        PixelMode::La | PixelMode::Pa => [sample(0), sample(0), sample(0), sample(1)],
         PixelMode::Rgb => [sample(0), sample(1), sample(2), 255.0],
         PixelMode::Rgba => [sample(0), sample(1), sample(2), sample(3)],
     }

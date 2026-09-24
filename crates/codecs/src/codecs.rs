@@ -306,7 +306,20 @@ fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Resu
         return Image::from_samples(width, height, mode, samples, depth, Some(format_name.into())).map_err(|e| e.to_string());
     }
     let (mode, pixels) = match color {
-        ColorType::L8 | ColorType::L16 => (PixelMode::L, image.into_luma8().into_raw()),
+        ColorType::L8 | ColorType::L16 => {
+            let mode = if format == RustFormat::Png {
+                let reader = png::Decoder::new(Cursor::new(data)).read_info().map_err(|e| e.to_string())?;
+                if reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One {
+                    PixelMode::One
+                } else {
+                    PixelMode::L
+                }
+            } else {
+                PixelMode::L
+            };
+            (mode, image.into_luma8().into_raw())
+        }
+        ColorType::La8 => (PixelMode::La, image.into_luma_alpha8().into_raw()),
         ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => (PixelMode::Rgb, image.into_rgb8().into_raw()),
         _ => (PixelMode::Rgba, image.into_rgba8().into_raw()),
     };
@@ -497,6 +510,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
                 }
                 PixelMode::Rgb => webpx::Encoder::new_rgb(pixels, image.width, image.height),
                 PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width, image.height),
+                _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
             };
             encoder
                 .lossless(options.lossless)
@@ -574,9 +588,11 @@ fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 
 fn color_type(mode: PixelMode) -> ExtendedColorType {
     match mode {
-        PixelMode::L => ExtendedColorType::L8,
+        PixelMode::One | PixelMode::L => ExtendedColorType::L8,
+        PixelMode::La => ExtendedColorType::La8,
         PixelMode::Rgb => ExtendedColorType::Rgb8,
         PixelMode::Rgba => ExtendedColorType::Rgba8,
+        PixelMode::Pa => unreachable!("PA must be expanded before encoding"),
     }
 }
 
@@ -585,6 +601,37 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
         .map_err(codec_error)?;
+    Ok(output)
+}
+
+fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
+    let width = image.width as usize;
+    let row_bytes = width.div_ceil(8);
+    let mut packed = vec![0; row_bytes * image.height as usize];
+    for (y, row) in image.pixel_data()?.chunks_exact(width.max(1)).enumerate() {
+        for (x, &value) in row.iter().enumerate().take(width) {
+            if value != 0 {
+                packed[y * row_bytes + x / 8] |= 128 >> (x % 8);
+            }
+        }
+    }
+    let mut output = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
+        encoder.set_color(png::ColorType::Grayscale);
+        encoder.set_depth(png::BitDepth::One);
+        encoder.set_compression(match compress_level {
+            0 => png::Compression::NoCompression,
+            1..=3 => png::Compression::Fast,
+            4..=6 => png::Compression::Balanced,
+            _ => png::Compression::High,
+        });
+        encoder
+            .write_header()
+            .map_err(codec_error)?
+            .write_image_data(&packed)
+            .map_err(codec_error)?;
+    }
     Ok(output)
 }
 
@@ -628,6 +675,7 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
         // Match the default used by Pillow/libjpeg for RGB JPEG output.
         PixelMode::Rgb => (PixelFormat::RGB, Subsamp::Sub2x2),
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
+        _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
     };
     let mut encoder = Compressor::new().map_err(codec_error)?;
     encoder.set_quality(i32::from(quality)).map_err(codec_error)?;
@@ -663,6 +711,7 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         PixelMode::L => (ColorEncoding::SrgbLuma, false),
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
         PixelMode::Rgba => (ColorEncoding::Srgb, true),
+        _ => return Err(PyValueError::new_err("unsupported mode for JPEG XL")),
     };
     let speed = jxl_encoder_speed(options.effort)?;
     let input_bytes = match &pixels {
@@ -1013,6 +1062,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             PixelMode::L => ExtendedColorType::L16,
             PixelMode::Rgb => ExtendedColorType::Rgb16,
             PixelMode::Rgba => ExtendedColorType::Rgba16,
+            _ => return Err(PyValueError::new_err("unsupported high-bit-depth mode")),
         };
         let mut output = Cursor::new(Vec::new());
         image::codecs::tiff::TiffEncoder::new(&mut output)
@@ -1028,6 +1078,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             PixelMode::L => png::ColorType::Grayscale,
             PixelMode::Rgb => png::ColorType::Rgb,
             PixelMode::Rgba => png::ColorType::Rgba,
+            _ => return Err(PyValueError::new_err("unsupported high-bit-depth mode")),
         };
         let mut encoder = png::Encoder::with_info(&mut output, info).map_err(codec_error)?;
         encoder.set_deflate_compression(if options.compress_level == 0 {
@@ -1060,6 +1111,27 @@ pub fn _encode(
         lossless,
         effort,
     };
+    if image.mode == PixelMode::One && format == ImageFormat::Png {
+        let encoded = py.detach(|| encode_one_png(image, compress_level))?;
+        return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
+    }
+    if matches!(image.mode, PixelMode::One | PixelMode::La | PixelMode::Pa) {
+        let target = if image.mode == PixelMode::One {
+            "L"
+        } else if format == ImageFormat::Png && image.mode == PixelMode::La && compressor.is_none() {
+            "LA"
+        } else {
+            "RGBA"
+        };
+        if target != "LA" {
+            let expanded = image.convert(py, target, None)?;
+            let encoded = py.detach(|| match compressor {
+                Some(compressor) => compressor.encode(&expanded, format, options),
+                None => encode(&expanded, format, options),
+            })?;
+            return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
+        }
+    }
     if let Some((palette_mode, _)) = image.palette {
         if format == ImageFormat::Png {
             let encoded = py.detach(|| encode_palette_png(image, compress_level))?;

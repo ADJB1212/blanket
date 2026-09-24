@@ -2,7 +2,7 @@
 
 Arithmetic supports 8-bit L, RGB, RGBA, and indexed P pixels. All channels,
 including alpha, participate. Binary arithmetic crops to the top-left overlap.
-Logical operations requiring Pillow's bilevel mode 1 are not supported.
+Logical operations accept bilevel mode 1 images.
 """
 
 from __future__ import annotations
@@ -22,6 +22,9 @@ __all__ = [
     "hard_light",
     "invert",
     "lighter",
+    "logical_and",
+    "logical_or",
+    "logical_xor",
     "multiply",
     "offset",
     "overlay",
@@ -30,6 +33,37 @@ __all__ = [
     "subtract",
     "subtract_modulo",
 ]
+
+
+def _logical(image1: Image.Image, image2: Image.Image, operation: str) -> Image.Image:
+    if image1.mode != "1" or image2.mode != "1":
+        raise ValueError("image has wrong mode")
+    width = min(image1.width, image2.width)
+    height = min(image1.height, image2.height)
+    first = image1.crop((0, 0, width, height)).tobytes()
+    second = image2.crop((0, 0, width, height)).tobytes()
+    if operation == "and":
+        pixels = bytes(a & b for a, b in zip(first, second, strict=True))
+    elif operation == "or":
+        pixels = bytes(a | b for a, b in zip(first, second, strict=True))
+    else:
+        pixels = bytes(a ^ b for a, b in zip(first, second, strict=True))
+    return Image.frombytes("1", (width, height), pixels)
+
+
+def logical_and(image1: Image.Image, image2: Image.Image) -> Image.Image:
+    """Return the bitwise AND of two bilevel images."""
+    return _logical(image1, image2, "and")
+
+
+def logical_or(image1: Image.Image, image2: Image.Image) -> Image.Image:
+    """Return the bitwise OR of two bilevel images."""
+    return _logical(image1, image2, "or")
+
+
+def logical_xor(image1: Image.Image, image2: Image.Image) -> Image.Image:
+    """Return the bitwise XOR of two bilevel images."""
+    return _logical(image1, image2, "xor")
 
 
 def _binary(image1: Image.Image, image2: Image.Image, operation: str, scale: float = 1.0, offset: int = 0) -> Image.Image:

@@ -5,8 +5,7 @@ use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
 use std::collections::HashSet;
 
-#[path = "palette_simd.rs"]
-mod kernels;
+use crate::palette_simd as kernels;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_colors, module)?)?;
