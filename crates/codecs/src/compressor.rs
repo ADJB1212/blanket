@@ -15,23 +15,24 @@ use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
-use crate::parallel::CandidateLimit;
-use crate::raster::{Image, PixelMode};
-use crate::{compressor_simd as pixels, parallel};
+use crate::compressor_simd as pixels;
+use blanket_core::parallel;
+use blanket_core::parallel::CandidateLimit;
+use blanket_core::raster::{Image, PixelMode};
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<LosslessImageCompressor>()?;
     module.add_class::<crate::lossy_compressor::LossyImageCompressor>()
 }
 
 #[derive(FromPyObject)]
-pub(crate) enum Compressor {
+pub enum Compressor {
     Lossless(LosslessImageCompressor),
     Lossy(crate::lossy_compressor::LossyImageCompressor),
 }
 
 impl Compressor {
-    pub(crate) fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
         match self {
             Self::Lossless(compressor) => compressor.encode(image, format, options),
             Self::Lossy(compressor) => compressor.encode(image, format, options),
@@ -41,9 +42,9 @@ impl Compressor {
 
 #[pyclass(name = "_LosslessImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
 #[derive(Clone, Copy)]
-pub(crate) struct LosslessImageCompressor {
+pub struct LosslessImageCompressor {
     #[pyo3(get)]
-    pub(crate) effort: u8,
+    pub effort: u8,
 }
 
 #[pymethods]
@@ -59,7 +60,7 @@ impl LosslessImageCompressor {
 }
 
 impl LosslessImageCompressor {
-    pub(crate) fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
         match format {
             ImageFormat::Png if image.bit_depth == 8 => self.optimize_png(image, options.compress_level),
             ImageFormat::Jpeg => self.optimize_jpeg(image, options),
@@ -327,7 +328,7 @@ impl LosslessImageCompressor {
             // Retain every alpha and hidden color sample. Gray+alpha supports
             // arbitrary transparency even when a single tRNS key cannot.
             let (color, reduced) = if opaque {
-                (png::ColorType::Rgb, crate::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
+                (png::ColorType::Rgb, blanket_core::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
             } else {
                 (png::ColorType::GrayscaleAlpha, pixels::select(pixels, channels, true, 0))
             };
@@ -387,7 +388,7 @@ impl LosslessImageCompressor {
                 // Eight bits is the last depth, so hand over the samples.
                 std::mem::replace(&mut gray, Cow::Borrowed(&[][..]))
             } else {
-                Cow::Owned(crate::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
+                Cow::Owned(blanket_core::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
             };
             let transparency: Vec<u8> = match key {
                 Some(key) if grayscale => ((usize::from(key[0]) / step) as u16).to_be_bytes().to_vec(),
@@ -927,7 +928,7 @@ impl<'a> PreparedSampleCodec<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::raster::PixelMode;
+    use blanket_core::raster::PixelMode;
 
     #[test]
     fn parallel_jxl_search_matches_serial_candidates() {
@@ -1213,7 +1214,7 @@ mod tests {
         };
         writer.write_all(&[1; 40]).unwrap();
         // A concurrent winner of 45 bytes leaves no room to beat it.
-        bound.set(46);
+        bound.tighten(46);
         assert!(writer.write_all(&[2; 6]).is_err());
         assert_eq!(writer.bytes, [1; 40]);
         // Unlike a rejected write, tightening never truncates collected bytes.
@@ -1224,7 +1225,7 @@ mod tests {
             exceeded: false,
         };
         writer.write_all(&[1; 40]).unwrap();
-        bound.set(46);
+        bound.tighten(46);
         writer.write_all(&[2; 5]).unwrap();
         assert_eq!(writer.bytes.len(), 45);
         assert!(writer.write_all(&[3]).is_err());

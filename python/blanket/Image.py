@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
-from ._blanket import _Image, fromarray as _native_fromarray, frombytes as _native_frombytes, open_bytes
+from ._blanket import _encode, _Image, fromarray as _native_fromarray, frombytes as _native_frombytes, open_bytes
 
 _EXTENSIONS = {
     ".bmp": "BMP",
@@ -1311,7 +1311,7 @@ class Image:
         output_format = _output_format(fp, format)
         self._sync_palette()
         values = _save_options(output_format, options)
-        encoded = self._native._encode(output_format, **values, compressor=None if compressor is None else compressor._native)
+        encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native)
         _write_bytes(fp, encoded)
 
     def __enter__(self) -> Self:

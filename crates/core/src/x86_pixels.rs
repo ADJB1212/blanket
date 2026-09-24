@@ -43,7 +43,7 @@ unsafe fn store<const C: usize>(ptr: *mut u8, bands: [__m128i; C]) {
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn reverse_rgb(src: &[u8], dst: &mut [u8]) -> usize {
+pub unsafe fn reverse_rgb(src: &[u8], dst: &mut [u8]) -> usize {
     let end = src.len() / 3 / 16 * 16;
     unsafe {
         let reverse = _mm_setr_epi8(15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0);
@@ -56,7 +56,7 @@ pub(crate) unsafe fn reverse_rgb(src: &[u8], dst: &mut [u8]) -> usize {
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn nearest_half_rgb(src: &[u8], dst: &mut [u8]) -> usize {
+pub unsafe fn nearest_half_rgb(src: &[u8], dst: &mut [u8]) -> usize {
     let end = dst.len() / 48 * 48;
     unsafe {
         let odd = _mm_setr_epi8(1, 3, 5, 7, 9, 11, 13, 15, -1, -1, -1, -1, -1, -1, -1, -1);
@@ -73,7 +73,7 @@ pub(crate) unsafe fn nearest_half_rgb(src: &[u8], dst: &mut [u8]) -> usize {
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
+pub unsafe fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
     let end = dst.len() / 16 * 16;
     unsafe {
         let zero = _mm_setzero_si128();
@@ -96,7 +96,7 @@ pub(crate) unsafe fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn gray_to_rgb(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>]) -> usize {
+pub unsafe fn gray_to_rgb(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8>]) -> usize {
     let end = src.len() / 16 * 16;
     unsafe {
         for i in (0..end).step_by(16) {
@@ -108,7 +108,7 @@ pub(crate) unsafe fn gray_to_rgb(src: &[u8], dst: &mut [std::mem::MaybeUninit<u8
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn merge<const C: usize>(bands: [&[u8]; C], dst: &mut [[u8; C]]) -> usize {
+pub unsafe fn merge<const C: usize>(bands: [&[u8]; C], dst: &mut [[u8; C]]) -> usize {
     let end = dst.len() / 16 * 16;
     unsafe {
         for i in (0..end).step_by(16) {
@@ -119,7 +119,7 @@ pub(crate) unsafe fn merge<const C: usize>(bands: [&[u8]; C], dst: &mut [[u8; C]
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn putalpha_rgb(src: &[u8], alpha: &[u8], dst: &mut [u8]) -> usize {
+pub unsafe fn putalpha_rgb(src: &[u8], alpha: &[u8], dst: &mut [u8]) -> usize {
     let end = alpha.len() / 16 * 16;
     unsafe {
         for i in (0..end).step_by(16) {
@@ -132,7 +132,7 @@ pub(crate) unsafe fn putalpha_rgb(src: &[u8], alpha: &[u8], dst: &mut [u8]) -> u
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn putalpha_rgba(dst: &mut [u8], alpha: &[u8]) -> usize {
+pub unsafe fn putalpha_rgba(dst: &mut [u8], alpha: &[u8]) -> usize {
     let end = alpha.len() / 16 * 16;
     unsafe {
         for i in (0..end).step_by(16) {
@@ -171,7 +171,7 @@ unsafe fn blend(d: __m128i, s: __m128i, a: __m128i) -> __m128i {
 }
 
 #[target_feature(enable = "ssse3")]
-pub(crate) unsafe fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) -> usize {
+pub unsafe fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) -> usize {
     let end = dst.len() / C / 16 * 16;
     unsafe {
         for i in (0..end).step_by(16) {

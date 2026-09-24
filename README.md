@@ -54,22 +54,7 @@ up the native build prerequisites below:
 pip install pyblanket
 ```
 
-Source builds require Rust 1.97+, CMake, Ninja, a C/C++ compiler, and NASM
-on x86. JPEG XL builds libjxl statically. Install native codec dependencies:
-
-```sh
-# macOS
-brew install cmake ninja dav1d libheif
-
-# Ubuntu
-sudo apt-get install build-essential cmake ninja-build nasm libdav1d-dev \
-    libheif-dev libde265-dev libx265-dev libnuma-dev
-```
-
-AVIF requires dav1d 1.3+. The embedded libheif build requires libde265 and x265
-development libraries to compile HEIF support; external libheif plugins are not
-loaded. Native shared codec libraries must also be available at runtime. See the
-[development notes](https://adjb1212.github.io/blanket-docs/development/) for more context.
+See the [development notes](https://adjb1212.github.io/blanket-docs/development/) for information on building from source.
 
 ## Examples
 
@@ -242,7 +227,7 @@ uv run --no-sync pytest -q
 uv run --no-sync scripts/verify_behavior.py
 ```
 
-The native core lives in [`src/`](src/), the Python API in
+The native core lives in [`crates/`](crates/), the Python API in
 [`python/blanket/`](python/blanket/), and compatibility tests in [`tests/`](tests/).
 Include a focused regression test with bug fixes and new features.
 [open an issue](https://github.com/ADJB1212/blanket/issues) to report a problem.

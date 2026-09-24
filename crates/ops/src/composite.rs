@@ -1,9 +1,9 @@
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode};
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_new, module)?)?;
     module.add_function(wrap_pyfunction!(image_paste, module)?)?;
     module.add_function(wrap_pyfunction!(image_alpha_composite, module)?)?;
@@ -116,7 +116,7 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let offset = if std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; caller validates equal pixel counts.
-        unsafe { crate::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
+        unsafe { blanket_core::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
     } else {
         0
     };
@@ -214,7 +214,7 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
 
 fn composite_pixels(pixels: &mut [u8], source: &[u8]) {
     const CHUNK: usize = 16 * 1024 * 4;
-    crate::parallel::chunks_mut(pixels, CHUNK, |i, pixels| {
+    blanket_core::parallel::chunks_mut(pixels, CHUNK, |i, pixels| {
         let source = &source[i * CHUNK..i * CHUNK + pixels.len()];
         for (dst, src) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks::<4>().0) {
             if src[3] == 0 {
@@ -252,7 +252,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             let offset = if std::arch::is_x86_feature_detected!("ssse3") {
                 // SAFETY: SSSE3 detected; validated matching RGB/alpha/output sizes.
-                unsafe { crate::x86_pixels::putalpha_rgb(source, alpha, &mut pixels) }
+                unsafe { blanket_core::x86_pixels::putalpha_rgb(source, alpha, &mut pixels) }
             } else {
                 0
             };
@@ -293,7 +293,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let offset = if std::arch::is_x86_feature_detected!("ssse3") {
             // SAFETY: SSSE3 detected; validated matching RGBA/alpha sizes.
-            unsafe { crate::x86_pixels::putalpha_rgba(pixels, alpha) }
+            unsafe { blanket_core::x86_pixels::putalpha_rgba(pixels, alpha) }
         } else {
             0
         };

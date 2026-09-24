@@ -4,8 +4,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use std::collections::HashMap;
 
-use crate::codecs::{self, ImageFormat, SaveOptions};
-
 fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
     if !value.is_exact_instance_of::<PyTuple>()
         && let Ok(number) = value.extract::<i64>()
@@ -179,14 +177,14 @@ fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PixelMode {
+pub enum PixelMode {
     L,
     Rgb,
     Rgba,
 }
 
 impl PixelMode {
-    pub(crate) fn parse(value: &str) -> PyResult<Self> {
+    pub fn parse(value: &str) -> PyResult<Self> {
         match value {
             "L" => Ok(Self::L),
             "RGB" => Ok(Self::Rgb),
@@ -197,7 +195,7 @@ impl PixelMode {
         }
     }
 
-    pub(crate) const fn as_str(self) -> &'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
             Self::L => "L",
             Self::Rgb => "RGB",
@@ -205,7 +203,7 @@ impl PixelMode {
         }
     }
 
-    pub(crate) const fn channels(self) -> usize {
+    pub const fn channels(self) -> usize {
         match self {
             Self::L => 1,
             Self::Rgb => 3,
@@ -216,18 +214,18 @@ impl PixelMode {
 
 #[pyclass(name = "_Image", module = "blanket._blanket", skip_from_py_object)]
 #[derive(Clone)]
-pub(crate) struct Image {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) mode: PixelMode,
-    pub(crate) pixels: Option<Vec<u8>>,
-    pub(crate) bit_depth: u8,
-    pub(crate) format: Option<String>,
-    pub(crate) palette: Option<(PixelMode, Vec<u8>)>,
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub mode: PixelMode,
+    pub pixels: Option<Vec<u8>>,
+    pub bit_depth: u8,
+    pub format: Option<String>,
+    pub palette: Option<(PixelMode, Vec<u8>)>,
 }
 
 impl Image {
-    pub(crate) fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
+    pub fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
         let expected = expected_len(width, height, mode)?;
         if pixels.len() != expected {
             return Err(PyValueError::new_err(format!(
@@ -246,7 +244,7 @@ impl Image {
         })
     }
 
-    pub(crate) fn pixel_data(&self) -> PyResult<&[u8]> {
+    pub fn pixel_data(&self) -> PyResult<&[u8]> {
         if self.bit_depth != 8 {
             return Err(PyValueError::new_err(
                 "this operation requires 8-bit pixels; use convert(..., bit_depth=8) explicitly",
@@ -255,11 +253,11 @@ impl Image {
         self.raw_data()
     }
 
-    pub(crate) fn raw_data(&self) -> PyResult<&[u8]> {
+    pub fn raw_data(&self) -> PyResult<&[u8]> {
         self.pixels.as_deref().ok_or_else(|| PyValueError::new_err("operation on closed image"))
     }
 
-    pub(crate) fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
+    pub fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
         if !matches!(bit_depth, 10 | 12 | 16) {
             return Err(PyValueError::new_err("bit_depth must be 8, 10, 12, or 16"));
         }
@@ -280,7 +278,7 @@ impl Image {
 
 #[pymethods]
 impl Image {
-    fn getextrema(&self, py: Python<'_>) -> PyResult<Vec<(u16, u16)>> {
+    pub fn getextrema(&self, py: Python<'_>) -> PyResult<Vec<(u16, u16)>> {
         let data = self.raw_data()?;
         let channels = self.mode.channels();
         Ok(py.detach(|| {
@@ -307,7 +305,7 @@ impl Image {
         }))
     }
 
-    fn getchannel(&self, py: Python<'_>, channel: usize) -> PyResult<Self> {
+    pub fn getchannel(&self, py: Python<'_>, channel: usize) -> PyResult<Self> {
         let data = self.raw_data()?;
         let channels = self.mode.channels();
         if channel >= channels {
@@ -331,7 +329,7 @@ impl Image {
         })
     }
 
-    fn getdata(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
+    pub fn getdata(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
         let data = self.raw_data()?;
         if self.bit_depth == 8 {
             return Ok(match self.mode {
@@ -350,7 +348,7 @@ impl Image {
         Ok(result.unbind())
     }
 
-    fn getcolors(&self, py: Python<'_>, maxcolors: usize) -> PyResult<Option<Py<PyList>>> {
+    pub fn getcolors(&self, py: Python<'_>, maxcolors: usize) -> PyResult<Option<Py<PyList>>> {
         let data = self.raw_data()?;
         let stride = self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
         if stride == 1 {
@@ -409,7 +407,7 @@ impl Image {
         Ok(Some(result.unbind()))
     }
 
-    fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {
+    pub fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {
         self.pixel_data()?;
         let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
         let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
@@ -423,7 +421,7 @@ impl Image {
         Ok(())
     }
 
-    fn putdata(&mut self, data: &Bound<'_, PyAny>, scale: f64, offset: f64) -> PyResult<()> {
+    pub fn putdata(&mut self, data: &Bound<'_, PyAny>, scale: f64, offset: f64) -> PyResult<()> {
         self.pixel_data()?;
         let length = data.len()?;
         if length > self.width as usize * self.height as usize {
@@ -437,7 +435,7 @@ impl Image {
         }
     }
 
-    fn getbbox(&self, py: Python<'_>, alpha_only: bool) -> PyResult<Option<(u32, u32, u32, u32)>> {
+    pub fn getbbox(&self, py: Python<'_>, alpha_only: bool) -> PyResult<Option<(u32, u32, u32, u32)>> {
         let pixels = self.raw_data()?;
         let channels = self.mode.channels();
         let sample_bytes = if self.bit_depth == 8 { 1 } else { 2 };
@@ -483,45 +481,45 @@ impl Image {
     }
 
     #[getter]
-    fn bit_depth(&self) -> u8 {
+    pub fn bit_depth(&self) -> u8 {
         self.bit_depth
     }
 
     #[getter]
-    fn mode(&self) -> &'static str {
+    pub fn mode(&self) -> &'static str {
         if self.palette.is_some() { "P" } else { self.mode.as_str() }
     }
 
     #[getter]
-    fn size(&self) -> (u32, u32) {
+    pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
 
     #[getter]
-    fn width(&self) -> u32 {
+    pub fn width(&self) -> u32 {
         self.width
     }
 
     #[getter]
-    fn height(&self) -> u32 {
+    pub fn height(&self) -> u32 {
         self.height
     }
 
     #[getter]
-    fn format(&self) -> Option<&str> {
+    pub fn format(&self) -> Option<&str> {
         self.format.as_deref()
     }
 
     #[getter]
-    fn info(&self, py: Python<'_>) -> Py<PyDict> {
+    pub fn info(&self, py: Python<'_>) -> Py<PyDict> {
         PyDict::new(py).unbind()
     }
 
-    fn load(&self) -> PyResult<()> {
+    pub fn load(&self) -> PyResult<()> {
         self.raw_data().map(|_| ())
     }
 
-    fn copy(&self, py: Python<'_>) -> PyResult<Self> {
+    pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
         let mut pixels = Vec::<u8>::with_capacity(source.len());
         let row = self.width as usize * self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
@@ -546,7 +544,7 @@ impl Image {
         })
     }
 
-    fn getpixel(&self, py: Python<'_>, xy: (i64, i64)) -> PyResult<Py<PyAny>> {
+    pub fn getpixel(&self, py: Python<'_>, xy: (i64, i64)) -> PyResult<Py<PyAny>> {
         let pixels = self.raw_data()?;
         let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
         let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
@@ -582,11 +580,11 @@ impl Image {
         })
     }
 
-    fn palette_data(&self) -> Option<(String, Vec<u8>)> {
+    pub fn palette_data(&self) -> Option<(String, Vec<u8>)> {
         self.palette.as_ref().map(|(mode, data)| (mode.as_str().to_owned(), data.clone()))
     }
 
-    fn set_palette(&mut self, mode: &str, data: Vec<u8>) -> PyResult<()> {
+    pub fn set_palette(&mut self, mode: &str, data: Vec<u8>) -> PyResult<()> {
         self.pixel_data()?;
         let mode = PixelMode::parse(mode)?;
         if self.mode != PixelMode::L || mode == PixelMode::L || data.len() > 256 * mode.channels() || !data.len().is_multiple_of(mode.channels()) {
@@ -596,12 +594,12 @@ impl Image {
         Ok(())
     }
 
-    fn close(&mut self) {
+    pub fn close(&mut self) {
         self.pixels = None;
     }
 
     #[pyo3(signature = (mode, bit_depth=None))]
-    fn convert(&self, py: Python<'_>, mode: &str, bit_depth: Option<u8>) -> PyResult<Self> {
+    pub fn convert(&self, py: Python<'_>, mode: &str, bit_depth: Option<u8>) -> PyResult<Self> {
         if mode == "P" && self.palette.is_some() {
             return self.copy(py);
         }
@@ -667,56 +665,19 @@ impl Image {
         Self::from_pixels(self.width, self.height, destination, converted, None)
     }
 
-    fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+    pub fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
         Ok(PyBytes::new(py, self.raw_data()?).unbind())
     }
 
-    #[pyo3(name = "_encode")]
-    #[pyo3(signature = (format, quality, compress_level, lossless, effort, compressor=None))]
-    #[allow(clippy::too_many_arguments)]
-    fn encode(
-        &self, py: Python<'_>, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8,
-        compressor: Option<crate::compressor::Compressor>,
-    ) -> PyResult<Py<PyBytes>> {
-        let format = ImageFormat::parse(format)?;
-        let options = SaveOptions {
-            quality,
-            compress_level,
-            lossless,
-            effort,
-        };
-        if let Some((palette_mode, _)) = &self.palette {
-            if format == ImageFormat::Png {
-                let encoded = py.detach(|| codecs::encode_palette_png(self, compress_level))?;
-                return Ok(PyBytes::new(py, &encoded).unbind());
-            }
-            if format == ImageFormat::Jpeg {
-                return Err(pyo3::exceptions::PyOSError::new_err("cannot write mode P as JPEG"));
-            }
-            let mode = palette_mode.as_str();
-            let expanded = self.convert(py, mode, None)?;
-            let encoded = py.detach(|| match compressor {
-                Some(compressor) => compressor.encode(&expanded, format, options),
-                None => codecs::encode(&expanded, format, options),
-            })?;
-            return Ok(PyBytes::new(py, &encoded).unbind());
-        }
-        let encoded = py.detach(|| match compressor {
-            Some(compressor) => compressor.encode(self, format, options),
-            None => codecs::encode(self, format, options),
-        })?;
-        Ok(PyBytes::new(py, &encoded).unbind())
-    }
-
-    fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+    pub fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __exit__(&mut self, _exc_type: &Bound<'_, PyAny>, _exc_value: &Bound<'_, PyAny>, _traceback: &Bound<'_, PyAny>) {
+    pub fn __exit__(&mut self, _exc_type: &Bound<'_, PyAny>, _exc_value: &Bound<'_, PyAny>, _traceback: &Bound<'_, PyAny>) {
         self.close();
     }
 
-    fn __repr__(&self) -> String {
+    pub fn __repr__(&self) -> String {
         format!(
             "<blanket.Image.Image image mode={} size={}x{}>",
             self.mode.as_str(),
@@ -727,7 +688,7 @@ impl Image {
 }
 
 #[pyfunction(signature = (mode, size, data, bit_depth=8))]
-pub(crate) fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
+pub fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
     if bit_depth != 8 {
         if !data.len().is_multiple_of(2) {
@@ -746,7 +707,7 @@ pub(crate) fn frombytes(mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8
 }
 
 #[pyfunction(signature = (obj, mode = None, bit_depth = None))]
-pub(crate) fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit_depth: Option<u8>) -> PyResult<Image> {
+pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit_depth: Option<u8>) -> PyResult<Image> {
     let interface = obj.getattr("__array_interface__")?;
     let shape: Vec<usize> = interface.get_item("shape")?.extract()?;
     let typestr: String = interface.get_item("typestr")?.extract()?;
@@ -857,7 +818,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_buffer_length() {
+    pub fn validates_buffer_length() {
         Python::initialize();
         Python::attach(|_| {
             let error = Image::from_pixels(2, 2, PixelMode::Rgb, vec![0; 11], None)
@@ -868,19 +829,19 @@ mod tests {
     }
 
     #[test]
-    fn converts_like_pillow_fixed_point_luminance() {
+    pub fn converts_like_pillow_fixed_point_luminance() {
         let rgb = [255, 0, 0, 0, 255, 0, 0, 0, 255, 12, 34, 56];
         assert_eq!(convert_pixels(&rgb, PixelMode::Rgb, PixelMode::L), [76, 150, 29, 30]);
     }
 
     #[test]
-    fn expands_and_drops_channels() {
+    pub fn expands_and_drops_channels() {
         assert_eq!(convert_pixels(&[7, 23], PixelMode::L, PixelMode::Rgba), [7, 7, 7, 255, 23, 23, 23, 255]);
         assert_eq!(convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb), [1, 2, 3]);
     }
 
     #[test]
-    fn expands_palette_indices_with_opaque_black_fallback() {
+    pub fn expands_palette_indices_with_opaque_black_fallback() {
         let palette = [10, 20, 30, 40, 50, 60];
         assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
         assert_eq!(expand_palette::<4>(&[0, 1], &[1, 2, 3, 4]), [1, 2, 3, 4, 0, 0, 0, 255]);
@@ -888,7 +849,7 @@ mod tests {
     }
 
     #[test]
-    fn infers_supported_array_modes() {
+    pub fn infers_supported_array_modes() {
         assert_eq!(array_mode(&[3, 5], "|u1").unwrap(), PixelMode::L);
         assert_eq!(array_mode(&[3, 5, 3], "|u1").unwrap(), PixelMode::Rgb);
         assert_eq!(array_mode(&[3, 5, 4], "|u1").unwrap(), PixelMode::Rgba);

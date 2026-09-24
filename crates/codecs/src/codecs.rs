@@ -13,12 +13,12 @@ use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use turbojpeg::{Colorspace, Compressor, Decompressor, PixelFormat, Subsamp};
 
-use crate::UnidentifiedImageError;
-use crate::raster::{Image, PixelMode};
+use blanket_core::UnidentifiedImageError;
+use blanket_core::{Image, PixelMode};
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-pub(crate) fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
+pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
     let (mode, palette) = image.palette.as_ref().expect("palette checked by caller");
     let mut encoded = Vec::new();
@@ -51,7 +51,7 @@ pub(crate) fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<
 }
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
-pub(crate) const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
+pub const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
 
 // libheif owns a process-wide plugin registry. Keep its initialization guard
 // alive so each image does not tear down and recreate the codec plugins.
@@ -72,7 +72,7 @@ thread_local! {
 
 /// Thread use for one JPEG XL encoding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum JxlThreads {
+pub enum JxlThreads {
     /// The calling thread's resizable pool, sized by libjxl for the frame.
     Pool,
     /// Exactly this many worker threads; one means no runner at all.
@@ -80,7 +80,7 @@ pub(crate) enum JxlThreads {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ImageFormat {
+pub enum ImageFormat {
     Bmp,
     Gif,
     Ico,
@@ -95,7 +95,7 @@ pub(crate) enum ImageFormat {
 }
 
 impl ImageFormat {
-    pub(crate) fn parse(value: &str) -> PyResult<Self> {
+    pub fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
             "BMP" => Ok(Self::Bmp),
             "GIF" => Ok(Self::Gif),
@@ -158,15 +158,15 @@ impl ImageFormat {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) struct SaveOptions {
-    pub(crate) quality: u8,
-    pub(crate) compress_level: u8,
-    pub(crate) lossless: bool,
-    pub(crate) effort: u8,
+pub struct SaveOptions {
+    pub quality: u8,
+    pub compress_level: u8,
+    pub lossless: bool,
+    pub effort: u8,
 }
 
 #[pyfunction]
-pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Image> {
+pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Image> {
     let format = ImageFormat::detect(data).ok_or_else(|| UnidentifiedImageError::new_err("cannot identify image file"))?;
     if let Some(formats) = formats {
         let allowed = formats
@@ -184,7 +184,7 @@ pub(crate) fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String
     py.detach(|| decode(data, format)).map_err(UnidentifiedImageError::new_err)
 }
 
-pub(crate) fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
+pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
         ImageFormat::Bmp => decode_rust_image(data, RustFormat::Bmp, "BMP"),
         ImageFormat::Gif => decode_rust_image(data, RustFormat::Gif, "GIF"),
@@ -422,7 +422,7 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
     rgba
 }
 
-pub(crate) fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
     if format == ImageFormat::Heif {
         return encode_heif(image, options);
     }
@@ -580,7 +580,7 @@ fn color_type(mode: PixelMode) -> ExtendedColorType {
     }
 }
 
-pub(crate) fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
+pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
@@ -590,13 +590,13 @@ pub(crate) fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> Py
 
 /// Entropy coding choices for one JPEG encoding of the same DCT coefficients.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct JpegCoding {
-    pub(crate) optimize: bool,
-    pub(crate) progressive: bool,
+pub struct JpegCoding {
+    pub optimize: bool,
+    pub progressive: bool,
 }
 
 impl JpegCoding {
-    pub(crate) const BASELINE: Self = Self {
+    pub const BASELINE: Self = Self {
         optimize: false,
         progressive: false,
     };
@@ -610,7 +610,7 @@ fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {
 /// with the given entropy coding. Quantized coefficients do not depend on the
 /// entropy coder, so this equals losslessly transforming the normal save while
 /// avoiding a second entropy decode and re-encode of the whole image.
-pub(crate) fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
+pub fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
     if image.bit_depth > 8 {
         // Match `encode`, which routes wide samples through `encode_wide`.
         return encode_wide(image, ImageFormat::Jpeg, options);
@@ -725,14 +725,14 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
 /// Worker threads worth giving one search candidate when `workers` candidates
 /// encode concurrently on the Rayon pool. libjxl parallelizes over 256-pixel
 /// groups, so more threads than groups would only add synchronization.
-pub(crate) fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
+pub fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
     let groups = (image.width as usize).div_ceil(256) * (image.height as usize).div_ceil(256);
     (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
 }
 
 /// Normalize wide samples once per effort search, rather than once per encode.
 /// Eight-bit and aligned native-endian 16-bit input borrow the source image.
-pub(crate) struct PreparedJxl<'a> {
+pub struct PreparedJxl<'a> {
     image: &'a Image,
     wide: Option<Cow<'a, [u16]>>,
 }
@@ -751,17 +751,17 @@ fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
 }
 
 impl<'a> PreparedJxl<'a> {
-    pub(crate) fn new(image: &'a Image) -> PyResult<Self> {
+    pub fn new(image: &'a Image) -> PyResult<Self> {
         let raw = image.raw_data()?;
         let wide = (image.bit_depth > 8).then(|| jxl_wide_samples(raw, image.bit_depth));
         Ok(Self { image, wide })
     }
 
-    pub(crate) fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
+    pub fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
         self.encode_with_threads(options, JxlThreads::Pool)
     }
 
-    pub(crate) fn encode_candidate(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
+    pub fn encode_candidate(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
         // Match the outer search's small-image cutoff. Larger serial trials
         // still benefit from libjxl's pool; parallel trials size their own.
         let threads = if self.image.raw_data()?.len() < JXL_PARALLEL_MIN_BYTES {
@@ -772,7 +772,7 @@ impl<'a> PreparedJxl<'a> {
         self.encode_with_threads(options, threads)
     }
 
-    pub(crate) fn encode_with_threads(&self, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
+    pub fn encode_with_threads(&self, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
         match &self.wide {
             Some(samples) => encode_jxl_samples(self.image, JxlSamples::Wide(samples), options, threads),
             None => encode_jxl_samples(self.image, JxlSamples::Byte(self.image.raw_data()?), options, threads),
@@ -907,20 +907,20 @@ fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
     encode_heif_with_preset(image, options, "medium")
 }
 
-pub(crate) fn encode_heif_with_preset(image: &Image, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
+pub fn encode_heif_with_preset(image: &Image, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
     PreparedHeif::new(image)?.encode(options, preset)
 }
 
 /// Own pixel planes and encoder parameter metadata once for a preset search.
 /// Every encoding resets its quality/preset and gets a fresh container.
-pub(crate) struct PreparedHeif {
+pub struct PreparedHeif {
     native: libheif_rs::Image,
     encoder: libheif_rs::Encoder<'static>,
     presets: bool,
 }
 
 impl PreparedHeif {
-    pub(crate) fn new(image: &Image) -> PyResult<Self> {
+    pub fn new(image: &Image) -> PyResult<Self> {
         use libheif_rs::{Channel, ColorSpace, RgbChroma};
 
         let pixels = image.raw_data()?;
@@ -969,11 +969,11 @@ impl PreparedHeif {
         Ok(Self { native, encoder, presets })
     }
 
-    pub(crate) fn supports_presets(&self) -> bool {
+    pub fn supports_presets(&self) -> bool {
         self.presets
     }
 
-    pub(crate) fn encode(&mut self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
+    pub fn encode(&mut self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
         use libheif_rs::{EncoderParameterValue, EncoderQuality, HeifContext};
 
         // Other HEVC plugins keep their defaults rather than receiving an
@@ -1044,6 +1044,43 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             .map_err(codec_error)?;
     }
     Ok(output)
+}
+
+#[pyfunction(name = "_encode")]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None))]
+#[allow(clippy::too_many_arguments)]
+pub fn _encode(
+    py: Python<'_>, image: &blanket_core::Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8,
+    compressor: Option<crate::compressor::Compressor>,
+) -> PyResult<Py<pyo3::types::PyBytes>> {
+    let format = ImageFormat::parse(format)?;
+    let options = SaveOptions {
+        quality,
+        compress_level,
+        lossless,
+        effort,
+    };
+    if let Some((palette_mode, _)) = image.palette {
+        if format == ImageFormat::Png {
+            let encoded = py.detach(|| encode_palette_png(image, compress_level))?;
+            return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
+        }
+        if format == ImageFormat::Jpeg {
+            return Err(pyo3::exceptions::PyOSError::new_err("cannot write mode P as JPEG"));
+        }
+        let mode = palette_mode.as_str();
+        let expanded = image.convert(py, mode, None)?;
+        let encoded = py.detach(|| match compressor {
+            Some(compressor) => compressor.encode(&expanded, format, options),
+            None => encode(&expanded, format, options),
+        })?;
+        return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
+    }
+    let encoded = py.detach(|| match compressor {
+        Some(compressor) => compressor.encode(image, format, options),
+        None => encode(image, format, options),
+    })?;
+    Ok(pyo3::types::PyBytes::new(py, &encoded).unbind())
 }
 
 #[cfg(test)]
