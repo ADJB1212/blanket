@@ -3,10 +3,10 @@
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, chunks_mut};
-use crate::raster::{Image, PixelMode};
+use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
+use blanket_core::raster::{Image, PixelMode};
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(filter_kernel, module)?)?;
     module.add_function(wrap_pyfunction!(filter_rank, module)?)?;
     module.add_function(wrap_pyfunction!(filter_mode, module)?)?;
@@ -485,7 +485,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
 
 fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
     const CHUNK: usize = 256 * 1024;
-    crate::parallel::chunks_mut_above(pixels, CHUNK * C, 4 * 1024 * 1024, |chunk, dst| {
+    blanket_core::parallel::chunks_mut_above(pixels, CHUNK * C, 4 * 1024 * 1024, |chunk, dst| {
         let start = chunk * CHUNK;
         let dst = dst.as_chunks_mut::<C>().0;
         let bands: [&[u8]; C] = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
@@ -494,7 +494,7 @@ fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         let offset = if std::arch::is_x86_feature_detected!("ssse3") {
             // SAFETY: SSSE3 detected; bands and destination have equal pixel counts.
-            unsafe { crate::x86_pixels::merge(bands, dst) }
+            unsafe { blanket_core::x86_pixels::merge(bands, dst) }
         } else {
             0
         };

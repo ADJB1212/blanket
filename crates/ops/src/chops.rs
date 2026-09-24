@@ -3,10 +3,10 @@
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, chunks_mut, chunks_mut_above};
-use crate::raster::{Image, PixelMode};
+use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut, chunks_mut_above};
+use blanket_core::raster::{Image, PixelMode};
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chops_binary, module)?)?;
     module.add_function(wrap_pyfunction!(chops_invert, module)?)?;
     module.add_function(wrap_pyfunction!(chops_offset, module)?)?;
@@ -122,7 +122,7 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
     let threshold = match operation {
         Operation::AddModulo | Operation::SubtractModulo | Operation::Lighter | Operation::Darker | Operation::Difference => 16 * 1024 * 1024,
-        _ => crate::parallel::MIN_PARALLEL_BYTES,
+        _ => blanket_core::parallel::MIN_PARALLEL_BYTES,
     };
     py.detach(|| {
         let output = &mut pixels.spare_capacity_mut()[..length];

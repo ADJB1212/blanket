@@ -4,10 +4,10 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
-use crate::raster::{Image, PixelMode};
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
+use blanket_core::raster::{Image, PixelMode};
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(enhance_blend, module)?)?;
     module.add_function(wrap_pyfunction!(enhance_color, module)?)?;
     module.add_function(wrap_pyfunction!(enhance_contrast, module)?)?;
@@ -193,7 +193,7 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
     chunks_mut(output, CHUNK_PIXELS * C, |i, dst| {
         let start = i * CHUNK_PIXELS * C;
         for (source, output) in source[start..].as_chunks::<C>().0.iter().zip(dst.as_chunks_mut::<C>().0) {
-            let luma = crate::simd::pillow_luma(source[0], source[1], source[2]);
+            let luma = blanket_core::simd::pillow_luma(source[0], source[1], source[2]);
             output[0] = luma;
             output[1] = luma;
             output[2] = luma;
@@ -247,7 +247,7 @@ fn byte_sum(source: &[u8]) -> u64 {
 
 fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
     let pixels = source.as_chunks::<C>().0;
-    let luminance = |pixel: &[u8; C]| u64::from(crate::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
+    let luminance = |pixel: &[u8; C]| u64::from(blanket_core::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
     if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) {
         pixels.par_iter().map(luminance).sum()
     } else {

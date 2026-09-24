@@ -137,7 +137,7 @@ pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     let done = if std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; equal complete RGB buffers checked above.
-        unsafe { crate::x86_pixels::reverse_rgb(source, output) }
+        unsafe { blanket_core::x86_pixels::reverse_rgb(source, output) }
     } else {
         0
     };
@@ -169,18 +169,12 @@ pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
     }
 }
 
-pub(crate) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
+pub fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
     assert!(tables.len() == 256 || tables.len() == C * 256);
     dispatch_lut::<C>(source, output, tables);
 }
 
-#[cfg(RUSTC_IS_NIGHTLY)]
-fn dispatch_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
-    portable::lut::<C>(source, output, tables);
-}
-
-#[cfg(not(RUSTC_IS_NIGHTLY))]
 fn dispatch_lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: NEON is mandatory on AArch64; the kernel bounds every load
@@ -228,12 +222,6 @@ pub(crate) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) {
     }
 }
 
-#[cfg(RUSTC_IS_NIGHTLY)]
-fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
-    portable::colorize(source, output, tables)
-}
-
-#[cfg(not(RUSTC_IS_NIGHTLY))]
 fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
     #[cfg(target_arch = "aarch64")]
     // SAFETY: NEON is guaranteed, and input/output/table extents are validated.
@@ -256,17 +244,6 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
     dispatch_vertical(source, output, stride, weights)
 }
 
-#[cfg(RUSTC_IS_NIGHTLY)]
-fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
-    let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
-    if magnitude * 255 + (1 << 21) <= i64::from(i32::MAX) {
-        assert!(weights.is_empty() || source.len() >= (weights.len() - 1).saturating_mul(stride).saturating_add(output.len()));
-        return portable::vertical(source, output, stride, weights);
-    }
-    0
-}
-
-#[cfg(not(RUSTC_IS_NIGHTLY))]
 fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
     #[cfg(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64"))]
     {
@@ -289,79 +266,7 @@ fn dispatch_vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &
     0
 }
 
-#[cfg(RUSTC_IS_NIGHTLY)]
-mod portable {
-    use std::simd::Simd;
-    use std::simd::prelude::*;
-
-    const LANES: usize = 16;
-    const VLANES: usize = 8;
-
-    pub(super) fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
-        let mut offset = 0;
-        if tables.len() == 256 {
-            while offset + LANES <= source.len() {
-                let idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
-                let vals: Simd<u8, LANES> = Simd::gather_or_default(tables, idx);
-                output[offset..offset + LANES].copy_from_slice(&vals.to_array());
-                offset += LANES;
-            }
-            super::scalar_lut::<1>(&source[offset..], &mut output[offset..], tables);
-        } else {
-            while offset + LANES * C <= source.len() {
-                for c in 0..C {
-                    let src_idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| offset + i * C + c));
-                    let src_bytes: Simd<u8, LANES> = Simd::gather_or_default(source, src_idx);
-                    let idx: Simd<usize, LANES> = src_bytes.cast();
-                    let table_slice = &tables[c * 256..c * 256 + 256];
-                    let vals: Simd<u8, LANES> = Simd::gather_or_default(table_slice, idx);
-                    let arr = vals.to_array();
-                    for i in 0..LANES {
-                        output[offset + i * C + c] = arr[i];
-                    }
-                }
-                offset += LANES * C;
-            }
-            super::scalar_lut::<C>(&source[offset..], &mut output[offset..], tables);
-        }
-    }
-
-    pub(super) fn colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
-        let mut offset = 0;
-        while offset + LANES <= source.len() {
-            let idx: Simd<usize, LANES> = Simd::from_array(std::array::from_fn(|i| usize::from(source[offset + i])));
-            for c in 0..3 {
-                let table_slice = &tables[c * 256..c * 256 + 256];
-                let vals: Simd<u8, LANES> = Simd::gather_or_default(table_slice, idx);
-                let arr = vals.to_array();
-                for i in 0..LANES {
-                    output[(offset + i) * 3 + c] = arr[i];
-                }
-            }
-            offset += LANES;
-        }
-        offset
-    }
-
-    pub(super) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
-        let end = output.len() / VLANES * VLANES;
-        for x in (0..end).step_by(VLANES) {
-            let mut acc: Simd<i32, VLANES> = Simd::splat(1 << 21);
-            for (i, &weight) in weights.iter().enumerate() {
-                let bytes: Simd<u8, VLANES> = Simd::from_slice(&source[i * stride + x..i * stride + x + VLANES]);
-                let widened: Simd<i32, VLANES> = bytes.cast();
-                acc += widened * Simd::splat(weight);
-            }
-            let shifted = acc >> Simd::splat(22);
-            let clamped = shifted.simd_clamp(Simd::splat(0), Simd::splat(255));
-            let narrowed: Simd<u8, VLANES> = clamped.cast();
-            output[x..x + VLANES].copy_from_slice(&narrowed.to_array());
-        }
-        end
-    }
-}
-
-#[cfg(all(any(target_arch = "x86", target_arch = "x86_64"), not(RUSTC_IS_NIGHTLY)))]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod x86 {
     #[cfg(target_arch = "x86")]
     use std::arch::x86::*;
@@ -455,7 +360,7 @@ mod x86 {
     }
 }
 
-#[cfg(all(target_arch = "aarch64", not(RUSTC_IS_NIGHTLY)))]
+#[cfg(target_arch = "aarch64")]
 mod neon {
     use std::arch::aarch64::*;
 
@@ -574,7 +479,7 @@ pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if C == 3 && std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; source contains twice the output pixels.
-        done = unsafe { crate::x86_pixels::nearest_half_rgb(source, output) };
+        done = unsafe { blanket_core::x86_pixels::nearest_half_rgb(source, output) };
     }
     #[cfg(target_arch = "aarch64")]
     if C == 3 {
@@ -613,7 +518,7 @@ pub(crate) fn reduce_three_l(upper: &[u8], middle: &[u8], lower: &[u8], output: 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; all three row extents checked above.
-        done = unsafe { crate::x86_pixels::reduce_three_l([upper, middle, lower], output) };
+        done = unsafe { blanket_core::x86_pixels::reduce_three_l([upper, middle, lower], output) };
     }
     #[cfg(target_arch = "aarch64")]
     {
@@ -818,9 +723,9 @@ mod tests {
         let source: Vec<u8> = (0..4 * 31).map(|i| (i * 67) as u8).collect();
         let mut actual = vec![0; 31];
         let count = vertical(&source, &mut actual, 31, &weights);
-        #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
+        #[cfg(target_arch = "aarch64")]
         assert_eq!(count, 24);
-        #[cfg(all(not(RUSTC_IS_NIGHTLY), any(target_arch = "x86", target_arch = "x86_64")))]
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         assert_eq!(count, if std::arch::is_x86_feature_detected!("avx2") { 24 } else { 0 });
         for x in 0..count {
             let sum = weights
@@ -846,7 +751,7 @@ mod tests {
                 let source: Vec<u8> = (0..1 + weights.len() * stride).map(|i| (i * 67) as u8).collect();
                 let mut actual = vec![123; width + 2];
                 let count = vertical(&source[1..], &mut actual[1..1 + width], stride, weights);
-                let enabled = cfg!(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"));
+                let enabled = cfg!(target_arch = "aarch64");
                 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
                 let enabled = enabled || std::arch::is_x86_feature_detected!("avx2");
                 assert_eq!(count, if enabled { width / 8 * 8 } else { 0 });
@@ -870,9 +775,9 @@ mod tests {
             let source: Vec<u8> = (0..n + 1).map(|i| (i * 37) as u8).collect();
             let mut output = vec![123; n * 3 + 2];
             let count = dispatch_colorize(&source[1..], &mut output[1..1 + n * 3], &tables);
-            #[cfg(any(RUSTC_IS_NIGHTLY, target_arch = "aarch64"))]
+            #[cfg(target_arch = "aarch64")]
             assert_eq!(count, n / 16 * 16);
-            #[cfg(all(not(RUSTC_IS_NIGHTLY), any(target_arch = "x86", target_arch = "x86_64")))]
+            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
             assert_eq!(count, if std::arch::is_x86_feature_detected!("avx2") { n / 8 * 8 } else { 0 });
             for i in 0..count {
                 let v = usize::from(source[1 + i]);

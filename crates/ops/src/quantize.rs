@@ -8,14 +8,14 @@ use rayon::prelude::*;
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use crate::quantize_simd::PaletteSearch;
-use crate::raster::{Image, PixelMode};
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
+use blanket_core::raster::{Image, PixelMode};
 
 type Color = [u8; 4];
 type Histogram = Vec<(Color, u64)>;
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(quantize, module)?)?;
     Ok(())
 }

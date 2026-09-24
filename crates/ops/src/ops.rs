@@ -4,14 +4,14 @@ use pyo3::prelude::*;
 use rayon::prelude::*;
 use std::borrow::Cow;
 
-use crate::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
-use crate::raster::{Image, PixelMode};
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
+use blanket_core::raster::{Image, PixelMode};
 
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
 type Mesh = Vec<(BoxI, [f64; 8])>;
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
@@ -378,7 +378,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     output(image, size, pixels)
 }
 
-pub(crate) fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
     let source = source.as_chunks::<C>().0;
     let width = if orientation >= 5 { h } else { w };
     // Bands and tiles keep 90-degree rotations local to cache and give every

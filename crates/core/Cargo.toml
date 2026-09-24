@@ -1,0 +1,17 @@
+[package]
+name = "blanket-core"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+garb = "0.2"
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
+rayon = {version = "1.12", default-features = false }
+
+[lints]
+workspace = true

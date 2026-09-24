@@ -1,0 +1,18 @@
+[package]
+name = "blanket-ops"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
+rayon = {version = "1.12", default-features = false }
+garb = "0.2"
+
+[lints]
+workspace = true

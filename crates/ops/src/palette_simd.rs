@@ -8,6 +8,7 @@ use std::arch::x86::*;
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::*;
 
+#[allow(dead_code)]
 pub(super) fn linear_lut(white: u8) -> [u16; 256] {
     let mut output = [0; 256];
     #[cfg(target_arch = "aarch64")]
@@ -41,6 +42,7 @@ pub(super) fn linear_lut(white: u8) -> [u16; 256] {
 
 #[cfg(target_arch = "aarch64")]
 #[target_feature(enable = "neon")]
+#[allow(dead_code)]
 unsafe fn linear_neon(white: u8, output: &mut [u16; 256]) {
     unsafe {
         let mut indices = vld1q_u16([0, 1, 2, 3, 4, 5, 6, 7].as_ptr());

@@ -194,7 +194,18 @@ dependencies = [
 name = "blanket"
 version = "0.0.2"
 dependencies = [
- "garb",
+ "blanket-codecs",
+ "blanket-core",
+ "blanket-ops",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codecs"
+version = "0.0.2"
+dependencies = [
+ "blanket-core",
+ "blanket-ops",
  "image",
  "jpegxl-rs",
  "libheif-rs",
@@ -202,9 +213,27 @@ dependencies = [
  "png",
  "pyo3",
  "rayon",
- "rustc_version",
  "turbojpeg",
  "webpx",
+]
+
+[[package]]
+name = "blanket-core"
+version = "0.0.2"
+dependencies = [
+ "garb",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "blanket-ops"
+version = "0.0.2"
+dependencies = [
+ "blanket-core",
+ "garb",
+ "pyo3",
+ "rayon",
 ]
 
 [[package]]
@@ -1312,15 +1341,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rustc_version"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
-dependencies = [
- "semver",
-]
-
-[[package]]
 name = "rustversion"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1340,12 +1360,6 @@ checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
 dependencies = [
  "winapi-util",
 ]
-
-[[package]]
-name = "semver"
-version = "1.0.28"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "serde_core"

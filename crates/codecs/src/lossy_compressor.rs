@@ -5,12 +5,12 @@ use pyo3::prelude::*;
 
 use crate::codecs::{self, ImageFormat, SaveOptions};
 use crate::compressor::LosslessImageCompressor;
-use crate::ops_simd;
-use crate::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode};
+use blanket_ops::ops_simd;
 
 #[pyclass(name = "_LossyImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
 #[derive(Clone, Copy)]
-pub(crate) struct LossyImageCompressor {
+pub struct LossyImageCompressor {
     #[pyo3(get)]
     max_rmse: f64,
     #[pyo3(get)]
@@ -33,7 +33,7 @@ impl LossyImageCompressor {
 }
 
 impl LossyImageCompressor {
-    pub(crate) fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
         let lossless = LosslessImageCompressor { effort: self.effort };
         let mut output = if format == ImageFormat::Jpeg && self.max_rmse > 0.0 && !options.lossless {
             codecs::encode(image, format, options)?

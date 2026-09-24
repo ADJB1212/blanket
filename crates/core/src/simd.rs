@@ -1,7 +1,7 @@
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::raster::PixelMode;
 
-pub(crate) fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
+pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     debug_assert_ne!(from, to, "caller should short-circuit identity conversion");
 
     match (from, to) {
@@ -131,7 +131,7 @@ fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
 }
 
 #[inline(always)]
-pub(crate) fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
+pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
     ((u32::from(r) * 19_595 + u32::from(g) * 38_470 + u32::from(b) * 7_471 + 0x8000) >> 16) as u8
 }
 

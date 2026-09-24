@@ -4,7 +4,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyList;
 
-pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(stat_count, module)?)?;
     module.add_function(wrap_pyfunction!(stat_extrema, module)?)?;
     module.add_function(wrap_pyfunction!(stat_sum, module)?)?;

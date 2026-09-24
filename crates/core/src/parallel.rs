@@ -2,31 +2,30 @@
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-pub(crate) const MIN_PARALLEL_BYTES: usize = 256 * 1024;
-pub(crate) const CHUNK_PIXELS: usize = 16 * 1024;
+pub const MIN_PARALLEL_BYTES: usize = 256 * 1024;
+pub const CHUNK_PIXELS: usize = 16 * 1024;
 
 /// Live exclusive bound. Encoders may recheck it after expensive work, before
 /// copying or decoding a candidate that a concurrent job has already beaten.
-pub(crate) struct CandidateLimit(AtomicUsize);
+pub struct CandidateLimit(AtomicUsize);
 
 impl CandidateLimit {
-    pub(crate) fn new(limit: usize) -> Self {
+    pub fn new(limit: usize) -> Self {
         Self(AtomicUsize::new(limit))
     }
 
-    pub(crate) fn get(&self) -> usize {
+    pub fn get(&self) -> usize {
         self.0.load(Ordering::Relaxed)
     }
 
-    #[cfg(test)]
-    pub(crate) fn set(&self, limit: usize) {
-        self.0.store(limit, Ordering::Relaxed);
+    pub fn tighten(&self, limit: usize) {
+        self.0.fetch_min(limit, Ordering::Relaxed);
     }
 }
 
 /// Independent single-threaded codec candidates, with deterministic ties.
 #[cfg(test)]
-pub(crate) fn try_candidates<T: Sync, E: Send>(
+pub fn try_candidates<T: Sync, E: Send>(
     output: &mut Vec<u8>, jobs: &[T], work_bytes: usize, encode: impl Fn(&T) -> Result<Vec<u8>, E> + Sync,
 ) -> Result<(), E> {
     if let Some(candidate) = best_candidate(jobs, work_bytes, output.len(), |job, _| encode(job).map(Some))? {
@@ -41,7 +40,7 @@ pub(crate) fn try_candidates<T: Sync, E: Send>(
 /// `None` lets native codecs discard losing buffers without copying to a Vec.
 /// The encoder receives an exclusive size bound, tightened after each winner.
 /// Allow ties with that winner because an earlier job may still be running.
-pub(crate) fn best_candidate<T: Sync, E: Send>(
+pub fn best_candidate<T: Sync, E: Send>(
     jobs: &[T], work_bytes: usize, limit: usize, encode: impl Fn(&T, &CandidateLimit) -> Result<Option<Vec<u8>>, E> + Sync,
 ) -> Result<Option<Vec<u8>>, E> {
     let workers = candidate_workers(work_bytes, jobs.len());
@@ -54,7 +53,7 @@ pub(crate) fn best_candidate<T: Sync, E: Send>(
             let Some(job) = jobs.get(index) else { break };
             match encode(job, &bound) {
                 Ok(Some(candidate)) if candidate.len() < limit => {
-                    bound.0.fetch_min(candidate.len() + 1, Ordering::Relaxed);
+                    bound.tighten(candidate.len() + 1);
                     result.keep(index, candidate);
                 }
                 Ok(_) => (),
@@ -89,7 +88,7 @@ pub(crate) fn best_candidate<T: Sync, E: Send>(
     }
 }
 
-pub(crate) fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
+pub fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
     if work_bytes >= 128 * 1024 && jobs > 1 {
         // Candidates are single-threaded, so every pool thread can run one.
         // Allow roughly four input-sized working buffers per encoder within
@@ -126,18 +125,16 @@ impl<E> CandidateResult<E> {
 /// Use consistent units for `work`, `chunk_size`, and `minimum_work` (bytes
 /// or items). Preserve operation-specific cost cutoffs, but only schedule work
 /// when there are multiple partitions and workers to execute them.
-pub(crate) fn should_parallel(work: usize, chunk_size: usize, minimum_work: usize) -> bool {
+pub fn should_parallel(work: usize, chunk_size: usize, minimum_work: usize) -> bool {
     work >= minimum_work && work > chunk_size && rayon::current_num_threads() > 1
 }
 
-pub(crate) fn chunks_mut(output: &mut [u8], chunk_size: usize, operation: impl Fn(usize, &mut [u8]) + Sync + Send) {
+pub fn chunks_mut(output: &mut [u8], chunk_size: usize, operation: impl Fn(usize, &mut [u8]) + Sync + Send) {
     chunks_mut_above(output, chunk_size, MIN_PARALLEL_BYTES, operation);
 }
 
 /// Memory-only work needs more bytes to amortize scheduling than arithmetic.
-pub(crate) fn chunks_mut_above<T: Send>(
-    output: &mut [T], chunk_size: usize, minimum_bytes: usize, operation: impl Fn(usize, &mut [T]) + Sync + Send,
-) {
+pub fn chunks_mut_above<T: Send>(output: &mut [T], chunk_size: usize, minimum_bytes: usize, operation: impl Fn(usize, &mut [T]) + Sync + Send) {
     if output.is_empty() {
         return;
     }

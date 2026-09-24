@@ -54,6 +54,7 @@ docs = [
 ]
 
 [tool.maturin]
+manifest-path = "crates/blanket/Cargo.toml"
 python-source = "python"
 module-name = "blanket._blanket"
 strip = true
