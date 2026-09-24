@@ -128,9 +128,9 @@ def test_crop_border_and_box_are_distinct(mode: str) -> None:
         assert result is not b
         assert result.info == b.info and result.info is not b.info
     with pytest.raises(TypeError):
-        cast(Callable[..., object], b.crop)(border=2)
+        cast("Callable[..., object]", b.crop)(border=2)
     with pytest.raises(TypeError):
-        cast(Callable[..., object], ImageOps.crop)(b, box=box)
+        cast("Callable[..., object]", ImageOps.crop)(b, box=box)
 
 
 @pytest.mark.parametrize("border", [100, (0, 100)])

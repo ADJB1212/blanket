@@ -46,6 +46,7 @@ class LossyImageCompressor:
             output = BytesIO()
             image.save(output, format="PNG", compressor=compressor)
             ```
+
         """
         if isinstance(max_rmse, bool) or not isinstance(max_rmse, (int, float)):
             raise TypeError("max_rmse must be a number")
@@ -72,6 +73,7 @@ class LossyImageCompressor:
             compressor = LossyImageCompressor(effort=1)
             print(compressor.max_rmse)
             ```
+
         """
         return self._native.max_rmse
 
@@ -90,6 +92,7 @@ class LossyImageCompressor:
             compressor = LossyImageCompressor(effort=1)
             print(compressor.effort)
             ```
+
         """
         return self._native.effort
 
@@ -125,6 +128,7 @@ class LosslessImageCompressor:
     High-bit-depth and indexed PNG and other formats keep normal encoding.
     Metadata follows normal save behavior. The object is reusable and affects
     only the save it is passed to, without modifying the image.
+
     """
 
     def __init__(self, *, effort: int = 7) -> None:
@@ -145,6 +149,7 @@ class LosslessImageCompressor:
             output = BytesIO()
             image.save(output, format="PNG", compressor=compressor)
             ```
+
         """
         if isinstance(effort, bool) or not isinstance(effort, int):
             raise TypeError("effort must be an integer")
@@ -167,5 +172,6 @@ class LosslessImageCompressor:
             compressor = LosslessImageCompressor(effort=1)
             print(compressor.effort)
             ```
+
         """
         return self._native.effort

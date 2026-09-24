@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import math
 from array import array
-from collections.abc import Sequence
 from contextlib import nullcontext
-from typing import IO, Protocol
+from typing import IO, TYPE_CHECKING, Protocol
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from ._blanket import ops_histogram, palette_colors, palette_gamma, palette_linear, palette_ramp, palette_sepia
 from ._color import _rgb

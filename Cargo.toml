@@ -1,14 +1,16 @@
 [package]
 name = "blanket"
-version = "0.0.1"
+version = "0.0.2"
 edition = "2024"
 resolver = "3"
 rust-version = "1.97"
-description = "A focused Rust-backed image library with a Pillow-shaped Python API"
-authors = ["Andrew Jaffe"]
+description = "A Rust-backed image library with a Pillow-shaped Python API"
+authors = ["Andrew Jaffe <adjaffeb@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/ADJB1212/blanket"
-exclude = [".github/*", "tests/*", "pyproject.toml", "python/*", "scripts/*", "docs/*"]
+documentation = "https://adjb1212.github.io/blanket-docs"
+exclude = [".github/", "tests/", "pyproject.toml", "python/", "scripts/", "docs/", "uv.lock"]
+publish = false
 
 [lib]
 name = "_blanket"

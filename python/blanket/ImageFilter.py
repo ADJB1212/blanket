@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Sequence
 from functools import reduce
 from operator import add
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
 
 from ._blanket import _Image, filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
 

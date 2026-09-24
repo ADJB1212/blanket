@@ -1,7 +1,3 @@
-[build-system]
-requires = ["maturin>=1.15,<2.0"]
-build-backend = "maturin"
-
 [project]
 name = "pyblanket"
 import-names = ["blanket"]
@@ -9,9 +5,8 @@ description = "A Rust-backed image library with a Pillow-shaped Python API"
 readme = "README.md"
 authors = [{ name = "Andrew Jaffe", email = "adjaffeb@gmail.com" }]
 requires-python = ">=3.12"
-license = "MIT"
-license-files = ["LICENSE"]
-dynamic = ["version"]
+license-files = ["LICENSE", "THIRD_PARTY_LICENSES.md"]
+dynamic = ["version", "license"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -27,7 +22,6 @@ classifiers = [
     "Programming Language :: Python :: 3.15",
     "Topic :: Multimedia :: Graphics",
     "Topic :: Multimedia :: Graphics :: Graphics Conversion",
-
 ]
 
 [project.urls]
@@ -35,6 +29,10 @@ Repository = "https://github.com/ADJB1212/blanket"
 Homepage = "https://adjb1212.github.io/blanket-docs"
 Documentation = "https://adjb1212.github.io/blanket-docs"
 Releases = "https://github.com/ADJB1212/blanket/releases"
+
+[build-system]
+requires = ["maturin>=1.15,<2.0"]
+build-backend = "maturin"
 
 [dependency-groups]
 dev = [
@@ -51,13 +49,14 @@ test = [
 ]
 docs = [
     "mkdocs>=1.5.0,<2",
-    "mkdocs-material>=9.1",
+    "mkdocs-material>=9.7",
     "mkdocstrings[python]>=0.30,<1",
 ]
 
 [tool.maturin]
 python-source = "python"
 module-name = "blanket._blanket"
+strip = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -72,9 +71,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-extend-select = ["I", "E", "B", "F", "Q", "C4", "UP", "TID", "RUF", "PIE", "ISC", "FLY", "PERF", "FURB"]
-ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402"]
+extend-select = ["I", "E", "B", "F", "Q", "C4", "UP", "ARG", "TID", "RUF", "PIE", "TCH", "SIM", "ISC", "FLY", "PERF", "FURB", "D417"]
+ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402", "SIM108"]
 future-annotations = true
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["TCH", "ARG"]
+"scripts/**/*.py" = ["TCH", "ARG"]
+"python/blanket/Image.py" = ["ARG002"]
 
 [tool.ruff.format]
 quote-style = "double"

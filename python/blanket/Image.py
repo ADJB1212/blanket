@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 import builtins
+import contextlib
 import math
 import os
-from collections.abc import Callable, Sequence
 from enum import IntEnum
 from operator import index
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Protocol, Self
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
@@ -302,7 +304,6 @@ class Image:
             image.load()
             ```
         """
-
         self._native.load()
         self._sync_palette()
 
@@ -334,7 +335,6 @@ class Image:
             result = image.convert("L")
             ```
         """
-
         if mode == "P" and self.mode != "P":
             return self.quantize()
         self._sync_palette()
@@ -1267,7 +1267,6 @@ class Image:
             pillow_image = image.to_pillow()
             ```
         """
-
         if self.bit_depth != 8:
             raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
 
@@ -1481,7 +1480,6 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
             print(reopened.size)
         ```
     """
-
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
     if formats is not None and not isinstance(formats, (list, tuple)):
@@ -1512,7 +1510,6 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
         image = Image.frombytes("RGB", (2, 1), bytes([255, 0, 0, 0, 255, 0]))
         ```
     """
-
     try:
         raw = bytes(data)
     except (TypeError, ValueError) as error:
@@ -1540,17 +1537,14 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
         image = Image.fromarray(pixels)
         ```
     """
-
     return Image(_native_fromarray(obj, mode, bit_depth))
 
 
 def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
     if hasattr(fp, "read"):
         stream = fp
-        try:
+        with contextlib.suppress(AttributeError, OSError):
             stream.seek(0)
-        except (AttributeError, OSError):
-            pass
         data = stream.read()
         if not isinstance(data, bytes):
             raise ValueError("binary data must be used to open an image")

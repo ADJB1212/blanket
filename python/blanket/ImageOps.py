@@ -6,9 +6,11 @@ accept L and RGB, matching Pillow's restrictions for these modes.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from itertools import pairwise
-from typing import Literal, Protocol, overload
+from typing import TYPE_CHECKING, Literal, Protocol, overload
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 from . import Image
 from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
