@@ -4,6 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "pyblanket"
+import-names = ["blanket"]
 description = "A Rust-backed image library with a Pillow-shaped Python API"
 readme = "README.md"
 authors = [{ name = "Andrew Jaffe", email = "adjaffeb@gmail.com" }]
@@ -13,13 +14,27 @@ license-files = ["LICENSE"]
 dynamic = ["version"]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Rust",
-    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Programming Language :: Python :: 3.15",
+    "Topic :: Multimedia :: Graphics",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+
 ]
 
 [project.urls]
 Repository = "https://github.com/ADJB1212/blanket"
+Homepage = "https://adjb1212.github.io/blanket-docs"
+Documentation = "https://adjb1212.github.io/blanket-docs"
+Releases = "https://github.com/ADJB1212/blanket/releases"
 
 [dependency-groups]
 dev = [
