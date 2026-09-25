@@ -261,3 +261,35 @@ def test_signed_integer_masked_paste_matches_pillow() -> None:
     target.paste(source, (0, 0), mask)
     pillow_target.paste(pillow_source, (0, 0), pillow_mask)
     assert target.getdata() == list(pillow_target.get_flattened_data())
+
+
+def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:
+    raw = bytes(i * 17 % 256 for i in range(37 * 3))
+    blanket = Image.frombytes("HSV", (37, 1), raw)
+    pillow = PillowImage.frombytes("HSV", (37, 1), raw)
+    assert blanket.mode == "HSV"
+    assert blanket.getbands() == ("H", "S", "V")
+    assert blanket.getpixel((0, 0)) == pillow.getpixel((0, 0))
+    assert blanket.tobytes() == pillow.tobytes()
+    blanket.putpixel((1, 0), (10, 20, 30))
+    pillow.putpixel((1, 0), (10, 20, 30))
+    assert blanket.getpixel((1, 0)) == (10, 20, 30)
+    for destination in ("L", "RGB", "RGBA", "I", "LA"):
+        assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+    rgb = Image.frombytes("RGB", blanket.size, bytes((i * 29 + 3) % 256 for i in range(37 * 3)))
+    assert rgb.convert("HSV").tobytes() == PillowImage.frombytes("RGB", rgb.size, rgb.tobytes()).convert("HSV").tobytes()
+    gray = Image.frombytes("L", (8, 1), bytes(range(0, 256, 32)))
+    assert gray.convert("HSV").tobytes() == PillowImage.frombytes("L", gray.size, gray.tobytes()).convert("HSV").tobytes()
+    la = Image.frombytes("LA", (2, 1), bytes([40, 10, 200, 255]))
+    assert la.convert("HSV").tobytes() == PillowImage.frombytes("LA", la.size, la.tobytes()).convert("HSV").tobytes()
+    rgba = Image.frombytes("RGBA", (2, 1), bytes([255, 0, 0, 80, 0, 255, 0, 10]))
+    assert rgba.convert("HSV").tobytes() == PillowImage.frombytes("RGBA", rgba.size, rgba.tobytes()).convert("HSV").tobytes()
+    assert Image.new("HSV", (1, 1), "red").getpixel((0, 0)) == PillowImage.new("HSV", (1, 1), "red").getpixel((0, 0))
+    wide = Image.frombytes("RGB", (2, 1), b"".join(v.to_bytes(2, "little") for v in (0, 0, 65535, 65535, 0, 0)), bit_depth=16)
+    assert wide.convert("HSV").tobytes() == wide.convert("RGB", bit_depth=8).convert("HSV").tobytes()
+    assert blanket.resize((11, 2), Image.Resampling.BILINEAR).tobytes() == pillow.resize((11, 2), PillowImage.Resampling.BILINEAR).tobytes()
+    assert blanket.crop((2, 0, 9, 1)).getdata() == list(pillow.crop((2, 0, 9, 1)).get_flattened_data())
+    assert blanket.split()[2].getdata() == list(pillow.split()[2].get_flattened_data())
+    assert Image.merge("HSV", blanket.split()).tobytes() == blanket.tobytes()
+    with pytest.raises(OSError, match="cannot write mode HSV"):
+        blanket.save(BytesIO(), "PNG")

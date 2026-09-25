@@ -66,7 +66,7 @@ pixel access, and compatibility across existing operations.
 - [ ] `CMYK` — 4-channel print color (no ICC transform required; raw channel storage)
 - [ ] `YCbCr` — luma/chroma (used internally by JPEG; expose for user code)
 - [ ] `LAB` — CIE L\*a\*b\*
-- [ ] `HSV` — hue, saturation, value
+- [x] `HSV` — hue, saturation, value
 
 ### Depends on
 

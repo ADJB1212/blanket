@@ -183,7 +183,7 @@ fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let mut pixels = buffer(source.len())?;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
-        PixelMode::Rgb => color_degenerate::<3>(source, &mut pixels),
+        PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels),
         PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels),
         _ => unreachable!(),
     });
@@ -211,7 +211,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let sum = py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => byte_sum(source),
         PixelMode::La | PixelMode::Pa => source.as_chunks::<2>().0.iter().map(|pixel| u64::from(pixel[0])).sum(),
-        PixelMode::Rgb => luminance_sum::<3>(source),
+        PixelMode::Rgb | PixelMode::Hsv => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
         _ => unreachable!(),
     });
@@ -230,7 +230,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
                 dst.copy_from_slice(&[mean, src[1]]);
             }
         }
-        PixelMode::Rgb => chunks_mut(&mut pixels, CHUNK_PIXELS * 3, |_, dst| {
+        PixelMode::Rgb | PixelMode::Hsv => chunks_mut(&mut pixels, CHUNK_PIXELS * 3, |_, dst| {
             for pixel in dst.as_chunks_mut::<3>().0 {
                 pixel.fill(mean);
             }
@@ -299,7 +299,7 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => smooth::<1>(source, &mut pixels, width),
         PixelMode::La | PixelMode::Pa => smooth::<2>(source, &mut pixels, width),
-        PixelMode::Rgb => smooth::<3>(source, &mut pixels, width),
+        PixelMode::Rgb | PixelMode::Hsv => smooth::<3>(source, &mut pixels, width),
         PixelMode::Rgba => smooth::<4>(source, &mut pixels, width),
         _ => unreachable!(),
     });

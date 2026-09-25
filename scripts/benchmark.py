@@ -245,7 +245,7 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
 
 
 def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
-    """Build benchmarks for all six non-identity mode conversions."""
+    """Build benchmarks for conversions among L, RGB, RGBA, and HSV."""
     raw_rgb = make_rgb(*size)
     raw_rgba = make_rgba(*size)
     raw_gray = make_gray(*size)
@@ -256,6 +256,8 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
     p_rgba = PillowImage.frombytes("RGBA", size, raw_rgba)
     b_gray = BlanketImage.frombytes("L", size, raw_gray)
     p_gray = PillowImage.frombytes("L", size, raw_gray)
+    b_hsv = b_rgb.convert("HSV")
+    p_hsv = p_rgb.convert("HSV")
 
     return [
         ("cvt RGB→L", lambda b=b_rgb: b.convert("L"), lambda p=p_rgb: p.convert("L")),
@@ -264,6 +266,12 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
         ("cvt RGBA→L", lambda b=b_rgba: b.convert("L"), lambda p=p_rgba: p.convert("L")),
         ("cvt L→RGB", lambda b=b_gray: b.convert("RGB"), lambda p=p_gray: p.convert("RGB")),
         ("cvt L→RGBA", lambda b=b_gray: b.convert("RGBA"), lambda p=p_gray: p.convert("RGBA")),
+        ("cvt RGB→HSV", lambda b=b_rgb: b.convert("HSV"), lambda p=p_rgb: p.convert("HSV")),
+        ("cvt RGBA→HSV", lambda b=b_rgba: b.convert("HSV"), lambda p=p_rgba: p.convert("HSV")),
+        ("cvt L→HSV", lambda b=b_gray: b.convert("HSV"), lambda p=p_gray: p.convert("HSV")),
+        ("cvt HSV→L", lambda b=b_hsv: b.convert("L"), lambda p=p_hsv: p.convert("L")),
+        ("cvt HSV→RGB", lambda b=b_hsv: b.convert("RGB"), lambda p=p_hsv: p.convert("RGB")),
+        ("cvt HSV→RGBA", lambda b=b_hsv: b.convert("RGBA"), lambda p=p_hsv: p.convert("RGBA")),
     ]
 
 
@@ -276,7 +284,7 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
     comparisons: list[Comparison] = []
     images: dict[str, tuple[BlanketImage.Image, PillowImage.Image]] = {}
 
-    for mode, make_pixels, fill, pixel in (("1", make_one, 1, 255), ("LA", make_la, (47, 128), (47, 128)), ("PA", make_pa, (3, 128), (3, 128))):
+    for mode, make_pixels, fill, pixel in (("1", make_one, 1, 255), ("LA", make_la, (47, 128), (47, 128)), ("PA", make_pa, (3, 128), (3, 128)), ("HSV", make_rgb, (47, 128, 200), (47, 128, 200))):
         raw = make_pixels(w, h)
         blanket = BlanketImage.frombytes(mode, size, raw)
         pillow = PillowImage.frombytes(mode, size, raw)
@@ -302,7 +310,7 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
         if mode == "PA":
             comparisons.append(("cvt PA→P", partial(blanket.convert, "P"), partial(pillow.convert, "P")))
             comparisons.append(("save PNG PA (expands RGBA)", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.convert("RGBA").save(BytesIO(), "PNG")))
-        else:
+        elif mode != "HSV":
             payload = pillow_payload(pillow, "PNG")
             comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))

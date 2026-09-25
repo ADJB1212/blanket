@@ -248,6 +248,7 @@ pub enum PixelMode {
     Pa,
     Rgb,
     Rgba,
+    Hsv,
 }
 
 impl PixelMode {
@@ -263,6 +264,7 @@ impl PixelMode {
             "PA" => Ok(Self::Pa),
             "RGB" => Ok(Self::Rgb),
             "RGBA" => Ok(Self::Rgba),
+            "HSV" => Ok(Self::Hsv),
             _ => Err(PyValueError::new_err(format!("unsupported image mode {value:?}"))),
         }
     }
@@ -279,6 +281,7 @@ impl PixelMode {
             Self::Pa => "PA",
             Self::Rgb => "RGB",
             Self::Rgba => "RGBA",
+            Self::Hsv => "HSV",
         }
     }
 
@@ -286,7 +289,7 @@ impl PixelMode {
         match self {
             Self::One | Self::L | Self::I | Self::I16 | Self::I16L | Self::I16B => 1,
             Self::La | Self::Pa => 2,
-            Self::Rgb => 3,
+            Self::Rgb | Self::Hsv => 3,
             Self::Rgba => 4,
         }
     }
@@ -430,7 +433,7 @@ impl Image {
                 return match self.mode {
                     PixelMode::One | PixelMode::L => extrema::<1>(data),
                     PixelMode::La | PixelMode::Pa => extrema::<2>(data),
-                    PixelMode::Rgb => extrema::<3>(data),
+                    PixelMode::Rgb | PixelMode::Hsv => extrema::<3>(data),
                     PixelMode::Rgba => extrema::<4>(data),
                     _ => unreachable!(),
                 };
@@ -463,7 +466,7 @@ impl Image {
                 let pixels = match self.mode {
                     PixelMode::One | PixelMode::L => data.to_vec(),
                     PixelMode::La | PixelMode::Pa => crate::simd::extract_two_channel(data, channel),
-                    PixelMode::Rgb => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
+                    PixelMode::Rgb | PixelMode::Hsv => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
                     PixelMode::Rgba => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
                     _ => unreachable!(),
                 };
@@ -491,7 +494,7 @@ impl Image {
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => PyList::new(py, data.iter().copied())?,
                 PixelMode::La | PixelMode::Pa => PyList::new(py, data.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))?,
-                PixelMode::Rgb => PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?,
+                PixelMode::Rgb | PixelMode::Hsv => PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?,
                 PixelMode::Rgba => PyList::new(py, data.as_chunks::<4>().0.iter().map(|p| (p[0], p[1], p[2], p[3])))?,
                 _ => unreachable!(),
             }
@@ -617,7 +620,7 @@ impl Image {
         match self.mode {
             PixelMode::One | PixelMode::L => put_pixels::<1>(pixels, data, length, scale, offset),
             PixelMode::La | PixelMode::Pa => put_pixels::<2>(pixels, data, length, scale, offset),
-            PixelMode::Rgb => put_pixels::<3>(pixels, data, length, scale, offset),
+            PixelMode::Rgb | PixelMode::Hsv => put_pixels::<3>(pixels, data, length, scale, offset),
             PixelMode::Rgba => put_pixels::<4>(pixels, data, length, scale, offset),
             _ => unreachable!(),
         }
@@ -773,7 +776,7 @@ impl Image {
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
                 PixelMode::La | PixelMode::Pa => (sample(offset), sample(offset + 1)).into_pyobject(py)?.into_any().unbind(),
-                PixelMode::Rgb => (sample(offset), sample(offset + 1), sample(offset + 2))
+                PixelMode::Rgb | PixelMode::Hsv => (sample(offset), sample(offset + 1), sample(offset + 2))
                     .into_pyobject(py)?
                     .into_any()
                     .unbind(),
@@ -787,7 +790,7 @@ impl Image {
         Ok(match self.mode {
             PixelMode::One | PixelMode::L => pixels[offset].into_pyobject(py)?.into_any().unbind(),
             PixelMode::La | PixelMode::Pa => (pixels[offset], pixels[offset + 1]).into_pyobject(py)?.into_any().unbind(),
-            PixelMode::Rgb => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
+            PixelMode::Rgb | PixelMode::Hsv => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
                 .into_pyobject(py)?
                 .into_any()
                 .unbind(),
@@ -827,6 +830,17 @@ impl Image {
             return self.copy(py);
         }
         let destination = PixelMode::parse(mode)?;
+        if self.mode == PixelMode::Hsv && destination != PixelMode::Hsv {
+            let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, hsv_to_rgb_bytes(self.pixel_data()?), None)?;
+            return if destination == PixelMode::Rgb {
+                Ok(rgb)
+            } else {
+                rgb.convert(py, mode, bit_depth)
+            };
+        }
+        if destination == PixelMode::Hsv && self.bit_depth > 8 {
+            return self.convert(py, "RGB", Some(8))?.convert(py, "HSV", None);
+        }
         if self.mode.is_integer() || destination.is_integer() {
             if let Some(depth) = bit_depth
                 && depth != (destination.sample_bytes() * 8) as u8
@@ -1008,7 +1022,7 @@ pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_
         let pixels = py.detach(|| unpack_bilevel(data, size.0 as usize, size.1 as usize));
         return Image::from_pixels(size.0, size.1, mode, pixels, None);
     }
-    if matches!(mode, PixelMode::La | PixelMode::Pa) && bit_depth != 8 {
+    if matches!(mode, PixelMode::La | PixelMode::Pa | PixelMode::Hsv) && bit_depth != 8 {
         return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
     }
     if bit_depth != 8 {
@@ -1039,7 +1053,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     let maximum_dimensions = match mode {
         PixelMode::One | PixelMode::L | PixelMode::I | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B => 2,
         PixelMode::La | PixelMode::Pa => 3,
-        PixelMode::Rgb => 3,
+        PixelMode::Rgb | PixelMode::Hsv => 3,
         PixelMode::Rgba => 4,
     };
     if shape.len() > maximum_dimensions {
@@ -1146,16 +1160,102 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return match to {
             PixelMode::L => source.to_vec(),
             PixelMode::Rgb | PixelMode::Rgba => crate::simd::convert(source, PixelMode::L, to),
+            PixelMode::Hsv => source.iter().flat_map(|&v| [0, 0, v]).collect(),
             _ => convert_pixels_generic(source, from, to),
         };
     }
     if from == PixelMode::La && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
         return crate::simd::convert_la(source, to);
     }
+    if from == PixelMode::Hsv {
+        let rgb = hsv_to_rgb_bytes(source);
+        return if to == PixelMode::Rgb {
+            rgb
+        } else {
+            convert_pixels(&rgb, PixelMode::Rgb, to)
+        };
+    }
+    if to == PixelMode::Hsv {
+        return match from {
+            PixelMode::One | PixelMode::L => source.iter().flat_map(|&v| [0, 0, v]).collect(),
+            PixelMode::La => source.as_chunks::<2>().0.iter().flat_map(|pixel| [0, 0, pixel[0]]).collect(),
+            PixelMode::Rgb | PixelMode::Rgba => source
+                .chunks_exact(from.channels())
+                .flat_map(|pixel| rgb_to_hsv(pixel[0], pixel[1], pixel[2]))
+                .collect(),
+            _ => {
+                let rgb = convert_pixels(source, from, PixelMode::Rgb);
+                convert_pixels(&rgb, PixelMode::Rgb, PixelMode::Hsv)
+            }
+        };
+    }
     if matches!(from, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
         return crate::simd::convert(source, from, to);
     }
     convert_pixels_generic(source, from, to)
+}
+
+fn clip8(value: i32) -> u8 {
+    if value <= 0 {
+        0
+    } else if value >= 256 {
+        255
+    } else {
+        value as u8
+    }
+}
+
+fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {
+    let maxc = r.max(g).max(b);
+    let minc = r.min(g).min(b);
+    if minc == maxc {
+        return [0, 0, maxc];
+    }
+    let cr = f32::from(maxc - minc);
+    let s = cr / f32::from(maxc);
+    let rc = f32::from(maxc - r) / cr;
+    let gc = f32::from(maxc - g) / cr;
+    let bc = f32::from(maxc - b) / cr;
+    let h = if r == maxc {
+        bc - gc
+    } else if g == maxc {
+        2.0 + rc - bc
+    } else {
+        4.0 + gc - rc
+    };
+    let wrapped = (h / 6.0 + 1.0).rem_euclid(1.0);
+    [clip8((wrapped * 255.0) as i32), clip8((s * 255.0) as i32), maxc]
+}
+
+fn hsv_to_rgb_bytes(source: &[u8]) -> Vec<u8> {
+    source
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .flat_map(|pixel| hsv_to_rgb(pixel[0], pixel[1], pixel[2]))
+        .collect()
+}
+
+fn hsv_to_rgb(h: u8, s: u8, v: u8) -> [u8; 3] {
+    if s == 0 {
+        return [v, v, v];
+    }
+    let sector = f32::from(h) * 6.0 / 255.0;
+    let i = sector.floor();
+    let f = sector - i;
+    let fs = f32::from(s) / 255.0;
+    let p = (f32::from(v) * (1.0 - fs)).round() as i32;
+    let q = (f32::from(v) * (1.0 - fs * f)).round() as i32;
+    let t = (f32::from(v) * (1.0 - fs * (1.0 - f))).round() as i32;
+    let (r, g, b) = match (i as i32).rem_euclid(6) {
+        0 => (i32::from(v), t, p),
+        1 => (q, i32::from(v), p),
+        2 => (p, i32::from(v), t),
+        3 => (p, q, i32::from(v)),
+        4 => (t, p, i32::from(v)),
+        _ => (i32::from(v), p, q),
+    };
+    [clip8(r), clip8(g), clip8(b)]
 }
 
 fn convert_pixels_generic(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
