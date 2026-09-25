@@ -43,7 +43,7 @@ fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
     pixels
 }
 
-fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
+pub fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
     use rayon::prelude::*;
 
     let row_bytes = width.div_ceil(8);
@@ -844,28 +844,24 @@ impl Image {
                     self.clone()
                 };
                 let data = source.raw_data()?;
-                let mut output = Vec::with_capacity(expected_len(self.width, self.height, destination)? * destination.sample_bytes());
                 if source.mode.is_integer() {
-                    for bytes in data.chunks_exact(source.mode.sample_bytes()) {
-                        let value = integer_value(source.mode, bytes);
-                        let value = if destination == PixelMode::I { value } else { value.clamp(0, 65535) };
+                    let output = crate::simd::convert_integer(data, source.mode, destination);
+                    return Self::from_integer_bytes(self.width, self.height, destination, output);
+                }
+                let mut output = Vec::with_capacity(expected_len(self.width, self.height, destination)? * destination.sample_bytes());
+                let grayscale = if source.mode == PixelMode::L {
+                    source
+                } else {
+                    source.convert(py, "L", Some(8))?
+                };
+                if grayscale.bit_depth > 8 {
+                    for bytes in grayscale.raw_data()?.as_chunks::<2>().0 {
+                        let value = i64::from(u16::from_le_bytes(*bytes));
                         output.extend_from_slice(&integer_bytes(destination, value)[..destination.sample_bytes()]);
                     }
                 } else {
-                    let grayscale = if source.mode == PixelMode::L {
-                        source
-                    } else {
-                        source.convert(py, "L", Some(8))?
-                    };
-                    if grayscale.bit_depth > 8 {
-                        for bytes in grayscale.raw_data()?.as_chunks::<2>().0 {
-                            let value = i64::from(u16::from_le_bytes(*bytes));
-                            output.extend_from_slice(&integer_bytes(destination, value)[..destination.sample_bytes()]);
-                        }
-                    } else {
-                        for &value in grayscale.raw_data()? {
-                            output.extend_from_slice(&integer_bytes(destination, i64::from(value))[..destination.sample_bytes()]);
-                        }
+                    for &value in grayscale.raw_data()? {
+                        output.extend_from_slice(&integer_bytes(destination, i64::from(value))[..destination.sample_bytes()]);
                     }
                 }
                 return Self::from_integer_bytes(self.width, self.height, destination, output);
@@ -878,10 +874,7 @@ impl Image {
                     .collect();
                 return Self::from_samples(self.width, self.height, PixelMode::L, samples, 16, None);
             }
-            let clipped: Vec<u8> = data
-                .chunks_exact(self.mode.sample_bytes())
-                .map(|bytes| integer_value(self.mode, bytes).clamp(0, 255) as u8)
-                .collect();
+            let clipped = crate::simd::integer_to_l(data, self.mode);
             let grayscale = Self::from_pixels(self.width, self.height, PixelMode::L, clipped, None)?;
             return grayscale.convert(py, mode, bit_depth);
         }

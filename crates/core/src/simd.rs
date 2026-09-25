@@ -1,6 +1,101 @@
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::raster::PixelMode;
 
+pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
+    let stride = mode.sample_bytes();
+    let mut output = vec![0; source.len() / stride];
+    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, dst| {
+        let src = &source[chunk * CHUNK_PIXELS * stride..(chunk * CHUNK_PIXELS + dst.len()) * stride];
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            unsafe {
+                while offset + 16 <= dst.len() {
+                    let ptr = src.as_ptr().add(offset * stride);
+                    let values = if mode == PixelMode::I {
+                        let a = vqmovun_s32(vld1q_s32(ptr.cast()));
+                        let b = vqmovun_s32(vld1q_s32(ptr.add(16).cast()));
+                        let c = vqmovun_s32(vld1q_s32(ptr.add(32).cast()));
+                        let d = vqmovun_s32(vld1q_s32(ptr.add(48).cast()));
+                        vcombine_u8(vqmovn_u16(vcombine_u16(a, b)), vqmovn_u16(vcombine_u16(c, d)))
+                    } else {
+                        let a = vld1q_u8(ptr);
+                        let b = vld1q_u8(ptr.add(16));
+                        let a = if mode == PixelMode::I16B { vrev16q_u8(a) } else { a };
+                        let b = if mode == PixelMode::I16B { vrev16q_u8(b) } else { b };
+                        vcombine_u8(vqmovn_u16(vreinterpretq_u16_u8(a)), vqmovn_u16(vreinterpretq_u16_u8(b)))
+                    };
+                    vst1q_u8(dst.as_mut_ptr().add(offset), values);
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (pixel, bytes) in dst[offset..].iter_mut().zip(src[offset * stride..].chunks_exact(stride)) {
+            *pixel = match mode {
+                PixelMode::I => i32::from_le_bytes(bytes.try_into().unwrap()).clamp(0, 255) as u8,
+                PixelMode::I16B => u16::from_be_bytes(bytes.try_into().unwrap()).min(255) as u8,
+                _ => u16::from_le_bytes(bytes.try_into().unwrap()).min(255) as u8,
+            };
+        }
+    });
+    output
+}
+
+pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
+    let source_bytes = from.sample_bytes();
+    let target_bytes = to.sample_bytes();
+    let mut output = vec![0; source.len() / source_bytes * target_bytes];
+    chunks_mut(&mut output, CHUNK_PIXELS * target_bytes, |chunk, dst| {
+        let src = &source[chunk * CHUNK_PIXELS * source_bytes..(chunk * CHUNK_PIXELS + dst.len() / target_bytes) * source_bytes];
+        #[cfg(target_arch = "aarch64")]
+        let offset = if to == PixelMode::I && source_bytes == 2 {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            unsafe {
+                while offset + 8 <= dst.len() / 4 {
+                    let input = vld1q_u8(src.as_ptr().add(offset * 2));
+                    let input = if from == PixelMode::I16B { vrev16q_u8(input) } else { input };
+                    let input = vreinterpretq_u16_u8(input);
+                    vst1q_u32(dst.as_mut_ptr().add(offset * 4).cast(), vmovl_u16(vget_low_u16(input)));
+                    vst1q_u32(dst.as_mut_ptr().add((offset + 4) * 4).cast(), vmovl_u16(vget_high_u16(input)));
+                    offset += 8;
+                }
+            }
+            offset
+        } else {
+            0
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (input, output) in src[offset * source_bytes..]
+            .chunks_exact(source_bytes)
+            .zip(dst[offset * target_bytes..].chunks_exact_mut(target_bytes))
+        {
+            let value = match from {
+                PixelMode::I => i64::from(i32::from_le_bytes(input.try_into().unwrap())),
+                PixelMode::I16B => i64::from(u16::from_be_bytes(input.try_into().unwrap())),
+                _ => i64::from(u16::from_le_bytes(input.try_into().unwrap())),
+            };
+            if to == PixelMode::I {
+                output.copy_from_slice(&(value as i32).to_le_bytes());
+            } else {
+                let value = value.clamp(0, 65535) as u16;
+                let bytes = if to == PixelMode::I16B {
+                    value.to_be_bytes()
+                } else {
+                    value.to_le_bytes()
+                };
+                output.copy_from_slice(&bytes);
+            }
+        }
+    });
+    output
+}
+
 pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     debug_assert_ne!(from, to, "caller should short-circuit identity conversion");
 

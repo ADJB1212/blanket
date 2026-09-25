@@ -15,7 +15,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction]
 fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
-    if color.len() != mode.channels() {
+    if color.len() != mode.channels() * mode.sample_bytes() {
         return Err(PyValueError::new_err("wrong number of color channels"));
     }
     let len = (size.0 as usize)
@@ -30,18 +30,26 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {
             PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
-            PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
+            PixelMode::I => fill_pixels::<4>(spare, &color),
+            PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
             PixelMode::Rgb => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba => fill_pixels::<4>(spare, &color),
-            _ => unreachable!("integer modes are constructed from integer bytes"),
         }
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
     });
-    Image::from_pixels(size.0, size.1, mode, pixels, None)
+    if mode.is_integer() {
+        Image::from_integer_bytes(size.0, size.1, mode, pixels)
+    } else {
+        Image::from_pixels(size.0, size.1, mode, pixels, None)
+    }
 }
 
 fn fill_pixels<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {
+    blanket_core::parallel::chunks_mut_above(pixels, 256 * 1024 * C, 1024 * 1024, |_, pixels| fill_pixels_chunk::<C>(pixels, color));
+}
+
+fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {
     let value: [_; C] = std::array::from_fn(|c| std::mem::MaybeUninit::new(color[c]));
     if C == 3 {
         // Three-byte stores don't vectorize well. A 48-byte repeating tile

@@ -607,15 +607,7 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
 
 fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let width = image.width as usize;
-    let row_bytes = width.div_ceil(8);
-    let mut packed = vec![0; row_bytes * image.height as usize];
-    for (y, row) in image.pixel_data()?.chunks_exact(width.max(1)).enumerate() {
-        for (x, &value) in row.iter().enumerate().take(width) {
-            if value != 0 {
-                packed[y * row_bytes + x / 8] |= 128 >> (x % 8);
-            }
-        }
-    }
+    let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, width, image.height as usize);
     let mut output = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
@@ -627,6 +619,7 @@ fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
             4..=6 => png::Compression::Balanced,
             _ => png::Compression::High,
         });
+        encoder.set_filter(png::Filter::Sub);
         encoder
             .write_header()
             .map_err(codec_error)?
@@ -1082,6 +1075,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             _ => return Err(PyValueError::new_err("unsupported high-bit-depth mode")),
         };
         let mut encoder = png::Encoder::with_info(&mut output, info).map_err(codec_error)?;
+        encoder.set_filter(png::Filter::Sub);
         encoder.set_deflate_compression(if options.compress_level == 0 {
             png::DeflateCompression::NoCompression
         } else {

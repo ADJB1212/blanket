@@ -1154,6 +1154,7 @@ mod tests {
                             PixelMode::L => png::ColorType::Grayscale,
                             PixelMode::Rgb => png::ColorType::Rgb,
                             PixelMode::Rgba => png::ColorType::Rgba,
+                            _ => unreachable!("test images are only L, RGB, or RGBA"),
                         },
                         depth: png::BitDepth::Eight,
                         pixels: Cow::Borrowed(pixels),

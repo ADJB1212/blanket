@@ -173,6 +173,18 @@ def test_integer_mode_conversion_matches_pillow(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+def test_integer_mode_conversion_simd_boundaries(mode: str) -> None:
+    values = [-65536, -1, 0, 1, 254, 255, 256, 65535, 65536] if mode == "I" else [0, 1, 254, 255, 256, 32767, 32768, 65534, 65535]
+    values = (values * 5)[:37]
+    blanket = Image.new(mode, (len(values), 1))
+    pillow = PillowImage.new(mode, (len(values), 1))
+    blanket.putdata(values)
+    pillow.putdata(values)
+    for destination in ("L", "RGB", "RGBA", "I"):
+        assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
 @pytest.mark.parametrize("filter", [Image.Resampling.NEAREST, Image.Resampling.BILINEAR])
 def test_integer_mode_resize_matches_pillow(mode: str, filter: Image.Resampling) -> None:
     values = [-10, 1000] if mode == "I" else [0, 65535]
@@ -181,6 +193,22 @@ def test_integer_mode_resize_matches_pillow(mode: str, filter: Image.Resampling)
     blanket.putdata(values)
     pillow.putdata(values)
     assert blanket.resize((3, 1), filter).getdata() == list(pillow.resize((3, 1), filter).get_flattened_data())
+
+
+def test_big_endian_integer_bilinear_resize_matches_pillow_byte_order() -> None:
+    values = [1, 258, 1025, 32767]
+    blanket = Image.new("I;16B", (4, 1))
+    pillow = PillowImage.new("I;16B", (4, 1))
+    blanket.putdata(values)
+    pillow.putdata(values)
+    assert blanket.resize((7, 1), Image.Resampling.BILINEAR).tobytes() == pillow.resize((7, 1), PillowImage.Resampling.BILINEAR).tobytes()
+
+
+@pytest.mark.parametrize("mode,value", [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
+def test_integer_mode_new_fills_full_sample(mode: str, value: int) -> None:
+    blanket = Image.new(mode, (37, 3), value)
+    pillow = PillowImage.new(mode, (37, 3), value)
+    assert blanket.tobytes() == pillow.tobytes()
 
 
 @pytest.mark.parametrize("dtype", ["<i4", "<u2", ">u2"])

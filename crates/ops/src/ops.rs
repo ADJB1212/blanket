@@ -823,11 +823,14 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
     let source = image.raw_data()?;
     let stride = image.mode.sample_bytes();
     let mut pixels = buffer(size, stride)?;
+    if image.width == 0 || image.height == 0 {
+        return output(image, size, pixels);
+    }
     let value = |index: usize| -> f64 {
         let start = index * stride;
         match image.mode {
             PixelMode::I => f64::from(i32::from_le_bytes(source[start..start + 4].try_into().unwrap())),
-            PixelMode::I16B => f64::from(u16::from_le_bytes(source[start..start + 2].try_into().unwrap())),
+            // Pillow resamples I;16B from its raw bytes as little-endian samples.
             _ => f64::from(u16::from_le_bytes(source[start..start + 2].try_into().unwrap())),
         }
     };
@@ -838,43 +841,47 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
         let ys: Vec<usize> = (0..size.1)
             .map(|y| ((bounds[1] + (f64::from(y) + 0.5) * (bounds[3] - bounds[1]) / f64::from(size.1)) as usize).min(image.height as usize - 1))
             .collect();
-        for (y, &sy) in ys.iter().enumerate() {
-            for (x, &sx) in xs.iter().enumerate() {
-                let src = (sy * image.width as usize + sx) * stride;
-                let dst = (y * size.0 as usize + x) * stride;
-                pixels[dst..dst + stride].copy_from_slice(&source[src..src + stride]);
-            }
+        if stride == 4 {
+            resize_nearest::<4>(source, &mut pixels, image.width, &xs, &ys);
+        } else {
+            resize_nearest::<2>(source, &mut pixels, image.width, &xs, &ys);
         }
     } else {
         let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
         let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
         let mut rows = vec![0.0; image.height as usize * size.0 as usize];
-        for sy in 0..image.height as usize {
-            for (x, (start, coefficients)) in horizontal.iter().enumerate() {
-                rows[sy * size.0 as usize + x] = coefficients
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(1 << 22))
-                    .sum();
-            }
-        }
-        for (y, (start, coefficients)) in vertical.iter().enumerate() {
-            for x in 0..size.0 as usize {
-                let sample: f64 = coefficients
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &weight)| rows[(start + i) * size.0 as usize + x] * f64::from(weight) / f64::from(1 << 22))
-                    .sum();
-                let offset = (y * size.0 as usize + x) * stride;
-                match image.mode {
-                    PixelMode::I => {
-                        pixels[offset..offset + 4].copy_from_slice(&(sample.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).to_le_bytes())
-                    }
-                    PixelMode::I16B => pixels[offset..offset + 2].copy_from_slice(&(sample.round().clamp(0.0, 65535.0) as u16).to_le_bytes()),
-                    _ => pixels[offset..offset + 2].copy_from_slice(&(sample.round().clamp(0.0, 65535.0) as u16).to_le_bytes()),
+        let row_width = size.0 as usize;
+        blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
+            for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate() {
+                let sy = band * 16 + row;
+                for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                    dst[x] = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(1 << 22))
+                        .sum();
                 }
             }
-        }
+        });
+        blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 * 1024, |band, chunk| {
+            for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
+                let (start, coefficients) = &vertical[band * 16 + row];
+                for x in 0..row_width {
+                    let sample: f64 = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| rows[(start + i) * row_width + x] * f64::from(weight) / f64::from(1 << 22))
+                        .sum();
+                    let offset = x * stride;
+                    match image.mode {
+                        PixelMode::I => {
+                            dst[offset..offset + 4].copy_from_slice(&(sample.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).to_le_bytes())
+                        }
+                        _ => dst[offset..offset + 2].copy_from_slice(&(sample.round().clamp(0.0, 65535.0) as u16).to_le_bytes()),
+                    }
+                }
+            }
+        });
     }
     output(image, size, pixels)
 }

@@ -9,7 +9,7 @@ import os
 from enum import IntEnum
 from operator import index
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Protocol, Self
+from typing import TYPE_CHECKING, BinaryIO, Protocol, Self, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -868,12 +868,14 @@ class Image:
             ```
         """
         if self.mode in ("I", "I;16", "I;16L", "I;16B"):
-            data = self.getdata()
+            data = cast("list[int]", self.getdata())
             return (min(data), max(data)) if data else None
         ranges = self._native.getextrema()
         if not ranges:
             return None
-        return ranges[0] if len(ranges) == 1 else tuple(ranges)
+        if len(ranges) == 1:
+            return ranges[0]
+        return tuple(ranges)
 
     def getbbox(self, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
         """Return the nonzero bounding box, using RGBA alpha by default.
@@ -1358,8 +1360,7 @@ class Image:
                 return self.convert("L", bit_depth=depth).save(fp, output_format, compressor=compressor, **options)
             if output_format not in ("PNG", "TIFF", "JXL"):
                 return self.convert("L").save(fp, output_format, compressor=compressor, **options)
-            samples = b"".join(int(value).to_bytes(2, "little") for value in self.getdata())
-            return frombytes("L", self.size, samples, bit_depth=16).save(fp, output_format, compressor=compressor, **options)
+            return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         values = _save_options(output_format, options)
         encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native)
@@ -1405,7 +1406,7 @@ def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | N
             pixel = (value & 0xFFFFFFFF).to_bytes(4, "little")
         else:
             pixel = (value & 0xFFFF).to_bytes(2, "big" if mode == "I;16B" else "little")
-        return frombytes(mode, dimensions, pixel * (dimensions[0] * dimensions[1]))
+        return Image(image_new(mode, dimensions, pixel))
     native_mode = "L" if mode == "P" else mode
     if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA"):
         raise ValueError(f"unsupported image mode {mode!r}")
