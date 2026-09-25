@@ -35,7 +35,19 @@ _EXTENSIONS = {
     ".avif": "AVIF",
     ".pdf": "PDF",
 }
-_BANDS = {"1": ("1",), "L": ("L",), "LA": ("L", "A"), "P": ("P",), "PA": ("P", "A"), "RGB": ("R", "G", "B"), "RGBA": ("R", "G", "B", "A")}
+_BANDS = {
+    "1": ("1",),
+    "L": ("L",),
+    "I": ("I",),
+    "I;16": ("I",),
+    "I;16L": ("I",),
+    "I;16B": ("I",),
+    "LA": ("L", "A"),
+    "P": ("P",),
+    "PA": ("P", "A"),
+    "RGB": ("R", "G", "B"),
+    "RGBA": ("R", "G", "B", "A"),
+}
 
 
 class Resampling(IntEnum):
@@ -183,7 +195,7 @@ class Image:
 
     @property
     def bit_depth(self) -> int:
-        """Significant bits per channel (8, 10, 12, or 16).
+        """Significant bits per channel (8, 10, 12, 16, or 32 for `I`).
 
         Examples:
             ```python
@@ -321,10 +333,10 @@ class Image:
         self._native.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
-        """Return a new image converted to a supported direct or indexed mode.
+        """Return a new image converted to a supported direct, integer, or indexed mode.
 
         Args:
-            mode: Destination mode: `1`, `L`, `LA`, `RGB`, `RGBA`, `P`, or `PA`.
+            mode: Destination mode, including `I` and the `I;16` family.
             bit_depth: Output sample depth, or None to retain the input depth.
 
         Examples:
@@ -435,7 +447,7 @@ class Image:
         return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
 
     def putpixel(self, xy: tuple[int, int], value: int | tuple[int, ...]) -> None:
-        """Write an 8-bit pixel, accepting negative coordinates and clipping values.
+        """Write a pixel, accepting negative coordinates.
 
         Palette images accept numeric indices, not RGB color allocation.
 
@@ -489,7 +501,7 @@ class Image:
         return tuple(self.getdata(band))
 
     def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
-        """Write 8-bit pixels in row order; scale/offset apply to single-band data.
+        """Write pixels in row order; scale/offset apply to single-band data.
 
         Args:
             data: Pixel values in row order. Short input leaves remaining pixels unchanged.
@@ -759,7 +771,7 @@ class Image:
         self._bands = _BANDS["RGBA"]
 
     def split(self) -> tuple[Image, ...]:
-        """Return independent L images for each band, in channel order.
+        """Return independent single-band images in channel order.
 
         Examples:
             ```python
@@ -771,7 +783,7 @@ class Image:
         """
         from ._blanket import ops_split
 
-        if self.mode == "1":
+        if self.mode in ("1", "I", "I;16", "I;16L", "I;16B"):
             return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
         for band in bands:
@@ -792,7 +804,7 @@ class Image:
         return self._bands
 
     def getchannel(self, channel: int | str) -> Image:
-        """Return an independent L image for a channel name or index.
+        """Return an independent image for a channel name or index.
 
         Args:
             channel: Channel name, such as `R`, or zero-based channel index.
@@ -814,7 +826,7 @@ class Image:
         channel = index(channel)
         if not 0 <= channel < len(self.getbands()):
             raise ValueError("band index out of range")
-        if self.mode == "1":
+        if self.mode in ("1", "I", "I;16", "I;16L", "I;16B"):
             return self.copy()
         result = Image(self._native.getchannel(channel))
         result.info.update(self.info)
@@ -855,6 +867,9 @@ class Image:
             extrema = image.getextrema()
             ```
         """
+        if self.mode in ("I", "I;16", "I;16L", "I;16B"):
+            data = self.getdata()
+            return (min(data), max(data)) if data else None
         ranges = self._native.getextrema()
         if not ranges:
             return None
@@ -1142,7 +1157,7 @@ class Image:
                 raise ValueError("Coordinate 'lower' is less than 'upper'")
             self.load()
             left, upper, right, lower = (round(value) for value in box)
-            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * len(self.mode))
+            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * len(self.getbands()))
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -1192,7 +1207,7 @@ class Image:
             native = ops_transpose(native, 1)
         else:
             # Pillow's alpha-aware path does not use integer reduction.
-            if reducing_gap is not None and method != Resampling.NEAREST and self.mode != "RGBA":
+            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("RGBA", "I", "I;16", "I;16L", "I;16B"):
                 fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
                 fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
                 if fx > 1 or fy > 1:
@@ -1295,7 +1310,7 @@ class Image:
             pillow_image = image.to_pillow()
             ```
         """
-        if self.bit_depth != 8:
+        if self.bit_depth != 8 and self.mode not in ("I", "I;16", "I;16L", "I;16B"):
             raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
 
         try:
@@ -1337,6 +1352,14 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if self.mode in ("I", "I;16", "I;16L", "I;16B"):
+            if self.mode == "I":
+                depth = 16 if output_format in ("PNG", "TIFF", "JXL") else 8
+                return self.convert("L", bit_depth=depth).save(fp, output_format, compressor=compressor, **options)
+            if output_format not in ("PNG", "TIFF", "JXL"):
+                return self.convert("L").save(fp, output_format, compressor=compressor, **options)
+            samples = b"".join(int(value).to_bytes(2, "little") for value in self.getdata())
+            return frombytes("L", self.size, samples, bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         values = _save_options(output_format, options)
         encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native)
@@ -1354,7 +1377,7 @@ class Image:
 
 
 def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | None = 0) -> Image:
-    """Create an 8-bit direct or indexed image filled with color.
+    """Create a direct, integer, or indexed image filled with color.
 
     Args:
         mode: Image mode, such as `L`, `RGB`, or `RGBA`.
@@ -1376,6 +1399,13 @@ def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | N
     dimensions = tuple(index(v) for v in size)
     if min(dimensions) < 0:
         raise ValueError("Width and height must be >= 0")
+    if mode in ("I", "I;16", "I;16L", "I;16B"):
+        value = 0 if color is None else index(color)
+        if mode == "I":
+            pixel = (value & 0xFFFFFFFF).to_bytes(4, "little")
+        else:
+            pixel = (value & 0xFFFF).to_bytes(2, "big" if mode == "I;16B" else "little")
+        return frombytes(mode, dimensions, pixel * (dimensions[0] * dimensions[1]))
     native_mode = "L" if mode == "P" else mode
     if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA"):
         raise ValueError(f"unsupported image mode {mode!r}")
@@ -1528,7 +1558,7 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
     Args:
         mode: Image mode, such as `L`, `RGB`, or `RGBA`.
         size: Output `(width, height)` in pixels.
-        data: Contiguous packed pixel buffer; depths above 8 use little-endian uint16 samples.
+        data: Contiguous packed pixel buffer. `I` uses little-endian int32; `I;16B` uses big-endian uint16.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
 
     Examples:
@@ -1549,10 +1579,10 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
 
 
 def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
-    """Create an image from uint8 or uint16 samples exposing the array interface.
+    """Create an image from uint8, uint16, or int32 array samples.
 
     Args:
-        obj: Object exposing the array interface with uint8 or uint16 samples.
+        obj: Object exposing the array interface with uint8, uint16, or int32 samples.
         mode: Optional mode matching the array's channel layout.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
 

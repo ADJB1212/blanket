@@ -60,8 +60,8 @@ pixel access, and compatibility across existing operations.
 - [x] `1` — bilevel (1-bit per pixel, packed or unpacked)
 - [x] `LA` — grayscale with alpha
 - [x] `PA` — indexed palette with alpha
-- [ ] `I` — 32-bit signed integer pixels
-- [ ] `I;16` / `I;16L` / `I;16B` — 16-bit integer (consolidate with existing high-bit-depth)
+- [x] `I` — 32-bit signed integer pixels
+- [x] `I;16` / `I;16L` / `I;16B` — 16-bit integer (consolidate with existing high-bit-depth)
 - [ ] `F` — 32-bit floating-point pixels
 - [ ] `CMYK` — 4-channel print color (no ICC transform required; raw channel storage)
 - [ ] `YCbCr` — luma/chroma (used internally by JPEG; expose for user code)

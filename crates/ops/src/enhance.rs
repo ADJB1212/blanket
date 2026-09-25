@@ -185,6 +185,7 @@ fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
         PixelMode::Rgb => color_degenerate::<3>(source, &mut pixels),
         PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels),
+        _ => unreachable!(),
     });
     output(image, pixels)
 }
@@ -212,6 +213,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         PixelMode::La | PixelMode::Pa => source.as_chunks::<2>().0.iter().map(|pixel| u64::from(pixel[0])).sum(),
         PixelMode::Rgb => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
+        _ => unreachable!(),
     });
     let pixel_count = source.len() / image.mode.channels();
     let mean = if pixel_count == 0 {
@@ -239,6 +241,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
                 *output = [mean, mean, mean, source[3]];
             }
         }),
+        _ => unreachable!(),
     });
     output(image, pixels)
 }
@@ -298,6 +301,7 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
         PixelMode::La | PixelMode::Pa => smooth::<2>(source, &mut pixels, width),
         PixelMode::Rgb => smooth::<3>(source, &mut pixels, width),
         PixelMode::Rgba => smooth::<4>(source, &mut pixels, width),
+        _ => unreachable!(),
     });
     output(image, pixels)
 }

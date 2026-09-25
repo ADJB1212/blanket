@@ -55,6 +55,7 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
         (PixelMode::Rgb, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
         (PixelMode::Rgba, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
         (PixelMode::Rgba, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+        _ => unreachable!(),
     });
     output(image, pixels)
 }
@@ -368,6 +369,7 @@ fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyRe
         PixelMode::La | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
         PixelMode::Rgb => blurred::<3>(source, width, height, radii, gaussian),
         PixelMode::Rgba => blurred::<4>(source, width, height, radii, gaussian),
+        _ => unreachable!(),
     }
 }
 
@@ -483,6 +485,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         PixelMode::La | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
         PixelMode::Rgb => merge::<3>(&sources, &mut pixels),
         PixelMode::Rgba => merge::<4>(&sources, &mut pixels),
+        _ => unreachable!(),
     });
     Image::from_pixels(width, height, mode, pixels, None)
 }

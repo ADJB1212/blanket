@@ -83,6 +83,13 @@ def make_pa(width: int, height: int) -> bytes:
     return bytes(value for index in range(width * height) for value in (index & 0xFF, (index * 53) & 0xFF))
 
 
+def make_integer(width: int, height: int, mode: str) -> bytes:
+    samples = np.arange(width * height, dtype=np.int32) * 37
+    if mode == "I":
+        return ((samples % 131072) - 32768).astype("<i4").tobytes()
+    return (samples % 65536).astype(">u2" if mode == "I;16B" else "<u2").tobytes()
+
+
 def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> bytes:
     output = BytesIO()
     image.save(output, fmt, **options)
@@ -261,7 +268,7 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
 
 
 def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
-    """Benchmark creation, conversion, and common operations for phase-one modes."""
+    """Benchmark creation, conversion, and common operations for additional modes."""
     w, h = size
     target = (max(1, w // 2), max(1, h // 2))
     box = (w // 10, h // 10, w - w // 10, h - h // 10)
@@ -298,6 +305,40 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
         else:
             payload = pillow_payload(pillow, "PNG")
             comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
+
+    for mode in ("I", "I;16", "I;16L", "I;16B"):
+        raw = make_integer(w, h, mode)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        fill = -1024 if mode == "I" else 1024
+        comparisons.extend(
+            [
+                (f"new {mode}", partial(BlanketImage.new, mode, size, fill), partial(PillowImage.new, mode, size, fill)),
+                (f"frombytes {mode}", partial(BlanketImage.frombytes, mode, size, raw), partial(PillowImage.frombytes, mode, size, raw)),
+                (f"tobytes {mode}", blanket.tobytes, pillow.tobytes),
+                (f"getpixel {mode}", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+                (f"putpixel {mode} (copy included)", lambda im=blanket, v=fill: im.copy().putpixel((w // 2, h // 2), v), lambda im=pillow, v=fill: im.copy().putpixel((w // 2, h // 2), v)),
+                (f"crop {mode}", partial(blanket.crop, box), partial(pillow.crop, box)),
+                (f"transpose {mode}", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+                (f"resize NEAREST {mode}", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+                (f"resize BILINEAR {mode}", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)),
+            ]
+        )
+        comparisons.extend(
+            (f"cvt {mode}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA", "I") if destination != mode
+        )
+        if mode != "I;16L":
+            if mode == "I":
+                output = BytesIO()
+                blanket.save(output, "PNG")
+                payload = output.getvalue()
+            else:
+                payload = pillow_payload(pillow, "PNG")
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+        if mode in ("I", "I;16L"):
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), None))
+        else:
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
 
     first, reference = images["1"]

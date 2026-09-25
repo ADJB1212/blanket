@@ -138,3 +138,98 @@ def test_bilevel_logical_operations_with_different_widths(widths: tuple[int, int
         actual = getattr(ImageChops, operation)(first, second)
         assert actual.size == expected.size
         assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+def test_integer_modes_pixel_storage_and_geometry(mode: str) -> None:
+    values = [-42, 258, 65535] if mode == "I" else [0, 258, 65535]
+    pillow = PillowImage.new(mode, (3, 1))
+    blanket = Image.new(mode, (3, 1))
+    pillow.putdata(values)
+    blanket.putdata(values)
+    assert blanket.mode == mode
+    assert blanket.getbands() == pillow.getbands()
+    assert blanket.getpixel((-1, 0)) == values[-1]
+    assert blanket.getdata() == list(pillow.get_flattened_data())
+    assert blanket.tobytes() == pillow.tobytes()
+    assert Image.frombytes(mode, blanket.size, blanket.tobytes()).getdata() == values
+    assert blanket.getextrema() == (min(values), max(values))
+    assert list(blanket.to_pillow().get_flattened_data()) == values
+    assert blanket.transpose(Image.Transpose.FLIP_LEFT_RIGHT).getdata() == list(pillow.transpose(PillowImage.Transpose.FLIP_LEFT_RIGHT).get_flattened_data())
+    assert blanket.crop((1, 0, 3, 1)).getdata() == values[1:]
+    blanket.putpixel((0, 0), values[-1])
+    assert blanket.getpixel((0, 0)) == values[-1]
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+def test_integer_mode_conversion_matches_pillow(mode: str) -> None:
+    values = [-10, 10, 258, 65535] if mode == "I" else [0, 10, 258, 65535]
+    pillow = PillowImage.new(mode, (4, 1))
+    blanket = Image.new(mode, (4, 1))
+    pillow.putdata(values)
+    blanket.putdata(values)
+    for destination in ("L", "RGB", "I"):
+        assert blanket.convert(destination).getdata() == list(pillow.convert(destination).get_flattened_data())
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("filter", [Image.Resampling.NEAREST, Image.Resampling.BILINEAR])
+def test_integer_mode_resize_matches_pillow(mode: str, filter: Image.Resampling) -> None:
+    values = [-10, 1000] if mode == "I" else [0, 65535]
+    blanket = Image.new(mode, (2, 1))
+    pillow = PillowImage.new(mode, (2, 1))
+    blanket.putdata(values)
+    pillow.putdata(values)
+    assert blanket.resize((3, 1), filter).getdata() == list(pillow.resize((3, 1), filter).get_flattened_data())
+
+
+@pytest.mark.parametrize("dtype", ["<i4", "<u2", ">u2"])
+def test_integer_mode_fromarray(dtype: str) -> None:
+    import numpy as np
+
+    values = np.array([[0, 258, 65535]], dtype=dtype)
+    blanket = Image.fromarray(values)
+    pillow = PillowImage.fromarray(values)
+    assert blanket.mode == pillow.mode
+    assert blanket.getdata() == list(pillow.get_flattened_data())
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+def test_integer_mode_png_save_preserves_sample_values(mode: str) -> None:
+    values = [-1, 258, 65536] if mode == "I" else [0, 258, 65535]
+    image = Image.new(mode, (3, 1))
+    image.putdata(values)
+    output = BytesIO()
+    image.save(output, "PNG")
+    reopened = PillowImage.open(BytesIO(output.getvalue()))
+    expected = [max(0, min(65535, value)) for value in values]
+    assert list(reopened.get_flattened_data()) == expected
+
+
+def test_signed_integer_to_uint16_clips_out_of_range_values() -> None:
+    image = Image.new("I", (3, 1))
+    image.putdata([-1, 258, 70000])
+    assert image.convert("I;16").getdata() == [0, 258, 65535]
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16B"])
+def test_integer_mode_paste(mode: str) -> None:
+    target = Image.new(mode, (3, 1), 10)
+    source = Image.new(mode, (2, 1), 1000)
+    target.paste(source, (1, 0))
+    assert target.getdata() == [10, 1000, 1000]
+    target.paste(42, (0, 0, 1, 1))
+    assert target.getdata() == [42, 1000, 1000]
+
+
+def test_signed_integer_masked_paste_matches_pillow() -> None:
+    mode = "I"
+    target = Image.new(mode, (3, 1), 10)
+    source = Image.new(mode, (3, 1), 1000)
+    pillow_target = PillowImage.new(mode, (3, 1), 10)
+    pillow_source = PillowImage.new(mode, (3, 1), 1000)
+    mask = Image.frombytes("L", (3, 1), bytes([0, 128, 255]))
+    pillow_mask = PillowImage.frombytes("L", (3, 1), mask.tobytes())
+    target.paste(source, (0, 0), mask)
+    pillow_target.paste(pillow_source, (0, 0), pillow_mask)
+    assert target.getdata() == list(pillow_target.get_flattened_data())

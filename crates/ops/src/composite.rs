@@ -33,6 +33,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
             PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
             PixelMode::Rgb => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba => fill_pixels::<4>(spare, &color),
+            _ => unreachable!("integer modes are constructed from integer bytes"),
         }
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
@@ -57,6 +58,9 @@ fn fill_pixels<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: 
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
+    if image.mode.is_integer() {
+        return paste_integer(image, source, position, mask);
+    }
     image.pixel_data()?;
     let source_pixels = source.pixel_data()?;
     if image.mode != source.mode {
@@ -110,6 +114,51 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
             }
         }
     });
+    Ok(())
+}
+
+fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>) -> PyResult<()> {
+    if image.mode != source.mode {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    let source_pixels = source.raw_data()?;
+    let mask_pixels = if let Some(mask) = mask {
+        if mask.palette.is_some()
+            || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba)
+            || (mask.width, mask.height) != (source.width, source.height)
+        {
+            return Err(PyValueError::new_err("bad transparency mask"));
+        }
+        Some((mask.pixel_data()?, mask.mode.channels()))
+    } else {
+        None
+    };
+    let stride = image.mode.sample_bytes();
+    let width = image.width as i64;
+    let height = image.height as i64;
+    let left = position.0.clamp(0, width);
+    let top = position.1.clamp(0, height);
+    let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width);
+    let bottom = position.1.saturating_add(i64::from(source.height)).clamp(0, height);
+    let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
+    for y in top..bottom {
+        for x in left..right {
+            let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * stride;
+            let dst = (y as usize * image.width as usize + x as usize) * stride;
+            let alpha = mask_pixels.map_or(255, |(mask, channels)| {
+                let i = src / stride * channels;
+                mask[i + channels - 1]
+            });
+            if alpha == 255 {
+                pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
+            } else if alpha != 0 {
+                for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
+                    let a = u32::from(alpha);
+                    *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;
+                }
+            }
+        }
+    }
     Ok(())
 }
 

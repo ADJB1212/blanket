@@ -593,6 +593,7 @@ fn color_type(mode: PixelMode) -> ExtendedColorType {
         PixelMode::Rgb => ExtendedColorType::Rgb8,
         PixelMode::Rgba => ExtendedColorType::Rgba8,
         PixelMode::Pa => unreachable!("PA must be expanded before encoding"),
+        _ => unreachable!("integer modes must be converted before encoding"),
     }
 }
 
