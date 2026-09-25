@@ -12,22 +12,23 @@ from blanket import Image, UnidentifiedImageError
 
 @pytest.mark.parametrize("format", ["TIFF", "WEBP"])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-def test_raster_interoperability(format: str, mode: str) -> None:
+@pytest.mark.parametrize("size", [(8, 6), (513, 257)])
+def test_raster_interoperability(format: str, mode: str, size: tuple[int, int]) -> None:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
-    raw = bytes((i * 17 + 31) % 256 for i in range(48 * channels))
-    source = Image.frombytes(mode, (8, 6), raw)
+    raw = bytes((i * 17 + 31) % 256 for i in range(size[0] * size[1] * channels))
+    source = Image.frombytes(mode, size, raw)
     options = {"lossless": True} if format == "WEBP" else {}
     output = BytesIO()
     source.save(output, format, **options)
     expected_mode = "RGB" if mode == "L" and format == "WEBP" else mode
     expected = source.convert(expected_mode).tobytes()
     loaded = Image.open(output, formats=[format])
-    assert (loaded.format, loaded.mode, loaded.size) == (format, expected_mode, (8, 6))
+    assert (loaded.format, loaded.mode, loaded.size) == (format, expected_mode, size)
     assert loaded.tobytes() == expected
     assert PillowImage.open(output).convert(expected_mode).tobytes() == expected
 
     external = BytesIO()
-    PillowImage.frombytes(mode, (8, 6), raw).save(external, format, **options)
+    PillowImage.frombytes(mode, size, raw).save(external, format, **options)
     assert Image.open(external).convert(expected_mode).tobytes() == expected
     with pytest.raises(UnidentifiedImageError):
         Image.open(output, formats=["PNG"])

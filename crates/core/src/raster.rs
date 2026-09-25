@@ -1,7 +1,7 @@
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
 use std::collections::HashMap;
 
 const fn bilevel_bytes() -> [u64; 256] {
@@ -212,7 +212,18 @@ fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length
     let mut output = pixels.as_chunks_mut::<C>().0.iter_mut();
     let mut write = |value: &Bound<'_, PyAny>| -> PyResult<()> {
         let pixel = if C == 1 {
-            let number = value.extract::<f64>()?;
+            let number = if value.is_exact_instance_of::<PyInt>() {
+                // Avoid allocating a temporary float for each integer sample.
+                let number = unsafe { pyo3::ffi::PyLong_AsDouble(value.as_ptr()) };
+                if number == -1.0
+                    && let Some(error) = PyErr::take(value.py())
+                {
+                    return Err(error);
+                }
+                number
+            } else {
+                value.extract::<f64>()?
+            };
             [(number * scale + offset).clamp(0.0, 255.0) as u8, 0, 0, 0]
         } else {
             parse_pixel(value, C)?

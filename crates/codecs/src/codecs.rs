@@ -495,7 +495,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
         }
         ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => {
-            let mut output = Cursor::new(Vec::new());
+            let mut output = Cursor::new(Vec::with_capacity(pixels.len().saturating_add(1024)));
             image::codecs::tiff::TiffEncoder::new(&mut output)
                 .write_image(pixels, image.width, image.height, color_type(image.mode))
                 .map_err(codec_error)?;
@@ -513,6 +513,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
                 _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
             };
             encoder
+                .config(webpx::EncoderConfig::new().thread_level(1))
                 .lossless(options.lossless)
                 .quality(if options.lossless { 75.0 } else { f32::from(options.quality) })
                 .encode(webpx::Unstoppable)

@@ -35,10 +35,11 @@ def test_webp_animation_first_frame(lossless: bool) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("lossless", [False, True])
-def test_webp_encode_matches_pillow_decode(mode: str, lossless: bool) -> None:
+@pytest.mark.parametrize("size", [(19, 13), (513, 257)])
+def test_webp_encode_matches_pillow_decode(mode: str, lossless: bool, size: tuple[int, int]) -> None:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
-    raw = bytes((i * 31 + i // 7) % 256 for i in range(19 * 13 * channels))
-    source = Image.frombytes(mode, (19, 13), raw)
+    raw = bytes((i * 31 + i // 7) % 256 for i in range(size[0] * size[1] * channels))
+    source = Image.frombytes(mode, size, raw)
     stream = BytesIO()
     source.save(stream, "WEBP", lossless=lossless, quality=85)
     expected = PillowImage.open(BytesIO(stream.getvalue()))

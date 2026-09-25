@@ -6,6 +6,7 @@ import argparse
 import gc
 import json
 import math
+import os
 import platform
 import subprocess
 import warnings
@@ -22,6 +23,7 @@ from typing import Any
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+
 import numpy as np
 import pillow_heif
 import pillow_jxl
@@ -34,10 +36,14 @@ from PIL import (
     ImagePalette as PillowPalette,
     ImageStat as PillowStat,
 )
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
+
+NO_RICH = os.environ.get("NO_RICH")
+
+if not NO_RICH:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
 from blanket import (
     Image as BlanketImage,
@@ -755,10 +761,16 @@ def imagepalette_comparisons(directory: Path) -> list[Comparison]:
     return comparisons
 
 
+def _speedup_label(value: float | None) -> str:
+    if value is None:
+        return "---"
+    return f"{value:.2f}x"
+
+
 def _speedup_text(value: float | None) -> Text:
     """Return a colored speedup cell."""
     if value is None:
-        return Text("—", style="dim")
+        return Text("---", style="dim")
     label = f"{value:.2f}x"
     if value >= 2.0:
         return Text(label, style="bold green")
@@ -782,7 +794,7 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
             last_section = r["section"]
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
-        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "—"
+        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
         table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]))
 
     return table
@@ -801,13 +813,45 @@ def make_summary_table(results: list[dict[str, Any]]) -> Table:
     for section in sections:
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
-            table.add_row(section, "—", "—", "—", "—")
+            table.add_row(section, "---", "---", "---", "---")
             continue
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(speedup > 1.0 for speedup in speedups)
         table.add_row(section, f"{wins}/{len(paired)}", _speedup_text(geometric_mean(speedups)), _speedup_text(max(speedups)), _speedup_text(min(speedups)))
 
     return table
+
+
+def print_detail_plain(results: list[dict[str, Any]]) -> None:
+    """Print every benchmark result as plain text lines."""
+    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10}"
+    print(header)
+    print("-" * len(header))
+    last_section: str | None = None
+    for r in results:
+        if r["section"] != last_section:
+            print(f"\n== {r['section']} ==")
+            last_section = r["section"]
+        spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
+        blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
+        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
+        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10}")
+
+
+def print_summary_plain(results: list[dict[str, Any]]) -> None:
+    """Print section summaries as plain text lines."""
+    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10}"
+    print(header)
+    print("-" * len(header))
+    sections = dict.fromkeys(r["section"] for r in results)
+    for section in sections:
+        paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
+        if not paired:
+            print(f"{section:<20} {'---':>10} {'---':>10} {'---':>10} {'---':>10}")
+            continue
+        speedups = [r["blanket_speedup"] for r in paired]
+        wins = sum(speedup > 1.0 for speedup in speedups)
+        print(f"{section:<20} {f'{wins}/{len(paired)}':>10} {_speedup_label(geometric_mean(speedups)):>10} {_speedup_label(max(speedups)):>10} {_speedup_label(min(speedups)):>10}")
 
 
 def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -917,6 +961,44 @@ def print_comparison(console: Console, results: list[dict[str, Any]], baseline: 
         console.print(details)
 
 
+def print_comparison_plain(results: list[dict[str, Any]], baseline: dict[str, Any], threshold: float, verbose: bool) -> None:
+    matched, added, missing = compare_results(results, baseline["results"])
+    print("\n--- Blanket vs baseline ---")
+    print(f"{len(matched)} matched; {added} new; {missing} baseline cases not run. Negative time change = faster.")
+    print(f"Changes within ±{threshold:g}% are below threshold (not a statistical significance test).")
+    if not matched:
+        print("No matching cases; use the same sections and sizes as the baseline.")
+        return
+
+    def change_label(change: float) -> str:
+        return f"{change:+.1f}%"
+
+    header = f"{'Section / size':<35} {'Time change':>12} {'Improved':>10} {'Regressed':>10} {'Within':>10}"
+    print(header)
+    print("-" * len(header))
+    groups = dict.fromkeys((row["section"], row["size"]) for row in matched)
+    for section, size in [*groups, ("All matched cases", "")]:
+        rows = matched if not size else [row for row in matched if (row["section"], row["size"]) == (section, size)]
+        improved = sum(row["change_pct"] < -threshold for row in rows)
+        regressed = sum(row["change_pct"] > threshold for row in rows)
+        change = (geometric_mean(row["blanket_ms"] / row["baseline_ms"] for row in rows) - 1) * 100
+        print(f"{f'{section} {size}'.strip():<35} {change_label(change):>12} {improved:>10} {regressed:>10} {len(rows) - improved - regressed:>10}")
+    print("Section and overall changes use equally weighted geometric mean time ratios.")
+
+    detail_header = f"{'Section / size / operation':<60} {'Before ms':>10} {'Now ms':>10} {'Delta ms':>10} {'Change':>10}"
+    printed_header = False
+    for row in sorted(matched, key=lambda row: abs(row["change_pct"]), reverse=True):
+        if verbose or abs(row["change_pct"]) > threshold:
+            if not printed_header:
+                print(detail_header)
+                print("-" * len(detail_header))
+                printed_header = True
+            print(
+                f"{row['section']} / {row['size']} / {row['operation']:<60s}"[:60]
+                + f" {row['baseline_ms']:>10.3f} {row['blanket_ms']:>10.3f} {row['blanket_ms'] - row['baseline_ms']:>+10.3f} {change_label(row['change_pct']):>10}"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
@@ -996,14 +1078,16 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *,
 
 def main() -> None:
     args = parse_args()
-    console = Console()
+    console = None if NO_RICH else Console()
     metadata = run_metadata(args)
     if args.baseline is not None:
         previous_metadata = args.baseline.get("metadata", {})
-        console.print(f"Baseline: {args.compare_path} ({previous_metadata.get('commit', 'unknown commit')}, dirty={previous_metadata.get('dirty', 'unknown')})", markup=False)
+        msg = f"Baseline: {args.compare_path} ({previous_metadata.get('commit', 'unknown commit')}, dirty={previous_metadata.get('dirty', 'unknown')})"
+        print(msg) if NO_RICH else console.print(msg, markup=False)
         for field in ("platform", "machine", "python", "iterations", "warmups"):
             if field in previous_metadata and previous_metadata[field] != metadata[field]:
-                console.print(f"Comparison warning: {field} differs: {previous_metadata[field]} → {metadata[field]}", markup=False)
+                warning = f"Comparison warning: {field} differs: {previous_metadata[field]} -> {metadata[field]}"
+                print(warning) if NO_RICH else console.print(warning, markup=False)
     all_results: list[dict[str, Any]] = []
 
     if "ImagePalette" in args.sections:
@@ -1014,15 +1098,22 @@ def main() -> None:
         all_results.extend(results)
         displayed_results = slower_results(results) if args.slower_only else results
         if displayed_results:
-            console.rule("ImagePalette (256 entries)")
-            console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
+            if NO_RICH:
+                print("\n--- ImagePalette (256 entries) ---")
+                (print_detail_plain if args.verbose or args.slower_only else print_summary_plain)(displayed_results)
+            else:
+                console.rule("ImagePalette (256 entries)")
+                console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
 
     for size_name in args.sizes if any(section != "ImagePalette" for section in args.sections) else []:
         size = SIZES[size_name]
         w, h = size
         mpx = (w * h) / 1_000_000
 
-        console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
+        if NO_RICH:
+            print(f"\n--- {size_name}  {w}x{h}  ({mpx:.2f} Mpx) --- median of {args.iterations} runs")
+        else:
+            console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  ---  median of {args.iterations} runs")
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
             "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),
@@ -1053,9 +1144,12 @@ def main() -> None:
 
         displayed_results = slower_results(size_results) if args.slower_only else size_results
         if displayed_results:
-            table = make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results)
-            console.print(table)
-            console.print()
+            if NO_RICH:
+                (print_detail_plain if args.verbose or args.slower_only else print_summary_plain)(displayed_results)
+            else:
+                table = make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results)
+                console.print(table)
+                console.print()
         all_results.extend(size_results)
 
     # ── summary ──────────────────────────────────────────────────────
@@ -1067,22 +1161,32 @@ def main() -> None:
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
-        console.print(Panel(summary, title="Summary", border_style="bold"))
+        if NO_RICH:
+            print("\n=== Summary ===")
+            print(f"{wins}/{len(paired)} operations faster than Pillow")
+            print(f"Geometric mean speedup: {geo_mean:.2f}x")
+            print(f"Best:  {best['operation']} @ {best['size']} ({best['blanket_speedup']:.2f}x)")
+            print(f"Worst: {worst['operation']} @ {worst['size']} ({worst['blanket_speedup']:.2f}x)")
+        else:
+            summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
+            console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.baseline is not None:
-        print_comparison(console, all_results, args.baseline, args.threshold, args.verbose)
+        if NO_RICH:
+            print_comparison_plain(all_results, args.baseline, args.threshold, args.verbose)
+        else:
+            print_comparison(console, all_results, args.baseline, args.threshold, args.verbose)
     if args.save_baseline is not None:
         args.save_baseline.parent.mkdir(parents=True, exist_ok=True)
         args.save_baseline.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "results": all_results}, indent=2) + "\n")
-        console.print(f"Baseline saved: {args.save_baseline}", markup=False)
+        print(f"Baseline saved: {args.save_baseline}") if NO_RICH else console.print(f"Baseline saved: {args.save_baseline}", markup=False)
     if not args.no_baseline:
         RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         commit = (metadata["commit"] or "unknown")[:12]
         run_path = RESULTS_DIRECTORY / f"run-{timestamp}-{commit}.json"
         run_path.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "baseline": str(args.compare_path.resolve()) if args.compare else None, "results": all_results}, indent=2) + "\n")
-        console.print(f"Run saved: {run_path}", markup=False)
+        print(f"Run saved: {run_path}") if NO_RICH else console.print(f"Run saved: {run_path}", markup=False)
     if args.json_path is not None:
         output_results = slower_results(all_results) if args.slower_only else all_results
         args.json_path.write_text(json.dumps(output_results, indent=2) + "\n")
