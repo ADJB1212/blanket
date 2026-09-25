@@ -110,6 +110,42 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
 }
 
+pub fn gray_to_hsv<const C: usize>(source: &[u8]) -> Vec<u8> {
+    let length = source.len() / C * 3;
+    let mut output = Vec::<u8>::with_capacity(length);
+    let spare = &mut output.spare_capacity_mut()[..length];
+    let chunk_pixels = 256 * 1024;
+    crate::parallel::chunks_mut_above(spare, chunk_pixels * 3, 5 * 1024 * 1024, |chunk, dst| {
+        let start = chunk * chunk_pixels * C;
+        let src = &source[start..start + dst.len() / 3 * C];
+        #[cfg(target_arch = "aarch64")]
+        let offset = {
+            use std::arch::aarch64::*;
+            let mut offset = 0;
+            unsafe {
+                let zero = vdupq_n_u8(0);
+                while offset + 16 <= src.len() / C {
+                    let ptr = src.as_ptr().add(offset * C);
+                    let value = if C == 1 { vld1q_u8(ptr) } else { vld2q_u8(ptr).0 };
+                    vst3q_u8(dst.as_mut_ptr().cast::<u8>().add(offset * 3), uint8x16x3_t(zero, zero, value));
+                    offset += 16;
+                }
+            }
+            offset
+        };
+        #[cfg(not(target_arch = "aarch64"))]
+        let offset = 0;
+        for (src, dst) in src[offset * C..].as_chunks::<C>().0.iter().zip(dst[offset * 3..].as_chunks_mut::<3>().0) {
+            dst[0].write(0);
+            dst[1].write(0);
+            dst[2].write(src[0]);
+        }
+    });
+    // Every output byte is initialized by the vector loop or scalar tail.
+    unsafe { output.set_len(length) };
+    output
+}
+
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];

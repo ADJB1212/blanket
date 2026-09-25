@@ -263,6 +263,18 @@ def test_signed_integer_masked_paste_matches_pillow() -> None:
     assert target.getdata() == list(pillow_target.get_flattened_data())
 
 
+@pytest.mark.parametrize(("source", "destination"), [("RGB", "HSV"), ("RGBA", "HSV"), ("L", "HSV"), ("LA", "HSV"), ("HSV", "RGB"), ("HSV", "RGBA"), ("HSV", "L")])
+@pytest.mark.parametrize("count", [15, 16, 17, 257, 1800007])
+def test_hsv_conversion_chunks_match_pillow(source: str, destination: str, count: int) -> None:
+    import random
+
+    channels = len(source)
+    raw = random.Random(42).randbytes(count * channels)
+    blanket = Image.frombytes(source, (count, 1), raw)
+    pillow = PillowImage.frombytes(source, (count, 1), raw)
+    assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+
+
 def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:
     raw = bytes(i * 17 % 256 for i in range(37 * 3))
     blanket = Image.frombytes("HSV", (37, 1), raw)

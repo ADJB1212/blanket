@@ -831,6 +831,11 @@ impl Image {
         }
         let destination = PixelMode::parse(mode)?;
         if self.mode == PixelMode::Hsv && destination != PixelMode::Hsv {
+            if bit_depth.is_none_or(|depth| depth == 8) && matches!(destination, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+                let source = self.pixel_data()?;
+                let pixels = py.detach(|| convert_pixels(source, PixelMode::Hsv, destination));
+                return Self::from_pixels(self.width, self.height, destination, pixels, None);
+            }
             let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, hsv_to_rgb_bytes(self.pixel_data()?), None)?;
             return if destination == PixelMode::Rgb {
                 Ok(rgb)
@@ -1160,7 +1165,7 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return match to {
             PixelMode::L => source.to_vec(),
             PixelMode::Rgb | PixelMode::Rgba => crate::simd::convert(source, PixelMode::L, to),
-            PixelMode::Hsv => source.iter().flat_map(|&v| [0, 0, v]).collect(),
+            PixelMode::Hsv => crate::simd::gray_to_hsv::<1>(source),
             _ => convert_pixels_generic(source, from, to),
         };
     }
@@ -1168,6 +1173,18 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return crate::simd::convert_la(source, to);
     }
     if from == PixelMode::Hsv {
+        if to == PixelMode::L {
+            return map_pixels::<3, 1>(source, |p| {
+                let [r, g, b] = hsv_to_rgb(p[0], p[1], p[2]);
+                [((u32::from(r) * 19595 + u32::from(g) * 38470 + u32::from(b) * 7471 + 32768) >> 16) as u8]
+            });
+        }
+        if to == PixelMode::Rgba {
+            return map_pixels::<3, 4>(source, |p| {
+                let [r, g, b] = hsv_to_rgb(p[0], p[1], p[2]);
+                [r, g, b, 255]
+            });
+        }
         let rgb = hsv_to_rgb_bytes(source);
         return if to == PixelMode::Rgb {
             rgb
@@ -1177,12 +1194,10 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
     if to == PixelMode::Hsv {
         return match from {
-            PixelMode::One | PixelMode::L => source.iter().flat_map(|&v| [0, 0, v]).collect(),
-            PixelMode::La => source.as_chunks::<2>().0.iter().flat_map(|pixel| [0, 0, pixel[0]]).collect(),
-            PixelMode::Rgb | PixelMode::Rgba => source
-                .chunks_exact(from.channels())
-                .flat_map(|pixel| rgb_to_hsv(pixel[0], pixel[1], pixel[2]))
-                .collect(),
+            PixelMode::One | PixelMode::L => crate::simd::gray_to_hsv::<1>(source),
+            PixelMode::La => crate::simd::gray_to_hsv::<2>(source),
+            PixelMode::Rgb => map_pixels::<3, 3>(source, |p| rgb_to_hsv(p[0], p[1], p[2])),
+            PixelMode::Rgba => map_pixels::<4, 3>(source, |p| rgb_to_hsv(p[0], p[1], p[2])),
             _ => {
                 let rgb = convert_pixels(source, from, PixelMode::Rgb);
                 convert_pixels(&rgb, PixelMode::Rgb, PixelMode::Hsv)
@@ -1205,6 +1220,17 @@ fn clip8(value: i32) -> u8 {
     }
 }
 
+fn map_pixels<const S: usize, const D: usize>(source: &[u8], convert: impl Fn([u8; S]) -> [u8; D] + Sync + Send) -> Vec<u8> {
+    let mut output = vec![0; source.len() / S * D];
+    crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * D, |chunk, dst| {
+        let start = chunk * crate::parallel::CHUNK_PIXELS * S;
+        for (src, dst) in source[start..].as_chunks::<S>().0.iter().zip(dst.as_chunks_mut::<D>().0) {
+            *dst = convert(*src);
+        }
+    });
+    output
+}
+
 fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {
     let maxc = r.max(g).max(b);
     let minc = r.min(g).min(b);
@@ -1219,21 +1245,17 @@ fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {
     let h = if r == maxc {
         bc - gc
     } else if g == maxc {
-        2.0 + rc - bc
+        (2.0 + f64::from(rc) - f64::from(bc)) as f32
     } else {
-        4.0 + gc - rc
+        (4.0 + f64::from(gc) - f64::from(rc)) as f32
     };
-    let wrapped = (h / 6.0 + 1.0).rem_euclid(1.0);
-    [clip8((wrapped * 255.0) as i32), clip8((s * 255.0) as i32), maxc]
+    let shifted = f64::from(h) / 6.0 + 1.0;
+    let wrapped = (shifted - shifted.floor()) as f32;
+    [clip8((f64::from(wrapped) * 255.0) as i32), clip8((f64::from(s) * 255.0) as i32), maxc]
 }
 
 fn hsv_to_rgb_bytes(source: &[u8]) -> Vec<u8> {
-    source
-        .as_chunks::<3>()
-        .0
-        .iter()
-        .flat_map(|pixel| hsv_to_rgb(pixel[0], pixel[1], pixel[2]))
-        .collect()
+    map_pixels::<3, 3>(source, |p| hsv_to_rgb(p[0], p[1], p[2]))
 }
 
 fn hsv_to_rgb(h: u8, s: u8, v: u8) -> [u8; 3] {
