@@ -136,13 +136,13 @@ libwebp)
 		-DWEBP_ENABLE_SIMD=ON -DWEBP_USE_THREAD=ON
 	;;
 libjxl)
-	libjxl_neon_flag=()
+	libjxl_macos_flags=()
 	if [[ "$RUNNER_OS" == macOS ]]; then
-		libjxl_neon_flag=(-DJPEGXL_FORCE_NEON=ON)
+		libjxl_macos_flags=(-DCMAKE_AR="$(brew --prefix llvm)/bin/llvm-ar" -DCMAKE_RANLIB="$(brew --prefix llvm)/bin/llvm-ranlib")
 	fi
 
 	cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
-		-DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF \
+		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_TESTING=OFF \
 		-DBUILD_SHARED_LIBS=ON -DJPEGXL_ENABLE_TOOLS=OFF \
 		-DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_MANPAGES=OFF \
 		-DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF \
@@ -152,7 +152,7 @@ libjxl)
 		-DJPEGXL_ENABLE_VIEWERS=OFF -DJPEGXL_ENABLE_PLUGINS=OFF \
 		-DJPEGXL_ENABLE_COVERAGE=OFF -DJPEGXL_TEST_TOOLS=OFF \
 		-DJPEGXL_ENABLE_WASM_THREADS=OFF -DJPEGXL_ENABLE_LTO=ON \
-		"${libjxl_neon_flag[@]}"
+		-DJPEGXL_ENABLE_SKCMS=OFF "${libjxl_macos_flags[@]}"
 	;;
 esac
 

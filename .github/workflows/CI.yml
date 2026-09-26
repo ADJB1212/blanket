@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main]
     paths-ignore:
       - "**.md"
       - "LICENSE"
@@ -38,6 +38,7 @@ env:
 
 permissions:
   contents: read
+  actions: write
 
 jobs:
   test:
@@ -55,9 +56,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - name: Cache Rust dependencies and build artifacts
-        id: cargo-cache
-        uses: actions/cache@v6
+      - name: Restore Rust dependencies and build artifacts
+        id: cargo-cache-restore
+        uses: actions/cache/restore@v6
         with:
           path: |
             ~/.cargo/registry
@@ -125,3 +126,20 @@ jobs:
         run: cargo test --features $BUILD_FEATURES
       - name: Verify Pillow behavior
         run: uv run scripts/verify_behavior.py
+      - name: Delete stale Rust caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache-restore.outputs.cache-matched-key != steps.cargo-cache-restore.outputs.cache-primary-key
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_PREFIX: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
+        run: |
+          gh cache list --key "$CACHE_PREFIX" --json id,key --jq '.[].id' \
+            | xargs -r -n1 gh cache delete
+      - name: Save Rust dependencies and build artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
