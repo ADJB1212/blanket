@@ -20,10 +20,10 @@ blanket-codecs = { path = "../codecs" }
 blanket-ops = { path = "../ops" }
 
 [features]
-default = ["vendored"]
-vendored = ["blanket-codecs/vendored"]
+default = ["no-vendored-webp"]
+jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]
-user-provided-webp = ["blanket-codecs/user-provided-webp"]
+no-vendored-webp = ["blanket-codecs/no-vendored-webp"]
 
 [lints]
 workspace = true

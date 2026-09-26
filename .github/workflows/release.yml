@@ -271,7 +271,7 @@ jobs:
             ) }}
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 $TUNE_ARGS
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 $TUNE_ARGS
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
@@ -395,7 +395,7 @@ jobs:
         id: build-wheel
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist-unrepaired -i python3.14 --strip --auditwheel=skip -- -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
+          maturin build --release --out dist-unrepaired --features default -i python3.14 --strip --auditwheel=skip -- -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
