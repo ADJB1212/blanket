@@ -1,4 +1,4 @@
-"""A focused, Rust-backed subset of Pillow's image API."""
+"""A Rust-backed, Pillow-shaped image API for 8-bit, integer, float, and indexed modes."""
 
 from . import Compressor, Image, ImageChops, ImageEnhance, ImageFilter, ImageOps, ImagePalette, ImageStat
 from ._blanket import UnidentifiedImageError, __version__

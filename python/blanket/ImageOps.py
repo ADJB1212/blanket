@@ -1,7 +1,8 @@
 """Pillow-shaped image operations, backed by native Blanket pixel kernels.
 
-Geometry works on L, RGB and RGBA. Histogram and lookup-table operations
-accept L and RGB, matching Pillow's restrictions for these modes.
+Geometry, canvas, and resampling work on the current Image modes, including
+`1`, `LA`, `PA`, integer, float, and print/luma/chroma modes. Histogram and
+lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
 """
 
 from __future__ import annotations
@@ -84,7 +85,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
         image: Input image.
         cutoff: Percentage discarded from histogram tails, or separate `(low, high)` percentages.
         ignore: Pixel value or sequence of values excluded from the histogram.
-        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+        mask: Optional L mask; pixels with a zero mask value are excluded.
         preserve_tone: Use a shared luminance histogram to preserve relative channel tone.
 
     Examples:
@@ -352,7 +353,7 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
 
     Args:
         image: Input image.
-        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+        mask: Optional L mask; pixels with a zero mask value are excluded.
 
     Examples:
         ```python
@@ -452,7 +453,7 @@ def flip(image: Image.Image) -> Image.Image:
 
 
 def grayscale(image: Image.Image) -> Image.Image:
-    """Convert to 8-bit luminance.
+    """Convert to luminance mode `L`, retaining the input sample depth.
 
     Args:
         image: Input image.

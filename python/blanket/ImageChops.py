@@ -1,8 +1,9 @@
 """Pillow-compatible channel operations with native Rust pixel processing.
 
-Arithmetic supports 8-bit L, RGB, RGBA, and indexed P pixels. All channels,
-including alpha, participate. Binary arithmetic crops to the top-left overlap.
-Logical operations accept bilevel mode 1 images.
+Arithmetic supports matching 8-bit `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
+`YCbCr`, `LAB`, and indexed `P`/`PA` images. All channels, including alpha,
+participate. Binary arithmetic crops to the top-left overlap. Logical
+operations accept bilevel mode `1` images.
 """
 
 from __future__ import annotations
@@ -343,7 +344,7 @@ def constant(image: Image.Image, value: int) -> Image.Image:
 
     Args:
         image: Input image.
-        value: Pixel value or channel tuple.
+        value: Grayscale fill value from 0 through 255.
 
     Examples:
         ```python
@@ -399,7 +400,7 @@ def composite(image1: Image.Image, image2: Image.Image, mask: Image.Image) -> Im
     Args:
         image1: First input image; its mode and dimensions must match the second image.
         image2: Second input image.
-        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+        mask: L or RGBA mask selecting pixels from the first image.
 
     Examples:
         ```python

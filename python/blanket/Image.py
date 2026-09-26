@@ -1,4 +1,8 @@
-"""Pillow-shaped image entry points backed by Blanket's Rust extension."""
+"""Pillow-shaped image constructors and the Image type, backed by Blanket's Rust extension.
+
+Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
+`YCbCr`, `LAB`, integer `I`/`I;16` variants, and floating-point `F`.
+"""
 
 from __future__ import annotations
 
@@ -171,7 +175,12 @@ class ImageTransformHandler:
 
 
 class Image:
-    """An image whose pixels and supported operations live in Rust."""
+    """An image whose pixels and supported operations live in Rust.
+
+    Modes include `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
+    `YCbCr`, `LAB`, `I`, `I;16` variants, and `F`. Indexed, integer, and float
+    modes support a smaller operation set than 8-bit color modes.
+    """
 
     def __init__(self, native: _Image) -> None:
         self._native = native
@@ -339,11 +348,11 @@ class Image:
         self._native.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
-        """Return a new image converted to a supported direct, integer, or indexed mode.
+        """Return a new image converted to a supported mode.
 
         Args:
-            mode: Destination mode, including `I`, `F`, and the `I;16` family.
-            bit_depth: Output sample depth, or None to retain the input depth.
+            mode: Destination mode: `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, or an `I;16` variant.
+            bit_depth: Output sample depth for high-bit-depth storage, or None to retain the input depth. `I` and `F` use 32-bit samples.
 
         Examples:
             ```python
@@ -541,7 +550,7 @@ class Image:
         return self._native.getcolors(max(0, index(maxcolors)))
 
     def putpalette(self, data: Sequence[int] | bytes | ImagePalette, rawmode: str = "RGB") -> None:
-        """Attach an RGB or RGBA palette to an L or P image.
+        """Attach an RGB or RGBA palette to an L, P, or PA image.
 
         Args:
             data: Interleaved palette entries or an ImagePalette object.
@@ -572,6 +581,7 @@ class Image:
         MEDIANCUT, MAXCOVERAGE, and FASTOCTREE run in the native backend.
         LIBIMAGEQUANT is unavailable in this build. Generated palette ordering
         and color choices may differ from Pillow's implementations.
+        Non-RGB sources convert through RGB except RGBA, which quantizes directly.
 
         Args:
             colors: Maximum palette size, from 1 through 256.
@@ -617,7 +627,11 @@ class Image:
         return result
 
     def tobytes(self) -> bytes:
-        """Return packed pixels; high-depth samples use little-endian uint16 storage.
+        """Return packed pixels.
+
+        Mode `1` uses row-packed bits. `I` is little-endian int32, `F` is
+        little-endian float32, and `I;16B` is big-endian uint16. Other
+        high-depth samples use little-endian uint16.
 
         Examples:
             ```python
@@ -668,7 +682,7 @@ class Image:
         Args:
             im: Source image or fill color.
             box: Destination origin or rectangle, or a mask image as the second positional argument.
-            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            mask: Optional L or RGBA mask selecting source pixels.
 
         Examples:
             ```python
@@ -752,7 +766,7 @@ class Image:
     def putalpha(self, alpha: Image | int) -> None:
         """Replace alpha in place; RGB images become RGBA.
 
-        L and P inputs are unsupported because Blanket does not implement LA/PA.
+        Only RGB and RGBA are accepted. LA and PA images are not supported.
 
         Args:
             alpha: L image matching the image size, or a constant alpha value from 0 through 255.
@@ -839,10 +853,10 @@ class Image:
         return result
 
     def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:
-        """Return 256 bins per band for 8-bit pixels; extrema is ignored.
+        """Return 256 bins per band for 8-bit modes; extrema is ignored.
 
         Args:
-            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            mask: Optional L mask; pixels with a zero mask value are excluded.
             extrema: Accepted for Pillow compatibility; ignored.
 
         Examples:
@@ -884,10 +898,10 @@ class Image:
         return tuple(ranges)
 
     def getbbox(self, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
-        """Return the nonzero bounding box, using RGBA alpha by default.
+        """Return the nonzero bounding box, using alpha for LA, PA, and RGBA by default.
 
         Args:
-            alpha_only: For RGBA images, inspect only alpha when true; otherwise inspect all channels.
+            alpha_only: For LA, PA, and RGBA images, inspect only alpha when true; otherwise inspect all channels.
 
         Examples:
             ```python
@@ -902,8 +916,10 @@ class Image:
     def point(self, lut: Sequence[float] | Callable[[int], float], mode: str | None = None) -> Image:
         """Map 8-bit channels through a table or a function evaluated 256 times.
 
+        Mode `F` accepts a callable applied to each floating-point sample.
+
         Args:
-            lut: 256 entries per input channel, or a callable evaluated for each possible 8-bit value.
+            lut: 256 entries per input channel, a callable evaluated for each 8-bit value, or a per-sample callable for mode `F`.
             mode: Optional output mode; must match the input mode.
 
         Examples:
@@ -972,6 +988,7 @@ class Image:
 
         factor can specify horizontal and vertical factors separately.
         box selects a nonempty source rectangle within the image.
+        Indexed `P` images are unsupported.
 
         Args:
             factor: Positive integer reduction factor, or separate `(x, y)` factors.
@@ -1016,7 +1033,7 @@ class Image:
         is ignored for the supported 8-bit modes.
 
         Args:
-            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            mask: Optional L mask; pixels with a zero mask value are excluded.
             extrema: Accepted for Pillow compatibility; ignored.
 
         Examples:
@@ -1316,6 +1333,9 @@ class Image:
     def to_pillow(self) -> object:
         """Return an equivalent Pillow image for interoperability.
 
+        High-bit-depth `L`/`RGB`/`RGBA` images must be converted to 8 bits first.
+        `I`, `F`, and `I;16` variants transfer at their native sample width.
+
         Examples:
             ```python
             from blanket import Image
@@ -1339,6 +1359,10 @@ class Image:
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF.
+
+        HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` saves
+        through RGB JPEG. CMYK writes JPEG, TIFF, or PDF. Integer modes
+        convert to `L` for encoding.
 
         Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
         ``compressor`` to optimize this save.
@@ -1410,10 +1434,10 @@ class Image:
 
 
 def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] | None = 0) -> Image:
-    """Create a direct, integer, or indexed image filled with color.
+    """Create a supported-mode image filled with color.
 
     Args:
-        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        mode: Image mode: `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, or an `I;16` variant.
         size: Output `(width, height)` in pixels.
         color: Fill value, channel tuple, or CSS color string.
 
@@ -1455,10 +1479,13 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
 
 
 def merge(mode: str, bands: Sequence[Image]) -> Image:
-    """Interleave L bands into an independent L, RGB, or RGBA image.
+    """Interleave L bands into an independent image.
+
+    The destination mode may be `1`, `L`, `LA`, `PA`, `RGB`, `RGBA`, `HSV`,
+    `CMYK`, `YCbCr`, or `LAB`.
 
     Args:
-        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        mode: Destination mode with as many channels as supplied L bands.
         bands: Sequence of single-channel L images, one per output band.
 
     Examples:
@@ -1480,6 +1507,8 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
 
 def blend(im1: Image, im2: Image, alpha: float) -> Image:
     """Interpolate equal-sized 8-bit images, clipping extrapolated values.
+
+    Indexed `P` images are unsupported.
 
     Args:
         im1: First image; both inputs must have the same mode and dimensions.
@@ -1512,7 +1541,7 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
     Args:
         image1: First input image; its mode and dimensions must match the second image.
         image2: Second input image.
-        mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+        mask: L or RGBA mask selecting pixels from the first image.
 
     Examples:
         ```python
@@ -1594,10 +1623,10 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
     """Create an image from bytes; mode 1 uses row-packed bits.
 
     Args:
-        mode: Image mode, such as `L`, `RGB`, or `RGBA`.
+        mode: Image mode, including `1` (row-packed bits), indexed, integer, float, and 8-bit color modes.
         size: Output `(width, height)` in pixels.
         data: Contiguous packed pixel buffer. `I` uses little-endian int32, `F` uses little-endian float32, and `I;16B` uses big-endian uint16.
-        bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
+        bit_depth: Significant bits per channel: 8, 10, 12, or 16 for high-bit-depth storage, or 32 for `I` and `F`.
 
     Examples:
         ```python
@@ -1622,7 +1651,7 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
     Args:
         obj: Object exposing the array interface with uint8, uint16, int32, float32, or float64 samples.
         mode: Optional mode matching the array's channel layout.
-        bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
+        bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth. Integer and float arrays map to `I` and `F`.
 
     Examples:
         ```python

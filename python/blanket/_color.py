@@ -1,4 +1,4 @@
-"""Color argument parsing for ImageOps; no optional dependencies required."""
+"""Color argument parsing for fills, transforms, and ImageOps; no optional dependencies required."""
 
 from __future__ import annotations
 

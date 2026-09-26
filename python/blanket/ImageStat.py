@@ -13,9 +13,11 @@ __all__ = ["Global", "Stat"]
 class Stat:
     """Calculate statistics from an 8-bit image or a list of histogram counts.
 
-    A mask selects pixels with any nonzero L value. Histograms contain 256
-    nonnegative integer counts per band, each fitting in an unsigned 64-bit
-    integer. Results are computed lazily and cached, as in Pillow.
+    Supported image modes include `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`,
+    `HSV`, `CMYK`, `YCbCr`, and `LAB`. A mask selects pixels with any nonzero
+    L value. Histograms contain 256 nonnegative integer counts per band, each
+    fitting in an unsigned 64-bit integer. Results are computed lazily and
+    cached, as in Pillow.
     """
 
     def __init__(self, image_or_list: Image.Image | list[int], mask: Image.Image | None = None) -> None:
@@ -23,7 +25,7 @@ class Stat:
 
         Args:
             image_or_list: An 8-bit image or a histogram with 256 nonnegative integer counts per band.
-            mask: Optional mask selecting pixels. Histogram operations require an L mask; compositing also accepts RGBA alpha.
+            mask: Optional L mask; pixels with a zero mask value are excluded.
 
         Examples:
             ```python

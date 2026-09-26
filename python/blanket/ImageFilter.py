@@ -1,4 +1,8 @@
-"""Pillow-compatible filters backed by native Rust pixel kernels."""
+"""Pillow-compatible filters backed by native Rust pixel kernels.
+
+Convolution, rank, and blur filters operate on 8-bit images, including `1`,
+`LA`, `PA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
+"""
 
 from __future__ import annotations
 

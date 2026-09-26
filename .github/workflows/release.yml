@@ -195,8 +195,8 @@ jobs:
       - name: Install build tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y libnuma-dev mold
-          brew install llvm lld cmake meson nasm ninja pkg-config
+          sudo apt-get install -y libnuma-dev
+          brew install llvm lld cmake meson nasm ninja pkg-config mold
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "CC=clang" >> "$GITHUB_ENV"
