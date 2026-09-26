@@ -13,5 +13,8 @@ garb = "0.2"
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
 rayon = {version = "1.12", default-features = false }
 
+[lib]
+doctest = false
+
 [lints]
 workspace = true

@@ -22,17 +22,17 @@ from blanket import (
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
-    channels = {"L": 1, "RGB": 3, "RGBA": 4, "HSV": 3}[mode]
+    channels = {"L": 1, "RGB": 3, "RGBA": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3}[mode]
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
 def check_conversions() -> int:
     checks = 0
-    for source_mode in ("L", "RGB", "RGBA", "HSV"):
+    for source_mode in ("L", "RGB", "RGBA", "HSV", "CMYK", "YCbCr"):
         raw = pixels(source_mode)
         blanket = BlanketImage.frombytes(source_mode, (37, 29), raw)
         pillow = PillowImage.frombytes(source_mode, (37, 29), raw)
-        for target_mode in ("L", "RGB", "RGBA", "HSV"):
+        for target_mode in ("L", "RGB", "RGBA", "HSV", "CMYK", "YCbCr"):
             actual = blanket.convert(target_mode)
             expected = pillow.convert(target_mode)
             assert actual.mode == expected.mode

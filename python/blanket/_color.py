@@ -37,8 +37,9 @@ def _rgb(color: str) -> tuple[int, ...]:
 
 def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[int]:
     """Normalize fill values to the native interleaved channel representation."""
+    channels = 3 if mode == "YCbCr" else len(mode)
     if color is None:
-        return [0] * len(mode)
+        return [0] * channels
     if isinstance(color, str):
         rgb = _rgb(color)
         if mode in ("1", "L", "LA"):
@@ -52,17 +53,17 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
             return [max(0, min(255, color))]
         if mode == "L":
             return [max(0, min(255, color))]
-        return [(color >> (8 * i)) & 255 for i in range(len(mode))]
+        return [(color >> (8 * i)) & 255 for i in range(channels)]
     if not isinstance(color, tuple):
         raise TypeError("color must be int or tuple")
     if mode in ("1", "L"):
         if len(color) != 1:
             raise TypeError("color must be int or single-element tuple")
-    elif (len(color) == 1 and mode == "LA") or (len(color) == 3 and mode == "RGBA"):
+    elif (len(color) == 1 and mode == "LA") or (len(color) == 3 and mode in ("RGBA", "CMYK")):
         color = (*color, 255)
-    elif mode == "RGB" and len(color) == 4:
+    elif mode in ("RGB", "YCbCr") and len(color) == 4:
         color = color[:3]
-    elif len(color) != len(mode):
+    elif len(color) != channels:
         raise TypeError("color must be int, or tuple of the appropriate channel count")
     if not all(isinstance(v, int) for v in color):
         raise TypeError("color components must be integers")

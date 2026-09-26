@@ -61,7 +61,7 @@ def test_jpeg_cross_library_loads() -> None:
         assert (loaded.mode, loaded.size) == ("RGB", (17, 13))
 
 
-def test_cmyk_jpeg_loads_as_rgb() -> None:
+def test_cmyk_jpeg_preserves_mode() -> None:
     raw = pixels("RGBA")
     output = BytesIO()
     source = PillowImage.frombytes("CMYK", (17, 13), raw)
@@ -69,11 +69,11 @@ def test_cmyk_jpeg_loads_as_rgb() -> None:
 
     output.seek(0)
     with PillowImage.open(output) as pillow:
-        expected = pillow.convert("RGB")
+        expected = pillow.copy()
         output.seek(0)
         actual = BlanketImage.open(output)
 
-    assert (actual.mode, actual.size) == ("RGB", (17, 13))
+    assert (actual.mode, actual.size) == ("CMYK", (17, 13))
     differences = [abs(left - right) for left, right in zip(actual.tobytes(), expected.tobytes(), strict=True)]
     assert max(differences) <= 1
 

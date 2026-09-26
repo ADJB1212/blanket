@@ -35,7 +35,7 @@ def test_fromarray_supports_strided_arrays() -> None:
 
 def test_fromarray_rejects_unsupported_arrays() -> None:
     with pytest.raises(TypeError, match="cannot handle this data type"):
-        Image.fromarray(np.zeros((3, 5), dtype=np.float32))
+        Image.fromarray(np.zeros((3, 5, 3), dtype=np.float32))
     with pytest.raises(TypeError, match="cannot handle this data type"):
         Image.fromarray(np.zeros((3, 5, 2), dtype=np.uint8))
 

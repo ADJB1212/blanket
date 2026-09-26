@@ -191,7 +191,7 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Ico => decode_ico(data),
         ImageFormat::Pdf => Err("PDF is a write-only format".into()),
         ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
-        ImageFormat::Tiff => decode_float_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok),
+        ImageFormat::Tiff => decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok),
         ImageFormat::Webp => decode_webp(data),
         ImageFormat::Heif => decode_heif(data),
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
@@ -200,10 +200,20 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     }
 }
 
-fn decode_float_tiff(data: &[u8]) -> Result<Option<Image>, String> {
+fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
         return Ok(None);
     };
+    if decoder.colortype().ok() == Some(tiff::ColorType::CMYK(8)) {
+        let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
+        validate_dimensions(width, height)?;
+        let tiff::decoder::DecodingResult::U8(pixels) = decoder.read_image().map_err(|error| error.to_string())? else {
+            return Err("invalid CMYK TIFF samples".into());
+        };
+        return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into()))
+            .map(Some)
+            .map_err(|error| error.to_string());
+    }
     if decoder.colortype().ok() != Some(tiff::ColorType::Gray(32)) {
         return Ok(None);
     }
@@ -353,7 +363,7 @@ fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
 
     let (mode, format) = match header.colorspace {
         Colorspace::Gray => (PixelMode::L, PixelFormat::GRAY),
-        Colorspace::CMYK | Colorspace::YCCK => (PixelMode::Rgb, PixelFormat::CMYK),
+        Colorspace::CMYK | Colorspace::YCCK => (PixelMode::Cmyk, PixelFormat::CMYK),
         Colorspace::RGB | Colorspace::YCbCr => (PixelMode::Rgb, PixelFormat::RGB),
     };
     let pitch = header
@@ -377,25 +387,10 @@ fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
             },
         )
         .map_err(|error| error.to_string())?;
-    let pixels = if format == PixelFormat::CMYK { cmyk_to_rgb(&pixels) } else { pixels };
-    Image::from_pixels(width, height, mode, pixels, Some("JPEG".to_owned())).map_err(|error| error.to_string())
-}
-
-fn cmyk_to_rgb(cmyk: &[u8]) -> Vec<u8> {
-    let mut rgb = Vec::with_capacity(cmyk.len() / 4 * 3);
-    // JPEG stores CMYK samples inverted, so combining a color channel with K
-    // is a multiplication rather than the usual subtractive CMYK formula.
-    for pixel in cmyk.as_chunks::<4>().0 {
-        rgb.push(multiply_u8(pixel[0], pixel[3]));
-        rgb.push(multiply_u8(pixel[1], pixel[3]));
-        rgb.push(multiply_u8(pixel[2], pixel[3]));
+    if format == PixelFormat::CMYK {
+        pixels.iter_mut().for_each(|value| *value = 255 - *value);
     }
-    rgb
-}
-
-fn multiply_u8(left: u8, right: u8) -> u8 {
-    let product = u16::from(left) * u16::from(right) + 128;
-    ((product + (product >> 8)) >> 8) as u8
+    Image::from_pixels(width, height, mode, pixels, Some("JPEG".to_owned())).map_err(|error| error.to_string())
 }
 
 fn decode_jxl(data: &[u8]) -> Result<Image, String> {
@@ -454,6 +449,28 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+        if image.mode == PixelMode::Cmyk {
+            match format {
+                ImageFormat::Jpeg => return encode_jpeg(image, image.pixel_data()?, options.quality),
+                ImageFormat::Tiff => {
+                    let mut output = Cursor::new(Vec::new());
+                    tiff::encoder::TiffEncoder::new(&mut output)
+                        .map_err(codec_error)?
+                        .write_image::<tiff::encoder::colortype::CMYK8>(image.width, image.height, image.pixel_data()?)
+                        .map_err(codec_error)?;
+                    return Ok(output.into_inner());
+                }
+                ImageFormat::Pdf => return encode_pdf(image, image.pixel_data()?),
+                _ => {}
+            }
+        }
+        return Err(PyOSError::new_err(format!(
+            "cannot write mode {} as {}",
+            image.mode.as_str(),
+            format.as_str()
+        )));
+    }
     if image.mode == PixelMode::F {
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode F as {}", format.as_str())));
@@ -624,7 +641,11 @@ fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
     object("", Some(content.as_bytes()));
     let rgb;
-    let color = if image.mode == PixelMode::L { "DeviceGray" } else { "DeviceRGB" };
+    let color = match image.mode {
+        PixelMode::L => "DeviceGray",
+        PixelMode::Cmyk => "DeviceCMYK",
+        _ => "DeviceRGB",
+    };
     let (samples, mask) = if image.mode == PixelMode::Rgba {
         rgb = pixels
             .as_chunks::<4>()
@@ -739,6 +760,7 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
         PixelMode::L => (PixelFormat::GRAY, Subsamp::Gray),
         // Match the default used by Pillow/libjpeg for RGB JPEG output.
         PixelMode::Rgb => (PixelFormat::RGB, Subsamp::Sub2x2),
+        PixelMode::Cmyk => (PixelFormat::CMYK, Subsamp::None),
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
         _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
     };
@@ -751,6 +773,13 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
     if coding.progressive {
         encoder.set_progressive(true).map_err(codec_error)?;
     }
+    let inverted;
+    let pixels = if image.mode == PixelMode::Cmyk {
+        inverted = pixels.iter().map(|value| 255 - value).collect::<Vec<_>>();
+        inverted.as_slice()
+    } else {
+        pixels
+    };
     encoder
         .compress_to_vec(turbojpeg::Image {
             pixels,
@@ -1422,14 +1451,6 @@ mod tests {
         assert_eq!(
             luma_alpha_to_rgba(&[0x10, 0x20, 0x30, 0x40]),
             [0x10, 0x10, 0x10, 0x20, 0x30, 0x30, 0x30, 0x40]
-        );
-    }
-
-    #[test]
-    fn converts_cmyk_pixels_to_rgb() {
-        assert_eq!(
-            cmyk_to_rgb(&[255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 0, 255]),
-            [255, 0, 0, 0, 255, 0, 0, 0, 0]
         );
     }
 }

@@ -167,6 +167,18 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
             (f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)) for quality in (50, 85, 95)
         )
 
+        for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
+            blanket = BlanketImage.frombytes(mode, size, raw)
+            pillow = PillowImage.frombytes(mode, size, raw)
+            for quality in (50, 85, 95):
+                label = f"save JPEG q={quality} {mode}" + (" (via RGB)" if mode == "YCbCr" else "")
+                comps.append((label, lambda b=blanket, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=pillow, q=quality: p.save(BytesIO(), "JPEG", quality=q)))
+            if mode == "CMYK":
+                for fmt in ("JPEG", "TIFF"):
+                    payload = pillow_payload(pillow, fmt)
+                    comps.append((f"load {fmt} CMYK", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: pillow_load(data)))
+                comps.append(("save TIFF CMYK", lambda b=blanket: b.save(BytesIO(), "TIFF"), lambda p=pillow: p.save(BytesIO(), "TIFF")))
+
         # ── TIFF and WebP ─────────────────────────────────────────────
         for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
             tiff = pillow_payload(p_img, "TIFF")
@@ -256,7 +268,7 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
 
 
 def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
-    """Build benchmarks for conversions among L, RGB, RGBA, and HSV."""
+    """Build benchmarks for conversions among L, RGB, RGBA, HSV, CMYK, and YCbCr."""
     raw_rgb = make_rgb(*size)
     raw_rgba = make_rgba(*size)
     raw_gray = make_gray(*size)
@@ -270,7 +282,7 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
     b_hsv = b_rgb.convert("HSV")
     p_hsv = p_rgb.convert("HSV")
 
-    return [
+    comparisons: list[Comparison] = [
         ("cvt RGB→L", lambda b=b_rgb: b.convert("L"), lambda p=p_rgb: p.convert("L")),
         ("cvt RGB→RGBA", lambda b=b_rgb: b.convert("RGBA"), lambda p=p_rgb: p.convert("RGBA")),
         ("cvt RGBA→RGB", lambda b=b_rgba: b.convert("RGB"), lambda p=p_rgba: p.convert("RGB")),
@@ -284,6 +296,16 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
         ("cvt HSV→RGB", lambda b=b_hsv: b.convert("RGB"), lambda p=p_hsv: p.convert("RGB")),
         ("cvt HSV→RGBA", lambda b=b_hsv: b.convert("RGBA"), lambda p=p_hsv: p.convert("RGBA")),
     ]
+    images = {"L": (b_gray, p_gray), "RGB": (b_rgb, p_rgb), "RGBA": (b_rgba, p_rgba), "HSV": (b_hsv, p_hsv)}
+    for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
+        images[mode] = (BlanketImage.frombytes(mode, size, raw), PillowImage.frombytes(mode, size, raw))
+    for source, (blanket, pillow) in images.items():
+        comparisons.extend(
+            (f"cvt {source}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination))
+            for destination in images
+            if source != destination and (source in ("CMYK", "YCbCr") or destination in ("CMYK", "YCbCr"))
+        )
+    return comparisons
 
 
 def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
@@ -295,7 +317,14 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
     comparisons: list[Comparison] = []
     images: dict[str, tuple[BlanketImage.Image, PillowImage.Image]] = {}
 
-    for mode, make_pixels, fill, pixel in (("1", make_one, 1, 255), ("LA", make_la, (47, 128), (47, 128)), ("PA", make_pa, (3, 128), (3, 128)), ("HSV", make_rgb, (47, 128, 200), (47, 128, 200))):
+    for mode, make_pixels, fill, pixel in (
+        ("1", make_one, 1, 255),
+        ("LA", make_la, (47, 128), (47, 128)),
+        ("PA", make_pa, (3, 128), (3, 128)),
+        ("HSV", make_rgb, (47, 128, 200), (47, 128, 200)),
+        ("CMYK", make_rgba, (47, 128, 200, 63), (47, 128, 200, 63)),
+        ("YCbCr", make_rgb, (47, 128, 200), (47, 128, 200)),
+    ):
         raw = make_pixels(w, h)
         blanket = BlanketImage.frombytes(mode, size, raw)
         pillow = PillowImage.frombytes(mode, size, raw)
@@ -316,12 +345,22 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
             ]
         )
         comparisons.extend((f"cvt {mode}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA") if destination != mode)
-        if mode == "LA":
-            comparisons.append(("resize BILINEAR LA", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)))
+        if mode in ("LA", "CMYK", "YCbCr"):
+            comparisons.append((f"resize BILINEAR {mode}", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)))
+        if mode in ("CMYK", "YCbCr"):
+            blanket_bands, pillow_bands = blanket.split(), pillow.split()
+            comparisons.extend(
+                [
+                    (f"split {mode}", blanket.split, pillow.split),
+                    (f"merge {mode}", partial(BlanketImage.merge, mode, blanket_bands), partial(PillowImage.merge, mode, pillow_bands)),
+                    (f"histogram {mode}", blanket.histogram, pillow.histogram),
+                    (f"filter SMOOTH {mode}", partial(blanket.filter, BlanketFilter.SMOOTH), partial(pillow.filter, PillowFilter.SMOOTH)),
+                ]
+            )
         if mode == "PA":
             comparisons.append(("cvt PA→P", partial(blanket.convert, "P"), partial(pillow.convert, "P")))
             comparisons.append(("save PNG PA (expands RGBA)", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.convert("RGBA").save(BytesIO(), "PNG")))
-        elif mode != "HSV":
+        elif mode not in ("HSV", "CMYK", "YCbCr"):
             payload = pillow_payload(pillow, "PNG")
             comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))

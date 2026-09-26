@@ -34,5 +34,8 @@ vendored = ["jpegxl-rs/vendored"]
 embedded-libheif = ["libheif-rs/embedded-libheif"]
 user-provided-webp = ["libwebp-sys/system-dylib"]
 
+[lib]
+doctest = false
+
 [lints]
 workspace = true

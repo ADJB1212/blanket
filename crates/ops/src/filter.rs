@@ -51,10 +51,10 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
         (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
         (PixelMode::La | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
         (PixelMode::La | PixelMode::Pa, _) => convolve::<2, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb | PixelMode::Hsv, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb | PixelMode::Hsv, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::Cmyk, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::Cmyk, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
         _ => unreachable!(),
     });
     output(image, pixels)
@@ -367,8 +367,8 @@ fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyRe
     match image.mode {
         PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
         PixelMode::La | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
-        PixelMode::Rgb | PixelMode::Hsv => blurred::<3>(source, width, height, radii, gaussian),
-        PixelMode::Rgba => blurred::<4>(source, width, height, radii, gaussian),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => blurred::<3>(source, width, height, radii, gaussian),
+        PixelMode::Rgba | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, gaussian),
         _ => unreachable!(),
     }
 }
@@ -483,8 +483,8 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
     py.detach(|| match mode {
         PixelMode::One | PixelMode::L => pixels.copy_from_slice(sources[0]),
         PixelMode::La | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
-        PixelMode::Rgb | PixelMode::Hsv => merge::<3>(&sources, &mut pixels),
-        PixelMode::Rgba => merge::<4>(&sources, &mut pixels),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => merge::<3>(&sources, &mut pixels),
+        PixelMode::Rgba | PixelMode::Cmyk => merge::<4>(&sources, &mut pixels),
         _ => unreachable!(),
     });
     Image::from_pixels(width, height, mode, pixels, None)

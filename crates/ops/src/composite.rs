@@ -32,8 +32,8 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
             PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
             PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
             PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
-            PixelMode::Rgb | PixelMode::Hsv => fill_pixels::<3>(spare, &color),
-            PixelMode::Rgba => fill_pixels::<4>(spare, &color),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => fill_pixels::<3>(spare, &color),
+            PixelMode::Rgba | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
         }
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
@@ -115,7 +115,7 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
                     (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
                     (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
                     (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
-                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill),
+                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill && source.mode == PixelMode::Rgba),
                     (4, 4) => paste_masked::<4, 4>(dst, src, mask, fill),
                     _ => unreachable!("validated modes"),
                 }

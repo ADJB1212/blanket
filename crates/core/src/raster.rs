@@ -261,6 +261,8 @@ pub enum PixelMode {
     Rgb,
     Rgba,
     Hsv,
+    Cmyk,
+    YCbCr,
 }
 
 impl PixelMode {
@@ -278,6 +280,8 @@ impl PixelMode {
             "RGB" => Ok(Self::Rgb),
             "RGBA" => Ok(Self::Rgba),
             "HSV" => Ok(Self::Hsv),
+            "CMYK" => Ok(Self::Cmyk),
+            "YCbCr" => Ok(Self::YCbCr),
             _ => Err(PyValueError::new_err(format!("unsupported image mode {value:?}"))),
         }
     }
@@ -296,6 +300,8 @@ impl PixelMode {
             Self::Rgb => "RGB",
             Self::Rgba => "RGBA",
             Self::Hsv => "HSV",
+            Self::Cmyk => "CMYK",
+            Self::YCbCr => "YCbCr",
         }
     }
 
@@ -303,8 +309,8 @@ impl PixelMode {
         match self {
             Self::One | Self::L | Self::I | Self::F | Self::I16 | Self::I16L | Self::I16B => 1,
             Self::La | Self::Pa => 2,
-            Self::Rgb | Self::Hsv => 3,
-            Self::Rgba => 4,
+            Self::Rgb | Self::Hsv | Self::YCbCr => 3,
+            Self::Rgba | Self::Cmyk => 4,
         }
     }
 
@@ -473,8 +479,8 @@ impl Image {
                 return match self.mode {
                     PixelMode::One | PixelMode::L => extrema::<1>(data),
                     PixelMode::La | PixelMode::Pa => extrema::<2>(data),
-                    PixelMode::Rgb | PixelMode::Hsv => extrema::<3>(data),
-                    PixelMode::Rgba => extrema::<4>(data),
+                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => extrema::<3>(data),
+                    PixelMode::Rgba | PixelMode::Cmyk => extrema::<4>(data),
                     _ => unreachable!(),
                 };
             }
@@ -513,8 +519,8 @@ impl Image {
                 let pixels = match self.mode {
                     PixelMode::One | PixelMode::L => data.to_vec(),
                     PixelMode::La | PixelMode::Pa => crate::simd::extract_two_channel(data, channel),
-                    PixelMode::Rgb | PixelMode::Hsv => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
-                    PixelMode::Rgba => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
+                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect(),
+                    PixelMode::Rgba | PixelMode::Cmyk => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
                     _ => unreachable!(),
                 };
                 Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)
@@ -544,8 +550,8 @@ impl Image {
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => PyList::new(py, data.iter().copied())?,
                 PixelMode::La | PixelMode::Pa => PyList::new(py, data.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))?,
-                PixelMode::Rgb | PixelMode::Hsv => PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?,
-                PixelMode::Rgba => PyList::new(py, data.as_chunks::<4>().0.iter().map(|p| (p[0], p[1], p[2], p[3])))?,
+                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?,
+                PixelMode::Rgba | PixelMode::Cmyk => PyList::new(py, data.as_chunks::<4>().0.iter().map(|p| (p[0], p[1], p[2], p[3])))?,
                 _ => unreachable!(),
             }
             .unbind());
@@ -682,8 +688,8 @@ impl Image {
         match self.mode {
             PixelMode::One | PixelMode::L => put_pixels::<1>(pixels, data, length, scale, offset),
             PixelMode::La | PixelMode::Pa => put_pixels::<2>(pixels, data, length, scale, offset),
-            PixelMode::Rgb | PixelMode::Hsv => put_pixels::<3>(pixels, data, length, scale, offset),
-            PixelMode::Rgba => put_pixels::<4>(pixels, data, length, scale, offset),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => put_pixels::<3>(pixels, data, length, scale, offset),
+            PixelMode::Rgba | PixelMode::Cmyk => put_pixels::<4>(pixels, data, length, scale, offset),
             _ => unreachable!(),
         }
     }
@@ -853,11 +859,11 @@ impl Image {
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
                 PixelMode::La | PixelMode::Pa => (sample(offset), sample(offset + 1)).into_pyobject(py)?.into_any().unbind(),
-                PixelMode::Rgb | PixelMode::Hsv => (sample(offset), sample(offset + 1), sample(offset + 2))
+                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => (sample(offset), sample(offset + 1), sample(offset + 2))
                     .into_pyobject(py)?
                     .into_any()
                     .unbind(),
-                PixelMode::Rgba => (sample(offset), sample(offset + 1), sample(offset + 2), sample(offset + 3))
+                PixelMode::Rgba | PixelMode::Cmyk => (sample(offset), sample(offset + 1), sample(offset + 2), sample(offset + 3))
                     .into_pyobject(py)?
                     .into_any()
                     .unbind(),
@@ -867,11 +873,11 @@ impl Image {
         Ok(match self.mode {
             PixelMode::One | PixelMode::L => pixels[offset].into_pyobject(py)?.into_any().unbind(),
             PixelMode::La | PixelMode::Pa => (pixels[offset], pixels[offset + 1]).into_pyobject(py)?.into_any().unbind(),
-            PixelMode::Rgb | PixelMode::Hsv => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => (pixels[offset], pixels[offset + 1], pixels[offset + 2])
                 .into_pyobject(py)?
                 .into_any()
                 .unbind(),
-            PixelMode::Rgba => (pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3])
+            PixelMode::Rgba | PixelMode::Cmyk => (pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3])
                 .into_pyobject(py)?
                 .into_any()
                 .unbind(),
@@ -907,6 +913,19 @@ impl Image {
             return self.copy(py);
         }
         let destination = PixelMode::parse(mode)?;
+        if destination == PixelMode::F && matches!(self.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+            if bit_depth.is_some_and(|depth| depth != 32) {
+                return Err(PyValueError::new_err("bit_depth does not match float mode"));
+            }
+            let rgb = convert_pixels(self.pixel_data()?, self.mode, PixelMode::Rgb);
+            let pixels = rgb
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .flat_map(|p| ((f64::from(p[0]) * 299.0 + f64::from(p[1]) * 587.0 + f64::from(p[2]) * 114.0) as f32 / 1000.0).to_le_bytes())
+                .collect();
+            return Self::from_float_bytes(self.width, self.height, pixels);
+        }
         if self.mode == PixelMode::F || destination == PixelMode::F {
             if destination == PixelMode::F {
                 if bit_depth.is_some_and(|depth| depth != 32) {
@@ -967,6 +986,44 @@ impl Image {
                 .collect();
             let gray = Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)?;
             return gray.convert(py, mode, bit_depth);
+        }
+        if matches!(self.mode, PixelMode::Cmyk | PixelMode::YCbCr) && destination != self.mode {
+            let source = self.pixel_data()?;
+            if self.mode == PixelMode::YCbCr && matches!(destination, PixelMode::L | PixelMode::La) {
+                let gray = Self::from_pixels(
+                    self.width,
+                    self.height,
+                    PixelMode::L,
+                    source.as_chunks::<3>().0.iter().map(|p| p[0]).collect(),
+                    None,
+                )?;
+                return gray.convert(py, mode, bit_depth);
+            }
+            let pixels = py.detach(|| convert_pixels(source, self.mode, PixelMode::Rgb));
+            if destination == PixelMode::One {
+                if bit_depth.is_some_and(|depth| depth != 8) {
+                    return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
+                }
+                let pixels = pixels
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
+                    .map(|p| {
+                        if u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114 >= 128000 {
+                            255
+                        } else {
+                            0
+                        }
+                    })
+                    .collect();
+                return Self::from_pixels(self.width, self.height, destination, pixels, None);
+            }
+            let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
+            return rgb.convert(py, mode, bit_depth);
+        }
+        if matches!(destination, PixelMode::Cmyk | PixelMode::YCbCr) && self.bit_depth > 8 && !self.mode.is_wide_scalar() {
+            let intermediate = if self.mode == PixelMode::L { "L" } else { "RGB" };
+            return self.convert(py, intermediate, Some(8))?.convert(py, mode, bit_depth);
         }
         if self.mode == PixelMode::Hsv && destination != PixelMode::Hsv {
             if bit_depth.is_none_or(|depth| depth == 8) && matches!(destination, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
@@ -1171,7 +1228,7 @@ pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_
         let pixels = py.detach(|| unpack_bilevel(data, size.0 as usize, size.1 as usize));
         return Image::from_pixels(size.0, size.1, mode, pixels, None);
     }
-    if matches!(mode, PixelMode::La | PixelMode::Pa | PixelMode::Hsv) && bit_depth != 8 {
+    if matches!(mode, PixelMode::La | PixelMode::Pa | PixelMode::Hsv | PixelMode::Cmyk | PixelMode::YCbCr) && bit_depth != 8 {
         return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
     }
     if bit_depth != 8 {
@@ -1202,8 +1259,8 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     let maximum_dimensions = match mode {
         PixelMode::One | PixelMode::L | PixelMode::I | PixelMode::F | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B => 2,
         PixelMode::La | PixelMode::Pa => 3,
-        PixelMode::Rgb | PixelMode::Hsv => 3,
-        PixelMode::Rgba => 4,
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => 3,
+        PixelMode::Rgba | PixelMode::Cmyk => 4,
     };
     if shape.len() > maximum_dimensions {
         return Err(PyValueError::new_err(format!(
@@ -1346,6 +1403,38 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     if from == to {
         return source.to_vec();
     }
+    if matches!(from, PixelMode::Cmyk | PixelMode::YCbCr) {
+        let rgb = if from == PixelMode::Cmyk {
+            map_pixels::<4, 3>(source, |p| {
+                std::array::from_fn(|i| {
+                    let value = u32::from(255 - p[i]) * u32::from(255 - p[3]) + 128;
+                    (((value >> 8) + value) >> 8) as u8
+                })
+            })
+        } else {
+            map_pixels::<3, 3>(source, ycbcr_to_rgb)
+        };
+        return convert_pixels(&rgb, PixelMode::Rgb, to);
+    }
+    if matches!(to, PixelMode::Cmyk | PixelMode::YCbCr) {
+        if matches!(from, PixelMode::One | PixelMode::L | PixelMode::La) {
+            let gray: Vec<u8> = source
+                .chunks_exact(from.channels())
+                .map(|p| if from == PixelMode::One && p[0] != 0 { 255 } else { p[0] })
+                .collect();
+            return if to == PixelMode::Cmyk {
+                map_pixels::<1, 4>(&gray, |p| [0, 0, 0, 255 - p[0]])
+            } else {
+                map_pixels::<1, 3>(&gray, |p| [p[0], 128, 128])
+            };
+        }
+        let rgb = convert_pixels(source, from, PixelMode::Rgb);
+        return if to == PixelMode::Cmyk {
+            map_pixels::<3, 4>(&rgb, |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+        } else {
+            map_pixels::<3, 3>(&rgb, rgb_to_ycbcr)
+        };
+    }
     if from == PixelMode::One {
         return match to {
             PixelMode::L => source.to_vec(),
@@ -1393,6 +1482,27 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return crate::simd::convert(source, from, to);
     }
     convert_pixels_generic(source, from, to)
+}
+
+fn rgb_to_ycbcr(p: [u8; 3]) -> [u8; 3] {
+    // Pillow rounds each contribution at six fractional bits before summing.
+    let term = |coefficient: f64, value: u8| (coefficient * f64::from(value) * 64.0 + 0.5) as i32;
+    let [r, g, b] = p;
+    [
+        ((term(0.299, r) + term(0.587, g) + term(0.114, b)) >> 6) as u8,
+        (((term(-0.16874, r) + term(-0.33126, g) + term(0.5, b)) >> 6) + 128) as u8,
+        (((term(0.5, r) + term(-0.41869, g) + term(-0.08131, b)) >> 6) + 128) as u8,
+    ]
+}
+
+fn ycbcr_to_rgb(p: [u8; 3]) -> [u8; 3] {
+    let term = |coefficient: f64, value: u8| (coefficient * f64::from(i32::from(value) - 128) * 64.0 + 0.5) as i32;
+    let [y, cb, cr] = p;
+    [
+        clip8(i32::from(y) + (term(1.402, cr) >> 6)),
+        clip8(i32::from(y) + ((term(-0.34414, cb) + term(-0.71414, cr)) >> 6)),
+        clip8(i32::from(y) + (term(1.772, cb) >> 6)),
+    ]
 }
 
 fn clip8(value: i32) -> u8 {
@@ -1559,6 +1669,21 @@ mod tests {
     }
 
     #[test]
+    fn converts_print_and_luma_chroma_channels() {
+        assert_eq!(
+            convert_pixels(&[0, 255, 255, 0, 0, 0, 0, 255], PixelMode::Cmyk, PixelMode::Rgb),
+            [255, 0, 0, 0, 0, 0]
+        );
+        assert_eq!(
+            convert_pixels(&[0, 128, 255], PixelMode::L, PixelMode::Cmyk),
+            [0, 0, 0, 255, 0, 0, 0, 127, 0, 0, 0, 0]
+        );
+        assert_eq!(convert_pixels(&[255, 0, 0], PixelMode::Rgb, PixelMode::YCbCr), [76, 84, 255]);
+        assert_eq!(convert_pixels(&[100, 30, 240], PixelMode::YCbCr, PixelMode::Rgb), [255, 53, 0]);
+        assert_eq!(convert_pixels(&[1], PixelMode::One, PixelMode::YCbCr), [255, 128, 128]);
+    }
+
+    #[test]
     pub fn expands_palette_indices_with_opaque_black_fallback() {
         let palette = [10, 20, 30, 40, 50, 60];
         assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
@@ -1571,7 +1696,7 @@ mod tests {
         assert_eq!(array_mode(&[3, 5], "|u1").unwrap(), PixelMode::L);
         assert_eq!(array_mode(&[3, 5, 3], "|u1").unwrap(), PixelMode::Rgb);
         assert_eq!(array_mode(&[3, 5, 4], "|u1").unwrap(), PixelMode::Rgba);
-        assert!(array_mode(&[3, 5], "<f4").is_err());
+        assert_eq!(array_mode(&[3, 5], "<f4").unwrap(), PixelMode::F);
         assert!(array_mode(&[3, 5, 2], "|u1").is_err());
     }
 }

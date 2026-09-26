@@ -175,6 +175,9 @@ unsafe fn blend_bytes_sse2(first: &[u8], second: &[u8], output: &mut [u8], facto
 
 #[pyfunction]
 fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+        return image.convert(py, "L", None)?.convert(py, image.mode.as_str(), None);
+    }
     let source = image.pixel_data()?;
     if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
         return copy(image, source);
@@ -207,6 +210,17 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
 
 #[pyfunction]
 fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+        let gray = image.convert(py, "L", None)?;
+        let source = gray.pixel_data()?;
+        let mean = if source.is_empty() {
+            0
+        } else {
+            (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8
+        };
+        let gray = Image::from_pixels(image.width, image.height, PixelMode::L, vec![mean; source.len()], None)?;
+        return gray.convert(py, image.mode.as_str(), None);
+    }
     let source = image.pixel_data()?;
     let sum = py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => byte_sum(source),
@@ -297,16 +311,17 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 
     let width = image.width as usize;
     py.detach(|| match image.mode {
-        PixelMode::One | PixelMode::L => smooth::<1>(source, &mut pixels, width),
-        PixelMode::La | PixelMode::Pa => smooth::<2>(source, &mut pixels, width),
-        PixelMode::Rgb | PixelMode::Hsv => smooth::<3>(source, &mut pixels, width),
-        PixelMode::Rgba => smooth::<4>(source, &mut pixels, width),
+        PixelMode::One | PixelMode::L => smooth::<1, 1>(source, &mut pixels, width),
+        PixelMode::La | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => smooth::<3, 3>(source, &mut pixels, width),
+        PixelMode::Cmyk => smooth::<4, 4>(source, &mut pixels, width),
+        PixelMode::Rgba => smooth::<4, 3>(source, &mut pixels, width),
         _ => unreachable!(),
     });
     output(image, pixels)
 }
 
-fn smooth<const C: usize>(source: &[u8], output: &mut [u8], width: usize) {
+fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], width: usize) {
     let row_bytes = width * C;
     let height = source.len() / row_bytes;
     chunks_mut_above(output, row_bytes * 32, MIN_PARALLEL_BYTES, |band, rows| {
@@ -317,8 +332,7 @@ fn smooth<const C: usize>(source: &[u8], output: &mut [u8], width: usize) {
             }
             for x in 1..width - 1 {
                 let center = y * row_bytes + x * C;
-                let channels = if C == 4 { 3 } else { C };
-                for channel in 0..channels {
+                for channel in 0..B {
                     let mut sum = u32::from(source[center + channel]) * 5;
                     for dy in [0, row_bytes, row_bytes * 2] {
                         let upper_left = center - row_bytes - C + dy + channel;
@@ -370,7 +384,7 @@ mod tests {
     fn smooth_copies_borders_and_preserves_alpha() {
         let source: Vec<u8> = (0..100).collect();
         let mut output = source.clone();
-        smooth::<4>(&source, &mut output, 5);
+        smooth::<4, 3>(&source, &mut output, 5);
         assert_eq!(&output[..20], &source[..20]);
         assert_eq!(&output[80..], &source[80..]);
         for (actual, expected) in output.as_chunks::<4>().0.iter().zip(source.as_chunks::<4>().0) {
