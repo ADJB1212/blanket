@@ -82,8 +82,10 @@ jobs:
         run: |
           curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
           echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
+          sudo add-apt-repository ppa:ubuntu-toolchain-r/test
           sudo apt-get update
-          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
+          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm gcc-16 g++-16
+          sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-16 160 --slave /usr/bin/g++ g++ /usr/bin/g++-16
           echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
           echo "CC=clang-23" >> "$GITHUB_ENV"
@@ -94,7 +96,7 @@ jobs:
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm webp
+          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm webp gcc
           echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
           echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
@@ -116,9 +118,11 @@ jobs:
           cargo clean -p webpx
       - name: Install project and test dependencies
         run: |
+          which gcc
+          gcc --version
           uv sync --no-install-project --only-group test
           uv tool install maturin
-          maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C link-arg=-fuse-ld=$FUSE_LINKER
+          maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
       - name: Test Python API
         run: uv run pytest
       - name: Test x86 SIMD kernels
