@@ -213,6 +213,7 @@ dependencies = [
  "png",
  "pyo3",
  "rayon",
+ "tiff",
  "turbojpeg",
  "webpx",
 ]

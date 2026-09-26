@@ -30,7 +30,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {
             PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
-            PixelMode::I => fill_pixels::<4>(spare, &color),
+            PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
             PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
             PixelMode::Rgb | PixelMode::Hsv => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba => fill_pixels::<4>(spare, &color),
@@ -38,7 +38,9 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
     });
-    if mode.is_integer() {
+    if mode == PixelMode::F {
+        Image::from_float_bytes(size.0, size.1, pixels)
+    } else if mode.is_integer() {
         Image::from_integer_bytes(size.0, size.1, mode, pixels)
     } else {
         Image::from_pixels(size.0, size.1, mode, pixels, None)
@@ -66,7 +68,7 @@ fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], c
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
-    if image.mode.is_integer() {
+    if image.mode.is_wide_scalar() {
         return paste_integer(image, source, position, mask);
     }
     image.pixel_data()?;
@@ -160,6 +162,13 @@ fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: 
             if alpha == 255 {
                 pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
             } else if alpha != 0 {
+                if image.mode == PixelMode::F {
+                    let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
+                    let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
+                    let mixed = (old * (255 - alpha) as f32 + new * alpha as f32) / 255.0;
+                    pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
+                    continue;
+                }
                 for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
                     let a = u32::from(alpha);
                     *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;

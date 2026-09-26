@@ -191,13 +191,31 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Ico => decode_ico(data),
         ImageFormat::Pdf => Err("PDF is a write-only format".into()),
         ImageFormat::Avif => decode_rust_image(data, RustFormat::Avif, "AVIF"),
-        ImageFormat::Tiff => decode_rust_image(data, RustFormat::Tiff, "TIFF"),
+        ImageFormat::Tiff => decode_float_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok),
         ImageFormat::Webp => decode_webp(data),
         ImageFormat::Heif => decode_heif(data),
         ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
     }
+}
+
+fn decode_float_tiff(data: &[u8]) -> Result<Option<Image>, String> {
+    let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
+        return Ok(None);
+    };
+    if decoder.colortype().ok() != Some(tiff::ColorType::Gray(32)) {
+        return Ok(None);
+    }
+    let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
+    validate_dimensions(width, height)?;
+    let tiff::decoder::DecodingResult::F32(values) = decoder.read_image().map_err(|error| error.to_string())? else {
+        return Ok(None);
+    };
+    let mut image =
+        Image::from_float_bytes(width, height, values.into_iter().flat_map(f32::to_le_bytes).collect()).map_err(|error| error.to_string())?;
+    image.format = Some("TIFF".to_owned());
+    Ok(Some(image))
 }
 
 fn decode_ico(data: &[u8]) -> Result<Image, String> {
@@ -436,6 +454,24 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if image.mode == PixelMode::F {
+        if format != ImageFormat::Tiff {
+            return Err(PyOSError::new_err(format!("cannot write mode F as {}", format.as_str())));
+        }
+        let samples: Vec<f32> = image
+            .raw_data()?
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|bytes| f32::from_le_bytes(*bytes))
+            .collect();
+        let mut output = Cursor::new(Vec::new());
+        tiff::encoder::TiffEncoder::new(&mut output)
+            .map_err(codec_error)?
+            .write_image::<tiff::encoder::colortype::Gray32Float>(image.width, image.height, &samples)
+            .map_err(codec_error)?;
+        return Ok(output.into_inner());
+    }
     if format == ImageFormat::Heif {
         return encode_heif(image, options);
     }

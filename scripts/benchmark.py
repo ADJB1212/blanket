@@ -96,6 +96,11 @@ def make_integer(width: int, height: int, mode: str) -> bytes:
     return (samples % 65536).astype(">u2" if mode == "I;16B" else "<u2").tobytes()
 
 
+def make_float(width: int, height: int) -> np.ndarray:
+    samples = (np.arange(width * height, dtype=np.uint32) * 37 % 1024).astype(np.float32)
+    return (samples - 128.5).reshape(height, width)
+
+
 def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> bytes:
     output = BytesIO()
     image.save(output, fmt, **options)
@@ -354,6 +359,32 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), None))
         else:
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
+
+    floats = make_float(w, h)
+    raw = floats.tobytes()
+    blanket = BlanketImage.frombytes("F", size, raw)
+    pillow = PillowImage.frombytes("F", size, raw)
+    fill = 12.5
+    comparisons.extend(
+        [
+            ("new F", partial(BlanketImage.new, "F", size, fill), partial(PillowImage.new, "F", size, fill)),
+            ("fromarray F", partial(BlanketImage.fromarray, floats), partial(PillowImage.fromarray, floats)),
+            ("frombytes F", partial(BlanketImage.frombytes, "F", size, raw), partial(PillowImage.frombytes, "F", size, raw)),
+            ("tobytes F", blanket.tobytes, pillow.tobytes),
+            ("getpixel F", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+            ("putpixel F (copy included)", lambda im=blanket: im.copy().putpixel((w // 2, h // 2), fill), lambda im=pillow: im.copy().putpixel((w // 2, h // 2), fill)),
+            ("crop F", partial(blanket.crop, box), partial(pillow.crop, box)),
+            ("transpose F", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+            ("resize NEAREST F", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+            ("resize BILINEAR F", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)),
+            ("reduce F", partial(blanket.reduce, 2), partial(pillow.reduce, 2)),
+        ]
+    )
+    comparisons.extend((f"cvt F→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA", "I"))
+    comparisons.extend((f"cvt {source}→F", partial(images[source][0].convert, "F"), partial(images[source][1].convert, "F")) for source in ("1", "LA", "HSV"))
+    payload = pillow_payload(pillow, "TIFF")
+    comparisons.append(("load TIFF F", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+    comparisons.append(("save TIFF F", lambda im=blanket: im.save(BytesIO(), "TIFF"), lambda im=pillow: im.save(BytesIO(), "TIFF")))
 
     first, reference = images["1"]
     second = BlanketImage.frombytes("1", size, bytes(value ^ 0xA5 for value in first.tobytes()))

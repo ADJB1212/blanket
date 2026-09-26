@@ -247,7 +247,14 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
     let source = image.raw_data()?;
     let mut pixels = buffer(source.len())?;
     if image.width != 0 && image.height != 0 {
-        let bytes_per_pixel = image.mode.channels() * if image.bit_depth == 8 { 1 } else { 2 };
+        let bytes_per_pixel = image.mode.channels()
+            * if image.mode.is_wide_scalar() {
+                image.mode.sample_bytes()
+            } else if image.bit_depth == 8 {
+                1
+            } else {
+                2
+            };
         let row = image.width as usize * bytes_per_pixel;
         let head = xoffset.rem_euclid(i64::from(image.width)) as usize * bytes_per_pixel;
         let shift_y = yoffset.rem_euclid(i64::from(image.height)) as usize;
