@@ -196,11 +196,14 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libnuma-dev
-          brew install llvm lld cmake meson nasm ninja pkg-config mold
+          brew install llvm lld cmake meson nasm ninja pkg-config mold gcc
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
           echo "CFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
       - name: Restore aom
@@ -271,7 +274,7 @@ jobs:
             ) }}
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 $TUNE_ARGS
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 $TUNE_ARGS
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
@@ -327,11 +330,11 @@ jobs:
           uv tool install delocate
       - name: Install build tools
         run: |
-          brew install llvm lld cmake ninja nasm pkg-config
-          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
+          brew install llvm lld cmake ninja nasm pkg-config gcc
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
           echo "CFLAGS=-O3" >> "$GITHUB_ENV"
           echo "CXXFLAGS=-O3" >> "$GITHUB_ENV"
       - name: Restore aom
@@ -395,7 +398,7 @@ jobs:
         id: build-wheel
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist-unrepaired --features default -i python3.14 --strip --auditwheel=skip -- -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
+          maturin build --release --out dist-unrepaired --features default -i python3.14 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6

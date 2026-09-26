@@ -30,7 +30,7 @@ jobs:
         with:
           path: ~/deps/aom
           key: aom-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
-      - name: Set up Homebrew (Linux)
+      - name: Set up Homebrew
         if: steps.cache.outputs.cache-hit != 'true'
         uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
       - name: Install build tools
@@ -38,20 +38,23 @@ jobs:
         shell: bash
         run: |
           if [[ "$RUNNER_OS" == macOS ]]; then
-            brew install llvm lld cmake ninja meson nasm pkg-config
+            brew install llvm lld cmake ninja meson nasm pkg-config gcc
           else
             sudo apt-get update
             sudo apt-get install -y libnuma-dev
-            brew install llvm lld cmake meson nasm ninja pkg-config
+            brew install llvm lld cmake meson nasm ninja pkg-config gcc
           fi
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
       - name: Select compiler
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
         run: |
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
       - name: Build aom
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash

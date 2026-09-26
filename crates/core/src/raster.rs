@@ -1448,14 +1448,27 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
     if matches!(to, PixelMode::Cmyk | PixelMode::YCbCr) {
         if matches!(from, PixelMode::One | PixelMode::L | PixelMode::La) {
-            let gray: Vec<u8> = source
-                .chunks_exact(from.channels())
-                .map(|p| if from == PixelMode::One && p[0] != 0 { 255 } else { p[0] })
-                .collect();
+            return match (from, to) {
+                (PixelMode::La, PixelMode::Cmyk) => map_pixels::<2, 4>(source, |p| [0, 0, 0, 255 - p[0]]),
+                (PixelMode::La, _) => map_pixels::<2, 3>(source, |p| [p[0], 128, 128]),
+                (PixelMode::One, PixelMode::Cmyk) => map_pixels::<1, 4>(source, |p| [0, 0, 0, if p[0] == 0 { 255 } else { 0 }]),
+                (PixelMode::One, _) => map_pixels::<1, 3>(source, |p| [if p[0] == 0 { 0 } else { 255 }, 128, 128]),
+                (_, PixelMode::Cmyk) => map_pixels::<1, 4>(source, |p| [0, 0, 0, 255 - p[0]]),
+                _ => map_pixels::<1, 3>(source, |p| [p[0], 128, 128]),
+            };
+        }
+        if from == PixelMode::Rgba {
             return if to == PixelMode::Cmyk {
-                map_pixels::<1, 4>(&gray, |p| [0, 0, 0, 255 - p[0]])
+                map_pixels::<4, 4>(source, |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
             } else {
-                map_pixels::<1, 3>(&gray, |p| [p[0], 128, 128])
+                map_pixels::<4, 3>(source, |p| rgb_to_ycbcr([p[0], p[1], p[2]]))
+            };
+        }
+        if from == PixelMode::Rgb {
+            return if to == PixelMode::Cmyk {
+                map_pixels::<3, 4>(source, |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+            } else {
+                map_pixels::<3, 3>(source, rgb_to_ycbcr)
             };
         }
         let rgb = convert_pixels(source, from, PixelMode::Rgb);

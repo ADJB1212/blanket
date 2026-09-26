@@ -37,6 +37,17 @@ def test_arrays_palettes_and_depth(mode: str) -> None:
         assert wide.convert(mode).tobytes() == wide.convert(source, bit_depth=8).convert(mode).tobytes()
 
 
+@pytest.mark.parametrize("source", ["1", "L", "LA", "RGB", "RGBA"])
+@pytest.mark.parametrize("target", ["CMYK", "YCbCr"])
+@pytest.mark.parametrize("count", [17, 16385, 300007])
+def test_direct_color_conversion_chunks(source: str, target: str, count: int) -> None:
+    length = (count + 7) // 8 if source == "1" else count * PIL.getmodebands(source)
+    raw = random.Random(73).randbytes(length)
+    expected = PIL.frombytes(source, (count, 1), raw)
+    actual = Image.frombytes(source, expected.size, raw)
+    assert actual.convert(target).tobytes() == expected.convert(target).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
 @pytest.mark.parametrize("other", ["1", "L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "I", "F"])
 @pytest.mark.parametrize("reverse", [False, True])

@@ -131,16 +131,16 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libnuma-dev
-          brew install llvm lld cmake meson nasm ninja pkg-config mold
+          brew install llvm lld cmake meson nasm ninja pkg-config mold gcc
 
       - name: Setup PATH
         run: |
           echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
 
       - name: Restore x265
         uses: actions/cache/restore@v6
@@ -210,7 +210,7 @@ jobs:
       - name: Install project and benchmark dependencies
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
           uv pip install --compile-bytecode dist/*.whl

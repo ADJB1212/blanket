@@ -86,23 +86,23 @@ jobs:
           sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm
           echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
-          echo "CC=clang-23" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "CC=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
+          echo "CXX=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif" >> "$GITHUB_ENV"
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
           brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm webp
-          echo "/opt/homebrew/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/llvm/bin" >> "$GITHUB_PATH"
-          echo "/opt/homebrew/opt/lld/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=lld" >> "$GITHUB_ENV"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp" >> "$GITHUB_ENV"
       - name: Check Rust formatting
         run: cargo fmt --check
@@ -118,7 +118,7 @@ jobs:
         run: |
           uv sync --no-install-project --only-group test
           uv tool install maturin
-          maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C link-arg=-fuse-ld=$FUSE_LINKER
+          maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
       - name: Test Python API
         run: uv run pytest
       - name: Test x86 SIMD kernels
