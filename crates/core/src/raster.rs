@@ -941,6 +941,10 @@ impl Image {
                 return Self::from_samples(self.width, self.height, PixelMode::L, samples, 16, None);
             }
             let data = self.raw_data()?;
+            if destination == PixelMode::I {
+                let pixels = py.detach(|| crate::simd::float_to_integer(data));
+                return Self::from_integer_bytes(self.width, self.height, destination, pixels);
+            }
             if destination.is_integer() {
                 let pixels = data
                     .as_chunks::<4>()
@@ -1222,7 +1226,18 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         if bit_depth.is_some_and(|depth| depth != 32) {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
-        let raw: Vec<u8> = obj.call_method0("tobytes")?.extract()?;
+        let raw = if let Ok(buffer) = pyo3::buffer::PyUntypedBuffer::get(obj)
+            && buffer.is_c_contiguous()
+        {
+            // The buffer export stays alive and Python remains attached during the copy.
+            if buffer.len_bytes() == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes()).to_vec() }
+            }
+        } else {
+            obj.call_method0("tobytes")?.extract::<Vec<u8>>()?
+        };
         let pixels = match typestr.as_str() {
             "<f4" | "=f4" => raw,
             ">f4" => raw

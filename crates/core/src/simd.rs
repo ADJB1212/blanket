@@ -1,6 +1,43 @@
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::raster::PixelMode;
 
+pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
+    let mut output = vec![0; source.len()];
+    chunks_mut(&mut output, CHUNK_PIXELS * 4, |chunk, dst| {
+        let src = &source[chunk * CHUNK_PIXELS * 4..][..dst.len()];
+        let mut offset = 0;
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            while offset + 16 <= dst.len() {
+                let values = vld1q_f32(src.as_ptr().add(offset).cast());
+                vst1q_s32(dst.as_mut_ptr().add(offset).cast(), vcvtq_s32_f32(values));
+                offset += 16;
+            }
+        }
+        #[cfg(target_arch = "x86_64")]
+        unsafe {
+            use std::arch::x86_64::*;
+            while offset + 16 <= dst.len() {
+                let values = _mm_loadu_ps(src.as_ptr().add(offset).cast());
+                let converted = _mm_cvttps_epi32(values);
+                let high = _mm_castps_si128(_mm_cmpge_ps(values, _mm_set1_ps(2147483648.0)));
+                let valid = _mm_castps_si128(_mm_cmpord_ps(values, values));
+                let result = _mm_and_si128(
+                    valid,
+                    _mm_or_si128(_mm_and_si128(high, _mm_set1_epi32(i32::MAX)), _mm_andnot_si128(high, converted)),
+                );
+                _mm_storeu_si128(dst.as_mut_ptr().add(offset).cast(), result);
+                offset += 16;
+            }
+        }
+        for (src, dst) in src[offset..].as_chunks::<4>().0.iter().zip(dst[offset..].as_chunks_mut::<4>().0) {
+            *dst = (f32::from_le_bytes(*src) as i32).to_le_bytes();
+        }
+    });
+    output
+}
+
 pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
     let stride = mode.sample_bytes();
     let mut output = vec![0; source.len() / stride];

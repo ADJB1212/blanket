@@ -589,21 +589,36 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
         let source = image.raw_data()?;
         let mut pixels = buffer(size, 4)?;
         py.detach(|| {
-            for y in 0..size.1 {
-                for x in 0..size.0 {
+            if size.0 == 0 {
+                return;
+            }
+            blanket_core::parallel::chunks_mut(&mut pixels, size.0 as usize * 4, |y, row| {
+                let y = y as u32;
+                let sy = top + y * fy;
+                let end_y = sy.saturating_add(fy).min(bottom);
+                let mut first = 0;
+                if fx == 2 && end_y - sy == 2 {
+                    let start = (sy as usize * image.width as usize + left as usize) * 4;
+                    let width = (right - left) as usize * 4;
+                    first =
+                        crate::ops_simd::reduce_float_two(&source[start..start + width], &source[start + image.width as usize * 4..][..width], row)
+                            as u32;
+                }
+                for x in first..size.0 {
                     let mut sum = 0.0_f64;
-                    let mut count = 0_u32;
-                    for sy in top + y * fy..(top + (y + 1) * fy).min(bottom) {
-                        for sx in left + x * fx..(left + (x + 1) * fx).min(right) {
-                            let start = (sy as usize * image.width as usize + sx as usize) * 4;
-                            sum += f64::from(f32::from_le_bytes(source[start..start + 4].try_into().unwrap()));
-                            count += 1;
+                    let sx = left + x * fx;
+                    let end_x = sx.saturating_add(fx).min(right);
+                    for sy in sy..end_y {
+                        let start = (sy as usize * image.width as usize + sx as usize) * 4;
+                        for bytes in source[start..start + (end_x - sx) as usize * 4].as_chunks::<4>().0 {
+                            sum += f64::from(f32::from_le_bytes(*bytes));
                         }
                     }
-                    let start = (y as usize * size.0 as usize + x as usize) * 4;
-                    pixels[start..start + 4].copy_from_slice(&((sum / f64::from(count)) as f32).to_le_bytes());
+                    let count = f64::from(end_x - sx) * f64::from(end_y - sy);
+                    let start = x as usize * 4;
+                    row[start..start + 4].copy_from_slice(&((sum / count) as f32).to_le_bytes());
                 }
-            }
+            });
         });
         return output(image, size, pixels);
     }

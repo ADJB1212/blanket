@@ -458,6 +458,40 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode F as {}", format.as_str())));
         }
+        if image.width == 0 || image.height == 0 {
+            return Err(PyValueError::new_err("cannot encode an empty image"));
+        }
+        if cfg!(target_endian = "little") {
+            use tiff::tags::Tag;
+            let pixels = image.raw_data()?;
+            let length = u32::try_from(pixels.len()).map_err(|_| PyValueError::new_err("image is too large for TIFF"))?;
+            let mut output = Cursor::new(Vec::with_capacity(pixels.len() + 256));
+            {
+                let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(codec_error)?;
+                let mut directory = encoder.image_directory().map_err(codec_error)?;
+                let offset = directory.write_data(pixels).map_err(codec_error)?;
+                for (tag, value) in [
+                    (Tag::ImageWidth, image.width),
+                    (Tag::ImageLength, image.height),
+                    (Tag::RowsPerStrip, image.height),
+                    (Tag::StripOffsets, offset as u32),
+                    (Tag::StripByteCounts, length),
+                ] {
+                    directory.write_tag(tag, value).map_err(codec_error)?;
+                }
+                for (tag, value) in [
+                    (Tag::BitsPerSample, 32_u16),
+                    (Tag::Compression, 1),
+                    (Tag::PhotometricInterpretation, 1),
+                    (Tag::SamplesPerPixel, 1),
+                    (Tag::SampleFormat, 3),
+                ] {
+                    directory.write_tag(tag, value).map_err(codec_error)?;
+                }
+                directory.finish().map_err(codec_error)?;
+            }
+            return Ok(output.into_inner());
+        }
         let samples: Vec<f32> = image
             .raw_data()?
             .as_chunks::<4>()

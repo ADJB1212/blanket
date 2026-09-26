@@ -310,6 +310,55 @@ def test_float_mode_fromarray_byte_order_and_width(dtype: str) -> None:
     assert Image.fromarray(values).tobytes() == PillowImage.fromarray(values).tobytes()
 
 
+@pytest.mark.parametrize("dtype", ["<f4", ">f4", "<f8", ">f8"])
+@pytest.mark.parametrize("strided", [False, True])
+def test_float_array_owns_pixels(dtype: str, strided: bool) -> None:
+    import numpy as np
+
+    values = np.arange(323, dtype=np.float32).reshape(17, 19).astype(dtype)
+    if strided:
+        values = values[::-1, ::2]
+    expected = PillowImage.fromarray(values).tobytes()
+    image = Image.fromarray(values)
+    values[:] = 0
+    assert image.tobytes() == expected
+
+
+@pytest.mark.parametrize("count", [3, 4, 5, 16385, 300001])
+def test_float_to_integer_saturation(count: int) -> None:
+    values = [float("nan"), float("inf"), -float("inf"), 2147483648.0, -2147483648.0, -1.75, 1.75, -0.0]
+    expected = [0, 2147483647, -2147483648, 2147483647, -2147483648, -1, 1, 0]
+    values = (values * ((count + 7) // 8))[:count]
+    image = Image.frombytes("F", (count, 1), struct.pack(f"<{count}f", *values))
+    assert image.convert("I").tobytes() == struct.pack(f"<{count}i", *(expected * ((count + 7) // 8))[:count])
+
+
+@pytest.mark.parametrize("factor", [2, 3, (2, 3), (1, 7)])
+@pytest.mark.parametrize("box", [None, (1, 3, 518, 513)])
+def test_float_reduce_simd_edges(factor: int | tuple[int, int], box: tuple[int, int, int, int] | None) -> None:
+    import numpy as np
+
+    values = np.random.default_rng(17).uniform(-1000, 1000, (515, 519)).astype(np.float32)
+    actual = Image.fromarray(values).reduce(factor, box=box)
+    expected = PillowImage.fromarray(values).reduce(factor, box=box)
+    assert np.frombuffer(actual.tobytes(), dtype=np.float32) == pytest.approx(np.frombuffer(expected.tobytes(), dtype=np.float32), abs=0.0001)
+
+
+def test_float_reduce_preserves_double_accumulation() -> None:
+    values = [1e20, 1.0, 1e20, -1e20, -1e20, 4.0, 1.0, 4.0]
+    image = Image.frombytes("F", (4, 2), struct.pack("<8f", *values))
+    assert image.reduce(2).tobytes() == struct.pack("<2f", 1.0, 1.25)
+
+
+def test_float_tiff_preserves_sample_bits() -> None:
+    raw = struct.pack("<8I", 0, 0x80000000, 0x7F800000, 0xFF800000, 0x7FC00001, 1, 0x7F7FFFFF, 0xBF800000)
+    image = Image.frombytes("F", (4, 2), raw)
+    output = BytesIO()
+    image.save(output, "TIFF")
+    assert PillowImage.open(BytesIO(output.getvalue())).tobytes() == raw
+    assert Image.open(BytesIO(output.getvalue())).tobytes() == raw
+
+
 def test_float_mode_reduce_transform_and_tiff_roundtrip() -> None:
     values = [1.25, 2.5, -3.75, 100.0, 0.0, 9.5]
     blanket = Image.new("F", (3, 2))
