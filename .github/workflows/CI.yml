@@ -89,7 +89,7 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang-23" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=vendored,user-provided-webp,embedded-libheif" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif" >> "$GITHUB_ENV"
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
@@ -102,7 +102,7 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=vendored,user-provided-webp" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp" >> "$GITHUB_ENV"
       - name: Check Rust formatting
         run: cargo fmt --check
       - name: Force rebuild crates that use homebrew dylibs

@@ -29,6 +29,7 @@ jobs:
       dav1d-version: ${{ steps.versions.outputs.dav1d }}
       libheif-version: ${{ steps.versions.outputs.libheif }}
       libwebp-version: ${{ steps.versions.outputs.libwebp }}
+      libjxl-version: ${{ steps.versions.outputs.libjxl }}
     steps:
       - name: Set codec versions
         id: versions
@@ -39,6 +40,7 @@ jobs:
           echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
           echo "libheif=v1.23.5" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
+          echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
 
   aom:
     needs: prepare
@@ -86,8 +88,15 @@ jobs:
       runner: ubuntu-24.04
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
+  libjxl:
+    needs: prepare
+    uses: ./.github/workflows/build-libjxl.yml
+    with:
+      runner: ubuntu-24.04
+      version: ${{ needs.prepare.outputs.libjxl-version }}
+
   benchmark:
-    needs: [prepare, libheif, libwebp]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
     runs-on: ubuntu-24.04
     strategy:
@@ -175,6 +184,13 @@ jobs:
           key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
 
+      - name: Restore libjxl
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libjxl
+          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
+          fail-on-cache-miss: true
+
       - name: Setup codec dependencies
         run: |
           echo "$HOME/deps/dav1d/bin" >> "$GITHUB_PATH"
@@ -183,17 +199,18 @@ jobs:
           echo "$HOME/deps/libde265/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libwebp/bin" >> "$GITHUB_PATH"
+          echo "$HOME/deps/libjxl/bin" >> "$GITHUB_PATH"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
 
-          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
 
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
 
       - name: Install project and benchmark dependencies
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist --features vendored,user-provided-webp -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
           uv pip install --compile-bytecode dist/*.whl
