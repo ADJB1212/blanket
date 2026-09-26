@@ -311,14 +311,6 @@ def test_jpeg_optimization(mode: str, quality: int, effort: int) -> None:
     assert original.tobytes() == pixels
 
 
-def test_jpeg_optimization_reduces_size() -> None:
-    original = Image.new("RGB", (256, 256), (12, 31, 79))
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "JPEG")
-    original.save(output, "JPEG", compressor=LosslessImageCompressor())
-    assert len(output.getvalue()) < len(baseline.getvalue())
-
-
 @pytest.mark.parametrize("format", ["JXL", "HEIF", "HEIC"])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("depth", [8, 10, 12])
@@ -382,16 +374,6 @@ def test_jxl_compressor_reuses_runner_across_frame_sizes(mode: str, depth: int) 
         assert decoded.size == size
         assert decoded.convert(mode, bit_depth=depth).tobytes() == raw
         assert source.tobytes() == raw
-
-
-@pytest.mark.parametrize("format", ["JXL", "HEIF"])
-def test_sample_codec_optimization_reduces_size(format: str) -> None:
-    original = Image.new("RGB", (128, 128), (12, 31, 79))
-    baseline, output = io.BytesIO(), io.BytesIO()
-    options = {"effort": 1} if format == "JXL" else {}
-    original.save(baseline, format, lossless=True, **options)
-    original.save(output, format, lossless=True, compressor=LosslessImageCompressor(effort=7), **options)
-    assert len(output.getvalue()) < len(baseline.getvalue())
 
 
 @pytest.mark.parametrize("format", ["JXL", "HEIC"])

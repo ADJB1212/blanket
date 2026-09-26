@@ -1,0 +1,64 @@
+name: Build libjxl
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+env:
+  DO_NOT_TRACK: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
+  MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore libjxl
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libjxl
+          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+      - name: Set up Homebrew (Linux)
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+      - name: Install build tools
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            brew install cmake ninja meson nasm pkg-config brotli
+          else
+            sudo apt-get update
+            sudo apt-get install -y libnuma-dev
+            brew install llvm lld cmake meson nasm ninja pkg-config brotli
+            echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+            echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          fi
+      - name: Select compiler
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+      - name: Build libjxl
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: bash scripts/build_release_dependency.sh libjxl "${{ inputs.version }}"
+      - name: Save libjxl
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/deps/libjxl
+          key: ${{ steps.cache.outputs.cache-primary-key }}

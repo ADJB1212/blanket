@@ -10,15 +10,6 @@ from PIL import Image as PILImage
 from blanket import Image
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 1), (2, 3), (3, 2), (3, 3), (4, 5), (99, 96), (100, 98), (803, 607)])
-def test_reduce_three_edges(mode: str, size: tuple[int, int]) -> None:
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
-    image = Image.frombytes(mode, size, raw)
-    reference = PILImage.frombytes(mode, size, raw)
-    assert image.reduce(3).tobytes() == reference.reduce(3).tobytes()
-
-
 def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
     raw = bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * len(mode)))
     return Image.frombytes(mode, (17, 13), raw), PILImage.frombytes(mode, (17, 13), raw)

@@ -36,6 +36,7 @@ jobs:
       dav1d-version: ${{ steps.versions.outputs.dav1d }}
       libheif-version: ${{ steps.versions.outputs.libheif }}
       libwebp-version: ${{ steps.versions.outputs.libwebp }}
+      libjxl-version: ${{ steps.versions.outputs.libjxl }}
     steps:
       - name: Set codec versions
         id: versions
@@ -46,6 +47,7 @@ jobs:
           echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
           echo "libheif=v1.23.5" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
+          echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
       - name: Ensure release exists
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -138,8 +140,19 @@ jobs:
       runner: ${{ matrix.runner }}
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
+  libjxl:
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+    uses: ./.github/workflows/build-libjxl.yml
+    with:
+      runner: ${{ matrix.runner }}
+      version: ${{ needs.prepare.outputs.libjxl-version }}
+
   linux:
-    needs: [prepare, libheif, libwebp]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -162,7 +175,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ hashFiles('**/Cargo.lock') }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -226,12 +239,18 @@ jobs:
           path: ~/deps/libwebp
           key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
+      - name: Restore libjxl
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libjxl
+          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
+          fail-on-cache-miss: true
       - name: Setup codec paths
         run: |
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
@@ -240,6 +259,7 @@ jobs:
           pkg-config --modversion libde265
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
+          pkg-config --modversion libjxl
       - name: Build wheels
         id: build-wheel
         env:
@@ -272,7 +292,7 @@ jobs:
           path: dist/*.whl
 
   macos:
-    needs: [prepare, libheif, libwebp]
+    needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
     runs-on: macos-latest
     steps:
@@ -287,7 +307,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ hashFiles('**/Cargo.lock') }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -350,12 +370,18 @@ jobs:
           path: ~/deps/libwebp
           key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
+      - name: Restore libjxl
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/libjxl
+          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
+          fail-on-cache-miss: true
       - name: Setup codec paths
         run: |
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig" >> "$GITHUB_ENV"
-          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp" >> "$GITHUB_ENV"
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
-          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "DYLD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
       - name: Verify codec versions
         run: |
           pkg-config --modversion dav1d
@@ -364,6 +390,7 @@ jobs:
           pkg-config --modversion libde265
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
+          pkg-config --modversion libjxl
       - name: Build wheels
         id: build-wheel
         run: |
