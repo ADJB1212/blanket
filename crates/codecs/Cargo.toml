@@ -29,7 +29,7 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["neon"] 
 libwebp-sys = { version = "0.14", default-features = false, features = ["avx2", "sse41"] }
 
 [features]
-default = ["vendored"]
+default = ["vendored", "user-provided-webp"]
 vendored = ["jpegxl-rs/vendored"]
 embedded-libheif = ["libheif-rs/embedded-libheif"]
 user-provided-webp = ["libwebp-sys/system-dylib"]

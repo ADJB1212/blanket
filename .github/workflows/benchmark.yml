@@ -193,7 +193,7 @@ jobs:
       - name: Install project and benchmark dependencies
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist --features vendored,user-provided-webp -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
+          maturin build --release --out dist -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
           uv pip install --compile-bytecode dist/*.whl
