@@ -152,6 +152,23 @@ def test_scaled_putdata(scale: float, offset: float) -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("container", [list, tuple])
+@pytest.mark.parametrize("scale,offset", [(1, 0), (0.75, 20)])
+@pytest.mark.parametrize("mode", ["1", "L", "P"])
+def test_putdata_integer_conversion(container: type, scale: float, offset: float, mode: str) -> None:
+    class Sample(int):
+        def __float__(self) -> float:
+            return 42.0
+
+    values = container([-1, 0, 255, 256, 2**100, -(2**100), Sample(7), 1.5])
+    actual, expected = Image.new(mode, (10, 1), 99), PIL.new(mode, (10, 1), 99)
+    actual.putdata(values, scale, offset)
+    expected.putdata(values, scale, offset)
+    assert actual.tobytes() == expected.tobytes()
+    with pytest.raises(OverflowError):
+        actual.putdata([2**10000])
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("alpha", [-1.5, 0, 0.1, 0.5, 1, 2.3])
 def test_blend(mode: str, alpha: float) -> None:

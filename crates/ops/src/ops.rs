@@ -46,6 +46,12 @@ fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
 }
 
 fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
+    if image.mode == PixelMode::F {
+        return Image::from_float_bytes(size.0, size.1, pixels);
+    }
+    if image.mode.is_integer() {
+        return Image::from_integer_bytes(size.0, size.1, image.mode, pixels);
+    }
     if image.bit_depth > 8 {
         return Image::from_samples(
             size.0,
@@ -93,6 +99,9 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
 
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
+    if image.mode.is_wide_scalar() {
+        return image.copy(py).map(|copy| vec![copy]);
+    }
     if image.bit_depth > 8 {
         let source = image.raw_data()?;
         return py.detach(|| {
@@ -181,9 +190,11 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     }
     let mut pixels = buffer((image.width, image.height), channels)?;
     py.detach(|| match image.mode {
-        PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
-        PixelMode::Rgb => apply_lut::<3>(source, &mut pixels, &lut),
-        PixelMode::Rgba => apply_lut::<4>(source, &mut pixels, &lut),
+        PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
+        PixelMode::La | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => apply_lut::<3>(source, &mut pixels, &lut),
+        PixelMode::Rgba | PixelMode::Cmyk => apply_lut::<4>(source, &mut pixels, &lut),
+        _ => unreachable!(),
     });
     output(image, (image.width, image.height), pixels)
 }
@@ -226,9 +237,11 @@ fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResul
         None
     };
     Ok(py.detach(|| match image.mode {
-        PixelMode::L => histogram::<1>(source, mask),
-        PixelMode::Rgb => histogram::<3>(source, mask),
-        PixelMode::Rgba => histogram::<4>(source, mask),
+        PixelMode::One | PixelMode::L => histogram::<1>(source, mask),
+        PixelMode::La | PixelMode::Pa => histogram::<2>(source, mask),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => histogram::<3>(source, mask),
+        PixelMode::Rgba | PixelMode::Cmyk => histogram::<4>(source, mask),
+        _ => unreachable!(),
     }))
 }
 
@@ -279,10 +292,18 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 #[pyfunction]
 fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<u8>) -> PyResult<Image> {
     let source = image.raw_data()?;
-    if fill.len() != image.mode.channels() {
+    if fill.len() != image.mode.channels() * if image.mode == PixelMode::F { 4 } else { 1 } {
         return Err(PyValueError::new_err("invalid fill color"));
     }
-    let fill = if image.bit_depth > 8 {
+    let fill = if image.mode == PixelMode::F {
+        fill
+    } else if image.mode.is_integer() {
+        match image.mode {
+            PixelMode::I => i32::from(fill[0]).to_le_bytes().to_vec(),
+            PixelMode::I16B => u16::from(fill[0]).to_be_bytes().to_vec(),
+            _ => u16::from(fill[0]).to_le_bytes().to_vec(),
+        }
+    } else if image.bit_depth > 8 {
         let maximum = (1_u32 << image.bit_depth) - 1;
         fill.into_iter()
             .flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes())
@@ -290,7 +311,14 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
     } else {
         fill
     };
-    let channels = image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
+    let channels = image.mode.channels()
+        * if image.mode.is_wide_scalar() {
+            image.mode.sample_bytes()
+        } else if image.bit_depth > 8 {
+            2
+        } else {
+            1
+        };
     if offset.0 <= 0
         && offset.1 <= 0
         && offset.0.saturating_add(i64::from(image.width)) >= i64::from(size.0)
@@ -349,7 +377,14 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     } else {
         (image.width, image.height)
     };
-    let c = image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
+    let c = image.mode.channels()
+        * if image.mode.is_wide_scalar() {
+            image.mode.sample_bytes()
+        } else if image.bit_depth > 8 {
+            2
+        } else {
+            1
+        };
     if orientation == 4 {
         let mut pixels = reserved_buffer(size, c)?;
         py.detach(|| {
@@ -362,18 +397,34 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         return output(image, size, pixels);
     }
     let mut pixels = buffer(size, c)?;
+    if image.mode.is_wide_scalar() {
+        py.detach(|| match c {
+            2 => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            4 => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            _ => unreachable!(),
+        });
+        return output(image, size, pixels);
+    }
     if image.bit_depth > 8 {
         py.detach(|| match image.mode {
-            PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            PixelMode::Rgb => transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            PixelMode::Rgba => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::La | PixelMode::Pa => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            }
+            PixelMode::Rgba | PixelMode::Cmyk => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            _ => unreachable!(),
         });
         return output(image, size, pixels);
     }
     py.detach(|| match image.mode {
-        PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-        PixelMode::Rgb => transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-        PixelMode::Rgba => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::La | PixelMode::Pa => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+            transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+        }
+        PixelMode::Rgba | PixelMode::Cmyk => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        _ => unreachable!(),
     });
     output(image, size, pixels)
 }
@@ -514,27 +565,90 @@ fn unpremultiply(pixels: &mut [u8]) {
     });
 }
 
+fn premultiply_la(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<2>().0 {
+        let value = u32::from(pixel[0]) * u32::from(pixel[1]) + 128;
+        pixel[0] = (((value >> 8) + value) >> 8) as u8;
+    }
+}
+
+fn unpremultiply_la(pixels: &mut [u8]) {
+    for pixel in pixels.as_chunks_mut::<2>().0 {
+        if pixel[1] != 0 && pixel[1] != 255 {
+            pixel[0] = (u32::from(pixel[0]) * 255 / u32::from(pixel[1])).min(255) as u8;
+        }
+    }
+}
+
 /// Integer box reduction used by resize's reducing_gap optimization.
 #[pyfunction]
 fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32)) -> PyResult<Image> {
-    let source = image.pixel_data()?;
     let (fx, fy) = factor;
     let (left, top, right, bottom) = bounds;
     if fx == 0 || fy == 0 || left > right || top > bottom || right > image.width || bottom > image.height {
         return Err(PyValueError::new_err("invalid reduction bounds or factor"));
     }
     let size = ((right - left).div_ceil(fx), (bottom - top).div_ceil(fy));
+    if image.mode == PixelMode::F {
+        let source = image.raw_data()?;
+        let mut pixels = buffer(size, 4)?;
+        py.detach(|| {
+            if size.0 == 0 {
+                return;
+            }
+            blanket_core::parallel::chunks_mut(&mut pixels, size.0 as usize * 4, |y, row| {
+                let y = y as u32;
+                let sy = top + y * fy;
+                let end_y = sy.saturating_add(fy).min(bottom);
+                let mut first = 0;
+                if fx == 2 && end_y - sy == 2 {
+                    let start = (sy as usize * image.width as usize + left as usize) * 4;
+                    let width = (right - left) as usize * 4;
+                    first =
+                        crate::ops_simd::reduce_float_two(&source[start..start + width], &source[start + image.width as usize * 4..][..width], row)
+                            as u32;
+                }
+                for x in first..size.0 {
+                    let mut sum = 0.0_f64;
+                    let sx = left + x * fx;
+                    let end_x = sx.saturating_add(fx).min(right);
+                    for sy in sy..end_y {
+                        let start = (sy as usize * image.width as usize + sx as usize) * 4;
+                        for bytes in source[start..start + (end_x - sx) as usize * 4].as_chunks::<4>().0 {
+                            sum += f64::from(f32::from_le_bytes(*bytes));
+                        }
+                    }
+                    let count = f64::from(end_x - sx) * f64::from(end_y - sy);
+                    let start = x as usize * 4;
+                    row[start..start + 4].copy_from_slice(&((sum / count) as f32).to_le_bytes());
+                }
+            });
+        });
+        return output(image, size, pixels);
+    }
+    let source = image.pixel_data()?;
     let c = image.mode.channels();
     let mut pixels = buffer(size, c)?;
     py.detach(|| match image.mode {
-        PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::Rgb => reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::La => {
+            let mut source = source.to_vec();
+            premultiply_la(&mut source);
+            reduce_pixels::<2>(&source, &mut pixels, image.width, size, factor, bounds);
+            unpremultiply_la(&mut pixels);
+        }
+        PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+            reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
+        }
+        PixelMode::Cmyk => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
         PixelMode::Rgba => {
             let mut source = source.to_vec();
             premultiply(&mut source);
             reduce_pixels::<4>(&source, &mut pixels, image.width, size, factor, bounds);
             unpremultiply(&mut pixels);
         }
+        _ => unreachable!(),
     });
     output(image, size, pixels)
 }
@@ -688,6 +802,9 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
     {
         return Err(PyValueError::new_err("invalid resize box"));
     }
+    if image.mode.is_wide_scalar() {
+        return py.detach(|| resize_integer(image, size, b, method));
+    }
     if image.bit_depth > 8 {
         return py.detach(|| resize_wide(image, size, b, method));
     }
@@ -720,27 +837,106 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
             let xs = positions(b[0], dx, size.0, image.width);
             let ys = positions(b[1], dy, size.1, image.height);
             match image.mode {
-                PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
-                PixelMode::Rgb => resize_nearest::<3>(source, &mut result, image.width, &xs, &ys),
-                PixelMode::Rgba => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::La | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                    resize_nearest::<3>(source, &mut result, image.width, &xs, &ys)
+                }
+                PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
+                _ => unreachable!(),
             }
             return Ok(());
         }
         let mut source = Cow::Borrowed(source);
-        if c == 4 {
+        if image.mode == PixelMode::Rgba {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La {
+            premultiply_la(source.to_mut());
         }
         match image.mode {
-            PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
-            PixelMode::Rgb => resample::<3>(&source, &mut result, image, size, b, method)?,
-            PixelMode::Rgba => resample::<4>(&source, &mut result, image, size, b, method)?,
+            PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
+            PixelMode::La | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, &mut result, image, size, b, method)?,
+            PixelMode::Rgba | PixelMode::Cmyk => resample::<4>(&source, &mut result, image, size, b, method)?,
+            _ => unreachable!(),
         }
-        if c == 4 {
+        if image.mode == PixelMode::Rgba {
             unpremultiply(&mut result);
+        } else if image.mode == PixelMode::La {
+            unpremultiply_la(&mut result);
         }
         Ok(())
     })?;
     output(image, size, result)
+}
+
+fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+    let source = image.raw_data()?;
+    let stride = image.mode.sample_bytes();
+    let mut pixels = buffer(size, stride)?;
+    if image.width == 0 || image.height == 0 {
+        return output(image, size, pixels);
+    }
+    let value = |index: usize| -> f64 {
+        let start = index * stride;
+        match image.mode {
+            PixelMode::I => f64::from(i32::from_le_bytes(source[start..start + 4].try_into().unwrap())),
+            PixelMode::F => f64::from(f32::from_le_bytes(source[start..start + 4].try_into().unwrap())),
+            // Pillow resamples I;16B from its raw bytes as little-endian samples.
+            _ => f64::from(u16::from_le_bytes(source[start..start + 2].try_into().unwrap())),
+        }
+    };
+    if method == 0 {
+        let xs: Vec<usize> = (0..size.0)
+            .map(|x| ((bounds[0] + (f64::from(x) + 0.5) * (bounds[2] - bounds[0]) / f64::from(size.0)) as usize).min(image.width as usize - 1))
+            .collect();
+        let ys: Vec<usize> = (0..size.1)
+            .map(|y| ((bounds[1] + (f64::from(y) + 0.5) * (bounds[3] - bounds[1]) / f64::from(size.1)) as usize).min(image.height as usize - 1))
+            .collect();
+        if stride == 4 {
+            resize_nearest::<4>(source, &mut pixels, image.width, &xs, &ys);
+        } else {
+            resize_nearest::<2>(source, &mut pixels, image.width, &xs, &ys);
+        }
+    } else {
+        let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
+        let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
+        let mut rows = vec![0.0; image.height as usize * size.0 as usize];
+        let row_width = size.0 as usize;
+        blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
+            for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate() {
+                let sy = band * 16 + row;
+                for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                    dst[x] = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(1 << 22))
+                        .sum();
+                }
+            }
+        });
+        blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 * 1024, |band, chunk| {
+            for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
+                let (start, coefficients) = &vertical[band * 16 + row];
+                for x in 0..row_width {
+                    let sample: f64 = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| rows[(start + i) * row_width + x] * f64::from(weight) / f64::from(1 << 22))
+                        .sum();
+                    let offset = x * stride;
+                    match image.mode {
+                        PixelMode::I => {
+                            dst[offset..offset + 4].copy_from_slice(&(sample.round().clamp(i32::MIN as f64, i32::MAX as f64) as i32).to_le_bytes())
+                        }
+                        PixelMode::F => dst[offset..offset + 4].copy_from_slice(&(sample as f32).to_le_bytes()),
+                        _ => dst[offset..offset + 2].copy_from_slice(&(sample.round().clamp(0.0, 65535.0) as u16).to_le_bytes()),
+                    }
+                }
+            }
+        });
+    }
+    output(image, size, pixels)
 }
 
 // Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
@@ -760,9 +956,11 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
             .map(|y| ((bounds[1] + (f64::from(y) + 0.5) * (bounds[3] - bounds[1]) / f64::from(size.1)) as usize).min(image.height as usize - 1))
             .collect();
         match image.mode {
-            PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
-            PixelMode::Rgb => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
-            PixelMode::Rgba => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::La | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
+            _ => unreachable!(),
         }
         return output(image, size, pixels);
     }
@@ -960,6 +1158,31 @@ fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u
     }
 }
 
+fn sample_float(source: &[u8], width: usize, height: usize, x: f64, y: f64, method: u8) -> f32 {
+    if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 || x >= width as f64 || y >= height as f64 {
+        return 0.0;
+    }
+    let get = |x: i64, y: i64| {
+        let x = x.clamp(0, width as i64 - 1) as usize;
+        let y = y.clamp(0, height as i64 - 1) as usize;
+        let start = (y * width + x) * 4;
+        f64::from(f32::from_le_bytes(source[start..start + 4].try_into().unwrap()))
+    };
+    if method == 0 {
+        return get(x as i64, y as i64) as f32;
+    }
+    let (x, y) = (x - 0.5, y - 0.5);
+    let (ix, iy) = (x.floor() as i64, y.floor() as i64);
+    let (tx, ty) = (x - x.floor(), y - y.floor());
+    if method == 2 {
+        let top = interpolate(get(ix, iy), get(ix + 1, iy), tx);
+        let bottom = interpolate(get(ix, iy + 1), get(ix + 1, iy + 1), tx);
+        interpolate(top, bottom, ty) as f32
+    } else {
+        cubic([-1, 0, 1, 2].map(|dy| cubic([-1, 0, 1, 2].map(|dx| get(ix + dx, iy + dy)), tx)), ty) as f32
+    }
+}
+
 fn affine_coordinate(a: f64, b: f64, c: f64, x: f64, y: f64) -> f64 {
     // Match the contraction order used by Pillow's ARM affine mapper.
     if cfg!(target_arch = "aarch64") {
@@ -1041,6 +1264,29 @@ fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &Neares
 /// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
 #[pyfunction]
 fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, fill: Vec<u8>) -> PyResult<Image> {
+    if image.mode == PixelMode::F {
+        if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != 4 {
+            return Err(PyValueError::new_err("invalid affine transform"));
+        }
+        let source = image.raw_data()?;
+        let mut pixels = buffer(size, 4)?;
+        let [a, b, c, d, e, f] = matrix;
+        py.detach(|| {
+            for y in 0..size.1 as usize {
+                for x in 0..size.0 as usize {
+                    let sx = affine_coordinate(a, b, c, x as f64 + 0.5, y as f64 + 0.5);
+                    let sy = affine_coordinate(d, e, f, x as f64 + 0.5, y as f64 + 0.5);
+                    let value = if sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64 {
+                        sample_float(source, image.width as usize, image.height as usize, sx, sy, method).to_le_bytes()
+                    } else {
+                        fill.as_slice().try_into().unwrap()
+                    };
+                    pixels[(y * size.0 as usize + x) * 4..(y * size.0 as usize + x + 1) * 4].copy_from_slice(&value);
+                }
+            }
+        });
+        return output(image, size, pixels);
+    }
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
     if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != channels {
@@ -1062,8 +1308,10 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
     }
     py.detach(|| {
         let mut source = Cow::Borrowed(source);
-        if channels == 4 && method != 0 {
+        if image.mode == PixelMode::Rgba && method != 0 {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La && method != 0 {
+            premultiply_la(source.to_mut());
         }
         // Nearest's floating path advances coordinates incrementally. Direct
         // multiplication can pick a different pixel at fractional boundaries.
@@ -1117,9 +1365,13 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     }
                 }
                 match image.mode {
-                    PixelMode::Rgb => resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys),
-                    PixelMode::Rgba => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
-                    PixelMode::L => unreachable!(),
+                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                        resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys)
+                    }
+                    PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::One | PixelMode::L => unreachable!(),
+                    PixelMode::La | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width, &xs, &ys),
+                    _ => unreachable!(),
                 }
                 return;
             }
@@ -1152,9 +1404,11 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                         continue;
                     }
                     match image.mode {
-                        PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
-                        PixelMode::Rgb => nearest_columns::<3>(source_row, row, columns, &fill),
-                        PixelMode::Rgba => nearest_columns::<4>(source_row, row, columns, &fill),
+                        PixelMode::One | PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
+                        PixelMode::La | PixelMode::Pa => nearest_columns::<2>(source_row, row, columns, &fill),
+                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => nearest_columns::<3>(source_row, row, columns, &fill),
+                        PixelMode::Rgba | PixelMode::Cmyk => nearest_columns::<4>(source_row, row, columns, &fill),
+                        _ => unreachable!(),
                     }
                     continue;
                 }
@@ -1164,9 +1418,13 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     let steps = (a, d);
                     let size = (image.width, image.height);
                     match image.mode {
-                        PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
-                        PixelMode::Rgb => nearest_fixed::<3>(&source, row, size, origin, steps, &fill),
-                        PixelMode::Rgba => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
+                        PixelMode::One | PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
+                        PixelMode::La | PixelMode::Pa => nearest_fixed::<2>(&source, row, size, origin, steps, &fill),
+                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                            nearest_fixed::<3>(&source, row, size, origin, steps, &fill)
+                        }
+                        PixelMode::Rgba | PixelMode::Cmyk => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
+                        _ => unreachable!(),
                     }
                     continue;
                 }
@@ -1191,8 +1449,10 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
             }
         });
         // Fill values also belong to Pillow's intermediate premultiplied mode.
-        if channels == 4 && method != 0 {
+        if image.mode == PixelMode::Rgba && method != 0 {
             unpremultiply(&mut pixels);
+        } else if image.mode == PixelMode::La && method != 0 {
+            unpremultiply_la(&mut pixels);
         }
     });
     output(image, size, pixels)
@@ -1206,6 +1466,54 @@ fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<I
 #[pyfunction]
 fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters: (u8, bool), fill: Option<Vec<u8>>) -> PyResult<Image> {
     let (method, perspective) = filters;
+    if image.mode == PixelMode::F {
+        if ![0, 2, 3].contains(&method) || fill.as_ref().is_some_and(|v| v.len() != 4) || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite())) {
+            return Err(PyValueError::new_err("invalid warp data"));
+        }
+        let source = image.raw_data()?;
+        let mut pixels = buffer(size, 4)?;
+        py.detach(|| {
+            if let Some(fill) = &fill {
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    pixel.copy_from_slice(fill);
+                }
+            }
+            for ((left, top, right, bottom), q) in mesh {
+                if right <= left || bottom <= top {
+                    continue;
+                }
+                let w = (right - left) as f64;
+                let h = (bottom - top) as f64;
+                let ax = (q[6] - q[0]) / w;
+                let bx = (q[2] - q[0]) / h;
+                let cx = (q[4] - q[2] - q[6] + q[0]) / (w * h);
+                let ay = (q[7] - q[1]) / w;
+                let by = (q[3] - q[1]) / h;
+                let cy = (q[5] - q[3] - q[7] + q[1]) / (w * h);
+                for y in top.max(0)..bottom.min(i64::from(size.1)) {
+                    for x in left.max(0)..right.min(i64::from(size.0)) {
+                        let u = (x - left) as f64 + 0.5;
+                        let v = (y - top) as f64 + 0.5;
+                        let (sx, sy) = if perspective {
+                            let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
+                            (
+                                affine_coordinate(q[0], q[1], q[2], u, v) / divisor,
+                                affine_coordinate(q[3], q[4], q[5], u, v) / divisor,
+                            )
+                        } else {
+                            (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
+                        };
+                        if fill.is_none() || (sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64) {
+                            let value = sample_float(source, image.width as usize, image.height as usize, sx, sy, method);
+                            let start = (y as usize * size.0 as usize + x as usize) * 4;
+                            pixels[start..start + 4].copy_from_slice(&value.to_le_bytes());
+                        }
+                    }
+                }
+            }
+        });
+        return output(image, size, pixels);
+    }
     let source = image.pixel_data()?;
     if ![0, 2, 3].contains(&method) {
         return Err(PyValueError::new_err("mesh transforms support NEAREST, BILINEAR and BICUBIC"));
@@ -1233,8 +1541,10 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
             }
         }
         let mut source = Cow::Borrowed(source);
-        if c == 4 && method != 0 {
+        if image.mode == PixelMode::Rgba && method != 0 {
             premultiply(source.to_mut());
+        } else if image.mode == PixelMode::La && method != 0 {
+            premultiply_la(source.to_mut());
         }
         for ((left, top, right, bottom), q) in mesh {
             if right <= left || bottom <= top {
@@ -1277,9 +1587,11 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                         if method == 0 {
                             let dst = &mut row[start * c..end * c];
                             match image.mode {
-                                PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
-                                PixelMode::Rgb => warp_nearest_row::<3>(&source, dst, &warp, v),
-                                PixelMode::Rgba => warp_nearest_row::<4>(&source, dst, &warp, v),
+                                PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
+                                PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
+                                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => warp_nearest_row::<3>(&source, dst, &warp, v),
+                                PixelMode::Rgba | PixelMode::Cmyk => warp_nearest_row::<4>(&source, dst, &warp, v),
+                                _ => unreachable!(),
                             }
                             continue;
                         }
@@ -1303,8 +1615,10 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                 },
             );
         }
-        if c == 4 && method != 0 {
+        if image.mode == PixelMode::Rgba && method != 0 {
             unpremultiply(&mut result);
+        } else if image.mode == PixelMode::La && method != 0 {
+            unpremultiply_la(&mut result);
         }
     });
     output(image, size, result)

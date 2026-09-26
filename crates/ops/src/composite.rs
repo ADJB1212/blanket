@@ -15,7 +15,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction]
 fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
-    if color.len() != mode.channels() {
+    if color.len() != mode.channels() * mode.sample_bytes() {
         return Err(PyValueError::new_err("wrong number of color channels"));
     }
     let len = (size.0 as usize)
@@ -29,17 +29,29 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {
-            PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
-            PixelMode::Rgb => fill_pixels::<3>(spare, &color),
-            PixelMode::Rgba => fill_pixels::<4>(spare, &color),
+            PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
+            PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
+            PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => fill_pixels::<3>(spare, &color),
+            PixelMode::Rgba | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
         }
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
     });
-    Image::from_pixels(size.0, size.1, mode, pixels, None)
+    if mode == PixelMode::F {
+        Image::from_float_bytes(size.0, size.1, pixels)
+    } else if mode.is_integer() {
+        Image::from_integer_bytes(size.0, size.1, mode, pixels)
+    } else {
+        Image::from_pixels(size.0, size.1, mode, pixels, None)
+    }
 }
 
 fn fill_pixels<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {
+    blanket_core::parallel::chunks_mut_above(pixels, 256 * 1024 * C, 1024 * 1024, |_, pixels| fill_pixels_chunk::<C>(pixels, color));
+}
+
+fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {
     let value: [_; C] = std::array::from_fn(|c| std::mem::MaybeUninit::new(color[c]));
     if C == 3 {
         // Three-byte stores don't vectorize well. A 48-byte repeating tile
@@ -56,6 +68,9 @@ fn fill_pixels<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: 
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
+    if image.mode.is_wide_scalar() {
+        return paste_integer(image, source, position, mask);
+    }
     image.pixel_data()?;
     let source_pixels = source.pixel_data()?;
     if image.mode != source.mode {
@@ -96,9 +111,11 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
                 match (c, mc) {
                     (1, 1) => paste_masked::<1, 1>(dst, src, mask, fill),
                     (1, 4) => paste_masked::<1, 4>(dst, src, mask, fill),
+                    (2, 1) => paste_masked::<2, 1>(dst, src, mask, fill),
+                    (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
                     (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
                     (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
-                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill),
+                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill && source.mode == PixelMode::Rgba),
                     (4, 4) => paste_masked::<4, 4>(dst, src, mask, fill),
                     _ => unreachable!("validated modes"),
                 }
@@ -110,11 +127,63 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
     Ok(())
 }
 
+fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>) -> PyResult<()> {
+    if image.mode != source.mode {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    let source_pixels = source.raw_data()?;
+    let mask_pixels = if let Some(mask) = mask {
+        if mask.palette.is_some()
+            || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba)
+            || (mask.width, mask.height) != (source.width, source.height)
+        {
+            return Err(PyValueError::new_err("bad transparency mask"));
+        }
+        Some((mask.pixel_data()?, mask.mode.channels()))
+    } else {
+        None
+    };
+    let stride = image.mode.sample_bytes();
+    let width = image.width as i64;
+    let height = image.height as i64;
+    let left = position.0.clamp(0, width);
+    let top = position.1.clamp(0, height);
+    let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width);
+    let bottom = position.1.saturating_add(i64::from(source.height)).clamp(0, height);
+    let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
+    for y in top..bottom {
+        for x in left..right {
+            let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * stride;
+            let dst = (y as usize * image.width as usize + x as usize) * stride;
+            let alpha = mask_pixels.map_or(255, |(mask, channels)| {
+                let i = src / stride * channels;
+                mask[i + channels - 1]
+            });
+            if alpha == 255 {
+                pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
+            } else if alpha != 0 {
+                if image.mode == PixelMode::F {
+                    let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
+                    let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
+                    let mixed = (old * (255 - alpha) as f32 + new * alpha as f32) / 255.0;
+                    pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
+                    continue;
+                }
+                for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
+                    let a = u32::from(alpha);
+                    *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) {
     #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
     let offset = 0;
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    let offset = if std::arch::is_x86_feature_detected!("ssse3") {
+    let offset = if C != 2 && std::arch::is_x86_feature_detected!("ssse3") {
         // SAFETY: SSSE3 detected; caller validates equal pixel counts.
         unsafe { blanket_core::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
     } else {
@@ -127,7 +196,7 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
         // Each iteration reads and writes 16 complete pixels. NEON is mandatory
         // on AArch64, and all three buffers have validated equal pixel counts.
         unsafe {
-            while offset + 16 <= dst.len() / C {
+            while C != 2 && offset + 16 <= dst.len() / C {
                 let dp = dst.as_mut_ptr().add(offset * C);
                 let sp = src.as_ptr().add(offset * C);
                 let mp = mask.as_ptr().add(offset * M);

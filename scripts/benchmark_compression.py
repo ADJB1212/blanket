@@ -166,9 +166,8 @@ def _delta(old: float, new: float) -> str:
 
 
 def compare_results(path_a: Path, path_b: Path) -> int:
-    """Load two JSON result files and print a rich table comparing overlapping tests."""
-    from rich.console import Console
-    from rich.table import Table
+    """Load two JSON result files and print a table comparing overlapping tests."""
+    import os
 
     data_a = json.loads(path_a.read_text())
     data_b = json.loads(path_b.read_text())
@@ -182,6 +181,12 @@ def compare_results(path_a: Path, path_b: Path) -> int:
 
     label_a = path_a.stem
     label_b = path_b.stem
+
+    if os.environ.get("NO_RICH"):
+        return _compare_results_plain(overlap, lookup_a, lookup_b, label_a, label_b, data_a, data_b)
+
+    from rich.console import Console
+    from rich.table import Table
 
     table = Table(
         title=f"Comparison: [bold]{label_a}[/bold] vs [bold]{label_b}[/bold]",
@@ -197,12 +202,12 @@ def compare_results(path_a: Path, path_b: Path) -> int:
     table.add_column("Max RMSE", justify="right")
     table.add_column(f"Opt B ({label_a})", justify="right")
     table.add_column(f"Opt B ({label_b})", justify="right")
-    table.add_column("Δ Size", justify="right")
+    table.add_column("Delta Size", justify="right")
     table.add_column(f"Saved% ({label_a})", justify="right")
     table.add_column(f"Saved% ({label_b})", justify="right")
     table.add_column(f"Opt ms ({label_a})", justify="right")
     table.add_column(f"Opt ms ({label_b})", justify="right")
-    table.add_column("Δ Time", justify="right")
+    table.add_column("Delta Time", justify="right")
     table.add_column("Check", justify="center")
 
     for key in overlap:
@@ -215,8 +220,8 @@ def compare_results(path_a: Path, path_b: Path) -> int:
         b_ms = float(b["optimized_ms"])
         a_pass = passed(a)
         b_pass = passed(b)
-        check_a = "[green]✓[/green]" if a_pass else "[red]✗[/red]"
-        check_b = "[green]✓[/green]" if b_pass else "[red]✗[/red]"
+        check_a = "[green]✓[/green]" if a_pass else "[red]x[/red]"
+        check_b = "[green]✓[/green]" if b_pass else "[red]x[/red]"
 
         table.add_row(
             key[0],
@@ -242,6 +247,54 @@ def compare_results(path_a: Path, path_b: Path) -> int:
     skipped_b = len(lookup_b) - len(overlap)
     if skipped_a or skipped_b:
         console.print(f"[dim]Skipped {skipped_a} test(s) only in A, {skipped_b} only in B.[/dim]")
+    return 0
+
+
+def _delta_plain(old: float, new: float) -> str:
+    if old == 0:
+        return "N/A"
+    pct = 100 * (new - old) / abs(old)
+    sign = "+" if pct >= 0 else ""
+    return f"{sign}{pct:.2f}%"
+
+
+def _compare_results_plain(
+    overlap: list[tuple[str, str, int, str, float]],
+    lookup_a: dict[tuple[str, str, int, str, float], dict[str, object]],
+    lookup_b: dict[tuple[str, str, int, str, float], dict[str, object]],
+    label_a: str,
+    label_b: str,
+    data_a: dict[str, object],
+    data_b: dict[str, object],
+) -> int:
+    print(f"Comparison: {label_a} vs {label_b}")
+    print(f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)")
+    print(f"B: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)")
+    header = f"{'Fixture':<12} {'Fmt':<5} {'Eff':>3} {'Compr':<10} {'RMSE':>5} {'OptB_A':>8} {'OptB_B':>8} {'dSize':>10} {'Sv%_A':>7} {'Sv%_B':>7} {'ms_A':>8} {'ms_B':>8} {'dTime':>10} {'Chk':>5}"
+    print(header)
+    print("-" * len(header))
+    for key in overlap:
+        a, b = lookup_a[key], lookup_b[key]
+        a_opt = float(a["optimized_bytes"])
+        b_opt = float(b["optimized_bytes"])
+        a_pct = float(a["reduction_percent"])
+        b_pct = float(b["reduction_percent"])
+        a_ms = float(a["optimized_ms"])
+        b_ms = float(b["optimized_ms"])
+        a_pass = "P" if passed(a) else "F"
+        b_pass = "P" if passed(b) else "F"
+        rmse_col = str(key[4]) if key[3] == "lossy" else "-"
+        print(
+            f"{key[0]:<12} {key[1]:<5} {key[2]:>3} {key[3]:<10} {rmse_col:>5}"
+            f" {a_opt:>8.0f} {b_opt:>8.0f} {_delta_plain(a_opt, b_opt):>10}"
+            f" {a_pct:>7.2f} {b_pct:>7.2f} {a_ms:>8.2f} {b_ms:>8.2f}"
+            f" {_delta_plain(a_ms, b_ms):>10} {a_pass}/{b_pass}"
+        )
+    print(f"\n{len(overlap)} overlapping tests compared.")
+    skipped_a = len(lookup_a) - len(overlap)
+    skipped_b = len(lookup_b) - len(overlap)
+    if skipped_a or skipped_b:
+        print(f"Skipped {skipped_a} test(s) only in A, {skipped_b} only in B.")
     return 0
 
 

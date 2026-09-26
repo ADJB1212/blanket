@@ -6,6 +6,7 @@ accept L and RGB, matching Pillow's restrictions for these modes.
 
 from __future__ import annotations
 
+import struct
 from itertools import pairwise
 from typing import TYPE_CHECKING, Literal, Protocol, overload
 
@@ -234,7 +235,8 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     if resized.size == tuple(size):
         return resized
     offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
-    return Image.Image(ops_canvas(resized._native, size, offset, color_pixel(color, image.mode)))
+    fill = list(struct.pack("<f", 0.0 if color is None else float(color))) if image.mode == "F" else color_pixel(color, image.mode)
+    return Image.Image(ops_canvas(resized._native, size, offset, fill))
 
 
 def crop(image: Image.Image, border: int = 0) -> Image.Image:
@@ -396,7 +398,8 @@ def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Ima
     size = (image.width + left + right, image.height + top + bottom)
     if min(size) < 0:
         raise ValueError("Width and height must be >= 0")
-    return Image.Image(ops_canvas(image._native, size, (left, top), color_pixel(fill, image.mode)))
+    color = list(struct.pack("<f", 0.0 if fill is None else float(fill))) if image.mode == "F" else color_pixel(fill, image.mode)
+    return Image.Image(ops_canvas(image._native, size, (left, top), color))
 
 
 def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, bleed: float = 0.0, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:

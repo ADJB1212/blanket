@@ -47,12 +47,15 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
     let weights: Vec<f32> = kernel.into_iter().map(|value| value / scale).collect();
     let width = image.width as usize;
     py.detach(|| match (image.mode, size.0) {
-        (PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::La | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::La | PixelMode::Pa, _) => convolve::<2, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::Cmyk, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::Cmyk, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+        _ => unreachable!(),
     });
     output(image, pixels)
 }
@@ -362,9 +365,11 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
 fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
     let (width, height) = (image.width as usize, image.height as usize);
     match image.mode {
-        PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
-        PixelMode::Rgb => blurred::<3>(source, width, height, radii, gaussian),
-        PixelMode::Rgba => blurred::<4>(source, width, height, radii, gaussian),
+        PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
+        PixelMode::La | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => blurred::<3>(source, width, height, radii, gaussian),
+        PixelMode::Rgba | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, gaussian),
+        _ => unreachable!(),
     }
 }
 
@@ -464,7 +469,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         return Err(PyValueError::new_err("images do not match"));
     }
     let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
-    if mode == PixelMode::L {
+    if matches!(mode, PixelMode::One | PixelMode::L) {
         // A single band only needs a copy, not a zeroed allocation followed by
         // another full-buffer write. This matters once the band exceeds cache.
         return Image::from_pixels(width, height, mode, py.detach(|| sources[0].to_vec()), None);
@@ -476,9 +481,11 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
             .ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?,
     )?;
     py.detach(|| match mode {
-        PixelMode::L => pixels.copy_from_slice(sources[0]),
-        PixelMode::Rgb => merge::<3>(&sources, &mut pixels),
-        PixelMode::Rgba => merge::<4>(&sources, &mut pixels),
+        PixelMode::One | PixelMode::L => pixels.copy_from_slice(sources[0]),
+        PixelMode::La | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => merge::<3>(&sources, &mut pixels),
+        PixelMode::Rgba | PixelMode::Cmyk => merge::<4>(&sources, &mut pixels),
+        _ => unreachable!(),
     });
     Image::from_pixels(width, height, mode, pixels, None)
 }

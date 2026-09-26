@@ -520,6 +520,9 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
 #[pyfunction]
 #[pyo3(signature = (image, colors, method, kmeans, palette=None, dither=3))]
 fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u64, palette: Option<&Image>, dither: i32) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
+        return Err(PyValueError::new_err("image has wrong mode"));
+    }
     let source = image.pixel_data()?;
     if !(1..=256).contains(&colors) {
         return Err(PyValueError::new_err("bad number of colors"));
@@ -554,12 +557,14 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
                 PixelMode::L => octree::<1>(source, colors, false),
                 PixelMode::Rgb => octree::<3>(source, colors, false),
                 PixelMode::Rgba => octree::<4>(source, colors, true),
+                _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         } else {
             match image.mode {
                 PixelMode::L => exact::<1>(source, colors, method, kmeans),
                 PixelMode::Rgb => exact::<3>(source, colors, method, kmeans),
                 PixelMode::Rgba => exact::<4>(source, colors, method, kmeans),
+                _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         };
         let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;

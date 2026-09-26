@@ -41,6 +41,9 @@ enum Operation {
     SoftLight,
     HardLight,
     Overlay,
+    And,
+    Or,
+    Xor,
 }
 
 impl Operation {
@@ -73,6 +76,9 @@ impl Operation {
             "soft_light" => Self::SoftLight,
             "hard_light" => Self::HardLight,
             "overlay" => Self::Overlay,
+            "and" => Self::And,
+            "or" => Self::Or,
+            "xor" => Self::Xor,
             _ => return Err(PyValueError::new_err("unknown channel operation")),
         })
     }
@@ -99,7 +105,31 @@ impl Operation {
                     (255 - (255 - x) * (255 - y) / 127) as u8
                 }
             }
+            Self::And => a & b,
+            Self::Or => a | b,
+            Self::Xor => a ^ b,
         }
+    }
+}
+
+fn bitwise_chunk<const OP: u8>(a: &[u8], b: &[u8], output: &mut [u8]) {
+    let (words, tail) = output.as_chunks_mut::<8>();
+    for ((dst, left), right) in words.iter_mut().zip(a.as_chunks::<8>().0).zip(b.as_chunks::<8>().0) {
+        let left = u64::from_ne_bytes(*left);
+        let right = u64::from_ne_bytes(*right);
+        *dst = match OP {
+            0 => left & right,
+            1 => left | right,
+            _ => left ^ right,
+        }
+        .to_ne_bytes();
+    }
+    for ((dst, &left), &right) in tail.iter_mut().zip(&a[words.len() * 8..]).zip(&b[words.len() * 8..]) {
+        *dst = match OP {
+            0 => left & right,
+            1 => left | right,
+            _ => left ^ right,
+        };
     }
 }
 
@@ -118,6 +148,23 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     let channels = first.mode.channels();
     let row = width as usize * channels;
     let length = row * height as usize;
+    if matches!(operation, Operation::And | Operation::Or | Operation::Xor) && first.width == second.width {
+        let mut pixels = buffer(length)?;
+        py.detach(|| {
+            chunks_mut_above(&mut pixels, 256 * 1024, 512 * 1024, |chunk, dst| {
+                let start = chunk * 256 * 1024;
+                let a = &a[start..start + dst.len()];
+                let b = &b[start..start + dst.len()];
+                match operation {
+                    Operation::And => bitwise_chunk::<0>(a, b, dst),
+                    Operation::Or => bitwise_chunk::<1>(a, b, dst),
+                    Operation::Xor => bitwise_chunk::<2>(a, b, dst),
+                    _ => unreachable!(),
+                }
+            });
+        });
+        return Image::from_pixels(width, height, first.mode, pixels, None);
+    }
     let mut pixels = reserved_buffer(length)?;
     let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
     let threshold = match operation {
@@ -150,6 +197,9 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                     Operation::Lighter => apply!(u8::max),
                     Operation::Darker => apply!(u8::min),
                     Operation::Difference => apply!(u8::abs_diff),
+                    Operation::And => apply!(std::ops::BitAnd::bitand),
+                    Operation::Or => apply!(std::ops::BitOr::bitor),
+                    Operation::Xor => apply!(std::ops::BitXor::bitxor),
                     Operation::Add => apply!(|a, b| Operation::Add.apply(a, b, scale, offset)),
                     Operation::Subtract => apply!(|a, b| Operation::Subtract.apply(a, b, scale, offset)),
                     Operation::Multiply => apply!(|a, b| Operation::Multiply.apply(a, b, scale, offset)),
@@ -197,7 +247,14 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
     let source = image.raw_data()?;
     let mut pixels = buffer(source.len())?;
     if image.width != 0 && image.height != 0 {
-        let bytes_per_pixel = image.mode.channels() * if image.bit_depth == 8 { 1 } else { 2 };
+        let bytes_per_pixel = image.mode.channels()
+            * if image.mode.is_wide_scalar() {
+                image.mode.sample_bytes()
+            } else if image.bit_depth == 8 {
+                1
+            } else {
+                2
+            };
         let row = image.width as usize * bytes_per_pixel;
         let head = xoffset.rem_euclid(i64::from(image.width)) as usize * bytes_per_pixel;
         let shift_y = yoffset.rem_euclid(i64::from(image.height)) as usize;

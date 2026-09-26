@@ -6,6 +6,7 @@ import argparse
 import gc
 import json
 import math
+import os
 import platform
 import subprocess
 import warnings
@@ -22,6 +23,7 @@ from typing import Any
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
+
 import numpy as np
 import pillow_heif
 import pillow_jxl
@@ -34,10 +36,14 @@ from PIL import (
     ImagePalette as PillowPalette,
     ImageStat as PillowStat,
 )
-from rich.console import Console
-from rich.panel import Panel
-from rich.table import Table
-from rich.text import Text
+
+NO_RICH = os.environ.get("NO_RICH")
+
+if not NO_RICH:
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.table import Table
+    from rich.text import Text
 
 from blanket import (
     Image as BlanketImage,
@@ -69,6 +75,30 @@ def make_rgba(width: int, height: int) -> bytes:
 
 def make_gray(width: int, height: int) -> bytes:
     return bytes((index * 37) & 0xFF for index in range(width * height))
+
+
+def make_one(width: int, height: int) -> bytes:
+    return bytes((index * 37 + 0xA5) & 0xFF for index in range(((width + 7) // 8) * height))
+
+
+def make_la(width: int, height: int) -> bytes:
+    return bytes(value for index in range(width * height) for value in ((index * 37) & 0xFF, (index * 53) & 0xFF))
+
+
+def make_pa(width: int, height: int) -> bytes:
+    return bytes(value for index in range(width * height) for value in (index & 0xFF, (index * 53) & 0xFF))
+
+
+def make_integer(width: int, height: int, mode: str) -> bytes:
+    samples = np.arange(width * height, dtype=np.int32) * 37
+    if mode == "I":
+        return ((samples % 131072) - 32768).astype("<i4").tobytes()
+    return (samples % 65536).astype(">u2" if mode == "I;16B" else "<u2").tobytes()
+
+
+def make_float(width: int, height: int) -> np.ndarray:
+    samples = (np.arange(width * height, dtype=np.uint32) * 37 % 1024).astype(np.float32)
+    return (samples - 128.5).reshape(height, width)
 
 
 def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> bytes:
@@ -136,6 +166,18 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         comps.extend(
             (f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)) for quality in (50, 85, 95)
         )
+
+        for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
+            blanket = BlanketImage.frombytes(mode, size, raw)
+            pillow = PillowImage.frombytes(mode, size, raw)
+            for quality in (50, 85, 95):
+                label = f"save JPEG q={quality} {mode}" + (" (via RGB)" if mode == "YCbCr" else "")
+                comps.append((label, lambda b=blanket, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=pillow, q=quality: p.save(BytesIO(), "JPEG", quality=q)))
+            if mode == "CMYK":
+                for fmt in ("JPEG", "TIFF"):
+                    payload = pillow_payload(pillow, fmt)
+                    comps.append((f"load {fmt} CMYK", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: pillow_load(data)))
+                comps.append(("save TIFF CMYK", lambda b=blanket: b.save(BytesIO(), "TIFF"), lambda p=pillow: p.save(BytesIO(), "TIFF")))
 
         # ── TIFF and WebP ─────────────────────────────────────────────
         for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
@@ -226,7 +268,7 @@ def ten_bit_comparisons(size: tuple[int, int]) -> list[Comparison]:
 
 
 def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
-    """Build benchmarks for all six non-identity mode conversions."""
+    """Build benchmarks for conversions among L, RGB, RGBA, HSV, CMYK, and YCbCr."""
     raw_rgb = make_rgb(*size)
     raw_rgba = make_rgba(*size)
     raw_gray = make_gray(*size)
@@ -237,15 +279,159 @@ def conversion_comparisons(size: tuple[int, int]) -> list[Comparison]:
     p_rgba = PillowImage.frombytes("RGBA", size, raw_rgba)
     b_gray = BlanketImage.frombytes("L", size, raw_gray)
     p_gray = PillowImage.frombytes("L", size, raw_gray)
+    b_hsv = b_rgb.convert("HSV")
+    p_hsv = p_rgb.convert("HSV")
 
-    return [
+    comparisons: list[Comparison] = [
         ("cvt RGB→L", lambda b=b_rgb: b.convert("L"), lambda p=p_rgb: p.convert("L")),
         ("cvt RGB→RGBA", lambda b=b_rgb: b.convert("RGBA"), lambda p=p_rgb: p.convert("RGBA")),
         ("cvt RGBA→RGB", lambda b=b_rgba: b.convert("RGB"), lambda p=p_rgba: p.convert("RGB")),
         ("cvt RGBA→L", lambda b=b_rgba: b.convert("L"), lambda p=p_rgba: p.convert("L")),
         ("cvt L→RGB", lambda b=b_gray: b.convert("RGB"), lambda p=p_gray: p.convert("RGB")),
         ("cvt L→RGBA", lambda b=b_gray: b.convert("RGBA"), lambda p=p_gray: p.convert("RGBA")),
+        ("cvt RGB→HSV", lambda b=b_rgb: b.convert("HSV"), lambda p=p_rgb: p.convert("HSV")),
+        ("cvt RGBA→HSV", lambda b=b_rgba: b.convert("HSV"), lambda p=p_rgba: p.convert("HSV")),
+        ("cvt L→HSV", lambda b=b_gray: b.convert("HSV"), lambda p=p_gray: p.convert("HSV")),
+        ("cvt HSV→L", lambda b=b_hsv: b.convert("L"), lambda p=p_hsv: p.convert("L")),
+        ("cvt HSV→RGB", lambda b=b_hsv: b.convert("RGB"), lambda p=p_hsv: p.convert("RGB")),
+        ("cvt HSV→RGBA", lambda b=b_hsv: b.convert("RGBA"), lambda p=p_hsv: p.convert("RGBA")),
     ]
+    images = {"L": (b_gray, p_gray), "RGB": (b_rgb, p_rgb), "RGBA": (b_rgba, p_rgba), "HSV": (b_hsv, p_hsv)}
+    for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
+        images[mode] = (BlanketImage.frombytes(mode, size, raw), PillowImage.frombytes(mode, size, raw))
+    for source, (blanket, pillow) in images.items():
+        comparisons.extend(
+            (f"cvt {source}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination))
+            for destination in images
+            if source != destination and (source in ("CMYK", "YCbCr") or destination in ("CMYK", "YCbCr"))
+        )
+    return comparisons
+
+
+def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Benchmark creation, conversion, and common operations for additional modes."""
+    w, h = size
+    target = (max(1, w // 2), max(1, h // 2))
+    box = (w // 10, h // 10, w - w // 10, h - h // 10)
+    palette = bytes(range(256)) * 3
+    comparisons: list[Comparison] = []
+    images: dict[str, tuple[BlanketImage.Image, PillowImage.Image]] = {}
+
+    for mode, make_pixels, fill, pixel in (
+        ("1", make_one, 1, 255),
+        ("LA", make_la, (47, 128), (47, 128)),
+        ("PA", make_pa, (3, 128), (3, 128)),
+        ("HSV", make_rgb, (47, 128, 200), (47, 128, 200)),
+        ("CMYK", make_rgba, (47, 128, 200, 63), (47, 128, 200, 63)),
+        ("YCbCr", make_rgb, (47, 128, 200), (47, 128, 200)),
+    ):
+        raw = make_pixels(w, h)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        if mode == "PA":
+            blanket.putpalette(palette)
+            pillow.putpalette(palette)
+        images[mode] = (blanket, pillow)
+        comparisons.extend(
+            [
+                (f"new {mode}", partial(BlanketImage.new, mode, size, fill), partial(PillowImage.new, mode, size, fill)),
+                (f"frombytes {mode}", partial(BlanketImage.frombytes, mode, size, raw), partial(PillowImage.frombytes, mode, size, raw)),
+                (f"tobytes {mode}", blanket.tobytes, pillow.tobytes),
+                (f"getpixel {mode}", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+                (f"putpixel {mode} (copy included)", lambda im=blanket, v=pixel: im.copy().putpixel((w // 2, h // 2), v), lambda im=pillow, v=pixel: im.copy().putpixel((w // 2, h // 2), v)),
+                (f"crop {mode}", partial(blanket.crop, box), partial(pillow.crop, box)),
+                (f"transpose {mode}", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+                (f"resize NEAREST {mode}", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+            ]
+        )
+        comparisons.extend((f"cvt {mode}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA") if destination != mode)
+        if mode in ("LA", "CMYK", "YCbCr"):
+            comparisons.append((f"resize BILINEAR {mode}", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)))
+        if mode in ("CMYK", "YCbCr"):
+            blanket_bands, pillow_bands = blanket.split(), pillow.split()
+            comparisons.extend(
+                [
+                    (f"split {mode}", blanket.split, pillow.split),
+                    (f"merge {mode}", partial(BlanketImage.merge, mode, blanket_bands), partial(PillowImage.merge, mode, pillow_bands)),
+                    (f"histogram {mode}", blanket.histogram, pillow.histogram),
+                    (f"filter SMOOTH {mode}", partial(blanket.filter, BlanketFilter.SMOOTH), partial(pillow.filter, PillowFilter.SMOOTH)),
+                ]
+            )
+        if mode == "PA":
+            comparisons.append(("cvt PA→P", partial(blanket.convert, "P"), partial(pillow.convert, "P")))
+            comparisons.append(("save PNG PA (expands RGBA)", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.convert("RGBA").save(BytesIO(), "PNG")))
+        elif mode not in ("HSV", "CMYK", "YCbCr"):
+            payload = pillow_payload(pillow, "PNG")
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
+
+    for mode in ("I", "I;16", "I;16L", "I;16B"):
+        raw = make_integer(w, h, mode)
+        blanket = BlanketImage.frombytes(mode, size, raw)
+        pillow = PillowImage.frombytes(mode, size, raw)
+        fill = -1024 if mode == "I" else 1024
+        comparisons.extend(
+            [
+                (f"new {mode}", partial(BlanketImage.new, mode, size, fill), partial(PillowImage.new, mode, size, fill)),
+                (f"frombytes {mode}", partial(BlanketImage.frombytes, mode, size, raw), partial(PillowImage.frombytes, mode, size, raw)),
+                (f"tobytes {mode}", blanket.tobytes, pillow.tobytes),
+                (f"getpixel {mode}", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+                (f"putpixel {mode} (copy included)", lambda im=blanket, v=fill: im.copy().putpixel((w // 2, h // 2), v), lambda im=pillow, v=fill: im.copy().putpixel((w // 2, h // 2), v)),
+                (f"crop {mode}", partial(blanket.crop, box), partial(pillow.crop, box)),
+                (f"transpose {mode}", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+                (f"resize NEAREST {mode}", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+                (f"resize BILINEAR {mode}", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)),
+            ]
+        )
+        comparisons.extend(
+            (f"cvt {mode}→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA", "I") if destination != mode
+        )
+        if mode != "I;16L":
+            if mode == "I":
+                output = BytesIO()
+                blanket.save(output, "PNG")
+                payload = output.getvalue()
+            else:
+                payload = pillow_payload(pillow, "PNG")
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+        if mode in ("I", "I;16L"):
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), None))
+        else:
+            comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
+
+    floats = make_float(w, h)
+    raw = floats.tobytes()
+    blanket = BlanketImage.frombytes("F", size, raw)
+    pillow = PillowImage.frombytes("F", size, raw)
+    fill = 12.5
+    comparisons.extend(
+        [
+            ("new F", partial(BlanketImage.new, "F", size, fill), partial(PillowImage.new, "F", size, fill)),
+            ("fromarray F", partial(BlanketImage.fromarray, floats), partial(PillowImage.fromarray, floats)),
+            ("frombytes F", partial(BlanketImage.frombytes, "F", size, raw), partial(PillowImage.frombytes, "F", size, raw)),
+            ("tobytes F", blanket.tobytes, pillow.tobytes),
+            ("getpixel F", partial(blanket.getpixel, (w // 2, h // 2)), partial(pillow.getpixel, (w // 2, h // 2))),
+            ("putpixel F (copy included)", lambda im=blanket: im.copy().putpixel((w // 2, h // 2), fill), lambda im=pillow: im.copy().putpixel((w // 2, h // 2), fill)),
+            ("crop F", partial(blanket.crop, box), partial(pillow.crop, box)),
+            ("transpose F", partial(blanket.transpose, BlanketImage.Transpose.ROTATE_90), partial(pillow.transpose, PillowImage.Transpose.ROTATE_90)),
+            ("resize NEAREST F", partial(blanket.resize, target, BlanketImage.Resampling.NEAREST), partial(pillow.resize, target, PillowImage.Resampling.NEAREST)),
+            ("resize BILINEAR F", partial(blanket.resize, target, BlanketImage.Resampling.BILINEAR), partial(pillow.resize, target, PillowImage.Resampling.BILINEAR)),
+            ("reduce F", partial(blanket.reduce, 2), partial(pillow.reduce, 2)),
+        ]
+    )
+    comparisons.extend((f"cvt F→{destination}", partial(blanket.convert, destination), partial(pillow.convert, destination)) for destination in ("L", "RGB", "RGBA", "I"))
+    comparisons.extend((f"cvt {source}→F", partial(images[source][0].convert, "F"), partial(images[source][1].convert, "F")) for source in ("1", "LA", "HSV"))
+    payload = pillow_payload(pillow, "TIFF")
+    comparisons.append(("load TIFF F", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+    comparisons.append(("save TIFF F", lambda im=blanket: im.save(BytesIO(), "TIFF"), lambda im=pillow: im.save(BytesIO(), "TIFF")))
+
+    first, reference = images["1"]
+    second = BlanketImage.frombytes("1", size, bytes(value ^ 0xA5 for value in first.tobytes()))
+    other = PillowImage.frombytes("1", size, second.tobytes())
+    comparisons.extend(
+        (name + " 1", partial(getattr(BlanketChops, name), first, second), partial(getattr(PillowChops, name), reference, other)) for name in ("logical_and", "logical_or", "logical_xor")
+    )
+    return comparisons
 
 
 def resize_comparisons(size: tuple[int, int]) -> list[Comparison]:
@@ -504,6 +690,8 @@ def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
             for image in (first, second, reference, other):
                 image.putpalette(bytes(range(256)) * 3)
         for name in BlanketChops.__all__:
+            if name.startswith("logical_"):
+                continue
             if name in ("invert", "duplicate"):
                 args, reference_args = (first,), (reference,)
             elif name == "constant":
@@ -643,10 +831,16 @@ def imagepalette_comparisons(directory: Path) -> list[Comparison]:
     return comparisons
 
 
+def _speedup_label(value: float | None) -> str:
+    if value is None:
+        return "---"
+    return f"{value:.2f}x"
+
+
 def _speedup_text(value: float | None) -> Text:
     """Return a colored speedup cell."""
     if value is None:
-        return Text("—", style="dim")
+        return Text("---", style="dim")
     label = f"{value:.2f}x"
     if value >= 2.0:
         return Text(label, style="bold green")
@@ -670,7 +864,7 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
             last_section = r["section"]
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
-        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "—"
+        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
         table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]))
 
     return table
@@ -689,13 +883,45 @@ def make_summary_table(results: list[dict[str, Any]]) -> Table:
     for section in sections:
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
-            table.add_row(section, "—", "—", "—", "—")
+            table.add_row(section, "---", "---", "---", "---")
             continue
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(speedup > 1.0 for speedup in speedups)
         table.add_row(section, f"{wins}/{len(paired)}", _speedup_text(geometric_mean(speedups)), _speedup_text(max(speedups)), _speedup_text(min(speedups)))
 
     return table
+
+
+def print_detail_plain(results: list[dict[str, Any]]) -> None:
+    """Print every benchmark result as plain text lines."""
+    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10}"
+    print(header)
+    print("-" * len(header))
+    last_section: str | None = None
+    for r in results:
+        if r["section"] != last_section:
+            print(f"\n== {r['section']} ==")
+            last_section = r["section"]
+        spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
+        blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
+        pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
+        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10}")
+
+
+def print_summary_plain(results: list[dict[str, Any]]) -> None:
+    """Print section summaries as plain text lines."""
+    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10}"
+    print(header)
+    print("-" * len(header))
+    sections = dict.fromkeys(r["section"] for r in results)
+    for section in sections:
+        paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
+        if not paired:
+            print(f"{section:<20} {'---':>10} {'---':>10} {'---':>10} {'---':>10}")
+            continue
+        speedups = [r["blanket_speedup"] for r in paired]
+        wins = sum(speedup > 1.0 for speedup in speedups)
+        print(f"{section:<20} {f'{wins}/{len(paired)}':>10} {_speedup_label(geometric_mean(speedups)):>10} {_speedup_label(max(speedups)):>10} {_speedup_label(min(speedups)):>10}")
 
 
 def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -706,8 +932,8 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
-DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Resize", "Memory")
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
+DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Mode Parity", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
 
@@ -805,6 +1031,44 @@ def print_comparison(console: Console, results: list[dict[str, Any]], baseline: 
         console.print(details)
 
 
+def print_comparison_plain(results: list[dict[str, Any]], baseline: dict[str, Any], threshold: float, verbose: bool) -> None:
+    matched, added, missing = compare_results(results, baseline["results"])
+    print("\n--- Blanket vs baseline ---")
+    print(f"{len(matched)} matched; {added} new; {missing} baseline cases not run. Negative time change = faster.")
+    print(f"Changes within ±{threshold:g}% are below threshold (not a statistical significance test).")
+    if not matched:
+        print("No matching cases; use the same sections and sizes as the baseline.")
+        return
+
+    def change_label(change: float) -> str:
+        return f"{change:+.1f}%"
+
+    header = f"{'Section / size':<35} {'Time change':>12} {'Improved':>10} {'Regressed':>10} {'Within':>10}"
+    print(header)
+    print("-" * len(header))
+    groups = dict.fromkeys((row["section"], row["size"]) for row in matched)
+    for section, size in [*groups, ("All matched cases", "")]:
+        rows = matched if not size else [row for row in matched if (row["section"], row["size"]) == (section, size)]
+        improved = sum(row["change_pct"] < -threshold for row in rows)
+        regressed = sum(row["change_pct"] > threshold for row in rows)
+        change = (geometric_mean(row["blanket_ms"] / row["baseline_ms"] for row in rows) - 1) * 100
+        print(f"{f'{section} {size}'.strip():<35} {change_label(change):>12} {improved:>10} {regressed:>10} {len(rows) - improved - regressed:>10}")
+    print("Section and overall changes use equally weighted geometric mean time ratios.")
+
+    detail_header = f"{'Section / size / operation':<60} {'Before ms':>10} {'Now ms':>10} {'Delta ms':>10} {'Change':>10}"
+    printed_header = False
+    for row in sorted(matched, key=lambda row: abs(row["change_pct"]), reverse=True):
+        if verbose or abs(row["change_pct"]) > threshold:
+            if not printed_header:
+                print(detail_header)
+                print("-" * len(detail_header))
+                printed_header = True
+            print(
+                f"{row['section']} / {row['size']} / {row['operation']:<60s}"[:60]
+                + f" {row['baseline_ms']:>10.3f} {row['blanket_ms']:>10.3f} {row['blanket_ms'] - row['baseline_ms']:>+10.3f} {change_label(row['change_pct']):>10}"
+            )
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
@@ -884,14 +1148,16 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *,
 
 def main() -> None:
     args = parse_args()
-    console = Console()
+    console = None if NO_RICH else Console()
     metadata = run_metadata(args)
     if args.baseline is not None:
         previous_metadata = args.baseline.get("metadata", {})
-        console.print(f"Baseline: {args.compare_path} ({previous_metadata.get('commit', 'unknown commit')}, dirty={previous_metadata.get('dirty', 'unknown')})", markup=False)
+        msg = f"Baseline: {args.compare_path} ({previous_metadata.get('commit', 'unknown commit')}, dirty={previous_metadata.get('dirty', 'unknown')})"
+        print(msg) if NO_RICH else console.print(msg, markup=False)
         for field in ("platform", "machine", "python", "iterations", "warmups"):
             if field in previous_metadata and previous_metadata[field] != metadata[field]:
-                console.print(f"Comparison warning: {field} differs: {previous_metadata[field]} → {metadata[field]}", markup=False)
+                warning = f"Comparison warning: {field} differs: {previous_metadata[field]} -> {metadata[field]}"
+                print(warning) if NO_RICH else console.print(warning, markup=False)
     all_results: list[dict[str, Any]] = []
 
     if "ImagePalette" in args.sections:
@@ -902,19 +1168,27 @@ def main() -> None:
         all_results.extend(results)
         displayed_results = slower_results(results) if args.slower_only else results
         if displayed_results:
-            console.rule("ImagePalette (256 entries)")
-            console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
+            if NO_RICH:
+                print("\n--- ImagePalette (256 entries) ---")
+                (print_detail_plain if args.verbose or args.slower_only else print_summary_plain)(displayed_results)
+            else:
+                console.rule("ImagePalette (256 entries)")
+                console.print(make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results))
 
     for size_name in args.sizes if any(section != "ImagePalette" for section in args.sections) else []:
         size = SIZES[size_name]
         w, h = size
         mpx = (w * h) / 1_000_000
 
-        console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  —  median of {args.iterations} runs")
+        if NO_RICH:
+            print(f"\n--- {size_name}  {w}x{h}  ({mpx:.2f} Mpx) --- median of {args.iterations} runs")
+        else:
+            console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  ---  median of {args.iterations} runs")
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
             "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),
             "Conversions": partial(conversion_comparisons, size),
+            "Mode Parity": partial(mode_parity_comparisons, size),
             "Resize": partial(resize_comparisons, size),
             "Geometry": partial(geometry_comparisons, size),
             "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size) + image_method_comparisons(size),
@@ -940,9 +1214,12 @@ def main() -> None:
 
         displayed_results = slower_results(size_results) if args.slower_only else size_results
         if displayed_results:
-            table = make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results)
-            console.print(table)
-            console.print()
+            if NO_RICH:
+                (print_detail_plain if args.verbose or args.slower_only else print_summary_plain)(displayed_results)
+            else:
+                table = make_detail_table(displayed_results) if args.verbose or args.slower_only else make_summary_table(displayed_results)
+                console.print(table)
+                console.print()
         all_results.extend(size_results)
 
     # ── summary ──────────────────────────────────────────────────────
@@ -954,22 +1231,32 @@ def main() -> None:
         best = max(paired, key=lambda r: r["blanket_speedup"])
         worst = min(paired, key=lambda r: r["blanket_speedup"])
 
-        summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
-        console.print(Panel(summary, title="Summary", border_style="bold"))
+        if NO_RICH:
+            print("\n=== Summary ===")
+            print(f"{wins}/{len(paired)} operations faster than Pillow")
+            print(f"Geometric mean speedup: {geo_mean:.2f}x")
+            print(f"Best:  {best['operation']} @ {best['size']} ({best['blanket_speedup']:.2f}x)")
+            print(f"Worst: {worst['operation']} @ {worst['size']} ({worst['blanket_speedup']:.2f}x)")
+        else:
+            summary = f"[bold]{wins}[/bold]/{len(paired)} operations faster than Pillow\nGeometric mean speedup: [bold]{geo_mean:.2f}x[/bold]\nBest:  [green]{best['operation']}[/green] @ {best['size']} ({best['blanket_speedup']:.2f}x)\nWorst: [red]{worst['operation']}[/red] @ {worst['size']} ({worst['blanket_speedup']:.2f}x)"
+            console.print(Panel(summary, title="Summary", border_style="bold"))
 
     if args.baseline is not None:
-        print_comparison(console, all_results, args.baseline, args.threshold, args.verbose)
+        if NO_RICH:
+            print_comparison_plain(all_results, args.baseline, args.threshold, args.verbose)
+        else:
+            print_comparison(console, all_results, args.baseline, args.threshold, args.verbose)
     if args.save_baseline is not None:
         args.save_baseline.parent.mkdir(parents=True, exist_ok=True)
         args.save_baseline.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "results": all_results}, indent=2) + "\n")
-        console.print(f"Baseline saved: {args.save_baseline}", markup=False)
+        print(f"Baseline saved: {args.save_baseline}") if NO_RICH else console.print(f"Baseline saved: {args.save_baseline}", markup=False)
     if not args.no_baseline:
         RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S.%fZ")
         commit = (metadata["commit"] or "unknown")[:12]
         run_path = RESULTS_DIRECTORY / f"run-{timestamp}-{commit}.json"
         run_path.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "baseline": str(args.compare_path.resolve()) if args.compare else None, "results": all_results}, indent=2) + "\n")
-        console.print(f"Run saved: {run_path}", markup=False)
+        print(f"Run saved: {run_path}") if NO_RICH else console.print(f"Run saved: {run_path}", markup=False)
     if args.json_path is not None:
         output_results = slower_results(all_results) if args.slower_only else all_results
         args.json_path.write_text(json.dumps(output_results, indent=2) + "\n")

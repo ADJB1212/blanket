@@ -37,8 +37,9 @@ with Image.open("photo.jpg") as image:
   and convert explicitly to Pillow when you need it.
 
 Blanket is currently **alpha software**. It implements a focused subset of
-Pillow's API, centered on `L`, `RGB`, and `RGBA` images, with limited indexed
-`P` support. It is not a drop-in replacement for `PIL` (yet).
+Pillow's API, centered on `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB` images, with integer `I`
+and `I;16` modes, floating-point `F`, and limited indexed
+`P` and `PA` support. It is not a drop-in replacement for `PIL` (yet).
 
 See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
 arithmetic and blend modes, and
@@ -181,8 +182,20 @@ change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
 
-- **Image modes:** general processing uses `L`, `RGB`, and `RGBA`. Quantization
-  produces indexed `P` images with a smaller supported operation set.
+- **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
+  Integer `I`, `I;16`, `I;16L`, and `I;16B` and floating-point `F` support pixel access,
+  conversion, copying, cropping, transposition, and resizing. `F` also supports
+  transforms and TIFF interchange.
+  Indexed `P` and `PA` images have a smaller supported operation set.
+- **Print and luma/chroma modes:** CMYK uses raw channels without ICC transforms;
+  JPEG and 8-bit TIFF retain CMYK on read, and JPEG, TIFF, and PDF support CMYK
+  output. CMYK save-time compression optimization is unsupported. YCbCr saves
+  to JPEG through RGB and opens back as RGB. Convert either mode to RGB for
+  other output formats or direct quantization.
+- **LAB:** 8-bit CIE L*a*b* supports pixel operations and TIFF interchange.
+  Native, statically linked LittleCMS converts between sRGB and D50 LAB;
+  other conversions pass through RGB. LAB save-time compression optimization
+  is unsupported.
 - **Metadata:** PNG, JPEG, and uncompressed JPEG XL metadata boxes supply
   EXIF/XMP for orientation handling. Saving writes pixels only; metadata is
   not preserved.

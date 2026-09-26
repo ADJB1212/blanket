@@ -6,10 +6,11 @@ import builtins
 import contextlib
 import math
 import os
+import struct
 from enum import IntEnum
 from operator import index
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Protocol, Self
+from typing import TYPE_CHECKING, BinaryIO, Protocol, Self, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -35,7 +36,24 @@ _EXTENSIONS = {
     ".avif": "AVIF",
     ".pdf": "PDF",
 }
-_BANDS = {"L": ("L",), "P": ("P",), "RGB": ("R", "G", "B"), "RGBA": ("R", "G", "B", "A")}
+_BANDS = {
+    "1": ("1",),
+    "L": ("L",),
+    "I": ("I",),
+    "F": ("F",),
+    "I;16": ("I",),
+    "I;16L": ("I",),
+    "I;16B": ("I",),
+    "LA": ("L", "A"),
+    "P": ("P",),
+    "PA": ("P", "A"),
+    "RGB": ("R", "G", "B"),
+    "RGBA": ("R", "G", "B", "A"),
+    "HSV": ("H", "S", "V"),
+    "CMYK": ("C", "M", "Y", "K"),
+    "YCbCr": ("Y", "Cb", "Cr"),
+    "LAB": ("L", "A", "B"),
+}
 
 
 class Resampling(IntEnum):
@@ -183,7 +201,7 @@ class Image:
 
     @property
     def bit_depth(self) -> int:
-        """Significant bits per channel (8, 10, 12, or 16).
+        """Significant bits per channel (8, 10, 12, 16, or 32 for `I` and `F`).
 
         Examples:
             ```python
@@ -291,7 +309,7 @@ class Image:
             print(image.has_transparency_data)
             ```
         """
-        return self.mode == "RGBA" or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
+        return self.mode in ("LA", "PA", "RGBA") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> None:
         """Validate that this eagerly loaded image remains open.
@@ -321,10 +339,10 @@ class Image:
         self._native.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
-        """Return a new image converted to `L`, `RGB`, or `RGBA`.
+        """Return a new image converted to a supported direct, integer, or indexed mode.
 
         Args:
-            mode: Destination mode: `L`, `RGB`, or `RGBA`.
+            mode: Destination mode, including `I`, `F`, and the `I;16` family.
             bit_depth: Output sample depth, or None to retain the input depth.
 
         Examples:
@@ -335,15 +353,35 @@ class Image:
             result = image.convert("L")
             ```
         """
+        if mode == "PA" and self.mode != "PA":
+            source = self if self.mode == "P" else self.convert("RGB").quantize()
+            if self.mode in ("LA", "RGBA"):
+                alpha = self.getchannel("A").tobytes()
+            elif self.mode == "P" and self.palette is not None and self.palette.mode == "RGBA":
+                entries = self.palette.tobytes()
+                alpha = bytes(entries[slot * 4 + 3] if slot * 4 + 3 < len(entries) else 255 for slot in source.tobytes())
+            else:
+                alpha = bytes([255]) * (self.width * self.height)
+            result = frombytes("PA", source.size, bytes(v for pair in zip(source.tobytes(), alpha, strict=True) for v in pair))
+            if source.palette is not None:
+                result.putpalette(source.palette)
+            return result
+        if mode == "PA" and self.mode == "PA":
+            return self.copy()
+        if mode == "P" and self.mode == "PA":
+            result = self.getchannel("P")
+            if self.palette is not None:
+                result.putpalette(self.palette)
+            return result
         if mode == "P" and self.mode != "P":
-            return self.quantize()
+            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B") else self).quantize()
         self._sync_palette()
         result = Image(self._native.convert(mode, bit_depth))
         result.info.update(self.info)
         return result
 
     def _sync_palette(self) -> None:
-        if self.mode == "P" and self.palette is not None:
+        if self.mode in ("P", "PA") and self.palette is not None:
             self._native.set_palette(self.palette.mode, self.palette.tobytes())
 
     def copy(self) -> Image:
@@ -414,8 +452,8 @@ class Image:
             return [v for i, v in enumerate(data) if i % 4 != 3]
         return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
 
-    def putpixel(self, xy: tuple[int, int], value: int | tuple[int, ...]) -> None:
-        """Write an 8-bit pixel, accepting negative coordinates and clipping values.
+    def putpixel(self, xy: tuple[int, int], value: float | tuple[int, ...]) -> None:
+        """Write a pixel, accepting negative coordinates.
 
         Palette images accept numeric indices, not RGB color allocation.
 
@@ -435,7 +473,7 @@ class Image:
             raise ValueError("palette putpixel requires an index")
         self._native.putpixel(tuple(index(v) for v in xy), value)
 
-    def getdata(self, band: int | None = None) -> list[int | tuple[int, ...]]:
+    def getdata(self, band: int | None = None) -> list[int | float | tuple[int, ...]]:
         """Return a flat pixel snapshot, optionally selecting one band.
 
         Args:
@@ -452,7 +490,7 @@ class Image:
         source = self if band is None else self.getchannel(index(band))
         return source._native.getdata()
 
-    def get_flattened_data(self, band: int | None = None) -> tuple[int | tuple[int, ...], ...]:
+    def get_flattened_data(self, band: int | None = None) -> tuple[int | float | tuple[int, ...], ...]:
         """Return an immutable flat pixel snapshot, as in recent Pillow versions.
 
         Args:
@@ -469,7 +507,7 @@ class Image:
         return tuple(self.getdata(band))
 
     def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
-        """Write 8-bit pixels in row order; scale/offset apply to single-band data.
+        """Write pixels in row order; scale/offset apply to single-band data.
 
         Args:
             data: Pixel values in row order. Short input leaves remaining pixels unchanged.
@@ -486,7 +524,7 @@ class Image:
         """
         self._native.putdata(data, scale, offset)
 
-    def getcolors(self, maxcolors: int = 256) -> list[tuple[int, int | tuple[int, ...]]] | None:
+    def getcolors(self, maxcolors: int = 256) -> list[tuple[int, int | float | tuple[int, ...]]] | None:
         """Return unordered (count, pixel) pairs, or None above maxcolors.
 
         Args:
@@ -521,12 +559,12 @@ class Image:
         from .ImagePalette import ImagePalette
 
         self.load()
-        if self.mode not in ("L", "P"):
+        if self.mode not in ("L", "P", "PA"):
             raise ValueError("illegal image mode")
         palette = data.copy() if isinstance(data, ImagePalette) else ImagePalette(rawmode, bytes(data))
         self._native.set_palette(palette.mode, palette.tobytes())
         self.palette = palette
-        self._bands = _BANDS["P"]
+        self._bands = _BANDS["PA" if self.mode == "PA" else "P"]
 
     def quantize(self, colors: int = 256, method: int | None = None, kmeans: int = 0, palette: Image | None = None, dither: Dither = Dither.FLOYDSTEINBERG) -> Image:
         """Return an indexed P image using a generated or supplied palette.
@@ -739,7 +777,7 @@ class Image:
         self._bands = _BANDS["RGBA"]
 
     def split(self) -> tuple[Image, ...]:
-        """Return independent L images for each band, in channel order.
+        """Return independent single-band images in channel order.
 
         Examples:
             ```python
@@ -751,6 +789,8 @@ class Image:
         """
         from ._blanket import ops_split
 
+        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
+            return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
         for band in bands:
             band.info.update(self.info)
@@ -770,7 +810,7 @@ class Image:
         return self._bands
 
     def getchannel(self, channel: int | str) -> Image:
-        """Return an independent L image for a channel name or index.
+        """Return an independent image for a channel name or index.
 
         Args:
             channel: Channel name, such as `R`, or zero-based channel index.
@@ -792,6 +832,8 @@ class Image:
         channel = index(channel)
         if not 0 <= channel < len(self.getbands()):
             raise ValueError("band index out of range")
+        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
+            return self.copy()
         result = Image(self._native.getchannel(channel))
         result.info.update(self.info)
         return result
@@ -820,7 +862,7 @@ class Image:
                 raise ValueError("bad transparency mask")
         return ops_histogram(self._native, None if mask is None else mask._native)
 
-    def getextrema(self) -> tuple[int, int] | tuple[tuple[int, int], ...] | None:
+    def getextrema(self) -> tuple[int | float, int | float] | tuple[tuple[int, int], ...] | None:
         """Return the minimum and maximum sample value of each band.
 
         Examples:
@@ -831,10 +873,15 @@ class Image:
             extrema = image.getextrema()
             ```
         """
+        if self.mode in ("I", "F", "I;16", "I;16L", "I;16B"):
+            data = cast("list[int]", self.getdata())
+            return (min(data), max(data)) if data else None
         ranges = self._native.getextrema()
         if not ranges:
             return None
-        return ranges[0] if len(ranges) == 1 else tuple(ranges)
+        if len(ranges) == 1:
+            return ranges[0]
+        return tuple(ranges)
 
     def getbbox(self, *, alpha_only: bool = True) -> tuple[int, int, int, int] | None:
         """Return the nonzero bounding box, using RGBA alpha by default.
@@ -870,6 +917,12 @@ class Image:
         from ._blanket import ops_lut
 
         self.load()
+        if self.mode == "F":
+            if not callable(lut):
+                raise ValueError("point operation not supported for this mode")
+            result = Image(self._native.point_float(lut))
+            result.info.update(self.info)
+            return result
         if mode is not None and mode != self.mode:
             raise ValueError("point mode conversion is not supported")
         values = [lut(i) for i in range(256)] * len(self.getbands()) if callable(lut) else list(lut)
@@ -1049,13 +1102,15 @@ class Image:
             raise ValueError("unknown transformation method")
         if resample not in (0, 2, 3):
             raise ValueError("transform supports NEAREST, BILINEAR and BICUBIC")
+        if self.mode in ("1", "P", "PA"):
+            resample = Resampling.NEAREST
         size = tuple(index(v) for v in size)
         if len(size) != 2:
             raise TypeError("size must contain two integers")
         if min(size) < 0:
             raise ValueError("width and height must be >= 0")
         self.load()
-        color = color_pixel(fillcolor, self.mode)
+        color = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
         if self.mode == "RGBA" and resample != 0 and isinstance(fillcolor, str):
             color[3] = 255
 
@@ -1116,7 +1171,7 @@ class Image:
                 raise ValueError("Coordinate 'lower' is less than 'upper'")
             self.load()
             left, upper, right, lower = (round(value) for value in box)
-            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * len(self.mode))
+            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (4 if self.mode == "F" else len(self.getbands())))
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -1146,7 +1201,7 @@ class Image:
         method = Resampling.BICUBIC if resample is None else resample
         if method not in range(6):
             raise ValueError(f"Unknown resampling filter ({method})")
-        if self.mode == "P":
+        if self.mode in ("1", "P", "PA"):
             method = Resampling.NEAREST
         if reducing_gap is not None and reducing_gap < 1.0:
             raise ValueError("reducing_gap must be 1.0 or greater")
@@ -1166,7 +1221,7 @@ class Image:
             native = ops_transpose(native, 1)
         else:
             # Pillow's alpha-aware path does not use integer reduction.
-            if reducing_gap is not None and method != Resampling.NEAREST and self.mode != "RGBA":
+            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("RGBA", "I", "F", "I;16", "I;16L", "I;16B"):
                 fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
                 fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
                 if fx > 1 or fy > 1:
@@ -1231,6 +1286,8 @@ class Image:
         else:
             if resample not in (Resampling.NEAREST, Resampling.BILINEAR, Resampling.BICUBIC):
                 raise ValueError("rotate supports NEAREST, BILINEAR and BICUBIC")
+            if self.mode in ("1", "P", "PA"):
+                resample = Resampling.NEAREST
             w, h = self.size
             cx, cy = (w / 2, h / 2) if center is None else center
             tx, ty = (0, 0) if translate is None else translate
@@ -1248,7 +1305,7 @@ class Image:
                 dx, dy = -(nw - w) / 2, -(nh - h) / 2
                 c, f = a * dx + b * dy + c, d * dx + e * dy + f
                 w, h = nw, nh
-            fill = color_pixel(fillcolor, self.mode)
+            fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
             if self.mode == "RGBA" and resample != Resampling.NEAREST and isinstance(fillcolor, str):
                 # Pillow parses strings in its intermediate RGBa mode as RGB.
                 fill[3] = 255
@@ -1267,7 +1324,7 @@ class Image:
             pillow_image = image.to_pillow()
             ```
         """
-        if self.bit_depth != 8:
+        if self.bit_depth != 8 and self.mode not in ("I", "F", "I;16", "I;16L", "I;16B"):
             raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
 
         try:
@@ -1309,6 +1366,33 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if self.mode == "LAB":
+            if output_format != "TIFF":
+                raise OSError(f"cannot write mode LAB as {output_format}")
+            if compressor is not None:
+                raise ValueError("compression optimization is not supported for LAB images")
+        if self.mode in ("CMYK", "YCbCr"):
+            allowed = ("JPEG", "TIFF", "PDF") if self.mode == "CMYK" else ("JPEG",)
+            if output_format not in allowed:
+                raise OSError(f"cannot write mode {self.mode} as {output_format}")
+            if self.mode == "YCbCr":
+                return self.convert("RGB").save(fp, output_format, compressor=compressor, **options)
+            if compressor is not None:
+                raise ValueError("compression optimization is not supported for CMYK images")
+        if self.mode == "HSV":
+            raise OSError(f"cannot write mode HSV as {output_format}")
+        if self.mode == "F":
+            if output_format != "TIFF":
+                raise OSError(f"cannot write mode F as {output_format}")
+            if compressor is not None:
+                raise ValueError("compression optimization is not supported for F images")
+        if self.mode in ("I", "I;16", "I;16L", "I;16B"):
+            if self.mode == "I":
+                depth = 16 if output_format in ("PNG", "TIFF", "JXL") else 8
+                return self.convert("L", bit_depth=depth).save(fp, output_format, compressor=compressor, **options)
+            if output_format not in ("PNG", "TIFF", "JXL"):
+                return self.convert("L").save(fp, output_format, compressor=compressor, **options)
+            return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         values = _save_options(output_format, options)
         encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native)
@@ -1325,8 +1409,8 @@ class Image:
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
 
-def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | None = 0) -> Image:
-    """Create an 8-bit L, RGB, RGBA, or indexed image filled with color.
+def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] | None = 0) -> Image:
+    """Create a direct, integer, or indexed image filled with color.
 
     Args:
         mode: Image mode, such as `L`, `RGB`, or `RGBA`.
@@ -1348,12 +1432,24 @@ def new(mode: str, size: tuple[int, int], color: str | int | tuple[int, ...] | N
     dimensions = tuple(index(v) for v in size)
     if min(dimensions) < 0:
         raise ValueError("Width and height must be >= 0")
+    if mode in ("I", "I;16", "I;16L", "I;16B"):
+        value = 0 if color is None else index(color)
+        if mode == "I":
+            pixel = (value & 0xFFFFFFFF).to_bytes(4, "little")
+        else:
+            pixel = (value & 0xFFFF).to_bytes(2, "big" if mode == "I;16B" else "little")
+        return Image(image_new(mode, dimensions, pixel))
+    if mode == "F":
+        value = 0.0 if color is None else float(color)
+        return Image(image_new(mode, dimensions, struct.pack("<f", value)))
     native_mode = "L" if mode == "P" else mode
-    if mode not in ("L", "RGB", "RGBA", "P"):
+    if mode == "HSV" and isinstance(color, str):
+        color = frombytes("RGB", (1, 1), bytes(color_pixel(color, "RGB"))).convert("HSV").getpixel((0, 0))
+    if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
-    if mode == "P":
+    if mode in ("P", "PA"):
         result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else bytes(768))
     return result
 
@@ -1495,12 +1591,12 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
 
 
 def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int = 8) -> Image:
-    """Create an image from packed pixels; depths above 8 use little-endian uint16.
+    """Create an image from bytes; mode 1 uses row-packed bits.
 
     Args:
         mode: Image mode, such as `L`, `RGB`, or `RGBA`.
         size: Output `(width, height)` in pixels.
-        data: Contiguous packed pixel buffer; depths above 8 use little-endian uint16 samples.
+        data: Contiguous packed pixel buffer. `I` uses little-endian int32, `F` uses little-endian float32, and `I;16B` uses big-endian uint16.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
 
     Examples:
@@ -1515,16 +1611,16 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth))
-    if mode == "P":
+    if mode in ("P", "PA"):
         result.putpalette(bytes(v for v in range(256) for _ in range(3)))
     return result
 
 
 def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
-    """Create an image from uint8 or uint16 samples exposing the array interface.
+    """Create an image from uint8, uint16, int32, float32, or float64 array samples.
 
     Args:
-        obj: Object exposing the array interface with uint8 or uint16 samples.
+        obj: Object exposing the array interface with uint8, uint16, int32, float32, or float64 samples.
         mode: Optional mode matching the array's channel layout.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth where supported.
 

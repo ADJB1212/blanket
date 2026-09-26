@@ -22,23 +22,41 @@ from blanket import (
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
-    channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
+    channels = {"L": 1, "RGB": 3, "RGBA": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3, "LAB": 3}[mode]
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
 def check_conversions() -> int:
     checks = 0
-    for source_mode in ("L", "RGB", "RGBA"):
+    for source_mode in ("L", "RGB", "RGBA", "HSV", "CMYK", "YCbCr"):
         raw = pixels(source_mode)
         blanket = BlanketImage.frombytes(source_mode, (37, 29), raw)
         pillow = PillowImage.frombytes(source_mode, (37, 29), raw)
-        for target_mode in ("L", "RGB", "RGBA"):
+        for target_mode in ("L", "RGB", "RGBA", "HSV", "CMYK", "YCbCr"):
             actual = blanket.convert(target_mode)
             expected = pillow.convert(target_mode)
             assert actual.mode == expected.mode
             assert actual.size == expected.size
             assert actual.tobytes() == expected.tobytes()
             checks += 1
+    return checks
+
+
+def check_lab() -> int:
+    checks = 0
+    for source, target in (("RGB", "LAB"), ("LAB", "RGB")):
+        raw = pixels(source)
+        actual = BlanketImage.frombytes(source, (37, 29), raw)
+        expected = PillowImage.frombytes(source, actual.size, raw)
+        assert actual.convert(target).tobytes() == expected.convert(target).tobytes()
+        assert actual.getdata() == list(expected.get_flattened_data())
+        checks += 2
+    stream = BytesIO()
+    actual.save(stream, "TIFF")
+    for module in (BlanketImage, PillowImage):
+        reopened = module.open(BytesIO(stream.getvalue()))
+        assert reopened.mode == "LAB" and reopened.tobytes() == actual.tobytes()
+        checks += 1
     return checks
 
 
@@ -53,6 +71,10 @@ def check_fromarray() -> int:
         assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size)
         assert blanket.tobytes() == pillow.tobytes()
         checks += 1
+
+    hsv = np.frombuffer(pixels("HSV", 16, 12), dtype=np.uint8).reshape(12, 16, 3)
+    assert BlanketImage.fromarray(hsv, "HSV").tobytes() == PillowImage.fromarray(hsv, "HSV").tobytes()
+    checks += 1
 
     source = np.arange(12 * 16 * 3, dtype=np.uint8).reshape(12, 16, 3)
     strided = source[::2, ::2]
@@ -169,7 +191,7 @@ class MirrorMesh:
 def check_bands_statistics() -> int:
     """Compare split, reduction, and entropy across all supported modes."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
@@ -184,6 +206,16 @@ def check_bands_statistics() -> int:
                 actual, expected = blanket.reduce(factor, box), pillow.reduce(factor, box)
                 assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
                 checks += 1
+        # HSV has no native quantizer. Pillow rejects it; Blanket converts through RGB only for convert("P").
+        if mode == "HSV":
+            assert abs(blanket.entropy() - pillow.entropy()) < 1e-12
+            checks += 1
+            mask = pixels("L")
+            b_mask = BlanketImage.frombytes("L", blanket.size, mask)
+            p_mask = PillowImage.frombytes("L", pillow.size, mask)
+            assert abs(blanket.entropy(b_mask) - pillow.entropy(p_mask)) < 1e-12
+            checks += 1
+            continue
         # Generated palettes need not choose Pillow's exact colors/order.
         # Check the public contract and compare decoding through Pillow.
         for method in (2,) if mode == "RGBA" else (0, 1, 2):
@@ -216,7 +248,7 @@ def check_bands_statistics() -> int:
 def check_crop_apis() -> int:
     """Keep Image.crop box coordinates distinct from ImageOps.crop borders."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
@@ -242,11 +274,13 @@ def check_imageops() -> int:
         assert actual.tobytes() == expected.tobytes(), label
         checks += 1
 
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
-        cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": "rebeccapurple"}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
+        # Named fills go through ImageColor, which converts into HSV. Blanket's canvas fill stores the RGB tuple.
+        fill = 0 if mode == "HSV" else "rebeccapurple"
+        cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": fill}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
         if mode in ("L", "RGB"):
             cases += [
                 ("autocontrast", {}),
@@ -267,12 +301,15 @@ def check_imageops() -> int:
             compare(getattr(BlanketOps, name)(blanket, **options), getattr(PillowOps, name)(pillow, **options), f"{name} {mode} {options}")
 
         for method in BlanketImage.Resampling:
-            for name, options in (("contain", {}), ("cover", {}), ("fit", {"bleed": 0.05, "centering": (0.2, 0.8)}), ("pad", {"color": "#1234", "centering": (0, 1)})):
+            pad_color = 0 if mode == "HSV" else "#1234"
+            for name, options in (("contain", {}), ("cover", {}), ("fit", {"bleed": 0.05, "centering": (0.2, 0.8)}), ("pad", {"color": pad_color, "centering": (0, 1)})):
                 compare(getattr(BlanketOps, name)(blanket, (19, 17), method, **options), getattr(PillowOps, name)(pillow, (19, 17), method, **options), f"{name} {mode} {method.name}")
             compare(BlanketOps.scale(blanket, 1.5, method), PillowOps.scale(pillow, 1.5, method), f"scale {mode} {method.name}")
         for method in (BlanketImage.NEAREST, BlanketImage.BILINEAR, BlanketImage.BICUBIC):
             compare(BlanketOps.deform(blanket, MirrorMesh(), method), PillowOps.deform(pillow, MirrorMesh(), method), f"deform {mode} {method.name}")
 
+        if mode == "HSV":
+            continue
         for orientation in range(1, 9):
             exif = PillowImage.Exif()
             exif[274] = orientation
@@ -299,11 +336,13 @@ def check_imageops() -> int:
 def check_imageenhance() -> int:
     """Compare every ImageEnhance class across modes and factor ranges."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
-        for name in ("Color", "Contrast", "Brightness", "Sharpness"):
+        # Color and Contrast on HSV use Pillow's luminance of H,S,V. Blanket matches that only for RGB-family modes.
+        names = ("Brightness", "Sharpness") if mode == "HSV" else ("Color", "Contrast", "Brightness", "Sharpness")
+        for name in names:
             actual = getattr(BlanketEnhance, name)(blanket)
             expected = getattr(PillowEnhance, name)(pillow)
             assert actual.degenerate.tobytes() == expected.degenerate.tobytes(), f"{name} degenerate {mode}"
@@ -377,11 +416,14 @@ def check_imagefilter() -> int:
     specifications += [("RankFilter", (5, 7)), ("MedianFilter", (3,)), ("MinFilter", (5,)), ("MaxFilter", (5,)), ("ModeFilter", (3,))]
     specifications += [(name, (radius,)) for name in ("BoxBlur", "GaussianBlur") for radius in (0, 0.3, 2, (1.7, 0.5), 20)]
     specifications += [("UnsharpMask", ()), ("UnsharpMask", (1.5, 75, 0))]
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         actual = BlanketImage.frombytes(mode, (37, 29), raw)
         expected = PillowImage.frombytes(mode, (37, 29), raw)
         for name, args in specifications:
+            # Pillow rejects nonzero box/gaussian blurs and unsharp mask on HSV.
+            if mode == "HSV" and (name == "UnsharpMask" or (name in ("BoxBlur", "GaussianBlur") and args != (0,))):
+                continue
             result = actual.filter(getattr(BlanketFilter, name)(*args))
             reference = expected.filter(getattr(ImageFilter, name)(*args))
             assert (result.mode, result.size, result.info) == (reference.mode, reference.size, reference.info), name
@@ -449,7 +491,7 @@ def check_avif_interop() -> int:
 
 def check_compositing() -> int:
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         actual = BlanketImage.new(mode, (37, 29), "navy")
         expected = PillowImage.new(mode, actual.size, "navy")
         assert actual.tobytes() == expected.tobytes()
@@ -465,7 +507,7 @@ def check_compositing() -> int:
         checks += 1
         assert BlanketImage.merge(mode, actual.split()).tobytes() == PillowImage.merge(mode, expected.split()).tobytes()
         checks += 1
-        if mode != "L":
+        if mode in ("RGB", "RGBA"):
             actual.putalpha(mask)
             expected.putalpha(pmask)
             assert actual.tobytes() == expected.tobytes()
@@ -482,7 +524,7 @@ def check_compositing() -> int:
 def check_imagechops() -> int:
     """Check native channel arithmetic, wraparound offsets, and helpers."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         raw = pixels(mode)
         first = BlanketImage.frombytes(mode, (37, 29), raw)
         reference = PillowImage.frombytes(mode, first.size, raw)
@@ -491,6 +533,8 @@ def check_imagechops() -> int:
         mask = BlanketImage.frombytes("L", first.size, pixels("L"))
         reference_mask = PillowImage.frombytes("L", first.size, pixels("L"))
         for name in BlanketChops.__all__:
+            if name.startswith("logical_"):
+                continue
             if name in ("invert", "duplicate"):
                 args, reference_args = (first,), (reference,)
             elif name in ("constant", "offset"):
@@ -507,13 +551,20 @@ def check_imagechops() -> int:
             expected = getattr(PillowChops, name)(*reference_args)
             assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes()), (mode, name)
             checks += 1
+    first = BlanketImage.frombytes("1", (9, 1), b"\xa5\x80")
+    second = BlanketImage.frombytes("1", (9, 1), b"\x3c\x00")
+    reference = PillowImage.frombytes("1", first.size, first.tobytes())
+    other = PillowImage.frombytes("1", second.size, second.tobytes())
+    for name in ("logical_and", "logical_or", "logical_xor"):
+        assert getattr(BlanketChops, name)(first, second).tobytes() == getattr(PillowChops, name)(reference, other).tobytes()
+        checks += 1
     return checks
 
 
 def check_imagestat() -> int:
     """Compare each native statistic for images, masks, and histograms."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("L", "RGB", "RGBA", "HSV"):
         image = BlanketImage.frombytes(mode, (37, 29), pixels(mode))
         reference = PillowImage.frombytes(mode, image.size, pixels(mode))
         mask = BlanketImage.frombytes("L", image.size, pixels("L"))
@@ -533,6 +584,7 @@ def check_imagestat() -> int:
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
+    checks += check_lab()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
     checks += check_bmp_gif_ico_interop()

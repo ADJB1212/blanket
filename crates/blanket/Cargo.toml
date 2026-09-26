@@ -11,6 +11,7 @@ publish = false
 [lib]
 name = "_blanket"
 crate-type = ["cdylib"]
+doctest = false
 
 [dependencies]
 pyo3 = { version = "0.29", features = ["abi3-py312"] }

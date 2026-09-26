@@ -103,7 +103,7 @@ def test_validation_and_closed_images():
     image = Image.new("RGBA", (3, 2))
     before = image.tobytes()
     for operation in [
-        lambda: Image.new("CMYK", (3, 2)),
+        lambda: Image.new("unsupported", (3, 2)),
         lambda: Image.new("RGB", (-1, 2)),
         lambda: Image.merge("RGB", [Image.new("L", (3, 2))]),
         lambda: Image.merge("L", [Image.new("P", (3, 2))]),

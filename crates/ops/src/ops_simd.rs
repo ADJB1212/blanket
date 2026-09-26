@@ -4,6 +4,42 @@
 //! runtime-detected AVX2 on x86/x86_64, with scalar fallbacks elsewhere.
 //! Nearest grayscale gathers also support x86 CPUs with SSSE3.
 
+pub(crate) fn reduce_float_two(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
+    let mut x = 0;
+    #[cfg(target_arch = "aarch64")]
+    unsafe {
+        use std::arch::aarch64::*;
+        while x * 8 + 16 <= upper.len() {
+            let a = vld1q_f32(upper.as_ptr().add(x * 8).cast());
+            let b = vld1q_f32(lower.as_ptr().add(x * 8).cast());
+            let even = vcvt_f64_f32(vget_low_f32(vuzp1q_f32(a, a)));
+            let odd = vcvt_f64_f32(vget_low_f32(vuzp2q_f32(a, a)));
+            let sum = vaddq_f64(vdupq_n_f64(0.0), even);
+            let sum = vaddq_f64(sum, odd);
+            let sum = vaddq_f64(sum, vcvt_f64_f32(vget_low_f32(vuzp1q_f32(b, b))));
+            let sum = vaddq_f64(sum, vcvt_f64_f32(vget_low_f32(vuzp2q_f32(b, b))));
+            vst1_f32(output.as_mut_ptr().add(x * 4).cast(), vcvt_f32_f64(vmulq_n_f64(sum, 0.25)));
+            x += 2;
+        }
+    }
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        use std::arch::x86_64::*;
+        while x * 8 + 16 <= upper.len() {
+            let a = _mm_loadu_ps(upper.as_ptr().add(x * 8).cast());
+            let b = _mm_loadu_ps(lower.as_ptr().add(x * 8).cast());
+            let sum = _mm_add_pd(_mm_setzero_pd(), _mm_cvtps_pd(_mm_shuffle_ps::<0x88>(a, a)));
+            let sum = _mm_add_pd(sum, _mm_cvtps_pd(_mm_shuffle_ps::<0xdd>(a, a)));
+            let sum = _mm_add_pd(sum, _mm_cvtps_pd(_mm_shuffle_ps::<0x88>(b, b)));
+            let sum = _mm_add_pd(sum, _mm_cvtps_pd(_mm_shuffle_ps::<0xdd>(b, b)));
+            let result = _mm_cvtpd_ps(_mm_mul_pd(sum, _mm_set1_pd(0.25)));
+            _mm_storel_epi64(output.as_mut_ptr().add(x * 4).cast(), _mm_castps_si128(result));
+            x += 2;
+        }
+    }
+    x
+}
+
 /// Reusable grayscale gather map for an axis-aligned nearest transform.
 pub(crate) struct NearestL {
     columns: Vec<usize>,
