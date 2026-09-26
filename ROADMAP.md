@@ -8,7 +8,7 @@ by priority but can ship independently.
 
 ---
 
-## Phase 0 — Current State
+## Phase 0 — Complete
 
 The foundation is in place: native Rust pixel kernels with SIMD and parallel
 execution, a Pillow-shaped Python API across seven modules, and read/write
@@ -51,7 +51,7 @@ support for eleven image formats.
 
 ---
 
-## Phase 1 — Mode Parity
+## Phase 1 — Mode Parity — Complete
 
 Add the missing Pillow image modes so that code written for Pillow can work
 unchanged. Each new mode needs storage, conversion to/from existing modes,
@@ -65,7 +65,7 @@ pixel access, and compatibility across existing operations.
 - [x] `F` — 32-bit floating-point pixels
 - [x] `CMYK` — 4-channel print color (no ICC transform required; raw channel storage)
 - [x] `YCbCr` — luma/chroma (used internally by JPEG; expose for user code)
-- [ ] `LAB` — CIE L\*a\*b\*
+- [x] `LAB` — CIE L\*a\*b\*
 - [x] `HSV` — hue, saturation, value
 
 ### Depends on

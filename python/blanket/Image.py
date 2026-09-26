@@ -52,6 +52,7 @@ _BANDS = {
     "HSV": ("H", "S", "V"),
     "CMYK": ("C", "M", "Y", "K"),
     "YCbCr": ("Y", "Cb", "Cr"),
+    "LAB": ("L", "A", "B"),
 }
 
 
@@ -373,7 +374,7 @@ class Image:
                 result.putpalette(self.palette)
             return result
         if mode == "P" and self.mode != "P":
-            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "F", "I", "I;16", "I;16L", "I;16B") else self).quantize()
+            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B") else self).quantize()
         self._sync_palette()
         result = Image(self._native.convert(mode, bit_depth))
         result.info.update(self.info)
@@ -1365,6 +1366,11 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if self.mode == "LAB":
+            if output_format != "TIFF":
+                raise OSError(f"cannot write mode LAB as {output_format}")
+            if compressor is not None:
+                raise ValueError("compression optimization is not supported for LAB images")
         if self.mode in ("CMYK", "YCbCr"):
             allowed = ("JPEG", "TIFF", "PDF") if self.mode == "CMYK" else ("JPEG",)
             if output_format not in allowed:
@@ -1439,7 +1445,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     native_mode = "L" if mode == "P" else mode
     if mode == "HSV" and isinstance(color, str):
         color = frombytes("RGB", (1, 1), bytes(color_pixel(color, "RGB"))).convert("HSV").getpixel((0, 0))
-    if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA", "HSV", "CMYK", "YCbCr"):
+    if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))

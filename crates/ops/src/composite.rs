@@ -32,7 +32,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
             PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
             PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
             PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => fill_pixels::<3>(spare, &color),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
         }
         // All reserved bytes above have been initialized, including empty images.

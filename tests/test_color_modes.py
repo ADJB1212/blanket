@@ -18,7 +18,7 @@ def test_raw_conversion_chunks(mode: str, count: int) -> None:
         assert actual.convert(target).tobytes() == expected.convert(target, dither=PIL.Dither.NONE).tobytes()
 
 
-@pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
+@pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB"])
 def test_arrays_palettes_and_depth(mode: str) -> None:
     np = pytest.importorskip("numpy")
     channels = PIL.getmodebands(mode)
@@ -48,7 +48,7 @@ def test_conversions(mode: str, other: str, reverse: bool) -> None:
     assert actual.convert(target).tobytes() == expected.convert(target, dither=PIL.Dither.NONE).tobytes()
 
 
-@pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
+@pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB"])
 def test_storage_and_bands(mode: str) -> None:
     channels = PIL.getmodebands(mode)
     raw = random.Random(42).randbytes(35 * channels)
@@ -75,7 +75,7 @@ def test_storage_and_bands(mode: str) -> None:
         actual.convert("RGB")
 
 
-@pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
+@pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB"])
 @pytest.mark.parametrize("method", range(6))
 def test_geometry(mode: str, method: int) -> None:
     raw = random.Random(19).randbytes(17 * 13 * PIL.getmodebands(mode))

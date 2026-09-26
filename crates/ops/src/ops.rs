@@ -192,7 +192,7 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
         PixelMode::La | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => apply_lut::<3>(source, &mut pixels, &lut),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => apply_lut::<3>(source, &mut pixels, &lut),
         PixelMode::Rgba | PixelMode::Cmyk => apply_lut::<4>(source, &mut pixels, &lut),
         _ => unreachable!(),
     });
@@ -239,7 +239,7 @@ fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResul
     Ok(py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => histogram::<1>(source, mask),
         PixelMode::La | PixelMode::Pa => histogram::<2>(source, mask),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => histogram::<3>(source, mask),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => histogram::<3>(source, mask),
         PixelMode::Rgba | PixelMode::Cmyk => histogram::<4>(source, mask),
         _ => unreachable!(),
     }))
@@ -409,7 +409,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         py.detach(|| match image.mode {
             PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
             PixelMode::La | PixelMode::Pa => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => {
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                 transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
             }
             PixelMode::Rgba | PixelMode::Cmyk => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
@@ -420,7 +420,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
         PixelMode::La | PixelMode::Pa => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => {
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
             transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
         }
         PixelMode::Rgba | PixelMode::Cmyk => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
@@ -638,7 +638,9 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
             unpremultiply_la(&mut pixels);
         }
         PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+            reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
+        }
         PixelMode::Cmyk => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
         PixelMode::Rgba => {
             let mut source = source.to_vec();
@@ -837,7 +839,9 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
             match image.mode {
                 PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
                 PixelMode::La | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width, &xs, &ys),
-                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => resize_nearest::<3>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                    resize_nearest::<3>(source, &mut result, image.width, &xs, &ys)
+                }
                 PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
                 _ => unreachable!(),
             }
@@ -852,7 +856,7 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
         match image.mode {
             PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
             PixelMode::La | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => resample::<3>(&source, &mut result, image, size, b, method)?,
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, &mut result, image, size, b, method)?,
             PixelMode::Rgba | PixelMode::Cmyk => resample::<4>(&source, &mut result, image, size, b, method)?,
             _ => unreachable!(),
         }
@@ -954,7 +958,7 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
         match image.mode {
             PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
             PixelMode::La | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width, &xs, &ys),
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
             PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
             _ => unreachable!(),
         }
@@ -1361,7 +1365,9 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     }
                 }
                 match image.mode {
-                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                        resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys)
+                    }
                     PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
                     PixelMode::One | PixelMode::L => unreachable!(),
                     PixelMode::La | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width, &xs, &ys),
@@ -1400,7 +1406,7 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     match image.mode {
                         PixelMode::One | PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
                         PixelMode::La | PixelMode::Pa => nearest_columns::<2>(source_row, row, columns, &fill),
-                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => nearest_columns::<3>(source_row, row, columns, &fill),
+                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => nearest_columns::<3>(source_row, row, columns, &fill),
                         PixelMode::Rgba | PixelMode::Cmyk => nearest_columns::<4>(source_row, row, columns, &fill),
                         _ => unreachable!(),
                     }
@@ -1414,7 +1420,9 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     match image.mode {
                         PixelMode::One | PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
                         PixelMode::La | PixelMode::Pa => nearest_fixed::<2>(&source, row, size, origin, steps, &fill),
-                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => nearest_fixed::<3>(&source, row, size, origin, steps, &fill),
+                        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                            nearest_fixed::<3>(&source, row, size, origin, steps, &fill)
+                        }
                         PixelMode::Rgba | PixelMode::Cmyk => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
                         _ => unreachable!(),
                     }
@@ -1581,7 +1589,7 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
                             match image.mode {
                                 PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
                                 PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
-                                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => warp_nearest_row::<3>(&source, dst, &warp, v),
+                                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => warp_nearest_row::<3>(&source, dst, &warp, v),
                                 PixelMode::Rgba | PixelMode::Cmyk => warp_nearest_row::<4>(&source, dst, &warp, v),
                                 _ => unreachable!(),
                             }

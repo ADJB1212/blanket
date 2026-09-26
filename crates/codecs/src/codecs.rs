@@ -204,6 +204,25 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
         return Ok(None);
     };
+    let photometric = decoder.get_tag_u32(tiff::tags::Tag::PhotometricInterpretation).ok();
+    if matches!(photometric, Some(8 | 9)) {
+        let signed = photometric == Some(8);
+        // Decode LAB as raw three-channel samples; the TIFF crate cannot read LAB buffers.
+        let normalized = lab_tiff_as_rgb(data)?;
+        decoder = tiff::decoder::Decoder::new(Cursor::new(normalized.as_slice())).map_err(|error| error.to_string())?;
+        if decoder.colortype().map_err(|error| error.to_string())? != tiff::ColorType::RGB(8) {
+            return Err("only 8-bit LAB TIFF images are supported".into());
+        }
+        let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
+        validate_dimensions(width, height)?;
+        let tiff::decoder::DecodingResult::U8(pixels) = decoder.read_image().map_err(|error| error.to_string())? else {
+            return Err("invalid LAB TIFF samples".into());
+        };
+        let pixels = if signed { blanket_core::raster::lab_raw_bytes(&pixels) } else { pixels };
+        return Image::from_pixels(width, height, PixelMode::Lab, pixels, Some("TIFF".into()))
+            .map(Some)
+            .map_err(|error| error.to_string());
+    }
     if decoder.colortype().ok() == Some(tiff::ColorType::CMYK(8)) {
         let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
         validate_dimensions(width, height)?;
@@ -226,6 +245,44 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         Image::from_float_bytes(width, height, values.into_iter().flat_map(f32::to_le_bytes).collect()).map_err(|error| error.to_string())?;
     image.format = Some("TIFF".to_owned());
     Ok(Some(image))
+}
+
+fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
+    let little = data.starts_with(b"II");
+    let read = |offset: usize, count: usize| -> Result<usize, String> {
+        let bytes = data
+            .get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?)
+            .ok_or("truncated TIFF directory")?;
+        let value = if little {
+            bytes.iter().rev().fold(0_u64, |value, &byte| (value << 8) | u64::from(byte))
+        } else {
+            bytes.iter().fold(0_u64, |value, &byte| (value << 8) | u64::from(byte))
+        };
+        usize::try_from(value).map_err(|_| "invalid TIFF offset".into())
+    };
+    let big = read(2, 2)? == 43;
+    let (offset, count_bytes, entry_bytes, value_offset) = if big { (read(8, 8)?, 8, 20, 12) } else { (read(4, 4)?, 2, 12, 8) };
+    let count = read(offset, count_bytes)?;
+    let start = offset.checked_add(count_bytes).ok_or("invalid TIFF offset")?;
+    if count > data.len().saturating_sub(start) / entry_bytes {
+        return Err("truncated TIFF directory".into());
+    }
+    for i in 0..count {
+        let entry = start + i * entry_bytes;
+        if read(entry, 2)? == 262 {
+            if read(entry + 2, 2)? != 3 || read(entry + 4, if big { 8 } else { 4 })? != 1 {
+                return Err("invalid TIFF photometric tag".into());
+            }
+            let mut normalized = data.to_vec();
+            normalized[entry + value_offset..entry + value_offset + 2].copy_from_slice(&if little {
+                2_u16.to_le_bytes()
+            } else {
+                2_u16.to_be_bytes()
+            });
+            return Ok(normalized);
+        }
+    }
+    Err("missing TIFF photometric tag".into())
 }
 
 fn decode_ico(data: &[u8]) -> Result<Image, String> {
@@ -449,6 +506,29 @@ fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if image.mode == PixelMode::Lab {
+        if format != ImageFormat::Tiff {
+            return Err(PyOSError::new_err(format!("cannot write mode LAB as {}", format.as_str())));
+        }
+        if image.width == 0 || image.height == 0 {
+            return Err(PyValueError::new_err("cannot encode an empty image"));
+        }
+        let mut output = Cursor::new(Vec::new());
+        {
+            let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(codec_error)?;
+            let mut frame = encoder
+                .new_image::<tiff::encoder::colortype::RGB8>(image.width, image.height)
+                .map_err(codec_error)?;
+            frame
+                .encoder()
+                .write_tag(tiff::tags::Tag::PhotometricInterpretation, 8_u16)
+                .map_err(codec_error)?;
+            frame
+                .write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?))
+                .map_err(codec_error)?;
+        }
+        return Ok(output.into_inner());
+    }
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
         if image.mode == PixelMode::Cmyk {
             match format {
@@ -1253,6 +1333,41 @@ pub fn _encode(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lab_tiff_directory_bounds_and_byte_order() {
+        for little in [false, true] {
+            for big in [false, true] {
+                let mut data = if little { b"II".to_vec() } else { b"MM".to_vec() };
+                let push = |data: &mut Vec<u8>, value: u64, count: usize| {
+                    if little {
+                        data.extend_from_slice(&value.to_le_bytes()[..count]);
+                    } else {
+                        data.extend_from_slice(&value.to_be_bytes()[8 - count..]);
+                    }
+                };
+                push(&mut data, if big { 43 } else { 42 }, 2);
+                if big {
+                    push(&mut data, 8, 2);
+                    push(&mut data, 0, 2);
+                }
+                push(&mut data, if big { 16 } else { 8 }, if big { 8 } else { 4 });
+                push(&mut data, 1, if big { 8 } else { 2 });
+                push(&mut data, 262, 2);
+                push(&mut data, 3, 2);
+                push(&mut data, 1, if big { 8 } else { 4 });
+                let value_offset = data.len();
+                push(&mut data, 8, 2);
+                push(&mut data, 0, if big { 6 } else { 2 });
+                let mut expected = data.clone();
+                expected[value_offset..value_offset + 2].copy_from_slice(&if little { 2_u16.to_le_bytes() } else { 2_u16.to_be_bytes() });
+                assert_eq!(lab_tiff_as_rgb(&data).unwrap(), expected);
+                for length in 0..data.len() {
+                    assert!(lab_tiff_as_rgb(&data[..length]).is_err());
+                }
+            }
+        }
+    }
 
     #[test]
     fn jxl_wide_preparation_borrows_only_native_aligned_samples() {

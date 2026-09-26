@@ -175,7 +175,7 @@ unsafe fn blend_bytes_sse2(first: &[u8], second: &[u8], output: &mut [u8], facto
 
 #[pyfunction]
 fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         return image.convert(py, "L", None)?.convert(py, image.mode.as_str(), None);
     }
     let source = image.pixel_data()?;
@@ -210,7 +210,7 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
 
 #[pyfunction]
 fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
         let mean = if source.is_empty() {
@@ -313,7 +313,7 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => smooth::<1, 1>(source, &mut pixels, width),
         PixelMode::La | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr => smooth::<3, 3>(source, &mut pixels, width),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, &mut pixels, width),
         PixelMode::Cmyk => smooth::<4, 4>(source, &mut pixels, width),
         PixelMode::Rgba => smooth::<4, 3>(source, &mut pixels, width),
         _ => unreachable!(),

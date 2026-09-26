@@ -22,7 +22,7 @@ from blanket import (
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
-    channels = {"L": 1, "RGB": 3, "RGBA": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3}[mode]
+    channels = {"L": 1, "RGB": 3, "RGBA": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3, "LAB": 3}[mode]
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
@@ -39,6 +39,24 @@ def check_conversions() -> int:
             assert actual.size == expected.size
             assert actual.tobytes() == expected.tobytes()
             checks += 1
+    return checks
+
+
+def check_lab() -> int:
+    checks = 0
+    for source, target in (("RGB", "LAB"), ("LAB", "RGB")):
+        raw = pixels(source)
+        actual = BlanketImage.frombytes(source, (37, 29), raw)
+        expected = PillowImage.frombytes(source, actual.size, raw)
+        assert actual.convert(target).tobytes() == expected.convert(target).tobytes()
+        assert actual.getdata() == list(expected.get_flattened_data())
+        checks += 2
+    stream = BytesIO()
+    actual.save(stream, "TIFF")
+    for module in (BlanketImage, PillowImage):
+        reopened = module.open(BytesIO(stream.getvalue()))
+        assert reopened.mode == "LAB" and reopened.tobytes() == actual.tobytes()
+        checks += 1
     return checks
 
 
@@ -566,6 +584,7 @@ def check_imagestat() -> int:
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
+    checks += check_lab()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
     checks += check_bmp_gif_ico_interop()

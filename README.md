@@ -37,7 +37,7 @@ with Image.open("photo.jpg") as image:
   and convert explicitly to Pillow when you need it.
 
 Blanket is currently **alpha software**. It implements a focused subset of
-Pillow's API, centered on `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, and `YCbCr` images, with integer `I`
+Pillow's API, centered on `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB` images, with integer `I`
 and `I;16` modes, floating-point `F`, and limited indexed
 `P` and `PA` support. It is not a drop-in replacement for `PIL` (yet).
 
@@ -182,7 +182,7 @@ change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
 
-- **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, and `YCbCr`.
+- **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
   Integer `I`, `I;16`, `I;16L`, and `I;16B` and floating-point `F` support pixel access,
   conversion, copying, cropping, transposition, and resizing. `F` also supports
   transforms and TIFF interchange.
@@ -192,6 +192,10 @@ change RGB values during RGB/YUV conversion.
   output. CMYK save-time compression optimization is unsupported. YCbCr saves
   to JPEG through RGB and opens back as RGB. Convert either mode to RGB for
   other output formats or direct quantization.
+- **LAB:** 8-bit CIE L*a*b* supports pixel operations and TIFF interchange.
+  Native, statically linked LittleCMS converts between sRGB and D50 LAB;
+  other conversions pass through RGB. LAB save-time compression optimization
+  is unsupported.
 - **Metadata:** PNG, JPEG, and uncompressed JPEG XL metadata boxes supply
   EXIF/XMP for orientation handling. Saving writes pixels only; metadata is
   not preserved.
