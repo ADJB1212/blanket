@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "blanket"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blanket-codecs",
  "blanket-core",
@@ -202,7 +202,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codecs"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blanket-core",
  "blanket-ops",
@@ -220,7 +220,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "garb",
  "lcms2",
@@ -231,7 +231,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-ops"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blanket-core",
  "garb",
