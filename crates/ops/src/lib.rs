@@ -2,6 +2,7 @@ pub mod chops;
 pub mod composite;
 pub mod enhance;
 pub mod filter;
+pub mod math;
 pub mod ops;
 pub mod ops_simd;
 pub mod palette;

@@ -47,6 +47,7 @@ test = [
     "pytest>=9,<10",
     "rich>=15",
     "ruff>=0.16.9",
+    "ty>=0.0.84",
 ]
 docs = [
     "mkdocs>=1.5.0,<2",
@@ -99,6 +100,9 @@ exclude = ["scripts", "tests", "docs"]
 
 [tool.ty.environment]
 python = "./.venv"
+
+[tool.ty.terminal]
+output-format = "concise"
 
 [tool.ty.analysis]
 allowed-unresolved-imports = ["blanket._blanket"]

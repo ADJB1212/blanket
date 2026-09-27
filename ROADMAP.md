@@ -134,10 +134,10 @@ users expect.
 
 ### ImageMath Module
 
-- [ ] `eval(expression, **operands)` — per-pixel math expressions
-- [ ] `lambda_eval(function, **operands)` — lambda-based evaluation
-- [ ] Operator support: arithmetic, bitwise, logical, comparison
-- [ ] Mode coercion rules matching Pillow
+- [x] `eval(expression, **operands)` and `unsafe_eval` — per-pixel math expressions
+- [x] `lambda_eval(function, **operands)` — lambda-based evaluation
+- [x] Operator support: arithmetic, bitwise, logical, comparison
+- [x] Mode coercion rules matching Pillow
 
 ### ExifTags & TiffTags
 

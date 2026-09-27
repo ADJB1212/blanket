@@ -21,6 +21,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_ops::composite::register(module)?;
     blanket_codecs::compressor::register(module)?;
     blanket_ops::filter::register(module)?;
+    blanket_ops::math::register(module)?;
     blanket_ops::ops::register(module)?;
     blanket_ops::palette::register(module)?;
     blanket_ops::quantize::register(module)?;
