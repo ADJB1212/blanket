@@ -123,8 +123,8 @@ users expect.
 
 ### ImageColor Module
 
-- [ ] `getrgb(color)` — public API (currently internal `_color.py`)
-- [ ] `getcolor(color, mode)` — convert color string to mode-specific value
+- [x] `getrgb(color)` — public API (currently internal `_color.py`)
+- [x] `getcolor(color, mode)` — convert color string to mode-specific value
 - [ ] Full CSS4 color spec compliance
 
 ### ImagePath Module

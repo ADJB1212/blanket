@@ -13,6 +13,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Image>()?;
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::_encode, module)?)?;
     blanket_ops::enhance::register(module)?;

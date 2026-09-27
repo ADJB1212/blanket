@@ -1,3 +1,4 @@
+pub mod color;
 pub mod parallel;
 pub mod raster;
 pub mod simd;
