@@ -183,6 +183,136 @@ pub fn gray_to_hsv<const C: usize>(source: &[u8]) -> Vec<u8> {
     output
 }
 
+/// Map `S`-byte pixels to `D` bytes in uninitialized output. `block` converts
+/// 16 pixels at a time where supported; `pixel` handles the remainder.
+fn map_blocks<const S: usize, const D: usize>(
+    source: &[u8], parallel_bytes: usize, block: impl Fn(*const u8, *mut u8) + Sync, pixel: impl Fn(&[u8; S]) -> [u8; D] + Sync,
+) -> Vec<u8> {
+    let count = source.len() / S;
+    let mut output = Vec::<u8>::with_capacity(count * D);
+    let chunk_pixels = 64 * 1024;
+    crate::parallel::chunks_mut_above(
+        &mut output.spare_capacity_mut()[..count * D],
+        chunk_pixels * D,
+        parallel_bytes,
+        |i, dst| {
+            let src = &source[i * chunk_pixels * S..(i * chunk_pixels + dst.len() / D) * S];
+            let blocks = if cfg!(target_arch = "aarch64") { src.len() / S / 16 } else { 0 };
+            for b in 0..blocks {
+                block(src[b * 16 * S..].as_ptr(), dst[b * 16 * D..].as_mut_ptr().cast::<u8>());
+            }
+            for (src, dst) in src[blocks * 16 * S..]
+                .as_chunks::<S>()
+                .0
+                .iter()
+                .zip(dst[blocks * 16 * D..].as_chunks_mut::<D>().0)
+            {
+                for (value, converted) in dst.iter_mut().zip(pixel(src)) {
+                    value.write(converted);
+                }
+            }
+        },
+    );
+    // Blocks and the scalar tail initialize every byte of each disjoint chunk.
+    unsafe { output.set_len(count * D) };
+    output
+}
+
+/// Pillow's L to CMYK stores inverted gray as K.
+pub fn gray_to_cmyk(source: &[u8]) -> Vec<u8> {
+    map_blocks::<1, 4>(
+        source,
+        4 * 1024 * 1024,
+        |src, dst| {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                use std::arch::aarch64::*;
+                let zero = vdupq_n_u8(0);
+                vst4q_u8(dst, uint8x16x4_t(zero, zero, zero, vmvnq_u8(vld1q_u8(src))));
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = (src, dst);
+        },
+        |p| [0, 0, 0, 255 - p[0]],
+    )
+}
+
+pub fn gray_to_ycbcr(source: &[u8]) -> Vec<u8> {
+    map_blocks::<1, 3>(
+        source,
+        4 * 1024 * 1024,
+        |src, dst| {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                use std::arch::aarch64::*;
+                let half = vdupq_n_u8(128);
+                vst3q_u8(dst, uint8x16x3_t(vld1q_u8(src), half, half));
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = (src, dst);
+        },
+        |p| [p[0], 128, 128],
+    )
+}
+
+/// RGB or RGBA to CMYK by inverting color channels, with zero K.
+pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
+    map_blocks::<S, 4>(
+        source,
+        4 * 1024 * 1024,
+        |src, dst| {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                use std::arch::aarch64::*;
+                let (r, g, b) = if S == 3 {
+                    let p = vld3q_u8(src);
+                    (p.0, p.1, p.2)
+                } else {
+                    let p = vld4q_u8(src);
+                    (p.0, p.1, p.2)
+                };
+                vst4q_u8(dst, uint8x16x4_t(vmvnq_u8(r), vmvnq_u8(g), vmvnq_u8(b), vdupq_n_u8(0)));
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = (src, dst);
+        },
+        |p| [255 - p[0], 255 - p[1], 255 - p[2], 0],
+    )
+}
+
+pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
+    map_blocks::<S, 1>(
+        source,
+        1024 * 1024,
+        |src, dst| {
+            #[cfg(target_arch = "aarch64")]
+            unsafe {
+                use std::arch::aarch64::*;
+                let value = if S == 3 {
+                    let p = vld3q_u8(src);
+                    match channel {
+                        0 => p.0,
+                        1 => p.1,
+                        _ => p.2,
+                    }
+                } else {
+                    let p = vld4q_u8(src);
+                    match channel {
+                        0 => p.0,
+                        1 => p.1,
+                        2 => p.2,
+                        _ => p.3,
+                    }
+                };
+                vst1q_u8(dst, value);
+            }
+            #[cfg(not(target_arch = "aarch64"))]
+            let _ = (src, dst);
+        },
+        |p| [p[channel]],
+    )
+}
+
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];

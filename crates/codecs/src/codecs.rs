@@ -194,7 +194,7 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Tiff => decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok),
         ImageFormat::Webp => decode_webp(data),
         ImageFormat::Heif => decode_heif(data),
-        ImageFormat::Png => decode_rust_image(data, RustFormat::Png, "PNG"),
+        ImageFormat::Png => decode_bilevel_png(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Png, "PNG"), Ok),
         ImageFormat::Jpeg => decode_jpeg(data),
         ImageFormat::Jxl => decode_jxl(data),
     }
@@ -357,6 +357,28 @@ fn decode_webp(data: &[u8]) -> Result<Image, String> {
         Some("WEBP".into()),
     )
     .map_err(|error| error.to_string())
+}
+
+/// Decode packed rows of non-interlaced, opaque 1-bit grayscale PNGs.
+fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
+    // IHDR bit depth, color type, and interlace method.
+    if data.get(24..29).is_none_or(|header| header[0] != 1 || header[1] != 0 || header[4] != 0) {
+        return Ok(None);
+    }
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    decoder.set_transformations(png::Transformations::IDENTITY);
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    if reader.info().trns.is_some() {
+        return Ok(None);
+    }
+    let (width, height) = reader.info().size();
+    validate_dimensions(width, height)?;
+    let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
+    reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
+    let pixels = blanket_core::raster::unpack_bilevel(&packed, width as usize, height as usize);
+    Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into()))
+        .map(Some)
+        .map_err(|error| error.to_string())
 }
 
 fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, String> {
@@ -530,20 +552,11 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
         return Ok(output.into_inner());
     }
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
-        if image.mode == PixelMode::Cmyk {
-            match format {
-                ImageFormat::Jpeg => return encode_jpeg(image, image.pixel_data()?, options.quality),
-                ImageFormat::Tiff => {
-                    let mut output = Cursor::new(Vec::new());
-                    tiff::encoder::TiffEncoder::new(&mut output)
-                        .map_err(codec_error)?
-                        .write_image::<tiff::encoder::colortype::CMYK8>(image.width, image.height, image.pixel_data()?)
-                        .map_err(codec_error)?;
-                    return Ok(output.into_inner());
-                }
-                ImageFormat::Pdf => return encode_pdf(image, image.pixel_data()?),
-                _ => {}
-            }
+        match (image.mode, format) {
+            (_, ImageFormat::Jpeg) => return encode_jpeg(image, image.pixel_data()?, options.quality),
+            (PixelMode::Cmyk, ImageFormat::Tiff) => return encode_raw_tiff(image, image.pixel_data()?),
+            (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?),
+            _ => {}
         }
         return Err(PyOSError::new_err(format!(
             "cannot write mode {} as {}",
@@ -559,35 +572,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
             return Err(PyValueError::new_err("cannot encode an empty image"));
         }
         if cfg!(target_endian = "little") {
-            use tiff::tags::Tag;
-            let pixels = image.raw_data()?;
-            let length = u32::try_from(pixels.len()).map_err(|_| PyValueError::new_err("image is too large for TIFF"))?;
-            let mut output = Cursor::new(Vec::with_capacity(pixels.len() + 256));
-            {
-                let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(codec_error)?;
-                let mut directory = encoder.image_directory().map_err(codec_error)?;
-                let offset = directory.write_data(pixels).map_err(codec_error)?;
-                for (tag, value) in [
-                    (Tag::ImageWidth, image.width),
-                    (Tag::ImageLength, image.height),
-                    (Tag::RowsPerStrip, image.height),
-                    (Tag::StripOffsets, offset as u32),
-                    (Tag::StripByteCounts, length),
-                ] {
-                    directory.write_tag(tag, value).map_err(codec_error)?;
-                }
-                for (tag, value) in [
-                    (Tag::BitsPerSample, 32_u16),
-                    (Tag::Compression, 1),
-                    (Tag::PhotometricInterpretation, 1),
-                    (Tag::SamplesPerPixel, 1),
-                    (Tag::SampleFormat, 3),
-                ] {
-                    directory.write_tag(tag, value).map_err(codec_error)?;
-                }
-                directory.finish().map_err(codec_error)?;
-            }
-            return Ok(output.into_inner());
+            return encode_raw_tiff(image, image.raw_data()?);
         }
         let samples: Vec<f32> = image
             .raw_data()?
@@ -661,6 +646,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
             Ok(output)
         }
         ImageFormat::Heif => unreachable!(),
+        ImageFormat::Tiff if matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) => encode_raw_tiff(image, pixels),
         ImageFormat::Tiff => {
             let mut output = Cursor::new(Vec::with_capacity(pixels.len().saturating_add(1024)));
             image::codecs::tiff::TiffEncoder::new(&mut output)
@@ -758,6 +744,78 @@ fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     Ok(output)
 }
 
+/// Uncompressed little-endian TIFF with one strip preceding the directory.
+fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
+    if image.width == 0 || image.height == 0 {
+        return Err(PyValueError::new_err("cannot encode an empty image"));
+    }
+    let (samples, bits, photometric) = match image.mode {
+        PixelMode::L => (1_u16, 8_u16, 1_u16),
+        PixelMode::F => (1, 32, 1),
+        PixelMode::Rgb => (3, 8, 2),
+        PixelMode::Rgba => (4, 8, 2),
+        PixelMode::Cmyk => (4, 8, 5),
+        _ => unreachable!("caller validates raw TIFF modes"),
+    };
+    let too_large = || PyValueError::new_err("image is too large for TIFF");
+    let length = u32::try_from(pixels.len()).map_err(|_| too_large())?;
+    let bits_offset = 8 + pixels.len().next_multiple_of(2);
+    let ifd_offset = bits_offset + if samples > 2 { usize::from(samples) * 2 } else { 0 };
+    let mut entries: Vec<(u16, u16, u32, u32)> = vec![
+        (256, 4, 1, image.width),
+        (257, 4, 1, image.height),
+        (
+            258,
+            3,
+            u32::from(samples),
+            if samples > 2 {
+                u32::try_from(bits_offset).map_err(|_| too_large())?
+            } else {
+                u32::from(bits)
+            },
+        ),
+        (259, 3, 1, 1),
+        (262, 3, 1, u32::from(photometric)),
+        (273, 4, 1, 8),
+        (277, 3, 1, u32::from(samples)),
+        (278, 4, 1, image.height),
+        (279, 4, 1, length),
+        (284, 3, 1, 1),
+    ];
+    if image.mode == PixelMode::Rgba {
+        entries.push((338, 3, 1, 2));
+    }
+    if image.mode == PixelMode::F {
+        entries.push((339, 3, 1, 3));
+    }
+    let size = ifd_offset + 2 + entries.len() * 12 + 4;
+    u32::try_from(size).map_err(|_| too_large())?;
+    let mut output = Vec::with_capacity(size);
+    output.extend_from_slice(b"II*\0");
+    output.extend_from_slice(&(ifd_offset as u32).to_le_bytes());
+    output.extend_from_slice(pixels);
+    output.resize(bits_offset, 0);
+    if samples > 2 {
+        for _ in 0..samples {
+            output.extend_from_slice(&bits.to_le_bytes());
+        }
+    }
+    output.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+    for (tag, kind, count, value) in entries {
+        output.extend_from_slice(&tag.to_le_bytes());
+        output.extend_from_slice(&kind.to_le_bytes());
+        output.extend_from_slice(&count.to_le_bytes());
+        if kind == 3 && count == 1 {
+            output.extend_from_slice(&(value as u16).to_le_bytes());
+            output.extend_from_slice(&[0, 0]);
+        } else {
+            output.extend_from_slice(&value.to_le_bytes());
+        }
+    }
+    output.extend_from_slice(&[0; 4]);
+    Ok(output)
+}
+
 fn color_type(mode: PixelMode) -> ExtendedColorType {
     match mode {
         PixelMode::One | PixelMode::L => ExtendedColorType::L8,
@@ -839,7 +897,7 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
     let (format, subsampling) = match image.mode {
         PixelMode::L => (PixelFormat::GRAY, Subsamp::Gray),
         // Match the default used by Pillow/libjpeg for RGB JPEG output.
-        PixelMode::Rgb => (PixelFormat::RGB, Subsamp::Sub2x2),
+        PixelMode::Rgb | PixelMode::YCbCr => (PixelFormat::RGB, Subsamp::Sub2x2),
         PixelMode::Cmyk => (PixelFormat::CMYK, Subsamp::None),
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
         _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
@@ -853,9 +911,29 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
     if coding.progressive {
         encoder.set_progressive(true).map_err(codec_error)?;
     }
+    if image.mode == PixelMode::YCbCr {
+        let (width, height) = (image.width as usize, image.height as usize);
+        let planes = ycbcr_planes(pixels, width, height);
+        let chroma = width.div_ceil(2);
+        return encoder
+            .compress_yuv_planes_to_vec(&turbojpeg::YuvPlanesImage {
+                y_plane: &planes.0,
+                u_plane: &planes.1,
+                v_plane: &planes.2,
+                width,
+                height,
+                y_stride: width.next_multiple_of(2),
+                u_stride: chroma,
+                v_stride: chroma,
+                subsamp: Subsamp::Sub2x2,
+            })
+            .map_err(codec_error);
+    }
     let inverted;
     let pixels = if image.mode == PixelMode::Cmyk {
-        inverted = pixels.iter().map(|value| 255 - value).collect::<Vec<_>>();
+        // Like Pillow, store inverted Adobe CMYK without a YCCK transform.
+        encoder.set_colorspace(Colorspace::CMYK).map_err(codec_error)?;
+        inverted = invert_samples(pixels);
         inverted.as_slice()
     } else {
         pixels
@@ -869,6 +947,80 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
             format,
         })
         .map_err(codec_error)
+}
+
+fn invert_samples(pixels: &[u8]) -> Vec<u8> {
+    let mut output = Vec::with_capacity(pixels.len());
+    blanket_core::parallel::chunks_mut_above(&mut output.spare_capacity_mut()[..pixels.len()], 256 * 1024, 4 * 1024 * 1024, |i, dst| {
+        for (value, &sample) in dst.iter_mut().zip(&pixels[i * 256 * 1024..]) {
+            value.write(255 - sample);
+        }
+    });
+    // Every reserved byte is written by the disjoint chunks above.
+    unsafe { output.set_len(pixels.len()) };
+    output
+}
+
+/// Planar Y plus 2x2 chroma averaged like libjpeg's h2v2 downsampler, with
+/// replicated right and bottom edges. Y is padded to even dimensions.
+fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    use rayon::prelude::*;
+    let y_stride = width.next_multiple_of(2);
+    let (cw, ch) = (width.div_ceil(2), height.div_ceil(2));
+    let mut y = vec![0; y_stride * ch * 2];
+    let mut cb = vec![0; cw * ch];
+    let mut cr = vec![0; cw * ch];
+    if width == 0 || height == 0 {
+        return (y, cb, cr);
+    }
+    let row = |r: usize| &pixels[r.min(height - 1) * width * 3..(r.min(height - 1) + 1) * width * 3];
+    let work = |cy: usize, luma: &mut [u8], cb: &mut [u8], cr: &mut [u8]| {
+        let (top, bottom) = (row(cy * 2), row(cy * 2 + 1));
+        let (luma0, luma1) = luma.split_at_mut(y_stride);
+        let mut x = 0;
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            let bias = vld1q_u16([1, 2, 1, 2, 1, 2, 1, 2].as_ptr());
+            while x + 16 <= width {
+                let a = vld3q_u8(top.as_ptr().add(x * 3));
+                let b = vld3q_u8(bottom.as_ptr().add(x * 3));
+                vst1q_u8(luma0.as_mut_ptr().add(x), a.0);
+                vst1q_u8(luma1.as_mut_ptr().add(x), b.0);
+                let average = |p: uint8x16_t, q: uint8x16_t| vshrn_n_u16::<2>(vaddq_u16(vaddq_u16(vpaddlq_u8(p), vpaddlq_u8(q)), bias));
+                vst1_u8(cb.as_mut_ptr().add(x / 2), average(a.1, b.1));
+                vst1_u8(cr.as_mut_ptr().add(x / 2), average(a.2, b.2));
+                x += 16;
+            }
+        }
+        for i in x..width {
+            luma0[i] = top[i * 3];
+            luma1[i] = bottom[i * 3];
+        }
+        if width < y_stride {
+            luma0[width] = luma0[width - 1];
+            luma1[width] = luma1[width - 1];
+        }
+        for cx in x / 2..cw {
+            let (l, r) = (cx * 6, (cx * 2 + 1).min(width - 1) * 3);
+            let bias = 1 + (cx as u16 & 1);
+            let sum = |c: usize| (u16::from(top[l + c]) + u16::from(top[r + c]) + u16::from(bottom[l + c]) + u16::from(bottom[r + c]) + bias) >> 2;
+            cb[cx] = sum(1) as u8;
+            cr[cx] = sum(2) as u8;
+        }
+    };
+    if blanket_core::parallel::should_parallel(pixels.len(), 64 * 1024, 1024 * 1024) {
+        y.par_chunks_mut(y_stride * 2)
+            .zip(cb.par_chunks_mut(cw))
+            .zip(cr.par_chunks_mut(cw))
+            .enumerate()
+            .for_each(|(cy, ((luma, cb), cr))| work(cy, luma, cb, cr));
+    } else {
+        for (cy, ((luma, cb), cr)) in y.chunks_mut(y_stride * 2).zip(cb.chunks_mut(cw)).zip(cr.chunks_mut(cw)).enumerate() {
+            work(cy, luma, cb, cr);
+        }
+    }
+    (y, cb, cr)
 }
 
 fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {

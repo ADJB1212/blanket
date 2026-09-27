@@ -136,6 +136,56 @@ def test_cmyk_codecs(format: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
+@pytest.mark.parametrize("size", [(48, 32), (17, 13)])
+@pytest.mark.parametrize("quality", [50, 95])
+def test_jpeg_encodes_like_pillow(mode: str, size: tuple[int, int], quality: int) -> None:
+    rgb = PIL.frombytes("RGB", size, random.Random(5).randbytes(size[0] * size[1] * 3)).filter(PILFilter.SMOOTH_MORE)
+    expected_image = rgb.convert(mode)
+    actual_image = Image.frombytes(mode, size, expected_image.tobytes())
+    streams = [BytesIO(), BytesIO()]
+    actual_image.save(streams[0], "JPEG", quality=quality)
+    expected_image.save(streams[1], "JPEG", quality=quality)
+    actual, expected = (PIL.open(BytesIO(stream.getvalue())) for stream in streams)
+    assert actual.mode == expected.mode == ("CMYK" if mode == "CMYK" else "RGB")
+    if size[0] % 16 == 0 and size[1] % 16 == 0:
+        assert actual.tobytes() == expected.tobytes()
+    else:
+        assert max(PILChops.difference(actual, expected).getextrema(), key=lambda band: band[1])[1] <= 8
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "CMYK", "F"])
+@pytest.mark.parametrize("size", [(1, 1), (17, 13)])
+def test_uncompressed_tiff_interop(mode: str, size: tuple[int, int]) -> None:
+    bands = 4 if mode == "F" else PIL.getmodebands(mode)
+    rng = random.Random(3)
+    raw = b"".join(rng.choice([b"\x00\x00\x80\x3f", b"\x00\x00\x00\xc1"]) for _ in range(size[0] * size[1])) if mode == "F" else rng.randbytes(size[0] * size[1] * bands)
+    stream = BytesIO()
+    Image.frombytes(mode, size, raw).save(stream, "TIFF")
+    reference = PIL.open(BytesIO(stream.getvalue()))
+    assert reference.mode == mode
+    assert reference.tobytes() == raw
+    assert Image.open(BytesIO(stream.getvalue())).tobytes() == raw
+
+
+@pytest.mark.parametrize("size", [(1, 1), (13, 5), (64, 3)])
+def test_bilevel_png_decodes_like_pillow(size: tuple[int, int]) -> None:
+    raw = random.Random(9).randbytes((size[0] + 7) // 8 * size[1])
+    stream = BytesIO()
+    PIL.frombytes("1", size, raw).save(stream, "PNG")
+    decoded = Image.open(BytesIO(stream.getvalue()))
+    assert decoded.mode == "1"
+    assert decoded.tobytes() == PIL.open(BytesIO(stream.getvalue())).tobytes()
+
+
+def test_full_width_paste_rows() -> None:
+    raw = random.Random(4).randbytes(9 * 7 * 3)
+    actual, expected = Image.new("RGB", (9, 7), "navy"), PIL.new("RGB", (9, 7), "navy")
+    actual.paste(Image.frombytes("RGB", (9, 7), raw), (0, 3))
+    expected.paste(PIL.frombytes("RGB", (9, 7), raw), (0, 3))
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
 def test_save_and_validation(mode: str) -> None:
     image = Image.new(mode, (3, 2))
     with pytest.raises(OSError, match=f"cannot write mode {mode}"):

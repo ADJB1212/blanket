@@ -149,12 +149,14 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     let row = width as usize * channels;
     let length = row * height as usize;
     if matches!(operation, Operation::And | Operation::Or | Operation::Xor) && first.width == second.width {
-        let mut pixels = buffer(length)?;
+        let mut pixels = reserved_buffer(length)?;
         py.detach(|| {
-            chunks_mut_above(&mut pixels, 256 * 1024, 512 * 1024, |chunk, dst| {
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..length], 256 * 1024, 512 * 1024, |chunk, dst| {
                 let start = chunk * 256 * 1024;
                 let a = &a[start..start + dst.len()];
                 let b = &b[start..start + dst.len()];
+                // SAFETY: u8 has no invalid bit patterns; every byte is written below.
+                let dst = unsafe { &mut *(std::ptr::from_mut(dst) as *mut [u8]) };
                 match operation {
                     Operation::And => bitwise_chunk::<0>(a, b, dst),
                     Operation::Or => bitwise_chunk::<1>(a, b, dst),
@@ -163,6 +165,8 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                 }
             });
         });
+        // Every output byte is written by the disjoint chunks above.
+        unsafe { pixels.set_len(length) };
         return Image::from_pixels(width, height, first.mode, pixels, None);
     }
     let mut pixels = reserved_buffer(length)?;

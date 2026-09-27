@@ -1360,8 +1360,8 @@ class Image:
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF.
 
-        HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` saves
-        through RGB JPEG. CMYK writes JPEG, TIFF, or PDF. Integer modes
+        HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` writes
+        JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
         convert to `L` for encoding.
 
         Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
@@ -1399,9 +1399,7 @@ class Image:
             allowed = ("JPEG", "TIFF", "PDF") if self.mode == "CMYK" else ("JPEG",)
             if output_format not in allowed:
                 raise OSError(f"cannot write mode {self.mode} as {output_format}")
-            if self.mode == "YCbCr":
-                return self.convert("RGB").save(fp, output_format, compressor=compressor, **options)
-            if compressor is not None:
+            if self.mode == "CMYK" and compressor is not None:
                 raise ValueError("compression optimization is not supported for CMYK images")
         if self.mode == "HSV":
             raise OSError(f"cannot write mode HSV as {output_format}")

@@ -22,7 +22,7 @@ const fn bilevel_bytes() -> [u64; 256] {
 
 const BILEVEL_BYTES: [u64; 256] = bilevel_bytes();
 
-fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
+pub fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
     use rayon::prelude::*;
 
     let mut pixels = vec![0; width * height];
@@ -522,10 +522,8 @@ impl Image {
                 let pixels = match self.mode {
                     PixelMode::One | PixelMode::L => data.to_vec(),
                     PixelMode::La | PixelMode::Pa => crate::simd::extract_two_channel(data, channel),
-                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                        data.as_chunks::<3>().0.iter().map(|pixel| pixel[channel]).collect()
-                    }
-                    PixelMode::Rgba | PixelMode::Cmyk => data.as_chunks::<4>().0.iter().map(|pixel| pixel[channel]).collect(),
+                    PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => crate::simd::extract_channel::<3>(data, channel),
+                    PixelMode::Rgba | PixelMode::Cmyk => crate::simd::extract_channel::<4>(data, channel),
                     _ => unreachable!(),
                 };
                 Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)
@@ -1011,14 +1009,13 @@ impl Image {
         if matches!(self.mode, PixelMode::Cmyk | PixelMode::YCbCr) && destination != self.mode {
             let source = self.pixel_data()?;
             if self.mode == PixelMode::YCbCr && matches!(destination, PixelMode::L | PixelMode::La) {
-                let gray = Self::from_pixels(
-                    self.width,
-                    self.height,
-                    PixelMode::L,
-                    source.as_chunks::<3>().0.iter().map(|p| p[0]).collect(),
-                    None,
-                )?;
-                return gray.convert(py, mode, bit_depth);
+                let luma = py.detach(|| crate::simd::extract_channel::<3>(source, 0));
+                let gray = Self::from_pixels(self.width, self.height, PixelMode::L, luma, None)?;
+                return if destination == PixelMode::L && bit_depth.is_none_or(|depth| depth == 8) {
+                    Ok(gray)
+                } else {
+                    gray.convert(py, mode, bit_depth)
+                };
             }
             let pixels = py.detach(|| convert_pixels(source, self.mode, PixelMode::Rgb));
             if destination == PixelMode::One {
@@ -1453,20 +1450,20 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
                 (PixelMode::La, _) => map_pixels::<2, 3>(source, |p| [p[0], 128, 128]),
                 (PixelMode::One, PixelMode::Cmyk) => map_pixels::<1, 4>(source, |p| [0, 0, 0, if p[0] == 0 { 255 } else { 0 }]),
                 (PixelMode::One, _) => map_pixels::<1, 3>(source, |p| [if p[0] == 0 { 0 } else { 255 }, 128, 128]),
-                (_, PixelMode::Cmyk) => map_pixels::<1, 4>(source, |p| [0, 0, 0, 255 - p[0]]),
-                _ => map_pixels::<1, 3>(source, |p| [p[0], 128, 128]),
+                (_, PixelMode::Cmyk) => crate::simd::gray_to_cmyk(source),
+                _ => crate::simd::gray_to_ycbcr(source),
             };
         }
         if from == PixelMode::Rgba {
             return if to == PixelMode::Cmyk {
-                map_pixels::<4, 4>(source, |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+                crate::simd::color_to_cmyk::<4>(source)
             } else {
                 map_pixels::<4, 3>(source, |p| rgb_to_ycbcr([p[0], p[1], p[2]]))
             };
         }
         if from == PixelMode::Rgb {
             return if to == PixelMode::Cmyk {
-                map_pixels::<3, 4>(source, |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+                crate::simd::color_to_cmyk::<3>(source)
             } else {
                 map_pixels::<3, 3>(source, rgb_to_ycbcr)
             };

@@ -101,6 +101,13 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
             return;
         }
         let count = (right - left) as usize;
+        if mask_pixels.is_none() && count == width && count == source.width as usize {
+            let s = (top - position.1) as usize * count * c;
+            let d = top as usize * width * c;
+            let len = (bottom - top) as usize * count * c;
+            pixels[d..d + len].copy_from_slice(&source_pixels[s..s + len]);
+            return;
+        }
         for y in top..bottom {
             let s = (y - position.1) as usize * source.width as usize + (left - position.0) as usize;
             let d = (y as usize * width + left as usize) * c;
