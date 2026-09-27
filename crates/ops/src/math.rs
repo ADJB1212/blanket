@@ -5,9 +5,80 @@ use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
+#[path = "math_simd.rs"]
+mod simd;
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(math_apply, module)?)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vector_math_matches_scalar_with_cropped_rows_and_tails() {
+        let integers = [i32::MIN, i32::MAX, -1, 0, 1, 31, 32, -33, 123456789];
+        let floats = [
+            f32::NEG_INFINITY,
+            -3.5,
+            -0.0,
+            0.0,
+            2.5,
+            f32::INFINITY,
+            f32::NAN,
+            f32::MIN_POSITIVE,
+            f32::from_bits(1),
+        ];
+        for name in [
+            "abs", "neg", "invert", "add", "sub", "mul", "div", "mod", "pow", "and", "or", "xor", "lshift", "rshift", "eq", "ne", "lt", "le", "gt",
+            "ge", "min", "max",
+        ] {
+            let op = Operation::parse(name).unwrap();
+            for float in [false, true] {
+                if float && op.integer_only() {
+                    continue;
+                }
+                let values: Vec<[u8; 4]> = if float {
+                    floats.map(f32::to_le_bytes).to_vec()
+                } else {
+                    integers.map(i32::to_le_bytes).to_vec()
+                };
+                for width in [1, 3, 4, 5, 17, CHUNK_PIXELS + 3] {
+                    for cropped in [false, true] {
+                        let left_width = width + usize::from(cropped) * 3;
+                        let right_width = width + usize::from(cropped) * 5;
+                        let a: Vec<u8> = (0..left_width * 3).flat_map(|i| values[i % values.len()]).collect();
+                        let b: Vec<u8> = (0..right_width * 3)
+                            .flat_map(|i| values[(i / values.len() + i * 2) % values.len()])
+                            .collect();
+                        let b = (!op.unary()).then_some(b.as_slice());
+                        let scalar = |a, b| {
+                            if float {
+                                op.float(f32::from_le_bytes(a), f32::from_le_bytes(b)).to_le_bytes()
+                            } else {
+                                op.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
+                            }
+                        };
+                        let mut expected = vec![0; width * 3 * 4];
+                        let mut actual = expected.clone();
+                        apply_pixels(&mut expected, &a, b, [width, left_width, right_width], scalar, |_, _, _| 0);
+                        apply_pixels(&mut actual, &a, b, [width, left_width, right_width], scalar, |out, a, b| {
+                            simd::apply(out, a, b, op, float)
+                        });
+                        for (actual, expected) in actual.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0) {
+                            if float && f32::from_le_bytes(*expected).is_nan() {
+                                assert!(f32::from_le_bytes(*actual).is_nan(), "{name}");
+                            } else {
+                                assert_eq!(actual, expected, "{name}, float={float}, width={width}, cropped={cropped}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -162,8 +233,9 @@ impl Operation {
 }
 
 fn apply_pixels(
-    output: &mut [u8], a: &[u8], b: Option<&[u8]>, width: usize, left_width: usize, right_width: usize,
+    output: &mut [u8], a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3],
     operation: impl Fn([u8; 4], [u8; 4]) -> [u8; 4] + Sync + Send,
+    vector: impl Fn(&mut [[u8; 4]], &[[u8; 4]], Option<&[[u8; 4]]>) -> usize + Sync + Send,
 ) {
     let a = a.as_chunks::<4>().0;
     let b = b.map(|data| data.as_chunks::<4>().0);
@@ -181,8 +253,11 @@ fn apply_pixels(
             };
             let (span, rest) = output.split_at_mut(len);
             let left = &a[ai..ai + len];
+            let done = vector(span, left, b.map(|b| &b[bi..bi + len]));
+            let span = &mut span[done..];
+            let left = &left[done..];
             if let Some(b) = b {
-                for ((out, &a), &b) in span.iter_mut().zip(left).zip(&b[bi..bi + len]) {
+                for ((out, &a), &b) in span.iter_mut().zip(left).zip(&b[bi + done..bi + len]) {
                     *out = operation(a, b);
                 }
             } else {
@@ -229,15 +304,15 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
                 match op {
                     $(Operation::$variant => {
                         if float {
-                            apply_pixels(&mut output, a, b, width as usize, left.width as usize,
-                                right.map_or(0, |r| r.width as usize), |a, b| {
+                            apply_pixels(&mut output, a, b, [width as usize, left.width as usize,
+                                right.map_or(0, |r| r.width as usize)], |a, b| {
                                     Operation::$variant.float(f32::from_le_bytes(a), f32::from_le_bytes(b)).to_le_bytes()
-                                });
+                                }, |out, a, b| simd::apply(out, a, b, Operation::$variant, true));
                         } else {
-                            apply_pixels(&mut output, a, b, width as usize, left.width as usize,
-                                right.map_or(0, |r| r.width as usize), |a, b| {
+                            apply_pixels(&mut output, a, b, [width as usize, left.width as usize,
+                                right.map_or(0, |r| r.width as usize)], |a, b| {
                                     Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
-                                });
+                                }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
                         }
                     }),+
                 }
