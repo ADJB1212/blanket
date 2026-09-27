@@ -271,6 +271,18 @@ fn apply_pixels(
     });
 }
 
+fn widen_u8_to_i32(source: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
+    let mut out = vec![0u8; width * height * 4];
+    for y in 0..height {
+        let src_row = &source[y * stride..y * stride + width];
+        let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
+        for (dst, &src) in dst_row.as_chunks_mut::<4>().0.iter_mut().zip(src_row) {
+            *dst = (src as i32).to_le_bytes();
+        }
+    }
+    out
+}
+
 #[pyfunction]
 #[pyo3(signature = (operation, left, right=None, integer_output=false))]
 fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool) -> PyResult<Image> {
@@ -278,19 +290,26 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
     if op.unary() != right.is_none() {
         return Err(PyValueError::new_err("wrong number of image math operands"));
     }
-    if !matches!(left.mode, PixelMode::I | PixelMode::F) || right.is_some_and(|r| r.mode != left.mode) {
+    let left_byte = matches!(left.mode, PixelMode::One | PixelMode::L);
+    let right_byte = right.is_some_and(|r| matches!(r.mode, PixelMode::One | PixelMode::L));
+    let integer_group = |mode: PixelMode| matches!(mode, PixelMode::One | PixelMode::L | PixelMode::I);
+    if left_byte || right_byte {
+        if !integer_group(left.mode) || right.is_some_and(|r| !integer_group(r.mode)) {
+            return Err(PyValueError::new_err("image math requires matching I or F operands"));
+        }
+    } else if !matches!(left.mode, PixelMode::I | PixelMode::F) || right.is_some_and(|r| r.mode != left.mode) {
         return Err(PyValueError::new_err("image math requires matching I or F operands"));
     }
     let float = left.mode == PixelMode::F;
     if float && op.integer_only() {
         return Err(PyTypeError::new_err(format!("bad operand type for '{operation}'")));
     }
-    let a = left.raw_data()?;
-    let b = right.map(Image::raw_data).transpose()?;
-    let width = right.map_or(left.width, |r| r.width.min(left.width));
-    let height = right.map_or(left.height, |r| r.height.min(left.height));
-    let len = (width as usize)
-        .checked_mul(height as usize)
+    let a_raw = left.raw_data()?;
+    let b_raw = right.map(Image::raw_data).transpose()?;
+    let width = right.map_or(left.width, |r| r.width.min(left.width)) as usize;
+    let height = right.map_or(left.height, |r| r.height.min(left.height)) as usize;
+    let len = width
+        .checked_mul(height)
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     let mut output = Vec::new();
@@ -299,18 +318,34 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
         .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     output.resize(len, 0);
     py.detach(|| {
+        let a_widened;
+        let b_widened;
+        let (a, left_width) = if left_byte {
+            a_widened = widen_u8_to_i32(a_raw, left.width as usize, width, height);
+            (a_widened.as_slice(), width)
+        } else {
+            (a_raw, left.width as usize)
+        };
+        let (b, right_width) = match (b_raw, right) {
+            (Some(b_raw), Some(r)) if matches!(r.mode, PixelMode::One | PixelMode::L) => {
+                b_widened = widen_u8_to_i32(b_raw, r.width as usize, width, height);
+                (Some(b_widened.as_slice()), width)
+            }
+            (Some(b_raw), Some(r)) => (Some(b_raw), r.width as usize),
+            _ => (None, 0),
+        };
         macro_rules! dispatch {
             ($($variant:ident),+ $(,)?) => {
                 match op {
                     $(Operation::$variant => {
                         if float {
-                            apply_pixels(&mut output, a, b, [width as usize, left.width as usize,
-                                right.map_or(0, |r| r.width as usize)], |a, b| {
+                            apply_pixels(&mut output, a, b, [width, left_width,
+                                right_width], |a, b| {
                                     Operation::$variant.float(f32::from_le_bytes(a), f32::from_le_bytes(b)).to_le_bytes()
                                 }, |out, a, b| simd::apply(out, a, b, Operation::$variant, true));
                         } else {
-                            apply_pixels(&mut output, a, b, [width as usize, left.width as usize,
-                                right.map_or(0, |r| r.width as usize)], |a, b| {
+                            apply_pixels(&mut output, a, b, [width, left_width,
+                                right_width], |a, b| {
                                     Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
                                 }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
                         }
@@ -323,8 +358,8 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
         );
     });
     if float && !integer_output {
-        Image::from_float_bytes(width, height, output)
+        Image::from_float_bytes(width as u32, height as u32, output)
     } else {
-        Image::from_integer_bytes(width, height, PixelMode::I, output)
+        Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
     }
 }

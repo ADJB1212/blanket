@@ -21,9 +21,9 @@ class _Operand:
 
     def _coerce(self, value: _Operand | float) -> Image.Image:
         if isinstance(value, _Operand):
-            if value.im.mode in ("1", "L"):
-                return value.im.convert("I")
-            if value.im.mode in ("I", "F"):
+            if value.im.mode in ("1", "L", "I"):
+                return value.im
+            if value.im.mode == "F":
                 return value.im
             raise ValueError(f"unsupported mode: {value.im.mode}")
         mode = "I" if isinstance(value, (int, float)) and self.im.mode in ("1", "L", "I") else "F"
@@ -33,8 +33,11 @@ class _Operand:
         first = self._coerce(left)
         second = None if right is None else self._coerce(right)
         if second is not None and first.mode != second.mode:
-            first = first.convert("F")
-            second = second.convert("F")
+            if frozenset((first.mode, second.mode)) <= frozenset(("1", "L", "I")):
+                pass
+            else:
+                first = first.convert("F")
+                second = second.convert("F")
         first.load()
         if second is not None:
             second.load()
