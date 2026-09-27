@@ -1,4 +1,4 @@
-//! Scalar image arithmetic for ImageMath.
+//! Image arithmetic for ImageMath.
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::{Image, PixelMode};
@@ -73,6 +73,7 @@ impl Operation {
         matches!(self, Self::Invert | Self::And | Self::Or | Self::Xor | Self::Lshift | Self::Rshift)
     }
 
+    #[inline(always)]
     fn integer(self, a: i32, b: i32) -> i32 {
         match self {
             Self::Abs => a.wrapping_abs(),
@@ -112,6 +113,7 @@ impl Operation {
         }
     }
 
+    #[inline(always)]
     fn float(self, a: f32, b: f32) -> f32 {
         match self {
             Self::Abs => a.abs(),
@@ -159,6 +161,41 @@ impl Operation {
     }
 }
 
+fn apply_pixels(
+    output: &mut [u8], a: &[u8], b: Option<&[u8]>, width: usize, left_width: usize, right_width: usize,
+    operation: impl Fn([u8; 4], [u8; 4]) -> [u8; 4] + Sync + Send,
+) {
+    let a = a.as_chunks::<4>().0;
+    let b = b.map(|data| data.as_chunks::<4>().0);
+    chunks_mut(output, CHUNK_PIXELS * 4, |start, chunk| {
+        let mut output = chunk.as_chunks_mut::<4>().0;
+        let mut index = start * CHUNK_PIXELS;
+        while !output.is_empty() {
+            let contiguous = left_width == width && (b.is_none() || right_width == width);
+            let (ai, bi, len) = if contiguous {
+                (index, index, output.len())
+            } else {
+                let x = index % width;
+                let y = index / width;
+                (y * left_width + x, y * right_width + x, output.len().min(width - x))
+            };
+            let (span, rest) = output.split_at_mut(len);
+            let left = &a[ai..ai + len];
+            if let Some(b) = b {
+                for ((out, &a), &b) in span.iter_mut().zip(left).zip(&b[bi..bi + len]) {
+                    *out = operation(a, b);
+                }
+            } else {
+                for (out, &a) in span.iter_mut().zip(left) {
+                    *out = operation(a, [0; 4]);
+                }
+            }
+            output = rest;
+            index += len;
+        }
+    });
+}
+
 #[pyfunction]
 #[pyo3(signature = (operation, left, right=None, integer_output=false))]
 fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool) -> PyResult<Image> {
@@ -187,28 +224,28 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
         .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     output.resize(len, 0);
     py.detach(|| {
-        chunks_mut(&mut output, CHUNK_PIXELS * 4, |start, chunk| {
-            for (offset, pixel) in chunk.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let index = start * CHUNK_PIXELS + offset;
-                let x = index % width as usize;
-                let y = index / width as usize;
-                let ai = (y * left.width as usize + x) * 4;
-                let av = a[ai..ai + 4].try_into().unwrap();
-                let bv = match (right, b) {
-                    (Some(right), Some(b)) => {
-                        let bi = (y * right.width as usize + x) * 4;
-                        b[bi..bi + 4].try_into().unwrap()
-                    }
-                    _ => [0; 4],
-                };
-                let bytes = if float {
-                    op.float(f32::from_le_bytes(av), f32::from_le_bytes(bv)).to_le_bytes()
-                } else {
-                    op.integer(i32::from_le_bytes(av), i32::from_le_bytes(bv)).to_le_bytes()
-                };
-                pixel.copy_from_slice(&bytes);
+        macro_rules! dispatch {
+            ($($variant:ident),+ $(,)?) => {
+                match op {
+                    $(Operation::$variant => {
+                        if float {
+                            apply_pixels(&mut output, a, b, width as usize, left.width as usize,
+                                right.map_or(0, |r| r.width as usize), |a, b| {
+                                    Operation::$variant.float(f32::from_le_bytes(a), f32::from_le_bytes(b)).to_le_bytes()
+                                });
+                        } else {
+                            apply_pixels(&mut output, a, b, width as usize, left.width as usize,
+                                right.map_or(0, |r| r.width as usize), |a, b| {
+                                    Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
+                                });
+                        }
+                    }),+
+                }
             }
-        });
+        }
+        dispatch!(
+            Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max
+        );
     });
     if float && !integer_output {
         Image::from_float_bytes(width, height, output)

@@ -136,8 +136,9 @@ def test_closed_image() -> None:
 
 
 @pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259)])
-def test_empty_and_parallel_buffers(size: tuple[int, int]) -> None:
-    a, pa = pair("I", size)
+@pytest.mark.parametrize("mode", ["I", "F"])
+def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
+    a, pa = pair(mode, size)
     original = a.tobytes()
     same(ImageMath.eval("(a * 3 - 2) / 2", a=a), PILMath.unsafe_eval("(a * 3 - 2) / 2", a=pa))
     assert a.tobytes() == original
@@ -150,3 +151,22 @@ def test_integer_boundaries_and_zero_divisors() -> None:
     assert list(ImageMath.eval("a / -1", a=image).getdata()) == [-2147483648, -2147483647, 7]
     assert list(ImageMath.eval("a / 0", a=image).getdata()) == [0, 0, 0]
     assert list(ImageMath.eval("a % 0", a=image).getdata()) == [0, 0, 0]
+
+
+@pytest.mark.parametrize("mode", ["I", "F"])
+@pytest.mark.parametrize("sizes", [((257, 259), (257, 259)), ((263, 259), (257, 263)), ((257, 263), (263, 259)), ((17003, 5), (17001, 4))])
+@pytest.mark.parametrize("expression", ["-a", "a + b", "a / b", "a < b", "min(a, b)", "equal(a, b)"])
+def test_chunk_boundaries_and_operand_strides(mode: str, sizes: tuple[tuple[int, int], tuple[int, int]], expression: str) -> None:
+    a, pa = pair(mode, sizes[0])
+    b, pb = pair(mode, sizes[1])
+    same(ImageMath.eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
+
+
+@pytest.mark.parametrize("expression", ["-a", "abs(a)", "a + b", "a / b", "min(a, b)", "max(a, b)", "a == b", "equal(a, b)"])
+def test_float_special_values(expression: str) -> None:
+    values = [float("nan"), float("inf"), -float("inf"), 0.0, -0.0, 1.0, -1.0]
+    pa = PILImage.frombytes("F", (7, 1), struct.pack("<7f", *values))
+    pb = PILImage.frombytes("F", (7, 1), struct.pack("<7f", *reversed(values)))
+    a = Image.frombytes("F", pa.size, pa.tobytes())
+    b = Image.frombytes("F", pb.size, pb.tobytes())
+    same(ImageMath.eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
