@@ -4,13 +4,11 @@ resolver = "3"
 
 [workspace.package]
 version = "0.0.2"
-description = "A Rust-backed image library with a Pillow-shaped Python API"
 authors = ["Andrew Jaffe <adjaffeb@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/ADJB1212/blanket"
 rust-version = "1.97"
 edition = "2024"
-publish = false
 
 [profile.release]
 opt-level = 3

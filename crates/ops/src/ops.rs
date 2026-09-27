@@ -370,7 +370,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         return Err(PyValueError::new_err("invalid orientation"));
     }
     if orientation == 1 {
-        return py.detach(|| output(image, (image.width, image.height), source.to_vec()));
+        return image.copy(py);
     }
     let size = if orientation >= 5 {
         (image.height, image.width)
