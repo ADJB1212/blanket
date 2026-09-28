@@ -1,7 +1,9 @@
 //! Exact compression preparation: bounded SIMD loads, scalar tails, and
 //! coarse Rayon partitions. Codec libraries handle their own entropy SIMD.
 
+use blanket_core::pixels::{Bytes, load, store};
 use rayon::prelude::*;
+use std::simd::{Simd, cmp::SimdPartialEq, num::SimdUint};
 
 use blanket_core::parallel::{chunks_mut_above, should_parallel};
 
@@ -18,35 +20,14 @@ pub(crate) fn matches_key(source: &[u8], key: [u8; 3]) -> bool {
 
 fn matches_key_chunk(source: &[u8], key: [u8; 3]) -> bool {
     let mut offset = 0;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: mandatory NEON, loading only complete 16-pixel blocks.
-        unsafe {
-            while offset + 64 <= source.len() {
-                let p = vld4q_u8(source.as_ptr().add(offset));
-                let same = vandq_u8(
-                    vandq_u8(vceqq_u8(p.0, vdupq_n_u8(key[0])), vceqq_u8(p.1, vdupq_n_u8(key[1]))),
-                    vceqq_u8(p.2, vdupq_n_u8(key[2])),
-                );
-                let valid = vorrq_u8(
-                    vandq_u8(same, vceqq_u8(p.3, vdupq_n_u8(0))),
-                    vbicq_u8(vceqq_u8(p.3, vdupq_n_u8(255)), same),
-                );
-                if vminvq_u8(valid) != 255 {
-                    return false;
-                }
-                offset += 64;
-            }
+    while offset + 64 <= source.len() {
+        let [r, g, b, a] = load::<4>(&source[offset..]);
+        let same = r.simd_eq(Bytes::splat(key[0])) & g.simd_eq(Bytes::splat(key[1])) & b.simd_eq(Bytes::splat(key[2]));
+        let valid = (same & a.simd_eq(Bytes::splat(0))) | (!same & a.simd_eq(Bytes::splat(255)));
+        if !valid.all() {
+            return false;
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("sse2") {
-        // SAFETY: CPU feature checked; kernel bounds all loads.
-        match unsafe { x86::matches_key(source, key) } {
-            Some(done) => offset = done,
-            None => return false,
-        }
+        offset += 64;
     }
     source[offset..]
         .as_chunks::<4>()
@@ -80,33 +61,20 @@ fn properties_chunk(source: &[u8], channels: usize) -> (bool, bool) {
     let mut gray = true;
     let mut opaque = true;
     let mut offset = 0;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: NEON is mandatory. Each load covers 16 complete pixels.
-        unsafe {
-            while offset + 16 * channels <= source.len() {
-                let (r, g, b, a) = if channels == 3 {
-                    let p = vld3q_u8(source.as_ptr().add(offset));
-                    (p.0, p.1, p.2, vdupq_n_u8(255))
-                } else {
-                    let p = vld4q_u8(source.as_ptr().add(offset));
-                    (p.0, p.1, p.2, p.3)
-                };
-                gray &= vminvq_u8(vandq_u8(vceqq_u8(r, g), vceqq_u8(r, b))) == 255;
-                opaque &= vminvq_u8(a) == 255;
-                offset += 16 * channels;
-                if !gray && (!opaque || channels == 3) {
-                    return (gray, opaque);
-                }
-            }
+    while offset + 16 * channels <= source.len() {
+        let (r, g, b, a) = if channels == 3 {
+            let [r, g, b] = load::<3>(&source[offset..]);
+            (r, g, b, Bytes::splat(255))
+        } else {
+            let [r, g, b, a] = load::<4>(&source[offset..]);
+            (r, g, b, a)
+        };
+        gray &= (r.simd_eq(g) & r.simd_eq(b)).all();
+        opaque &= a.simd_eq(Bytes::splat(255)).all();
+        offset += 16 * channels;
+        if !gray && (!opaque || channels == 3) {
+            return (gray, opaque);
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("ssse3") {
-        // SAFETY: CPU support checked; kernel bounds loads and handles tails.
-        let result = unsafe { x86::properties(source, channels) };
-        (offset, gray, opaque) = result;
     }
     for pixel in source[offset..].chunks_exact(channels) {
         gray &= pixel[0] == pixel[1] && pixel[0] == pixel[2];
@@ -139,37 +107,24 @@ pub(crate) fn select(source: &[u8], channels: usize, alpha: bool, shift: u8) -> 
 fn select_chunk(source: &[u8], output: &mut [u8], channels: usize, alpha: bool, shift: u8) {
     let target_channels = if alpha { 2 } else { 1 };
     let mut done = 0;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: all loads/stores cover exactly 16 complete pixels. Callers
-        // use alpha only for RGBA -> LA and shift only for single-channel output.
-        unsafe {
-            while (done + 16) * channels <= source.len() {
-                let ptr = source.as_ptr().add(done * channels);
-                let (gray, a) = match channels {
-                    1 => (vld1q_u8(ptr), vdupq_n_u8(255)),
-                    3 => (vld3q_u8(ptr).0, vdupq_n_u8(255)),
-                    _ => {
-                        let p = vld4q_u8(ptr);
-                        (p.0, p.3)
-                    }
-                };
-                let gray = vshlq_u8(gray, vdupq_n_s8(-(shift as i8)));
-                let ptr = output.as_mut_ptr().add(done * target_channels);
-                if alpha {
-                    vst2q_u8(ptr, uint8x16x2_t(gray, a));
-                } else {
-                    vst1q_u8(ptr, gray);
-                }
-                done += 16;
+    while (done + 16) * channels <= source.len() {
+        let src = &source[done * channels..];
+        let (gray, a) = match channels {
+            1 => (Bytes::from_slice(&src[..16]), Bytes::splat(255)),
+            3 => (load::<3>(src)[0], Bytes::splat(255)),
+            _ => {
+                let p = load::<4>(src);
+                (p[0], p[3])
             }
+        };
+        let gray = gray >> shift;
+        let dst = &mut output[done * target_channels..];
+        if alpha {
+            store(dst, [gray, a]);
+        } else {
+            gray.copy_to_slice(&mut dst[..16]);
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("ssse3") {
-        // SAFETY: feature checked; kernel bounds source and destination access.
-        done = unsafe { x86::select(source, output, channels, alpha, shift) };
+        done += 16;
     }
     for (src, dst) in source[done * channels..]
         .chunks_exact(channels)
@@ -197,28 +152,12 @@ pub(crate) fn fits_depth(gray: &[u8], bits: usize) -> bool {
 fn fits_depth_chunk(source: &[u8], bits: usize) -> bool {
     let mut offset = 0;
     let step = (255 / ((1 << bits) - 1)) as u8;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: each load stays inside the slice; NEON is mandatory.
-        unsafe {
-            while offset + 16 <= source.len() {
-                let v = vld1q_u8(source.as_ptr().add(offset));
-                let reduced = vshlq_u8(v, vdupq_n_s8(bits as i8 - 8));
-                if vminvq_u8(vceqq_u8(v, vmulq_u8(reduced, vdupq_n_u8(step)))) != 255 {
-                    return false;
-                }
-                offset += 16;
-            }
+    while offset + 16 <= source.len() {
+        let v = Bytes::from_slice(&source[offset..offset + 16]);
+        if !v.simd_eq((v >> (8 - bits) as u8) * Bytes::splat(step)).all() {
+            return false;
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("sse2") {
-        // SAFETY: feature checked and all vector loads bounded in the kernel.
-        match unsafe { x86::fits_depth(source, bits) } {
-            Some(done) => offset = done,
-            None => return false,
-        }
+        offset += 16;
     }
     source[offset..].iter().all(|&v| v % step == 0)
 }
@@ -299,40 +238,24 @@ fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTran
 
 fn pack_row(source: &[u8], output: &mut [u8], bits: usize) {
     let mut done = 0;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: loads are bounded by complete blocks; each block emits only
-        // its packed bytes. Scalar tails handle row padding independently.
-        unsafe {
-            if bits == 4 {
-                while done + 32 <= source.len() {
-                    let v = vld2q_u8(source.as_ptr().add(done));
-                    vst1q_u8(output.as_mut_ptr().add(done / 2), vorrq_u8(vshlq_n_u8::<4>(v.0), v.1));
-                    done += 32;
-                }
-            } else if bits == 2 {
-                while done + 64 <= source.len() {
-                    let v = vld4q_u8(source.as_ptr().add(done));
-                    let packed = vorrq_u8(vorrq_u8(vshlq_n_u8::<6>(v.0), vshlq_n_u8::<4>(v.1)), vorrq_u8(vshlq_n_u8::<2>(v.2), v.3));
-                    vst1q_u8(output.as_mut_ptr().add(done / 4), packed);
-                    done += 64;
-                }
-            } else {
-                let weights = vld1q_u8([128, 64, 32, 16, 8, 4, 2, 1, 128, 64, 32, 16, 8, 4, 2, 1].as_ptr());
-                while done + 16 <= source.len() {
-                    let v = vmulq_u8(vld1q_u8(source.as_ptr().add(done)), weights);
-                    output[done / 8] = vaddv_u8(vget_low_u8(v));
-                    output[done / 8 + 1] = vaddv_u8(vget_high_u8(v));
-                    done += 16;
-                }
-            }
+    if bits == 4 {
+        while done + 32 <= source.len() {
+            let [a, b] = load::<2>(&source[done..]);
+            ((a << 4) | b).copy_to_slice(&mut output[done / 2..done / 2 + 16]);
+            done += 32;
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("ssse3") {
-        // SAFETY: checked CPU support; kernel bounds all accesses.
-        done = unsafe { x86::pack(source, output, bits) };
+    } else if bits == 2 {
+        while done + 64 <= source.len() {
+            let [a, b, c, d] = load::<4>(&source[done..]);
+            ((a << 6) | (b << 4) | (c << 2) | d).copy_to_slice(&mut output[done / 4..done / 4 + 16]);
+            done += 64;
+        }
+    } else {
+        let weights = Simd::<u8, 8>::from_array([128, 64, 32, 16, 8, 4, 2, 1]);
+        while done + 8 <= source.len() {
+            output[done / 8] = (Simd::<u8, 8>::from_slice(&source[done..done + 8]) * weights).reduce_sum();
+            done += 8;
+        }
     }
     for (x, &sample) in source.iter().enumerate().skip(done) {
         output[x * bits / 8] |= sample << (8 - bits - x * bits % 8);
@@ -349,181 +272,6 @@ pub(crate) fn equal(left: &[u8], right: &[u8]) -> bool {
         return left == right;
     }
     left[..1024] == right[..1024] && left.par_chunks(256 * 1024).zip(right.par_chunks(256 * 1024)).all(|(a, b)| a == b)
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-mod x86 {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::*;
-
-    #[target_feature(enable = "sse2")]
-    pub(super) unsafe fn matches_key(src: &[u8], key: [u8; 3]) -> Option<usize> {
-        let mut done = 0;
-        unsafe {
-            let key = _mm_set1_epi32(i32::from_le_bytes([key[0], key[1], key[2], 0]));
-            let rgb = _mm_set1_epi32(0x00ff_ffff);
-            let alpha = _mm_set1_epi32(0xff00_0000_u32 as i32);
-            while done + 16 <= src.len() {
-                let v = _mm_loadu_si128(src.as_ptr().add(done).cast());
-                let same = _mm_cmpeq_epi32(_mm_and_si128(v, rgb), key);
-                let a = _mm_and_si128(v, alpha);
-                let valid = _mm_or_si128(
-                    _mm_and_si128(same, _mm_cmpeq_epi32(a, _mm_setzero_si128())),
-                    _mm_andnot_si128(same, _mm_cmpeq_epi32(a, alpha)),
-                );
-                if _mm_movemask_epi8(valid) != 0xffff {
-                    return None;
-                }
-                done += 16;
-            }
-        }
-        Some(done)
-    }
-
-    #[target_feature(enable = "ssse3")]
-    pub(super) unsafe fn properties(src: &[u8], channels: usize) -> (usize, bool, bool) {
-        let mut offset = 0;
-        let (mut gray, mut opaque) = (true, true);
-        unsafe {
-            let r = if channels == 3 { [0, 3, 6, 9] } else { [0, 4, 8, 12] };
-            let mask = |delta: i8| {
-                _mm_setr_epi8(
-                    r[0] + delta,
-                    r[1] + delta,
-                    r[2] + delta,
-                    r[3] + delta,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                )
-            };
-            while offset + 16 <= src.len() {
-                let v = _mm_loadu_si128(src.as_ptr().add(offset).cast());
-                let red = _mm_shuffle_epi8(v, mask(0));
-                gray &= _mm_movemask_epi8(_mm_and_si128(
-                    _mm_cmpeq_epi8(red, _mm_shuffle_epi8(v, mask(1))),
-                    _mm_cmpeq_epi8(red, _mm_shuffle_epi8(v, mask(2))),
-                )) == 0xffff;
-                if channels == 4 {
-                    opaque &= _mm_movemask_epi8(_mm_cmpeq_epi8(_mm_shuffle_epi8(v, mask(3)), _mm_set1_epi8(-1))) & 15 == 15;
-                }
-                offset += 4 * channels;
-                if !gray && (!opaque || channels == 3) {
-                    break;
-                }
-            }
-        }
-        (offset, gray, opaque)
-    }
-
-    #[target_feature(enable = "ssse3")]
-    pub(super) unsafe fn select(src: &[u8], dst: &mut [u8], channels: usize, alpha: bool, shift: u8) -> usize {
-        let mut done = 0;
-        let count = if channels == 1 { 16 } else { 4 };
-        let target = if alpha { 2 } else { 1 };
-        unsafe {
-            let mask = if alpha {
-                _mm_setr_epi8(0, 3, 4, 7, 8, 11, 12, 15, -1, -1, -1, -1, -1, -1, -1, -1)
-            } else {
-                _mm_setr_epi8(
-                    0,
-                    channels as i8,
-                    (2 * channels) as i8,
-                    (3 * channels) as i8,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                    -1,
-                )
-            };
-            while done * channels + 16 <= src.len() {
-                let mut v = _mm_loadu_si128(src.as_ptr().add(done * channels).cast());
-                if channels != 1 {
-                    v = _mm_shuffle_epi8(v, mask);
-                }
-                v = _mm_and_si128(
-                    _mm_srl_epi16(v, _mm_cvtsi32_si128(i32::from(shift))),
-                    _mm_set1_epi8((255_u8 >> shift) as i8),
-                );
-                let mut buffer = [0_u8; 16];
-                _mm_storeu_si128(buffer.as_mut_ptr().cast(), v);
-                dst[done * target..(done + count) * target].copy_from_slice(&buffer[..count * target]);
-                done += count;
-            }
-        }
-        done
-    }
-
-    #[target_feature(enable = "sse2")]
-    pub(super) unsafe fn fits_depth(src: &[u8], bits: usize) -> Option<usize> {
-        let mut done = 0;
-        unsafe {
-            while done + 16 <= src.len() {
-                let v = _mm_loadu_si128(src.as_ptr().add(done).cast());
-                let shift = _mm_cvtsi32_si128((8 - bits) as i32);
-                let mut restored = _mm_and_si128(_mm_srl_epi16(v, shift), _mm_set1_epi8(((1 << bits) - 1) as i8));
-                if bits == 1 {
-                    restored = _mm_sub_epi8(_mm_setzero_si128(), restored);
-                } else {
-                    if bits == 2 {
-                        restored = _mm_or_si128(restored, _mm_slli_epi16::<2>(restored));
-                    }
-                    restored = _mm_or_si128(restored, _mm_slli_epi16::<4>(restored));
-                }
-                if _mm_movemask_epi8(_mm_cmpeq_epi8(v, restored)) != 0xffff {
-                    return None;
-                }
-                done += 16;
-            }
-        }
-        Some(done)
-    }
-
-    #[target_feature(enable = "ssse3")]
-    pub(super) unsafe fn pack(src: &[u8], dst: &mut [u8], bits: usize) -> usize {
-        let mut done = 0;
-        unsafe {
-            while done + 16 <= src.len() {
-                let v = _mm_loadu_si128(src.as_ptr().add(done).cast());
-                if bits == 1 {
-                    let mask = _mm_movemask_epi8(_mm_slli_epi16::<7>(v)) as u16;
-                    dst[done / 8] = (mask as u8).reverse_bits();
-                    dst[done / 8 + 1] = ((mask >> 8) as u8).reverse_bits();
-                } else {
-                    let weights = if bits == 4 { _mm_set1_epi16(0x0110) } else { _mm_set1_epi32(0x01041040) };
-                    let mut packed = _mm_maddubs_epi16(v, weights);
-                    if bits == 2 {
-                        packed = _mm_hadd_epi16(packed, _mm_setzero_si128());
-                    }
-                    packed = _mm_packus_epi16(packed, _mm_setzero_si128());
-                    let mut buffer = [0_u8; 16];
-                    _mm_storeu_si128(buffer.as_mut_ptr().cast(), packed);
-                    dst[done * bits / 8..(done + 16) * bits / 8].copy_from_slice(&buffer[..2 * bits]);
-                }
-                done += 16;
-            }
-        }
-        done
-    }
 }
 
 #[cfg(test)]
@@ -671,7 +419,7 @@ mod tests {
         assert_eq!(properties(&source, 4), (false, true));
         *source.last_mut().unwrap() = 0;
         assert_eq!(properties(&source, 4), (false, false));
-        source.chunks_exact_mut(4).for_each(|p| p.copy_from_slice(&[71, 71, 71, 0]));
+        source.as_chunks_mut::<4>().0.fill([71, 71, 71, 0]);
         assert_eq!(properties(&source, 4), (true, false));
         let last = source.len() - 4;
         source[last] = 72;

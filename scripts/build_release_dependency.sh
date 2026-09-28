@@ -66,7 +66,7 @@ git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
 case "$name" in
 x265)
 	x265_neon_flag=()
-	if [[ "$RUNNER_OS" == macOS ]]; then
+	if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
 		x265_neon_flag=(-DHAVE_NEON=1)
 	fi
 	for depth in 12 10; do

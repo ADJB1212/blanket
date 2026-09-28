@@ -9,7 +9,7 @@ use blanket_core::raster::{Image, PixelMode};
 use blanket_ops::ops_simd;
 
 #[pyclass(name = "_LossyImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct LossyImageCompressor {
     #[pyo3(get)]
     max_rmse: f64,
@@ -240,46 +240,26 @@ fn png_rounding_within_error(histogram: &[u64; 256], table: &[u8], channels: usi
 fn within_error_8bit(actual: &[u8], expected: &[u8], channels: usize, limit: f64) -> bool {
     let mut error = 0_u64;
     let mut offset = 0;
-    #[cfg(target_arch = "aarch64")]
-    {
-        use std::arch::aarch64::*;
-        // SAFETY: NEON is mandatory and each load covers a complete 16-byte block.
-        unsafe {
-            let alpha_mask = vreinterpretq_u8_u32(vdupq_n_u32(0xff00_0000));
-            while offset + 16 <= actual.len() {
-                let mut a = vld1q_u8(actual.as_ptr().add(offset));
-                let mut b = vld1q_u8(expected.as_ptr().add(offset));
-                if channels == 4 {
-                    let equal = vceqq_u8(a, b);
-                    if vminvq_u8(vorrq_u8(equal, vmvnq_u8(alpha_mask))) != 255 {
-                        return false;
-                    }
-                    a = vbicq_u8(a, alpha_mask);
-                    b = vbicq_u8(b, alpha_mask);
-                }
-                let low = vreinterpretq_s16_u16(vsubl_u8(vget_low_u8(a), vget_low_u8(b)));
-                let high = vreinterpretq_s16_u16(vsubl_u8(vget_high_u8(a), vget_high_u8(b)));
-                for diff in [low, high] {
-                    error += vaddvq_s32(vmull_s16(vget_low_s16(diff), vget_low_s16(diff))) as u64;
-                    error += vaddvq_s32(vmull_s16(vget_high_s16(diff), vget_high_s16(diff))) as u64;
-                }
-                if (error * if channels == 1 { 3 } else { 1 }) as f64 > limit {
-                    return false;
-                }
-                offset += 16;
-            }
+    use std::simd::{
+        Select, Simd,
+        cmp::SimdPartialEq,
+        num::{SimdInt, SimdUint},
+    };
+    let alpha = Simd::<u8, 16>::from_array(std::array::from_fn(|i| u8::from(channels == 4 && i % 4 == 3))).simd_ne(Simd::splat(0));
+    while offset + 16 <= actual.len() {
+        let a = Simd::<u8, 16>::from_slice(&actual[offset..offset + 16]);
+        let b = Simd::<u8, 16>::from_slice(&expected[offset..offset + 16]);
+        if (alpha & a.simd_ne(b)).any() {
+            return false;
         }
-    }
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    if std::arch::is_x86_feature_detected!("sse2") {
-        // SAFETY: CPU support is checked and the kernel bounds every load.
-        match unsafe { within_error_8bit_sse2(actual, expected, channels, limit) } {
-            Some(sum) => {
-                error = sum;
-                offset = actual.len() / 16 * 16;
-            }
-            None => return false,
+        let a = alpha.select(Simd::splat(0), a).cast::<i32>();
+        let b = alpha.select(Simd::splat(0), b).cast::<i32>();
+        let diff = a - b;
+        error += (diff * diff).reduce_sum() as u64;
+        if (error * if channels == 1 { 3 } else { 1 }) as f64 > limit {
+            return false;
         }
+        offset += 16;
     }
     for (&a, &b) in actual[offset..].iter().zip(&expected[offset..]) {
         if channels == 4 && offset % 4 == 3 {
@@ -293,42 +273,6 @@ fn within_error_8bit(actual: &[u8], expected: &[u8], channels: usize, limit: f64
         offset += 1;
     }
     (error * if channels == 1 { 3 } else { 1 }) as f64 <= limit
-}
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-#[target_feature(enable = "sse2")]
-unsafe fn within_error_8bit_sse2(actual: &[u8], expected: &[u8], channels: usize, limit: f64) -> Option<u64> {
-    #[cfg(target_arch = "x86")]
-    use std::arch::x86::*;
-    #[cfg(target_arch = "x86_64")]
-    use std::arch::x86_64::*;
-
-    let mut error = 0_u64;
-    let zero = _mm_setzero_si128();
-    let alpha_mask = _mm_set1_epi32(0x00ff_ffff);
-    for offset in (0..actual.len() / 16 * 16).step_by(16) {
-        // SAFETY: the loop only visits complete 16-byte blocks.
-        let mut a = unsafe { _mm_loadu_si128(actual.as_ptr().add(offset).cast()) };
-        let mut b = unsafe { _mm_loadu_si128(expected.as_ptr().add(offset).cast()) };
-        if channels == 4 {
-            if _mm_movemask_epi8(_mm_cmpeq_epi8(a, b)) & 0x8888 != 0x8888 {
-                return None;
-            }
-            a = _mm_and_si128(a, alpha_mask);
-            b = _mm_and_si128(b, alpha_mask);
-        }
-        let low = _mm_sub_epi16(_mm_unpacklo_epi8(a, zero), _mm_unpacklo_epi8(b, zero));
-        let high = _mm_sub_epi16(_mm_unpackhi_epi8(a, zero), _mm_unpackhi_epi8(b, zero));
-        let sums = _mm_add_epi32(_mm_madd_epi16(low, low), _mm_madd_epi16(high, high));
-        let mut lanes = [0_i32; 4];
-        // SAFETY: the destination has room for one 128-bit vector.
-        unsafe { _mm_storeu_si128(lanes.as_mut_ptr().cast(), sums) };
-        error += lanes.into_iter().map(|lane| lane as u64).sum::<u64>();
-        if (error * if channels == 1 { 3 } else { 1 }) as f64 > limit {
-            return None;
-        }
-    }
-    Some(error)
 }
 
 fn rgba_sample(image: &Image, data: &[u8], index: usize) -> [f64; 4] {
@@ -398,7 +342,7 @@ mod tests {
                     })
                     .sum();
                 let actual = Image::from_pixels(count as u32, 1, mode, candidate.clone(), None).unwrap();
-                let expected = Image::from_pixels(count as u32, 1, mode, reference.clone(), None).unwrap();
+                let expected = Image::from_pixels(count as u32, 1, mode, reference, None).unwrap();
                 let boundary = (expected_error / (count * 3) as f64).sqrt();
                 assert!(within_error(&actual, &expected, boundary + 1e-9).unwrap());
                 if boundary > 0.0 {
