@@ -496,38 +496,7 @@ fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
         let start = chunk * CHUNK;
         let dst = dst.as_chunks_mut::<C>().0;
         let bands: [&[u8]; C] = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
-        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
-        let offset = 0;
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        let offset = if std::arch::is_x86_feature_detected!("ssse3") {
-            // SAFETY: SSSE3 detected; bands and destination have equal pixel counts.
-            unsafe { blanket_core::x86_pixels::merge(bands, dst) }
-        } else {
-            0
-        };
-        #[cfg(target_arch = "aarch64")]
-        let offset = {
-            let mut offset = 0;
-            use std::arch::aarch64::*;
-            // Bands and output have matching pixel counts. Every store writes
-            // exactly 16 complete pixels within the current output partition.
-            unsafe {
-                while offset + 16 <= dst.len() {
-                    let r = vld1q_u8(bands[0].as_ptr().add(offset));
-                    let g = vld1q_u8(bands[1].as_ptr().add(offset));
-                    let b = vld1q_u8(bands[2].as_ptr().add(offset));
-                    let ptr = dst.as_mut_ptr().add(offset).cast::<u8>();
-                    if C == 3 {
-                        vst3q_u8(ptr, uint8x16x3_t(r, g, b));
-                    } else {
-                        let a = vld1q_u8(bands[3].as_ptr().add(offset));
-                        vst4q_u8(ptr, uint8x16x4_t(r, g, b, a));
-                    }
-                    offset += 16;
-                }
-            }
-            offset
-        };
+        let offset = blanket_core::pixels::merge(bands, dst);
         for (i, pixel) in dst.iter_mut().enumerate().skip(offset) {
             *pixel = std::array::from_fn(|c| bands[c][i]);
         }

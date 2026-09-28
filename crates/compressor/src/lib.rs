@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 pub mod compressor;
 pub mod compressor_simd;
 pub mod lossy_compressor;

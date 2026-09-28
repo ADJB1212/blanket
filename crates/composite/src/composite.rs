@@ -187,62 +187,7 @@ fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: 
 }
 
 fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) {
-    #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
-    let offset = 0;
-    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    let offset = if C != 2 && std::arch::is_x86_feature_detected!("ssse3") {
-        // SAFETY: SSSE3 detected; caller validates equal pixel counts.
-        unsafe { blanket_core::x86_pixels::paste_masked::<C, M>(dst, src, mask, fill) }
-    } else {
-        0
-    };
-    #[cfg(target_arch = "aarch64")]
-    let offset = {
-        let mut offset = 0;
-        use std::arch::aarch64::*;
-        // Each iteration reads and writes 16 complete pixels. NEON is mandatory
-        // on AArch64, and all three buffers have validated equal pixel counts.
-        unsafe {
-            while C != 2 && offset + 16 <= dst.len() / C {
-                let dp = dst.as_mut_ptr().add(offset * C);
-                let sp = src.as_ptr().add(offset * C);
-                let mp = mask.as_ptr().add(offset * M);
-                let a = if M == 1 { vld1q_u8(mp) } else { vld4q_u8(mp).3 };
-                let blend = |d, s, a| {
-                    let inv = vsubq_u8(vdupq_n_u8(255), a);
-                    let lo = vmlal_u8(vmull_u8(vget_low_u8(d), vget_low_u8(inv)), vget_low_u8(s), vget_low_u8(a));
-                    let hi = vmlal_high_u8(vmull_high_u8(d, inv), s, a);
-                    let lo = vaddq_u16(lo, vdupq_n_u16(128));
-                    let hi = vaddq_u16(hi, vdupq_n_u16(128));
-                    vcombine_u8(
-                        vshrn_n_u16::<8>(vaddq_u16(lo, vshrq_n_u16::<8>(lo))),
-                        vshrn_n_u16::<8>(vaddq_u16(hi, vshrq_n_u16::<8>(hi))),
-                    )
-                };
-                if C == 1 {
-                    vst1q_u8(dp, blend(vld1q_u8(dp), vld1q_u8(sp), a));
-                } else if C == 3 {
-                    let d = vld3q_u8(dp);
-                    let s = vld3q_u8(sp);
-                    vst3q_u8(dp, uint8x16x3_t(blend(d.0, s.0, a), blend(d.1, s.1, a), blend(d.2, s.2, a)));
-                } else {
-                    let d = vld4q_u8(dp);
-                    let s = vld4q_u8(sp);
-                    let rgb_a = if fill && M == 1 {
-                        vorrq_u8(a, vandq_u8(vceqq_u8(d.3, vdupq_n_u8(0)), vcgtq_u8(a, vdupq_n_u8(0))))
-                    } else {
-                        a
-                    };
-                    vst4q_u8(
-                        dp,
-                        uint8x16x4_t(blend(d.0, s.0, rgb_a), blend(d.1, s.1, rgb_a), blend(d.2, s.2, rgb_a), blend(d.3, s.3, a)),
-                    );
-                }
-                offset += 16;
-            }
-        }
-        offset
-    };
+    let offset = blanket_core::pixels::paste_masked::<C, M>(dst, src, mask, fill);
     for ((d, s), m) in dst[offset * C..]
         .as_chunks_mut::<C>()
         .0
@@ -323,31 +268,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     if image.mode == PixelMode::Rgb {
         let mut pixels = vec![0; alpha.len() * 4];
         py.detach(|| {
-            #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
-            let offset = 0;
-            #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-            let offset = if std::arch::is_x86_feature_detected!("ssse3") {
-                // SAFETY: SSSE3 detected; validated matching RGB/alpha/output sizes.
-                unsafe { blanket_core::x86_pixels::putalpha_rgb(source, alpha, &mut pixels) }
-            } else {
-                0
-            };
-            #[cfg(target_arch = "aarch64")]
-            let offset = {
-                let mut offset = 0;
-                use std::arch::aarch64::*;
-                // Buffers contain the same number of complete pixels; process
-                // only complete vectors, leaving the tail to the scalar loop.
-                unsafe {
-                    while offset + 16 <= alpha.len() {
-                        let rgb = vld3q_u8(source.as_ptr().add(offset * 3));
-                        let a = vld1q_u8(alpha.as_ptr().add(offset));
-                        vst4q_u8(pixels.as_mut_ptr().add(offset * 4), uint8x16x4_t(rgb.0, rgb.1, rgb.2, a));
-                        offset += 16;
-                    }
-                }
-                offset
-            };
+            let offset = blanket_core::pixels::putalpha_rgb(source, alpha, &mut pixels);
             for ((dst, src), &a) in pixels[offset * 4..]
                 .as_chunks_mut::<4>()
                 .0
@@ -364,32 +285,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     let pixels = image.pixels.as_mut().expect("validated open image");
     py.detach(|| {
-        #[cfg(not(any(target_arch = "aarch64", target_arch = "x86", target_arch = "x86_64")))]
-        let offset = 0;
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        let offset = if std::arch::is_x86_feature_detected!("ssse3") {
-            // SAFETY: SSSE3 detected; validated matching RGBA/alpha sizes.
-            unsafe { blanket_core::x86_pixels::putalpha_rgba(pixels, alpha) }
-        } else {
-            0
-        };
-        #[cfg(target_arch = "aarch64")]
-        let offset = {
-            use std::arch::aarch64::*;
-            let mut offset = 0;
-            // Read and update exactly 16 complete RGBA pixels per iteration.
-            // Unaligned NEON loads/stores are valid for these byte buffers.
-            unsafe {
-                while offset + 16 <= alpha.len() {
-                    let ptr = pixels.as_mut_ptr().add(offset * 4);
-                    let rgba = vld4q_u8(ptr);
-                    let a = vld1q_u8(alpha.as_ptr().add(offset));
-                    vst4q_u8(ptr, uint8x16x4_t(rgba.0, rgba.1, rgba.2, a));
-                    offset += 16;
-                }
-            }
-            offset
-        };
+        let offset = blanket_core::pixels::putalpha_rgba(pixels, alpha);
         for (pixel, &a) in pixels[offset * 4..].as_chunks_mut::<4>().0.iter_mut().zip(&alpha[offset..]) {
             pixel[3] = a;
         }

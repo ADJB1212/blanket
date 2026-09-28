@@ -30,6 +30,7 @@ default = ["no-vendored-webp"]
 jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]
 no-vendored-webp = ["blanket-codecs/no-vendored-webp"]
+use-system-lcms2 = ["blanket-core/use-system-lcms2"]
 
 [lints]
 workspace = true
