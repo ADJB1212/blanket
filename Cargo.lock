@@ -195,9 +195,14 @@ name = "blanket"
 version = "0.0.3"
 dependencies = [
  "blanket-codecs",
+ "blanket-composite",
  "blanket-compressor",
  "blanket-core",
+ "blanket-enhance",
+ "blanket-filter",
  "blanket-ops",
+ "blanket-palette",
+ "blanket-stat",
  "pyo3",
 ]
 
@@ -206,7 +211,6 @@ name = "blanket-codecs"
 version = "0.0.3"
 dependencies = [
  "blanket-core",
- "blanket-ops",
  "image",
  "jpegxl-rs",
  "libheif-rs",
@@ -217,6 +221,14 @@ dependencies = [
  "tiff",
  "turbojpeg",
  "webpx",
+]
+
+[[package]]
+name = "blanket-composite"
+version = "0.0.3"
+dependencies = [
+ "blanket-core",
+ "pyo3",
 ]
 
 [[package]]
@@ -244,13 +256,45 @@ dependencies = [
 ]
 
 [[package]]
+name = "blanket-enhance"
+version = "0.0.3"
+dependencies = [
+ "blanket-core",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "blanket-filter"
+version = "0.0.3"
+dependencies = [
+ "blanket-core",
+ "pyo3",
+]
+
+[[package]]
 name = "blanket-ops"
 version = "0.0.3"
 dependencies = [
  "blanket-core",
- "garb",
  "pyo3",
  "rayon",
+]
+
+[[package]]
+name = "blanket-palette"
+version = "0.0.3"
+dependencies = [
+ "blanket-core",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "blanket-stat"
+version = "0.0.3"
+dependencies = [
+ "pyo3",
 ]
 
 [[package]]

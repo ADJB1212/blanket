@@ -1,3 +1,5 @@
+mod encode;
+
 use blanket_codecs::open_bytes;
 use blanket_core::{
     Image, UnidentifiedImageError,
@@ -14,15 +16,15 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_compressor::_encode, module)?)?;
-    blanket_ops::enhance::register(module)?;
-    blanket_ops::chops::register(module)?;
-    blanket_ops::composite::register(module)?;
+    module.add_function(wrap_pyfunction!(encode::_encode, module)?)?;
+    blanket_enhance::enhance::register(module)?;
+    blanket_composite::chops::register(module)?;
+    blanket_composite::composite::register(module)?;
     blanket_compressor::register(module)?;
-    blanket_ops::filter::register(module)?;
+    blanket_filter::filter::register(module)?;
     blanket_ops::ops::register(module)?;
-    blanket_ops::palette::register(module)?;
-    blanket_ops::quantize::register(module)?;
-    blanket_ops::stat::register(module)?;
+    blanket_palette::palette::register(module)?;
+    blanket_palette::quantize::register(module)?;
+    blanket_stat::stat::register(module)?;
     Ok(())
 }

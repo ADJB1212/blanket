@@ -1,5 +1,16 @@
 [workspace]
-members = ["crates/core", "crates/codecs", "crates/compressor", "crates/ops", "crates/blanket"]
+members = [
+    "crates/core",
+    "crates/codecs",
+    "crates/compressor",
+    "crates/ops",
+    "crates/composite",
+    "crates/enhance",
+    "crates/filter",
+    "crates/palette",
+    "crates/stat",
+    "crates/blanket",
+]
 resolver = "3"
 
 [workspace.package]

@@ -10,7 +10,6 @@ publish = false
 
 [dependencies]
 blanket-core = { path = "../core" }
-blanket-ops = { path = "../ops" }
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
 libheif-rs = { version = "3.0", default-features = false, features = ["latest"] }
