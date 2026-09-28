@@ -1,5 +1,28 @@
 [workspace]
-members = ["crates/core", "crates/codecs", "crates/ops", "crates/blanket"]
+members = [
+    "crates/core",
+    "crates/codecs",
+    "crates/codec-common",
+    "crates/codec-png",
+    "crates/codec-image",
+    "crates/codec-jpeg",
+    "crates/codec-jxl",
+    "crates/codec-heif",
+    "crates/codec-pdf",
+    "crates/codec-tiff",
+    "crates/codec-webp",
+    "crates/codec-avif",
+    "crates/codec-bmp-ico",
+    "crates/codec-gif",
+    "crates/compressor",
+    "crates/ops",
+    "crates/composite",
+    "crates/enhance",
+    "crates/filter",
+    "crates/palette",
+    "crates/stat",
+    "crates/blanket",
+]
 resolver = "3"
 
 [workspace.package]

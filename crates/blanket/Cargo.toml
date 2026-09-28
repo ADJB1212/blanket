@@ -17,7 +17,13 @@ doctest = false
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
 blanket-core = { path = "../core" }
 blanket-codecs = { path = "../codecs" }
+blanket-compressor = { path = "../compressor" }
 blanket-ops = { path = "../ops" }
+blanket-composite = { path = "../composite" }
+blanket-enhance = { path = "../enhance" }
+blanket-filter = { path = "../filter" }
+blanket-palette = { path = "../palette" }
+blanket-stat = { path = "../stat" }
 
 [features]
 default = ["no-vendored-webp"]

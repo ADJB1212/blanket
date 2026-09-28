@@ -55,32 +55,6 @@ fn matches_key_chunk(source: &[u8], key: [u8; 3]) -> bool {
         .all(|p| (p[3] == 0 && p[..3] == key) || (p[3] == 255 && p[..3] != key))
 }
 
-/// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
-/// the existing rounded full-range mapping, including 16-bit identity input.
-pub(crate) fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
-    fn convert<const MAX: u32>(source: &[u8]) -> Vec<u16> {
-        let mut output = vec![0; source.len() / 2];
-        let fill = |i: usize, dst: &mut [u16]| {
-            let src = &source[i * CHUNK_PIXELS * 2..(i * CHUNK_PIXELS + dst.len()) * 2];
-            for (v, dst) in src.as_chunks::<2>().0.iter().zip(dst) {
-                *dst = ((u32::from(u16::from_le_bytes(*v)) * 65535 + MAX / 2) / MAX) as u16;
-            }
-        };
-        if should_parallel(source.len(), CHUNK_PIXELS * 2, MEMORY_PARALLEL_BYTES) {
-            output.par_chunks_mut(CHUNK_PIXELS).enumerate().for_each(|(i, dst)| fill(i, dst));
-        } else {
-            output.chunks_mut(CHUNK_PIXELS).enumerate().for_each(|(i, dst)| fill(i, dst));
-        }
-        output
-    }
-    match depth {
-        10 => convert::<1023>(source),
-        12 => convert::<4095>(source),
-        16 => convert::<65535>(source),
-        _ => unreachable!("validated wide depth"),
-    }
-}
-
 pub(crate) fn properties(source: &[u8], channels: usize) -> (bool, bool) {
     if channels == 1 {
         return (true, true);
@@ -657,16 +631,6 @@ mod tests {
                 assert!(!matches_key(&src, key));
             }
             src[start..start + 4].copy_from_slice(&saved);
-        }
-    }
-
-    #[test]
-    fn wide_normalization_matches_original_rounding_exhaustively() {
-        for depth in [10, 12, 16] {
-            let maximum = (1_u32 << depth) - 1;
-            let src: Vec<_> = (0..=maximum).flat_map(|v| (v as u16).to_le_bytes()).collect();
-            let expected: Vec<_> = (0..=maximum).map(|v| ((v * 65535 + maximum / 2) / maximum) as u16).collect();
-            assert_eq!(normalize_u16(&src, depth), expected);
         }
     }
 
