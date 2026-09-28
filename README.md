@@ -37,9 +37,10 @@ with Image.open("photo.jpg") as image:
   and convert explicitly to Pillow when you need it.
 
 Blanket is currently **alpha software**. It implements a focused subset of
-Pillow's API, centered on `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB` images, with integer `I`
-and `I;16` modes, floating-point `F`, and limited indexed
-`P` and `PA` support. It is not a drop-in replacement for `PIL` (yet).
+Pillow's API, centered on images in the `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`,
+`CMYK`, `YCbCr`, and `LAB` modes. It also supports integer `I` and `I;16`
+modes, floating-point `F`, and indexed `P` and `PA` images to a limited
+extent. It is not yet a drop-in replacement for `PIL`.
 
 See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
 arithmetic and blend modes, and
@@ -48,14 +49,14 @@ statistics.
 
 ## Installation
 
-Blanket requires **Python 3.12+**. Install from this repository after setting
-up the native build prerequisites below:
+Blanket requires **Python 3.12+**. Install it with pip:
 
 ```sh
 pip install pyblanket
 ```
 
-See the [development notes](https://adjb1212.github.io/blanket-docs/development/) for information on building from source.
+See the [development notes](https://adjb1212.github.io/blanket-docs/development/)
+for information on building from source.
 
 ## Examples
 
@@ -123,7 +124,8 @@ with Image.open("photo.jpg") as image:
 
 `resize()` supports all six `Image.Resampling` filters. `ImageOps` includes
 cropping, padding, flips, color adjustments, and EXIF orientation correction.
-`ImageFilter` provides blurs, convolution kernels, rank filters, and 3D color LUTs.
+`ImageFilter` provides blur, convolution, and rank filters, as well as 3D color
+LUTs.
 
 ### Build an image with transparency
 
@@ -157,8 +159,8 @@ image.convert("RGB", bit_depth=8).save("preview.jpg")
 `image.bit_depth` reports sample precision. Copying, conversion, pixel access,
 splitting, cropping, transposition, and resizing preserve high-bit-depth
 samples. Other processing operations require conversion to 8 bits.
-See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/) for storage
-and format-specific behavior.
+See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/)
+for storage and format-specific behavior.
 
 ## Supported formats
 
@@ -173,12 +175,12 @@ and format-specific behavior.
 | HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                             |
 | PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency                      |
 | BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                |
-| GIF         | Yes  |  Yes  | First frame only; single-frame output, 256 colors and binary transparency |
+| GIF         | Yes  |  Yes  | First frame only; single-frame output with 256 colors and binary transparency |
 | ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension   |
 
 Encoder settings and their defaults are listed in the
-[format guide](https://adjb1212.github.io/blanket-docs/formats/). HEIF lossless compression can still
-change RGB values during RGB/YUV conversion.
+[format guide](https://adjb1212.github.io/blanket-docs/formats/). HEIF lossless
+compression can still change RGB values during RGB/YUV conversion.
 
 ## Compatibility and scope
 
@@ -205,8 +207,8 @@ change RGB values during RGB/YUV conversion.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
   installed. High-bit-depth images must first be converted to 8 bits.
 
-See the [usage and API notes](https://adjb1212.github.io/blanket-docs/) for operation-specific restrictions,
-palette support, and interoperability examples.
+See the [usage and API notes](https://adjb1212.github.io/blanket-docs/) for
+operation-specific restrictions, palette support, and interoperability examples.
 
 ## Performance
 
@@ -245,8 +247,8 @@ uv run --no-sync scripts/verify_behavior.py
 
 The native core lives in [`crates/`](crates/), the Python API in
 [`python/blanket/`](python/blanket/), and compatibility tests in [`tests/`](tests/).
-Include a focused regression test with bug fixes and new features.
-[open an issue](https://github.com/ADJB1212/blanket/issues) to report a problem.
+Include a focused regression test when fixing a bug or adding a feature. To
+report a problem, [open an issue](https://github.com/ADJB1212/blanket/issues).
 
 ## License
 
