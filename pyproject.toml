@@ -71,6 +71,7 @@ xfail_strict = true
 fix = true
 line-length = 200
 target-version = "py312"
+cache-dir = "/dev/null"
 
 [tool.ruff.lint]
 fixable = ["ALL"]

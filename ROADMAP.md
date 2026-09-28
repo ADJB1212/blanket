@@ -112,14 +112,14 @@ users expect.
 
 ### Image Methods
 
-- [ ] `show()` — display via system viewer or configurable backend
-- [ ] `effect_spread(distance)` — randomly displace pixels
-- [ ] `remap_palette(dest_map, source_palette=None)` — reorder palette indices
-- [ ] `verify()` — check file integrity without full decode
-- [ ] `draft(mode, size)` — configure decoder for reduced-resolution reads
-- [ ] `getim()` / `im` — internal image core access (compatibility shim)
-- [ ] `tobitmap(name="image")` — X11 bitmap string (mode `1`)
-- [ ] `entropy(mask, extrema)` on high-bit-depth images
+- [x] `show()` — display via system viewer or configurable backend
+- [x] `effect_spread(distance)` — randomly displace pixels
+- [x] `remap_palette(dest_map, source_palette=None)` — reorder palette indices
+- [x] `verify()` — validate eagerly decoded pixels
+- [x] `draft(mode, size)` — no-op after eager decoding
+- [x] `getim()` / `im` — internal image core access (compatibility shim)
+- [x] `tobitmap(name="image")` — X11 bitmap string (mode `1`)
+- [x] `entropy(mask, extrema)` on high-bit-depth images
 
 ### ImageColor Module
 

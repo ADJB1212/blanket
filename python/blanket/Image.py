@@ -10,7 +10,11 @@ import builtins
 import contextlib
 import math
 import os
+import shlex
 import struct
+import subprocess
+import sys
+import tempfile
 from enum import IntEnum
 from operator import index
 from pathlib import Path
@@ -334,6 +338,114 @@ class Image:
         self._native.load()
         self._sync_palette()
 
+    @property
+    def im(self) -> _Image:
+        """Blanket's native image core, available after loading the image.
+
+        This is a Blanket ``_Image`` object, not a Pillow ``ImagingCore``.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            core = image.im
+            ```
+        """
+        self.load()
+        return self._native
+
+    def getim(self) -> _Image:
+        """Return Blanket's native image core.
+
+        The result is the same object as ``im``; it is not a Pillow capsule.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            assert image.getim() is image.im
+            ```
+        """
+        return self.im
+
+    def verify(self) -> None:
+        """Confirm that the eagerly decoded pixel buffer is available.
+
+        File decoding and integrity checks take place in ``Image.open``.
+        This method raises ``ValueError`` if the image has been closed.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            image.verify()
+            ```
+        """
+        self.load()
+
+    def draft(self, mode: str | None, size: tuple[int, int] | None) -> None:
+        """Return ``None`` because Blanket decodes images when opening them.
+
+        Args:
+            mode: Requested decoder mode; accepted for Pillow compatibility.
+            size: Requested decoder size; accepted for Pillow compatibility.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8))
+            image.draft("L", (4, 4))
+            ```
+        """
+        self.load()
+
+    def show(self, title: str | None = None) -> None:
+        """Save a temporary PNG and launch the system image viewer.
+
+        Set ``BLANKET_IMAGE_VIEWER`` to a command and optional arguments to
+        select another viewer. The temporary file remains available while the
+        viewer opens it.
+
+        Args:
+            title: Optional window title; accepted for Pillow compatibility.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), "navy")
+            image.show()
+            ```
+        """
+        self.load()
+        display = self if self.mode in ("1", "L", "LA", "P", "PA", "RGB", "RGBA") else self.convert("RGB")
+        with tempfile.NamedTemporaryFile(prefix="blanket-", suffix=".png", delete=False) as stream:
+            path = stream.name
+            try:
+                display.save(stream, format="PNG")
+            except Exception:
+                Path(path).unlink(missing_ok=True)
+                raise
+        viewer = os.environ.get("BLANKET_IMAGE_VIEWER")
+        if viewer:
+            command = [*shlex.split(viewer), path]
+        elif sys.platform == "darwin":
+            command = ["open", path]
+        elif sys.platform == "win32":
+            os.startfile(path)  # type: ignore[attr-defined]
+            return
+        else:
+            command = ["xdg-open", path]
+        try:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            Path(path).unlink(missing_ok=True)
+            raise
+
     def close(self) -> None:
         """Release the image's pixel buffer.
 
@@ -460,6 +572,56 @@ class Image:
         if mode == "RGB":
             return [v for i, v in enumerate(data) if i % 4 != 3]
         return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
+
+    def remap_palette(self, dest_map: Sequence[int], source_palette: bytes | bytearray | None = None) -> Image:
+        """Return a P image whose palette follows ``dest_map``.
+
+        The map lists old palette indices in their new order. Unlisted source
+        indices become index zero, matching Pillow's remapping behavior.
+
+        Args:
+            dest_map: Old indices in the desired palette order.
+            source_palette: Optional interleaved RGB or RGBA palette bytes.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("P", (2, 1))
+            image.putpalette([0, 0, 0, 255, 0, 0])
+            swapped = image.remap_palette([1, 0])
+            ```
+        """
+        from ._blanket import ops_remap_indices
+
+        self.load()
+        if self.mode not in ("L", "P"):
+            raise ValueError("illegal image mode")
+        positions = [index(value) for value in dest_map]
+        if len(positions) > 256 or len(set(positions)) != len(positions) or any(not 0 <= value < 256 for value in positions):
+            raise ValueError("dest_map must contain unique palette indices from 0 through 255")
+        palette_mode = self.palette.mode if self.mode == "P" and self.palette is not None else "RGB"
+        if source_palette is None:
+            entries = self.palette.tobytes() if self.mode == "P" and self.palette is not None else bytes(v for i in range(256) for v in (i, i, i))
+        else:
+            entries = bytes(source_palette)
+            palette_mode = "RGBA" if len(entries) > 768 else "RGB"
+        channels = len(palette_mode)
+        if len(entries) % channels or any(value * channels + channels > len(entries) for value in positions):
+            raise ValueError("source palette has too few entries")
+        mapping = bytearray(256)
+        for new_position, old_position in enumerate(positions):
+            mapping[old_position] = new_position
+        result = Image(ops_remap_indices(self._native, bytes(mapping)))
+        result.putpalette(b"".join(entries[value * channels : (value + 1) * channels] for value in positions), palette_mode)
+        result.info.update(self.info)
+        if isinstance(self.info.get("transparency"), int):
+            old_transparency = self.info["transparency"]
+            if old_transparency in positions:
+                result.info["transparency"] = mapping[old_transparency]
+            else:
+                result.info.pop("transparency", None)
+        return result
 
     def putpixel(self, xy: tuple[int, int], value: float | tuple[int, ...]) -> None:
         """Write a pixel, accepting negative coordinates.
@@ -642,6 +804,51 @@ class Image:
             ```
         """
         return self._native.tobytes()
+
+    def tobitmap(self, name: str = "image") -> bytes:
+        """Return a mode ``1`` image as X11 bitmap source bytes.
+
+        Args:
+            name: ASCII prefix for the bitmap width, height, and data names.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("1", (8, 8))
+            bitmap = image.tobitmap("icon")
+            ```
+        """
+        from ._blanket import ops_xbm_bits
+
+        self.load()
+        if self.mode != "1":
+            raise ValueError("not a bitmap")
+        name.encode("ascii")
+        bits = [f"0x{value:02x}" for value in ops_xbm_bits(self._native)]
+        body = ",".join(bits)
+        return (f"#define {name}_width {self.width}\n#define {name}_height {self.height}\nstatic char {name}_bits[] = {{\n{body}\n}};").encode("ascii")
+
+    def effect_spread(self, distance: int) -> Image:
+        """Return an image with pixels randomly sampled from nearby positions.
+
+        Args:
+            distance: Maximum horizontal and vertical sample displacement.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), "navy")
+            spread = image.effect_spread(2)
+            ```
+        """
+        from ._blanket import ops_spread
+
+        self.load()
+        result = Image(ops_spread(self._native, index(distance)))
+        result.info.update(self.info)
+        return result
 
     def filter(self, filter: Filter | type[Filter]) -> Image:
         """Return a filtered image, accepting a filter instance or class.
@@ -1029,12 +1236,13 @@ class Image:
     def entropy(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> float:
         """Return Shannon entropy over all channel histogram bins.
 
-        An L mask selects pixels with nonzero values. As in Pillow, extrema
-        is ignored for the supported 8-bit modes.
+        An L mask selects pixels with nonzero values. Each channel uses 256
+        bins. Extrema controls binning for high-bit-depth and wide scalar
+        images; it is ignored for 8-bit modes.
 
         Args:
             mask: Optional L mask; pixels with a zero mask value are excluded.
-            extrema: Accepted for Pillow compatibility; ignored.
+            extrema: Optional lower and upper sample values for wide images.
 
         Examples:
             ```python
@@ -1049,7 +1257,7 @@ class Image:
         self.load()
         if mask is not None:
             mask.load()
-        return ops_entropy(self._native, None if mask is None else mask._native)
+        return ops_entropy(self._native, None if mask is None else mask._native, extrema)
 
     def transpose(self, method: int) -> Image:
         """Return a flipped or right-angle rotated copy using ``Transpose``.

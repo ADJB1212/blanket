@@ -17,6 +17,9 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
     module.add_function(wrap_pyfunction!(ops_split, module)?)?;
     module.add_function(wrap_pyfunction!(ops_entropy, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_spread, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_remap_indices, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_xbm_bits, module)?)?;
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
     module.add_function(wrap_pyfunction!(ops_transpose, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
@@ -164,9 +167,13 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         .collect()
 }
 
-#[pyfunction(signature = (image, mask=None))]
-fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<f64> {
-    let bins = ops_histogram(py, image, mask)?;
+#[pyfunction(signature = (image, mask=None, extrema=None))]
+fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<f64> {
+    let bins = if image.bit_depth == 8 && !image.mode.is_wide_scalar() {
+        ops_histogram(py, image, mask)?
+    } else {
+        wide_histogram(image, mask, extrema)?
+    };
     let total = bins.iter().sum::<u64>() as f64;
     if total == 0.0 {
         return Ok(f64::NAN);
@@ -179,6 +186,130 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<
             probability * probability.log2()
         })
         .sum::<f64>())
+}
+
+fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
+    let raw = image.raw_data()?;
+    let mask_data = if let Some(mask) = mask {
+        if mask.mode != PixelMode::L || mask.bit_depth != 8 {
+            return Err(PyValueError::new_err("bad transparency mask"));
+        }
+        if (mask.width, mask.height) != (image.width, image.height) {
+            return Err(PyValueError::new_err("images do not match"));
+        }
+        Some(mask.pixel_data()?)
+    } else {
+        None
+    };
+    let samples: Vec<f64> = match image.mode {
+        PixelMode::I => raw.as_chunks::<4>().0.iter().map(|v| i32::from_le_bytes(*v) as f64).collect(),
+        PixelMode::F => raw.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v) as f64).collect(),
+        PixelMode::I16B => raw.as_chunks::<2>().0.iter().map(|v| u16::from_be_bytes(*v) as f64).collect(),
+        PixelMode::I16 | PixelMode::I16L => raw.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v) as f64).collect(),
+        _ => raw.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v) as f64).collect(),
+    };
+    let channels = image.mode.channels();
+    let mut bins = vec![0_u64; channels * 256];
+    if samples.is_empty() {
+        return Ok(bins);
+    }
+    let (low, high) = extrema.unwrap_or_else(|| {
+        samples
+            .iter()
+            .copied()
+            .filter(|v| v.is_finite())
+            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+    });
+    if !low.is_finite() || !high.is_finite() || high < low {
+        return Err(PyValueError::new_err("invalid extrema"));
+    }
+    if high == low {
+        return Ok(bins);
+    }
+    for (pixel_index, pixel) in samples.chunks_exact(channels).enumerate() {
+        if mask_data.is_some_and(|mask| mask[pixel_index] == 0) {
+            continue;
+        }
+        for (channel, &value) in pixel.iter().enumerate() {
+            if value.is_finite() {
+                let slot = ((value - low) * 255.0 / (high - low)).trunc() as i64;
+                if (0..256).contains(&slot) {
+                    bins[channel * 256 + slot as usize] += 1;
+                }
+            }
+        }
+    }
+    Ok(bins)
+}
+
+#[pyfunction]
+fn ops_spread(image: &Image, distance: i64) -> PyResult<Image> {
+    let source = image.raw_data()?;
+    let channels = image.mode.channels()
+        * if image.mode.is_wide_scalar() {
+            image.mode.sample_bytes()
+        } else if image.bit_depth > 8 {
+            2
+        } else {
+            1
+        };
+    let mut pixels = source.to_vec();
+    let distance = distance.unsigned_abs().min(u64::from(image.width.max(image.height))) as i64;
+    if distance == 0 || image.width == 0 || image.height == 0 {
+        return output(image, (image.width, image.height), pixels);
+    }
+    let mut state = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64
+        | 1;
+    let mut random = || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        state
+    };
+    let width = image.width as usize;
+    for y in 0..image.height as usize {
+        for x in 0..width {
+            let dx = (random() % (2 * distance as u64 + 1)) as i64 - distance;
+            let dy = (random() % (2 * distance as u64 + 1)) as i64 - distance;
+            let sx = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
+            let sy = (y as i64 + dy).clamp(0, image.height as i64 - 1) as usize;
+            let destination = (y * width + x) * channels;
+            let origin = (sy * width + sx) * channels;
+            pixels[destination..destination + channels].copy_from_slice(&source[origin..origin + channels]);
+        }
+    }
+    output(image, (image.width, image.height), pixels)
+}
+
+#[pyfunction]
+fn ops_remap_indices(image: &Image, mapping: Vec<u8>) -> PyResult<Image> {
+    if image.mode != PixelMode::L || mapping.len() != 256 {
+        return Err(PyValueError::new_err("invalid palette remapping"));
+    }
+    let pixels = image.pixel_data()?.iter().map(|&value| mapping[value as usize]).collect();
+    Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None)
+}
+
+#[pyfunction]
+fn ops_xbm_bits(image: &Image) -> PyResult<Vec<u8>> {
+    if image.mode != PixelMode::One {
+        return Err(PyValueError::new_err("not a bitmap"));
+    }
+    let source = image.pixel_data()?;
+    let width = image.width as usize;
+    let row_bytes = width.div_ceil(8);
+    let mut result = vec![0_u8; row_bytes * image.height as usize];
+    for (y, row) in source.chunks(width.max(1)).enumerate() {
+        for (x, &value) in row.iter().enumerate() {
+            if value != 0 {
+                result[y * row_bytes + x / 8] |= 1 << (x % 8);
+            }
+        }
+    }
+    Ok(result)
 }
 
 #[pyfunction]
@@ -1654,5 +1785,44 @@ mod tests {
             let clipped = ops_canvas(py, &image, (3, 3), (-1, 1), vec![9]).unwrap();
             assert_eq!(clipped.pixel_data().unwrap(), [9, 9, 9, 2, 3, 9, 5, 6, 9]);
         });
+    }
+
+    #[test]
+    fn spread_keeps_pixel_values_and_zero_distance_copies() {
+        let image = Image::from_pixels(3, 2, PixelMode::Rgb, (0..18).collect(), None).unwrap();
+        assert_eq!(ops_spread(&image, 0).unwrap().pixel_data().unwrap(), image.pixel_data().unwrap());
+        let spread = ops_spread(&image, 2).unwrap();
+        assert_eq!((spread.width, spread.height, spread.mode), (3, 2, PixelMode::Rgb));
+        for pixel in spread.pixel_data().unwrap().as_chunks::<3>().0 {
+            assert!(image.pixel_data().unwrap().as_chunks::<3>().0.contains(pixel));
+        }
+    }
+
+    #[test]
+    fn entropy_accepts_wide_samples_and_mask() {
+        Python::initialize();
+        Python::attach(|py| {
+            let image = Image::from_integer_bytes(4, 1, PixelMode::I16, vec![0, 0, 0, 1, 0, 2, 0, 3]).unwrap();
+            assert_eq!(ops_entropy(py, &image, None, None).unwrap(), 2.0);
+            let mask = Image::from_pixels(4, 1, PixelMode::L, vec![1, 0, 1, 0], None).unwrap();
+            assert_eq!(ops_entropy(py, &image, Some(&mask), Some((0.0, 512.0))).unwrap(), 1.0);
+        });
+    }
+
+    #[test]
+    fn remap_indices_and_pack_xbm_rows() {
+        let indexed = Image::from_pixels(3, 1, PixelMode::L, vec![0, 1, 2], None).unwrap();
+        let mut mapping: Vec<u8> = (0..=255).collect();
+        mapping[..3].copy_from_slice(&[1, 2, 0]);
+        assert_eq!(ops_remap_indices(&indexed, mapping).unwrap().pixel_data().unwrap(), [1, 2, 0]);
+        let bitmap = Image::from_pixels(
+            9,
+            2,
+            PixelMode::One,
+            vec![255, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255],
+            None,
+        )
+        .unwrap();
+        assert_eq!(ops_xbm_bits(&bitmap).unwrap(), [0x81, 0, 0, 1]);
     }
 }

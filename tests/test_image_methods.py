@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import math
+from io import BytesIO
+from pathlib import Path
+
 import pytest
 from PIL import Image as PIL
 
@@ -103,6 +107,116 @@ def test_l_bbox_scans_empty_edge_columns(width: int) -> None:
     image = Image.frombytes("L", (width, 33), raw)
     reference = PIL.frombytes("L", (width, 33), raw)
     assert image.getbbox() == reference.getbbox()
+
+
+def test_remap_palette_matches_pillow_and_preserves_transparency() -> None:
+    image = Image.frombytes("P", (4, 1), b"\x00\x01\x02\x01")
+    reference = PIL.frombytes("P", image.size, image.tobytes())
+    palette = bytes([10, 20, 30, 40, 50, 60, 70, 80, 90])
+    image.putpalette(palette)
+    reference.putpalette(palette)
+    image.info["transparency"] = reference.info["transparency"] = 1
+    mapping = [2, 0, 1]
+    actual = image.remap_palette(mapping)
+    expected = reference.remap_palette(mapping)
+    assert actual.mode == expected.mode == "P"
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.getpalette() == expected.getpalette()
+    assert actual.info["transparency"] == expected.info["transparency"] == 2
+    assert image.tobytes() == b"\x00\x01\x02\x01"
+
+
+@pytest.mark.parametrize("mode", ["L", "P"])
+@pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
+def test_remap_palette_with_source_palette(mode: str, palette_mode: str) -> None:
+    raw = b"\x00\x01\x02"
+    palette = bytes(i % 256 for i in range(256 * len(palette_mode)))
+    image = Image.frombytes(mode, (3, 1), raw)
+    reference = PIL.frombytes(mode, (3, 1), raw)
+    actual = image.remap_palette([2, 0, 1], source_palette=palette)
+    expected = reference.remap_palette([2, 0, 1], source_palette=palette)
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.getpalette(palette_mode) == expected.getpalette(palette_mode)
+
+
+def test_xbm_bitmap_matches_pillow() -> None:
+    image = Image.new("1", (9, 2))
+    reference = PIL.new("1", image.size)
+    for point in ((0, 0), (7, 0), (8, 1)):
+        image.putpixel(point, 255)
+        reference.putpixel(point, 255)
+    assert image.tobitmap("sample") == reference.tobitmap("sample")
+    with pytest.raises(ValueError, match="not a bitmap"):
+        Image.new("L", (1, 1)).tobitmap()
+
+
+def test_eager_verify_draft_and_core_shim() -> None:
+    stream = BytesIO()
+    Image.new("RGB", (3, 2), (10, 20, 30)).save(stream, "PNG")
+    image = Image.open(BytesIO(stream.getvalue()))
+    assert image.verify() is None
+    assert image.draft("L", (1, 1)) is None
+    assert image.getim() is image.im
+    assert image.size == (3, 2)
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.verify()
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA", "I", "F"])
+def test_spread_preserves_mode_size_and_source_values(mode: str) -> None:
+    image = Image.new(mode, (5, 5))
+    for y in range(5):
+        for x in range(5):
+            value = (x + y) % 2 * 255 if mode == "1" else x + y * 5
+            image.putpixel((x, y), (value,) * len(mode) if mode in ("RGB", "RGBA") else value)
+    result = image.effect_spread(2)
+    assert (result.mode, result.size, result.bit_depth) == (image.mode, image.size, image.bit_depth)
+    assert set(result.getdata()) <= set(image.getdata())
+    assert image.effect_spread(0).tobytes() == image.tobytes()
+
+
+@pytest.mark.parametrize("mode,data", [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
+def test_wide_entropy_matches_pillow(mode: str, data: list[int | float]) -> None:
+    image = Image.new(mode, (4, 1))
+    reference = PIL.new(mode, image.size)
+    image.putdata(data)
+    reference.putdata(data)
+    for extrema in (None, (0, 40)):
+        assert image.entropy(extrema=extrema) == pytest.approx(reference.entropy(extrema=extrema))
+    mask = Image.frombytes("L", (4, 1), b"\x01\x00\x01\x00")
+    assert image.entropy(mask) == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize("mode,data", [("I", [-10, 0, 1, 2, 255, 256, 1000]), ("F", [-1.0, 0.0, 0.1, 0.5, 1.0, 2.0, 10.0])])
+def test_wide_entropy_extrema_binning_matches_pillow(mode: str, data: list[int | float]) -> None:
+    image = Image.new(mode, (len(data), 1))
+    reference = PIL.new(mode, image.size)
+    image.putdata(data)
+    reference.putdata(data)
+    for extrema in (None, (0, 1), (0, 256), (-10, 1000)):
+        assert image.entropy(extrema=extrema) == pytest.approx(reference.entropy(extrema=extrema))
+    constant = Image.new(mode, (2, 1), 5)
+    assert math.isnan(constant.entropy())
+
+
+def test_high_depth_entropy() -> None:
+    image = Image.frombytes("L", (4, 1), b"\x00\x00\x00\x01\x00\x02\x00\x03", bit_depth=16)
+    assert image.entropy() == pytest.approx(2.0)
+    assert math.isnan(Image.new("I", (0, 0)).entropy())
+
+
+@pytest.mark.parametrize("mode", ["RGB", "CMYK"])
+def test_show_launches_configured_viewer(monkeypatch: pytest.MonkeyPatch, mode: str) -> None:
+    launched: list[list[str]] = []
+    monkeypatch.setenv("BLANKET_IMAGE_VIEWER", "image-viewer --single")
+    monkeypatch.setattr(Image.subprocess, "Popen", lambda command, **kwargs: launched.append(command))
+    color = (255, 0, 0) if mode == "RGB" else (0, 255, 255, 0)
+    Image.new(mode, (1, 1), color).show()
+    assert launched[0][:2] == ["image-viewer", "--single"]
+    path = Path(launched[0][-1])
+    assert path.read_bytes().startswith(b"\x89PNG")
+    path.unlink()
 
 
 @pytest.mark.parametrize("size", [(800, 600), (1024, 1024), (803, 607)])
