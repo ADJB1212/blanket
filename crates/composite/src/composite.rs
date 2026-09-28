@@ -151,8 +151,8 @@ fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: 
         None
     };
     let stride = image.mode.sample_bytes();
-    let width = image.width as i64;
-    let height = image.height as i64;
+    let width = i64::from(image.width);
+    let height = i64::from(image.height);
     let left = position.0.clamp(0, width);
     let top = position.1.clamp(0, height);
     let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width);
@@ -172,7 +172,7 @@ fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: 
                 if image.mode == PixelMode::F {
                     let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
                     let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
-                    let mixed = (old * (255 - alpha) as f32 + new * alpha as f32) / 255.0;
+                    let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
                     pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
                     continue;
                 }

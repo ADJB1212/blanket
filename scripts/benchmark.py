@@ -32,6 +32,7 @@ from PIL import (
     ImageChops as PillowChops,
     ImageEnhance as PillowEnhance,
     ImageFilter as PillowFilter,
+    ImageMath as PillowMath,
     ImageOps as PillowOps,
     ImagePalette as PillowPalette,
     ImageStat as PillowStat,
@@ -50,6 +51,7 @@ from blanket import (
     ImageChops as BlanketChops,
     ImageEnhance as BlanketEnhance,
     ImageFilter as BlanketFilter,
+    ImageMath as BlanketMath,
     ImageOps as BlanketOps,
     ImagePalette as BlanketPalette,
     ImageStat as BlanketStat,
@@ -714,6 +716,48 @@ def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comparisons
 
 
+def imagemath_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Time expression evaluation with reusable inputs and native arithmetic."""
+    comparisons: list[Comparison] = []
+    expressions = [
+        ("add", "a + b"),
+        ("subtract", "a - b"),
+        ("multiply", "a * b"),
+        ("divide", "a / b"),
+        ("remainder", "a % b"),
+        ("power", "a ** 2"),
+        ("absolute", "abs(a)"),
+        ("compare", "a > b"),
+        ("minimum", "min(a, b)"),
+        ("maximum", "max(a, b)"),
+        ("scalar", "a + 17"),
+        ("compound", "convert((float(a) + float(b)) / 2, 'L')"),
+    ]
+    for mode in ("1", "L", "I", "F"):
+        if mode == "1":
+            raw = make_one(*size)
+        elif mode == "L":
+            raw = make_gray(*size)
+        elif mode == "I":
+            raw = make_integer(*size, mode)
+        else:
+            raw = make_float(*size).astype("<f4").tobytes()
+        first = BlanketImage.frombytes(mode, size, raw)
+        reference = PillowImage.frombytes(mode, size, raw)
+        second = first.transpose(BlanketImage.Transpose.FLIP_LEFT_RIGHT)
+        other = reference.transpose(PillowImage.Transpose.FLIP_LEFT_RIGHT)
+        cases = expressions + ([] if mode == "F" else [("invert", "~a"), ("bitwise", "(a & b) ^ 85"), ("shift", "a >> 2")])
+        comparisons.extend(
+            (f"{name} {mode}", partial(BlanketMath.unsafe_eval, expression, a=first, b=second), partial(PillowMath.unsafe_eval, expression, a=reference, b=other)) for name, expression in cases
+        )
+        comparisons.append((f"lambda compound {mode}", partial(BlanketMath.lambda_eval, _math_expression, a=first, b=second), partial(PillowMath.lambda_eval, _math_expression, a=reference, b=other)))
+    return comparisons
+
+
+def _math_expression(operands: dict[str, Any]) -> object:
+    return operands["convert"]((operands["float"](operands["a"]) + operands["float"](operands["b"])) / 2, "L")
+
+
 STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
 
 
@@ -925,14 +969,30 @@ def print_summary_plain(results: list[dict[str, Any]]) -> None:
 
 
 def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return paired results where Blanket trails Pillow."""
-    return [r for r in results if r["blanket_speedup"] is not None and r["blanket_speedup"] < 1.0]
+    """Return paired results where Blanket trails Pillow (rounded to 2 decimal places)."""
+    return [r for r in results if r["blanket_speedup"] is not None and round(r["blanket_speedup"], 2) < 1.0]
 
 
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
+SECTION_NAMES = (
+    "ImagePalette",
+    "Codec I/O",
+    "Conversions",
+    "Mode Parity",
+    "Resize",
+    "Geometry",
+    "Bands",
+    "Memory",
+    "ImageOps",
+    "ImageChops",
+    "ImageMath",
+    "ImageStat",
+    "ImageEnhance",
+    "ImageFilter",
+    "10-bit",
+)
 DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Mode Parity", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
@@ -1196,6 +1256,7 @@ def main() -> None:
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),
             "ImageChops": partial(imagechops_comparisons, size),
+            "ImageMath": partial(imagemath_comparisons, size),
             "ImageStat": partial(imagestat_comparisons, size),
             "ImageEnhance": partial(imageenhance_comparisons, size),
             "ImageFilter": partial(imagefilter_comparisons, size),

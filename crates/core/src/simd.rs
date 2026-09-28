@@ -36,29 +36,46 @@ pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
 pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
     let stride = mode.sample_bytes();
     let mut output = vec![0; source.len() / stride];
-    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, dst| {
+    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 * 1024 * 1024, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * stride..(chunk * CHUNK_PIXELS + dst.len()) * stride];
-        let offset = dst.len() / 16 * 16;
-        for i in (0..offset).step_by(16) {
-            let values = Simd::<i32, 16>::from_array(std::array::from_fn(|lane| {
-                let bytes = &src[(i + lane) * stride..(i + lane + 1) * stride];
-                match mode {
-                    PixelMode::I => i32::from_le_bytes(bytes.try_into().unwrap()),
-                    PixelMode::I16B => i32::from(u16::from_be_bytes(bytes.try_into().unwrap())),
-                    _ => i32::from(u16::from_le_bytes(bytes.try_into().unwrap())),
+        match mode {
+            PixelMode::I => {
+                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                    *pixel = i32::from_le_bytes(*bytes).clamp(0, 255) as u8;
                 }
-            }));
-            values
-                .simd_clamp(Simd::splat(0), Simd::splat(255))
-                .cast::<u8>()
-                .copy_to_slice(&mut dst[i..i + 16]);
+            }
+            PixelMode::I16B => {
+                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                    *pixel = u16::from_be_bytes(*bytes).min(255) as u8;
+                }
+            }
+            _ => {
+                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
+                    *pixel = u16::from_le_bytes(*bytes).min(255) as u8;
+                }
+            }
         }
-        for (pixel, bytes) in dst[offset..].iter_mut().zip(src[offset * stride..].chunks_exact(stride)) {
-            *pixel = match mode {
+    });
+    output
+}
+
+pub fn integer_to_color(source: &[u8], mode: PixelMode, channels: usize) -> Vec<u8> {
+    debug_assert!(matches!(channels, 3 | 4));
+    let stride = mode.sample_bytes();
+    let mut output = vec![0; source.len() / stride * channels];
+    chunks_mut(&mut output, CHUNK_PIXELS * channels, |chunk, dst| {
+        let start = chunk * CHUNK_PIXELS * stride;
+        let src = &source[start..start + dst.len() / channels * stride];
+        for (bytes, pixel) in src.chunks_exact(stride).zip(dst.chunks_exact_mut(channels)) {
+            let value = match mode {
                 PixelMode::I => i32::from_le_bytes(bytes.try_into().unwrap()).clamp(0, 255) as u8,
                 PixelMode::I16B => u16::from_be_bytes(bytes.try_into().unwrap()).min(255) as u8,
                 _ => u16::from_le_bytes(bytes.try_into().unwrap()).min(255) as u8,
             };
+            pixel[..3].fill(value);
+            if channels == 4 {
+                pixel[3] = 255;
+            }
         }
     });
     output
@@ -191,7 +208,7 @@ pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8>
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];
-    chunks_mut(&mut output, CHUNK_PIXELS * channels, |chunk, dst| {
+    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 * 1024 * 1024, |chunk, dst| {
         let start = chunk * CHUNK_PIXELS * 2;
         let src = &source[start..start + dst.len() / channels * 2];
         let offset = src.len() / 2 / 16 * 16;
@@ -320,6 +337,32 @@ mod tests {
             assert_eq!(result[i * 3], rgba[i * 4], "R mismatch at pixel {i}");
             assert_eq!(result[i * 3 + 1], rgba[i * 4 + 1], "G mismatch at pixel {i}");
             assert_eq!(result[i * 3 + 2], rgba[i * 4 + 2], "B mismatch at pixel {i}");
+        }
+    }
+
+    #[test]
+    fn integer_to_color_matches_gray_expansion() {
+        for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+            let values = [-10_i32, 0, 1, 127, 255, 256, 65535, 100000];
+            for count in [0, 1, 15, 16, 17, 257] {
+                let source: Vec<u8> = values
+                    .iter()
+                    .cycle()
+                    .take(count)
+                    .flat_map(|&value| match mode {
+                        PixelMode::I => value.to_le_bytes().to_vec(),
+                        PixelMode::I16B => (value as u16).to_be_bytes().to_vec(),
+                        _ => (value as u16).to_le_bytes().to_vec(),
+                    })
+                    .collect();
+                let gray = integer_to_l(&source, mode);
+                for destination in [PixelMode::Rgb, PixelMode::Rgba] {
+                    assert_eq!(
+                        integer_to_color(&source, mode, destination.channels()),
+                        convert(&gray, PixelMode::L, destination)
+                    );
+                }
+            }
         }
     }
 

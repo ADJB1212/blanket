@@ -9,6 +9,8 @@ from ._color_names import CSS_COLORS
 
 
 def _rgb(color: str) -> tuple[int, ...]:
+    if not isinstance(color, str):
+        raise TypeError("color must be a string")
     if len(color) > 100:
         raise ValueError("color specifier is too long")
     value = color.lower()

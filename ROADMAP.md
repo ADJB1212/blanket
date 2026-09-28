@@ -112,19 +112,19 @@ users expect.
 
 ### Image Methods
 
-- [ ] `show()` — display via system viewer or configurable backend
-- [ ] `effect_spread(distance)` — randomly displace pixels
-- [ ] `remap_palette(dest_map, source_palette=None)` — reorder palette indices
-- [ ] `verify()` — check file integrity without full decode
-- [ ] `draft(mode, size)` — configure decoder for reduced-resolution reads
-- [ ] `getim()` / `im` — internal image core access (compatibility shim)
-- [ ] `tobitmap(name="image")` — X11 bitmap string (mode `1`)
-- [ ] `entropy(mask, extrema)` on high-bit-depth images
+- [x] `show()` — display via system viewer or configurable backend
+- [x] `effect_spread(distance)` — randomly displace pixels
+- [x] `remap_palette(dest_map, source_palette=None)` — reorder palette indices
+- [x] `verify()` — validate eagerly decoded pixels
+- [x] `draft(mode, size)` — no-op after eager decoding
+- [x] `getim()` / `im` — internal image core access (compatibility shim)
+- [x] `tobitmap(name="image")` — X11 bitmap string (mode `1`)
+- [x] `entropy(mask, extrema)` on high-bit-depth images
 
 ### ImageColor Module
 
-- [ ] `getrgb(color)` — public API (currently internal `_color.py`)
-- [ ] `getcolor(color, mode)` — convert color string to mode-specific value
+- [x] `getrgb(color)` — public API (currently internal `_color.py`)
+- [x] `getcolor(color, mode)` — convert color string to mode-specific value
 - [ ] Full CSS4 color spec compliance
 
 ### ImagePath Module
@@ -134,10 +134,10 @@ users expect.
 
 ### ImageMath Module
 
-- [ ] `eval(expression, **operands)` — per-pixel math expressions
-- [ ] `lambda_eval(function, **operands)` — lambda-based evaluation
-- [ ] Operator support: arithmetic, bitwise, logical, comparison
-- [ ] Mode coercion rules matching Pillow
+- [x] `eval(expression, **operands)` and `unsafe_eval` — per-pixel math expressions
+- [x] `lambda_eval(function, **operands)` — lambda-based evaluation
+- [x] Operator support: arithmetic, bitwise, logical, comparison
+- [x] Mode coercion rules matching Pillow
 
 ### ExifTags & TiffTags
 

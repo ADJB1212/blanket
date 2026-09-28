@@ -1,5 +1,5 @@
 #![feature(portable_simd)]
-
+pub mod color;
 pub mod parallel;
 pub mod pixels;
 pub mod raster;

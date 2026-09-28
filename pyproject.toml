@@ -71,6 +71,7 @@ xfail_strict = true
 fix = true
 line-length = 200
 target-version = "py312"
+cache-dir = "/dev/null"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
@@ -100,6 +101,9 @@ exclude = ["scripts", "tests", "docs"]
 
 [tool.ty.environment]
 python = "./.venv"
+
+[tool.ty.terminal]
+output-format = "concise"
 
 [tool.ty.analysis]
 allowed-unresolved-imports = ["blanket._blanket"]

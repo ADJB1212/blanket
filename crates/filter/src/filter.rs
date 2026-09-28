@@ -421,7 +421,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
         return Err(PyValueError::new_err("table has wrong number of elements"));
     }
     let prepared: Vec<i32> = table.into_iter().map(|v| ((v * 16320.0).round() as i32).clamp(-32768, 32767)).collect();
-    let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * (1 << 18) as f64) as usize);
+    let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * f64::from(1 << 18)) as usize);
     let len = (image.width as usize)
         .checked_mul(image.height as usize)
         .and_then(|n| n.checked_mul(output_channels))

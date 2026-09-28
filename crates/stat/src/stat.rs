@@ -1,4 +1,4 @@
-//! Native histogram reductions and moments for ImageStat.
+//! Native histogram reductions and moments for `ImageStat`.
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;

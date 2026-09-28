@@ -21,7 +21,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 /// Packed colors are already well-distributed 32-bit keys. One multiply and
-/// fold is far cheaper than SipHash for the millions of lookups a photo needs.
+/// fold is far cheaper than `SipHash` for the millions of lookups a photo needs.
 #[derive(Default)]
 struct ColorHasher(u64);
 
@@ -203,7 +203,7 @@ fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -
         }
     }
     let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
-    result.palette = reference.palette.clone();
+    result.palette.clone_from(&reference.palette);
     Ok(result)
 }
 
