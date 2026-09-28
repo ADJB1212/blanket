@@ -665,7 +665,7 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
             }
             *count += 1;
         }
-        return Some(first.into_iter().map(|i| (&pixels[i..i + 1], counts[usize::from(pixels[i])])).collect());
+        return Some(first.into_iter().map(|i| (&pixels[i..=i], counts[usize::from(pixels[i])])).collect());
     }
     let chunk = 64 * 1024 * channels;
     let counts = if parallel::should_parallel(pixels.len(), chunk, 256 * 1024) {
@@ -704,7 +704,7 @@ struct PngCandidate<'a> {
     source: bool,
 }
 
-impl<'a> PngCandidate<'a> {
+impl PngCandidate<'_> {
     /// Smallest PNG any filter and level could produce for this candidate.
     fn minimum_size(&self, image: &Image) -> usize {
         // Signature, IHDR, one IDAT header/CRC, and IEND.
@@ -720,7 +720,7 @@ impl<'a> PngCandidate<'a> {
     }
 
     #[cfg(test)]
-    fn plain(color: png::ColorType, depth: png::BitDepth, pixels: &'a [u8]) -> PngCandidate<'a> {
+    fn plain<'a>(color: png::ColorType, depth: png::BitDepth, pixels: &'a [u8]) -> PngCandidate<'a> {
         PngCandidate {
             color,
             depth,
@@ -764,7 +764,13 @@ impl<'a> PngCandidate<'a> {
             Ok::<_, png::EncodingError>(())
         })();
         match result {
-            Err(png::EncodingError::IoError(error)) if error.get_ref().is_some_and(|error| error.is::<CandidateLimitReached>()) => Ok(None),
+            Err(png::EncodingError::IoError(error))
+                if error
+                    .get_ref()
+                    .is_some_and(<dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>::is::<CandidateLimitReached>) =>
+            {
+                Ok(None)
+            }
             Err(error) => Err(codec_error(error)),
             Ok(()) => Ok(Some(output.bytes)),
         }

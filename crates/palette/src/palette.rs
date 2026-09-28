@@ -109,7 +109,7 @@ fn blend(kind: usize, middle: f64, position: f64) -> PyResult<f64> {
             }
             position.powf(exponent)
         }
-        2 => ((-std::f64::consts::PI / 2.0 + std::f64::consts::PI * value).sin() + 1.0) / 2.0,
+        2 => f64::midpoint((-std::f64::consts::PI / 2.0 + std::f64::consts::PI * value).sin(), 1.0),
         3 => (1.0 - (value - 1.0).powi(2)).sqrt(),
         4 => 1.0 - (1.0 - value.powi(2)).sqrt(),
         _ => value,
@@ -156,7 +156,7 @@ fn render_gradient(segments: &[(Vec<f64>, usize)]) -> PyResult<Vec<u8>> {
 }
 
 #[pyfunction]
-fn palette_gradient<'py>(py: Python<'py>, segments: Vec<(Vec<f64>, usize)>) -> PyResult<Bound<'py, PyBytes>> {
+fn palette_gradient(py: Python<'_>, segments: Vec<(Vec<f64>, usize)>) -> PyResult<Bound<'_, PyBytes>> {
     Ok(PyBytes::new(py, &render_gradient(&segments)?))
 }
 

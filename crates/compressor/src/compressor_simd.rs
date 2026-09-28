@@ -205,17 +205,16 @@ fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTran
     let fill = |i: usize, dst: &mut [u8], scratch: &mut Vec<u8>| {
         let start = i * rows_per_chunk * width;
         let source = &samples[start..start + dst.len() / row_bytes * width];
-        let source = match transform {
-            PackTransform::Identity => source,
-            _ => {
-                scratch.resize(source.len(), 0);
-                match transform {
-                    PackTransform::Shift(shift) => select_chunk(source, scratch, 1, false, shift),
-                    PackTransform::Map(mapping) => blanket_ops::ops_simd::lut::<1>(source, scratch, mapping),
-                    PackTransform::Identity => unreachable!(),
-                }
-                scratch.as_slice()
+        let source = if let PackTransform::Identity = transform {
+            source
+        } else {
+            scratch.resize(source.len(), 0);
+            match transform {
+                PackTransform::Shift(shift) => select_chunk(source, scratch, 1, false, shift),
+                PackTransform::Map(mapping) => blanket_ops::ops_simd::lut::<1>(source, scratch, mapping),
+                PackTransform::Identity => unreachable!(),
             }
+            scratch.as_slice()
         };
         for (src, dst) in source.chunks_exact(width).zip(dst.chunks_exact_mut(row_bytes)) {
             pack_row(src, dst, bits);

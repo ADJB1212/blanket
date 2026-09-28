@@ -1,4 +1,4 @@
-//! Native primitives used by the Python ImageEnhance API.
+//! Native primitives used by the Python `ImageEnhance` API.
 
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;

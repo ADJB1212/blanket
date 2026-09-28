@@ -102,7 +102,7 @@ impl LossyImageCompressor {
         let channels = image.mode.channels();
         let pixels = image.pixels.as_ref().expect("validated image");
         let histogram = png_rounding_histogram(pixels, channels);
-        let limit = self.max_rmse * self.max_rmse * image.width as f64 * image.height as f64 * 3.0;
+        let limit = self.max_rmse * self.max_rmse * f64::from(image.width) * f64::from(image.height) * 3.0;
         let mut tried = vec![std::array::from_fn(|sample| sample as u8)];
         let mut winner = None;
         let mut smallest = usize::MAX;

@@ -193,7 +193,7 @@ fn has_brand(data: &[u8], accepted: &[&[u8; 4]]) -> bool {
         return false;
     }
     std::iter::once(&data[8..12])
-        .chain(data[16..size].as_chunks::<4>().0.iter().map(|v| v.as_slice()))
+        .chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice))
         .any(|brand| accepted.iter().any(|candidate| brand == candidate.as_slice()))
 }
 
@@ -205,7 +205,7 @@ fn is_heif(data: &[u8]) -> bool {
     if size < 16 || size > data.len() || !size.is_multiple_of(4) {
         return false;
     }
-    let brands = std::iter::once(&data[8..12]).chain(data[16..size].as_chunks::<4>().0.iter().map(|v| v.as_slice()));
+    let brands = std::iter::once(&data[8..12]).chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice));
     brands.into_iter().any(|brand| {
         matches!(
             brand,

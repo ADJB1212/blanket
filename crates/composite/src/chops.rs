@@ -1,4 +1,4 @@
-//! Channel arithmetic and wraparound translation for ImageChops.
+//! Channel arithmetic and wraparound translation for `ImageChops`.
 
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;

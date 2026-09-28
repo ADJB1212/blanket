@@ -66,7 +66,7 @@ fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
         );
     }
     let mut result = Image::from_pixels(size.0, size.1, image.mode, pixels, None)?;
-    result.palette = image.palette.clone();
+    result.palette.clone_from(&image.palette);
     Ok(result)
 }
 
