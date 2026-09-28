@@ -1,12 +1,3 @@
-pub mod chops;
-pub mod composite;
-pub mod enhance;
-pub mod filter;
 pub mod math;
 pub mod ops;
 pub mod ops_simd;
-pub mod palette;
-pub mod palette_simd;
-pub mod quantize;
-pub mod quantize_simd;
-pub mod stat;

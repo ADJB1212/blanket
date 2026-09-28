@@ -503,6 +503,38 @@ pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
     ((u32::from(r) * 19_595 + u32::from(g) * 38_470 + u32::from(b) * 7_471 + 0x8000) >> 16) as u8
 }
 
+/// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
+/// the existing rounded full-range mapping, including 16-bit identity input.
+pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
+    use crate::parallel::should_parallel;
+    use rayon::prelude::*;
+
+    const CHUNK_PIXELS: usize = 64 * 1024;
+    const MEMORY_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+
+    fn convert<const MAX: u32>(source: &[u8]) -> Vec<u16> {
+        let mut output = vec![0; source.len() / 2];
+        let fill = |i: usize, dst: &mut [u16]| {
+            let src = &source[i * CHUNK_PIXELS * 2..(i * CHUNK_PIXELS + dst.len()) * 2];
+            for (v, dst) in src.as_chunks::<2>().0.iter().zip(dst) {
+                *dst = ((u32::from(u16::from_le_bytes(*v)) * 65535 + MAX / 2) / MAX) as u16;
+            }
+        };
+        if should_parallel(source.len(), CHUNK_PIXELS * 2, MEMORY_PARALLEL_BYTES) {
+            output.par_chunks_mut(CHUNK_PIXELS).enumerate().for_each(|(i, dst)| fill(i, dst));
+        } else {
+            output.chunks_mut(CHUNK_PIXELS).enumerate().for_each(|(i, dst)| fill(i, dst));
+        }
+        output
+    }
+    match depth {
+        10 => convert::<1023>(source),
+        12 => convert::<4095>(source),
+        16 => convert::<65535>(source),
+        _ => unreachable!("validated wide depth"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -615,5 +647,15 @@ mod tests {
             .iter()
             .map(|px| ((px[0] as u32 * 19_595 + px[1] as u32 * 38_470 + px[2] as u32 * 7_471 + 0x8000) >> 16) as u8)
             .collect()
+    }
+
+    #[test]
+    fn wide_normalization_matches_original_rounding_exhaustively() {
+        for depth in [10, 12, 16] {
+            let maximum = (1_u32 << depth) - 1;
+            let src: Vec<_> = (0..=maximum).flat_map(|v| (v as u16).to_le_bytes()).collect();
+            let expected: Vec<_> = (0..=maximum).map(|v| ((v * 65535 + maximum / 2) / maximum) as u16).collect();
+            assert_eq!(normalize_u16(&src, depth), expected);
+        }
     }
 }
