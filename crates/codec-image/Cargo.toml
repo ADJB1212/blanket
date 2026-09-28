@@ -1,0 +1,20 @@
+[package]
+name = "blanket-codec-image"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+blanket-codec-common = { path = "../codec-common" }
+image = { version = "0.25", default-features = false, features = [] }
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

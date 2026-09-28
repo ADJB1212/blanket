@@ -1,0 +1,22 @@
+[package]
+name = "blanket-codec-gif"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
+blanket-codec-common = { path = "../codec-common" }
+blanket-codec-image = { path = "../codec-image" }
+image = { version = "0.25", default-features = false, features = ["gif"] }
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

@@ -207,20 +207,149 @@ dependencies = [
 ]
 
 [[package]]
-name = "blanket-codecs"
+name = "blanket-codec-avif"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-core",
+ "image",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-bmp-ico"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-codec-png",
+ "blanket-core",
+ "image",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-common"
+version = "0.0.3"
+dependencies = [
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-gif"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-core",
+ "image",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-heif"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-core",
+ "libheif-rs",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-image"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-core",
+ "image",
+]
+
+[[package]]
+name = "blanket-codec-jpeg"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-core",
+ "pyo3",
+ "rayon",
+ "turbojpeg",
+]
+
+[[package]]
+name = "blanket-codec-jxl"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-core",
+ "jpegxl-rs",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
+name = "blanket-codec-pdf"
 version = "0.0.3"
 dependencies = [
  "blanket-core",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-codec-png"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-core",
  "image",
- "jpegxl-rs",
- "libheif-rs",
- "libwebp-sys",
  "png",
  "pyo3",
- "rayon",
+]
+
+[[package]]
+name = "blanket-codec-tiff"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-core",
+ "image",
+ "pyo3",
  "tiff",
- "turbojpeg",
+]
+
+[[package]]
+name = "blanket-codec-webp"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-image",
+ "blanket-core",
+ "image",
+ "libwebp-sys",
+ "pyo3",
  "webpx",
+]
+
+[[package]]
+name = "blanket-codecs"
+version = "0.0.3"
+dependencies = [
+ "blanket-codec-avif",
+ "blanket-codec-bmp-ico",
+ "blanket-codec-common",
+ "blanket-codec-gif",
+ "blanket-codec-heif",
+ "blanket-codec-jpeg",
+ "blanket-codec-jxl",
+ "blanket-codec-pdf",
+ "blanket-codec-png",
+ "blanket-codec-tiff",
+ "blanket-codec-webp",
+ "blanket-core",
+ "pyo3",
 ]
 
 [[package]]

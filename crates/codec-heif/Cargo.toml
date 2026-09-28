@@ -1,0 +1,25 @@
+[package]
+name = "blanket-codec-heif"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+pyo3 = { version = "0.29", features = ["abi3-py312"] }
+blanket-codec-common = { path = "../codec-common" }
+libheif-rs = { version = "3.0", default-features = false, features = ["latest"] }
+
+[features]
+default = []
+embedded-libheif = ["libheif-rs/embedded-libheif"]
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true
