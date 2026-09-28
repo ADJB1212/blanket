@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
@@ -164,20 +166,24 @@ fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>
         let (top, bottom) = (row(cy * 2), row(cy * 2 + 1));
         let (luma0, luma1) = luma.split_at_mut(y_stride);
         let mut x = 0;
-        #[cfg(target_arch = "aarch64")]
-        unsafe {
-            use std::arch::aarch64::*;
-            let bias = vld1q_u16([1, 2, 1, 2, 1, 2, 1, 2].as_ptr());
-            while x + 16 <= width {
-                let a = vld3q_u8(top.as_ptr().add(x * 3));
-                let b = vld3q_u8(bottom.as_ptr().add(x * 3));
-                vst1q_u8(luma0.as_mut_ptr().add(x), a.0);
-                vst1q_u8(luma1.as_mut_ptr().add(x), b.0);
-                let average = |p: uint8x16_t, q: uint8x16_t| vshrn_n_u16::<2>(vaddq_u16(vaddq_u16(vpaddlq_u8(p), vpaddlq_u8(q)), bias));
-                vst1_u8(cb.as_mut_ptr().add(x / 2), average(a.1, b.1));
-                vst1_u8(cr.as_mut_ptr().add(x / 2), average(a.2, b.2));
-                x += 16;
-            }
+        use blanket_core::pixels::load;
+        use std::simd::{Simd, num::SimdUint, simd_swizzle};
+        let bias = Simd::<u16, 8>::from_array([1, 2, 1, 2, 1, 2, 1, 2]);
+        while x + 16 <= width {
+            let a = load::<3>(&top[x * 3..]);
+            let b = load::<3>(&bottom[x * 3..]);
+            a[0].copy_to_slice(&mut luma0[x..x + 16]);
+            b[0].copy_to_slice(&mut luma1[x..x + 16]);
+            let average = |p: Simd<u8, 16>, q: Simd<u8, 16>| {
+                let even_p = simd_swizzle!(p, [0, 2, 4, 6, 8, 10, 12, 14]);
+                let odd_p = simd_swizzle!(p, [1, 3, 5, 7, 9, 11, 13, 15]);
+                let even_q = simd_swizzle!(q, [0, 2, 4, 6, 8, 10, 12, 14]);
+                let odd_q = simd_swizzle!(q, [1, 3, 5, 7, 9, 11, 13, 15]);
+                ((even_p.cast::<u16>() + odd_p.cast::<u16>() + even_q.cast::<u16>() + odd_q.cast::<u16>() + bias) >> 2).cast::<u8>()
+            };
+            average(a[1], b[1]).copy_to_slice(&mut cb[x / 2..x / 2 + 8]);
+            average(a[2], b[2]).copy_to_slice(&mut cr[x / 2..x / 2 + 8]);
+            x += 16;
         }
         for i in x..width {
             luma0[i] = top[i * 3];

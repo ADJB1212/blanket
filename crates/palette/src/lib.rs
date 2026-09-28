@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 pub mod palette;
 pub mod palette_simd;
 pub mod quantize;

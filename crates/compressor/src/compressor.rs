@@ -41,7 +41,7 @@ impl Compressor {
 }
 
 #[pyclass(name = "_LosslessImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct LosslessImageCompressor {
     #[pyo3(get)]
     pub effort: u8,

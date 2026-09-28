@@ -226,6 +226,9 @@ explains baseline comparisons and reproducible runs.
 
 ## Contributing
 
+Source builds require the Rust nightly pinned in `rust-toolchain.toml` for
+portable SIMD.
+
 With the [build prerequisites](#installation) installed, set up a development
 environment and run the checks:
 
