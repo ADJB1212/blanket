@@ -1106,6 +1106,10 @@ impl Image {
                     .collect();
                 return Self::from_samples(self.width, self.height, PixelMode::L, samples, 16, None);
             }
+            if matches!(destination, PixelMode::Rgb | PixelMode::Rgba) {
+                let pixels = py.detach(|| crate::simd::integer_to_color(data, self.mode, destination.channels()));
+                return Self::from_pixels(self.width, self.height, destination, pixels, None);
+            }
             let clipped = crate::simd::integer_to_l(data, self.mode);
             let grayscale = Self::from_pixels(self.width, self.height, PixelMode::L, clipped, None)?;
             return grayscale.convert(py, mode, bit_depth);
