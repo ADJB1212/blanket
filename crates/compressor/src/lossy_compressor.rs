@@ -3,8 +3,8 @@
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::codecs::{self, ImageFormat, SaveOptions};
 use crate::compressor::LosslessImageCompressor;
+use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
 use blanket_core::raster::{Image, PixelMode};
 use blanket_ops::ops_simd;
 

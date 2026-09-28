@@ -14,11 +14,11 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_codecs::_encode, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_compressor::_encode, module)?)?;
     blanket_ops::enhance::register(module)?;
     blanket_ops::chops::register(module)?;
     blanket_ops::composite::register(module)?;
-    blanket_codecs::compressor::register(module)?;
+    blanket_compressor::register(module)?;
     blanket_ops::filter::register(module)?;
     blanket_ops::ops::register(module)?;
     blanket_ops::palette::register(module)?;

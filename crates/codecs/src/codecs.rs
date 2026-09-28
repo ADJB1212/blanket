@@ -835,7 +835,7 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
     Ok(output)
 }
 
-fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
+pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let width = image.width as usize;
     let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, width, image.height as usize);
     let mut output = Vec::new();
@@ -1122,7 +1122,7 @@ fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
             return Cow::Borrowed(samples);
         }
     }
-    Cow::Owned(crate::compressor_simd::normalize_u16(raw, depth))
+    Cow::Owned(blanket_core::simd::normalize_u16(raw, depth))
 }
 
 impl<'a> PreparedJxl<'a> {
@@ -1378,7 +1378,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             "high-bit-depth saving supports HEIF, PNG, TIFF, or JXL; convert to bit_depth=8 explicitly for this format",
         ));
     }
-    let samples = crate::compressor_simd::normalize_u16(pixels, image.bit_depth);
+    let samples = blanket_core::simd::normalize_u16(pixels, image.bit_depth);
     if format == ImageFormat::Jxl {
         return encode_jxl_samples(image, JxlSamples::Wide(&samples), options, JxlThreads::Pool);
     }
@@ -1422,64 +1422,6 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
             .map_err(codec_error)?;
     }
     Ok(output)
-}
-
-#[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None))]
-#[allow(clippy::too_many_arguments)]
-pub fn _encode(
-    py: Python<'_>, image: &blanket_core::Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8,
-    compressor: Option<crate::compressor::Compressor>,
-) -> PyResult<Py<pyo3::types::PyBytes>> {
-    let format = ImageFormat::parse(format)?;
-    let options = SaveOptions {
-        quality,
-        compress_level,
-        lossless,
-        effort,
-    };
-    if image.mode == PixelMode::One && format == ImageFormat::Png {
-        let encoded = py.detach(|| encode_one_png(image, compress_level))?;
-        return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
-    }
-    if matches!(image.mode, PixelMode::One | PixelMode::La | PixelMode::Pa) {
-        let target = if image.mode == PixelMode::One {
-            "L"
-        } else if format == ImageFormat::Png && image.mode == PixelMode::La && compressor.is_none() {
-            "LA"
-        } else {
-            "RGBA"
-        };
-        if target != "LA" {
-            let expanded = image.convert(py, target, None)?;
-            let encoded = py.detach(|| match compressor {
-                Some(compressor) => compressor.encode(&expanded, format, options),
-                None => encode(&expanded, format, options),
-            })?;
-            return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
-        }
-    }
-    if let Some((palette_mode, _)) = image.palette {
-        if format == ImageFormat::Png {
-            let encoded = py.detach(|| encode_palette_png(image, compress_level))?;
-            return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
-        }
-        if format == ImageFormat::Jpeg {
-            return Err(pyo3::exceptions::PyOSError::new_err("cannot write mode P as JPEG"));
-        }
-        let mode = palette_mode.as_str();
-        let expanded = image.convert(py, mode, None)?;
-        let encoded = py.detach(|| match compressor {
-            Some(compressor) => compressor.encode(&expanded, format, options),
-            None => encode(&expanded, format, options),
-        })?;
-        return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
-    }
-    let encoded = py.detach(|| match compressor {
-        Some(compressor) => compressor.encode(image, format, options),
-        None => encode(image, format, options),
-    })?;
-    Ok(pyo3::types::PyBytes::new(py, &encoded).unbind())
 }
 
 #[cfg(test)]
@@ -1528,7 +1470,7 @@ mod tests {
         let storage = Aligned([0, 0, 255, 255, 1, 128, 17, 23, 42, 0]);
         for raw in [&storage.0[..8], &storage.0[1..9]] {
             let prepared = jxl_wide_samples(raw, 16);
-            assert_eq!(prepared.as_ref(), crate::compressor_simd::normalize_u16(raw, 16));
+            assert_eq!(prepared.as_ref(), blanket_core::simd::normalize_u16(raw, 16));
             assert_eq!(
                 matches!(prepared, Cow::Borrowed(_)),
                 cfg!(target_endian = "little") && raw.as_ptr().addr().is_multiple_of(2)
@@ -1538,7 +1480,7 @@ mod tests {
             let raw: Vec<_> = [0_u16, 1, 71, (1 << depth) - 1].into_iter().flat_map(u16::to_le_bytes).collect();
             let prepared = jxl_wide_samples(&raw, depth);
             assert!(matches!(prepared, Cow::Owned(_)));
-            assert_eq!(prepared.as_ref(), crate::compressor_simd::normalize_u16(&raw, depth));
+            assert_eq!(prepared.as_ref(), blanket_core::simd::normalize_u16(&raw, depth));
             assert_eq!(prepared[3], u16::MAX);
         }
     }

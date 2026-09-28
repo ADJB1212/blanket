@@ -17,6 +17,7 @@ doctest = false
 pyo3 = { version = "0.29", features = ["abi3-py312"] }
 blanket-core = { path = "../core" }
 blanket-codecs = { path = "../codecs" }
+blanket-compressor = { path = "../compressor" }
 blanket-ops = { path = "../ops" }
 
 [features]

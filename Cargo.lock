@@ -195,6 +195,7 @@ name = "blanket"
 version = "0.0.3"
 dependencies = [
  "blanket-codecs",
+ "blanket-compressor",
  "blanket-core",
  "blanket-ops",
  "pyo3",
@@ -216,6 +217,19 @@ dependencies = [
  "tiff",
  "turbojpeg",
  "webpx",
+]
+
+[[package]]
+name = "blanket-compressor"
+version = "0.0.3"
+dependencies = [
+ "blanket-codecs",
+ "blanket-core",
+ "blanket-ops",
+ "png",
+ "pyo3",
+ "rayon",
+ "turbojpeg",
 ]
 
 [[package]]

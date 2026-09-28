@@ -14,8 +14,8 @@ use std::sync::OnceLock;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
 use crate::compressor_simd as pixels;
+use blanket_codecs::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
 use blanket_core::parallel;
 use blanket_core::parallel::CandidateLimit;
 use blanket_core::raster::{Image, PixelMode};
