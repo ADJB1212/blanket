@@ -1,20 +1,90 @@
 //! Portable kernels for packed byte pixels.
-use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdUint};
+use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdUint, simd_swizzle};
 
 pub type Bytes = Simd<u8, 16>;
 
 #[inline]
 pub fn load<const C: usize>(source: &[u8]) -> [Bytes; C] {
     assert!(source.len() >= 16 * C);
-    std::array::from_fn(|c| Bytes::gather_or_default(source, Simd::from_array(std::array::from_fn(|i| i * C + c))))
+    let mut result = [Bytes::splat(0); C];
+    match C {
+        1 => result[0] = Bytes::from_slice(&source[..16]),
+        2 => {
+            let (a, b) = Bytes::from_slice(&source[..16]).deinterleave(Bytes::from_slice(&source[16..32]));
+            result.copy_from_slice(&[a, b]);
+        }
+        3 => result.copy_from_slice(&load_rgb(source)),
+        4 => {
+            let (a, b) = Bytes::from_slice(&source[..16]).deinterleave(Bytes::from_slice(&source[16..32]));
+            let (c, d) = Bytes::from_slice(&source[32..48]).deinterleave(Bytes::from_slice(&source[48..64]));
+            let (r, blue) = a.deinterleave(c);
+            let (g, alpha) = b.deinterleave(d);
+            result.copy_from_slice(&[r, g, blue, alpha]);
+        }
+        6 => {
+            let a = load_rgb(source);
+            let b = load_rgb(&source[48..]);
+            for c in 0..3 {
+                (result[c], result[c + 3]) = a[c].deinterleave(b[c]);
+            }
+        }
+        _ => return std::array::from_fn(|c| Bytes::gather_or_default(source, Simd::from_array(std::array::from_fn(|i| i * C + c)))),
+    }
+    result
 }
 
 #[inline]
 pub fn store<const C: usize>(output: &mut [u8], values: [Bytes; C]) {
     assert!(output.len() >= 16 * C);
-    for (c, value) in values.into_iter().enumerate() {
-        value.scatter(output, Simd::from_array(std::array::from_fn(|i| i * C + c)));
+    match C {
+        1 => values[0].copy_to_slice(&mut output[..16]),
+        2 => {
+            let (a, b) = values[0].interleave(values[1]);
+            a.copy_to_slice(&mut output[..16]);
+            b.copy_to_slice(&mut output[16..32]);
+        }
+        3 => store_rgb(output, [values[0], values[1], values[2]]),
+        4 => {
+            let (a, c) = values[0].interleave(values[2]);
+            let (b, d) = values[1].interleave(values[3]);
+            let (ab, ba) = a.interleave(b);
+            let (cd, dc) = c.interleave(d);
+            for (chunk, value) in output[..64].as_chunks_mut::<16>().0.iter_mut().zip([ab, ba, cd, dc]) {
+                value.copy_to_slice(chunk);
+            }
+        }
+        _ => {
+            for (c, value) in values.into_iter().enumerate() {
+                value.scatter(output, Simd::from_array(std::array::from_fn(|i| i * C + c)));
+            }
+        }
     }
+}
+
+#[inline]
+fn load_rgb(source: &[u8]) -> [Bytes; 3] {
+    let a = Bytes::from_slice(&source[..16]);
+    let b = Bytes::from_slice(&source[16..32]);
+    let c = Bytes::from_slice(&source[32..48]);
+    let t0 = simd_swizzle!(a, b, [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0]);
+    let t1 = simd_swizzle!(a, b, [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0]);
+    let t2 = simd_swizzle!(a, b, [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0]);
+    [
+        simd_swizzle!(t0, c, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 17, 20, 23, 26, 29]),
+        simd_swizzle!(t1, c, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 18, 21, 24, 27, 30]),
+        simd_swizzle!(t2, c, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 16, 19, 22, 25, 28, 31]),
+    ]
+}
+
+#[inline]
+fn store_rgb(output: &mut [u8], values: [Bytes; 3]) {
+    let [a, b, c] = values;
+    let t = simd_swizzle!(a, b, [0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 4, 20, 0, 5]);
+    simd_swizzle!(t, c, [0, 1, 16, 3, 4, 17, 6, 7, 18, 9, 10, 19, 12, 13, 20, 15]).copy_to_slice(&mut output[0..16]);
+    let t = simd_swizzle!(a, b, [21, 0, 6, 22, 0, 7, 23, 0, 8, 24, 0, 9, 25, 0, 10, 26]);
+    simd_swizzle!(t, c, [0, 21, 2, 3, 22, 5, 6, 23, 8, 9, 24, 11, 12, 25, 14, 15]).copy_to_slice(&mut output[16..32]);
+    let t = simd_swizzle!(a, b, [0, 11, 27, 0, 12, 28, 0, 13, 29, 0, 14, 30, 0, 15, 31, 0]);
+    simd_swizzle!(t, c, [26, 1, 2, 27, 4, 5, 28, 7, 8, 29, 10, 11, 30, 13, 14, 31]).copy_to_slice(&mut output[32..48]);
 }
 
 pub fn reverse_rgb(src: &[u8], dst: &mut [u8]) -> usize {
@@ -114,6 +184,28 @@ pub fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_layouts_match_scalar_at_every_alignment() {
+        fn check<const C: usize>() {
+            for offset in 0..16 {
+                let source: Vec<u8> = (0..offset + 16 * C).map(|i| (i * 37 + i / 7) as u8).collect();
+                let channels = load::<C>(&source[offset..]);
+                for (c, channel) in channels.iter().enumerate() {
+                    assert_eq!(channel.to_array(), std::array::from_fn(|i| source[offset + i * C + c]));
+                }
+                let mut output = vec![93; offset + 16 * C + 16];
+                store(&mut output[offset..offset + 16 * C], channels);
+                assert_eq!(&output[offset..offset + 16 * C], &source[offset..]);
+                assert!(output[..offset].iter().chain(&output[offset + 16 * C..]).all(|&v| v == 93));
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<6>();
+    }
 
     #[test]
     fn sampling_matches_scalar_with_unaligned_buffers_and_tails() {

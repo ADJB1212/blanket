@@ -140,9 +140,9 @@ pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
     assert_eq!(source.len(), output.len() * 2);
     let done = output.len() / C / 16 * 16 * C;
     for i in (0..done).step_by(16 * C) {
-        let values = std::array::from_fn::<_, C, _>(|c| {
-            Bytes::gather_or_default(&source[i * 2..], Simd::from_array(std::array::from_fn(|lane| (lane * 2 + 1) * C + c)))
-        });
+        let first = load::<C>(&source[i * 2..]);
+        let second = load::<C>(&source[i * 2 + 16 * C..]);
+        let values = std::array::from_fn::<_, C, _>(|c| first[c].deinterleave(second[c]).1);
         store(&mut output[i..], values);
     }
     for (dst, pair) in output[done..]
@@ -284,6 +284,7 @@ mod tests {
             }
         }
         check::<1>();
+        check::<2>();
         check::<3>();
         check::<4>();
     }
