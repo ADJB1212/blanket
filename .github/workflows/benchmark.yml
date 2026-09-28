@@ -21,7 +21,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       aom-version: ${{ steps.versions.outputs.aom }}
       x265-version: ${{ steps.versions.outputs.x265 }}
@@ -46,35 +46,35 @@ jobs:
     needs: prepare
     uses: ./.github/workflows/build-aom.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.aom-version }}
 
   x265:
     needs: prepare
     uses: ./.github/workflows/build-x265.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.x265-version }}
 
   libde265:
     needs: prepare
     uses: ./.github/workflows/build-libde265.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libde265-version }}
 
   dav1d:
     needs: prepare
     uses: ./.github/workflows/build-dav1d.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.dav1d-version }}
 
   libheif:
     needs: [prepare, aom, x265, libde265, dav1d]
     uses: ./.github/workflows/build-libheif.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libheif-version }}
       aom-version: ${{ needs.prepare.outputs.aom-version }}
       x265-version: ${{ needs.prepare.outputs.x265-version }}
@@ -85,20 +85,20 @@ jobs:
     needs: prepare
     uses: ./.github/workflows/build-libwebp.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
   libjxl:
     needs: prepare
     uses: ./.github/workflows/build-libjxl.yml
     with:
-      runner: ubuntu-24.04
+      runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libjxl-version }}
 
   benchmark:
     needs: [prepare, libheif, libwebp, libjxl]
     timeout-minutes: 60
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       matrix:
         include:

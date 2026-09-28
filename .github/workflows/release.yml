@@ -75,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-aom.yml
     with:
       runner: ${{ matrix.runner }}
@@ -86,7 +86,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-x265.yml
     with:
       runner: ${{ matrix.runner }}
@@ -97,7 +97,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-libde265.yml
     with:
       runner: ${{ matrix.runner }}
@@ -108,7 +108,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-dav1d.yml
     with:
       runner: ${{ matrix.runner }}
@@ -119,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-libheif.yml
     with:
       runner: ${{ matrix.runner }}
@@ -134,7 +134,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-libwebp.yml
     with:
       runner: ${{ matrix.runner }}
@@ -145,7 +145,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-latest]
+        runner: [ubuntu-26.04, ubuntu-26.04-arm, macos-latest]
     uses: ./.github/workflows/build-libjxl.yml
     with:
       runner: ${{ matrix.runner }}
@@ -158,9 +158,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04
+          - runner: ubuntu-26.04
             target: x86_64-unknown-linux-gnu
-          - runner: ubuntu-24.04-arm
+          - runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
     steps:
