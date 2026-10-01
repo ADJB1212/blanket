@@ -7,6 +7,8 @@ from typing import BinaryIO
 
 from ._blanket import palette_gradient
 
+_GIMP_COMMENT = re.compile(rb"\w+:|#")
+
 
 def _text_palette(stream: BinaryIO) -> tuple[bytes, str]:
     entries = [bytes([value]) * 3 for value in range(256)]
@@ -34,7 +36,7 @@ def _gimp_palette(stream: BinaryIO) -> tuple[bytes, str]:
         line = stream.readline()
         if not line:
             break
-        if re.match(rb"\w+:|#", line):
+        if _GIMP_COMMENT.match(line):
             continue
         if len(line) > 100:
             raise SyntaxError("bad palette file")

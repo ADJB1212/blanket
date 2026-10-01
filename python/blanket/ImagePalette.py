@@ -143,8 +143,8 @@ class ImagePalette:
             slot += 1
         if slot >= 256 and image:
             histogram = ops_histogram(image._native, None) if isinstance(image, Image) else image.histogram()
-            for candidate, count in reversed(list(enumerate(histogram))):
-                if count == 0 and candidate not in reserved:
+            for candidate in range(len(histogram) - 1, -1, -1):
+                if histogram[candidate] == 0 and candidate not in reserved:
                     slot = candidate
                     break
         if slot >= 256:

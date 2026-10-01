@@ -8,7 +8,7 @@ lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
 from __future__ import annotations
 
 import struct
-from itertools import pairwise
+from itertools import accumulate, pairwise
 from typing import TYPE_CHECKING, Literal, Protocol, overload
 
 if TYPE_CHECKING:
@@ -372,10 +372,7 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
         if not step:
             table.extend(range(256))
             continue
-        cumulative = step // 2
-        for count in counts:
-            table.append(cumulative // step)
-            cumulative += count
+        table.extend(cumulative // step for cumulative in accumulate(counts[:-1], initial=step // 2))
     return _lut(image, table)
 
 

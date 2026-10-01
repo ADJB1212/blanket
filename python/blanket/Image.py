@@ -26,7 +26,38 @@ if TYPE_CHECKING:
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
-from ._blanket import _encode, _Image, fromarray as _native_fromarray, frombytes as _native_frombytes, open_bytes
+from ._blanket import (
+    _encode,
+    _Image,
+    enhance_blend,
+    filter_merge,
+    fromarray as _native_fromarray,
+    frombytes as _native_frombytes,
+    image_alpha_composite,
+    image_alpha_composite_inplace,
+    image_new,
+    image_paste,
+    image_putalpha,
+    open_bytes,
+    ops_affine,
+    ops_canvas,
+    ops_entropy,
+    ops_histogram,
+    ops_lut,
+    ops_reduce,
+    ops_remap_indices,
+    ops_resize,
+    ops_split,
+    ops_spread,
+    ops_transpose,
+    ops_warp,
+    ops_xbm_bits,
+    quantize as _native_quantize,
+)
+from ._color import color_pixel
+from ._exif import read_metadata
+from .Compressor import LosslessImageCompressor, LossyImageCompressor
+from .ImageFilter import MultibandFilter
 
 _EXTENSIONS = {
     ".bmp": "BMP",
@@ -61,6 +92,22 @@ _BANDS = {
     "CMYK": ("C", "M", "Y", "K"),
     "YCbCr": ("Y", "Cb", "Cr"),
     "LAB": ("L", "A", "B"),
+}
+_GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
+_RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}
+_FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF"}
+_SAVE_OPTIONS = {
+    "BMP": frozenset(),
+    "GIF": frozenset(),
+    "ICO": frozenset(),
+    "PNG": frozenset({"compress_level"}),
+    "JPEG": frozenset({"quality"}),
+    "JXL": frozenset({"quality", "lossless", "effort"}),
+    "TIFF": frozenset(),
+    "PDF": frozenset(),
+    "WEBP": frozenset({"quality", "lossless"}),
+    "HEIF": frozenset({"quality", "lossless"}),
+    "AVIF": frozenset({"quality", "effort"}),
 }
 
 
@@ -480,10 +527,15 @@ class Image:
                 alpha = self.getchannel("A").tobytes()
             elif self.mode == "P" and self.palette is not None and self.palette.mode == "RGBA":
                 entries = self.palette.tobytes()
-                alpha = bytes(entries[slot * 4 + 3] if slot * 4 + 3 < len(entries) else 255 for slot in source.tobytes())
+                table = bytes(entries[slot * 4 + 3] if slot * 4 + 3 < len(entries) else 255 for slot in range(256))
+                alpha = source.tobytes().translate(table)
             else:
-                alpha = bytes([255]) * (self.width * self.height)
-            result = frombytes("PA", source.size, bytes(v for pair in zip(source.tobytes(), alpha, strict=True) for v in pair))
+                alpha = b"\xff" * (self.width * self.height)
+            indices = source.tobytes()
+            pixels = bytearray(2 * len(indices))
+            pixels[0::2] = indices
+            pixels[1::2] = alpha
+            result = frombytes("PA", source.size, pixels)
             if source.palette is not None:
                 result.putpalette(source.palette)
             return result
@@ -570,8 +622,15 @@ class Image:
         if mode == self.palette.mode:
             return list(data)
         if mode == "RGB":
-            return [v for i, v in enumerate(data) if i % 4 != 3]
-        return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
+            rgb = bytearray(data)
+            del rgb[3::4]
+            return list(rgb)
+        if len(data) % 3:
+            return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
+        rgba = bytearray(b"\xff" * (len(data) // 3 * 4))
+        for channel in range(3):
+            rgba[channel::4] = data[channel::3]
+        return list(rgba)
 
     def remap_palette(self, dest_map: Sequence[int], source_palette: bytes | bytearray | None = None) -> Image:
         """Return a P image whose palette follows ``dest_map``.
@@ -592,7 +651,6 @@ class Image:
             swapped = image.remap_palette([1, 0])
             ```
         """
-        from ._blanket import ops_remap_indices
 
         self.load()
         if self.mode not in ("L", "P"):
@@ -602,7 +660,7 @@ class Image:
             raise ValueError("dest_map must contain unique palette indices from 0 through 255")
         palette_mode = self.palette.mode if self.mode == "P" and self.palette is not None else "RGB"
         if source_palette is None:
-            entries = self.palette.tobytes() if self.mode == "P" and self.palette is not None else bytes(v for i in range(256) for v in (i, i, i))
+            entries = self.palette.tobytes() if self.mode == "P" and self.palette is not None else _GRAY_PALETTE
         else:
             entries = bytes(source_palette)
             palette_mode = "RGBA" if len(entries) > 768 else "RGB"
@@ -760,7 +818,6 @@ class Image:
             result = image.quantize(colors=8)
             ```
         """
-        from ._blanket import quantize
 
         self.load()
         method = Quantize.FASTOCTREE if method is None and self.mode == "RGBA" else Quantize.MEDIANCUT if method is None else index(method)
@@ -784,7 +841,7 @@ class Image:
             if method not in range(4):
                 raise ValueError("quantization error")
         source = self.convert("RGB") if self.mode == "P" else self
-        result = Image(quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
+        result = Image(_native_quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
         result.info.update(self.info)
         return result
 
@@ -819,7 +876,6 @@ class Image:
             bitmap = image.tobitmap("icon")
             ```
         """
-        from ._blanket import ops_xbm_bits
 
         self.load()
         if self.mode != "1":
@@ -843,7 +899,6 @@ class Image:
             spread = image.effect_spread(2)
             ```
         """
-        from ._blanket import ops_spread
 
         self.load()
         result = Image(ops_spread(self._native, index(distance)))
@@ -866,8 +921,6 @@ class Image:
             result = image.filter(ImageFilter.GaussianBlur(radius=2))
             ```
         """
-        from ._blanket import filter_merge
-        from .ImageFilter import MultibandFilter
 
         self.load()
         if callable(filter):
@@ -899,7 +952,6 @@ class Image:
             image.paste("red", (0, 0, 4, 4))
             ```
         """
-        from ._blanket import image_paste
 
         if isinstance(box, Image):
             if mask is not None:
@@ -962,8 +1014,6 @@ class Image:
         overlay = im if region == (0, 0, *im.size) else im.crop(region)
         box = (*dest, dest[0] + overlay.width, dest[1] + overlay.height)
         if box == (0, 0, *self.size):
-            from ._blanket import image_alpha_composite_inplace
-
             overlay = overlay.copy() if overlay._native is self._native else overlay
             image_alpha_composite_inplace(self._native, overlay._native)
             return
@@ -986,7 +1036,6 @@ class Image:
             image.putalpha(128)
             ```
         """
-        from ._blanket import image_putalpha
 
         if self.mode not in ("RGB", "RGBA"):
             raise ValueError("putalpha requires RGB or RGBA; LA and PA modes are not supported")
@@ -1008,7 +1057,6 @@ class Image:
             red, green, blue = image.split()
             ```
         """
-        from ._blanket import ops_split
 
         if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
             return (self.copy(),)
@@ -1074,7 +1122,6 @@ class Image:
             counts = image.histogram()
             ```
         """
-        from ._blanket import ops_histogram
 
         self.load()
         if mask is not None:
@@ -1137,7 +1184,6 @@ class Image:
             result = image.point(lambda value: 255 - value)
             ```
         """
-        from ._blanket import ops_lut
 
         self.load()
         if self.mode == "F":
@@ -1209,7 +1255,6 @@ class Image:
             result = image.reduce(2)
             ```
         """
-        from ._blanket import ops_reduce
 
         self.load()
         factor = factor if isinstance(factor, (list, tuple)) else (factor, factor)
@@ -1252,7 +1297,6 @@ class Image:
             entropy = image.entropy()
             ```
         """
-        from ._blanket import ops_entropy
 
         self.load()
         if mask is not None:
@@ -1273,7 +1317,6 @@ class Image:
             result = image.transpose(Image.Transpose.ROTATE_90)
             ```
         """
-        from ._blanket import ops_transpose
 
         method = index(method)
         if method not in range(7):
@@ -1314,8 +1357,6 @@ class Image:
             result = image.transform((8, 8), Image.Transform.AFFINE, (1, 0, 1, 0, 1, 0))
             ```
         """
-        from ._blanket import ops_affine, ops_warp
-        from ._color import color_pixel
 
         if isinstance(method, ImageTransformHandler):
             return method.transform(size, self, resample=resample, fill=fill)
@@ -1323,7 +1364,7 @@ class Image:
             method, data = method.getdata()
         if data is None:
             raise ValueError("missing method data")
-        if method not in tuple(Transform):
+        if method not in Transform:
             raise ValueError("unknown transformation method")
         if resample not in (0, 2, 3):
             raise ValueError("transform supports NEAREST, BILINEAR and BICUBIC")
@@ -1384,7 +1425,6 @@ class Image:
             result = image.crop((1, 1, 7, 7))
             ```
         """
-        from ._blanket import ops_canvas, ops_transpose
 
         if box is None:
             self.load()
@@ -1421,7 +1461,6 @@ class Image:
             result = image.resize((16, 16), Image.Resampling.LANCZOS)
             ```
         """
-        from ._blanket import ops_reduce, ops_resize, ops_transpose
 
         method = Resampling.BICUBIC if resample is None else resample
         if method not in range(6):
@@ -1450,7 +1489,7 @@ class Image:
                 fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
                 fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
                 if fx > 1 or fy > 1:
-                    support = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}[method] - 0.5
+                    support = _RESIZE_SUPPORT[method] - 0.5
                     sx = support * (box[2] - box[0]) / size[0]
                     sy = support * (box[3] - box[1]) / size[1]
                     safe = (max(0, int(box[0] - sx)), max(0, int(box[1] - sy)), min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)))
@@ -1493,8 +1532,6 @@ class Image:
             result = image.rotate(30, expand=True)
             ```
         """
-        from ._blanket import ops_affine, ops_transpose
-        from ._color import color_pixel
 
         angle %= 360.0
         if not math.isfinite(angle):
@@ -1592,7 +1629,6 @@ class Image:
             image.save(output, format="PNG")
             ```
         """
-        from .Compressor import LosslessImageCompressor, LossyImageCompressor
 
         compressor = options.pop("compressor", None)
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
@@ -1654,8 +1690,6 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
         image = Image.new("RGB", (64, 64), "navy")
         ```
     """
-    from ._blanket import image_new
-    from ._color import color_pixel
 
     if not isinstance(size, (list, tuple)) or len(size) != 2:
         raise ValueError("Size must be a list or tuple of length 2")
@@ -1703,7 +1737,6 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
         result = Image.merge("RGB", (blue, green, red))
         ```
     """
-    from ._blanket import filter_merge
 
     bands = tuple(bands)
     if any(band.mode != "L" for band in bands):
@@ -1730,7 +1763,6 @@ def blend(im1: Image, im2: Image, alpha: float) -> Image:
         result = Image.blend(image, other, 0.25)
         ```
     """
-    from ._blanket import enhance_blend
 
     im1.load()
     im2.load()
@@ -1782,7 +1814,6 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
         result = Image.alpha_composite(background, overlay)
         ```
     """
-    from ._blanket import image_alpha_composite
 
     result = Image(image_alpha_composite(im1._native, im2._native))
     result.info.update(im1.info)
@@ -1819,7 +1850,6 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     image = Image(open_bytes(data, formats))
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
-    from ._exif import read_metadata
 
     image.info.update(read_metadata(data, image.format))
     return image
@@ -1847,7 +1877,7 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
         raise TypeError("data must be a bytes-like object") from error
     result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth))
     if mode in ("P", "PA"):
-        result.putpalette(bytes(v for v in range(256) for _ in range(3)))
+        result.putpalette(_GRAY_PALETTE)
     return result
 
 
@@ -1894,9 +1924,8 @@ def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binar
 def _output_format(fp: object, requested: str | None) -> str:
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
-        aliases = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF"}
-        normalized = aliases.get(normalized, normalized)
-        if normalized not in {"PNG", "JPEG", "JXL", "TIFF", "WEBP", "HEIF", "AVIF", "PDF", "BMP", "GIF", "ICO"}:
+        normalized = _FORMAT_ALIASES.get(normalized, normalized)
+        if normalized not in _SAVE_OPTIONS:
             raise ValueError(f"unsupported image format {requested!r}")
         return normalized
     if hasattr(fp, "write"):
@@ -1909,20 +1938,7 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
-    allowed = {
-        "BMP": set(),
-        "GIF": set(),
-        "ICO": set(),
-        "PNG": {"compress_level"},
-        "JPEG": {"quality"},
-        "JXL": {"quality", "lossless", "effort"},
-        "TIFF": set(),
-        "PDF": set(),
-        "WEBP": {"quality", "lossless"},
-        "HEIF": {"quality", "lossless"},
-        "AVIF": {"quality", "effort"},
-    }[format]
-    unknown = supplied.keys() - allowed
+    unknown = supplied.keys() - _SAVE_OPTIONS[format]
     if unknown:
         names = ", ".join(sorted(unknown))
         raise TypeError(f"unsupported {format} save option(s): {names}")

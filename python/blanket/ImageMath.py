@@ -14,16 +14,18 @@ from ._blanket import math_apply
 
 __all__ = ["eval", "lambda_eval", "unsafe_eval"]
 
+_INTEGER_MODES = frozenset(("1", "L", "I"))
+
 
 class _Operand:
+    __slots__ = ("im",)
+
     def __init__(self, image: Image.Image) -> None:
         self.im = image
 
     def _coerce(self, value: _Operand | float) -> Image.Image:
         if isinstance(value, _Operand):
-            if value.im.mode in ("1", "L", "I"):
-                return value.im
-            if value.im.mode == "F":
+            if value.im.mode in ("1", "L", "I", "F"):
                 return value.im
             raise ValueError(f"unsupported mode: {value.im.mode}")
         mode = "I" if isinstance(value, (int, float)) and self.im.mode in ("1", "L", "I") else "F"
@@ -32,12 +34,9 @@ class _Operand:
     def _apply(self, operation: str, left: _Operand | float, right: _Operand | float | None = None, *, integer_output: bool = False) -> _Operand:
         first = self._coerce(left)
         second = None if right is None else self._coerce(right)
-        if second is not None and first.mode != second.mode:
-            if frozenset((first.mode, second.mode)) <= frozenset(("1", "L", "I")):
-                pass
-            else:
-                first = first.convert("F")
-                second = second.convert("F")
+        if second is not None and first.mode != second.mode and not {first.mode, second.mode} <= _INTEGER_MODES:
+            first = first.convert("F")
+            second = second.convert("F")
         first.load()
         if second is not None:
             second.load()
