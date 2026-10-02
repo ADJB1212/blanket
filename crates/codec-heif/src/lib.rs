@@ -9,6 +9,15 @@ use std::sync::LazyLock;
 // Contexts, encoders, and pixel planes remain local to each operation.
 static HEIF_LIBRARY: LazyLock<libheif_rs::LibHeif> = LazyLock::new(libheif_rs::LibHeif::new);
 
+pub fn backend_info() -> (bool, bool, String) {
+    let lib = &*HEIF_LIBRARY;
+    let format = Some(libheif_rs::CompressionFormat::Hevc);
+    let decode = !lib.decoder_descriptors(1, format).is_empty();
+    let encode = !lib.encoder_descriptors(1, format, None).is_empty();
+    let [major, minor, patch] = lib.version();
+    (decode, encode, format!("{major}.{minor}.{patch}"))
+}
+
 pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
     use libheif_rs::{ColorSpace, DecodingOptions, HeifContext, RgbChroma};
     let lib = &*HEIF_LIBRARY;

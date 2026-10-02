@@ -164,6 +164,12 @@ for storage and format-specific behavior.
 
 ## Supported formats
 
+Use `from blanket import features` to inspect the installed build:
+`features.check("heif_decoder")` reports runtime codec availability,
+`features.version("jxl")` reports its backend version, and
+`features.blanketinfo()` prints backend and format diagnostics. See the
+[features module](https://adjb1212.github.io/blanket-docs/features/) for feature names.
+
 | Format      | Read | Write | Notes                                                                     |
 | ----------- | :--: | :---: | ------------------------------------------------------------------------- |
 | PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                               |

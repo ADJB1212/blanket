@@ -1,4 +1,5 @@
 mod encode;
+mod features;
 
 use blanket_codecs::open_bytes;
 use blanket_core::{
@@ -18,6 +19,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(encode::_encode, module)?)?;
+    module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
     blanket_enhance::enhance::register(module)?;
     blanket_composite::chops::register(module)?;
     blanket_composite::composite::register(module)?;

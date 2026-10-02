@@ -30,7 +30,7 @@ version = "0.0.3"
 authors = ["Andrew Jaffe <adjaffeb@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/ADJB1212/blanket"
-rust-version = "1.97"
+rust-version = "1.98"
 edition = "2024"
 
 [profile.release]
@@ -48,8 +48,13 @@ debug = "line-directives-only"
 lto = "off"
 codegen-units = 256
 
+[workspace.lints.rust]
+warnings = { level = "deny", priority = -1 }
+unused_mut = "deny"
+
 [workspace.lints.clippy]
 needless_return = "allow"
+perf = { level = "deny", priority = -1 }
 redundant_clone = "deny"
 unnecessary_to_owned = "deny"
 needless_collect = "deny"

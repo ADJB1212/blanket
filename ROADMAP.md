@@ -139,16 +139,11 @@ users expect.
 - [x] Operator support: arithmetic, bitwise, logical, comparison
 - [x] Mode coercion rules matching Pillow
 
-### ExifTags & TiffTags
-
-- [ ] `ExifTags.Base`, `ExifTags.GPS`, `ExifTags.IFD` — tag name/number lookups
-- [ ] `TiffTags` — TIFF tag constants and type info
-
 ### features Module
 
-- [ ] `features.check(feature)` — runtime feature detection
-- [ ] `features.version(feature)` — version strings for codec backends
-- [ ] `features.pilinfo()` — diagnostic output
+- [x] `features.check(feature)` — runtime feature detection
+- [x] `features.version(feature)` — version strings for codec backends
+- [x] `features.blanketinfo()` — diagnostic output
 
 ---
 

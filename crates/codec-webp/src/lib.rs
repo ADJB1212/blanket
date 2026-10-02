@@ -46,3 +46,8 @@ pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
         .encode(webpx::Unstoppable)
         .map_err(codec_error)
 }
+
+pub fn backend_version() -> String {
+    let (major, minor, patch) = webpx::version();
+    format!("{major}.{minor}.{patch}")
+}

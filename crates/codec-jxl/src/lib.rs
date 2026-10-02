@@ -11,6 +11,11 @@ use std::borrow::Cow;
 
 pub const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
 
+pub fn backend_version() -> String {
+    let version = unsafe { jpegxl_sys::decode::JxlDecoderVersion() };
+    format!("{}.{}.{}", version / 1_000_000, version / 1_000 % 1_000, version % 1_000)
+}
+
 thread_local! {
     // A runner is used by only its owning calling thread. Reuse its workers
     // across decodes; each image still gets a fresh decoder and metadata state.
