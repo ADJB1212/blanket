@@ -1,6 +1,6 @@
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
-use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderResult, EncoderSpeed};
+use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderSpeed};
 use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
 use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
@@ -135,13 +135,11 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         match pixels {
             JxlSamples::Byte(pixels) => {
                 let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-                let encoded: EncoderResult<u8> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
-                Ok(encoded.data)
+                encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)
             }
             JxlSamples::Wide(pixels) => {
                 let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-                let encoded: EncoderResult<u16> = encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)?;
-                Ok(encoded.data)
+                encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)
             }
         }
     };
@@ -309,8 +307,8 @@ mod tests {
                 .build()
                 .unwrap();
             let frame = EncoderFrame::new(&pixels).num_channels(4);
-            let reference: EncoderResult<u8> = encoder.encode_frame(&frame, side, side).unwrap();
-            assert_eq!(output, reference.data);
+            let reference = encoder.encode_frame(&frame, side, side).unwrap();
+            assert_eq!(output, reference);
         }
     }
 
