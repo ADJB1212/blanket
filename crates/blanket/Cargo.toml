@@ -24,6 +24,7 @@ blanket-enhance = { path = "../enhance" }
 blanket-filter = { path = "../filter" }
 blanket-palette = { path = "../palette" }
 blanket-stat = { path = "../stat" }
+blanket-draw = { path = "../draw" }
 
 [features]
 default = ["no-vendored-webp"]

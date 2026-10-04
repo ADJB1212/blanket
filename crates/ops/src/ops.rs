@@ -1,11 +1,11 @@
 //! Pixel primitives used by the Python ImageOps API.
-use pyo3::exceptions::{PyMemoryError, PyValueError};
-use pyo3::prelude::*;
-use rayon::prelude::*;
 use std::borrow::Cow;
 
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use blanket_core::raster::{Image, PixelMode};
+use pyo3::exceptions::{PyMemoryError, PyValueError};
+use pyo3::prelude::*;
+use rayon::prelude::*;
 
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
@@ -209,7 +209,7 @@ fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64
         _ => raw.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v) as f64).collect(),
     };
     let channels = image.mode.channels();
-    let mut bins = vec![0_u64; channels * 256];
+    let mut bins = vec![0_u64; channels << 8];
     if samples.is_empty() {
         return Ok(bins);
     }
@@ -378,7 +378,7 @@ fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResul
 
 fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
     let count = |start: usize, bytes: &[u8]| {
-        let mut bins = vec![0_u64; C * 256];
+        let mut bins = vec![0_u64; C << 8];
         let pixels = bytes.as_chunks::<C>().0;
         // Hoist the mask decision out of the per-pixel loop.
         match mask {
@@ -409,7 +409,7 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         .enumerate()
         .map(|(i, bytes)| count(i * CHUNK_PIXELS, bytes))
         .reduce(
-            || vec![0; C * 256],
+            || vec![0; C << 8],
             |mut total, bins| {
                 for (a, b) in total.iter_mut().zip(bins) {
                     *a += b;
@@ -590,7 +590,7 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                     let sx = if orientation == 7 || orientation == 8 {
                         w - band * 32 - count
                     } else {
-                        band * 32
+                        band << 5
                     };
                     let src = &source[sy * w + sx..sy * w + sx + count];
                     for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
@@ -674,7 +674,7 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Vec<(us
 }
 
 fn premultiply(pixels: &mut [u8]) {
-    chunks_mut(pixels, CHUNK_PIXELS * 4, |_, chunk| {
+    chunks_mut(pixels, CHUNK_PIXELS << 2, |_, chunk| {
         for p in chunk.as_chunks_mut::<4>().0 {
             for c in 0..3 {
                 let v = u32::from(p[c]) * u32::from(p[3]) + 128;
@@ -685,7 +685,7 @@ fn premultiply(pixels: &mut [u8]) {
 }
 
 fn unpremultiply(pixels: &mut [u8]) {
-    chunks_mut(pixels, CHUNK_PIXELS * 4, |_, chunk| {
+    chunks_mut(pixels, CHUNK_PIXELS << 2, |_, chunk| {
         for p in chunk.as_chunks_mut::<4>().0 {
             if p[3] != 0 && p[3] != 255 {
                 for c in 0..3 {
@@ -733,7 +733,7 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
                 let end_y = sy.saturating_add(fy).min(bottom);
                 let mut first = 0;
                 if fx == 2 && end_y - sy == 2 {
-                    let start = (sy as usize * image.width as usize + left as usize) * 4;
+                    let start = (sy as usize * image.width as usize + left as usize) << 2;
                     let width = (right - left) as usize * 4;
                     first =
                         crate::ops_simd::reduce_float_two(&source[start..start + width], &source[start + image.width as usize * 4..][..width], row)
@@ -744,7 +744,7 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
                     let sx = left + x * fx;
                     let end_x = sx.saturating_add(fx).min(right);
                     for sy in sy..end_y {
-                        let start = (sy as usize * image.width as usize + sx as usize) * 4;
+                        let start = (sy as usize * image.width as usize + sx as usize) << 2;
                         for bytes in source[start..start + (end_x - sx) as usize * 4].as_chunks::<4>().0 {
                             sum += f64::from(f32::from_le_bytes(*bytes));
                         }
@@ -794,7 +794,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
     let row_bytes = size.0 as usize * C;
     // Reduction reads many more bytes than it writes. Schedule by source work.
     let threshold = if cfg!(target_arch = "aarch64") && C == 1 && matches!((fx, fy), (3, 3) | (4, 4)) {
-        128 * 1024
+        128 << 10
     } else {
         MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1)
     };
@@ -1046,7 +1046,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                 }
             }
         });
-        blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 * 1024, |band, chunk| {
+        blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 << 10, |band, chunk| {
             for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
                 let (start, coefficients) = &vertical[band * 16 + row];
                 for x in 0..row_width {
@@ -1075,7 +1075,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
 fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
     let channels = image.mode.channels();
     let bytes = image.raw_data()?;
-    let mut pixels = buffer(size, channels * 2)?;
+    let mut pixels = buffer(size, channels << 1)?;
     if image.width == 0 || image.height == 0 {
         return output(image, size, pixels);
     }
@@ -1160,7 +1160,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
     let source = source.as_chunks::<C>().0;
-    chunks_mut_above(output, row_bytes * 16, 1024 * 1024, |band, rows| {
+    chunks_mut_above(output, row_bytes << 4, 1024 << 10, |band, rows| {
         for i in 0..rows.len() / row_bytes {
             let sy = ys[band * 16 + i];
             if i > 0 && sy == ys[band * 16 + i - 1] {
@@ -1198,7 +1198,7 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
         let narrow = horizontal
             .iter()
             .all(|(_, coefficients)| coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + (1 << 21) <= i64::from(i32::MAX));
-        chunks_mut(&mut temp, row_bytes * 16, |band, rows| {
+        chunks_mut(&mut temp, row_bytes << 4, |band, rows| {
             for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
                 let y = first_row + band * 16 + i;
                 let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
@@ -1227,7 +1227,7 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
         });
         Cow::Owned(temp)
     };
-    chunks_mut(output, row_bytes * 16, |band, rows| {
+    chunks_mut(output, row_bytes << 4, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let (start, coefficients) = &vertical[band * 16 + i];
             let src = &temp[(start - first_row) * row_bytes..];
@@ -1296,7 +1296,7 @@ fn sample_float(source: &[u8], width: usize, height: usize, x: f64, y: f64, meth
     let get = |x: i64, y: i64| {
         let x = x.clamp(0, width as i64 - 1) as usize;
         let y = y.clamp(0, height as i64 - 1) as usize;
-        let start = (y * width + x) * 4;
+        let start = (y * width + x) << 2;
         f64::from(f32::from_le_bytes(source[start..start + 4].try_into().unwrap()))
     };
     if method == 0 {
@@ -1486,7 +1486,7 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                     let bytes: Vec<_> = columns.iter().flat_map(|x| (0..3).map(move |c| Some(x.unwrap() + c))).collect();
                     let map = crate::ops_simd::NearestL::new(&bytes, image.width as usize * 3).unwrap();
                     if map.is_vectorized() {
-                        chunks_mut_above(&mut pixels, row_bytes * 16, 512 * 1024, |band, rows| {
+                        chunks_mut_above(&mut pixels, row_bytes * 16, 512 << 10, |band, rows| {
                             for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                                 let start = ys[band * 16 + i] * image.width as usize * 3;
                                 map.sample(&source[start..start + image.width as usize * 3], row);
@@ -1516,7 +1516,7 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
         let threshold = if nearest_l.as_ref().is_some_and(|map| map.is_vectorized()) {
             MIN_PARALLEL_BYTES
         } else {
-            32 * 1024
+            32 << 10
         };
         chunks_mut_above(&mut pixels, row_bytes * 16, threshold, |band, rows| {
             for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
@@ -1709,8 +1709,8 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
             // ones); only disjoint rows within an entry execute concurrently.
             chunks_mut_above(
                 &mut result[first * row_bytes..last * row_bytes],
-                row_bytes * 16,
-                32 * 1024,
+                row_bytes << 4,
+                32 << 10,
                 |band, rows| {
                     for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                         let y = (first + band * 16 + i) as i64;

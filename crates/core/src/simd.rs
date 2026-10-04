@@ -1,15 +1,14 @@
+use std::simd::Simd;
+use std::simd::cmp::SimdOrd;
+use std::simd::num::{SimdFloat, SimdInt};
+
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::pixels::{Bytes, load, store};
 use crate::raster::PixelMode;
-use std::simd::{
-    Simd,
-    cmp::SimdOrd,
-    num::{SimdFloat, SimdInt},
-};
 
 pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0; source.len()];
-    chunks_mut(&mut output, CHUNK_PIXELS * 4, |chunk, dst| {
+    chunks_mut(&mut output, CHUNK_PIXELS << 2, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * 4..][..dst.len()];
         let mut offset = 0;
         while offset + 16 <= dst.len() {
@@ -36,7 +35,7 @@ pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
 pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
     let stride = mode.sample_bytes();
     let mut output = vec![0; source.len() / stride];
-    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 * 1024 * 1024, |chunk, dst| {
+    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 << 20, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * stride..(chunk * CHUNK_PIXELS + dst.len()) * stride];
         match mode {
             PixelMode::I => {
@@ -155,7 +154,7 @@ fn map_blocks<const S: usize, const D: usize>(
     source: &[u8], parallel_bytes: usize, block: impl Fn([Bytes; S]) -> [Bytes; D] + Sync, pixel: impl Fn(&[u8; S]) -> [u8; D] + Sync,
 ) -> Vec<u8> {
     let mut output = vec![0; source.len() / S * D];
-    let chunk_pixels = 64 * 1024;
+    let chunk_pixels = 64 << 10;
     crate::parallel::chunks_mut_above(&mut output, chunk_pixels * D, parallel_bytes, |i, dst| {
         let src = &source[i * chunk_pixels * S..(i * chunk_pixels + dst.len() / D) * S];
         let end = src.len() / S / 16 * 16;
@@ -170,45 +169,40 @@ fn map_blocks<const S: usize, const D: usize>(
 }
 
 pub fn gray_to_hsv<const C: usize>(source: &[u8]) -> Vec<u8> {
-    map_blocks::<C, 3>(source, 5 * 1024 * 1024, |p| [Bytes::splat(0), Bytes::splat(0), p[0]], |p| [0, 0, p[0]])
+    map_blocks::<C, 3>(source, 5 << 20, |p| [Bytes::splat(0), Bytes::splat(0), p[0]], |p| [0, 0, p[0]])
 }
 
 /// Pillow's L to CMYK stores inverted gray as K.
 pub fn gray_to_cmyk(source: &[u8]) -> Vec<u8> {
     map_blocks::<1, 4>(
         source,
-        4 * 1024 * 1024,
+        4 << 20,
         |p| [Bytes::splat(0), Bytes::splat(0), Bytes::splat(0), !p[0]],
         |p| [0, 0, 0, 255 - p[0]],
     )
 }
 
 pub fn gray_to_ycbcr(source: &[u8]) -> Vec<u8> {
-    map_blocks::<1, 3>(
-        source,
-        4 * 1024 * 1024,
-        |p| [p[0], Bytes::splat(128), Bytes::splat(128)],
-        |p| [p[0], 128, 128],
-    )
+    map_blocks::<1, 3>(source, 4 << 20, |p| [p[0], Bytes::splat(128), Bytes::splat(128)], |p| [p[0], 128, 128])
 }
 
 pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
     map_blocks::<S, 4>(
         source,
-        4 * 1024 * 1024,
+        4 << 20,
         |p| [!p[0], !p[1], !p[2], Bytes::splat(0)],
         |p| [255 - p[0], 255 - p[1], 255 - p[2], 0],
     )
 }
 
 pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
-    map_blocks::<S, 1>(source, 1024 * 1024, |p| [p[channel]], |p| [p[channel]])
+    map_blocks::<S, 1>(source, 1024 << 10, |p| [p[channel]], |p| [p[channel]])
 }
 
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];
-    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 * 1024 * 1024, |chunk, dst| {
+    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 << 20, |chunk, dst| {
         let start = chunk * CHUNK_PIXELS * 2;
         let src = &source[start..start + dst.len() / channels * 2];
         let offset = src.len() / 2 / 16 * 16;
@@ -246,7 +240,7 @@ pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
     map_blocks::<S, C>(
         source,
-        2 * 1024 * 1024,
+        2 << 20,
         |p| std::array::from_fn(|c| if c == 3 { Bytes::splat(255) } else { p[if S == 1 { 0 } else { c }] }),
         |p| std::array::from_fn(|c| if c == 3 { 255 } else { p[if S == 1 { 0 } else { c }] }),
     )
@@ -273,11 +267,12 @@ pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
 /// the existing rounded full-range mapping, including 16-bit identity input.
 pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
-    use crate::parallel::should_parallel;
     use rayon::prelude::*;
 
-    const CHUNK_PIXELS: usize = 64 * 1024;
-    const MEMORY_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+    use crate::parallel::should_parallel;
+
+    const CHUNK_PIXELS: usize = 64 << 10;
+    const MEMORY_PARALLEL_BYTES: usize = 4 << 20;
 
     fn convert<const MAX: u32>(source: &[u8]) -> Vec<u16> {
         let mut output = vec![0; source.len() / 2];

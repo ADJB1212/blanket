@@ -1,8 +1,9 @@
+use std::sync::LazyLock;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
-use std::sync::LazyLock;
 
 // libheif owns a process-wide plugin registry. Keep its initialization guard
 // alive so each image does not tear down and recreate the codec plugins.

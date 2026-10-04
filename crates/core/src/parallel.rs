@@ -1,6 +1,7 @@
 //! Coarse, disjoint output partitions with a serial path for small images.
-use rayon::prelude::*;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use rayon::prelude::*;
 
 pub const MIN_PARALLEL_BYTES: usize = 256 * 1024;
 pub const CHUNK_PIXELS: usize = 16 * 1024;

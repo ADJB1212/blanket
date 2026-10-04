@@ -1,9 +1,10 @@
 //! Small palette kernels. Python owns mutable palette storage and file parsing.
 
+use std::collections::HashSet;
+
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
-use std::collections::HashSet;
 
 use crate::palette_simd as kernels;
 

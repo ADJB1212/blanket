@@ -1,12 +1,10 @@
 //! Four-lane ImageMath kernels with scalar fallbacks for unsupported operations.
 
+use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
+use std::simd::num::{SimdFloat, SimdInt};
+use std::simd::{Select, f32x4, i32x4};
+
 use super::Operation;
-use std::simd::{
-    Select,
-    cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd},
-    f32x4, i32x4,
-    num::{SimdFloat, SimdInt},
-};
 
 #[inline]
 pub(super) fn apply(output: &mut [[u8; 4]], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, op: Operation, float: bool) -> usize {

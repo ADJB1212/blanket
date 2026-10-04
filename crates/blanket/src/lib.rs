@@ -2,10 +2,8 @@ mod encode;
 mod features;
 
 use blanket_codecs::open_bytes;
-use blanket_core::{
-    Image, UnidentifiedImageError,
-    raster::{fromarray, frombytes},
-};
+use blanket_core::raster::{fromarray, frombytes};
+use blanket_core::{Image, UnidentifiedImageError};
 use pyo3::prelude::*;
 
 /// Native implementation details for the public `blanket` Python package.
@@ -30,5 +28,6 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_palette::palette::register(module)?;
     blanket_palette::quantize::register(module)?;
     blanket_stat::stat::register(module)?;
+    blanket_draw::draw::register(module)?;
     Ok(())
 }

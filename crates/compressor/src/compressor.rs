@@ -5,20 +5,20 @@
 //! the same samples. This does not undo loss introduced by the requested save,
 //! and does not reuse an opened image's original encoded source.
 
-use rayon::prelude::*;
 use std::borrow::Cow;
 #[cfg(test)]
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use pyo3::exceptions::{PyOSError, PyValueError};
-use pyo3::prelude::*;
-
-use crate::compressor_simd as pixels;
 use blanket_codecs::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
 use blanket_core::parallel;
 use blanket_core::parallel::CandidateLimit;
 use blanket_core::raster::{Image, PixelMode};
+use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::prelude::*;
+use rayon::prelude::*;
+
+use crate::compressor_simd as pixels;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<LosslessImageCompressor>()?;
@@ -934,8 +934,9 @@ impl<'a> PreparedSampleCodec<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use blanket_core::raster::PixelMode;
+
+    use super::*;
 
     #[test]
     fn parallel_jxl_search_matches_serial_candidates() {

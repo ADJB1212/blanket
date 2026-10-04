@@ -1,12 +1,12 @@
 //! Save-time size reduction with a decoded-sample error bound.
 
+use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
+use blanket_core::raster::{Image, PixelMode};
+use blanket_ops::ops_simd;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::compressor::LosslessImageCompressor;
-use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
-use blanket_core::raster::{Image, PixelMode};
-use blanket_ops::ops_simd;
 
 #[pyclass(name = "_LossyImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
 #[derive(Clone)]
@@ -240,11 +240,9 @@ fn png_rounding_within_error(histogram: &[u64; 256], table: &[u8], channels: usi
 fn within_error_8bit(actual: &[u8], expected: &[u8], channels: usize, limit: f64) -> bool {
     let mut error = 0_u64;
     let mut offset = 0;
-    use std::simd::{
-        Select, Simd,
-        cmp::SimdPartialEq,
-        num::{SimdInt, SimdUint},
-    };
+    use std::simd::cmp::SimdPartialEq;
+    use std::simd::num::{SimdInt, SimdUint};
+    use std::simd::{Select, Simd};
     let alpha = Simd::<u8, 16>::from_array(std::array::from_fn(|i| u8::from(channels == 4 && i % 4 == 3))).simd_ne(Simd::splat(0));
     while offset + 16 <= actual.len() {
         let a = Simd::<u8, 16>::from_slice(&actual[offset..offset + 16]);

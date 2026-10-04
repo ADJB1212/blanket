@@ -239,7 +239,7 @@ fn apply_pixels(
 ) {
     let a = a.as_chunks::<4>().0;
     let b = b.map(|data| data.as_chunks::<4>().0);
-    chunks_mut(output, CHUNK_PIXELS * 4, |start, chunk| {
+    chunks_mut(output, CHUNK_PIXELS << 2, |start, chunk| {
         let mut output = chunk.as_chunks_mut::<4>().0;
         let mut index = start * CHUNK_PIXELS;
         while !output.is_empty() {

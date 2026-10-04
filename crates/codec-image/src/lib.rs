@@ -1,7 +1,8 @@
+use std::io::Cursor;
+
 use blanket_codec_common::validate_dimensions;
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageFormat as RustFormat};
-use std::io::Cursor;
 
 pub fn color_type(mode: PixelMode) -> ExtendedColorType {
     match mode {

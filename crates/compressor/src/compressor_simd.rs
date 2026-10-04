@@ -1,11 +1,13 @@
 //! Exact compression preparation: bounded SIMD loads, scalar tails, and
 //! coarse Rayon partitions. Codec libraries handle their own entropy SIMD.
 
-use blanket_core::pixels::{Bytes, load, store};
-use rayon::prelude::*;
-use std::simd::{Simd, cmp::SimdPartialEq, num::SimdUint};
+use std::simd::Simd;
+use std::simd::cmp::SimdPartialEq;
+use std::simd::num::SimdUint;
 
 use blanket_core::parallel::{chunks_mut_above, should_parallel};
+use blanket_core::pixels::{Bytes, load, store};
+use rayon::prelude::*;
 
 const MEMORY_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
 const CHUNK_PIXELS: usize = 64 * 1024;

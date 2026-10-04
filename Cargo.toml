@@ -21,6 +21,7 @@ members = [
     "crates/filter",
     "crates/palette",
     "crates/stat",
+    "crates/draw",
     "crates/blanket",
 ]
 resolver = "3"
@@ -45,6 +46,7 @@ codegen-units = 1
 incremental = true
 opt-level = 1
 debug = "line-directives-only"
+split-debuginfo = "unpacked"
 lto = "off"
 codegen-units = 256
 

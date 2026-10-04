@@ -3,14 +3,13 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use rayon::prelude::*;
-
-use pyo3::exceptions::{PyRuntimeError, PyValueError};
-use pyo3::prelude::*;
-
-use crate::quantize_simd::PaletteSearch;
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use blanket_core::raster::{Image, PixelMode};
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
+use pyo3::prelude::*;
+use rayon::prelude::*;
+
+use crate::quantize_simd::PaletteSearch;
 
 type Color = [u8; 4];
 type Histogram = Vec<(Color, u64)>;

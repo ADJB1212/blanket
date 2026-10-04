@@ -1,10 +1,9 @@
 //! Pillow-compatible filtering with independent output partitions.
 
-use pyo3::exceptions::{PyMemoryError, PyValueError};
-use pyo3::prelude::*;
-
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::raster::{Image, PixelMode};
+use pyo3::exceptions::{PyMemoryError, PyValueError};
+use pyo3::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(filter_kernel, module)?)?;

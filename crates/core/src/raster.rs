@@ -1,8 +1,9 @@
+use std::collections::HashMap;
+
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
-use std::collections::HashMap;
 
 const fn bilevel_bytes() -> [u64; 256] {
     let mut table = [0; 256];
@@ -37,7 +38,7 @@ pub fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
             dst.copy_from_slice(&BILEVEL_BYTES[*byte as usize].to_le_bytes());
         }
         for (x, dst) in tail.iter_mut().enumerate() {
-            *dst = if packed[width / 8] & (128 >> x) != 0 { 255 } else { 0 };
+            *dst = if packed[width >> 3] & (128 >> x) != 0 { 255 } else { 0 };
         }
     });
     pixels
@@ -145,7 +146,7 @@ fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
 }
 
 fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
-    const CHUNK: usize = 128 * 1024;
+    const CHUNK: usize = 128 << 10;
     if maxcolors >= 64 && crate::parallel::should_parallel(data.len() / N, CHUNK, CHUNK * 2) {
         use rayon::prelude::*;
         let tables: Option<Vec<_>> = data
@@ -414,7 +415,7 @@ impl Image {
             height,
             mode,
             pixels: Some(pixels),
-            bit_depth: (mode.sample_bytes() * 8) as u8,
+            bit_depth: (mode.sample_bytes() << 3) as u8,
             format: None,
             palette: None,
         })
@@ -529,8 +530,8 @@ impl Image {
                 Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)
             } else {
                 let samples = data
-                    .chunks_exact(channels * 2)
-                    .map(|pixel| u16::from_le_bytes([pixel[channel * 2], pixel[channel * 2 + 1]]))
+                    .chunks_exact(channels << 1)
+                    .map(|pixel| u16::from_le_bytes([pixel[channel << 1], pixel[channel * 2 + 1]]))
                     .collect();
                 Self::from_samples(self.width, self.height, PixelMode::L, samples, self.bit_depth, None)
             }
@@ -821,7 +822,7 @@ impl Image {
             };
         let chunk = if source.len() >= 4 * 1024 * 1024 { 256 * 1024 } else { row.max(4096) };
         py.detach(|| {
-            crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 * 1024 * 1024, |i, dst| {
+            crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
                 // Disjoint output partitions initialize the entire reserved buffer.
                 // Source and destination are separate allocations of equal length.
                 unsafe { std::ptr::copy_nonoverlapping(source[i * chunk..].as_ptr(), dst.as_mut_ptr().cast::<u8>(), dst.len()) };
@@ -1061,7 +1062,7 @@ impl Image {
         }
         if self.mode.is_integer() || destination.is_integer() {
             if let Some(depth) = bit_depth
-                && depth != (destination.sample_bytes() * 8) as u8
+                && depth != (destination.sample_bytes() << 3) as u8
                 && destination.is_integer()
             {
                 return Err(PyValueError::new_err("bit_depth does not match integer mode"));
@@ -1237,7 +1238,7 @@ pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_
         return Image::from_float_bytes(size.0, size.1, data.to_vec());
     }
     if mode.is_integer() {
-        if bit_depth != 8 && bit_depth != (mode.sample_bytes() * 8) as u8 {
+        if bit_depth != 8 && bit_depth != (mode.sample_bytes() << 3) as u8 {
             return Err(PyValueError::new_err("bit_depth does not match integer mode"));
         }
         return Image::from_integer_bytes(size.0, size.1, mode, data.to_vec());

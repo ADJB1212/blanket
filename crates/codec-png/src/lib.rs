@@ -1,3 +1,5 @@
+use std::io::Cursor;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::{color_type, decode_with_metadata};
 use blanket_core::{Image, PixelMode};
@@ -5,7 +7,6 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::{ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
-use std::io::Cursor;
 
 pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;

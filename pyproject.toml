@@ -71,7 +71,6 @@ xfail_strict = true
 fix = true
 line-length = 200
 target-version = "py312"
-cache-dir = "/dev/null"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
@@ -83,6 +82,7 @@ future-annotations = true
 "tests/**/*.py" = ["TCH", "ARG"]
 "scripts/**/*.py" = ["TCH", "ARG"]
 "python/blanket/Image.py" = ["ARG002"]
+"python/blanket/ImageDraw.py" = ["ARG"]
 
 [tool.ruff.format]
 quote-style = "double"

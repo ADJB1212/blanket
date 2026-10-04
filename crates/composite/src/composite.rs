@@ -1,7 +1,6 @@
+use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
-
-use blanket_core::raster::{Image, PixelMode};
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_new, module)?)?;

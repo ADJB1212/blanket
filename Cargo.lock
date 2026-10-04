@@ -176,6 +176,7 @@ dependencies = [
  "blanket-composite",
  "blanket-compressor",
  "blanket-core",
+ "blanket-draw",
  "blanket-enhance",
  "blanket-filter",
  "blanket-ops",
@@ -361,6 +362,14 @@ dependencies = [
  "lcms2-sys",
  "pyo3",
  "rayon",
+]
+
+[[package]]
+name = "blanket-draw"
+version = "0.0.3"
+dependencies = [
+ "blanket-core",
+ "pyo3",
 ]
 
 [[package]]

@@ -1,7 +1,3 @@
-use blanket_core::{Image, PixelMode, UnidentifiedImageError};
-use pyo3::exceptions::{PyOSError, PyValueError};
-use pyo3::prelude::*;
-
 use blanket_codec_avif::{decode_avif, encode_avif};
 use blanket_codec_bmp_ico::{decode_bmp, decode_ico, encode_bmp, encode_ico};
 pub use blanket_codec_common::SaveOptions;
@@ -17,6 +13,9 @@ use blanket_codec_png::{decode_png, encode_wide_png};
 pub use blanket_codec_png::{encode_one_png, encode_palette_png, encode_png};
 use blanket_codec_tiff::{decode_tiff, encode_float_tiff, encode_lab_tiff, encode_raw_tiff, encode_tiff, encode_wide_tiff, is_dng};
 use blanket_codec_webp::{decode_webp, encode_webp};
+use blanket_core::{Image, PixelMode, UnidentifiedImageError};
+use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::prelude::*;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";

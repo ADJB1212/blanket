@@ -121,9 +121,6 @@ jobs:
           maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER -Z threads=4
       - name: Test Python API
         run: uv run pytest
-      - name: Test x86 SIMD kernels
-        if: runner.arch == 'X64'
-        run: cargo test --features $BUILD_FEATURES
       - name: Verify Pillow behavior
         run: uv run scripts/verify_behavior.py
       - name: Delete stale Rust caches

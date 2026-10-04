@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderSpeed};
@@ -7,7 +9,6 @@ use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
-use std::borrow::Cow;
 
 pub const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
 

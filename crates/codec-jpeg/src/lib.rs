@@ -166,8 +166,10 @@ fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>
         let (top, bottom) = (row(cy * 2), row(cy * 2 + 1));
         let (luma0, luma1) = luma.split_at_mut(y_stride);
         let mut x = 0;
+        use std::simd::num::SimdUint;
+        use std::simd::{Simd, simd_swizzle};
+
         use blanket_core::pixels::load;
-        use std::simd::{Simd, num::SimdUint, simd_swizzle};
         let bias = Simd::<u16, 8>::from_array([1, 2, 1, 2, 1, 2, 1, 2]);
         while x + 16 <= width {
             let a = load::<3>(&top[x * 3..]);

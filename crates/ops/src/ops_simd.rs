@@ -1,10 +1,9 @@
 //! Portable SIMD kernels with scalar tails.
+use std::simd::Simd;
+use std::simd::cmp::SimdOrd;
+use std::simd::num::{SimdFloat, SimdInt, SimdUint};
+
 use blanket_core::pixels::{self, Bytes, load, store};
-use std::simd::{
-    Simd,
-    cmp::SimdOrd,
-    num::{SimdFloat, SimdInt, SimdUint},
-};
 
 pub(crate) fn reduce_float_two(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
     let end = (upper.len().min(lower.len()) / 16 * 2).min(output.len() / 8 * 2);
@@ -72,7 +71,7 @@ pub(crate) fn reverse_rgb(source: &[u8], output: &mut [u8]) {
 
 pub fn lut<const C: usize>(source: &[u8], output: &mut [u8], tables: &[u8]) {
     assert_eq!(source.len(), output.len());
-    assert!(tables.len() == 256 || tables.len() == C * 256);
+    assert!(tables.len() == 256 || tables.len() == C << 8);
     let end = source.len() / (16 * C) * (16 * C);
     for i in (0..end).step_by(16 * C) {
         let values = load::<C>(&source[i..]);

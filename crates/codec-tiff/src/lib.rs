@@ -1,10 +1,11 @@
+use std::io::Cursor;
+
 use blanket_codec_common::{codec_error, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use std::io::Cursor;
 
 fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {

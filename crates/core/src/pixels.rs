@@ -1,5 +1,7 @@
 //! Portable kernels for packed byte pixels.
-use std::simd::{Select, Simd, cmp::SimdPartialEq, num::SimdUint, simd_swizzle};
+use std::simd::cmp::SimdPartialEq;
+use std::simd::num::SimdUint;
+use std::simd::{Select, Simd, simd_swizzle};
 
 pub type Bytes = Simd<u8, 16>;
 

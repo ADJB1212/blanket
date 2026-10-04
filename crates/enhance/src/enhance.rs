@@ -1,11 +1,10 @@
 //! Native primitives used by the Python `ImageEnhance` API.
 
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
+use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-
-use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
-use blanket_core::raster::{Image, PixelMode};
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(enhance_blend, module)?)?;
@@ -69,10 +68,8 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
 }
 
 fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
-    use std::simd::{
-        Simd,
-        num::{SimdFloat, SimdUint},
-    };
+    use std::simd::Simd;
+    use std::simd::num::{SimdFloat, SimdUint};
     let done = first.len().min(second.len()).min(output.len()) / 16 * 16;
     for i in (0..done).step_by(16) {
         let a = Simd::<u8, 16>::from_slice(&first[i..i + 16]).cast::<f32>();

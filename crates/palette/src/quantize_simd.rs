@@ -1,5 +1,6 @@
 //! Exact squared RGBA distance searches, with first-entry tie breaking.
-use std::simd::{Simd, num::SimdUint};
+use std::simd::Simd;
+use std::simd::num::SimdUint;
 type Color = [u8; 4];
 
 pub(crate) struct PaletteSearch<'a> {

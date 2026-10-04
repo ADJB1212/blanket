@@ -79,9 +79,14 @@ pixel access, and compatibility across existing operations.
 Drawing primitives are the most-requested missing module for real-world Pillow
 replacement. This is a substantial feature that warrants its own phase.
 
-- [ ] `ImageDraw.Draw(image, mode=None)` context
-- [ ] Geometric primitives: `line`, `rectangle`, `rounded_rectangle`, `ellipse`, `arc`, `chord`, `pieslice`, `polygon`, `regular_polygon`, `point`
-- [ ] Fill and outline with color, width control
+The public `ImageDraw` module and `blanket-draw` crate provide in-place points
+and rectangles, including fills, outline widths, and RGBA blending onto RGB.
+The remaining drawing operations raise `NotImplementedError`.
+
+- [x] `ImageDraw.Draw(image, mode=None)` context
+- [x] `point`, `rectangle`, with color fills and rectangle outline widths
+- [ ] Remaining geometric primitives: `line`, `rounded_rectangle`, `ellipse`, `arc`, `chord`, `pieslice`, `polygon`, `regular_polygon`
+- [ ] Fill, outline, and width control for remaining primitives
 - [ ] Anti-aliased drawing
 - [ ] `textbbox`, `textlength`, `multiline_textbbox`
 - [ ] `text`, `multiline_text` (requires `ImageFont`)

@@ -8,11 +8,21 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 import numpy as np
-from PIL import Image as PillowImage, ImageChops as PillowChops, ImageEnhance as PillowEnhance, ImageFilter, ImageOps as PillowOps, ImagePalette as PillowPalette, ImageStat as PillowStat
+from PIL import (
+    Image as PillowImage,
+    ImageChops as PillowChops,
+    ImageDraw as PillowDraw,
+    ImageEnhance as PillowEnhance,
+    ImageFilter,
+    ImageOps as PillowOps,
+    ImagePalette as PillowPalette,
+    ImageStat as PillowStat,
+)
 
 from blanket import (
     Image as BlanketImage,
     ImageChops as BlanketChops,
+    ImageDraw as BlanketDraw,
     ImageEnhance as BlanketEnhance,
     ImageFilter as BlanketFilter,
     ImageOps as BlanketOps,
@@ -581,6 +591,21 @@ def check_imagestat() -> int:
     return checks
 
 
+def check_imagedraw() -> int:
+    checks = 0
+    for mode, ink in (("L", 173), ("RGB", (37, 173, 91)), ("RGBA", (37, 173, 91, 83))):
+        for width in (1, 2, 8):
+            actual = BlanketImage.new(mode, (13, 11))
+            expected = PillowImage.new(mode, actual.size)
+            for module, image in ((BlanketDraw, actual), (PillowDraw, expected)):
+                draw = module.Draw(image)
+                draw.rectangle((-2, 1, 8, 7), fill=ink, outline=255, width=width)
+                draw.point([(-1, 0), (3.9, 4.9), (12, 10)], fill=ink)
+            assert actual.tobytes() == expected.tobytes(), (mode, width)
+            checks += 1
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
@@ -591,6 +616,7 @@ def main() -> None:
     checks += check_compositing()
     checks += check_imagechops()
     checks += check_imagestat()
+    checks += check_imagedraw()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()
