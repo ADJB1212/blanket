@@ -74,23 +74,26 @@ pixel access, and compatibility across existing operations.
 
 ---
 
-## Phase 2 — ImageDraw
+## Phase 2 — ImageDraw — Complete
 
 Drawing primitives are the most-requested missing module for real-world Pillow
 replacement. This is a substantial feature that warrants its own phase.
 
-The public `ImageDraw` module and `blanket-draw` crate provide in-place points
-and rectangles, including fills, outline widths, and RGBA blending onto RGB.
-The remaining drawing operations raise `NotImplementedError`.
+The public `ImageDraw` module and `blanket-draw` crate provide in-place geometry,
+optional supersampled edges, bitmap text, font-object interoperability, and
+four-connected flood filling. Default text uses a small built-in bitmap font;
+font loading and advanced text rendering remain in Phase 3. Drawing uses
+Blanket's rasterization rules; curved edges and wide strokes can differ from
+Pillow. See the ImageDraw reference for supported modes and text limitations.
 
 - [x] `ImageDraw.Draw(image, mode=None)` context
 - [x] `point`, `rectangle`, with color fills and rectangle outline widths
-- [ ] Remaining geometric primitives: `line`, `rounded_rectangle`, `ellipse`, `arc`, `chord`, `pieslice`, `polygon`, `regular_polygon`
-- [ ] Fill, outline, and width control for remaining primitives
-- [ ] Anti-aliased drawing
-- [ ] `textbbox`, `textlength`, `multiline_textbbox`
-- [ ] `text`, `multiline_text` (requires `ImageFont`)
-- [ ] Flood fill (`floodfill`)
+- [x] Remaining geometric primitives: `line`, `rounded_rectangle`, `ellipse`, `arc`, `chord`, `pieslice`, `polygon`, `regular_polygon`
+- [x] Fill, outline, and width control for remaining primitives
+- [x] Anti-aliased drawing
+- [x] `textbbox`, `textlength`, `multiline_textbbox`
+- [x] `text`, `multiline_text` (bitmap fallback and supplied font objects)
+- [x] Flood fill (`floodfill`)
 
 ---
 

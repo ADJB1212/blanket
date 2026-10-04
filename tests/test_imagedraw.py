@@ -84,14 +84,17 @@ def test_invalid_rectangle_does_not_modify_image(bounds: tuple[int, ...]) -> Non
     assert image.tobytes() == before
 
 
-def test_empty_image_and_unimplemented_operations() -> None:
+def test_empty_image_drawing() -> None:
     image = Image.new("RGB", (0, 0))
     draw = ImageDraw.Draw(image)
     draw.point([])
     draw.rectangle((-10, -10, 10, 10), fill="red")
     assert image.tobytes() == b""
-    with pytest.raises(NotImplementedError):
-        draw.ellipse((0, 0, 2, 2))
+    draw.ellipse((0, 0, 2, 2), fill="red")
+    draw.line((0, 0, 2, 2), fill="red")
+    draw.text((0, 0), "A", fill="red")
+    ImageDraw.floodfill(image, (0, 0), "red")
+    assert image.tobytes() == b""
 
 
 @pytest.mark.parametrize("operation", ["point", "rectangle"])
