@@ -45,7 +45,7 @@ jobs:
           echo "x265=4.2" >> "$GITHUB_OUTPUT"
           echo "libde265=v1.1.3" >> "$GITHUB_OUTPUT"
           echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
-          echo "libheif=v1.23.5" >> "$GITHUB_OUTPUT"
+          echo "libheif=v1.23.6" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
           echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
       - name: Ensure release exists
