@@ -34,7 +34,7 @@ jobs:
       - name: Set codec versions
         id: versions
         run: |
-          echo "aom=v3.15.1" >> "$GITHUB_OUTPUT"
+          echo "aom=v3.15.2" >> "$GITHUB_OUTPUT"
           echo "x265=4.2" >> "$GITHUB_OUTPUT"
           echo "libde265=v1.1.3" >> "$GITHUB_OUTPUT"
           echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
