@@ -170,7 +170,10 @@ fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend:
     }
     let length = delta.abs();
     let sign = delta.signum();
-    for coordinate in 0..limit {
+    let end = start + delta;
+    let first = start.min(end).ceil().clamp(0.0, f64::from(limit)) as u32;
+    let last = (start.max(end).floor() + 1.0).clamp(0.0, f64::from(limit)) as u32;
+    for coordinate in first..last {
         let step = (f64::from(coordinate) - start) * sign;
         if step < 0.0 || step >= length {
             continue;
@@ -387,7 +390,7 @@ fn sample_distance(mode: PixelMode, a: &[u8], b: &[u8]) -> f64 {
 
 #[pyfunction]
 fn draw_floodfill(
-    image: &mut Image, position: (i64, i64), value: &Bound<'_, PyAny>, border: Option<&Bound<'_, PyAny>>, threshold: f64,
+    py: Python<'_>, image: &mut Image, position: (i64, i64), value: &Bound<'_, PyAny>, border: Option<&Bound<'_, PyAny>>, threshold: f64,
 ) -> PyResult<()> {
     let fill = ink(image, value, false)?;
     let border = border.map(|value| ink(image, value, false)).transpose()?;
@@ -395,44 +398,52 @@ fn draw_floodfill(
     if x < 0 || y < 0 || x >= i64::from(image.width) || y >= i64::from(image.height) {
         return Ok(());
     }
+    py.detach(|| floodfill(image, (x, y), &fill, border.as_deref(), threshold));
+    Ok(())
+}
+
+fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Option<&[u8]>, threshold: f64) {
+    let (x, y) = position;
     let stride = image.mode.channels() * image.mode.sample_bytes();
     let seed_index = y as usize * image.width as usize + x as usize;
     let pixels = image.pixels.as_mut().unwrap();
     let seed = pixels[seed_index * stride..(seed_index + 1) * stride].to_vec();
-    if sample_distance(image.mode, &seed, &fill) <= threshold {
-        return Ok(());
+    if sample_distance(image.mode, &seed, fill) <= threshold {
+        return;
     }
     let mut visited = vec![false; pixels.len() / stride];
+    visited[seed_index] = true;
     let mut pending = vec![seed_index];
     while let Some(index) = pending.pop() {
-        if visited[index] {
-            continue;
-        }
-        visited[index] = true;
         let pixel = &mut pixels[index * stride..(index + 1) * stride];
-        let eligible = match &border {
+        let eligible = match border {
             Some(border) => pixel != border && pixel != fill,
             None => sample_distance(image.mode, pixel, &seed) <= threshold,
         };
         if !eligible {
             continue;
         }
-        pixel.copy_from_slice(&fill);
+        pixel.copy_from_slice(fill);
         let width = image.width as usize;
+        let mut enqueue = |index: usize| {
+            if !visited[index] {
+                visited[index] = true;
+                pending.push(index);
+            }
+        };
         if index % width > 0 {
-            pending.push(index - 1);
+            enqueue(index - 1);
         }
         if index % width + 1 < width {
-            pending.push(index + 1);
+            enqueue(index + 1);
         }
         if index >= width {
-            pending.push(index - width);
+            enqueue(index - width);
         }
-        if index + width < visited.len() {
-            pending.push(index + width);
+        if index + width < pixels.len() / stride {
+            enqueue(index + width);
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]

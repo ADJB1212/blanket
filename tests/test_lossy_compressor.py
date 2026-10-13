@@ -91,6 +91,20 @@ def test_png_histogram_quantization_at_low_effort(mode: str) -> None:
     assert source.tobytes() == raw
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+def test_png_search_keeps_earlier_winner_after_more_trials(mode: str) -> None:
+    rng = random.Random(105)
+    channels = len(mode)
+    raw = bytes(rng.randrange(120, 128) if mode != "RGBA" or i % 4 != 3 else 0 for i in range(65 * 33 * channels))
+    source = Image.frombytes(mode, (65, 33), raw)
+    first = encode(source, "PNG", compressor=LossyImageCompressor(max_rmse=4, effort=1))
+    later = encode(source, "PNG", compressor=LossyImageCompressor(max_rmse=4, effort=10))
+    assert len(later) <= len(first)
+    assert Image.open(io.BytesIO(later)).convert(mode).tobytes() == Image.open(io.BytesIO(first)).convert(mode).tobytes()
+    assert_bounded(encode(source, "PNG"), later, 4)
+    assert source.tobytes() == raw
+
+
 def test_jpeg_search_refines_between_fixed_quality_drops() -> None:
     source = Image.frombytes("RGB", (129, 67), random.Random(37).randbytes(129 * 67 * 3))
     baseline = encode(source, "JPEG", quality=90)

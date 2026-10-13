@@ -461,18 +461,25 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
 
 fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
     let mut previous = vec![usize::MAX; histogram.len()];
+    let mut assignments = vec![0; histogram.len()];
+    let mut sums = vec![[0u64; 4]; palette.len()];
+    let mut counts = vec![0u64; palette.len()];
     loop {
         let search = PaletteSearch::new(palette);
-        let nearest = |(color, _): &(Color, u64)| search.nearest(*color);
-        let assignments: Vec<usize> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
-            histogram.par_iter().map(nearest).collect()
+        if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
+            assignments
+                .par_iter_mut()
+                .zip(histogram.par_iter())
+                .for_each(|(index, (color, _))| *index = search.nearest(*color));
         } else {
-            histogram.iter().map(nearest).collect()
-        };
-        let mut sums = vec![[0u64; 4]; palette.len()];
-        let mut counts = vec![0u64; palette.len()];
+            for (index, (color, _)) in assignments.iter_mut().zip(histogram) {
+                *index = search.nearest(*color);
+            }
+        }
+        sums.fill([0; 4]);
+        counts.fill(0);
         let mut changed = 0u64;
-        for (((color, count), old), i) in histogram.iter().zip(&mut previous).zip(assignments) {
+        for (((color, count), old), &i) in histogram.iter().zip(&mut previous).zip(&assignments) {
             if i != *old {
                 changed += count;
                 *old = i;
@@ -643,5 +650,15 @@ mod tests {
         let coverage = maximum_coverage(&histogram, 4);
         assert_eq!(coverage.len(), 4);
         assert!(coverage.iter().all(|color| histogram.iter().any(|(c, _)| c == color)));
+    }
+
+    #[test]
+    fn refinement_reuses_buffers_across_assignment_changes() {
+        for repetitions in [1, CHUNK_PIXELS / 6 + 1] {
+            let histogram: Histogram = (0..repetitions).flat_map(|_| [0, 2, 3, 8, 9, 10].map(|v| ([v, v, v, 255], 1))).collect();
+            let mut palette = [[0, 0, 0, 255], [2, 2, 2, 255]];
+            refine(&histogram, &mut palette, 1);
+            assert_eq!(palette, [[2, 2, 2, 255], [9, 9, 9, 255]]);
+        }
     }
 }

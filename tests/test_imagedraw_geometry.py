@@ -16,6 +16,22 @@ def test_thin_lines_match_pillow(points: list[tuple[int, int]], mode: str, ink: 
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("vertical", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_short_line_segments_on_large_canvas(vertical: bool, reverse: bool) -> None:
+    size = (3, 32769) if vertical else (32769, 3)
+    points = [(i, i % 3) for i in range(-5, 257)] + [(32770, 1), (32780, 2)]
+    if vertical:
+        points = [(y, x) for x, y in points]
+    if reverse:
+        points.reverse()
+    actual = Image.new("RGB", size)
+    expected = PILImage.new("RGB", size)
+    ImageDraw.Draw(actual, "RGBA").line(points, fill=(23, 81, 157, 91))
+    PILDraw.Draw(expected, "RGBA").line(points, fill=(23, 81, 157, 91))
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("operation", ["line", "polygon", "ellipse", "arc", "chord", "pieslice", "rounded_rectangle", "regular_polygon"])
 @pytest.mark.parametrize(
     "mode,ink",
@@ -148,6 +164,20 @@ def test_floodfill_matches_pillow(border: int | None, threshold: int) -> None:
     expected = PILImage.frombytes("L", actual.size, raw)
     ImageDraw.floodfill(actual, (2, 2), 100, border=border, thresh=threshold)
     PILDraw.floodfill(expected, (2, 2), 100, border=border, thresh=threshold)
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode,fill", [("L", 100), ("RGB", (10, 20, 30)), ("RGBA", (10, 20, 30, 40))])
+@pytest.mark.parametrize("border", [False, True])
+def test_floodfill_connected_region_and_holes(mode: str, fill: object, border: bool) -> None:
+    actual = Image.new(mode, (97, 89), 0)
+    expected = PILImage.new(mode, actual.size, 0)
+    for image, module in ((actual, ImageDraw), (expected, PILDraw)):
+        draw = module.Draw(image)
+        draw.rectangle((0, 0, 96, 88), outline="white")
+        for x in range(5, 90, 7):
+            draw.line([(x, 3), (x, 80)], fill="white")
+        module.floodfill(image, (1, 1), fill, border=image.getpixel((0, 0)) if border else None)
     assert actual.tobytes() == expected.tobytes()
 
 

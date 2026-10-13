@@ -111,8 +111,8 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
             length = int.from_bytes(data[pos : pos + 2], "big")
             if length < 2 or pos + length > len(data):
                 break
-            payload = data[pos + 2 : pos + length]
             if marker == 0xE1:
+                payload = data[pos + 2 : pos + length]
                 if payload.startswith(b"Exif\0\0"):
                     info.setdefault("exif", payload)
                 elif payload.startswith(b"http://ns.adobe.com/xap/1.0/\0"):
@@ -125,6 +125,9 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
             kind = data[pos + 4 : pos + 8]
             if pos + 12 + length > len(data):
                 break
+            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt"):
+                pos += length + 12
+                continue
             payload = data[pos + 8 : pos + 8 + length]
             if kind == b"eXIf":
                 info["exif"] = b"Exif\0\0" + payload
@@ -166,6 +169,9 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
                 length = len(data) - pos
             if length < header or pos + length > len(data):
                 break
+            if kind not in (b"Exif", b"xml "):
+                pos += length
+                continue
             payload = data[pos + header : pos + length]
             if kind == b"Exif" and len(payload) >= 4:
                 offset = int.from_bytes(payload[:4], "big")

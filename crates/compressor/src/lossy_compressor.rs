@@ -104,6 +104,7 @@ impl LossyImageCompressor {
         let histogram = png_rounding_histogram(pixels, channels);
         let limit = self.max_rmse * self.max_rmse * f64::from(image.width) * f64::from(image.height) * 3.0;
         let mut tried = vec![std::array::from_fn(|sample| sample as u8)];
+        let mut rounded = None;
         let mut winner = None;
         let mut smallest = usize::MAX;
         let mut trials = 0;
@@ -120,28 +121,13 @@ impl LossyImageCompressor {
                     continue;
                 }
                 tried.push(color_table);
-                let mut table = [0; 4 * 256];
-                for channel in 0..channels {
-                    for sample in 0..256 {
-                        table[channel * 256 + sample] = if channels == 4 && channel == 3 {
-                            sample as u8
-                        } else {
-                            color_table[sample]
-                        };
-                    }
-                }
-                let mut rounded = image.clone();
+                let rounded = rounded.get_or_insert_with(|| image.clone());
                 let destination = rounded.pixels.as_mut().expect("validated image");
-                match channels {
-                    1 => ops_simd::lut::<1>(pixels, destination, &color_table),
-                    3 => ops_simd::lut::<3>(pixels, destination, &color_table),
-                    4 => ops_simd::lut::<4>(pixels, destination, &table),
-                    _ => unreachable!("validated mode"),
-                }
-                let candidate = codecs::encode(&rounded, ImageFormat::Png, options)?;
+                round_png_pixels(pixels, destination, channels, &color_table);
+                let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;
                 if candidate.len() < smallest {
                     smallest = candidate.len();
-                    winner = Some(rounded);
+                    winner = Some(color_table);
                     if candidate.len() < output.len() {
                         output = candidate;
                     }
@@ -152,13 +138,26 @@ impl LossyImageCompressor {
                 }
             }
         }
-        if let Some(winner) = winner {
+        if let (Some(color_table), Some(mut winner)) = (winner, rounded) {
+            round_png_pixels(pixels, winner.pixels.as_mut().expect("validated image"), channels, &color_table);
             let optimized = LosslessImageCompressor { effort: self.effort }.encode(&winner, ImageFormat::Png, options)?;
             if optimized.len() < output.len() {
                 output = optimized;
             }
         }
         Ok(output)
+    }
+}
+
+fn round_png_pixels(pixels: &[u8], destination: &mut [u8], channels: usize, color_table: &[u8; 256]) {
+    match channels {
+        1 => ops_simd::lut::<1>(pixels, destination, color_table),
+        3 => ops_simd::lut::<3>(pixels, destination, color_table),
+        4 => {
+            let table: [_; 4 * 256] = std::array::from_fn(|i| if i < 3 * 256 { color_table[i % 256] } else { (i % 256) as u8 });
+            ops_simd::lut::<4>(pixels, destination, &table);
+        }
+        _ => unreachable!("validated mode"),
     }
 }
 
@@ -296,6 +295,33 @@ fn rgba_sample(image: &Image, data: &[u8], index: usize) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_rounding_replaces_trials_and_restores_color_without_changing_alpha() {
+        let first = std::array::from_fn(|i| (i / 16 * 16) as u8);
+        let second = std::array::from_fn(|i| 255 - i as u8);
+        for channels in [1, 3, 4] {
+            for count in [0, 1, 15, 16, 17, 65] {
+                let source: Vec<u8> = (0..count * channels).map(|i| (i * 53 % 256) as u8).collect();
+                let mut destination = vec![19; source.len() + 2];
+                for table in [&first, &second, &first] {
+                    round_png_pixels(&source, &mut destination[1..source.len() + 1], channels, table);
+                    for (i, (&actual, &sample)) in destination[1..source.len() + 1].iter().zip(&source).enumerate() {
+                        assert_eq!(
+                            actual,
+                            if channels == 4 && i % 4 == 3 {
+                                sample
+                            } else {
+                                table[usize::from(sample)]
+                            }
+                        );
+                    }
+                    assert_eq!(destination[0], 19);
+                    assert_eq!(*destination.last().unwrap(), 19);
+                }
+            }
+        }
+    }
 
     #[test]
     fn error_bound_includes_hidden_color_but_excludes_alpha() {

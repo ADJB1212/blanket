@@ -332,7 +332,6 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
 fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
     debug_assert_eq!(source.len(), width * height * C);
     let mut pixels = buffer(source.len())?;
-    pixels.copy_from_slice(source);
     if pixels.is_empty() {
         return Ok(pixels);
     }
@@ -344,19 +343,29 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
     if [radii.0, radii.1].iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
     }
-    let mut scratch = buffer(source.len())?;
     let passes = if gaussian { 3 } else { 1 };
-    if radii.0 > 0.0 {
-        for _ in 0..passes {
-            box_horizontal::<C>(&pixels, &mut scratch, width, radii.0);
-            std::mem::swap(&mut pixels, &mut scratch);
-        }
+    let horizontal_passes = if radii.0 > 0.0 { passes } else { 0 };
+    let vertical_passes = if radii.1 > 0.0 { passes } else { 0 };
+    if horizontal_passes + vertical_passes == 0 {
+        pixels.copy_from_slice(source);
+        return Ok(pixels);
     }
-    if radii.1 > 0.0 {
-        for _ in 0..passes {
-            box_vertical(&pixels, &mut scratch, width * C, radii.1);
-            std::mem::swap(&mut pixels, &mut scratch);
-        }
+    if radii.0 > 0.0 {
+        box_horizontal::<C>(source, &mut pixels, width, radii.0);
+    } else {
+        box_vertical(source, &mut pixels, width * C, radii.1);
+    }
+    if horizontal_passes + vertical_passes == 1 {
+        return Ok(pixels);
+    }
+    let mut scratch = buffer(source.len())?;
+    for _ in 1..horizontal_passes {
+        box_horizontal::<C>(&pixels, &mut scratch, width, radii.0);
+        std::mem::swap(&mut pixels, &mut scratch);
+    }
+    for _ in usize::from(horizontal_passes == 0)..vertical_passes {
+        box_vertical(&pixels, &mut scratch, width * C, radii.1);
+        std::mem::swap(&mut pixels, &mut scratch);
     }
     Ok(pixels)
 }

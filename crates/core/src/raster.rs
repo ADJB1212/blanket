@@ -954,19 +954,23 @@ impl Image {
                 if self.mode == PixelMode::F {
                     return self.copy(py);
                 }
-                let source = if self.mode == PixelMode::I || matches!(self.mode, PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
-                    self.clone()
+                let converted;
+                let source = if self.mode.is_integer() {
+                    self
                 } else {
-                    self.convert(py, "L", Some(8))?
+                    converted = self.convert(py, "L", Some(8))?;
+                    &converted
                 };
                 let data = source.raw_data()?;
-                let pixels = if source.mode.is_integer() {
-                    data.chunks_exact(source.mode.sample_bytes())
-                        .flat_map(|bytes| (integer_value(source.mode, bytes) as f32).to_le_bytes())
-                        .collect()
-                } else {
-                    data.iter().flat_map(|&value| f32::from(value).to_le_bytes()).collect()
-                };
+                let pixels = py.detach(|| {
+                    if source.mode.is_integer() {
+                        data.chunks_exact(source.mode.sample_bytes())
+                            .flat_map(|bytes| (integer_value(source.mode, bytes) as f32).to_le_bytes())
+                            .collect()
+                    } else {
+                        data.iter().flat_map(|&value| f32::from(value).to_le_bytes()).collect()
+                    }
+                });
                 return Self::from_float_bytes(self.width, self.height, pixels);
             }
             if destination == PixelMode::L && bit_depth == Some(16) {
@@ -985,17 +989,20 @@ impl Image {
                 return Self::from_integer_bytes(self.width, self.height, destination, pixels);
             }
             if destination.is_integer() {
-                let pixels = data
-                    .as_chunks::<4>()
-                    .0
-                    .iter()
-                    .flat_map(|bytes| {
-                        let maximum = if destination == PixelMode::I { i32::MAX as f64 } else { 65535.0 };
-                        let minimum = if destination == PixelMode::I { i32::MIN as f64 } else { 0.0 };
-                        let value = f64::from(float_value(bytes)).clamp(minimum, maximum) as i64;
-                        integer_bytes(destination, value)[..destination.sample_bytes()].to_vec()
-                    })
-                    .collect();
+                let pixels = py.detach(|| {
+                    data.as_chunks::<4>()
+                        .0
+                        .iter()
+                        .flat_map(|bytes| {
+                            let value = f64::from(float_value(bytes)).clamp(0.0, 65535.0) as u16;
+                            if destination == PixelMode::I16B {
+                                value.to_be_bytes()
+                            } else {
+                                value.to_le_bytes()
+                            }
+                        })
+                        .collect()
+                });
                 return Self::from_integer_bytes(self.width, self.height, destination, pixels);
             }
             let pixels = data
@@ -1071,32 +1078,31 @@ impl Image {
                 return self.copy(py);
             }
             if destination.is_integer() {
-                let source = if self.palette.is_some() {
-                    self.convert(py, "L", Some(8))?
+                let converted;
+                let source = if self.palette.is_none() && (self.mode.is_integer() || self.mode == PixelMode::L) {
+                    self
                 } else {
-                    self.clone()
+                    converted = self.convert(py, "L", Some(8))?;
+                    &converted
                 };
                 let data = source.raw_data()?;
                 if source.mode.is_integer() {
-                    let output = crate::simd::convert_integer(data, source.mode, destination);
+                    let output = py.detach(|| crate::simd::convert_integer(data, source.mode, destination));
                     return Self::from_integer_bytes(self.width, self.height, destination, output);
                 }
                 let mut output = Vec::with_capacity(expected_len(self.width, self.height, destination)? * destination.sample_bytes());
-                let grayscale = if source.mode == PixelMode::L {
-                    source
-                } else {
-                    source.convert(py, "L", Some(8))?
-                };
-                if grayscale.bit_depth > 8 {
-                    for bytes in grayscale.raw_data()?.as_chunks::<2>().0 {
-                        let value = i64::from(u16::from_le_bytes(*bytes));
-                        output.extend_from_slice(&integer_bytes(destination, value)[..destination.sample_bytes()]);
+                py.detach(|| {
+                    if source.bit_depth > 8 {
+                        for bytes in data.as_chunks::<2>().0 {
+                            let value = i64::from(u16::from_le_bytes(*bytes));
+                            output.extend_from_slice(&integer_bytes(destination, value)[..destination.sample_bytes()]);
+                        }
+                    } else {
+                        for &value in data {
+                            output.extend_from_slice(&integer_bytes(destination, i64::from(value))[..destination.sample_bytes()]);
+                        }
                     }
-                } else {
-                    for &value in grayscale.raw_data()? {
-                        output.extend_from_slice(&integer_bytes(destination, i64::from(value))[..destination.sample_bytes()]);
-                    }
-                }
+                });
                 return Self::from_integer_bytes(self.width, self.height, destination, output);
             }
             let data = self.raw_data()?;

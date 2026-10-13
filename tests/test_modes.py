@@ -241,6 +241,32 @@ def test_signed_integer_to_uint16_clips_out_of_range_values() -> None:
     assert image.convert("I;16").getdata() == [0, 258, 65535]
 
 
+@pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA", "P", "PA"])
+@pytest.mark.parametrize("destination", ["I", "I;16", "I;16L", "I;16B"])
+def test_color_and_indexed_to_integer_owns_grayscale_samples(source_mode: str, destination: str) -> None:
+    channels = {"L": 1, "RGB": 3, "RGBA": 4, "P": 1, "PA": 2}[source_mode]
+    raw = bytes((i * 53 + 17) % 256 for i in range(37 * channels))
+    image = Image.frombytes(source_mode, (37, 1), raw)
+    if source_mode in ("P", "PA"):
+        image.putpalette(bytes((i * 37 + 11) % 256 for i in range(768)))
+    expected = list(image.to_pillow().convert("L").get_flattened_data())
+    converted = image.convert(destination)
+    assert converted.getdata() == expected
+    assert image.tobytes() == raw
+    image.putpixel((0, 0), 0 if channels == 1 else (0,) * channels)
+    assert converted.getdata() == expected
+
+
+@pytest.mark.parametrize("destination", ["I", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_wide_grayscale_to_integer_preserves_full_samples(destination: str, depth: int) -> None:
+    values = [0, 1, 255, 256, (1 << depth) - 1]
+    raw = struct.pack("<5H", *values)
+    image = Image.frombytes("L", (5, 1), raw, bit_depth=depth)
+    assert image.convert(destination).getdata() == values
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16B"])
 def test_integer_mode_paste(mode: str) -> None:
     target = Image.new(mode, (3, 1), 10)
@@ -286,6 +312,31 @@ def test_float_mode_storage_conversion_and_geometry() -> None:
     pillow.putpixel((0, 0), 1.25)
     assert blanket.getpixel((0, 0)) == pillow.getpixel((0, 0))
     assert blanket.to_pillow().tobytes() == blanket.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("count", [1, 37, 16385])
+def test_float_to_uint16_saturation_and_byte_order(mode: str, count: int) -> None:
+    values = [float("nan"), float("inf"), -float("inf"), -1.75, 0, 1.75, 255.9, 256.25, 65535, 65536]
+    expected = [0, 65535, 0, 0, 0, 1, 255, 256, 65535, 65535]
+    values = (values * ((count + 9) // 10))[:count]
+    expected = (expected * ((count + 9) // 10))[:count]
+    image = Image.frombytes("F", (count, 1), struct.pack(f"<{count}f", *values))
+    converted = image.convert(mode)
+    assert converted.getdata() == expected
+    endian = ">" if mode == "I;16B" else "<"
+    assert converted.tobytes() == struct.pack(f"{endian}{count}H", *expected)
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+def test_integer_to_float_owns_converted_samples(mode: str) -> None:
+    values = [-65536, -1, 0, 1, 65535, 65536] if mode == "I" else [0, 1, 255, 256, 32768, 65535]
+    image = Image.new(mode, (len(values), 1))
+    image.putdata(values)
+    converted = image.convert("F")
+    assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
+    image.putpixel((0, 0), 42)
+    assert converted.getdata() == [float(value) for value in values]
 
 
 def test_float_mode_fromarray_and_paste() -> None:
