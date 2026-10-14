@@ -69,6 +69,59 @@ def test_rank_histogram_groups_and_replicated_edges(mode: str, size: tuple[int, 
     compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("size", [(1, 137), (43, 137), (137, 1)])
+@pytest.mark.parametrize("window", [3, 31, 129])
+@pytest.mark.parametrize("name", ["MinFilter", "MaxFilter"])
+def test_extrema_filters_cross_bands_and_large_windows(mode: str, size: tuple[int, int], window: int, name: str) -> None:
+    compare(mode, size, getattr(ImageFilter, name)(window), getattr(PillowFilter, name)(window))
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize("name,args", [("RankFilter", (3, 2)), ("MinFilter", (3,)), ("MaxFilter", (3,)), ("ModeFilter", (3,))])
+def test_native_neighborhood_filters_do_not_split_bands(mode: str, name: str, args: tuple[int, ...], monkeypatch: pytest.MonkeyPatch) -> None:
+    image = Image.new(mode, (7, 5))
+    channels = len(image.getbands())
+    if channels > 1:
+        image.putdata([tuple((i * 11 + channel * 71) % 256 for channel in range(channels)) for i in range(35)])
+    else:
+        image.putdata([255 if i % 3 else 0 for i in range(35)] if mode == "1" else [i * 11 % 256 for i in range(35)])
+    bands = [image.getchannel(channel) for channel in range(len(image.getbands()))]
+    operation = getattr(ImageFilter, name)(*args)
+    expected = [operation.filter(band._native).tobytes() for band in bands]
+
+    def split_error(_image: Image.Image) -> tuple[Image.Image, ...]:
+        raise AssertionError("native neighborhood filters should receive the packed image")
+
+    monkeypatch.setattr(Image.Image, "split", split_error)
+    result = image.filter(operation)
+    assert [result.getchannel(channel).tobytes() for channel in range(len(result.getbands()))] == expected
+
+
+def test_rank_subclass_receives_independent_bands() -> None:
+    class CustomRank(ImageFilter.RankFilter):
+        def filter(self, image):
+            assert image.mode == "L"
+            return super().filter(image)
+
+    image, reference = images("RGBA", (7, 5))
+    custom = CustomRank(3, 4)
+    operation = ImageFilter.RankFilter(3, 4)
+    operation.filter = custom.filter
+    expected = reference.filter(PillowFilter.RankFilter(3, 4)).tobytes()
+    for filter in (custom, operation):
+        assert image.filter(filter).tobytes() == expected
+
+
+@pytest.mark.parametrize("operation", [ImageFilter.RankFilter(1, 0), ImageFilter.ModeFilter(1)])
+def test_single_pixel_neighborhood_returns_independent_copy(operation: ImageFilter.Filter) -> None:
+    image, _ = images("RGBA", (7, 5))
+    result = image.filter(operation)
+    assert result.tobytes() == image.tobytes()
+    image.close()
+    assert len(result.tobytes()) == 7 * 5 * 4
+
+
 @pytest.mark.parametrize("size", [-3, -1, 0, 2, 4, 12])
 def test_mode_filter_special_sizes(size: int) -> None:
     compare("RGB", (7, 5), ImageFilter.ModeFilter(size), PillowFilter.ModeFilter(size))

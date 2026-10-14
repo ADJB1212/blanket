@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 from PIL import Image as PILImage, ImageDraw as PILDraw, ImageFont as PILFont
 
@@ -192,6 +194,50 @@ def test_floodfill_modes_and_diagonal_separation(mode: str, value: object, backg
     ImageDraw.floodfill(image, (-1, 0), value)
     ImageDraw.floodfill(image, (3, 3), value)
     assert image.getpixel((2, 2)) == background
+
+
+@pytest.mark.parametrize("mode,value", [("L", 117), ("LA", (117, 81)), ("RGB", (117, 81, 39)), ("RGBA", (117, 81, 39, 17)), ("I", -7), ("F", 1.25), ("I;16B", 1000), ("P", 7), ("PA", (7, 81))])
+@pytest.mark.parametrize("border", [False, True])
+def test_floodfill_scanlines_expand_merge_and_preserve_enclosed_regions(mode: str, value: object, border: bool) -> None:
+    rows = ["####....#####", "##........###", "##..##..##.##", "##..##..##.##", "##.........##", "########..###", "...#####..###", "...#####....#", "#############"]
+    image = Image.new(mode, (len(rows[0]), len(rows)))
+    barrier = (255,) * len(image.getbands()) if len(image.getbands()) > 1 else 255
+    for y, row in enumerate(rows):
+        for x, cell in enumerate(row):
+            if cell == "#":
+                image.putpixel((x, y), barrier)
+    # A prefilled pixel must not disconnect the surrounding eligible region.
+    image.putpixel((5, 1), value)
+    expected = image.copy()
+    pending = [(4, 0)]
+    visited = set(pending)
+    while pending:
+        x, y = pending.pop()
+        if expected.getpixel((x, y)) != 0 and expected.getpixel((x, y)) != (0,) * len(image.getbands()):
+            continue
+        expected.putpixel((x, y), value)
+        for neighbor in [(x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)]:
+            if 0 <= neighbor[0] < image.width and 0 <= neighbor[1] < image.height and neighbor not in visited:
+                pending.append(neighbor)
+                visited.add(neighbor)
+    ImageDraw.floodfill(image, (4, 0), value, border=barrier if border else None)
+    assert image.tobytes() == expected.tobytes()
+
+
+def test_drawing_independent_images_in_threads_matches_serial() -> None:
+    def render(index: int) -> bytes:
+        image = Image.new("RGBA", (73, 67))
+        draw = ImageDraw.Draw(image)
+        draw.point([(index, index), (2, 3)], fill="white")
+        draw.rectangle((2, 2, 65, 61), fill="blue", outline="white", width=3)
+        draw.ellipse((5, 5, 60, 57), fill="red")
+        draw.polygon([(4, 4), (20, 60), (60, 20)], fill="green")
+        draw.text((4, 4), "Ab", fill="white", stroke_width=2)
+        return image.tobytes()
+
+    expected = [render(index) for index in range(8)]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        assert list(executor.map(render, range(8))) == expected
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA", "I", "F", "P"])

@@ -164,9 +164,15 @@ fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -
         return Err(PyValueError::new_err("only RGB or L mode images can be quantized to a palette"));
     } else if dither == 0 {
         // Each worker owns its cache and output. No atomics or per-pixel locks.
-        chunks_mut(&mut indices, CHUNK_PIXELS * 8, |chunk, out| {
+        let chunk_pixels = if should_parallel(indices.len(), CHUNK_PIXELS * 8, MIN_PARALLEL_BYTES) {
+            indices.len().div_ceil(rayon::current_num_threads()).max(CHUNK_PIXELS * 8)
+        } else {
+            indices.len().max(1)
+        };
+        // Keep one search cache per partition instead of rebuilding it every 128K pixels.
+        chunks_mut(&mut indices, chunk_pixels, |chunk, out| {
             let mut cache = vec![256u16; 64 * 64 * 64];
-            let start = chunk * CHUNK_PIXELS * 8 * 3;
+            let start = chunk * chunk_pixels * 3;
             for (pixel, index) in source[start..start + out.len() * 3].as_chunks::<3>().0.iter().zip(out) {
                 *index = palette_nearest([pixel[0], pixel[1], pixel[2], 255], &search, &mut cache) as u8;
             }

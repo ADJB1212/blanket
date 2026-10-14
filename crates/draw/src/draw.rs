@@ -63,9 +63,11 @@ fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyA
     {
         ink.reverse();
     }
-    for (x, y) in points {
-        paint(image, x, y, &ink, blend);
-    }
+    value.py().detach(|| {
+        for (x, y) in points {
+            paint(image, x, y, &ink, blend);
+        }
+    });
     Ok(())
 }
 
@@ -73,23 +75,25 @@ fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyA
 fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'_, PyAny>, width: i64, blend: bool) -> PyResult<()> {
     let ink = ink(image, value, blend)?;
     let (left, top, right, bottom) = bounds;
-    if width == 0 {
-        for y in top.max(0)..=bottom.min(i64::from(image.height) - 1) {
-            hline(image, left, right, y, &ink, blend);
-        }
-    } else {
-        for i in 0..width {
-            hline(image, left, right, top.saturating_add(i), &ink, blend);
-            hline(image, left, right, bottom.saturating_sub(i), &ink, blend);
-            let start = top.saturating_add(width);
-            let end = bottom.saturating_sub(width).saturating_add(1);
-            let (first, last) = if start < end { (start, end - 1) } else { (end.saturating_add(1), start) };
-            for y in first.max(0)..=last.min(i64::from(image.height) - 1) {
-                paint(image, right.saturating_sub(i), y, &ink, blend);
-                paint(image, left.saturating_add(i), y, &ink, blend);
+    value.py().detach(|| {
+        if width == 0 {
+            for y in top.max(0)..=bottom.min(i64::from(image.height) - 1) {
+                hline(image, left, right, y, &ink, blend);
+            }
+        } else {
+            for i in 0..width {
+                hline(image, left, right, top.saturating_add(i), &ink, blend);
+                hline(image, left, right, bottom.saturating_sub(i), &ink, blend);
+                let start = top.saturating_add(width);
+                let end = bottom.saturating_sub(width).saturating_add(1);
+                let (first, last) = if start < end { (start, end - 1) } else { (end.saturating_add(1), start) };
+                for y in first.max(0)..=last.min(i64::from(image.height) - 1) {
+                    paint(image, right.saturating_sub(i), y, &ink, blend);
+                    paint(image, left.saturating_add(i), y, &ink, blend);
+                }
             }
         }
-    }
+    });
     Ok(())
 }
 
@@ -202,28 +206,30 @@ fn draw_ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'
     let inner_x = rx - width as f64;
     let inner_y = ry - width as f64;
     let samples = if antialias { 4 } else { 1 };
-    for y in top.max(0)..=bottom.min(i64::from(image.height) - 1) {
-        for x in left.max(0)..=right.min(i64::from(image.width) - 1) {
-            let mut covered = 0;
-            for sy in 0..samples {
-                for sx in 0..samples {
-                    let dx = x as f64 + (f64::from(sx) + 0.5) / f64::from(samples) - 0.5 - cx;
-                    let dy = y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5 - cy;
-                    let outer = (dx / rx).powi(2) + (dy / ry).powi(2) <= 1.0;
-                    let inner = width != 0 && inner_x > 0.0 && inner_y > 0.0 && (dx / inner_x).powi(2) + (dy / inner_y).powi(2) <= 1.0;
-                    covered += i32::from(outer && !inner);
+    value.py().detach(|| {
+        for y in top.max(0)..=bottom.min(i64::from(image.height) - 1) {
+            for x in left.max(0)..=right.min(i64::from(image.width) - 1) {
+                let mut covered = 0;
+                for sy in 0..samples {
+                    for sx in 0..samples {
+                        let dx = x as f64 + (f64::from(sx) + 0.5) / f64::from(samples) - 0.5 - cx;
+                        let dy = y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5 - cy;
+                        let outer = (dx / rx).powi(2) + (dy / ry).powi(2) <= 1.0;
+                        let inner = width != 0 && inner_x > 0.0 && inner_y > 0.0 && (dx / inner_x).powi(2) + (dy / inner_y).powi(2) <= 1.0;
+                        covered += i32::from(outer && !inner);
+                    }
                 }
+                coverage_paint(
+                    image,
+                    x,
+                    y,
+                    &ink,
+                    blend,
+                    ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
+                );
             }
-            coverage_paint(
-                image,
-                x,
-                y,
-                &ink,
-                blend,
-                ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
-            );
         }
-    }
+    });
     Ok(())
 }
 
@@ -247,50 +253,52 @@ fn draw_path(
     if points.is_empty() || (!filled && width <= 0.0) {
         return Ok(());
     }
-    if !filled && !closed && !antialias && width == 1.0 && points.iter().all(|&(x, y)| x.fract() == 0.0 && y.fract() == 0.0) {
-        for pair in points.windows(2) {
-            thin_line(image, pair[0], pair[1], &ink, blend);
-        }
-        let last = points[points.len() - 1];
-        paint(image, last.0 as i64, last.1 as i64, &ink, blend);
-        return Ok(());
-    }
-    let radius = width.max(1.0) / 2.0;
-    let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min) - radius;
-    let right = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max) + radius;
-    let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min) - radius;
-    let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max) + radius;
-    let samples = if antialias { 4 } else { 1 };
-    for y in (top.floor() as i64).max(0)..=(bottom.ceil() as i64).min(i64::from(image.height) - 1) {
-        for x in (left.floor() as i64).max(0)..=(right.ceil() as i64).min(i64::from(image.width) - 1) {
-            let mut covered = 0;
-            for sy in 0..samples {
-                for sx in 0..samples {
-                    let point = (
-                        x as f64 + (f64::from(sx) + 0.5) / f64::from(samples) - 0.5,
-                        y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5,
-                    );
-                    let hit = if filled {
-                        contains(&points, point)
-                    } else {
-                        points
-                            .windows(2)
-                            .any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + 1e-12)
-                            || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + 1e-12)
-                    };
-                    covered += i32::from(hit);
-                }
+    value.py().detach(|| {
+        if !filled && !closed && !antialias && width == 1.0 && points.iter().all(|&(x, y)| x.fract() == 0.0 && y.fract() == 0.0) {
+            for pair in points.windows(2) {
+                thin_line(image, pair[0], pair[1], &ink, blend);
             }
-            coverage_paint(
-                image,
-                x,
-                y,
-                &ink,
-                blend,
-                ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
-            );
+            let last = points[points.len() - 1];
+            paint(image, last.0 as i64, last.1 as i64, &ink, blend);
+            return;
         }
-    }
+        let radius = width.max(1.0) / 2.0;
+        let left = points.iter().map(|p| p.0).fold(f64::INFINITY, f64::min) - radius;
+        let right = points.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max) + radius;
+        let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min) - radius;
+        let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max) + radius;
+        let samples = if antialias { 4 } else { 1 };
+        for y in (top.floor() as i64).max(0)..=(bottom.ceil() as i64).min(i64::from(image.height) - 1) {
+            for x in (left.floor() as i64).max(0)..=(right.ceil() as i64).min(i64::from(image.width) - 1) {
+                let mut covered = 0;
+                for sy in 0..samples {
+                    for sx in 0..samples {
+                        let point = (
+                            x as f64 + (f64::from(sx) + 0.5) / f64::from(samples) - 0.5,
+                            y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5,
+                        );
+                        let hit = if filled {
+                            contains(&points, point)
+                        } else {
+                            points
+                                .windows(2)
+                                .any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + 1e-12)
+                                || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + 1e-12)
+                        };
+                        covered += i32::from(hit);
+                    }
+                }
+                coverage_paint(
+                    image,
+                    x,
+                    y,
+                    &ink,
+                    blend,
+                    ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
+                );
+            }
+        }
+    });
     Ok(())
 }
 
@@ -306,43 +314,49 @@ fn draw_mask(
         check_coverage(image)?;
     }
     let stroke = i64::try_from(stroke).map_err(|_| PyValueError::new_err("stroke is too large"))?;
-    for y in (-stroke).max(position.1.saturating_neg())
-        ..(size.1 as i64)
-            .saturating_add(stroke)
-            .min(i64::from(image.height).saturating_sub(position.1))
-    {
-        for x in (-stroke).max(position.0.saturating_neg())
-            ..(size.0 as i64)
+    value.py().detach(|| {
+        for y in (-stroke).max(position.1.saturating_neg())
+            ..(size.1 as i64)
                 .saturating_add(stroke)
-                .min(i64::from(image.width).saturating_sub(position.0))
+                .min(i64::from(image.height).saturating_sub(position.1))
         {
-            let mut coverage = 0;
-            for my in y.saturating_sub(stroke).max(0)..=y.saturating_add(stroke).min(size.1 as i64 - 1) {
-                for mx in x.saturating_sub(stroke).max(0)..=x.saturating_add(stroke).min(size.0 as i64 - 1) {
-                    if (mx as f64 - x as f64).powi(2) + (my as f64 - y as f64).powi(2) <= (stroke as f64).powi(2) {
-                        coverage = coverage.max(mask[my as usize * size.0 + mx as usize]);
+            for x in (-stroke).max(position.0.saturating_neg())
+                ..(size.0 as i64)
+                    .saturating_add(stroke)
+                    .min(i64::from(image.width).saturating_sub(position.0))
+            {
+                let mut coverage = 0;
+                for my in y.saturating_sub(stroke).max(0)..=y.saturating_add(stroke).min(size.1 as i64 - 1) {
+                    for mx in x.saturating_sub(stroke).max(0)..=x.saturating_add(stroke).min(size.0 as i64 - 1) {
+                        if (mx as f64 - x as f64).powi(2) + (my as f64 - y as f64).powi(2) <= (stroke as f64).powi(2) {
+                            coverage = coverage.max(mask[my as usize * size.0 + mx as usize]);
+                        }
                     }
                 }
-            }
-            if image.mode == PixelMode::Rgba && coverage != 0 {
-                let offset = ((position.1 + y) as usize * image.width as usize + (position.0 + x) as usize) * 4;
-                let dst = &image.pixels.as_ref().unwrap()[offset..offset + 4];
-                let mut pixel = [0; 4];
-                for channel in 0..4 {
-                    let weight = if channel < 3 && dst[3] == 0 { 255 } else { u32::from(coverage) };
-                    pixel[channel] = ((u32::from(ink[channel]) * weight + u32::from(dst[channel]) * (255 - weight) + 127) / 255) as u8;
+                if image.mode == PixelMode::Rgba && coverage != 0 {
+                    let offset = ((position.1 + y) as usize * image.width as usize + (position.0 + x) as usize) * 4;
+                    let dst = &image.pixels.as_ref().unwrap()[offset..offset + 4];
+                    let mut pixel = [0; 4];
+                    for channel in 0..4 {
+                        let weight = if channel < 3 && dst[3] == 0 { 255 } else { u32::from(coverage) };
+                        pixel[channel] = ((u32::from(ink[channel]) * weight + u32::from(dst[channel]) * (255 - weight) + 127) / 255) as u8;
+                    }
+                    paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &pixel, false);
+                } else {
+                    coverage_paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &ink, blend, coverage);
                 }
-                paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &pixel, false);
-            } else {
-                coverage_paint(image, position.0.saturating_add(x), position.1.saturating_add(y), &ink, blend, coverage);
             }
         }
-    }
+    });
     Ok(())
 }
 
 #[pyfunction]
-fn raster_font_mask(glyphs: Vec<Vec<u8>>, scale: usize) -> PyResult<(usize, usize, Vec<u8>)> {
+fn raster_font_mask(py: Python<'_>, glyphs: Vec<Vec<u8>>, scale: usize) -> PyResult<(usize, usize, Vec<u8>)> {
+    py.detach(|| font_mask(&glyphs, scale))
+}
+
+fn font_mask(glyphs: &[Vec<u8>], scale: usize) -> PyResult<(usize, usize, Vec<u8>)> {
     if scale == 0 || glyphs.iter().any(|rows| rows.len() != 7) {
         return Err(PyValueError::new_err("invalid bitmap glyph or scale"));
     }
@@ -384,7 +398,7 @@ fn sample_distance(mode: PixelMode, a: &[u8], b: &[u8]) -> f64 {
             (f64::from(u16::from_le_bytes(a.try_into().unwrap())) - f64::from(u16::from_le_bytes(b.try_into().unwrap()))).abs()
         }
         PixelMode::I16B => (f64::from(u16::from_be_bytes(a.try_into().unwrap())) - f64::from(u16::from_be_bytes(b.try_into().unwrap()))).abs(),
-        _ => a.iter().zip(b).map(|(&x, &y)| (f64::from(x) - f64::from(y)).abs()).sum(),
+        _ => f64::from(a.iter().zip(b).map(|(&x, &y)| u32::from(x.abs_diff(y))).sum::<u32>()),
     }
 }
 
@@ -407,43 +421,58 @@ fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Optio
     let stride = image.mode.channels() * image.mode.sample_bytes();
     let seed_index = y as usize * image.width as usize + x as usize;
     let pixels = image.pixels.as_mut().unwrap();
-    let seed = pixels[seed_index * stride..(seed_index + 1) * stride].to_vec();
-    if sample_distance(image.mode, &seed, fill) <= threshold {
+    let mut seed = [0; 4];
+    seed[..stride].copy_from_slice(&pixels[seed_index * stride..(seed_index + 1) * stride]);
+    let seed = &seed[..stride];
+    if sample_distance(image.mode, seed, fill) <= threshold {
         return;
     }
-    let mut visited = vec![false; pixels.len() / stride];
-    visited[seed_index] = true;
-    let mut pending = vec![seed_index];
-    while let Some(index) = pending.pop() {
-        let pixel = &mut pixels[index * stride..(index + 1) * stride];
-        let eligible = match border {
-            Some(border) => pixel != border && pixel != fill,
-            None => sample_distance(image.mode, pixel, &seed) <= threshold,
-        };
-        if !eligible {
-            continue;
-        }
-        pixel.copy_from_slice(fill);
-        let width = image.width as usize;
-        let mut enqueue = |index: usize| {
-            if !visited[index] {
-                visited[index] = true;
-                pending.push(index);
+    let eligible = |pixel: &[u8]| match border {
+        Some(border) => pixel != border && pixel != fill,
+        None => pixel != fill && sample_distance(image.mode, pixel, seed) <= threshold,
+    };
+    if !eligible(&pixels[seed_index * stride..(seed_index + 1) * stride]) {
+        return;
+    }
+    let width = image.width as usize;
+    let count = pixels.len() / stride;
+    let mut pending = vec![flood_run(pixels, seed_index, width, stride, fill, &eligible)];
+    while let Some((left, right)) = pending.pop() {
+        let mut scan = |mut index: usize, end: usize| {
+            while index <= end {
+                if eligible(&pixels[index * stride..(index + 1) * stride]) {
+                    let span = flood_run(pixels, index, width, stride, fill, &eligible);
+                    index = span.1 + 1;
+                    pending.push(span);
+                } else {
+                    index += 1;
+                }
             }
         };
-        if index % width > 0 {
-            enqueue(index - 1);
+        if left >= width {
+            scan(left - width, right - width);
         }
-        if index % width + 1 < width {
-            enqueue(index + 1);
-        }
-        if index >= width {
-            enqueue(index - width);
-        }
-        if index + width < pixels.len() / stride {
-            enqueue(index + width);
+        if right + width < count {
+            scan(left + width, right + width);
         }
     }
+}
+
+fn flood_run(pixels: &mut [u8], index: usize, width: usize, stride: usize, fill: &[u8], eligible: &impl Fn(&[u8]) -> bool) -> (usize, usize) {
+    let row = index / width * width;
+    let mut left = index;
+    let mut right = index;
+    while left > row && eligible(&pixels[(left - 1) * stride..left * stride]) {
+        left -= 1;
+    }
+    while right + 1 < row + width && eligible(&pixels[(right + 1) * stride..(right + 2) * stride]) {
+        right += 1;
+    }
+    // Painted runs cannot be eligible again, so no image-sized visited map is needed.
+    for pixel in pixels[left * stride..(right + 1) * stride].chunks_exact_mut(stride) {
+        pixel.copy_from_slice(fill);
+    }
+    (left, right)
 }
 
 #[cfg(test)]
@@ -463,7 +492,7 @@ mod tests {
 
     #[test]
     fn bitmap_masks_scale_without_touching_spacing() {
-        let (width, height, mask) = raster_font_mask(vec![vec![16; 7], vec![1; 7]], 2).unwrap();
+        let (width, height, mask) = font_mask(&[vec![16; 7], vec![1; 7]], 2).unwrap();
         assert_eq!((width, height), (24, 14));
         for row in mask.chunks_exact(width) {
             assert_eq!(&row[..2], &[255, 255]);
@@ -471,7 +500,7 @@ mod tests {
             assert_eq!(&row[20..22], &[255, 255]);
             assert_eq!(&row[22..], &[0, 0]);
         }
-        assert_eq!(raster_font_mask(vec![], 1).unwrap(), (0, 0, vec![]));
+        assert_eq!(font_mask(&[], 1).unwrap(), (0, 0, vec![]));
     }
 
     #[test]

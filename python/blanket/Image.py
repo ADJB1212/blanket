@@ -57,7 +57,7 @@ from ._blanket import (
 from ._color import color_pixel
 from ._exif import read_metadata
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
-from .ImageFilter import MultibandFilter
+from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
 _EXTENSIONS = {
     ".bmp": "BMP",
@@ -927,7 +927,8 @@ class Image:
             filter = filter()
         if not hasattr(filter, "filter"):
             raise TypeError("filter argument should be ImageFilter.Filter instance or class")
-        if self.mode == "L" or isinstance(filter, MultibandFilter):
+        neighborhood_filter = isinstance(filter, (RankFilter, ModeFilter)) and getattr(filter.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
+        if self.mode == "L" or isinstance(filter, MultibandFilter) or neighborhood_filter:
             result = Image(filter.filter(self._native))
             result.info.update(self.info)
             return result

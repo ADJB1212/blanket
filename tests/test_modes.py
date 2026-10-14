@@ -205,6 +205,32 @@ def test_big_endian_integer_bilinear_resize_matches_pillow_byte_order() -> None:
     assert blanket.resize((7, 1), Image.Resampling.BILINEAR).tobytes() == pillow.resize((7, 1), PillowImage.Resampling.BILINEAR).tobytes()
 
 
+@pytest.mark.parametrize("mode", ["I", "F", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("resample", [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
+@pytest.mark.parametrize("box,crop", [((1.25, 129.5, 8.25, 133.75), (0, 113, 9, 153)), ((0, 0, 9, 3), (0, 0, 9, 40)), ((0, 254, 9, 257), (0, 217, 9, 257)), ((2, 130, 2, 130), (0, 113, 9, 153))])
+def test_scalar_resize_uses_only_crop_rows(mode: str, resample: Image.Resampling, box: tuple[float, ...], crop: tuple[int, ...]) -> None:
+    values = [((y * 103 + x * 29) % 65536) for y in range(257) for x in range(9)]
+    code = "i" if mode == "I" else "f" if mode == "F" else "H"
+    raw = struct.pack((">" if mode == "I;16B" else "<") + f"{len(values)}{code}", *values)
+    image = Image.frombytes(mode, (9, 257), raw)
+    actual = image.resize((13, 7), resample, box=box)
+    local_box = (box[0], box[1] - crop[1], box[2], box[3] - crop[1])
+    expected = image.crop(crop).resize((13, 7), resample, box=local_box)
+    assert actual.tobytes() == expected.tobytes()
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize("factor", [2, 7, 37])
+def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, factor: int) -> None:
+    size = (13, 137)
+    channels = 3 if mode == "YCbCr" else len(mode)
+    raw = bytes((i * 71 + i // 13) % 256 for i in range(size[0] * size[1] * channels))
+    actual = Image.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
+    expected = PillowImage.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode,value", [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
 def test_integer_mode_new_fills_full_sample(mode: str, value: int) -> None:
     blanket = Image.new(mode, (37, 3), value)

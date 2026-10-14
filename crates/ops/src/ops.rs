@@ -799,20 +799,21 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
         MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1)
     };
     chunks_mut_above(output, row_bytes * 8, threshold, |band, rows| {
+        let mut column_sums = if fx == 1 { vec![0_u64; row_bytes] } else { Vec::new() };
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y0 = top + (band * 8 + i) as u32 * fy;
             let y1 = y0.saturating_add(fy).min(bottom);
             if fx == 1 {
                 let count = u64::from(y1 - y0);
                 let multiplier = ((1_u64 << 24) as f32 / count as f32) as u64;
-                let mut sums = vec![0_u64; row.len()];
+                column_sums.fill(0);
                 for sy in y0..y1 {
                     let start = sy as usize * width as usize + left as usize;
-                    for (sum, &sample) in sums.iter_mut().zip(source[start..start + size.0 as usize].as_flattened()) {
+                    for (sum, &sample) in column_sums.iter_mut().zip(source[start..start + size.0 as usize].as_flattened()) {
                         *sum += u64::from(sample);
                     }
                 }
-                for (dst, sum) in row.iter_mut().zip(sums) {
+                for (dst, sum) in row.iter_mut().zip(&column_sums) {
                     *dst = (((sum + count / 2) * multiplier) >> 24) as u8;
                 }
                 continue;
@@ -1032,11 +1033,13 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
     } else {
         let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
         let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
-        let mut rows = vec![0.0; image.height as usize * size.0 as usize];
+        let first = vertical.first().unwrap().0;
+        let (last, tail) = vertical.last().unwrap();
+        let mut rows = vec![0.0; (last + tail.len() - first) * size.0 as usize];
         let row_width = size.0 as usize;
         blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
             for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate() {
-                let sy = band * 16 + row;
+                let sy = first + band * 16 + row;
                 for (x, (start, coefficients)) in horizontal.iter().enumerate() {
                     dst[x] = coefficients
                         .iter()
@@ -1053,7 +1056,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     let sample: f64 = coefficients
                         .iter()
                         .enumerate()
-                        .map(|(i, &weight)| rows[(start + i) * row_width + x] * f64::from(weight) / f64::from(1 << 22))
+                        .map(|(i, &weight)| rows[(start - first + i) * row_width + x] * f64::from(weight) / f64::from(1 << 22))
                         .sum();
                     let offset = x * stride;
                     match image.mode {

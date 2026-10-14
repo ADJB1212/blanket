@@ -177,9 +177,10 @@ def test_parallel_quantize_preserves_serial_palette(mode: str, method: int) -> N
     assert large.tobytes() == small.tobytes() * 1024
 
 
-def test_parallel_fixed_palette_matches_pillow() -> None:
-    raw = bytes((i * 37 + i // 13) % 256 for i in range(513 * 517 * 3))
-    image = Image.frombytes("RGB", (513, 517), raw)
+@pytest.mark.parametrize("size", [(513, 517), (2049, 2051)])
+def test_parallel_fixed_palette_matches_pillow(size: tuple[int, int]) -> None:
+    raw = bytes((i * 37 + i // 13) % 256 for i in range(size[0] * size[1] * 3))
+    image = Image.frombytes("RGB", size, raw)
     palette = Image.frombytes("P", (1, 1), b"\x00")
     palette.putpalette(bytes((i * 71) % 256 for i in range(16 * 3)))
     actual = image.quantize(palette=palette, dither=0)

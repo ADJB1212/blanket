@@ -1,5 +1,7 @@
 //! Pillow-compatible filtering with independent output partitions.
 
+use std::collections::VecDeque;
+
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
@@ -123,12 +125,81 @@ fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<
     if rank < 0 || i64::from(rank) >= count {
         return Err(PyValueError::new_err("bad rank value"));
     }
+    if size > 1 && (rank == 0 || i64::from(rank) == count - 1) {
+        return extrema_filter(py, image, (size / 2) as usize, rank != 0);
+    }
     neighborhood(py, image, (size / 2) as usize, Some(rank as u64))
 }
 
 #[pyfunction]
 fn filter_mode(py: Python<'_>, image: &Image, size: i32) -> PyResult<Image> {
     neighborhood(py, image, (size / 2).max(0) as usize, None)
+}
+
+fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -> PyResult<Image> {
+    let source = image.pixel_data()?;
+    let pixels = py.detach(|| -> PyResult<Vec<u8>> {
+        let mut horizontal = buffer(source.len())?;
+        let mut pixels = buffer(source.len())?;
+        if pixels.is_empty() {
+            return Ok(pixels);
+        }
+        let channels = image.mode.channels();
+        let stride = image.width as usize * channels;
+        chunks_mut(&mut horizontal, stride * 16, |band, rows| {
+            let mut queue = VecDeque::new();
+            for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+                let input = &source[(band * 16 + i) * stride..][..stride];
+                for channel in 0..channels {
+                    extrema_line(&input[channel..], &mut row[channel..], channels, 0, radius, maximum, &mut queue);
+                }
+            }
+        });
+        // Growing bands with the radius bounds repeated window initialization.
+        let band_rows = 64.max(radius.min(image.height as usize));
+        chunks_mut(&mut pixels, stride * band_rows, |band, rows| {
+            let mut queue = VecDeque::new();
+            for column in 0..stride {
+                extrema_line(
+                    &horizontal[column..],
+                    &mut rows[column..],
+                    stride,
+                    band * band_rows,
+                    radius,
+                    maximum,
+                    &mut queue,
+                );
+            }
+        });
+        Ok(pixels)
+    })?;
+    output(image, pixels)
+}
+
+fn extrema_line(source: &[u8], output: &mut [u8], step: usize, first: usize, radius: usize, maximum: bool, queue: &mut VecDeque<(usize, u8)>) {
+    queue.clear();
+    let length = source.len().div_ceil(step);
+    let mut next = first.saturating_sub(radius);
+    for (i, dst) in output.iter_mut().step_by(step).enumerate() {
+        let center = first + i;
+        let left = center.saturating_sub(radius);
+        while queue.front().is_some_and(|&(index, _)| index < left) {
+            queue.pop_front();
+        }
+        let right = (center + radius).min(length - 1);
+        while next <= right {
+            let value = source[next * step];
+            while queue
+                .back()
+                .is_some_and(|&(_, previous)| if maximum { previous <= value } else { previous >= value })
+            {
+                queue.pop_back();
+            }
+            queue.push_back((next, value));
+            next += 1;
+        }
+        *dst = queue.front().unwrap().1;
+    }
 }
 
 fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>) -> PyResult<Image> {
@@ -138,6 +209,10 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
     let height = image.height as usize;
     let channels = image.mode.channels();
     if pixels.is_empty() {
+        return output(image, pixels);
+    }
+    if radius == 0 {
+        pixels.copy_from_slice(source);
         return output(image, pixels);
     }
     py.detach(|| {
@@ -514,6 +589,36 @@ fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sliding_extrema_preserve_strides_offsets_and_guards() {
+        let mut queue = VecDeque::new();
+        for step in [1, 2, 3, 4] {
+            let backing: Vec<u8> = (0..137 * step + 1).map(|i| (i * 71 + i / 7) as u8).collect();
+            let source = &backing[1..];
+            for first in [0, 1, 63, 64, 65, 136] {
+                let count = 17.min(137 - first);
+                for radius in [0, 1, 4, 70, 1000] {
+                    for maximum in [false, true] {
+                        let mut output = vec![173; count * step + 2];
+                        extrema_line(source, &mut output[1..1 + count * step], step, first, radius, maximum, &mut queue);
+                        for (i, &actual) in output.iter().enumerate() {
+                            if i > 0 && i <= count * step && (i - 1) % step == 0 {
+                                let center = first + (i - 1) / step;
+                                let left = center.saturating_sub(radius);
+                                let right = (center + radius).min(136);
+                                let values = (left..=right).map(|index| source[index * step]);
+                                let expected = if maximum { values.max() } else { values.min() }.unwrap();
+                                assert_eq!(actual, expected);
+                            } else {
+                                assert_eq!(actual, 173);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn convolution_orientation_and_borders() {
