@@ -18,6 +18,23 @@ from ._blanket import _Image, filter_blur, filter_kernel, filter_lut, filter_mod
 
 
 class Filter(ABC):
+    """Base class for filters applied to individual image bands.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+
+        class IdentityFilter(ImageFilter.Filter):
+            def filter(self, image):
+                return image
+
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(IdentityFilter())
+        ```
+    """
+
     @abstractmethod
     def filter(self, image: _Image) -> _Image:
         """Filter a native image band and return a native image."""
@@ -29,10 +46,40 @@ class MultibandFilter(Filter):
 
 
 class BuiltinFilter(MultibandFilter):
+    """Apply a convolution defined by the filterargs class attribute.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+
+        class MeanFilter(ImageFilter.BuiltinFilter):
+            name = "Mean"
+            filterargs = (3, 3), 9, 0, (1,) * 9
+
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(MeanFilter())
+        ```
+    """
+
     name: str
     filterargs: tuple[tuple[int, int], float, float, Sequence[float]]
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image convolved with the configured kernel.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.BLUR)
+            ```
+        """
         return filter_kernel(image, *self.filterargs)
 
 
@@ -95,12 +142,36 @@ class RankFilter(Filter):
         self.rank = rank
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image with each pixel replaced by its local rank value.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.RankFilter(size=3, rank=4))
+            ```
+        """
         if self.size < 0:
             raise ValueError("bad kernel size")
         return filter_rank(image, self.size, self.rank)
 
 
 class MedianFilter(RankFilter):
+    """Replace each pixel with the median value in an odd-sized window.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.MedianFilter(size=3))
+        ```
+    """
+
     name = "Median"
 
     def __init__(self, size: int = 3) -> None:
@@ -121,6 +192,17 @@ class MedianFilter(RankFilter):
 
 
 class MinFilter(RankFilter):
+    """Replace each pixel with the minimum value in an odd-sized window.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.MinFilter(size=3))
+        ```
+    """
+
     name = "Min"
 
     def __init__(self, size: int = 3) -> None:
@@ -141,6 +223,17 @@ class MinFilter(RankFilter):
 
 
 class MaxFilter(RankFilter):
+    """Replace each pixel with the maximum value in an odd-sized window.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.MaxFilter(size=3))
+        ```
+    """
+
     name = "Max"
 
     def __init__(self, size: int = 3) -> None:
@@ -182,6 +275,19 @@ class ModeFilter(Filter):
         self.size = size
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image filtered by the most frequent nearby value.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.ModeFilter(size=3))
+            ```
+        """
         return filter_mode(image, self.size)
 
 
@@ -215,6 +321,19 @@ class GaussianBlur(MultibandFilter):
         self.radius = radius
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image blurred with the configured Gaussian radii.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.GaussianBlur(radius=2))
+            ```
+        """
         return filter_blur(image, _radii(self.radius), True)
 
 
@@ -243,10 +362,34 @@ class BoxBlur(MultibandFilter):
         self.radius = radius
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image blurred with the configured box radii.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.BoxBlur(radius=2))
+            ```
+        """
         return filter_blur(image, _radii(self.radius), False)
 
 
 class UnsharpMask(MultibandFilter):
+    """Sharpen an image by amplifying differences from a Gaussian-blurred copy.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = image.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+        ```
+    """
+
     name = "UnsharpMask"
 
     def __init__(self, radius: float = 2, percent: int = 150, threshold: int = 3) -> None:
@@ -270,6 +413,19 @@ class UnsharpMask(MultibandFilter):
         self.threshold = threshold
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image sharpened with the configured unsharp mask.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.filter(ImageFilter.UnsharpMask(radius=2, percent=150, threshold=3))
+            ```
+        """
         return filter_unsharp(image, self.radius, self.percent, self.threshold)
 
 
@@ -590,10 +746,34 @@ class Color3DLUT(MultibandFilter):
         return type(self)(self.size, table, channels, target_mode or self.mode, _copy_table=False)
 
     def __repr__(self) -> str:
+        """Return a representation describing the table storage and dimensions.
+
+        Examples:
+            ```python
+            from blanket import ImageFilter
+
+            lut = ImageFilter.Color3DLUT.generate(3, lambda r, g, b: (r, g, b))
+            print(repr(lut))
+            ```
+        """
         text = f"{type(self).__name__} from {type(self.table).__name__} size={self.size[0]}x{self.size[1]}x{self.size[2]} channels={self.channels}"
         if self.mode:
             text += f" target_mode={self.mode}"
         return f"<{text}>"
 
     def filter(self, image: _Image) -> _Image:
+        """Return a native image mapped through this table using trilinear interpolation.
+
+        Args:
+            image: Native image supplied by `Image.filter`.
+
+        Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            lut = ImageFilter.Color3DLUT.generate(3, lambda r, g, b: (1 - r, g, b))
+            result = image.filter(lut)
+            ```
+        """
         return filter_lut(image, self.mode or image.mode, self.channels, self.size, self.table)

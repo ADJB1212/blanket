@@ -234,6 +234,19 @@ class Image:
     """
 
     def __init__(self, native: _Image) -> None:
+        """Wrap a native image and initialize its Python metadata.
+
+        Args:
+            native: Image storage supplied by the Rust extension.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            source = Image.new("RGB", (8, 8), (40, 100, 180))
+            image = Image.Image(source._native)
+            ```
+        """
         self._native = native
         self._bands = _BANDS[native.mode]
         self.filename: str | bytes = ""
@@ -1666,13 +1679,46 @@ class Image:
         _write_bytes(fp, encoded)
 
     def __enter__(self) -> Self:
+        """Load the image and return it for use in a context manager.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            with Image.new("RGB", (8, 8), (40, 100, 180)) as image:
+                print(image.size)
+            ```
+        """
         self.load()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
+        """Close the image when leaving a context manager.
+
+        Args:
+            *exc_info: Exception type, value, and traceback supplied by the context manager.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            with Image.new("RGB", (8, 8), (40, 100, 180)) as image:
+                result = image.copy()
+            ```
+        """
         self.close()
 
     def __repr__(self) -> str:
+        """Return a representation containing the image mode and dimensions.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            print(repr(image))
+            ```
+        """
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
 
