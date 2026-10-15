@@ -194,4 +194,4 @@ class BitmapFont:
         left, top = self.getbbox(text, anchor=anchor)[:2]
         glyphs = [bytes.fromhex(_GLYPHS.get(char.upper(), _GLYPHS["?"])) for char in text]
         width, height, data = raster_font_mask(glyphs, self.scale)
-        return BitmapMask((width, height), bytes(data)), (left, top)
+        return BitmapMask((width, height), data), (left, top)

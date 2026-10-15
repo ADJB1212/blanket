@@ -188,7 +188,7 @@ class ImagePalette:
         assert isinstance(self._palette, bytearray)
         offset = slot * len(self.mode)
         if offset < len(self.palette):
-            self._palette = self._palette[:offset] + bytes(color) + self._palette[offset + len(self.mode) :]
+            self._palette[offset : offset + len(self.mode)] = bytes(color)
         else:
             self._palette += bytes(color)
         self.dirty = 1

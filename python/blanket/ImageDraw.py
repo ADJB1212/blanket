@@ -24,6 +24,8 @@ if TYPE_CHECKING:
 
 __all__ = ["Draw", "ImageDraw", "floodfill"]
 
+_BINARY_TABLE = bytes([0] + [255] * 255)
+
 
 class ImageDraw:
     """In-place drawing context for a Blanket image.
@@ -567,8 +569,8 @@ class ImageDraw:
                 mask = font.getmask(text, mode, stroke_width=outline, **options)
                 offset = font.getbbox(text, anchor=anchor, stroke_width=outline, **options)[:2]
             data = bytes(mask)
-            if mode == "1":
-                data = bytes(255 if sample else 0 for sample in data)
+            if mode == "1" and not isinstance(font, BitmapFont):
+                data = data.translate(_BINARY_TABLE)
             position = (int(xy[0]) + int(offset[0]), int(xy[1]) + int(offset[1]))
             draw_mask(self.im._native, position, mask.size, data, self._ink(ink), bool(self.blend), native_stroke)
 

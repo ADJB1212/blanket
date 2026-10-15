@@ -482,6 +482,35 @@ impl Image {
 
 #[pymethods]
 impl Image {
+    pub fn getextrema_scalar(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        if !self.mode.is_wide_scalar() {
+            return Err(PyValueError::new_err("scalar extrema require a wide scalar mode"));
+        }
+        let data = self.raw_data()?;
+        if data.is_empty() {
+            return Ok(None);
+        }
+        if self.mode == PixelMode::F {
+            let (lo, hi) = py.detach(|| {
+                let values = data.as_chunks::<4>().0.iter().map(|bytes| float_value(bytes));
+                values.fold((f32::NAN, f32::NAN), |(lo, hi), v| {
+                    if lo.is_nan() && hi.is_nan() {
+                        return (v, v);
+                    }
+                    (if v < lo { v } else { lo }, if v > hi { v } else { hi })
+                })
+            });
+            return Ok(Some((lo, hi).into_pyobject(py)?.into_any().unbind()));
+        }
+        let mode = self.mode;
+        let (lo, hi) = py.detach(|| {
+            data.chunks_exact(mode.sample_bytes())
+                .map(|bytes| integer_value(mode, bytes))
+                .fold((i64::MAX, i64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
+        });
+        Ok(Some((lo, hi).into_pyobject(py)?.into_any().unbind()))
+    }
+
     pub fn getextrema(&self, py: Python<'_>) -> PyResult<Vec<(u16, u16)>> {
         if self.mode.is_integer() {
             return Err(PyValueError::new_err("integer extrema require getdata"));

@@ -713,7 +713,9 @@ class Image:
         """
         if self.mode == "P" and isinstance(value, tuple) and len(value) != 1:
             raise ValueError("palette putpixel requires an index")
-        self._native.putpixel(tuple(index(v) for v in xy), value)
+        if type(xy) is not tuple or len(xy) != 2 or type(xy[0]) is not int or type(xy[1]) is not int:
+            xy = tuple(index(v) for v in xy)
+        self._native.putpixel(xy, value)
 
     def getdata(self, band: int | None = None) -> list[int | float | tuple[int, ...]]:
         """Return a flat pixel snapshot, optionally selecting one band.
@@ -1156,8 +1158,7 @@ class Image:
             ```
         """
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B"):
-            data = cast("list[int]", self.getdata())
-            return (min(data), max(data)) if data else None
+            return self._native.getextrema_scalar()
         ranges = self._native.getextrema()
         if not ranges:
             return None
