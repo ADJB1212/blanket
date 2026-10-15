@@ -1,6 +1,6 @@
 //! Image arithmetic for ImageMath.
 
-use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
+use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut, chunks_mut_above};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -45,7 +45,7 @@ mod tests {
                 } else {
                     integers.map(i32::to_le_bytes).to_vec()
                 };
-                for width in [1, 3, 4, 5, 17, CHUNK_PIXELS + 3] {
+                for width in [1, 3, 4, 5, 17, CHUNK_PIXELS + 3, CHUNK_PIXELS * 4 + 3] {
                     for cropped in [false, true] {
                         let left_width = width + usize::from(cropped) * 3;
                         let right_width = width + usize::from(cropped) * 5;
@@ -67,6 +67,16 @@ mod tests {
                         apply_pixels(&mut actual, &a, b, [width, left_width, right_width], scalar, |out, a, b| {
                             simd::apply(out, a, b, op, float)
                         });
+                        if float {
+                            let result = float_pixels(expected.len(), &a, b, [width, left_width, right_width], None, op, false).unwrap();
+                            for (actual, expected) in result.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0) {
+                                if f32::from_le_bytes(*expected).is_nan() {
+                                    assert!(f32::from_le_bytes(*actual).is_nan(), "{name}");
+                                } else {
+                                    assert_eq!(actual, expected, "{name}, width={width}, cropped={cropped}");
+                                }
+                            }
+                        }
                         for (actual, expected) in actual.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0) {
                             if float && f32::from_le_bytes(*expected).is_nan() {
                                 assert!(f32::from_le_bytes(*actual).is_nan(), "{name}");
@@ -82,6 +92,7 @@ mod tests {
 }
 
 #[derive(Clone, Copy)]
+#[repr(usize)]
 enum Operation {
     Abs,
     Neg,
@@ -108,6 +119,31 @@ enum Operation {
 }
 
 impl Operation {
+    const ALL: [Self; 22] = [
+        Self::Abs,
+        Self::Neg,
+        Self::Invert,
+        Self::Add,
+        Self::Sub,
+        Self::Mul,
+        Self::Div,
+        Self::Mod,
+        Self::Pow,
+        Self::And,
+        Self::Or,
+        Self::Xor,
+        Self::Lshift,
+        Self::Rshift,
+        Self::Eq,
+        Self::Ne,
+        Self::Lt,
+        Self::Le,
+        Self::Gt,
+        Self::Ge,
+        Self::Min,
+        Self::Max,
+    ];
+
     fn parse(name: &str) -> PyResult<Self> {
         Ok(match name {
             "abs" => Self::Abs,
@@ -283,6 +319,67 @@ fn widen_u8_to_i32(source: &[u8], stride: usize, width: usize, height: usize) ->
     out
 }
 
+fn float_pixels(
+    len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, op: Operation, reverse: bool,
+) -> PyResult<Vec<u8>> {
+    macro_rules! dispatch {
+        ($($variant:ident),+ $(,)?) => {
+            match op {
+                $(Operation::$variant => float_pixels_impl::<{Operation::$variant as usize}>(
+                    len, a, b, [width, left_width, right_width], scalar, reverse)),+
+            }
+        }
+    }
+    dispatch!(
+        Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max
+    )
+}
+
+fn float_pixels_impl<const OP: usize>(
+    len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, reverse: bool,
+) -> PyResult<Vec<u8>> {
+    let mut output = Vec::<[u8; 4]>::new();
+    output
+        .try_reserve_exact(len / 4)
+        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let a = a.as_chunks::<4>().0;
+    let b = b.map(|b| b.as_chunks::<4>().0);
+    const CHUNK: usize = 64 << 10;
+    let threshold = if matches!(Operation::ALL[OP], Operation::Mod | Operation::Pow) {
+        256 << 10
+    } else {
+        4 << 20
+    };
+    chunks_mut_above(&mut output.spare_capacity_mut()[..len / 4], CHUNK, threshold, |chunk, dst| {
+        let mut index = chunk * CHUNK;
+        let mut dst = dst;
+        while !dst.is_empty() {
+            let contiguous = left_width == width && (b.is_none() || right_width == width);
+            let (ai, bi, count) = if contiguous {
+                (index, index, dst.len())
+            } else {
+                let x = index % width;
+                let y = index / width;
+                (y * left_width + x, y * right_width + x, dst.len().min(width - x))
+            };
+            let (span, rest) = dst.split_at_mut(count);
+            simd::apply_float(
+                span,
+                &a[ai..ai + count],
+                b.map(|b| &b[bi..bi + count]),
+                scalar,
+                Operation::ALL[OP],
+                reverse,
+            );
+            index += count;
+            dst = rest;
+        }
+    });
+    // SAFETY: each disjoint output span was fully initialized above.
+    unsafe { output.set_len(len / 4) };
+    Ok(output.into_flattened())
+}
+
 #[pyfunction]
 #[pyo3(signature = (operation, left, right=None, integer_output=false, *, scalar=None, reverse=false))]
 fn math_apply(
@@ -327,6 +424,24 @@ fn math_apply(
         .checked_mul(height)
         .and_then(|n| n.checked_mul(4))
         .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    if float {
+        let output = py.detach(|| {
+            float_pixels(
+                len,
+                a_raw,
+                b_raw,
+                [width, left.width as usize, right.map_or(0, |r| r.width as usize)],
+                scalar,
+                op,
+                reverse,
+            )
+        })?;
+        return if integer_output {
+            Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
+        } else {
+            Image::from_float_bytes(width as u32, height as u32, output)
+        };
+    }
     let mut output = Vec::new();
     output
         .try_reserve_exact(len)
@@ -353,26 +468,10 @@ fn math_apply(
             ($($variant:ident),+ $(,)?) => {
                 match op {
                     $(Operation::$variant => {
-                        if float {
-                            apply_pixels(&mut output, a, b, [width, left_width,
-                                right_width], |a, b| {
-                                    let a = f32::from_le_bytes(a);
-                                    let b = scalar.unwrap_or_else(|| f32::from_le_bytes(b));
-                                    let (a, b) = if reverse { (b, a) } else { (a, b) };
-                                    Operation::$variant.float(a, b).to_le_bytes()
-                                }, |out, a, b| {
-                                    if let Some(value) = scalar {
-                                        simd::apply_float_scalar(out, a, value, Operation::$variant, reverse)
-                                    } else {
-                                        simd::apply(out, a, b, Operation::$variant, true)
-                                    }
-                                });
-                        } else {
-                            apply_pixels(&mut output, a, b, [width, left_width,
-                                right_width], |a, b| {
-                                    Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
-                                }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
-                        }
+                        apply_pixels(&mut output, a, b, [width, left_width,
+                            right_width], |a, b| {
+                                Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
+                            }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
                     }),+
                 }
             }
@@ -381,9 +480,5 @@ fn math_apply(
             Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max
         );
     });
-    if float && !integer_output {
-        Image::from_float_bytes(width as u32, height as u32, output)
-    } else {
-        Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
-    }
+    Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
 }

@@ -544,6 +544,10 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
 }
 
 pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+    if C == 3 && orientation == 8 {
+        rotate_rgb_90(source, output, w, h);
+        return;
+    }
     let source = source.as_chunks::<C>().0;
     let width = if orientation >= 5 { h } else { w };
     // Bands and tiles keep 90-degree rotations local to cache and give every
@@ -579,6 +583,39 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                     for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
                         let i = if orientation == 7 || orientation == 8 { count - 1 - i } else { i };
                         row[x * C..(x + 1) * C].copy_from_slice(&src[i]);
+                    }
+                }
+            }
+        }
+    });
+}
+
+fn rotate_rgb_90(source: &[u8], output: &mut [u8], w: usize, h: usize) {
+    chunks_mut_above(output, h * 3 * 32, MIN_PARALLEL_BYTES, |band, rows| {
+        for (group, rows) in rows.chunks_mut(h * 3 * 4).enumerate() {
+            let count = rows.len() / (h * 3);
+            let y = band * 32 + group * 4;
+            if count == 4 {
+                let sx = w - y - 4;
+                let end = h / 4 * 4;
+                for x in (0..end).step_by(4) {
+                    let input = std::array::from_fn(|i| &source[((x + i) * w + sx) * 3..][..12]);
+                    let columns = crate::ops_simd::transpose_rgb_four(input);
+                    for (row, column) in rows.chunks_exact_mut(h * 3).zip(columns.iter().rev()) {
+                        row[x * 3..x * 3 + 12].copy_from_slice(column);
+                    }
+                }
+                for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
+                    for x in end..h {
+                        let src = (x * w + w - 1 - y - i) * 3;
+                        row[x * 3..x * 3 + 3].copy_from_slice(&source[src..src + 3]);
+                    }
+                }
+            } else {
+                for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
+                    for (x, dst) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+                        let src = (x * w + w - 1 - y - i) * 3;
+                        dst.copy_from_slice(&source[src..src + 3]);
                     }
                 }
             }
@@ -1811,6 +1848,38 @@ mod tests {
             let clipped = ops_canvas(py, &image, (3, 3), (-1, 1), vec![9]).unwrap();
             assert_eq!(clipped.pixel_data().unwrap(), [9, 9, 9, 2, 3, 9, 5, 6, 9]);
         });
+    }
+
+    #[test]
+    fn tiled_transpose_preserves_unaligned_pixels_edges_and_guards() {
+        fn check<const C: usize>() {
+            for (w, h) in [(1, 1), (1, 33), (33, 1), (17, 31), (32, 32), (33, 65), (67, 35)] {
+                for orientation in 5..=8 {
+                    for offset in 0..16 {
+                        let source: Vec<u8> = (0..offset + w * h * C).map(|i| (i * 37 + 113) as u8).collect();
+                        let mut output = vec![0xa5; offset + w * h * C + 16];
+                        transpose::<C>(&source[offset..], &mut output[offset..offset + w * h * C], w, h, orientation);
+                        assert!(output[..offset].iter().all(|&v| v == 0xa5));
+                        assert!(output[offset + w * h * C..].iter().all(|&v| v == 0xa5));
+                        for y in 0..w {
+                            for x in 0..h {
+                                let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
+                                let sx = if orientation == 7 || orientation == 8 { w - 1 - y } else { y };
+                                let src = offset + (sy * w + sx) * C;
+                                let dst = offset + (y * h + x) * C;
+                                assert_eq!(output[dst..dst + C], source[src..src + C]);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<6>();
+        check::<8>();
     }
 
     #[test]

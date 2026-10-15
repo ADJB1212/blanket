@@ -6,20 +6,45 @@ use std::simd::{Select, f32x4, i32x4};
 
 use super::Operation;
 
-#[inline]
-pub(super) fn apply_float_scalar(output: &mut [[u8; 4]], input: &[[u8; 4]], value: f32, op: Operation, reverse: bool) -> usize {
-    assert!(input.len() >= output.len());
-    if matches!(op, Operation::Mod | Operation::Pow) {
-        return 0;
+#[inline(always)]
+pub(super) fn apply_float(
+    output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, scalar: Option<f32>, op: Operation, reverse: bool,
+) {
+    assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
+    let end = if matches!(op, Operation::Mod | Operation::Pow) {
+        0
+    } else {
+        output.len() / 4 * 4
+    };
+    let write = |dst: &mut [std::mem::MaybeUninit<[u8; 4]>; 4], left: &[[u8; 4]; 4], right| {
+        let left = f32x4::from_array(left.map(f32::from_le_bytes));
+        let (left, right) = if reverse { (right, left) } else { (left, right) };
+        *dst = float_operation(op, left, right)
+            .to_array()
+            .map(|v| std::mem::MaybeUninit::new(v.to_le_bytes()));
+    };
+    let dst = output[..end].as_chunks_mut::<4>().0;
+    let left = a[..end].as_chunks::<4>().0;
+    if let Some(value) = scalar {
+        let value = f32x4::splat(value);
+        for (dst, left) in dst.iter_mut().zip(left) {
+            write(dst, left, value);
+        }
+    } else if let Some(b) = b {
+        for ((dst, left), right) in dst.iter_mut().zip(left).zip(b[..end].as_chunks::<4>().0) {
+            write(dst, left, f32x4::from_array(right.map(f32::from_le_bytes)));
+        }
+    } else {
+        for (dst, left) in dst.iter_mut().zip(left) {
+            write(dst, left, f32x4::splat(0.0));
+        }
     }
-    let len = output.len() / 4 * 4;
-    let scalar = f32x4::splat(value);
-    for (dst, src) in output[..len].as_chunks_mut::<4>().0.iter_mut().zip(input[..len].as_chunks::<4>().0) {
-        let values = f32x4::from_array(src.map(f32::from_le_bytes));
-        let (a, b) = if reverse { (scalar, values) } else { (values, scalar) };
-        *dst = float_operation(op, a, b).to_array().map(f32::to_le_bytes);
+    for i in end..output.len() {
+        let left = f32::from_le_bytes(a[i]);
+        let right = scalar.unwrap_or_else(|| b.map_or(0.0, |b| f32::from_le_bytes(b[i])));
+        let (left, right) = if reverse { (right, left) } else { (left, right) };
+        output[i].write(op.float(left, right).to_le_bytes());
     }
-    len
 }
 
 #[inline]
@@ -80,7 +105,7 @@ fn integer(op: Operation, a: i32x4, b: i32x4) -> i32x4 {
     }
 }
 
-#[inline]
+#[inline(always)]
 fn float_operation(op: Operation, a: f32x4, b: f32x4) -> f32x4 {
     let one = f32x4::splat(1.0);
     let zero = f32x4::splat(0.0);
@@ -120,12 +145,13 @@ mod tests {
                                 .chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes()))
                                 .collect();
                             let input = source[offset..].as_chunks::<4>().0;
-                            let mut output = vec![0xa5; offset + len * 4 + 16];
-                            let done = apply_float_scalar(output[offset..offset + len * 4].as_chunks_mut::<4>().0, input, value, op, reverse);
-                            assert_eq!(done, if matches!(op, Operation::Mod | Operation::Pow) { 0 } else { len / 4 * 4 });
-                            assert!(output[..offset].iter().all(|&v| v == 0xa5));
-                            assert!(output[offset + done * 4..].iter().all(|&v| v == 0xa5));
-                            for (actual, sample) in output[offset..offset + done * 4].as_chunks::<4>().0.iter().zip(input) {
+                            let mut uninit = vec![std::mem::MaybeUninit::new([0xa5; 4]); len + 2];
+                            apply_float(&mut uninit[1..len + 1], input, None, Some(value), op, reverse);
+                            // SAFETY: the guarded elements started initialized and the kernel wrote every output sample.
+                            let initialized: Vec<_> = uninit.iter().map(|sample| unsafe { sample.assume_init() }).collect();
+                            assert_eq!(initialized[0], [0xa5; 4]);
+                            assert_eq!(initialized[len + 1], [0xa5; 4]);
+                            for (actual, sample) in initialized[1..len + 1].iter().zip(input) {
                                 let sample = f32::from_le_bytes(*sample);
                                 let expected = if reverse { op.float(value, sample) } else { op.float(sample, value) };
                                 if expected.is_nan() {

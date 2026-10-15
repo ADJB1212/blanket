@@ -5,6 +5,24 @@ use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use blanket_core::pixels::{self, Bytes, load, store};
 
+#[inline]
+pub(crate) fn transpose_rgb_four(rows: [&[u8]; 4]) -> [[u8; 12]; 4] {
+    use std::simd::simd_swizzle;
+
+    let [a, b, c, d] = rows.map(|row| Bytes::from_array(std::array::from_fn(|i| if i < 12 { row[i] } else { 0 })));
+    let ab0 = simd_swizzle!(a, b, [0, 1, 2, 16, 17, 18, 3, 4, 5, 19, 20, 21, 0, 0, 0, 0]);
+    let ab1 = simd_swizzle!(a, b, [6, 7, 8, 22, 23, 24, 9, 10, 11, 25, 26, 27, 0, 0, 0, 0]);
+    let cd0 = simd_swizzle!(c, d, [0, 1, 2, 16, 17, 18, 3, 4, 5, 19, 20, 21, 0, 0, 0, 0]);
+    let cd1 = simd_swizzle!(c, d, [6, 7, 8, 22, 23, 24, 9, 10, 11, 25, 26, 27, 0, 0, 0, 0]);
+    [
+        simd_swizzle!(ab0, cd0, [0, 1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 0, 0, 0, 0]),
+        simd_swizzle!(ab0, cd0, [6, 7, 8, 9, 10, 11, 22, 23, 24, 25, 26, 27, 0, 0, 0, 0]),
+        simd_swizzle!(ab1, cd1, [0, 1, 2, 3, 4, 5, 16, 17, 18, 19, 20, 21, 0, 0, 0, 0]),
+        simd_swizzle!(ab1, cd1, [6, 7, 8, 9, 10, 11, 22, 23, 24, 25, 26, 27, 0, 0, 0, 0]),
+    ]
+    .map(|v| v.to_array()[..12].try_into().unwrap())
+}
+
 pub(crate) fn reduce_float_two(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
     let end = (upper.len().min(lower.len()) / 16 * 2).min(output.len() / 8 * 2);
     for x in (0..end).step_by(2) {

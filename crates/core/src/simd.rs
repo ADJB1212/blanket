@@ -1,6 +1,6 @@
 use std::simd::Simd;
 use std::simd::cmp::SimdOrd;
-use std::simd::num::{SimdFloat, SimdInt};
+use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::pixels::{Bytes, load, store};
@@ -261,12 +261,16 @@ pub fn gray_to_hsv<const C: usize>(source: &[u8]) -> Vec<u8> {
 
 /// Pillow's L to CMYK stores inverted gray as K.
 pub fn gray_to_cmyk(source: &[u8]) -> Vec<u8> {
-    map_blocks::<1, 4>(
-        source,
-        4 << 20,
-        |p| [Bytes::splat(0), Bytes::splat(0), Bytes::splat(0), !p[0]],
-        |p| [0, 0, 0, 255 - p[0]],
-    )
+    let (blocks, tail) = source.as_chunks::<16>();
+    let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+    output.extend(
+        blocks
+            .iter()
+            .map(|block| ((!Bytes::from_array(*block)).cast::<u32>() << 24).to_array().map(u32::to_le_bytes)),
+    );
+    let mut output = output.into_flattened();
+    output.extend(tail.iter().map(|&v| [0, 0, 0, 255 - v]));
+    output.into_flattened()
 }
 
 pub fn gray_to_ycbcr(source: &[u8]) -> Vec<u8> {
@@ -274,6 +278,15 @@ pub fn gray_to_ycbcr(source: &[u8]) -> Vec<u8> {
 }
 
 pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
+    if S == 4 {
+        return source
+            .as_chunks::<S>()
+            .0
+            .iter()
+            .map(|p| ((u32::from_le_bytes(p[..4].try_into().unwrap()) ^ 0x00ff_ffff) & 0x00ff_ffff).to_le_bytes())
+            .collect::<Vec<_>>()
+            .into_flattened();
+    }
     map_blocks::<S, 4>(
         source,
         4 << 20,
@@ -284,6 +297,14 @@ pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
 
 pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
     fn extract<const S: usize, const BAND: usize>(source: &[u8]) -> Vec<u8> {
+        if S == 2 {
+            let (blocks, tail) = source.as_chunks::<32>();
+            let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+            output.extend(blocks.iter().map(|block| load::<2>(block)[BAND].to_array()));
+            let mut output = output.into_flattened();
+            output.extend(tail.as_chunks::<2>().0.iter().map(|p| p[BAND]));
+            return output;
+        }
         if source.len() / S < 4 << 20 {
             return source.as_chunks::<S>().0.iter().map(|pixel| pixel[BAND]).collect();
         }
@@ -307,6 +328,9 @@ pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8>
 }
 
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
+    if to == PixelMode::L {
+        return extract_channel::<2>(source, 0);
+    }
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];
     crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 << 20, |chunk, dst| {
@@ -345,6 +369,26 @@ pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
 }
 
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
+    if C == 4 {
+        if S == 3 {
+            let (blocks, tail) = source.as_chunks::<48>();
+            let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+            output.extend(blocks.iter().map(|block| {
+                let mut pixels = [0; 64];
+                let [r, g, b] = load::<3>(block);
+                store(&mut pixels, [r, g, b, Bytes::splat(255)]);
+                pixels
+            }));
+            let mut output = output.into_flattened();
+            output.extend(tail.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]));
+            return output;
+        }
+        return source
+            .iter()
+            .map(|&v| ((u32::from(v) * 0x0001_0101) | 0xff00_0000).to_le_bytes())
+            .collect::<Vec<_>>()
+            .into_flattened();
+    }
     map_blocks::<S, C>(
         source,
         2 << 20,
@@ -407,6 +451,39 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn expanding_and_extracting_unaligned_pixels_preserves_channels_and_tails() {
+        for count in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33, 257] {
+            for offset in 0..16 {
+                let source: Vec<u8> = (0..offset + count * 4).map(|i| (i * 37 + 113) as u8).collect();
+                let gray = &source[offset..offset + count];
+                let rgb = &source[offset..offset + count * 3];
+                let rgba = &source[offset..];
+                let expected: Vec<_> = gray.iter().flat_map(|&v| [v, v, v, 255]).collect();
+                assert_eq!(convert(gray, PixelMode::L, PixelMode::Rgba), expected);
+                let expected: Vec<_> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+                assert_eq!(convert(rgb, PixelMode::Rgb, PixelMode::Rgba), expected);
+                let expected: Vec<_> = gray.iter().flat_map(|&v| [0, 0, 0, 255 - v]).collect();
+                assert_eq!(gray_to_cmyk(gray), expected);
+                let expected: Vec<_> = rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
+                    .collect();
+                assert_eq!(color_to_cmyk::<4>(rgba), expected);
+                let pairs = &source[offset..offset + count * 2];
+                for band in 0..2 {
+                    let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().map(|p| p[band]).collect();
+                    assert_eq!(extract_two_channel(pairs, band), expected);
+                    if band == 0 {
+                        assert_eq!(convert_la(pairs, PixelMode::L), expected);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn numeric_conversion_kernels_preserve_unaligned_tails_and_guards() {

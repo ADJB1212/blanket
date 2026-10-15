@@ -159,7 +159,7 @@ def test_float_scalar_overflow(value: float) -> None:
         ImageMath.unsafe_eval("a + n", a=image, n=value)
 
 
-@pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259)])
+@pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259), (1025, 1025)])
 @pytest.mark.parametrize("mode", ["I", "F"])
 def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
     a, pa = pair(mode, size)
