@@ -323,6 +323,15 @@ jobs:
         uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
       - name: Install Rust
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+      - name: Configure macOS toolchain
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+
+          echo "DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer" >> "$GITHUB_ENV"
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
       - name: Install Python from uv
         run: |
           uv python install 3.14
@@ -398,7 +407,7 @@ jobs:
         id: build-wheel
         run: |
           uv sync --no-install-project --only-group test
-          maturin build --release --out dist-unrepaired --features default -i python3.14 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C link-arg=-Wl,--icf=safe -C link-arg=-Wl,-fixup_chains -C target-cpu=apple-m1
+          maturin build --release --out dist-unrepaired --features default -i python3.14 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
