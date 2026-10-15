@@ -136,6 +136,51 @@ def test_big_endian_strided_uint16() -> None:
     assert image.tobytes() == source.astype("<u2").tobytes()
 
 
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("byteorder", ["<", ">"])
+def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int, byteorder: str) -> None:
+    samples = (np.arange(19 * 23 * channels, dtype=np.uint32) * 37 % (1 << depth)).astype(f"{byteorder}u2")
+    samples = samples.reshape((19, 23) if channels == 1 else (19, 23, channels))
+    for array in (samples, samples[::-1, ::2]):
+        expected = array.astype("<u2").tobytes()
+        image = Image.fromarray(array, mode, bit_depth=depth)
+        original = array.copy()
+        array[...] = (1 << depth) - 1
+        assert image.tobytes() == expected
+        array[...] = original
+    if depth < 16:
+        samples.flat[-1] = 1 << depth
+        for construct in (lambda: Image.fromarray(samples, mode, bit_depth=depth), lambda: Image.frombytes(mode, (23, 19), samples.astype("<u2").tobytes(), bit_depth=depth)):
+            with pytest.raises(ValueError, match="range"):
+                construct()
+
+
+@pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("target_mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("source_depth,target_depth", [(8, 10), (10, 8), (10, 12), (12, 16), (16, 10), (16, 16)])
+@pytest.mark.parametrize("count", [17, 262147])
+def test_wide_conversion_rounding_and_parallel_tails(source_mode: str, target_mode: str, source_depth: int, target_depth: int, count: int) -> None:
+    source_max = (1 << source_depth) - 1
+    target_max = (1 << target_depth) - 1
+    samples = (np.arange(count * len(source_mode), dtype=np.uint64) * 37 % (source_max + 1)).reshape(count, len(source_mode))
+    raw = samples.astype("u1" if source_depth == 8 else "<u2").tobytes()
+    image = Image.frombytes(source_mode, (count, 1), raw, bit_depth=source_depth)
+    rgb = np.repeat(samples, 3, axis=1) if source_mode == "L" else samples[:, :3]
+    if target_mode == "L":
+        expected = (rgb @ np.array([19595, 38470, 7471], dtype=np.uint64) + 32768) >> 16
+    elif target_mode == "RGB":
+        expected = rgb
+    else:
+        alpha = samples[:, 3:] if source_mode == "RGBA" else np.full((count, 1), source_max, dtype=np.uint64)
+        expected = np.concatenate((rgb, alpha), axis=1)
+    expected = ((expected * target_max + source_max // 2) // source_max).astype("u1" if target_depth == 8 else "<u2")
+    result = image.convert(target_mode, bit_depth=target_depth)
+    assert (result.mode, result.size, result.bit_depth) == (target_mode, image.size, target_depth)
+    assert result.tobytes() == expected.tobytes()
+    assert image.tobytes() == raw
+
+
 def test_external_ten_bit_heif() -> None:
     # Independent encoder uses 16-bit input normalized to 10-bit HEVC samples.
     samples = np.linspace(0, 65535, 32 * 32 * 3, dtype=np.uint16).reshape(32, 32, 3)
@@ -187,6 +232,18 @@ def test_wide_resize_preserves_constant_samples(method: int, mode: str, channels
     assert result.bit_depth == 10
     expected = 713 if channels == 1 else (713, 713, 713, 511) if channels == 4 else (713,) * 3
     assert all(result.getpixel((x, y)) == expected for y in range(7) for x in range(9))
+
+
+@pytest.mark.parametrize("method", list(Image.Resampling))
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_wide_resize_matches_independent_row_regions(method: int, mode: str, depth: int) -> None:
+    samples = (np.arange(1026 * 514 * len(mode), dtype=np.uint32) * 37 % (1 << depth)).astype("<u2")
+    image = Image.frombytes(mode, (1026, 514), samples.tobytes(), bit_depth=depth)
+    result = image.resize((513, 257), method)
+    regions = [image.resize((513, bottom - top), method, box=(0, top * 2, 1026, bottom * 2)) for top, bottom in ((0, 64), (64, 128), (128, 257))]
+    assert (result.mode, result.bit_depth) == (mode, depth)
+    assert result.tobytes() == b"".join(region.tobytes() for region in regions)
 
 
 @pytest.mark.parametrize("data", [b"", b"\x00\x00\x00\x18ftypheic", b"\x00\x00\x00\x10ftypheic\0\0\0\0"])

@@ -9,8 +9,19 @@ from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
 
 
+@pytest.mark.parametrize("mode", ["LA", "RGB", "RGBA", "YCbCr"])
+def test_channel_extraction_parallel_cutoff_and_tail(mode: str) -> None:
+    count = (4 << 20) + 3
+    channels = PIL.getmodebands(mode)
+    raw = random.Random(17).randbytes(count * channels)
+    actual = Image.frombytes(mode, (count, 1), raw)
+    expected = PIL.frombytes(mode, (count, 1), raw)
+    for channel in range(channels):
+        assert actual.getchannel(channel).tobytes() == expected.getchannel(channel).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
-@pytest.mark.parametrize("count", [17, 4097, 300007])
+@pytest.mark.parametrize("count", [17, 4097, 262143, 262144, 262147, 300007])
 def test_raw_conversion_chunks(mode: str, count: int) -> None:
     raw = random.Random(73).randbytes(count * PIL.getmodebands(mode))
     actual, expected = Image.frombytes(mode, (count, 1), raw), PIL.frombytes(mode, (count, 1), raw)

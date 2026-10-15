@@ -156,10 +156,10 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         for label, _, p_img, _ in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
             png = pillow_payload(p_img, "PNG", compress_level=6)
             comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)), lambda p=png: pillow_load(p)))
-            comps.extend(
-                (f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv))
-                for level in (1, 6, 9)
-            )
+        comps.extend(
+            (f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv))
+            for level in (1, 6, 9)
+        )
 
         # ── JPEG ──────────────────────────────────────────────────────
         for label, _, p_img in (("RGB", b_rgb, p_rgb), ("L", b_gray, p_gray)):
@@ -1002,7 +1002,7 @@ def result_key(row: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def load_baseline(path: Path) -> dict[str, Any]:
-    """Accept saved runs and the original --json result lists."""
+    """Accept saved runs and result lists, using median Blanket times for repeated cases."""
     document = json.loads(path.read_text())
     if isinstance(document, list):
         document = {"results": document, "metadata": {}}
@@ -1010,17 +1010,18 @@ def load_baseline(path: Path) -> dict[str, Any]:
         raise ValueError("expected a run object or a list of results")
     if not isinstance(document.get("metadata", {}), dict):
         raise ValueError("metadata must be an object")
-    seen = set()
+    cases: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
     for row in document["results"]:
         try:
             key = result_key(row)
             value = row["blanket_ms"]
             valid = not isinstance(value, bool) and isinstance(value, (int, float)) and math.isfinite(value) and value > 0
-            if not valid or key in seen:
-                raise ValueError("timings must be positive and finite, and case keys unique")
-            seen.add(key)
+            if not valid:
+                raise ValueError(f"timing for {key!r} must be positive and finite")
+            cases.setdefault(key, []).append(row)
         except (KeyError, TypeError) as error:
             raise ValueError("invalid benchmark result") from error
+    document["results"] = [{**rows[0], "blanket_ms": median(row["blanket_ms"] for row in rows)} for rows in cases.values()]
     return document
 
 

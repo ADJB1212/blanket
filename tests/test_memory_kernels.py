@@ -8,6 +8,26 @@ from PIL import Image as PillowImage, ImageOps as PillowOps
 from blanket import Image, ImageOps
 
 
+@pytest.mark.parametrize("mode,color", [("RGB", (19, 29, 39)), ("RGBA", (19, 29, 39, 149)), ("I", -1024), ("F", -12.5), ("I;16B", 1024), ("LA", (19, 149))])
+@pytest.mark.parametrize("size", [(0, 3), (17, 19), (800, 600), (1025, 1025), (1400001, 1)])
+def test_new_fills_serial_and_parallel_buffers(mode: str, color: object, size: tuple[int, int]) -> None:
+    actual = Image.new(mode, size, color)
+    expected = PillowImage.new(mode, size, color)
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+@pytest.mark.parametrize("size", [(37, 33), (803, 607), (2053, 2051)])
+def test_scalar_crop_copies_complete_rows(mode: str, size: tuple[int, int]) -> None:
+    sample_bytes = 4 if mode in ("I", "F") else 2
+    raw = random.Random(41).randbytes(size[0] * size[1] * sample_bytes)
+    image = Image.frombytes(mode, size, raw)
+    reference = PillowImage.frombytes(mode, size, raw)
+    for box in ((1, 2, size[0] - 2, size[1] - 1), (0, 0, *size), (3, 2, 3, size[1]), (-1, -2, size[0] + 1, size[1] + 2)):
+        assert image.crop(box).tobytes() == reference.crop(box).tobytes()
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(1, 33), (33, 1), (31, 65), (32, 64), (33, 63), (803, 607)])
 def test_transpose_tile_edges(mode: str, size: tuple[int, int]) -> None:

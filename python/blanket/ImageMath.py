@@ -32,6 +32,10 @@ class _Operand:
         return Image.new(mode, self.im.size, value)
 
     def _apply(self, operation: str, left: _Operand | float, right: _Operand | float | None = None, *, integer_output: bool = False) -> _Operand:
+        operand, value, reverse = (left, right, False) if isinstance(left, _Operand) else (right, left, True)
+        if isinstance(operand, _Operand) and operand.im.mode == "F" and isinstance(value, (int, float)):
+            operand.im.load()
+            return _Operand(Image.Image(math_apply(operation, operand.im._native, integer_output=integer_output, scalar=float(value), reverse=reverse)))
         first = self._coerce(left)
         second = None if right is None else self._coerce(right)
         if second is not None and first.mode != second.mode and not {first.mode, second.mode} <= _INTEGER_MODES:

@@ -235,6 +235,7 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                 for channel in 0..channels {
                     let mut histogram = [0_u64; 256];
                     let mut coarse = [0_u64; 16];
+                    let mut candidates = [0_u64; 4];
                     for yy in top..=bottom {
                         let weight = vertical_weight(yy);
                         for xx in 0..=radius.min(width - 1) {
@@ -248,6 +249,8 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                             histogram[value] += weight * horizontal;
                             if rank.is_some() {
                                 coarse[value >> 4] += weight * horizontal;
+                            } else if histogram[value] == 3 {
+                                candidates[value >> 6] |= 1 << (value & 63);
                             }
                         }
                     }
@@ -255,7 +258,7 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                         let original = source[(y * width + x) * channels + channel];
                         row[x * channels + channel] = match rank {
                             Some(rank) => select_rank(&histogram, &coarse, rank),
-                            None => select_mode(&histogram, original),
+                            None => select_mode(&histogram, &candidates, original),
                         };
                         if x + 1 == width {
                             break;
@@ -268,6 +271,8 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                                 histogram[value] -= weight;
                                 if rank.is_some() {
                                     coarse[value >> 4] -= weight;
+                                } else if histogram[value] == 2 {
+                                    candidates[value >> 6] &= !(1 << (value & 63));
                                 }
                             }
                             if rank.is_some() || x + radius + 1 < width {
@@ -276,6 +281,8 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                                 histogram[value] += weight;
                                 if rank.is_some() {
                                     coarse[value >> 4] += weight;
+                                } else if histogram[value] == 3 {
+                                    candidates[value >> 6] |= 1 << (value & 63);
                                 }
                             }
                         }
@@ -306,15 +313,20 @@ fn select_rank(histogram: &[u64; 256], coarse: &[u64; 16], mut rank: u64) -> u8 
     unreachable!("rank is within the populated histogram")
 }
 
-fn select_mode(histogram: &[u64; 256], original: u8) -> u8 {
-    let mut count = 0;
+fn select_mode(histogram: &[u64; 256], candidates: &[u64; 4], original: u8) -> u8 {
+    let mut count = 2;
     let mut result = original;
-    for (value, &frequency) in histogram.iter().enumerate() {
-        if frequency > count {
-            count = frequency;
-            if count > 2 {
+    // Only values occurring at least three times can replace the original.
+    for (group, &mask) in candidates.iter().enumerate() {
+        let mut mask = mask;
+        while mask != 0 {
+            let value = group * 64 + mask.trailing_zeros() as usize;
+            let frequency = histogram[value];
+            if frequency > count {
+                count = frequency;
                 result = value as u8;
             }
+            mask &= mask - 1;
         }
     }
     result
@@ -663,10 +675,10 @@ mod tests {
         let mut histogram = [0; 256];
         histogram[1] = 2;
         histogram[2] = 2;
-        assert_eq!(select_mode(&histogram, 99), 99);
+        assert_eq!(select_mode(&histogram, &[0; 4], 99), 99);
         histogram[1] = 3;
         histogram[2] = 3;
-        assert_eq!(select_mode(&histogram, 99), 1);
+        assert_eq!(select_mode(&histogram, &[6, 0, 0, 0], 99), 1);
     }
 
     #[test]

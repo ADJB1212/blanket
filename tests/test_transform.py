@@ -137,12 +137,13 @@ def test_nearest_fractional_boundaries(scale: float) -> None:
     assert image.transform((80, 80), Image.AFFINE, data).tobytes() == reference.transform((80, 80), PILImage.Transform.AFFINE, data).tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("target", [(15, 17), (16, 16), (33, 31), (400, 300), (800, 600)])
 @pytest.mark.parametrize("extent", [(80.0, 60.0, 720.0, 540.0), (799.9, 599.9, 0.1, 0.1), (0.1, 0.1, 10.1, 10.1), (3.5, 2.5, 3.5, 2.5), (-10.0, -10.0, 810.0, 610.0)])
-def test_nearest_extent_gather(target: tuple[int, int], extent: tuple[float, float, float, float]) -> None:
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(800 * 600))
-    image = Image.frombytes("L", (800, 600), raw)
-    reference = PILImage.frombytes("L", (800, 600), raw)
+def test_nearest_extent_gather(mode: str, target: tuple[int, int], extent: tuple[float, float, float, float]) -> None:
+    raw = bytes((i * 37 + i // 7) % 256 for i in range(800 * 600 * len(mode)))
+    image = Image.frombytes(mode, (800, 600), raw)
+    reference = PILImage.frombytes(mode, (800, 600), raw)
     actual = image.transform(target, Image.EXTENT, extent, fillcolor=19)
     expected = reference.transform(target, PILImage.Transform.EXTENT, extent, fillcolor=19)
     assert actual.tobytes() == expected.tobytes()

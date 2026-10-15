@@ -56,14 +56,7 @@ fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
         return Image::from_integer_bytes(size.0, size.1, image.mode, pixels);
     }
     if image.bit_depth > 8 {
-        return Image::from_samples(
-            size.0,
-            size.1,
-            image.mode,
-            pixels.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect(),
-            image.bit_depth,
-            None,
-        );
+        return Image::from_sample_bytes(size.0, size.1, image.mode, pixels, image.bit_depth, None);
     }
     let mut result = Image::from_pixels(size.0, size.1, image.mode, pixels, None)?;
     result.palette.clone_from(&image.palette);
@@ -77,24 +70,15 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
     if len == 0 {
         return;
     }
-    if !should_parallel(len, row_bytes.saturating_mul(32), 4 * 1024 * 1024) {
-        for y in 0..height {
-            pixels.extend_from_slice(source_row(y));
+    chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], row_bytes * 32, 4 * 1024 * 1024, |band, rows| {
+        for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+            let src = source_row(band * 32 + i);
+            assert_eq!(src.len(), row.len());
+            // SAFETY: source and destination are separate allocations.
+            // Each worker initializes only its disjoint destination rows.
+            unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), row.as_mut_ptr().cast::<u8>(), row.len()) };
         }
-        return;
-    }
-    pixels.spare_capacity_mut()[..len]
-        .par_chunks_mut(row_bytes * 32)
-        .enumerate()
-        .for_each(|(band, rows)| {
-            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                let src = source_row(band * 32 + i);
-                assert_eq!(src.len(), row.len());
-                // SAFETY: source and destination are separate allocations.
-                // Each worker initializes only its disjoint destination rows.
-                unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), row.as_mut_ptr().cast::<u8>(), row.len()) };
-            }
-        });
+    });
     // SAFETY: every byte in the reserved image was initialized above. If a
     // worker panics, the vector remains empty and exposes no unwritten bytes.
     unsafe { pixels.set_len(len) };
@@ -455,8 +439,7 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
         && offset.0.saturating_add(i64::from(image.width)) >= i64::from(size.0)
         && offset.1.saturating_add(i64::from(image.height)) >= i64::from(size.1)
     {
-        // An interior crop writes every byte. Append complete source rows so
-        // allocation does not first zero memory that is immediately replaced.
+        // An interior crop writes every byte directly into reserved storage.
         let mut pixels = reserved_buffer(size, channels)?;
         py.detach(|| {
             let row_bytes = size.0 as usize * channels;
@@ -760,28 +743,42 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
     let source = image.pixel_data()?;
     let c = image.mode.channels();
     let mut pixels = buffer(size, c)?;
-    py.detach(|| match image.mode {
-        PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::La => {
-            let mut source = source.to_vec();
-            premultiply_la(&mut source);
-            reduce_pixels::<2>(&source, &mut pixels, image.width, size, factor, bounds);
-            unpremultiply_la(&mut pixels);
+    py.detach(|| -> PyResult<()> {
+        match image.mode {
+            PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
+            PixelMode::La => {
+                let mut source = reduction_crop(source, image.width, bounds, c)?;
+                premultiply_la(&mut source);
+                reduce_pixels::<2>(&source, &mut pixels, right - left, size, factor, (0, 0, right - left, bottom - top));
+                unpremultiply_la(&mut pixels);
+            }
+            PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
+            }
+            PixelMode::Cmyk => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
+            PixelMode::Rgba => {
+                let mut source = reduction_crop(source, image.width, bounds, c)?;
+                premultiply(&mut source);
+                reduce_pixels::<4>(&source, &mut pixels, right - left, size, factor, (0, 0, right - left, bottom - top));
+                unpremultiply(&mut pixels);
+            }
+            _ => unreachable!(),
         }
-        PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-            reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
-        }
-        PixelMode::Cmyk => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
-        PixelMode::Rgba => {
-            let mut source = source.to_vec();
-            premultiply(&mut source);
-            reduce_pixels::<4>(&source, &mut pixels, image.width, size, factor, bounds);
-            unpremultiply(&mut pixels);
-        }
-        _ => unreachable!(),
-    });
+        Ok(())
+    })?;
     output(image, size, pixels)
+}
+
+fn reduction_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), channels: usize) -> PyResult<Vec<u8>> {
+    let (left, top, right, bottom) = bounds;
+    let mut pixels = reserved_buffer((right - left, bottom - top), channels)?;
+    let row_bytes = (right - left) as usize * channels;
+    copy_rows(&mut pixels, row_bytes, (bottom - top) as usize, |y| {
+        let start = ((top as usize + y) * width as usize + left as usize) * channels;
+        &source[start..start + row_bytes]
+    });
+    Ok(pixels)
 }
 
 fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, size: (u32, u32), factor: (u32, u32), bounds: (u32, u32, u32, u32)) {
@@ -1113,49 +1110,55 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
         .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     temp.resize(length, 0.0);
     let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
-    for y in 0..rows {
-        for (x, (start, coefficients)) in horizontal.iter().enumerate() {
-            for channel in 0..channels {
-                let value = coefficients
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &weight)| {
-                        let offset = ((y + first) * image.width as usize + start + i) * channels;
-                        let value = sample(offset + channel);
-                        let value = if channels == 4 && channel < 3 {
-                            value * sample(offset + 3) / maximum
-                        } else {
-                            value
-                        };
-                        value * f64::from(weight) / f64::from(1 << 22)
-                    })
-                    .sum::<f64>();
-                temp[y * stride + x * channels + channel] = value;
+    chunks_mut_above(&mut temp, stride * 8, MIN_PARALLEL_BYTES, |band, rows| {
+        for (y, row) in rows.chunks_exact_mut(stride).enumerate() {
+            let y = band * 8 + y;
+            for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                for channel in 0..channels {
+                    let value = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| {
+                            let offset = ((y + first) * image.width as usize + start + i) * channels;
+                            let value = sample(offset + channel);
+                            let value = if channels == 4 && channel < 3 {
+                                value * sample(offset + 3) / maximum
+                            } else {
+                                value
+                            };
+                            value * f64::from(weight) / f64::from(1 << 22)
+                        })
+                        .sum::<f64>();
+                    row[x * channels + channel] = value;
+                }
             }
         }
-    }
-    for (y, (start, coefficients)) in vertical.iter().enumerate() {
-        for x in 0..size.0 as usize {
-            let mut values = [0.0; 4];
-            for (channel, value) in values.iter_mut().enumerate().take(channels) {
-                *value = coefficients
-                    .iter()
-                    .enumerate()
-                    .map(|(i, &weight)| temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(1 << 22))
-                    .sum::<f64>()
-                    .clamp(0.0, maximum);
-            }
-            for channel in 0..channels {
-                let value = if channels == 4 && channel < 3 {
-                    if values[3] > 0.0 { values[channel] * maximum / values[3] } else { 0.0 }
-                } else {
-                    values[channel]
-                };
-                let offset = (y * stride + x * channels + channel) * 2;
-                pixels[offset..offset + 2].copy_from_slice(&(value.round().clamp(0.0, maximum) as u16).to_le_bytes());
+    });
+    chunks_mut(&mut pixels, stride * 2 * 8, |band, rows| {
+        for (y, row) in rows.chunks_exact_mut(stride * 2).enumerate() {
+            let (start, coefficients) = &vertical[band * 8 + y];
+            for x in 0..size.0 as usize {
+                let mut values = [0.0; 4];
+                for (channel, value) in values.iter_mut().enumerate().take(channels) {
+                    *value = coefficients
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(1 << 22))
+                        .sum::<f64>()
+                        .clamp(0.0, maximum);
+                }
+                for channel in 0..channels {
+                    let value = if channels == 4 && channel < 3 {
+                        if values[3] > 0.0 { values[channel] * maximum / values[3] } else { 0.0 }
+                    } else {
+                        values[channel]
+                    };
+                    let offset = (x * channels + channel) * 2;
+                    row[offset..offset + 2].copy_from_slice(&(value.round().clamp(0.0, maximum) as u16).to_le_bytes());
+                }
             }
         }
-    }
+    });
     output(image, size, pixels)
 }
 
@@ -1761,6 +1764,26 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduction_crop_only_copies_requested_rows_and_columns() {
+        for channels in [2, 4] {
+            let source: Vec<u8> = (0..19 * 17 * channels).map(|i| (i * 37) as u8).collect();
+            for bounds in [(3, 5, 8, 9), (0, 0, 19, 17), (19, 17, 19, 17)] {
+                let (left, top, right, bottom) = bounds;
+                let crop = reduction_crop(&source, 19, bounds, channels).unwrap();
+                assert_eq!(crop.len(), (right - left) as usize * (bottom - top) as usize * channels);
+                let mut expected = Vec::new();
+                for y in top..bottom {
+                    for x in left..right {
+                        let start = (y * 19 + x) as usize * channels;
+                        expected.extend_from_slice(&source[start..start + channels]);
+                    }
+                }
+                assert_eq!(crop, expected);
+            }
+        }
+    }
 
     #[test]
     fn alpha_rounding_and_zero_alpha() {

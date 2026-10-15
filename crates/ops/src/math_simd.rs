@@ -7,6 +7,22 @@ use std::simd::{Select, f32x4, i32x4};
 use super::Operation;
 
 #[inline]
+pub(super) fn apply_float_scalar(output: &mut [[u8; 4]], input: &[[u8; 4]], value: f32, op: Operation, reverse: bool) -> usize {
+    assert!(input.len() >= output.len());
+    if matches!(op, Operation::Mod | Operation::Pow) {
+        return 0;
+    }
+    let len = output.len() / 4 * 4;
+    let scalar = f32x4::splat(value);
+    for (dst, src) in output[..len].as_chunks_mut::<4>().0.iter_mut().zip(input[..len].as_chunks::<4>().0) {
+        let values = f32x4::from_array(src.map(f32::from_le_bytes));
+        let (a, b) = if reverse { (scalar, values) } else { (values, scalar) };
+        *dst = float_operation(op, a, b).to_array().map(f32::to_le_bytes);
+    }
+    len
+}
+
+#[inline]
 pub(super) fn apply(output: &mut [[u8; 4]], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, op: Operation, float: bool) -> usize {
     assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
     if matches!(op, Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift) || (!float && matches!(op, Operation::Div)) {
@@ -90,6 +106,40 @@ fn float_operation(op: Operation, a: f32x4, b: f32x4) -> f32x4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_broadcast_preserves_operand_order_tails_and_guards() {
+        let values = [f32::NAN, f32::NEG_INFINITY, -3.5, -0.0, 0.0, 1.0, f32::INFINITY, f32::from_bits(1)];
+        for name in ["add", "sub", "mul", "div", "mod", "pow", "eq", "ne", "lt", "le", "gt", "ge", "min", "max"] {
+            let op = Operation::parse(name).unwrap();
+            for value in values {
+                for reverse in [false, true] {
+                    for len in [0, 1, 3, 4, 5, 15, 16, 17, 67] {
+                        for offset in 0..16 {
+                            let source: Vec<u8> = std::iter::repeat_n(0, offset)
+                                .chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes()))
+                                .collect();
+                            let input = source[offset..].as_chunks::<4>().0;
+                            let mut output = vec![0xa5; offset + len * 4 + 16];
+                            let done = apply_float_scalar(output[offset..offset + len * 4].as_chunks_mut::<4>().0, input, value, op, reverse);
+                            assert_eq!(done, if matches!(op, Operation::Mod | Operation::Pow) { 0 } else { len / 4 * 4 });
+                            assert!(output[..offset].iter().all(|&v| v == 0xa5));
+                            assert!(output[offset + done * 4..].iter().all(|&v| v == 0xa5));
+                            for (actual, sample) in output[offset..offset + done * 4].as_chunks::<4>().0.iter().zip(input) {
+                                let sample = f32::from_le_bytes(*sample);
+                                let expected = if reverse { op.float(value, sample) } else { op.float(sample, value) };
+                                if expected.is_nan() {
+                                    assert!(f32::from_le_bytes(*actual).is_nan(), "{name}");
+                                } else {
+                                    assert_eq!(*actual, expected.to_le_bytes(), "{name}, reverse={reverse}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn unaligned_buffers_preserve_tails_and_guards() {

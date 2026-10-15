@@ -89,6 +89,13 @@ fn store_rgb(output: &mut [u8], values: [Bytes; 3]) {
     simd_swizzle!(t, c, [26, 1, 2, 27, 4, 5, 28, 7, 8, 29, 10, 11, 30, 13, 14, 31]).copy_to_slice(&mut output[32..48]);
 }
 
+#[inline]
+pub fn store_gray_rgb(output: &mut [u8], gray: Bytes) {
+    simd_swizzle!(gray, [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 4, 4, 4, 5]).copy_to_slice(&mut output[..16]);
+    simd_swizzle!(gray, [5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10]).copy_to_slice(&mut output[16..32]);
+    simd_swizzle!(gray, [10, 11, 11, 11, 12, 12, 12, 13, 13, 13, 14, 14, 14, 15, 15, 15]).copy_to_slice(&mut output[32..48]);
+}
+
 pub fn reverse_rgb(src: &[u8], dst: &mut [u8]) -> usize {
     let end = dst.len() / 3 / 16 * 16;
     for i in (0..end).step_by(16) {

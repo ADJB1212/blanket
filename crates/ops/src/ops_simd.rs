@@ -26,9 +26,10 @@ pub(crate) fn reduce_float_two(upper: &[u8], lower: &[u8], output: &mut [u8]) ->
     end
 }
 
-/// Reusable grayscale gather map for an axis-aligned nearest transform.
+/// Reusable byte gather map for an axis-aligned nearest transform.
 pub(crate) struct NearestL {
     columns: Vec<usize>,
+    blocks: Vec<Option<(usize, Bytes)>>,
     width: usize,
 }
 
@@ -38,7 +39,17 @@ impl NearestL {
         if columns.iter().any(|&x| x >= width) {
             return None;
         }
-        Some(Self { columns, width })
+        let blocks = columns
+            .as_chunks::<16>()
+            .0
+            .iter()
+            .map(|columns| {
+                let start = (*columns.iter().min().unwrap()).min(width.saturating_sub(32));
+                (width >= 32 && columns.iter().all(|&x| x - start < 32))
+                    .then(|| (start, Bytes::from_array(std::array::from_fn(|i| (columns[i] - start) as u8))))
+            })
+            .collect();
+        Some(Self { columns, blocks, width })
     }
 
     pub(crate) fn is_vectorized(&self) -> bool {
@@ -49,8 +60,16 @@ impl NearestL {
         assert_eq!(source.len(), self.width);
         assert_eq!(output.len(), self.columns.len());
         let done = output.len() / 16 * 16;
-        for i in (0..done).step_by(16) {
-            Bytes::gather_or_default(source, Simd::from_slice(&self.columns[i..i + 16])).copy_to_slice(&mut output[i..i + 16]);
+        for (i, (block, dst)) in self.blocks.iter().zip(output[..done].as_chunks_mut::<16>().0).enumerate() {
+            let values = if let Some((start, indices)) = block {
+                let low = Bytes::from_slice(&source[*start..*start + 16]);
+                let high = Bytes::from_slice(&source[*start + 16..*start + 32]);
+                low.swizzle_dyn(*indices) | high.swizzle_dyn(*indices - Bytes::splat(16))
+            } else {
+                let i = i * 16;
+                Bytes::gather_or_default(source, Simd::from_slice(&self.columns[i..i + 16]))
+            };
+            values.copy_to_slice(dst);
         }
         for (dst, &x) in output[done..].iter_mut().zip(&self.columns[done..]) {
             *dst = source[x];
@@ -412,24 +431,29 @@ mod tests {
 
     #[test]
     fn nearest_l_gathers_and_scalar_tails() {
-        let source: Vec<u8> = (0..258).map(|i| (i * 37) as u8).collect();
-        for n in [0, 1, 15, 16, 17, 31, 32, 33, 127] {
-            for step in [0, 1, 2, 5] {
-                for reverse in [false, true] {
-                    let columns: Vec<_> = (0..n)
-                        .map(|i| {
-                            let x = i * step % 256;
-                            Some(if reverse { 255 - x } else { x })
-                        })
-                        .collect();
-                    let map = NearestL::new(&columns, 256).unwrap();
-                    let mut output = vec![123; n + 2];
-                    map.sample(&source[1..257], &mut output[1..n + 1]);
-                    for (i, column) in columns.iter().enumerate() {
-                        assert_eq!(output[i + 1], source[1 + column.unwrap()]);
+        for width in [1, 15, 16, 17, 31, 32, 33, 64, 256] {
+            for channels in [1, 2, 3, 4] {
+                let bytes = width * channels;
+                let source: Vec<u8> = (0..bytes + 2).map(|i| (i * 37) as u8).collect();
+                for n in [0, 1, 15, 16, 17, 31, 32, 33, 127] {
+                    for step in [0, 1, 2, 3, 5, 31] {
+                        for reverse in [false, true] {
+                            let columns: Vec<_> = (0..n * channels)
+                                .map(|i| {
+                                    let x = i / channels * step % width;
+                                    Some((if reverse { width - 1 - x } else { x }) * channels + i % channels)
+                                })
+                                .collect();
+                            let map = NearestL::new(&columns, bytes).unwrap();
+                            let mut output = vec![123; n * channels + 2];
+                            map.sample(&source[1..bytes + 1], &mut output[1..n * channels + 1]);
+                            for (i, column) in columns.iter().enumerate() {
+                                assert_eq!(output[i + 1], source[1 + column.unwrap()]);
+                            }
+                            assert_eq!(output[0], 123);
+                            assert_eq!(output[n * channels + 1], 123);
+                        }
                     }
-                    assert_eq!(output[0], 123);
-                    assert_eq!(output[n + 1], 123);
                 }
             }
         }

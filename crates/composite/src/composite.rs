@@ -47,7 +47,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
 }
 
 fn fill_pixels<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {
-    blanket_core::parallel::chunks_mut_above(pixels, 256 * 1024 * C, 1024 * 1024, |_, pixels| fill_pixels_chunk::<C>(pixels, color));
+    blanket_core::parallel::chunks_mut_above(pixels, 64 * 1024 * C, 4 * 1024 * 1024, |_, pixels| fill_pixels_chunk::<C>(pixels, color));
 }
 
 fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], color: &[u8]) {

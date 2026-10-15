@@ -2,7 +2,7 @@
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::{Image, PixelMode};
-use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
 #[path = "math_simd.rs"]
@@ -284,12 +284,27 @@ fn widen_u8_to_i32(source: &[u8], stride: usize, width: usize, height: usize) ->
 }
 
 #[pyfunction]
-#[pyo3(signature = (operation, left, right=None, integer_output=false))]
-fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool) -> PyResult<Image> {
+#[pyo3(signature = (operation, left, right=None, integer_output=false, *, scalar=None, reverse=false))]
+fn math_apply(
+    py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool, scalar: Option<f64>, reverse: bool,
+) -> PyResult<Image> {
     let op = Operation::parse(operation)?;
-    if op.unary() != right.is_none() {
+    if op.unary() != (right.is_none() && scalar.is_none()) || (right.is_some() && scalar.is_some()) {
         return Err(PyValueError::new_err("wrong number of image math operands"));
     }
+    if scalar.is_some() && left.mode != PixelMode::F {
+        return Err(PyValueError::new_err("scalar image math requires F mode"));
+    }
+    let scalar = scalar
+        .map(|value| {
+            let sample = value as f32;
+            if value.is_finite() && !sample.is_finite() {
+                Err(PyOverflowError::new_err("float too large to pack with f format"))
+            } else {
+                Ok(sample)
+            }
+        })
+        .transpose()?;
     let left_byte = matches!(left.mode, PixelMode::One | PixelMode::L);
     let right_byte = right.is_some_and(|r| matches!(r.mode, PixelMode::One | PixelMode::L));
     let integer_group = |mode: PixelMode| matches!(mode, PixelMode::One | PixelMode::L | PixelMode::I);
@@ -341,8 +356,17 @@ fn math_apply(py: Python<'_>, operation: &str, left: &Image, right: Option<&Imag
                         if float {
                             apply_pixels(&mut output, a, b, [width, left_width,
                                 right_width], |a, b| {
-                                    Operation::$variant.float(f32::from_le_bytes(a), f32::from_le_bytes(b)).to_le_bytes()
-                                }, |out, a, b| simd::apply(out, a, b, Operation::$variant, true));
+                                    let a = f32::from_le_bytes(a);
+                                    let b = scalar.unwrap_or_else(|| f32::from_le_bytes(b));
+                                    let (a, b) = if reverse { (b, a) } else { (a, b) };
+                                    Operation::$variant.float(a, b).to_le_bytes()
+                                }, |out, a, b| {
+                                    if let Some(value) = scalar {
+                                        simd::apply_float_scalar(out, a, value, Operation::$variant, reverse)
+                                    } else {
+                                        simd::apply(out, a, b, Operation::$variant, true)
+                                    }
+                                });
                         } else {
                             apply_pixels(&mut output, a, b, [width, left_width,
                                 right_width], |a, b| {

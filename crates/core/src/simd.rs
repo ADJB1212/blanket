@@ -6,6 +6,44 @@ use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::pixels::{Bytes, load, store};
 use crate::raster::PixelMode;
 
+pub fn integer_to_float(source: &[u8], mode: PixelMode) -> Vec<u8> {
+    let stride = mode.sample_bytes();
+    let mut output = vec![0; source.len() / stride * 4];
+    chunks_mut(&mut output, CHUNK_PIXELS * 4, |chunk, dst| {
+        let src = &source[chunk * CHUNK_PIXELS * stride..];
+        for (i, pixel) in dst.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+            let value = match mode {
+                PixelMode::I => i32::from_le_bytes(src[i * 4..i * 4 + 4].try_into().unwrap()),
+                PixelMode::I16B => i32::from(u16::from_be_bytes(src[i * 2..i * 2 + 2].try_into().unwrap())),
+                _ => i32::from(u16::from_le_bytes(src[i * 2..i * 2 + 2].try_into().unwrap())),
+            };
+            *pixel = (value as f32).to_le_bytes();
+        }
+    });
+    output
+}
+
+pub fn float_to_l(source: &[u8]) -> Vec<u8> {
+    let mut output = vec![0; source.len() / 4];
+    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, dst| {
+        float_to_l_chunk(&source[chunk * CHUNK_PIXELS * 4..][..dst.len() * 4], dst);
+    });
+    output
+}
+
+#[inline]
+fn float_to_l_chunk(source: &[u8], dst: &mut [u8]) {
+    let src = source.as_chunks::<4>().0;
+    let end = dst.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let values = Simd::<f32, 16>::from_array(std::array::from_fn(|lane| f32::from_le_bytes(src[i + lane])));
+        values.cast::<u8>().copy_to_slice(&mut dst[i..i + 16]);
+    }
+    for (dst, src) in dst[end..].iter_mut().zip(&src[end..]) {
+        *dst = f32::from_le_bytes(*src) as u8;
+    }
+}
+
 pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0; source.len()];
     chunks_mut(&mut output, CHUNK_PIXELS << 2, |chunk, dst| {
@@ -59,25 +97,74 @@ pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
 }
 
 pub fn integer_to_color(source: &[u8], mode: PixelMode, channels: usize) -> Vec<u8> {
-    debug_assert!(matches!(channels, 3 | 4));
+    match channels {
+        3 => integer_to_color_pixels::<3>(source, mode),
+        4 => integer_to_color_pixels::<4>(source, mode),
+        _ => unreachable!("RGB or RGBA destination"),
+    }
+}
+
+fn integer_to_color_pixels<const C: usize>(source: &[u8], mode: PixelMode) -> Vec<u8> {
     let stride = mode.sample_bytes();
-    let mut output = vec![0; source.len() / stride * channels];
-    chunks_mut(&mut output, CHUNK_PIXELS * channels, |chunk, dst| {
-        let start = chunk * CHUNK_PIXELS * stride;
-        let src = &source[start..start + dst.len() / channels * stride];
-        for (bytes, pixel) in src.chunks_exact(stride).zip(dst.chunks_exact_mut(channels)) {
-            let value = match mode {
-                PixelMode::I => i32::from_le_bytes(bytes.try_into().unwrap()).clamp(0, 255) as u8,
-                PixelMode::I16B => u16::from_be_bytes(bytes.try_into().unwrap()).min(255) as u8,
-                _ => u16::from_le_bytes(bytes.try_into().unwrap()).min(255) as u8,
-            };
-            pixel[..3].fill(value);
-            if channels == 4 {
-                pixel[3] = 255;
-            }
-        }
+    if C == 4 && source.len() / stride * C < 4 << 20 {
+        return match mode {
+            PixelMode::I => integer_to_color_serial::<C, 4>(source.as_chunks::<4>().0, i32::from_le_bytes),
+            PixelMode::I16B => integer_to_color_serial::<C, 2>(source.as_chunks::<2>().0, |v| i32::from(u16::from_be_bytes(v))),
+            _ => integer_to_color_serial::<C, 2>(source.as_chunks::<2>().0, |v| i32::from(u16::from_le_bytes(v))),
+        };
+    }
+    let mut output = vec![0; source.len() / stride * C];
+    const CHUNK: usize = 64 << 10;
+    crate::parallel::chunks_mut_above(&mut output, CHUNK * C, 256 << 10, |chunk, dst| {
+        let start = chunk * CHUNK * stride;
+        let src = &source[start..start + dst.len() / C * stride];
+        integer_to_color_chunk::<C>(src, dst, mode);
     });
     output
+}
+
+#[inline]
+fn integer_to_color_serial<const C: usize, const S: usize>(source: &[[u8; S]], sample: impl Fn([u8; S]) -> i32) -> Vec<u8> {
+    source
+        .iter()
+        .map(|&input| {
+            let value = sample(input).clamp(0, 255) as u8;
+            std::array::from_fn(|c| if c == 3 { 255 } else { value })
+        })
+        .collect::<Vec<[u8; C]>>()
+        .into_flattened()
+}
+
+#[inline]
+fn integer_to_color_chunk<const C: usize>(src: &[u8], dst: &mut [u8], mode: PixelMode) {
+    match mode {
+        PixelMode::I => integer_to_color_samples::<C, 4>(src.as_chunks::<4>().0, dst, i32::from_le_bytes),
+        PixelMode::I16B => integer_to_color_samples::<C, 2>(src.as_chunks::<2>().0, dst, |v| i32::from(u16::from_be_bytes(v))),
+        _ => integer_to_color_samples::<C, 2>(src.as_chunks::<2>().0, dst, |v| i32::from(u16::from_le_bytes(v))),
+    }
+}
+
+#[inline]
+fn integer_to_color_samples<const C: usize, const S: usize>(src: &[[u8; S]], dst: &mut [u8], sample: impl Fn([u8; S]) -> i32) {
+    let end = dst.len() / C / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let input: &[[u8; S]; 16] = src[i..i + 16].try_into().unwrap();
+        let values = Simd::<i32, 16>::from_array(input.map(&sample))
+            .simd_clamp(Simd::splat(0), Simd::splat(255))
+            .cast::<u8>();
+        if C == 3 {
+            crate::pixels::store_gray_rgb(&mut dst[i * C..], values);
+        } else {
+            store::<C>(
+                &mut dst[i * C..],
+                std::array::from_fn(|c| if c == 3 { Bytes::splat(255) } else { values }),
+            );
+        }
+    }
+    for (pixel, &input) in dst[end * C..].as_chunks_mut::<C>().0.iter_mut().zip(&src[end..]) {
+        let value = sample(input).clamp(0, 255) as u8;
+        *pixel = std::array::from_fn(|c| if c == 3 { 255 } else { value });
+    }
 }
 
 pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
@@ -196,7 +283,27 @@ pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
 }
 
 pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
-    map_blocks::<S, 1>(source, 1024 << 10, |p| [p[channel]], |p| [p[channel]])
+    fn extract<const S: usize, const BAND: usize>(source: &[u8]) -> Vec<u8> {
+        if source.len() / S < 4 << 20 {
+            return source.as_chunks::<S>().0.iter().map(|pixel| pixel[BAND]).collect();
+        }
+        let mut output = vec![0; source.len() / S];
+        const CHUNK: usize = 64 << 10;
+        crate::parallel::chunks_mut_above(&mut output, CHUNK, 4 << 20, |i, dst| {
+            let src = &source[i * CHUNK * S..(i * CHUNK + dst.len()) * S];
+            for (pixel, value) in dst.iter_mut().zip(src.as_chunks::<S>().0) {
+                *pixel = value[BAND];
+            }
+        });
+        output
+    }
+    match channel {
+        0 => extract::<S, 0>(source),
+        1 => extract::<S, 1>(source),
+        2 => extract::<S, 2>(source),
+        3 => extract::<S, 3>(source),
+        _ => unreachable!("validated channel index"),
+    }
 }
 
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
@@ -300,6 +407,56 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn numeric_conversion_kernels_preserve_unaligned_tails_and_guards() {
+        let floats = [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -0.0, 0.0, -1.5, 1.75, 254.9, 255.1];
+        let integers = [i32::MIN, i32::MAX, -1, 0, 1, 127, 255, 256, 65535];
+        for count in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33] {
+            for offset in 0..16 {
+                let source: Vec<_> = std::iter::repeat_n(93, offset)
+                    .chain((0..count).flat_map(|i| floats[i % floats.len()].to_le_bytes()))
+                    .collect();
+                let mut output = vec![93; offset + count + 16];
+                float_to_l_chunk(&source[offset..], &mut output[offset..offset + count]);
+                assert!(output[..offset].iter().all(|&v| v == 93));
+                assert!(output[offset + count..].iter().all(|&v| v == 93));
+                for i in 0..count {
+                    assert_eq!(output[offset + i], floats[i % floats.len()].clamp(0.0, 255.0) as u8);
+                }
+                for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+                    let source: Vec<_> = std::iter::repeat_n(93, offset)
+                        .chain((0..count).flat_map(|i| {
+                            let v = integers[i % integers.len()];
+                            match mode {
+                                PixelMode::I => v.to_le_bytes().to_vec(),
+                                PixelMode::I16B => (v as u16).to_be_bytes().to_vec(),
+                                _ => (v as u16).to_le_bytes().to_vec(),
+                            }
+                        }))
+                        .collect();
+                    let gray = integer_to_l(&source[offset..], mode);
+                    for channels in [3, 4] {
+                        let mut output = vec![93; offset + count * channels + 16];
+                        let dst = &mut output[offset..offset + count * channels];
+                        if channels == 3 {
+                            integer_to_color_chunk::<3>(&source[offset..], dst, mode);
+                        } else {
+                            integer_to_color_chunk::<4>(&source[offset..], dst, mode);
+                        }
+                        assert!(output[..offset].iter().all(|&v| v == 93));
+                        assert!(output[offset + count * channels..].iter().all(|&v| v == 93));
+                        for i in 0..count {
+                            assert_eq!(&output[offset + i * channels..offset + i * channels + 3], &[gray[i]; 3]);
+                            if channels == 4 {
+                                assert_eq!(output[offset + i * channels + 3], 255);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn float_cast_matches_scalar_at_vector_boundaries() {

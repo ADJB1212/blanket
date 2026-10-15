@@ -444,20 +444,35 @@ impl Image {
     }
 
     pub fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
+        let mut pixels = vec![0; samples.len() * 2];
+        for (dst, value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(samples) {
+            *dst = value.to_le_bytes();
+        }
+        Self::from_sample_bytes(width, height, mode, pixels, bit_depth, format)
+    }
+
+    pub fn from_sample_bytes(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
         if !matches!(mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
             return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
         }
         if !matches!(bit_depth, 10 | 12 | 16) {
             return Err(PyValueError::new_err("bit_depth must be 8, 10, 12, or 16"));
         }
-        if samples.len() != expected_len(width, height, mode)? || samples.iter().any(|&v| u32::from(v) >= (1_u32 << bit_depth)) {
+        if !pixels.len().is_multiple_of(2)
+            || pixels.len() / 2 != expected_len(width, height, mode)?
+            || pixels
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .any(|&v| u32::from(u16::from_le_bytes(v)) >= (1_u32 << bit_depth))
+        {
             return Err(PyValueError::new_err("invalid sample count or sample outside bit_depth range"));
         }
         Ok(Self {
             width,
             height,
             mode,
-            pixels: Some(samples.into_iter().flat_map(u16::to_le_bytes).collect()),
+            pixels: Some(pixels),
             bit_depth,
             format,
             palette: None,
@@ -964,9 +979,7 @@ impl Image {
                 let data = source.raw_data()?;
                 let pixels = py.detach(|| {
                     if source.mode.is_integer() {
-                        data.chunks_exact(source.mode.sample_bytes())
-                            .flat_map(|bytes| (integer_value(source.mode, bytes) as f32).to_le_bytes())
-                            .collect()
+                        crate::simd::integer_to_float(data, source.mode)
                     } else {
                         data.iter().flat_map(|&value| f32::from(value).to_le_bytes()).collect()
                     }
@@ -1005,12 +1018,7 @@ impl Image {
                 });
                 return Self::from_integer_bytes(self.width, self.height, destination, pixels);
             }
-            let pixels = data
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|bytes| float_value(bytes).clamp(0.0, 255.0) as u8)
-                .collect();
+            let pixels = py.detach(|| crate::simd::float_to_l(data));
             let gray = Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)?;
             return gray.convert(py, mode, bit_depth);
         }
@@ -1137,35 +1145,55 @@ impl Image {
                 return expanded.convert(py, mode, Some(depth));
             }
             let bytes = self.raw_data()?;
-            let samples: Vec<u16> = if self.bit_depth == 8 {
-                bytes.iter().map(|&v| u16::from(v)).collect()
-            } else {
-                bytes.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect()
-            };
             let source_max = (1_u32 << self.bit_depth) - 1;
             let target_max = (1_u32 << depth) - 1;
-            let mut output = Vec::with_capacity(expected_len(self.width, self.height, destination)?);
-            for pixel in samples.chunks_exact(self.mode.channels()) {
-                let (r, g, b, a) = match self.mode {
-                    PixelMode::L => (pixel[0], pixel[0], pixel[0], source_max as u16),
-                    PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], source_max as u16),
-                    PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
-                    _ => unreachable!("high-bit-depth mode validated above"),
-                };
-                let scale = |v: u16| ((u32::from(v) * target_max + source_max / 2) / source_max) as u16;
-                match destination {
-                    PixelMode::L => output.push(scale(
-                        ((u64::from(r) * 19595 + u64::from(g) * 38470 + u64::from(b) * 7471 + 32768) >> 16) as u16,
-                    )),
-                    PixelMode::Rgb => output.extend([scale(r), scale(g), scale(b)]),
-                    PixelMode::Rgba => output.extend([scale(r), scale(g), scale(b), scale(a)]),
-                    _ => unreachable!("high-bit-depth mode validated above"),
-                }
-            }
+            let source_stride = self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
+            let sample_bytes = if depth == 8 { 1 } else { 2 };
+            let target_stride = destination.channels() * sample_bytes;
+            let mut output = vec![0; expected_len(self.width, self.height, destination)? * sample_bytes];
+            py.detach(|| {
+                crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * target_stride, |band, chunk| {
+                    let start = band * crate::parallel::CHUNK_PIXELS * source_stride;
+                    for (i, pixel) in chunk.chunks_exact_mut(target_stride).enumerate() {
+                        let offset = start + i * source_stride;
+                        let sample = |channel: usize| {
+                            if self.bit_depth == 8 {
+                                u16::from(bytes[offset + channel])
+                            } else {
+                                u16::from_le_bytes([bytes[offset + channel * 2], bytes[offset + channel * 2 + 1]])
+                            }
+                        };
+                        let (r, g, b, a) = match self.mode {
+                            PixelMode::L => (sample(0), sample(0), sample(0), source_max as u16),
+                            PixelMode::Rgb => (sample(0), sample(1), sample(2), source_max as u16),
+                            PixelMode::Rgba => (sample(0), sample(1), sample(2), sample(3)),
+                            _ => unreachable!("high-bit-depth mode validated above"),
+                        };
+                        let values = if destination == PixelMode::L {
+                            [
+                                ((u64::from(r) * 19595 + u64::from(g) * 38470 + u64::from(b) * 7471 + 32768) >> 16) as u16,
+                                0,
+                                0,
+                                0,
+                            ]
+                        } else {
+                            [r, g, b, a]
+                        };
+                        for (channel, dst) in pixel.chunks_exact_mut(sample_bytes).enumerate() {
+                            let value = ((u32::from(values[channel]) * target_max + source_max / 2) / source_max) as u16;
+                            if depth == 8 {
+                                dst[0] = value as u8;
+                            } else {
+                                dst.copy_from_slice(&value.to_le_bytes());
+                            }
+                        }
+                    }
+                });
+            });
             return if depth == 8 {
-                Self::from_pixels(self.width, self.height, destination, output.into_iter().map(|v| v as u8).collect(), None)
+                Self::from_pixels(self.width, self.height, destination, output, None)
             } else {
-                Self::from_samples(self.width, self.height, destination, output, depth, None)
+                Self::from_sample_bytes(self.width, self.height, destination, output, depth, None)
             };
         }
         if let Some((palette_mode, palette)) = &self.palette {
@@ -1271,14 +1299,7 @@ pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_
         if !data.len().is_multiple_of(2) {
             return Err(PyValueError::new_err("16-bit storage requires an even byte count"));
         }
-        return Image::from_samples(
-            size.0,
-            size.1,
-            mode,
-            data.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)).collect(),
-            bit_depth,
-            None,
-        );
+        return Image::from_sample_bytes(size.0, size.1, mode, data.to_vec(), bit_depth, None);
     }
     let pixels = if mode == PixelMode::Lab { lab_raw_bytes(data) } else { data.to_vec() };
     Image::from_pixels(size.0, size.1, mode, pixels, None)
@@ -1379,20 +1400,13 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
 
     let depth = bit_depth.unwrap_or(if wide { 16 } else { 8 });
     if wide {
-        let raw: Vec<u8> = obj.call_method0("tobytes")?.extract()?;
-        let samples = raw
-            .as_chunks::<2>()
-            .0
-            .iter()
-            .map(|v| {
-                if typestr == ">u2" {
-                    u16::from_be_bytes([v[0], v[1]])
-                } else {
-                    u16::from_le_bytes([v[0], v[1]])
-                }
-            })
-            .collect();
-        return Image::from_samples(width, height, mode, samples, depth, None);
+        let mut raw = obj.call_method0("tobytes")?.cast::<PyBytes>()?.as_bytes().to_vec();
+        if typestr == ">u2" {
+            for bytes in raw.as_chunks_mut::<2>().0 {
+                bytes.swap(0, 1);
+            }
+        }
+        return Image::from_sample_bytes(width, height, mode, raw, depth, None);
     }
     if depth != 8 {
         return Err(PyValueError::new_err("high-bit-depth arrays must use uint16 samples"));

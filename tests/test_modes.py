@@ -174,13 +174,14 @@ def test_integer_mode_conversion_matches_pillow(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-def test_integer_mode_conversion_simd_boundaries(mode: str) -> None:
+@pytest.mark.parametrize("count", [15, 16, 17, 37, 16387, 262147, 1400001])
+def test_integer_mode_conversion_simd_boundaries(mode: str, count: int) -> None:
     values = [-65536, -1, 0, 1, 254, 255, 256, 65535, 65536] if mode == "I" else [0, 1, 254, 255, 256, 32767, 32768, 65534, 65535]
-    values = (values * 5)[:37]
-    blanket = Image.new(mode, (len(values), 1))
-    pillow = PillowImage.new(mode, (len(values), 1))
-    blanket.putdata(values)
-    pillow.putdata(values)
+    values = (values * ((count + len(values) - 1) // len(values)))[:count]
+    format = "i" if mode == "I" else "H"
+    raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *values)
+    blanket = Image.frombytes(mode, (count, 1), raw)
+    pillow = PillowImage.frombytes(mode, (count, 1), raw)
     for destination in ("L", "RGB", "RGBA", "I"):
         assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
@@ -355,14 +356,26 @@ def test_float_to_uint16_saturation_and_byte_order(mode: str, count: int) -> Non
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-def test_integer_to_float_owns_converted_samples(mode: str) -> None:
-    values = [-65536, -1, 0, 1, 65535, 65536] if mode == "I" else [0, 1, 255, 256, 32768, 65535]
-    image = Image.new(mode, (len(values), 1))
-    image.putdata(values)
+@pytest.mark.parametrize("count", [6, 15, 16, 17, 16387, 262147])
+def test_integer_to_float_owns_converted_samples(mode: str, count: int) -> None:
+    values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 65535] if mode == "I" else [0, 1, 255, 256, 32768, 65535]
+    samples = (values * ((count + len(values) - 1) // len(values)))[:count]
+    format = "i" if mode == "I" else "H"
+    raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *samples)
+    image = Image.frombytes(mode, (count, 1), raw)
     converted = image.convert("F")
     assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
     image.putpixel((0, 0), 42)
-    assert converted.getdata() == [float(value) for value in values]
+    assert converted.tobytes() == struct.pack(f"<{count}f", *samples)
+
+
+@pytest.mark.parametrize("count", [3, 15, 16, 17, 16387, 262147])
+def test_float_to_l_saturation_and_parallel_tails(count: int) -> None:
+    values = [float("nan"), float("inf"), -float("inf"), -1.75, -0.0, 0.0, 1.75, 254.9, 255.1, 1e30]
+    expected = [0, 255, 0, 0, 0, 0, 1, 254, 255, 255]
+    samples = (values * ((count + len(values) - 1) // len(values)))[:count]
+    image = Image.frombytes("F", (count, 1), struct.pack(f"<{count}f", *samples))
+    assert image.convert("L").tobytes() == bytes((expected * ((count + len(values) - 1) // len(values)))[:count])
 
 
 def test_float_mode_fromarray_and_paste() -> None:

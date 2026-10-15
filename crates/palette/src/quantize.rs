@@ -373,10 +373,15 @@ impl Cube {
     }
 
     /// Cells by descending population; equal counts keep cube order.
-    fn sorted(&self) -> Vec<Bucket> {
-        let mut buckets = self.buckets.clone();
-        buckets.sort_by_key(|bucket| Reverse(bucket.count));
-        buckets
+    fn sorted(&self, limit: usize) -> Vec<Bucket> {
+        let mut indices: Vec<usize> = (0..self.buckets.len()).collect();
+        let key = |&i: &usize| (Reverse(self.buckets[i].count), i);
+        if limit < indices.len() {
+            indices.select_nth_unstable_by_key(limit, key);
+            indices.truncate(limit);
+        }
+        indices.sort_unstable_by_key(key);
+        indices.into_iter().map(|i| self.buckets[i]).collect()
     }
 
     fn subtract(&mut self, buckets: &[Bucket]) {
@@ -424,7 +429,7 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
     let mut coarse = fine.resized(coarse_bits);
     let mut coarse_count = coarse.used().min(colors);
     let mut fine_count = colors - coarse_count;
-    let fine_palette = fine.sorted();
+    let fine_palette = fine.sorted(colors);
     // Fine cells replace their share of the coarse cells. Cleared coarse
     // cells free palette slots for further fine cells.
     coarse.subtract(&fine_palette[..fine_count]);
@@ -434,7 +439,7 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
         fine_count = colors - coarse_count;
         coarse.subtract(&fine_palette[subtracted..fine_count]);
     }
-    let coarse_palette = coarse.sorted();
+    let coarse_palette = coarse.sorted(coarse_count);
     let palette: Vec<Bucket> = coarse_palette[..coarse_count]
         .iter()
         .chain(&fine_palette[..fine_count])
@@ -644,6 +649,25 @@ mod tests {
         let expanded = coarse.resized([4, 4, 4, 0]);
         for (offset, count) in [(0x000, 3), (0x111, 3), (0x333, 3), (0x444, 0), (0x00F, 0)] {
             assert_eq!(expanded.buckets[offset].count, count);
+        }
+    }
+
+    #[test]
+    fn cube_selection_matches_stable_sort_with_ties_and_empty_cells() {
+        let mut cube = Cube::new([3, 4, 3, 3]);
+        for (i, bucket) in cube.buckets.iter_mut().enumerate() {
+            bucket.count = (i % 17) as u64;
+            bucket.sums = [i as u64; 4];
+        }
+        let mut expected = cube.buckets.clone();
+        expected.sort_by_key(|bucket| Reverse(bucket.count));
+        for limit in [0, 1, 16, 256, cube.buckets.len(), cube.buckets.len() + 1] {
+            let actual = cube.sorted(limit);
+            assert_eq!(actual.len(), limit.min(expected.len()));
+            for (actual, expected) in actual.iter().zip(&expected) {
+                assert_eq!(actual.count, expected.count);
+                assert_eq!(actual.sums, expected.sums);
+            }
         }
     }
 

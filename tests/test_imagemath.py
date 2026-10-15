@@ -128,11 +128,35 @@ def test_operand_names_restricted(name: str) -> None:
         ImageMath.eval("1", **{name: 1})
 
 
-def test_closed_image() -> None:
-    image = Image.new("I", (1, 1))
+@pytest.mark.parametrize("mode", ["I", "F"])
+def test_closed_image(mode: str) -> None:
+    image = Image.new(mode, (1, 1))
     image.close()
     with pytest.raises(ValueError):
         ImageMath.eval("a + 1", a=image)
+
+
+@pytest.mark.parametrize("value", [17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize(
+    "expression",
+    ["a + n", "n + a", "a - n", "n - a", "a * n", "n * a", "a / n", "n / a", "a % n", "n % a", "a ** n", "n ** a", "a < n", "n < a", "min(a, n)", "max(a, n)", "equal(a, n)", "notequal(a, n)"],
+)
+def test_float_scalars_without_constant_images(expression: str, value: float, monkeypatch: pytest.MonkeyPatch) -> None:
+    a, pa = pair("F", (17, 1))
+    expected = PILMath.unsafe_eval(expression, a=pa, n=value)
+
+    def constant_image(*args: object, **kwargs: object) -> None:
+        raise AssertionError("float scalar math must not allocate a constant image")
+
+    monkeypatch.setattr(Image, "new", constant_image)
+    same(ImageMath.unsafe_eval(expression, a=a, n=value), expected)
+
+
+@pytest.mark.parametrize("value", [1e100, -1e100, 10**400])
+def test_float_scalar_overflow(value: float) -> None:
+    image = Image.new("F", (5, 1))
+    with pytest.raises(OverflowError):
+        ImageMath.unsafe_eval("a + n", a=image, n=value)
 
 
 @pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259)])
@@ -142,6 +166,26 @@ def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
     original = a.tobytes()
     same(ImageMath.eval("(a * 3 - 2) / 2", a=a), PILMath.unsafe_eval("(a * 3 - 2) / 2", a=pa))
     assert a.tobytes() == original
+
+
+@pytest.mark.parametrize("count", [0, 1, 15, 16, 17, 16387, 262147])
+def test_compound_integer_float_rounding_and_parallel_tails(count: int) -> None:
+    values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 254, 255, 256]
+    values = (values * ((count + len(values) - 1) // len(values)))[:count]
+    raw = struct.pack(f"<{count}i", *values)
+    a = Image.frombytes("I", (count, 1), raw)
+    pa = PILImage.frombytes("I", (count, 1), raw)
+    b = Image.frombytes("I", (count, 1), raw[::-1])
+    pb = PILImage.frombytes("I", (count, 1), raw[::-1])
+    expression = "convert((float(a) + float(b)) / 2, 'L')"
+
+    def evaluate(args):
+        return args["convert"]((args["float"](args["a"]) + args["float"](args["b"])) / 2, "L")
+
+    expected = PILMath.unsafe_eval(expression, a=pa, b=pb)
+    assert ImageMath.unsafe_eval(expression, a=a, b=b).tobytes() == expected.tobytes()
+    assert ImageMath.lambda_eval(evaluate, a=a, b=b).tobytes() == expected.tobytes()
+    assert a.tobytes() == raw
 
 
 def test_integer_boundaries_and_zero_divisors() -> None:

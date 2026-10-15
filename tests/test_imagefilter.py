@@ -134,6 +134,18 @@ def test_mode_filter_ties_and_rare_values() -> None:
         assert image.filter(ImageFilter.ModeFilter).tobytes() == pillow.filter(PillowFilter.ModeFilter).tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("size", [(1, 19), (19, 1), (23, 19), (513, 515)])
+@pytest.mark.parametrize("window", [3, 5, 12])
+def test_mode_filter_candidates_enter_leave_and_tie(mode: str, size: tuple[int, int], window: int) -> None:
+    rng = random.Random(81)
+    values = (0, 63, 64, 127, 128, 191, 192, 255)
+    raw = bytes(rng.choice(values) for _ in range(size[0] * size[1] * len(mode)))
+    image = Image.frombytes(mode, size, raw)
+    reference = PillowImage.frombytes(mode, size, raw)
+    assert image.filter(ImageFilter.ModeFilter(window)).tobytes() == reference.filter(PillowFilter.ModeFilter(window)).tobytes()
+
+
 @pytest.mark.parametrize("name", ["BoxBlur", "GaussianBlur"])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("radius", [0, 0.1, 0.5, 1, 1.3, 2, 10, 100.5, (0, 2), (2.5, 0), (0.3, 1.7), [1, 2]])
