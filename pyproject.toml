@@ -47,8 +47,8 @@ test = [
     "pillow-heif>=1.7",
     "pytest>=9,<10",
     "rich>=15",
-    "ruff>=0.16.9",
-    "ty>=0.0.84",
+    "ruff>=0.17.0",
+    "ty>=0.0.88",
 ]
 docs = [
     "mkdocs>=1.5.0,<2",
