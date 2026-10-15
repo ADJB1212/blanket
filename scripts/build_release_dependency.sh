@@ -65,6 +65,15 @@ git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
 
 case "$name" in
 x265)
+	json11_cpp="$source_dir/source/dynamicHDR10/json11/json11.cpp"
+	if [[ -f "$json11_cpp" ]] && ! grep -qE '^[[:space:]]*#include <cstdint>' "$json11_cpp"; then
+	  tmp_file=$(mktemp)
+	  {
+	    printf '#include <cstdint>\n'
+	    cat "$json11_cpp"
+	  } >"$tmp_file"
+	  mv "$tmp_file" "$json11_cpp"
+	fi
 	x265_neon_flag=()
 	if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
 		x265_neon_flag=(-DHAVE_NEON=1)

@@ -359,7 +359,7 @@ fn integer_bytes(mode: PixelMode, value: i64) -> [u8; 4] {
     bytes
 }
 
-#[pyclass(name = "_Image", module = "blanket._blanket", skip_from_py_object)]
+#[pyclass(name = "_Image", module = "blanket._blanket")]
 #[derive(Clone)]
 pub struct Image {
     pub width: u32,
