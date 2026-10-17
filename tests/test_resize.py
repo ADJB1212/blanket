@@ -6,7 +6,7 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [None, *Image.Resampling])
 @pytest.mark.parametrize("size,box", [((11, 7), None), ((101, 83), None), ((9, 8), (2.3, 1.7, 59.2, 43.8)), ((67, 49), None)])
 @pytest.mark.parametrize("gap", [None, 1.0, 2.0, 3.0])
@@ -61,3 +61,12 @@ def test_resize_closed_image() -> None:
     image.close()
     with pytest.raises(ValueError):
         image.resize((3, 2))
+
+
+@pytest.mark.parametrize("mode", ["LA", "RGBA"])
+@pytest.mark.parametrize("size,target", [((2, 1024), (1, 5)), ((1024, 2), (5, 1)), ((67, 49), (1, 1))])
+def test_alpha_resize_reduction_extreme_shapes(mode: str, size: tuple[int, int], target: tuple[int, int]) -> None:
+    raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(size[0] * size[1] * len(mode)))
+    actual = Image.frombytes(mode, size, raw)
+    expected = PillowImage.frombytes(mode, size, raw)
+    assert actual.resize(target, Image.Resampling.LANCZOS, reducing_gap=2.0).tobytes() == expected.resize(target, PillowImage.Resampling.LANCZOS, reducing_gap=2.0).tobytes()

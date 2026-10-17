@@ -51,7 +51,7 @@ def test_transpose(mode: str, method: int) -> None:
     assert result.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("resample", [0, 2, 3])
 @pytest.mark.parametrize("fillcolor", [None, "#12345680", 17])
 @pytest.mark.parametrize("size", [(13, 9), (19, 14)])

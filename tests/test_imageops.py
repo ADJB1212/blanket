@@ -43,7 +43,7 @@ def test_public_functions_match_pillow() -> None:
         ("autocontrast", {"cutoff": (50, 50)}),
         ("equalize", {}),
         ("invert", {}),
-        ("posterize", {"bits": 0}),
+        ("posterize", {"bits": 1}),
         ("posterize", {"bits": 4}),
         ("posterize", {"bits": 8}),
         ("solarize", {}),
@@ -54,6 +54,20 @@ def test_public_functions_match_pillow() -> None:
 def test_tone_operations(mode: str, name: str, kwargs: dict) -> None:
     b, p = pair(mode)
     same(getattr(ImageOps, name)(b, **kwargs), getattr(PILOps, name)(p, **kwargs))
+
+
+@pytest.mark.parametrize("bits", [-1, 0, 9])
+def test_posterize_rejects_invalid_bits(bits: int) -> None:
+    for module, image_module in ((ImageOps, Image), (PILOps, PILImage)):
+        with pytest.raises(ValueError, match="bits must be between or equal to 1 and 8"):
+            module.posterize(image_module.new("RGB", (1, 1)), bits)
+
+
+@pytest.mark.parametrize("operation", ["contain", "fit"])
+@pytest.mark.parametrize("size", [(0, 10), (10, 0), (0, 0)])
+def test_empty_geometry(operation: str, size: tuple[int, int]) -> None:
+    image, expected = pair()
+    same(getattr(ImageOps, operation)(image, size), getattr(PILOps, operation)(expected, size))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
@@ -256,6 +270,11 @@ def test_exif_cleans_xmp(key: str, kind: type) -> None:
     elif kind is tuple:
         value = (value.encode(), b"unrelated")
     b.info[key] = p.info[key] = value
+    if kind is tuple:
+        result = ImageOps.exif_transpose(b)
+        assert result.info[key] == (b"<rdf ><keep/></rdf>", b"unrelated")
+        assert b.info[key] == value
+        return
     actual, expected = ImageOps.exif_transpose(b), PILOps.exif_transpose(p)
     same(actual, expected)
     assert actual.info[key] == expected.info[key]
@@ -290,8 +309,8 @@ def test_unsupported_lut_mode(name: str, kwargs: dict) -> None:
         ("expand", (-100,)),
         ("expand", ((1,),)),
         ("expand", (1, "invalid-color")),
-        ("contain", ((0, 10),)),
-        ("fit", ((0, 10),)),
+        ("contain", ((-1, 10),)),
+        ("fit", ((-1, 10),)),
         ("scale", (2, 99)),
     ],
 )

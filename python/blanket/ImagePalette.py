@@ -10,7 +10,7 @@ from typing import IO, TYPE_CHECKING, Protocol
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-from ._blanket import ops_histogram, palette_colors, palette_gamma, palette_linear, palette_ramp, palette_sepia
+from ._blanket import ops_histogram, palette_colors, palette_decode, palette_gamma, palette_linear, palette_ramp, palette_sepia
 from ._color import _rgb
 from ._palette import load_palette
 from .Image import Image
@@ -40,6 +40,8 @@ class ImagePalette:
             palette = ImagePalette.ImagePalette("RGB", [0, 0, 0, 255, 0, 0])
             ```
         """
+        if mode not in ("RGB", "RGBA", "CMYK"):
+            raise ValueError("unsupported palette mode")
         self.mode = mode
         self.rawmode: str | None = None
         self.palette = palette or bytearray()
@@ -77,7 +79,10 @@ class ImagePalette:
             ```
         """
         if self._colors is None:
-            self._colors = palette_colors(self.palette, len(self.mode))
+            palette = self.palette
+            if self.rawmode and self.rawmode != self.mode:
+                palette = palette_decode(self.mode, self.rawmode, bytes(palette))
+            self._colors = palette_colors(palette, len(self.mode))
         return self._colors
 
     @colors.setter
@@ -112,7 +117,7 @@ class ImagePalette:
             mode, entries = palette.getdata()
             ```
         """
-        return (self.rawmode, self.palette) if self.rawmode else (self.mode, self.tobytes())
+        return (self.rawmode, bytes(self.palette)) if self.rawmode else (self.mode, self.tobytes())
 
     def tobytes(self) -> bytes:
         """Serialize a non-raw palette to bytes.
@@ -140,6 +145,7 @@ class ImagePalette:
         slot = len(self.palette) // len(self.mode)
         reserved = (image.info.get("background"), image.info.get("transparency")) if image else ()
         while slot in reserved:
+            self._palette += bytearray(len(self.mode))
             slot += 1
         if slot >= 256 and image:
             histogram = ops_histogram(image._native, None) if isinstance(image, Image) else image.histogram()
@@ -184,13 +190,14 @@ class ImagePalette:
             return colors[color]
         except KeyError as error:
             slot = self._new_color_index(image, error)
-        self.colors[color] = slot
         assert isinstance(self._palette, bytearray)
         offset = slot * len(self.mode)
         if offset < len(self.palette):
-            self._palette[offset : offset + len(self.mode)] = bytes(color)
+            self._palette = self._palette[:offset] + bytes(color) + self._palette[offset + len(self.mode) :]
+            self._colors = None
         else:
             self._palette += bytes(color)
+        self.colors[color] = slot
         self.dirty = 1
         return slot
 
@@ -240,7 +247,8 @@ def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:
         ```
     """
     result = ImagePalette()
-    result.rawmode = rawmode
+    if rawmode != "RGB":
+        result.rawmode = rawmode
     result.palette = data
     result.dirty = 1
     return result

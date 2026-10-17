@@ -779,6 +779,9 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
     }
     let source = image.pixel_data()?;
     let c = image.mode.channels();
+    if factor == (1, 1) {
+        return output(image, size, reduction_crop(source, image.width, bounds, c)?);
+    }
     let mut pixels = buffer(size, c)?;
     py.detach(|| -> PyResult<()> {
         match image.mode {
@@ -947,8 +950,8 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
     });
 }
 
-#[pyfunction]
-fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, method, bounds, reducing_gap=None))]
+fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>) -> PyResult<Image> {
     let source = image.raw_data()?;
     if method > 5 {
         return Err(PyValueError::new_err("unknown resampling filter"));
@@ -957,7 +960,7 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
         return Err(PyValueError::new_err("height and width must be > 0"));
     }
     // The public Pillow resize API passes its box through C floats.
-    let b = [bounds.0, bounds.1, bounds.2, bounds.3].map(|x| f64::from(x as f32));
+    let mut b = [bounds.0, bounds.1, bounds.2, bounds.3].map(|x| f64::from(x as f32));
     if b.iter().any(|x| !x.is_finite())
         || b[0] < 0.0
         || b[1] < 0.0
@@ -978,7 +981,14 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
     // storage. Pass order affects 8-bit rounding, so retain it as well.
     if u64::from(image.height) > u64::from(image.width) * 100 && size.1 < image.height && image.width > 0 {
         let transposed = ops_transpose(py, image, 5)?;
-        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2))?;
+        let resized = ops_resize(
+            py,
+            &transposed,
+            (size.1, size.0),
+            method,
+            (bounds.1, bounds.0, bounds.3, bounds.2),
+            reducing_gap,
+        )?;
         return ops_transpose(py, &resized, 5);
     }
     let c = image.mode.channels();
@@ -1018,6 +1028,46 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
             premultiply(source.to_mut());
         } else if image.mode == PixelMode::La {
             premultiply_la(source.to_mut());
+        }
+        let mut reduced = None;
+        if let Some(gap) = reducing_gap {
+            let fx = (((bounds.2 - bounds.0) / f64::from(size.0) / gap) as u32).max(1);
+            let fy = (((bounds.3 - bounds.1) / f64::from(size.1) / gap) as u32).max(1);
+            if fx > 1 || fy > 1 {
+                let support = match method {
+                    1 => 3.0,
+                    3 => 2.0,
+                    4 => 0.5,
+                    _ => 1.0,
+                } - 0.5;
+                let sx = support * (bounds.2 - bounds.0) / f64::from(size.0);
+                let sy = support * (bounds.3 - bounds.1) / f64::from(size.1);
+                let safe = (
+                    (bounds.0 - sx).max(0.0) as u32,
+                    (bounds.1 - sy).max(0.0) as u32,
+                    (bounds.2 + sx).ceil().min(f64::from(image.width)) as u32,
+                    (bounds.3 + sy).ceil().min(f64::from(image.height)) as u32,
+                );
+                let reduced_size = ((safe.2 - safe.0).div_ceil(fx), (safe.3 - safe.1).div_ceil(fy));
+                let mut pixels = buffer(reduced_size, c)?;
+                match image.mode {
+                    PixelMode::La => reduce_pixels::<2>(&source, &mut pixels, image.width, reduced_size, (fx, fy), safe),
+                    PixelMode::Rgba => reduce_pixels::<4>(&source, &mut pixels, image.width, reduced_size, (fx, fy), safe),
+                    _ => return Err(PyValueError::new_err("resize reduction requires an alpha image")),
+                }
+                b = [
+                    (bounds.0 - f64::from(safe.0)) / f64::from(fx),
+                    (bounds.1 - f64::from(safe.1)) / f64::from(fy),
+                    (bounds.2 - f64::from(safe.0)) / f64::from(fx),
+                    (bounds.3 - f64::from(safe.1)) / f64::from(fy),
+                ]
+                .map(|x| f64::from(x as f32));
+                reduced = Some(output(image, reduced_size, pixels)?);
+            }
+        }
+        let image = reduced.as_ref().unwrap_or(image);
+        if reduced.is_some() {
+            source = Cow::Borrowed(image.pixel_data()?);
         }
         match image.mode {
             PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
@@ -1436,8 +1486,10 @@ fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &Neares
 }
 
 /// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
-#[pyfunction]
-fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, fill: Vec<u8>) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, matrix, method, fill, color_string=false))]
+fn ops_affine(
+    py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, mut fill: Vec<u8>, color_string: bool,
+) -> PyResult<Image> {
     if image.mode == PixelMode::F {
         if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != 4 {
             return Err(PyValueError::new_err("invalid affine transform"));
@@ -1465,6 +1517,13 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
     let channels = image.mode.channels();
     if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != channels {
         return Err(PyValueError::new_err("invalid affine transform"));
+    }
+    if method != 0 && color_string {
+        if image.mode == PixelMode::Rgba {
+            premultiply(&mut fill);
+        } else if image.mode == PixelMode::La {
+            premultiply_la(&mut fill);
+        }
     }
     let [a, b, c, d, e, f] = matrix;
     // Pillow uses 16.16 coordinates for nearest affine rotations when all
@@ -1622,7 +1681,6 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
                 }
             }
         });
-        // Fill values also belong to Pillow's intermediate premultiplied mode.
         if image.mode == PixelMode::Rgba && method != 0 {
             unpremultiply(&mut pixels);
         } else if image.mode == PixelMode::La && method != 0 {
@@ -1634,11 +1692,13 @@ fn ops_affine(py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6],
 
 #[pyfunction]
 fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<Image> {
-    ops_warp(py, image, (image.width, image.height), mesh, (method, false), None)
+    ops_warp(py, image, (image.width, image.height), mesh, (method, false), None, false)
 }
 
-#[pyfunction]
-fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters: (u8, bool), fill: Option<Vec<u8>>) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, mesh, filters, fill, color_string=false))]
+fn ops_warp(
+    py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters: (u8, bool), mut fill: Option<Vec<u8>>, color_string: bool,
+) -> PyResult<Image> {
     let (method, perspective) = filters;
     if image.mode == PixelMode::F {
         if ![0, 2, 3].contains(&method) || fill.as_ref().is_some_and(|v| v.len() != 4) || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite())) {
@@ -1699,6 +1759,16 @@ fn ops_warp(py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters
     let mut result = buffer(size, c)?;
     if result.is_empty() {
         return output(image, size, result);
+    }
+    if method != 0
+        && color_string
+        && let Some(fill) = &mut fill
+    {
+        if image.mode == PixelMode::Rgba {
+            premultiply(fill);
+        } else if image.mode == PixelMode::La {
+            premultiply_la(fill);
+        }
     }
     let full_nearest = method == 0
         && mesh.len() == 1

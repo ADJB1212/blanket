@@ -56,13 +56,7 @@ fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
 
 #[pyfunction]
 fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
-    let mut ink = ink(image, value, blend)?;
-    // Pillow points use native byte order even for explicit-endian modes.
-    if (cfg!(target_endian = "little") && image.mode == PixelMode::I16B)
-        || (cfg!(target_endian = "big") && matches!(image.mode, PixelMode::I16 | PixelMode::I16L))
-    {
-        ink.reverse();
-    }
+    let ink = ink(image, value, blend)?;
     value.py().detach(|| {
         for (x, y) in points {
             paint(image, x, y, &ink, blend);

@@ -28,7 +28,7 @@ class _Operand:
             if value.im.mode in ("1", "L", "I", "F"):
                 return value.im
             raise ValueError(f"unsupported mode: {value.im.mode}")
-        mode = "I" if isinstance(value, (int, float)) and self.im.mode in ("1", "L", "I") else "F"
+        mode = "I" if isinstance(value, int) and self.im.mode in ("1", "L", "I") else "F"
         return Image.new(mode, self.im.size, value)
 
     def _apply(self, operation: str, left: _Operand | float, right: _Operand | float | None = None, *, integer_output: bool = False) -> _Operand:

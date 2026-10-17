@@ -15,11 +15,17 @@ def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.Im
     assert (actual.mode, actual.rawmode, actual.dirty) == (expected.mode, expected.rawmode, expected.dirty)
     assert type(actual.palette) is type(expected.palette)
     assert actual.palette == expected.palette
-    assert actual.colors == expected.colors
+    try:
+        colors = expected.colors
+    except ValueError as error:
+        with pytest.raises(ValueError, match=str(error)):
+            _ = actual.colors
+    else:
+        assert actual.colors == colors
     assert actual.getdata() == expected.getdata()
 
 
-@pytest.mark.parametrize("mode", ["", "L", "RGB", "RGBA", "custom"])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "CMYK"])
 @pytest.mark.parametrize("length", [0, 1, 7, 769])
 def test_save_pads_partial_entries_and_truncates(mode: str, length: int) -> None:
     data = bytes(i % 256 for i in range(length))
@@ -29,7 +35,7 @@ def test_save_pads_partial_entries_and_truncates(mode: str, length: int) -> None
     assert actual.getvalue() == expected.getvalue()
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "CMYK"])
 @pytest.mark.parametrize("storage", [bytes, bytearray, list, tuple, lambda values: array("B", values)])
 def test_storage_copy_and_cache(mode: str, storage: type) -> None:
     data = [1, 2, 3, 4, 1, 2, 3, 4, 1, 2]
@@ -106,20 +112,23 @@ def test_full_palette_and_reuse() -> None:
     assert ImagePalette.wedge().getcolor(color, gray) == 255
 
 
-@pytest.mark.parametrize("rawmode", ["RGB;L", "RGBA", "BGR"])
+@pytest.mark.parametrize("rawmode", ["RGB", "RGB;L", "RGBA", "BGR", "BGR;L"])
 def test_raw_palette(rawmode: str) -> None:
     data = bytearray(range(24))
     actual, expected = ImagePalette.raw(rawmode, data), PillowPalette.raw(rawmode, data)
     assert_palette(actual, expected)
-    assert actual.getdata()[1] is data
+    assert isinstance(actual.getdata()[1], bytes)
     assert_palette(actual.copy(), expected.copy())
+    if rawmode == "RGB":
+        assert actual.tobytes() == bytes(data)
+        return
     for operation in (lambda: actual.tobytes(), lambda: actual.tostring(), lambda: actual.getcolor((1, 2, 3)), lambda: actual.save(StringIO())):
         with pytest.raises(ValueError, match="palette contains raw palette data"):
             operation()
 
 
 @pytest.mark.parametrize("factory", ["wedge", "negative", "random"])
-@pytest.mark.parametrize("mode", ["", "L", "RGB", "RGBA", "custom"])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "CMYK"])
 def test_factories(factory: str, mode: str) -> None:
     state = random.getstate()
     try:
@@ -174,7 +183,7 @@ def test_gamma_lut(exp: float) -> None:
         assert ImagePalette.make_gamma_lut(exp) == expected
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "CMYK"])
 def test_save(mode: str, tmp_path: Path) -> None:
     actual = ImagePalette.ImagePalette(mode, [1, 2, 3, 4])
     expected = PillowPalette.ImagePalette(mode, [1, 2, 3, 4])
@@ -186,8 +195,16 @@ def test_save(mode: str, tmp_path: Path) -> None:
     path = tmp_path / "palette.pal"
     actual.save(str(path))
     assert path.read_text() == reference.getvalue()
-    if mode != "RGBA":
+    if mode == "RGB":
         assert ImagePalette.load(str(path)) == PillowPalette.load(str(path))
+
+
+@pytest.mark.parametrize("mode", ["", "L", "custom"])
+@pytest.mark.parametrize("factory", ["ImagePalette", "wedge", "negative", "random"])
+def test_unsupported_palette_modes(mode: str, factory: str) -> None:
+    for module in (ImagePalette, PillowPalette):
+        with pytest.raises(ValueError, match="unsupported palette mode"):
+            getattr(module, factory)(mode)
 
 
 @pytest.mark.parametrize(

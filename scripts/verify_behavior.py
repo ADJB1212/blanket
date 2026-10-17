@@ -369,7 +369,7 @@ def check_imageenhance() -> int:
 def check_imagepalette() -> int:
     """Compare palette state, allocation, factories, serialization, and loaders."""
     checks = 0
-    for mode in ("L", "RGB", "RGBA"):
+    for mode in ("RGB", "RGBA", "CMYK"):
         for factory in ("wedge", "negative"):
             actual = getattr(BlanketPalette, factory)(mode)
             expected = getattr(PillowPalette, factory)(mode)

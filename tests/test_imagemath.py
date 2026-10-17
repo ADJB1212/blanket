@@ -68,12 +68,6 @@ def same(actual: Image.Image, expected: PILImage.Image) -> None:
 def test_arithmetic_matches_pillow(mode: str, expression: str) -> None:
     a, pa = pair(mode)
     b, pb = pair(mode, (2, 3))
-    if "2.9" in expression and mode != "F":
-        with pytest.raises(TypeError):
-            PILMath.unsafe_eval(expression, a=pa, b=pb)
-        with pytest.raises(TypeError):
-            ImageMath.unsafe_eval(expression, a=a, b=b)
-        return
     same(ImageMath.unsafe_eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
 
 

@@ -1392,8 +1392,6 @@ class Image:
             raise ValueError("width and height must be >= 0")
         self.load()
         color = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
-        if self.mode == "RGBA" and resample != 0 and isinstance(fillcolor, str):
-            color[3] = 255
 
         def coordinates(values: Sequence[object], count: int) -> tuple[float, ...]:
             values = tuple(float(v) for v in values[:count])
@@ -1407,7 +1405,7 @@ class Image:
                 matrix = ((right - left) / size[0], 0, left, 0, (bottom - top) / size[1], top)
             else:
                 matrix = coordinates(data, 6)
-            native = ops_affine(self._native, size, matrix, resample, color)
+            native = ops_affine(self._native, size, matrix, resample, color, isinstance(fillcolor, str))
         else:
             if method == Transform.MESH:
                 mesh = []
@@ -1418,7 +1416,7 @@ class Image:
                     mesh.append((box, coordinates(quad, 8)))
             else:
                 mesh = [((0, 0, *size), coordinates(data, 8))]
-            native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE), color if fillcolor is not None else None)
+            native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE), color if fillcolor is not None else None, isinstance(fillcolor, str))
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -1499,8 +1497,7 @@ class Image:
         if size == self.size and box == (0, 0, self.width, self.height):
             native = ops_transpose(native, 1)
         else:
-            # Pillow's alpha-aware path does not use integer reduction.
-            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("RGBA", "I", "F", "I;16", "I;16L", "I;16B"):
+            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("LA", "RGBA", "I", "F", "I;16", "I;16L", "I;16B"):
                 fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
                 fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
                 if fx > 1 or fy > 1:
@@ -1510,7 +1507,7 @@ class Image:
                     safe = (max(0, int(box[0] - sx)), max(0, int(box[1] - sy)), min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)))
                     native = ops_reduce(native, (fx, fy), safe)
                     box = ((box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy, (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy)
-            native = ops_resize(native, size, method, box)
+            native = ops_resize(native, size, method, box, reducing_gap if self.mode in ("LA", "RGBA") else None)
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -1583,10 +1580,7 @@ class Image:
                 c, f = a * dx + b * dy + c, d * dx + e * dy + f
                 w, h = nw, nh
             fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
-            if self.mode == "RGBA" and resample != Resampling.NEAREST and isinstance(fillcolor, str):
-                # Pillow parses strings in its intermediate RGBa mode as RGB.
-                fill[3] = 255
-            result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill))
+            result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill, isinstance(fillcolor, str)))
         result.info.update(self.info)
         return result
 

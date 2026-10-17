@@ -10,6 +10,7 @@ use crate::palette_simd as kernels;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_colors, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_decode, module)?)?;
     module.add_function(wrap_pyfunction!(palette_ramp, module)?)?;
     module.add_function(wrap_pyfunction!(palette_linear, module)?)?;
     module.add_function(wrap_pyfunction!(palette_gamma, module)?)?;
@@ -41,6 +42,24 @@ fn palette_colors<'py>(py: Python<'py>, palette: &Bound<'py, PyAny>, channels: u
         }
     }
     Ok(colors)
+}
+
+#[pyfunction]
+fn palette_decode<'py>(py: Python<'py>, mode: &str, rawmode: &str, data: &[u8]) -> PyResult<Bound<'py, PyBytes>> {
+    if mode != "RGB" || !matches!(rawmode, "RGB" | "BGR" | "RGB;L") {
+        return Err(PyValueError::new_err("unrecognized raw mode"));
+    }
+    let count = (data.len() / 3).min(256);
+    let mut pixels = vec![0; count * 3];
+    let planar = rawmode.ends_with(";L");
+    let reverse = rawmode.starts_with("BGR");
+    for (i, pixel) in pixels.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+        for (c, value) in pixel.iter_mut().enumerate() {
+            let c = if reverse { 2 - c } else { c };
+            *value = data[if planar { c * count + i } else { i * 3 + c }];
+        }
+    }
+    Ok(PyBytes::new(py, &pixels))
 }
 
 fn index_bytes(py: Python<'_>, colors: &Bound<'_, PyDict>, data: &[u8], channels: usize) -> PyResult<()> {

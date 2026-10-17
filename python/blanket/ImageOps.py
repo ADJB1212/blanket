@@ -180,12 +180,18 @@ def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resam
         result = ImageOps.contain(image, (4, 6))
         ```
     """
+    if image.height == 0:
+        return Image.new(image.mode, (size[0], 0))
+    if size[1] == 0:
+        return Image.new(image.mode, (0, 0))
     ratio = image.width / image.height
     target = size[0] / size[1]
     if ratio > target:
         size = (size[0], round(image.height / image.width * size[0]))
     elif ratio < target:
         size = (round(image.width / image.height * size[1]), size[1])
+    if min(size) == 0:
+        return Image.new(image.mode, size)
     return _resize(image, size, method)
 
 
@@ -418,11 +424,15 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
         result = ImageOps.fit(image, (4, 6))
         ```
     """
+    if min(size) == 0:
+        return Image.new(image.mode, size)
     cx, cy = (v if 0 <= v <= 1 else 0.5 for v in centering)
     if not 0 <= bleed < 0.5:
         bleed = 0.0
     bx, by = image.width * bleed, image.height * bleed
     width, height = image.width - 2 * bx, image.height - 2 * by
+    if height == 0:
+        return Image.new(image.mode, size)
     ratio = size[0] / size[1]
     if width / height >= ratio:
         cw, ch = ratio * height, height
@@ -501,11 +511,11 @@ def mirror(image: Image.Image) -> Image.Image:
 
 
 def posterize(image: Image.Image, bits: int) -> Image.Image:
-    """Keep the highest bits of each channel (0 through 8).
+    """Keep the highest bits of each channel (1 through 8).
 
     Args:
         image: Input image.
-        bits: Number of high bits to retain per channel, from 0 through 8.
+        bits: Number of high bits to retain per channel, from 1 through 8.
 
     Examples:
         ```python
@@ -515,6 +525,8 @@ def posterize(image: Image.Image, bits: int) -> Image.Image:
         result = ImageOps.posterize(image, bits=4)
         ```
     """
+    if not 1 <= bits <= 8:
+        raise ValueError("bits must be between or equal to 1 and 8")
     mask = ~(2 ** (8 - bits) - 1)
     return _lut(image, [v & mask for v in range(256)])
 
