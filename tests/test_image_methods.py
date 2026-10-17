@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import struct
 from io import BytesIO
 from pathlib import Path
 
@@ -176,6 +177,45 @@ def test_spread_preserves_mode_size_and_source_values(mode: str) -> None:
     assert image.effect_spread(0).tobytes() == image.tobytes()
 
 
+@pytest.mark.parametrize(
+    "mode,depth,sample_bytes",
+    [(mode, 8, channels) for mode, channels in (("1", 1), ("L", 1), ("LA", 2), ("P", 1), ("PA", 2), ("RGB", 3), ("RGBA", 4), ("HSV", 3), ("CMYK", 4), ("YCbCr", 3), ("LAB", 3))]
+    + [(mode, 32 if mode in ("I", "F") else 16, 4 if mode in ("I", "F") else 2) for mode in ("I", "F", "I;16", "I;16L", "I;16B")]
+    + [(mode, depth, channels * 2) for mode, channels in (("L", 1), ("RGB", 3), ("RGBA", 4)) for depth in (10, 12, 16)],
+)
+@pytest.mark.parametrize("size", [(1, 1), (1, 17), (17, 1), (7, 5), (0, 3)])
+def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int, sample_bytes: int, size: tuple[int, int]) -> None:
+    count = size[0] * size[1]
+    if mode == "1":
+        image = Image.new(mode, size)
+        image.putdata([i % 2 * 255 for i in range(count)])
+    elif mode in ("L", "RGB", "RGBA") and depth > 8:
+        samples = [(i * 73 + i // 7) % (1 << depth) for i in range(count * len(mode))]
+        image = Image.frombytes(mode, size, struct.pack("<" + "H" * len(samples), *samples), bit_depth=depth)
+    else:
+        raw = bytes((i * 73 + i // 7) % 256 for i in range(count * sample_bytes))
+        image = Image.frombytes(mode, size, raw)
+    if mode == "P":
+        image.putpalette(bytes(range(256)) * 3)
+    pixels = bytes(image.getdata()) if mode == "1" else image.tobytes()
+    for distance in (0, 1, -1, -(2**63)):
+        result = image.effect_spread(distance)
+        actual = bytes(result.getdata()) if mode == "1" else result.tobytes()
+        assert (result.mode, result.bit_depth, result.size) == (image.mode, image.bit_depth, size)
+        assert result.getpalette() == image.getpalette()
+        if distance == 0:
+            assert actual == pixels
+        radius = abs(distance)
+        for i in range(count):
+            x, y = i % size[0], i // size[0]
+            neighbors = {
+                pixels[(yy * size[0] + xx) * sample_bytes : (yy * size[0] + xx + 1) * sample_bytes]
+                for yy in range(max(0, y - radius), min(size[1], y + radius + 1))
+                for xx in range(max(0, x - radius), min(size[0], x + radius + 1))
+            }
+            assert actual[i * sample_bytes : (i + 1) * sample_bytes] in neighbors
+
+
 @pytest.mark.parametrize("mode,data", [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
 def test_wide_entropy_matches_pillow(mode: str, data: list[int | float]) -> None:
     image = Image.new(mode, (4, 1))
@@ -204,6 +244,44 @@ def test_high_depth_entropy() -> None:
     image = Image.frombytes("L", (4, 1), b"\x00\x00\x00\x01\x00\x02\x00\x03", bit_depth=16)
     assert image.entropy() == pytest.approx(2.0)
     assert math.isnan(Image.new("I", (0, 0)).entropy())
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+def test_wide_entropy_streams_samples_with_masks(mode: str) -> None:
+    code = "i" if mode == "I" else "f" if mode == "F" else "H"
+    raw = struct.pack((">" if mode == "I;16B" else "<") + "4" + code, 0, 256, 512, 768)
+    image = Image.frombytes(mode, (4, 1), raw)
+    mask = Image.frombytes("L", image.size, b"\x01\x00\xff\x00")
+    for extrema in (None, (0, 768)):
+        assert image.entropy(extrema=extrema) == pytest.approx(2.0)
+        assert image.entropy(mask, extrema=extrema) == pytest.approx(1.0)
+    assert math.isnan(image.entropy(Image.new("L", image.size)))
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_high_depth_entropy_preserves_band_and_mask_counts(mode: str, depth: int) -> None:
+    maximum = (1 << depth) - 1
+    values = [value for value in (0, maximum // 3, maximum * 2 // 3, maximum) for _ in mode]
+    raw = struct.pack("<" + "H" * len(values), *values)
+    image = Image.frombytes(mode, (4, 1), raw, bit_depth=depth)
+    mask = Image.frombytes("L", image.size, b"\x01\x00\xff\x00")
+    for extrema in (None, (0, maximum)):
+        assert image.entropy(extrema=extrema) == pytest.approx(math.log2(4 * len(mode)))
+        assert image.entropy(mask, extrema=extrema) == pytest.approx(math.log2(2 * len(mode)))
+
+
+def test_float_entropy_ignores_nonfinite_samples_and_validates_extrema() -> None:
+    raw = struct.pack("<5f", float("nan"), float("inf"), -float("inf"), -1, 1)
+    image = Image.frombytes("F", (5, 1), raw)
+    assert image.entropy() == pytest.approx(1.0)
+    assert image.entropy(extrema=(-1, 1)) == pytest.approx(1.0)
+    for extrema in ((1, -1), (float("nan"), 1), (0, float("inf"))):
+        with pytest.raises(ValueError, match="invalid extrema"):
+            image.entropy(extrema=extrema)
+    with pytest.raises(ValueError, match="invalid extrema"):
+        Image.frombytes("F", (3, 1), raw[:12]).entropy()
 
 
 @pytest.mark.parametrize("mode", ["RGB", "CMYK"])

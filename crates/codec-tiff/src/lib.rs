@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use blanket_codec_common::{codec_error, validate_dimensions};
+use blanket_codec_common::{codec_error, u16_bytes, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
@@ -241,17 +241,24 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     Ok(output.into_inner())
 }
 
-pub fn encode_wide_tiff(image: &Image, samples: Vec<u16>) -> PyResult<Vec<u8>> {
-    let data: Vec<u8> = samples.into_iter().flat_map(u16::to_ne_bytes).collect();
+pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
     let color = match image.mode {
         PixelMode::L => ExtendedColorType::L16,
         PixelMode::Rgb => ExtendedColorType::Rgb16,
         PixelMode::Rgba => ExtendedColorType::Rgba16,
         _ => return Err(PyValueError::new_err("unsupported high-bit-depth mode")),
     };
-    let mut output = Cursor::new(Vec::new());
+    let raw = image.raw_data()?;
+    let normalized;
+    let samples = if image.bit_depth == 16 && cfg!(target_endian = "little") {
+        raw
+    } else {
+        normalized = blanket_core::simd::normalize_u16(raw, image.bit_depth);
+        u16_bytes(&normalized)
+    };
+    let mut output = Cursor::new(Vec::with_capacity(samples.len().saturating_add(1024)));
     image::codecs::tiff::TiffEncoder::new(&mut output)
-        .write_image(&data, image.width, image.height, color)
+        .write_image(samples, image.width, image.height, color)
         .map_err(codec_error)?;
     return Ok(output.into_inner());
 }

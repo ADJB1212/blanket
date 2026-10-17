@@ -156,7 +156,7 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Opt
     let bins = if image.bit_depth == 8 && !image.mode.is_wide_scalar() {
         ops_histogram(py, image, mask)?
     } else {
-        wide_histogram(image, mask, extrema)?
+        wide_histogram(py, image, mask, extrema)?
     };
     let total = bins.iter().sum::<u64>() as f64;
     if total == 0.0 {
@@ -172,7 +172,7 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Opt
         .sum::<f64>())
 }
 
-fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
+fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
     let raw = image.raw_data()?;
     let mask_data = if let Some(mask) = mask {
         if mask.mode != PixelMode::L || mask.bit_depth != 8 {
@@ -185,14 +185,19 @@ fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64
     } else {
         None
     };
-    let samples: Vec<f64> = match image.mode {
-        PixelMode::I => raw.as_chunks::<4>().0.iter().map(|v| i32::from_le_bytes(*v) as f64).collect(),
-        PixelMode::F => raw.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v) as f64).collect(),
-        PixelMode::I16B => raw.as_chunks::<2>().0.iter().map(|v| u16::from_be_bytes(*v) as f64).collect(),
-        PixelMode::I16 | PixelMode::I16L => raw.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v) as f64).collect(),
-        _ => raw.as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v) as f64).collect(),
-    };
     let channels = image.mode.channels();
+    py.detach(|| match image.mode {
+        PixelMode::I => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
+        PixelMode::F => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v))),
+        PixelMode::I16B => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
+        _ => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
+    })
+}
+
+fn sample_histogram<const N: usize>(
+    raw: &[u8], channels: usize, mask: Option<&[u8]>, extrema: Option<(f64, f64)>, sample: impl Fn(&[u8; N]) -> f64,
+) -> PyResult<Vec<u64>> {
+    let samples = raw.as_chunks::<N>().0;
     let mut bins = vec![0_u64; channels << 8];
     if samples.is_empty() {
         return Ok(bins);
@@ -200,7 +205,7 @@ fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64
     let (low, high) = extrema.unwrap_or_else(|| {
         samples
             .iter()
-            .copied()
+            .map(&sample)
             .filter(|v| v.is_finite())
             .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
     });
@@ -211,10 +216,11 @@ fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64
         return Ok(bins);
     }
     for (pixel_index, pixel) in samples.chunks_exact(channels).enumerate() {
-        if mask_data.is_some_and(|mask| mask[pixel_index] == 0) {
+        if mask.is_some_and(|mask| mask[pixel_index] == 0) {
             continue;
         }
-        for (channel, &value) in pixel.iter().enumerate() {
+        for (channel, bytes) in pixel.iter().enumerate() {
+            let value = sample(bytes);
             if value.is_finite() {
                 let slot = ((value - low) * 255.0 / (high - low)).trunc() as i64;
                 if (0..256).contains(&slot) {
@@ -227,7 +233,7 @@ fn wide_histogram(image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64
 }
 
 #[pyfunction]
-fn ops_spread(image: &Image, distance: i64) -> PyResult<Image> {
+fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
     let source = image.raw_data()?;
     let channels = image.mode.channels()
         * if image.mode.is_wide_scalar() {
@@ -237,35 +243,51 @@ fn ops_spread(image: &Image, distance: i64) -> PyResult<Image> {
         } else {
             1
         };
-    let mut pixels = source.to_vec();
     let distance = distance.unsigned_abs().min(u64::from(image.width.max(image.height))) as i64;
     if distance == 0 || image.width == 0 || image.height == 0 {
-        return output(image, (image.width, image.height), pixels);
+        return output(image, (image.width, image.height), py.detach(|| source.to_vec()));
     }
     let mut state = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_nanos() as u64
         | 1;
+    let mut pixels = reserved_buffer((image.width, image.height), channels)?;
+    py.detach(|| {
+        let spare = &mut pixels.spare_capacity_mut()[..source.len()];
+        match channels {
+            1 => spread_pixels::<1>(source, spare, image.width as usize, distance, &mut state),
+            2 => spread_pixels::<2>(source, spare, image.width as usize, distance, &mut state),
+            3 => spread_pixels::<3>(source, spare, image.width as usize, distance, &mut state),
+            4 => spread_pixels::<4>(source, spare, image.width as usize, distance, &mut state),
+            6 => spread_pixels::<6>(source, spare, image.width as usize, distance, &mut state),
+            8 => spread_pixels::<8>(source, spare, image.width as usize, distance, &mut state),
+            _ => unreachable!("validated pixel layout"),
+        }
+    });
+    // SAFETY: the spread kernel initializes every reserved pixel above.
+    unsafe { pixels.set_len(source.len()) };
+    output(image, (image.width, image.height), pixels)
+}
+
+fn spread_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], width: usize, distance: i64, state: &mut u64) {
+    let source = source.as_chunks::<C>().0;
+    let height = source.len() / width;
     let mut random = || {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        state
+        *state ^= *state << 13;
+        *state ^= *state >> 7;
+        *state ^= *state << 17;
+        *state
     };
-    let width = image.width as usize;
-    for y in 0..image.height as usize {
-        for x in 0..width {
+    for (y, row) in output.chunks_exact_mut(width * C).enumerate() {
+        for (x, pixel) in row.as_chunks_mut::<C>().0.iter_mut().enumerate() {
             let dx = (random() % (2 * distance as u64 + 1)) as i64 - distance;
             let dy = (random() % (2 * distance as u64 + 1)) as i64 - distance;
             let sx = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
-            let sy = (y as i64 + dy).clamp(0, image.height as i64 - 1) as usize;
-            let destination = (y * width + x) * channels;
-            let origin = (sy * width + sx) * channels;
-            pixels[destination..destination + channels].copy_from_slice(&source[origin..origin + channels]);
+            let sy = (y as i64 + dy).clamp(0, height as i64 - 1) as usize;
+            *pixel = source[sy * width + sx].map(std::mem::MaybeUninit::new);
         }
     }
-    output(image, (image.width, image.height), pixels)
 }
 
 #[pyfunction]
@@ -694,7 +716,23 @@ fn kernel(x: f64, method: u8) -> f64 {
 
 // Pillow's 8-bit resampler rounds signed coefficients to 22-bit fixed point,
 // and rounds/clamps pixels after each of its two separable passes.
-fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Vec<(usize, Vec<i32>)> {
+struct ResampleWeights {
+    bounds: Vec<(usize, std::ops::Range<usize>)>,
+    coefficients: Vec<i32>,
+}
+
+impl ResampleWeights {
+    fn get(&self, index: usize) -> (usize, &[i32]) {
+        let (start, range) = &self.bounds[index];
+        (*start, &self.coefficients[range.clone()])
+    }
+
+    fn iter(&self) -> impl ExactSizeIterator<Item = (usize, &[i32])> {
+        self.bounds.iter().map(|(start, range)| (*start, &self.coefficients[range.clone()]))
+    }
+}
+
+fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> ResampleWeights {
     let scale = f64::from(end as f32 - start as f32) / f64::from(output);
     let filter_scale = scale.max(1.0);
     let support = match method {
@@ -703,23 +741,25 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Vec<(us
         4 => 0.5,
         _ => 1.0,
     } * filter_scale;
-    (0..output)
-        .map(|i| {
-            let center = start + (f64::from(i) + 0.5) * scale;
-            let left = ((center - support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
-            let right = ((center + support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
-            let raw: Vec<f64> = (left..right)
-                .map(|x| kernel((x as f64 - center + 0.5) * (1.0 / filter_scale), method))
-                .collect();
-            let sum: f64 = raw.iter().sum();
-            (
-                left,
-                raw.into_iter()
-                    .map(|v| if sum == 0.0 { 0 } else { (v / sum * 4194304.0).round() as i32 })
-                    .collect(),
-            )
-        })
-        .collect()
+    let mut raw = Vec::new();
+    let mut weights = ResampleWeights {
+        bounds: Vec::with_capacity(output as usize),
+        coefficients: Vec::new(),
+    };
+    for i in 0..output {
+        let center = start + (f64::from(i) + 0.5) * scale;
+        let left = ((center - support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
+        let right = ((center + support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
+        raw.clear();
+        raw.extend((left..right).map(|x| kernel((x as f64 - center + 0.5) * (1.0 / filter_scale), method)));
+        let sum: f64 = raw.iter().sum();
+        let offset = weights.coefficients.len();
+        weights
+            .coefficients
+            .extend(raw.iter().map(|&v| if sum == 0.0 { 0 } else { (v / sum * 4194304.0).round() as i32 }));
+        weights.bounds.push((left, offset..weights.coefficients.len()));
+    }
+    weights
 }
 
 fn premultiply(pixels: &mut [u8]) {
@@ -1146,8 +1186,8 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
     } else {
         let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
         let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
-        let first = vertical.first().unwrap().0;
-        let (last, tail) = vertical.last().unwrap();
+        let first = vertical.get(0).0;
+        let (last, tail) = vertical.get(size.1 as usize - 1);
         let mut rows = vec![0.0; (last + tail.len() - first) * size.0 as usize];
         let row_width = size.0 as usize;
         blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
@@ -1164,7 +1204,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
         });
         blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 << 10, |band, chunk| {
             for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
-                let (start, coefficients) = &vertical[band * 16 + row];
+                let (start, coefficients) = vertical.get(band * 16 + row);
                 for x in 0..row_width {
                     let sample: f64 = coefficients
                         .iter()
@@ -1214,8 +1254,8 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
     let maximum = f64::from((1_u32 << image.bit_depth) - 1);
     let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
     let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
-    let first = vertical.first().unwrap().0;
-    let (last, tail) = vertical.last().unwrap();
+    let first = vertical.get(0).0;
+    let (last, tail) = vertical.get(size.1 as usize - 1);
     let rows = last + tail.len() - first;
     let stride = size.0 as usize * channels;
     let length = rows
@@ -1252,7 +1292,7 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
     });
     chunks_mut(&mut pixels, stride * 2 * 8, |band, rows| {
         for (y, row) in rows.chunks_exact_mut(stride * 2).enumerate() {
-            let (start, coefficients) = &vertical[band * 8 + y];
+            let (start, coefficients) = vertical.get(band * 8 + y);
             for x in 0..size.0 as usize {
                 let mut values = [0.0; 4];
                 for (channel, value) in values.iter_mut().enumerate().take(channels) {
@@ -1305,10 +1345,14 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
 }
 
 fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8) -> PyResult<()> {
-    let horizontal = weights(image.width, size.0, b[0], b[2], method);
+    if size.1 == image.height && b[1] == 0.0 && b[3] == f64::from(image.height) {
+        let horizontal = weights(image.width, size.0, b[0], b[2], method);
+        resample_horizontal::<C>(source, output, image.width as usize, 0, &horizontal);
+        return Ok(());
+    }
     let vertical = weights(image.height, size.1, b[1], b[3], method);
-    let first_row = vertical.first().unwrap().0;
-    let (last_start, last_weights) = vertical.last().unwrap();
+    let first_row = vertical.get(0).0;
+    let (last_start, last_weights) = vertical.get(size.1 as usize - 1);
     let last_row = last_start + last_weights.len();
     let row_bytes = size.0 as usize * C;
     let input_stride = image.width as usize * C;
@@ -1316,42 +1360,14 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
     let temp = if horizontal_identity {
         Cow::Borrowed(&source[first_row * input_stride..last_row * input_stride])
     } else {
+        let horizontal = weights(image.width, size.0, b[0], b[2], method);
         let mut temp = buffer((size.0, (last_row - first_row) as u32), C)?;
-        let narrow = horizontal
-            .iter()
-            .all(|(_, coefficients)| coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + (1 << 21) <= i64::from(i32::MAX));
-        chunks_mut(&mut temp, row_bytes << 4, |band, rows| {
-            for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                let y = first_row + band * 16 + i;
-                let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
-                for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
-                    if narrow {
-                        let mut sums = [1_i32 << 21; C];
-                        for (pixel, &weight) in src[*start..*start + coefficients.len()].iter().zip(coefficients) {
-                            for c in 0..C {
-                                sums[c] += i32::from(pixel[c]) * weight;
-                            }
-                        }
-                        for c in 0..C {
-                            dst[c] = (sums[c] >> 22).clamp(0, 255) as u8;
-                        }
-                    } else {
-                        for c in 0..C {
-                            let sum = coefficients
-                                .iter()
-                                .enumerate()
-                                .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
-                            dst[c] = (sum >> 22).clamp(0, 255) as u8;
-                        }
-                    }
-                }
-            }
-        });
+        resample_horizontal::<C>(source, &mut temp, image.width as usize, first_row, &horizontal);
         Cow::Owned(temp)
     };
     chunks_mut(output, row_bytes << 4, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
-            let (start, coefficients) = &vertical[band * 16 + i];
+            let (start, coefficients) = vertical.get(band * 16 + i);
             let src = &temp[(start - first_row) * row_bytes..];
             let vectorized = crate::ops_simd::vertical(src, dst, row_bytes, coefficients);
             for (x, out) in dst.iter_mut().enumerate().skip(vectorized) {
@@ -1364,6 +1380,41 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
         }
     });
     Ok(())
+}
+
+fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {
+    let row_bytes = horizontal.bounds.len() * C;
+    let input_stride = width * C;
+    let narrow = horizontal
+        .iter()
+        .all(|(_, coefficients)| coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + (1 << 21) <= i64::from(i32::MAX));
+    chunks_mut(output, row_bytes << 4, |band, rows| {
+        for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
+            let y = first_row + band * 16 + i;
+            let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
+            for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
+                if narrow {
+                    let mut sums = [1_i32 << 21; C];
+                    for (pixel, &weight) in src[start..start + coefficients.len()].iter().zip(coefficients) {
+                        for c in 0..C {
+                            sums[c] += i32::from(pixel[c]) * weight;
+                        }
+                    }
+                    for c in 0..C {
+                        dst[c] = (sums[c] >> 22).clamp(0, 255) as u8;
+                    }
+                } else {
+                    for c in 0..C {
+                        let sum = coefficients
+                            .iter()
+                            .enumerate()
+                            .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
+                        dst[c] = (sum >> 22).clamp(0, 255) as u8;
+                    }
+                }
+            }
+        }
+    });
 }
 
 fn cubic(v: [f64; 4], t: f64) -> f64 {
@@ -2022,13 +2073,63 @@ mod tests {
 
     #[test]
     fn spread_keeps_pixel_values_and_zero_distance_copies() {
-        let image = Image::from_pixels(3, 2, PixelMode::Rgb, (0..18).collect(), None).unwrap();
-        assert_eq!(ops_spread(&image, 0).unwrap().pixel_data().unwrap(), image.pixel_data().unwrap());
-        let spread = ops_spread(&image, 2).unwrap();
-        assert_eq!((spread.width, spread.height, spread.mode), (3, 2, PixelMode::Rgb));
-        for pixel in spread.pixel_data().unwrap().as_chunks::<3>().0 {
-            assert!(image.pixel_data().unwrap().as_chunks::<3>().0.contains(pixel));
+        Python::initialize();
+        Python::attach(|py| {
+            let image = Image::from_pixels(3, 2, PixelMode::Rgb, (0..18).collect(), None).unwrap();
+            assert_eq!(ops_spread(py, &image, 0).unwrap().pixel_data().unwrap(), image.pixel_data().unwrap());
+            let spread = ops_spread(py, &image, 2).unwrap();
+            assert_eq!((spread.width, spread.height, spread.mode), (3, 2, PixelMode::Rgb));
+            for pixel in spread.pixel_data().unwrap().as_chunks::<3>().0 {
+                assert!(image.pixel_data().unwrap().as_chunks::<3>().0.contains(pixel));
+            }
+        });
+    }
+
+    #[test]
+    fn spread_initializes_complete_pixels_without_touching_guards() {
+        fn check<const C: usize>() {
+            for width in [1, 3, 17] {
+                for height in [1, 5] {
+                    let input: Vec<u8> = (0..width * height * C + 3).map(|i| (i * 73 + i / 7) as u8).collect();
+                    let source = &input[3..];
+                    for distance in [1, 2, 30] {
+                        let mut state = 0x1234_5678_u64;
+                        let mut reference_state = state;
+                        let mut random = || {
+                            reference_state ^= reference_state << 13;
+                            reference_state ^= reference_state >> 7;
+                            reference_state ^= reference_state << 17;
+                            reference_state
+                        };
+                        let mut expected = Vec::new();
+                        for y in 0..height {
+                            for x in 0..width {
+                                let dx = (random() % (distance as u64 * 2 + 1)) as i64 - distance;
+                                let dy = (random() % (distance as u64 * 2 + 1)) as i64 - distance;
+                                let sx = (x as i64 + dx).clamp(0, width as i64 - 1) as usize;
+                                let sy = (y as i64 + dy).clamp(0, height as i64 - 1) as usize;
+                                let offset = (sy * width + sx) * C;
+                                expected.extend_from_slice(&source[offset..offset + C]);
+                            }
+                        }
+                        let mut actual = vec![std::mem::MaybeUninit::new(93); source.len() + 8];
+                        spread_pixels::<C>(source, &mut actual[3..3 + source.len()], width, distance, &mut state);
+                        // SAFETY: the whole buffer was initialized before the call.
+                        let actual: Vec<_> = actual.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                        assert_eq!(&actual[..3], &[93; 3]);
+                        assert_eq!(&actual[3..3 + source.len()], expected);
+                        assert_eq!(&actual[3 + source.len()..], &[93; 5]);
+                        assert_eq!(state, reference_state);
+                    }
+                }
+            }
         }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<6>();
+        check::<8>();
     }
 
     #[test]

@@ -471,38 +471,42 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
 }
 
 fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
-    let mut previous = vec![usize::MAX; histogram.len()];
-    let mut assignments = vec![0; histogram.len()];
-    let mut sums = vec![[0u64; 4]; palette.len()];
-    let mut counts = vec![0u64; palette.len()];
+    let mut previous = vec![u16::MAX; histogram.len()];
     loop {
         let search = PaletteSearch::new(palette);
-        if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
-            assignments
+        let empty = || (vec![[0_u64; 5]; palette.len()], 0_u64);
+        let accumulate = |(mut sums, mut changed): (Vec<[u64; 5]>, u64), (old, (color, count)): (&mut u16, &(Color, u64))| {
+            let i = search.nearest(*color);
+            if i as u16 != *old {
+                changed += count;
+                *old = i as u16;
+            }
+            sums[i][4] += count;
+            for (sum, &value) in sums[i][..4].iter_mut().zip(color) {
+                *sum += u64::from(value) * count;
+            }
+            (sums, changed)
+        };
+        let (sums, changed) = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
+            previous
                 .par_iter_mut()
                 .zip(histogram.par_iter())
-                .for_each(|(index, (color, _))| *index = search.nearest(*color));
+                .with_min_len(CHUNK_PIXELS)
+                .fold(empty, accumulate)
+                .reduce(empty, |(mut a, changed_a), (b, changed_b)| {
+                    for (a, b) in a.iter_mut().zip(b) {
+                        for (a, b) in a.iter_mut().zip(b) {
+                            *a += b;
+                        }
+                    }
+                    (a, changed_a + changed_b)
+                })
         } else {
-            for (index, (color, _)) in assignments.iter_mut().zip(histogram) {
-                *index = search.nearest(*color);
-            }
-        }
-        sums.fill([0; 4]);
-        counts.fill(0);
-        let mut changed = 0u64;
-        for (((color, count), old), &i) in histogram.iter().zip(&mut previous).zip(&assignments) {
-            if i != *old {
-                changed += count;
-                *old = i;
-            }
-            counts[i] += count;
-            for c in 0..4 {
-                sums[i][c] += u64::from(color[c]) * count;
-            }
-        }
-        for (i, entry) in palette.iter_mut().enumerate() {
-            if counts[i] != 0 {
-                *entry = std::array::from_fn(|c| ((sums[i][c] + counts[i] / 2) / counts[i]) as u8);
+            previous.iter_mut().zip(histogram).fold(empty(), accumulate)
+        };
+        for (entry, sums) in palette.iter_mut().zip(sums) {
+            if sums[4] != 0 {
+                *entry = std::array::from_fn(|c| ((sums[c] + sums[4] / 2) / sums[4]) as u8);
             }
         }
         if changed <= threshold {
@@ -689,6 +693,51 @@ mod tests {
             let mut palette = [[0, 0, 0, 255], [2, 2, 2, 255]];
             refine(&histogram, &mut palette, 1);
             assert_eq!(palette, [[2, 2, 2, 255], [9, 9, 9, 255]]);
+        }
+    }
+
+    #[test]
+    fn refinement_preserves_weighted_results_across_worker_counts() {
+        let histogram: Histogram = (0..CHUNK_PIXELS * 2 + 17)
+            .map(|i| ([i as u8, (i / 256) as u8, (i * 73) as u8, 255], (i % 7 + 1) as u64))
+            .collect();
+        for colors in [1, 16, 256] {
+            let initial: Vec<Color> = (0..colors).map(|i| [i as u8, (i * 31) as u8, (i * 17) as u8, 255]).collect();
+            for threshold in [1, histogram.iter().map(|(_, count)| count).sum()] {
+                let mut expected = initial.clone();
+                let mut previous = vec![usize::MAX; histogram.len()];
+                loop {
+                    let search = PaletteSearch::new(&expected);
+                    let mut sums = vec![[0_u64; 5]; colors];
+                    let mut changed = 0;
+                    for ((color, count), old) in histogram.iter().zip(&mut previous) {
+                        let i = search.nearest(*color);
+                        if i != *old {
+                            changed += count;
+                            *old = i;
+                        }
+                        sums[i][4] += count;
+                        for c in 0..4 {
+                            sums[i][c] += u64::from(color[c]) * count;
+                        }
+                    }
+                    for (color, sums) in expected.iter_mut().zip(sums) {
+                        if sums[4] != 0 {
+                            *color = std::array::from_fn(|c| ((sums[c] + sums[4] / 2) / sums[4]) as u8);
+                        }
+                    }
+                    if changed <= threshold {
+                        break;
+                    }
+                }
+                for threads in [1, 4] {
+                    let mut actual = initial.clone();
+                    rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                        refine(&histogram, &mut actual, threshold);
+                    });
+                    assert_eq!(actual, expected, "colors={colors}, threshold={threshold}, threads={threads}");
+                }
+            }
         }
     }
 }

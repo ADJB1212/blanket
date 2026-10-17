@@ -24,3 +24,10 @@ pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
 pub fn codec_error(error: impl std::fmt::Display) -> PyErr {
     PyOSError::new_err(error.to_string())
 }
+
+/// Borrow native-endian sample bytes without copying the sample buffer.
+pub fn u16_bytes(samples: &[u16]) -> &[u8] {
+    // SAFETY: u16 has no padding, every byte is initialized, and the returned
+    // slice shares the immutable borrow and lifetime of the source samples.
+    unsafe { std::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), std::mem::size_of_val(samples)) }
+}

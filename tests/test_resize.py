@@ -21,6 +21,16 @@ def test_resize_matches_pillow(mode: str, method: int | None, size: tuple[int, i
     assert image.tobytes() == raw
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
+@pytest.mark.parametrize("method", [Image.Resampling.BOX, Image.Resampling.BILINEAR, Image.Resampling.HAMMING, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
+@pytest.mark.parametrize("size", [(67, 7), (67, 83), (513, 49)])
+def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: Image.Resampling, size: tuple[int, int]) -> None:
+    raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
+    actual = Image.frombytes(mode, (67, 49), raw).resize(size, method)
+    expected = PillowImage.frombytes(mode, (67, 49), raw).resize(size, method)
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("size", [(3, 2), (6, 4)])
 def test_resize_copies_metadata_and_owns_pixels(size: tuple[int, int]) -> None:
     image = Image.frombytes("RGBA", (3, 2), bytes(range(24)))
@@ -32,6 +42,19 @@ def test_resize_copies_metadata_and_owns_pixels(size: tuple[int, int]) -> None:
     assert result.format is None
     image.close()
     assert len(result.tobytes()) == size[0] * size[1] * 4
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize("method", [method for method in Image.Resampling if method != Image.Resampling.NEAREST])
+@pytest.mark.parametrize("box", [None, (1.25, 0, 61.75, 49)])
+def test_horizontal_resize_writes_output_directly_with_full_height(mode: str, method: Image.Resampling, box: tuple[float, ...] | None) -> None:
+    channels = 3 if mode == "YCbCr" else len(mode)
+    raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * channels))
+    actual = Image.frombytes(mode, (67, 49), raw)
+    expected = PillowImage.frombytes(mode, (67, 49), raw)
+    for width in [1, 13, 513]:
+        assert actual.resize((width, 49), method, box).tobytes() == expected.resize((width, 49), method, box).tobytes()
+    assert actual.tobytes() == raw
 
 
 @pytest.mark.parametrize(

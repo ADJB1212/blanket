@@ -68,7 +68,7 @@ fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], c
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     if image.mode.is_wide_scalar() {
-        return paste_integer(image, source, position, mask);
+        return paste_integer(py, image, source, position, mask);
     }
     image.pixel_data()?;
     let source_pixels = source.pixel_data()?;
@@ -133,7 +133,7 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
     Ok(())
 }
 
-fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>) -> PyResult<()> {
+fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>) -> PyResult<()> {
     if image.mode != source.mode {
         return Err(PyValueError::new_err("images do not match"));
     }
@@ -157,31 +157,52 @@ fn paste_integer(image: &mut Image, source: &Image, position: (i64, i64), mask: 
     let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width);
     let bottom = position.1.saturating_add(i64::from(source.height)).clamp(0, height);
     let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
-    for y in top..bottom {
-        for x in left..right {
-            let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * stride;
-            let dst = (y as usize * image.width as usize + x as usize) * stride;
-            let alpha = mask_pixels.map_or(255, |(mask, channels)| {
-                let i = src / stride * channels;
-                mask[i + channels - 1]
-            });
-            if alpha == 255 {
-                pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
-            } else if alpha != 0 {
-                if image.mode == PixelMode::F {
-                    let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
-                    let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
-                    let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
-                    pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
-                    continue;
+    py.detach(|| {
+        if right <= left || bottom <= top {
+            return;
+        }
+        if mask_pixels.is_none() {
+            let row_bytes = (right - left) as usize * stride;
+            if left == 0 && right == width && image.width == source.width {
+                let src = (top - position.1) as usize * row_bytes;
+                let dst = top as usize * row_bytes;
+                let length = (bottom - top) as usize * row_bytes;
+                pixels[dst..dst + length].copy_from_slice(&source_pixels[src..src + length]);
+            } else {
+                for y in top..bottom {
+                    let src = ((y - position.1) as usize * source.width as usize + (left - position.0) as usize) * stride;
+                    let dst = (y as usize * image.width as usize + left as usize) * stride;
+                    pixels[dst..dst + row_bytes].copy_from_slice(&source_pixels[src..src + row_bytes]);
                 }
-                for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
-                    let a = u32::from(alpha);
-                    *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;
+            }
+            return;
+        }
+        for y in top..bottom {
+            for x in left..right {
+                let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * stride;
+                let dst = (y as usize * image.width as usize + x as usize) * stride;
+                let alpha = mask_pixels.map_or(255, |(mask, channels)| {
+                    let i = src / stride * channels;
+                    mask[i + channels - 1]
+                });
+                if alpha == 255 {
+                    pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
+                } else if alpha != 0 {
+                    if image.mode == PixelMode::F {
+                        let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
+                        let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
+                        let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
+                        pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
+                        continue;
+                    }
+                    for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
+                        let a = u32::from(alpha);
+                        *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;
+                    }
                 }
             }
         }
-    }
+    });
     Ok(())
 }
 

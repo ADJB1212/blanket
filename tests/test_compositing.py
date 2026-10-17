@@ -41,6 +41,22 @@ def test_paste(mode, source_mode, mask_mode, position):
     assert_same(actual, background)
 
 
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+@pytest.mark.parametrize("source_size", [(7, 5), (4, 3)])
+@pytest.mark.parametrize("position", [(0, 0), (0, 2), (0, -2), (2, 1), (-2, -1), (40, 0), (-40, 0), (0, 40)])
+def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, source_size: tuple[int, int], position: tuple[int, int]) -> None:
+    sample_bytes = 4 if mode in ("I", "F") else 2
+    rng = random.Random(71)
+    raw = rng.randbytes(7 * 6 * sample_bytes)
+    source_raw = rng.randbytes(source_size[0] * source_size[1] * sample_bytes)
+    actual, expected = Image.frombytes(mode, (7, 6), raw), PIL.frombytes(mode, (7, 6), raw)
+    source = Image.frombytes(mode, source_size, source_raw)
+    actual.paste(source, position)
+    expected.paste(PIL.frombytes(mode, source_size, source_raw), position)
+    assert_same(actual, expected)
+    assert source.tobytes() == source_raw
+
+
 @pytest.mark.parametrize("mode,color", [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
 def test_paste_fill_and_alias(mode, color):
     actual, expected = Image.new(mode, (6, 5)), PIL.new(mode, (6, 5))

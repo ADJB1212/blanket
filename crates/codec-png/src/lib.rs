@@ -1,10 +1,10 @@
 use std::io::Cursor;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
-use blanket_codec_image::{color_type, decode_with_metadata};
+use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
+use blanket_codec_image::color_type;
 use blanket_core::{Image, PixelMode};
+use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
-use image::{ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
@@ -98,18 +98,47 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
     if let Some(image) = decode_bilevel_png(data)? {
         return Ok(image);
     }
-    let reader = png::Decoder::new(Cursor::new(data)).read_info().map_err(|e| e.to_string())?;
-    let info = reader.info();
-    decode_with_metadata(
-        data,
-        RustFormat::Png,
-        "PNG",
-        info.sbit.as_deref(),
-        info.color_type == png::ColorType::Grayscale && info.bit_depth == png::BitDepth::One,
-    )
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    let header = decoder.read_header_info().map_err(|error| error.to_string())?;
+    validate_dimensions(header.width, header.height)?;
+    let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
+    decoder.set_transformations(png::Transformations::EXPAND);
+    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let mut pixels = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
+    let frame = reader.next_frame(&mut pixels).map_err(|error| error.to_string())?;
+    pixels.truncate(frame.buffer_size());
+    let mode = match frame.color_type {
+        png::ColorType::Grayscale if bilevel => PixelMode::One,
+        png::ColorType::Grayscale => PixelMode::L,
+        png::ColorType::GrayscaleAlpha if frame.bit_depth == png::BitDepth::Eight => PixelMode::La,
+        png::ColorType::GrayscaleAlpha | png::ColorType::Rgba => PixelMode::Rgba,
+        png::ColorType::Rgb => PixelMode::Rgb,
+        png::ColorType::Indexed => return Err("unexpanded PNG palette".into()),
+    };
+    if frame.bit_depth == png::BitDepth::Sixteen {
+        let depth = reader
+            .info()
+            .sbit
+            .as_deref()
+            .filter(|bits| bits.len() == mode.channels() && matches!(bits[0], 10 | 12) && bits.iter().all(|&b| b == bits[0]))
+            .map_or(16, |bits| bits[0]);
+        if frame.color_type == png::ColorType::GrayscaleAlpha {
+            let mut rgba = Vec::with_capacity(pixels.len() * 2);
+            for &[l0, l1, a0, a1] in pixels.as_chunks::<4>().0 {
+                rgba.extend_from_slice(&[l1, l0, l1, l0, l1, l0, a1, a0]);
+            }
+            pixels = rgba;
+        } else {
+            for sample in pixels.as_chunks_mut::<2>().0 {
+                *sample = (u16::from_be_bytes(*sample) >> (16 - depth)).to_le_bytes();
+            }
+        }
+        return Image::from_sample_bytes(frame.width, frame.height, mode, pixels, depth, Some("PNG".into())).map_err(|error| error.to_string());
+    }
+    Image::from_pixels(frame.width, frame.height, mode, pixels, Some("PNG".into())).map_err(|error| error.to_string())
 }
 
-pub fn encode_wide_png(image: &Image, samples: Vec<u16>, options: SaveOptions) -> PyResult<Vec<u8>> {
+pub fn encode_wide_png(image: &Image, mut samples: Vec<u16>, options: SaveOptions) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
     {
         let mut info = png::Info::with_size(image.width, image.height);
@@ -131,9 +160,10 @@ pub fn encode_wide_png(image: &Image, samples: Vec<u16>, options: SaveOptions) -
         writer
             .write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()])
             .map_err(codec_error)?;
-        writer
-            .write_image_data(&samples.into_iter().flat_map(u16::to_be_bytes).collect::<Vec<_>>())
-            .map_err(codec_error)?;
+        for sample in &mut samples {
+            *sample = sample.to_be();
+        }
+        writer.write_image_data(u16_bytes(&samples)).map_err(codec_error)?;
     }
     Ok(output)
 }

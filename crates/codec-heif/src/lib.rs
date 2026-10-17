@@ -50,30 +50,21 @@ pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
     let mode = if alpha { PixelMode::Rgba } else { PixelMode::Rgb };
     let plane = decoded.planes().interleaved.ok_or("missing HEIF pixel plane")?;
     let row = decoded.width() as usize * mode.channels() * if depth > 8 { 2 } else { 1 };
-    if row > plane.stride {
+    if row > plane.stride || plane.stride == 0 {
         return Err("invalid HEIF row stride".into());
     }
-    let rows = plane.data.chunks_exact(plane.stride).take(decoded.height() as usize);
-    if depth == 8 {
-        let mut pixels = Vec::with_capacity(row * decoded.height() as usize);
-        if row == plane.stride {
-            pixels.extend_from_slice(&plane.data[..row * decoded.height() as usize]);
-        } else {
-            for source in rows {
-                pixels.extend_from_slice(&source[..row]);
-            }
+    let mut pixels = Vec::with_capacity(row * decoded.height() as usize);
+    if row == plane.stride {
+        pixels.extend_from_slice(plane.data.get(..row * decoded.height() as usize).ok_or("truncated HEIF pixel plane")?);
+    } else {
+        for source in plane.data.chunks_exact(plane.stride).take(decoded.height() as usize) {
+            pixels.extend_from_slice(&source[..row]);
         }
+    }
+    if depth == 8 {
         Image::from_pixels(decoded.width(), decoded.height(), mode, pixels, Some("HEIF".into()))
     } else {
-        Image::from_samples(
-            decoded.width(),
-            decoded.height(),
-            mode,
-            rows.flat_map(|source| source[..row].as_chunks::<2>().0.iter().map(|v| u16::from_le_bytes(*v)))
-                .collect(),
-            depth,
-            Some("HEIF".into()),
-        )
+        Image::from_sample_bytes(decoded.width(), decoded.height(), mode, pixels, depth, Some("HEIF".into()))
     }
     .map_err(|e| e.to_string())
 }
