@@ -19,7 +19,9 @@ from ._draw_font import BitmapFont
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-    Coords = Sequence[float] | Sequence[tuple[float, float]]
+    from .ImagePath import Path
+
+    Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
     Color = int | float | str | tuple[int, ...] | None
 
 __all__ = ["Draw", "ImageDraw", "floodfill"]

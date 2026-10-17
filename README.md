@@ -25,8 +25,9 @@ with Image.open("photo.jpg") as image:
 
 ## Why Blanket?
 
-- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageEnhance`,
-  `ImageFilter`, `ImageMath`, `ImagePalette`, and `ImageStat`.
+- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageColor`,
+  `ImageDraw`, `ImageEnhance`, `ImageFilter`, `ImageMath`, `ImagePalette`,
+  `ImagePath`, and `ImageStat`.
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside

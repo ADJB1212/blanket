@@ -7,7 +7,12 @@ from ._color import _rgb
 
 
 def getrgb(color: str) -> tuple[int, ...]:
-    """Convert a CSS color string to an RGB or RGBA tuple."""
+    """Convert an absolute CSS color literal to an 8-bit sRGB or RGBA tuple.
+
+    Supports CSS4 functions and predefined spaces, plus Pillow's HSV and
+    integer-alpha RGBA extensions. Contextual CSS values require resolution
+    by the caller. Out-of-gamut colors use CSS local MINDE gamut mapping.
+    """
     return _rgb(color)
 
 

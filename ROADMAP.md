@@ -113,7 +113,7 @@ support TrueType/OpenType via a Rust font rasterizer (e.g. `ab_glyph` or
 
 ---
 
-## Phase 4 — Missing Image Methods & Module Gaps
+## Phase 4 — Missing Image Methods & Module Gaps — Complete
 
 Fill in the remaining `Image` methods and small utility modules that Pillow
 users expect.
@@ -133,12 +133,12 @@ users expect.
 
 - [x] `getrgb(color)` — public API (currently internal `_color.py`)
 - [x] `getcolor(color, mode)` — convert color string to mode-specific value
-- [ ] Full CSS4 color spec compliance
+- [x] CSS4 absolute color literals, including modern syntax, Lab/OKLab, predefined spaces, and sRGB gamut mapping (see the ImageColor reference for contextual CSS exclusions and Pillow's integer-alpha extension)
 
 ### ImagePath Module
 
-- [ ] `Path` object with `compact`, `getbbox`, `map`, `tolist`, `transform`
-- [ ] Integration with `ImageDraw` for path-based drawing
+- [x] `Path` object with `compact`, `getbbox`, `map`, `tolist`, `transform`
+- [x] Integration with `ImageDraw` for path-based drawing
 
 ### ImageMath Module
 

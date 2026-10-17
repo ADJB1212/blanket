@@ -1,6 +1,6 @@
 """A Rust-backed, Pillow-shaped image API for 8-bit, integer, float, and indexed modes."""
 
-from . import Compressor, Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageMath, ImageOps, ImagePalette, ImageStat, features
+from . import Compressor, Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageMath, ImageOps, ImagePalette, ImagePath, ImageStat, features
 from ._blanket import UnidentifiedImageError, __version__
 
 __all__ = [
@@ -14,6 +14,7 @@ __all__ = [
     "ImageMath",
     "ImageOps",
     "ImagePalette",
+    "ImagePath",
     "ImageStat",
     "UnidentifiedImageError",
     "__version__",

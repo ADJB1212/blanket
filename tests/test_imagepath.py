@@ -1,0 +1,85 @@
+from __future__ import annotations
+
+import struct
+from array import array
+
+import pytest
+from PIL import ImagePath as PillowPath
+
+from blanket import Image, ImageDraw, ImagePath
+
+
+@pytest.mark.parametrize("coordinates", [[], 3, [1, 2, 3.5, -4], [(1, 2), (3.5, -4)], [[1, 2], [3.5, -4]], [(1, 2), 3.5, -4], array("f", [1, 2, 3.5, -4]), struct.pack("=ffff", 1, 2, 3.5, -4)])
+def test_path_construction_and_sequences(coordinates: object) -> None:
+    actual, expected = ImagePath.Path(coordinates), PillowPath.Path(coordinates)
+    assert len(actual) == len(expected)
+    assert list(actual) == list(expected)
+    assert actual.tolist() == expected.tolist()
+    assert actual.tolist(True) == expected.tolist(True)
+    assert actual.getbbox() == expected.getbbox()
+    assert actual[1:].tolist() == expected[1:].tolist()
+    if actual:
+        assert actual[-1] == expected[-1]
+        actual[-1] = expected[-1] = (8, 9)
+        assert actual.tolist() == expected.tolist()
+    copy = ImagePath.Path(actual)
+    if copy:
+        copy[0] = (99, 99)
+        assert actual[0] != copy[0]
+
+
+@pytest.mark.parametrize("distance", [-1, 0, 1, 2, 2.5, 100])
+def test_compact_matches_pillow(distance: float) -> None:
+    points = [(0, 0), (0, 0), (0.5, 0.5), (1, 1), (2, 1), (4, 4)]
+    actual, expected = ImagePath.Path(points), PillowPath.Path(points)
+    assert actual.compact(distance) == expected.compact(distance)
+    assert actual.tolist() == expected.tolist()
+    assert ImagePath.Path([]).compact(distance) == 0
+
+
+@pytest.mark.parametrize("matrix", [(2, 0, 3, 0, -2, 5), (0.5, 2, -1, -2, 0.25, 4)])
+@pytest.mark.parametrize("wrap", [0, 3])
+def test_map_and_transform_match_pillow(matrix: tuple[float, ...], wrap: float) -> None:
+    actual, expected = ImagePath.Path([(-1, 2), (3, 4)]), PillowPath.Path([(-1, 2), (3, 4)])
+    for path in (actual, expected):
+        assert path.map(lambda x, y: (x + 2, y * 3)) is None
+        assert path.transform(matrix, wrap) is None
+    assert actual.tolist() == expected.tolist()
+
+
+def test_path_mutation_failures() -> None:
+    path = ImagePath.Path([(1, 2), (3, 4)])
+    with pytest.raises(ValueError, match="during mapping"):
+        path.map(lambda x, y: (path.compact(), y))
+    assert path.compact(0) == 0
+    with pytest.raises(RuntimeError):
+        path.map(lambda x, y: (_ for _ in ()).throw(RuntimeError()))
+    assert path.compact(0) == 0
+    with pytest.raises(TypeError):
+        path[::2]
+    with pytest.raises(TypeError):
+        path[:] = [(1, 2)]
+    with pytest.raises(TypeError):
+        del path[0]
+    with pytest.raises(IndexError):
+        path[2] = (0, 0)
+    with pytest.raises(ValueError):
+        path.transform((1, 2, 3))
+
+
+@pytest.mark.parametrize("coordinates", [[1], [(1, 2, 3)], ["1", "2"], None])
+def test_invalid_coordinates(coordinates: object) -> None:
+    with pytest.raises((TypeError, ValueError)):
+        ImagePath.Path(coordinates)
+
+
+@pytest.mark.parametrize("method", ["point", "line", "polygon", "rectangle", "ellipse", "rounded_rectangle"])
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA", "P", "I", "I;16", "F", "CMYK", "YCbCr", "LAB", "HSV"])
+def test_draw_accepts_paths(method: str, mode: str) -> None:
+    points = [(1.5, 2.5), (6.5, 7.5)]
+    path = ImagePath.Path(points)
+    path.transform((1, 0, 1, 0, 1, 0))
+    actual, expected = Image.new(mode, (10, 10)), Image.new(mode, (10, 10))
+    getattr(ImageDraw.Draw(actual), method)(path, fill=1)
+    getattr(ImageDraw.Draw(expected), method)(path.tolist(), fill=1)
+    assert actual.tobytes() == expected.tobytes()

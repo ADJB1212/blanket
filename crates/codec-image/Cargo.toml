@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 blanket-core = { path = "../core" }
 blanket-codec-common = { path = "../codec-common" }
-image = { version = "0.25", default-features = false, features = [] }
+image = { version = "0.25", default-features = false }
 
 [lib]
 doctest = false
