@@ -13,3 +13,12 @@ codec dependencies:
 
 Full license texts are included in the corresponding Cargo source packages and
 upstream source repositories.
+
+Outline font rendering and layout also use these Rust dependencies:
+
+- ab_glyph and ab_glyph_rasterizer: Apache-2.0
+- rustybuzz: MIT
+- ttf-parser and owned_ttf_parser: MIT OR Apache-2.0
+- unicode-bidi and unicode-script: MIT OR Apache-2.0
+
+Their license texts are available in the corresponding Cargo source packages.

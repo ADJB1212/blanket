@@ -29,5 +29,6 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_palette::quantize::register(module)?;
     blanket_stat::stat::register(module)?;
     blanket_draw::draw::register(module)?;
+    blanket_draw::font::register(module)?;
     Ok(())
 }

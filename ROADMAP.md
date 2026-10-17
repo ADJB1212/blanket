@@ -97,19 +97,20 @@ Pillow. See the ImageDraw reference for supported modes and text limitations.
 
 ---
 
-## Phase 3 — ImageFont & Text Rendering
+## Phase 3 — ImageFont & Text Rendering — Complete
 
-Text rendering depends on `ImageDraw` and a font backend. The goal is to
-support TrueType/OpenType via a Rust font rasterizer (e.g. `ab_glyph` or
-`cosmic-text`) without linking FreeType.
+The public `ImageFont` module uses `ab_glyph` rasterization, `rustybuzz`
+OpenType shaping, and Unicode bidirectional/script runs without linking
+FreeType. Fonts integrate with `ImageDraw` masks, strokes, anchors, and
+multiline alignment. See the ImageFont reference for layout limitations.
 
-- [ ] `ImageFont.truetype(font, size, ...)` — load `.ttf`/`.otf` files
-- [ ] `ImageFont.load_default(size=None)` — built-in fallback font
-- [ ] Glyph rasterization and layout (horizontal, basic vertical)
-- [ ] Font metrics: `getbbox`, `getlength`, `getmetrics`
-- [ ] Bitmap font support (`ImageFont.load`)
-- [ ] Unicode and multi-script rendering
-- [ ] Text anchors and alignment
+- [x] `ImageFont.truetype(font, size, ...)` — load `.ttf`/`.otf` files
+- [x] `ImageFont.load_default(size=None)` — built-in fallback font
+- [x] Glyph rasterization and layout (horizontal, basic vertical)
+- [x] Font metrics: `getbbox`, `getlength`, `getmetrics`
+- [x] Bitmap font support (`ImageFont.load`)
+- [x] Unicode and multi-script rendering
+- [x] Text anchors and alignment
 
 ---
 

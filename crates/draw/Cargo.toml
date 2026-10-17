@@ -11,6 +11,10 @@ publish = false
 [dependencies]
 blanket-core = { path = "../core" }
 pyo3.workspace = true
+ab_glyph = "0.2.32"
+rustybuzz = "0.20.1"
+unicode-bidi = "0.3.18"
+unicode-script = "0.5.8"
 
 [lib]
 doctest = false

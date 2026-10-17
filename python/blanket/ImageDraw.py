@@ -506,6 +506,7 @@ class ImageDraw:
         """Draw text using the bitmap fallback or a supplied font object.
 
         Strings containing newlines are passed to :meth:`multiline_text`.
+        Use `ImageFont.truetype` to load TrueType and OpenType fonts.
         Font objects must provide `getlength`, `getbbox`, and `getmask2` or
         `getmask`. Coverage masks require 8-bit non-indexed images; use
         `fontmode="1"` for binary masks on other supported drawing modes.
@@ -654,7 +655,7 @@ class ImageDraw:
     def _text_options(direction: str | None, features: Sequence[str] | None, language: str | None, embedded_color: bool) -> None:
         """Reject embedded-color text until a supporting font backend exists."""
         if embedded_color:
-            raise NotImplementedError("embedded color fonts require the ImageFont backend")
+            raise NotImplementedError("embedded color fonts are not supported")
 
     def _text_layout(
         self,
