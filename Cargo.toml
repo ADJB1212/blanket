@@ -34,6 +34,12 @@ repository = "https://github.com/ADJB1212/blanket"
 rust-version = "1.98"
 edition = "2024"
 
+[workspace.dependencies]
+rayon = { version = "1.12", default-features = false }
+pyo3 = { version = "0.30", features = ["abi3-py312"] }
+png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
+turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
+
 [profile.release]
 opt-level = 3
 debug = false
@@ -43,6 +49,14 @@ strip = true
 codegen-units = 1
 
 [profile.dev]
+incremental = true
+opt-level = 1
+debug = "line-directives-only"
+split-debuginfo = "unpacked"
+lto = "off"
+codegen-units = 256
+
+[profile.test]
 incremental = true
 opt-level = 1
 debug = "line-directives-only"

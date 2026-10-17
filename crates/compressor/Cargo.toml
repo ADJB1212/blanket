@@ -12,12 +12,12 @@ publish = false
 blanket-core = { path = "../core" }
 blanket-codecs = { path = "../codecs" }
 blanket-ops = { path = "../ops" }
-pyo3 = { version = "0.30", features = ["abi3-py312"] }
-png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
-rayon = {version = "1.12", default-features = false }
+pyo3.workspace = true
+png.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
-turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
+turbojpeg.workspace = true
 
 [lib]
 doctest = false

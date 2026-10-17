@@ -5,6 +5,22 @@ use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use blanket_core::pixels::{self, Bytes, load, store};
 
+pub(crate) fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
+    let count = output.len();
+    assert_eq!(source.len(), count);
+    let (blocks, tail) = output.as_chunks_mut::<64>();
+    for (i, block) in blocks.iter_mut().enumerate() {
+        *block = Simd::<u8, 64>::from_slice(&source[count - (i + 1) * 64..count - i * 64])
+            .reverse()
+            .to_array()
+            .map(std::mem::MaybeUninit::new);
+    }
+    let length = tail.len();
+    for (dst, &src) in tail.iter_mut().zip(source[..length].iter().rev()) {
+        dst.write(src);
+    }
+}
+
 #[inline]
 pub(crate) fn transpose_rgb_four(rows: [&[u8]; 4]) -> [[u8; 12]; 4] {
     use std::simd::simd_swizzle;

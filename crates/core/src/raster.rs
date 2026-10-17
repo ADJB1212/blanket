@@ -89,6 +89,54 @@ fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
 
 type ColorCounts = [(u64, usize, usize); 512];
 
+fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8], tuple: bool) -> PyResult<Bound<'py, PyAny>> {
+    let values: [_; 256] = std::array::from_fn(|v| (v as u8).into_pyobject(py).unwrap());
+    let mut cache: [Option<([u8; C], Bound<'py, PyAny>)>; 256] = std::array::from_fn(|_| None);
+    let count = data.len() / C;
+    // SAFETY: fresh containers stay private until every slot is initialized.
+    // Bound owns each allocation so errors release partially filled containers.
+    unsafe {
+        let result = Bound::from_owned_ptr_or_err(
+            py,
+            if tuple {
+                pyo3::ffi::PyTuple_New(count as _)
+            } else {
+                pyo3::ffi::PyList_New(count as _)
+            },
+        )?;
+        for (i, pixel) in data.as_chunks::<C>().0.iter().enumerate() {
+            let mut key = [0; 4];
+            key[..C].copy_from_slice(pixel);
+            let slot = (u32::from_le_bytes(key).wrapping_mul(0x9e3779b9) >> 24) as usize;
+            let item = if let Some((_, item)) = cache[slot].as_ref().filter(|(key, _)| key == pixel) {
+                item.clone()
+            } else {
+                let value = |c: usize| values[pixel[c] as usize].as_ptr();
+                let item = Bound::from_owned_ptr_or_err(
+                    py,
+                    match C {
+                        2 => pyo3::ffi::PyTuple_Pack(2, value(0), value(1)),
+                        3 => pyo3::ffi::PyTuple_Pack(3, value(0), value(1), value(2)),
+                        4 => pyo3::ffi::PyTuple_Pack(4, value(0), value(1), value(2), value(3)),
+                        _ => unreachable!(),
+                    },
+                )?;
+                cache[slot] = Some((*pixel, item.clone()));
+                item
+            };
+            let status = if tuple {
+                pyo3::ffi::PyTuple_SetItem(result.as_ptr(), i as _, item.into_ptr())
+            } else {
+                pyo3::ffi::PyList_SetItem(result.as_ptr(), i as _, item.into_ptr())
+            };
+            if status != 0 {
+                return Err(PyErr::fetch(py));
+            }
+        }
+        Ok(result)
+    }
+}
+
 fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
     let top = pixels.chunks_exact(width).position(|row| row.iter().any(|&v| v != 0))?;
     let bottom = pixels.chunks_exact(width).rposition(|row| row.iter().any(|&v| v != 0)).unwrap();
@@ -584,27 +632,27 @@ impl Image {
 
     pub fn getdata(&self, py: Python<'_>) -> PyResult<Py<PyList>> {
         let data = self.raw_data()?;
+        if self.bit_depth == 8 && self.mode.channels() > 1 {
+            let result = match self.mode.channels() {
+                2 => packed_pixel_data::<2>(py, data, false)?,
+                3 => packed_pixel_data::<3>(py, data, false)?,
+                4 => packed_pixel_data::<4>(py, data, false)?,
+                _ => unreachable!(),
+            };
+            return Ok(result.cast_into::<PyList>()?.unbind());
+        }
         if self.mode == PixelMode::F {
             return Ok(PyList::new(py, data.as_chunks::<4>().0.iter().map(|bytes| float_value(bytes)))?.unbind());
         }
         if self.mode.is_integer() {
-            let values: Vec<i64> = data
-                .chunks_exact(self.mode.sample_bytes())
-                .map(|bytes| integer_value(self.mode, bytes))
-                .collect();
-            return Ok(PyList::new(py, values)?.unbind());
+            return Ok(PyList::new(
+                py,
+                data.chunks_exact(self.mode.sample_bytes()).map(|bytes| integer_value(self.mode, bytes)),
+            )?
+            .unbind());
         }
         if self.bit_depth == 8 {
-            return Ok(match self.mode {
-                PixelMode::One | PixelMode::L => PyList::new(py, data.iter().copied())?,
-                PixelMode::La | PixelMode::Pa => PyList::new(py, data.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])))?,
-                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                    PyList::new(py, data.as_chunks::<3>().0.iter().map(|p| (p[0], p[1], p[2])))?
-                }
-                PixelMode::Rgba | PixelMode::Cmyk => PyList::new(py, data.as_chunks::<4>().0.iter().map(|p| (p[0], p[1], p[2], p[3])))?,
-                _ => unreachable!(),
-            }
-            .unbind());
+            return Ok(PyList::new(py, data.iter().copied())?.unbind());
         }
         let result = PyList::empty(py);
         for y in 0..self.height {
@@ -613,6 +661,33 @@ impl Image {
             }
         }
         Ok(result.unbind())
+    }
+
+    pub fn get_flattened_data(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
+        let data = self.raw_data()?;
+        if self.bit_depth == 8 && self.mode.channels() > 1 {
+            let result = match self.mode.channels() {
+                2 => packed_pixel_data::<2>(py, data, true)?,
+                3 => packed_pixel_data::<3>(py, data, true)?,
+                4 => packed_pixel_data::<4>(py, data, true)?,
+                _ => unreachable!(),
+            };
+            return Ok(result.cast_into::<PyTuple>()?.unbind());
+        }
+        if self.mode == PixelMode::F {
+            return Ok(PyTuple::new(py, data.as_chunks::<4>().0.iter().map(|bytes| float_value(bytes)))?.unbind());
+        }
+        if self.mode.is_integer() {
+            return Ok(PyTuple::new(
+                py,
+                data.chunks_exact(self.mode.sample_bytes()).map(|bytes| integer_value(self.mode, bytes)),
+            )?
+            .unbind());
+        }
+        if self.bit_depth == 8 {
+            return Ok(PyTuple::new(py, data.iter().copied())?.unbind());
+        }
+        Ok(self.getdata(py)?.bind(py).to_tuple().unbind())
     }
 
     pub fn getcolors(&self, py: Python<'_>, maxcolors: usize) -> PyResult<Option<Py<PyList>>> {
@@ -855,16 +930,7 @@ impl Image {
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
         let mut pixels = Vec::<u8>::with_capacity(source.len());
-        let row = self.width as usize
-            * self.mode.channels()
-            * if self.mode.is_wide_scalar() {
-                self.mode.sample_bytes()
-            } else if self.bit_depth == 8 {
-                1
-            } else {
-                2
-            };
-        let chunk = if source.len() >= 4 * 1024 * 1024 { 256 * 1024 } else { row.max(4096) };
+        let chunk = 256 * 1024;
         py.detach(|| {
             crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
                 // Disjoint output partitions initialize the entire reserved buffer.

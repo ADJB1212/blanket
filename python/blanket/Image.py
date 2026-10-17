@@ -748,7 +748,8 @@ class Image:
             pixels = image.get_flattened_data()
             ```
         """
-        return tuple(self.getdata(band))
+        source = self if band is None else self.getchannel(index(band))
+        return source._native.get_flattened_data()
 
     def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
         """Write pixels in row order; scale/offset apply to single-band data.
@@ -1448,8 +1449,10 @@ class Image:
             if box[3] < box[1]:
                 raise ValueError("Coordinate 'lower' is less than 'upper'")
             self.load()
-            left, upper, right, lower = (round(value) for value in box)
-            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (4 if self.mode == "F" else len(self.getbands())))
+            left, upper, right, lower = box
+            if type(left) is not int or type(upper) is not int or type(right) is not int or type(lower) is not int:
+                left, upper, right, lower = round(left), round(upper), round(right), round(lower)
+            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (4 if self.mode == "F" else len(self._bands)))
         result = Image(native)
         result.info.update(self.info)
         return result
@@ -1735,8 +1738,8 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
 
     if not isinstance(size, (list, tuple)) or len(size) != 2:
         raise ValueError("Size must be a list or tuple of length 2")
-    dimensions = tuple(index(v) for v in size)
-    if min(dimensions) < 0:
+    dimensions = size if type(size) is tuple and type(size[0]) is int and type(size[1]) is int else tuple(index(v) for v in size)
+    if dimensions[0] < 0 or dimensions[1] < 0:
         raise ValueError("Width and height must be >= 0")
     if mode in ("I", "I;16", "I;16L", "I;16B"):
         value = 0 if color is None else index(color)

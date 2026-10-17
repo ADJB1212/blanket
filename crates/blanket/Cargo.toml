@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
-pyo3 = { version = "0.30", features = ["abi3-py312"] }
+pyo3.workspace = true
 blanket-core = { path = "../core" }
 blanket-codecs = { path = "../codecs" }
 blanket-compressor = { path = "../compressor" }

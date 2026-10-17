@@ -1,6 +1,6 @@
 //! Channel arithmetic and wraparound translation for `ImageChops`.
 
-use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut, chunks_mut_above};
+use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut_above};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -10,12 +10,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chops_invert, module)?)?;
     module.add_function(wrap_pyfunction!(chops_offset, module)?)?;
     Ok(())
-}
-
-fn buffer(len: usize) -> PyResult<Vec<u8>> {
-    let mut pixels = reserved_buffer(len)?;
-    pixels.resize(len, 0);
-    Ok(pixels)
 }
 
 fn reserved_buffer(len: usize) -> PyResult<Vec<u8>> {
@@ -248,7 +242,7 @@ fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
 #[pyfunction]
 fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> PyResult<Image> {
     let source = image.raw_data()?;
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = reserved_buffer(source.len())?;
     if image.width != 0 && image.height != 0 {
         let bytes_per_pixel = image.mode.channels()
             * if image.mode.is_wide_scalar() {
@@ -261,13 +255,53 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
         let row = image.width as usize * bytes_per_pixel;
         let head = xoffset.rem_euclid(i64::from(image.width)) as usize * bytes_per_pixel;
         let shift_y = yoffset.rem_euclid(i64::from(image.height)) as usize;
+        let height = image.height as usize;
         py.detach(|| {
-            chunks_mut(&mut pixels, row, |y, dst| {
-                let source_y = (y + image.height as usize - shift_y) % image.height as usize;
-                let src = &source[source_y * row..(source_y + 1) * row];
-                dst[..head].copy_from_slice(&src[row - head..]);
-                dst[head..].copy_from_slice(&src[..row - head]);
-            });
+            let tail = row - head;
+            if head.min(tail) <= row / 8 && source.len() < 4 << 20 {
+                // Rotate the flat buffer, then repair the narrow wrap at each row.
+                let shift = (shift_y * row + if head <= tail { head } else { source.len() - tail }) % source.len();
+                let dst = pixels.as_mut_ptr();
+                // SAFETY: the two copies initialize the entire reserved allocation.
+                unsafe {
+                    std::ptr::copy_nonoverlapping(source[source.len() - shift..].as_ptr(), dst, shift);
+                    std::ptr::copy_nonoverlapping(source.as_ptr(), dst.add(shift), source.len() - shift);
+                }
+                let mut sy = height - shift_y;
+                if head != 0 {
+                    for y in 0..height {
+                        if sy == height {
+                            sy = 0;
+                        }
+                        let (src, target, count) = if head <= tail {
+                            (sy * row + tail, y * row, head)
+                        } else {
+                            (sy * row, y * row + head, tail)
+                        };
+                        // SAFETY: the repair stays inside an initialized destination row.
+                        unsafe { std::ptr::copy_nonoverlapping(source[src..].as_ptr(), dst.add(target), count) };
+                        sy += 1;
+                    }
+                }
+            } else {
+                chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], row * 32, 4 << 20, |band, rows| {
+                    let mut sy = (band * 32 + height - shift_y) % height;
+                    for dst in rows.chunks_exact_mut(row) {
+                        let src = &source[sy * row..(sy + 1) * row];
+                        // SAFETY: the two copies initialize a disjoint, complete row.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(src[tail..].as_ptr(), dst.as_mut_ptr().cast::<u8>(), head);
+                            std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>().add(head), tail);
+                        }
+                        sy += 1;
+                        if sy == height {
+                            sy = 0;
+                        }
+                    }
+                });
+            }
+            // SAFETY: every reserved byte was initialized by the row copies.
+            unsafe { pixels.set_len(source.len()) };
         });
     }
     Ok(Image {

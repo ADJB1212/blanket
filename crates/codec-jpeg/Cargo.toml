@@ -10,10 +10,10 @@ publish = false
 
 [dependencies]
 blanket-core = { path = "../core" }
-pyo3 = { version = "0.30", features = ["abi3-py312"] }
+pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }
-turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
-rayon = {version = "1.12", default-features = false }
+turbojpeg.workspace = true
+rayon.workspace = true
 
 [lib]
 doctest = false

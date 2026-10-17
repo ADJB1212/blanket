@@ -510,6 +510,24 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         });
         return output(image, size, pixels);
     }
+    if c == 1 && matches!(orientation, 2 | 3) {
+        let mut pixels = reserved_buffer(size, c)?;
+        let width = image.width as usize;
+        let height = image.height as usize;
+        let len = source.len();
+        py.detach(|| {
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], width.max(1) * 32, 4 << 20, |band, rows| {
+                for (i, row) in rows.chunks_exact_mut(width.max(1)).enumerate() {
+                    let y = band * 32 + i;
+                    let sy = if orientation == 3 { height - 1 - y } else { y };
+                    crate::ops_simd::reverse_gray(&source[sy * width..(sy + 1) * width], row);
+                }
+            });
+            // SAFETY: every row was initialized by the reversal kernel.
+            unsafe { pixels.set_len(len) };
+        });
+        return output(image, size, pixels);
+    }
     let mut pixels = buffer(size, c)?;
     if image.mode.is_wide_scalar() {
         py.detach(|| match c {
@@ -563,6 +581,17 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                     row.copy_from_slice(src.as_flattened());
                 } else if C == 3 {
                     crate::ops_simd::reverse_rgb(src.as_flattened(), row);
+                } else if C == 1 {
+                    let src = src.as_flattened();
+                    let end = w / 64 * 64;
+                    for x in (0..end).step_by(64) {
+                        std::simd::Simd::<u8, 64>::from_slice(&src[w - x - 64..w - x])
+                            .reverse()
+                            .copy_to_slice(&mut row[x..x + 64]);
+                    }
+                    for (dst, src) in row[end..].iter_mut().zip(src[..w - end].iter().rev()) {
+                        *dst = *src;
+                    }
                 } else {
                     for (dst, src) in row.as_chunks_mut::<C>().0.iter_mut().zip(src.iter().rev()) {
                         *dst = *src;
@@ -1918,6 +1947,45 @@ mod tests {
             let clipped = ops_canvas(py, &image, (3, 3), (-1, 1), vec![9]).unwrap();
             assert_eq!(clipped.pixel_data().unwrap(), [9, 9, 9, 2, 3, 9, 5, 6, 9]);
         });
+    }
+
+    #[test]
+    fn grayscale_reversal_preserves_unaligned_tails_and_guards() {
+        for width in [0, 1, 15, 16, 17, 63, 64, 65, 127, 128, 129] {
+            for height in [1, 35] {
+                for offset in 0..16 {
+                    let source: Vec<u8> = (0..offset + width * height).map(|i| (i * 37 + 113) as u8).collect();
+                    let mut spare = vec![std::mem::MaybeUninit::new(93); offset + width + 16];
+                    crate::ops_simd::reverse_gray(&source[offset..offset + width], &mut spare[offset..offset + width]);
+                    // SAFETY: the whole buffer was initialized before the call.
+                    let actual: Vec<_> = spare.into_iter().map(|v| unsafe { v.assume_init() }).collect();
+                    assert_eq!(
+                        &actual[offset..offset + width],
+                        source[offset..offset + width].iter().rev().copied().collect::<Vec<_>>()
+                    );
+                    assert!(actual[..offset].iter().all(|&v| v == 93));
+                    assert!(actual[offset + width..].iter().all(|&v| v == 93));
+                    for orientation in [2, 3] {
+                        let mut output = vec![93; offset + width * height + 16];
+                        transpose::<1>(
+                            &source[offset..],
+                            &mut output[offset..offset + width * height],
+                            width,
+                            height,
+                            orientation,
+                        );
+                        for y in 0..height {
+                            let sy = if orientation == 3 { height - 1 - y } else { y };
+                            for x in 0..width {
+                                assert_eq!(output[offset + y * width + x], source[offset + sy * width + width - 1 - x]);
+                            }
+                        }
+                        assert!(output[..offset].iter().all(|&v| v == 93));
+                        assert!(output[offset + width * height..].iter().all(|&v| v == 93));
+                    }
+                }
+            }
+        }
     }
 
     #[test]

@@ -1,6 +1,10 @@
 //! Pillow-compatible filtering with independent output partitions.
 
 use std::collections::VecDeque;
+use std::simd::Simd;
+#[cfg(target_arch = "aarch64")]
+use std::simd::StdFloat;
+use std::simd::num::{SimdFloat, SimdUint};
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::raster::{Image, PixelMode};
@@ -37,8 +41,7 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
     if i64::from(size.0) * i64::from(size.1) != kernel.len() as i64 {
         return Err(PyValueError::new_err("bad kernel size"));
     }
-    let mut pixels = buffer(source.len())?;
-    pixels.copy_from_slice(source);
+    let mut pixels = source.to_vec();
     if i64::from(image.width) < i64::from(size.0) || i64::from(image.height) < i64::from(size.1) {
         return output(image, pixels);
     }
@@ -71,33 +74,55 @@ fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], wi
     let radius = K / 2;
     let stride = width * C;
     let height = source.len() / stride;
-    let source = source.as_chunks::<C>().0;
     chunks_mut(pixels, stride * 16, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let y = band * 16 + i;
             if y < radius || y + radius >= height {
                 continue;
             }
-            let row = row.as_chunks_mut::<C>().0;
-            for x in radius..width - radius {
-                let mut sums = [offset + 0.5; C];
+            let first = radius * C;
+            let last = (width - radius) * C;
+            let end = first + (last - first) / 16 * 16;
+            for x in (first..end).step_by(16) {
+                let mut sums = Simd::splat(offset + 0.5);
                 for (ky, taps) in taps.iter().enumerate() {
-                    let window: &[[u8; C]; K] = source[(y + radius - ky) * width + x - radius..][..K].try_into().unwrap();
-                    // Sum each row before accumulating, matching Pillow's f32 order.
-                    for c in 0..C {
-                        let mut subtotal = kernel_add(f32::from(window[0][c]), taps[0], f32::from(window[1][c]) * taps[1]);
-                        for kx in 2..K {
-                            subtotal = kernel_add(f32::from(window[kx][c]), taps[kx], subtotal);
-                        }
-                        sums[c] += subtotal;
+                    let start = (y + radius - ky) * stride + x - first;
+                    let value = |kx| Simd::<u8, 16>::from_slice(&source[start + kx * C..][..16]).cast::<f32>();
+                    let mut subtotal = kernel_add_simd(value(0), Simd::splat(taps[0]), value(1) * Simd::splat(taps[1]));
+                    for (kx, &weight) in taps.iter().enumerate().skip(2) {
+                        subtotal = kernel_add_simd(value(kx), Simd::splat(weight), subtotal);
                     }
+                    sums += subtotal;
                 }
-                for c in 0..C {
-                    row[x][c] = sums[c] as u8;
+                sums.cast::<u8>().copy_to_slice(&mut row[x..x + 16]);
+            }
+            for (i, pixel) in row[end..last].iter_mut().enumerate() {
+                let x = end + i;
+                let mut sum = offset + 0.5;
+                for (ky, taps) in taps.iter().enumerate() {
+                    let start = (y + radius - ky) * stride + x - first;
+                    // Sum each row before accumulating, matching Pillow's f32 order.
+                    let mut subtotal = kernel_add(f32::from(source[start]), taps[0], f32::from(source[start + C]) * taps[1]);
+                    for kx in 2..K {
+                        subtotal = kernel_add(f32::from(source[start + kx * C]), taps[kx], subtotal);
+                    }
+                    sum += subtotal;
                 }
+                *pixel = sum as u8;
             }
         }
     });
+}
+
+fn kernel_add_simd(value: Simd<f32, 16>, weight: Simd<f32, 16>, sum: Simd<f32, 16>) -> Simd<f32, 16> {
+    #[cfg(target_arch = "aarch64")]
+    {
+        value.mul_add(weight, sum)
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        value * weight + sum
+    }
 }
 
 // Pillow's AArch64 C builds contract each row's multiply/add expressions.
@@ -630,6 +655,56 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn convolution_vectors_match_scalar_rounding_tails_and_guards() {
+        fn check<const C: usize, const K: usize>() {
+            for width in [K, K + 1, K + 15, K + 16, K + 17, 67] {
+                let height = 35;
+                for offset in [0, 1, 7, 15] {
+                    let source: Vec<u8> = (0..offset + width * height * C).map(|i| (i * 37 + 113) as u8).collect();
+                    let source = &source[offset..];
+                    for weights in [
+                        (0..K * K).map(|i| (i as f32 - 4.5) / 7.0).collect::<Vec<_>>(),
+                        vec![f32::INFINITY; K * K],
+                        vec![f32::NAN; K * K],
+                    ] {
+                        let mut expected = source.to_vec();
+                        let radius = K / 2;
+                        for y in radius..height - radius {
+                            for x in radius * C..(width - radius) * C {
+                                let mut sum = -13.25 + 0.5;
+                                for ky in 0..K {
+                                    let start = (y + radius - ky) * width * C + x - radius * C;
+                                    let taps = &weights[ky * K..][..K];
+                                    let mut subtotal = kernel_add(f32::from(source[start]), taps[0], f32::from(source[start + C]) * taps[1]);
+                                    for kx in 2..K {
+                                        subtotal = kernel_add(f32::from(source[start + kx * C]), taps[kx], subtotal);
+                                    }
+                                    sum += subtotal;
+                                }
+                                expected[y * width * C + x] = sum as u8;
+                            }
+                        }
+                        let mut output = vec![93; offset + source.len() + 16];
+                        output[offset..offset + source.len()].copy_from_slice(source);
+                        convolve::<C, K>(source, &mut output[offset..offset + source.len()], width, &weights, -13.25);
+                        assert_eq!(&output[offset..offset + source.len()], expected);
+                        assert!(output[..offset].iter().all(|&v| v == 93));
+                        assert!(output[offset + source.len()..].iter().all(|&v| v == 93));
+                    }
+                }
+            }
+        }
+        check::<1, 3>();
+        check::<2, 3>();
+        check::<3, 3>();
+        check::<4, 3>();
+        check::<1, 5>();
+        check::<2, 5>();
+        check::<3, 5>();
+        check::<4, 5>();
     }
 
     #[test]

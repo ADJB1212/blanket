@@ -70,14 +70,42 @@ pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
     output
 }
 
+fn narrow_integer_l<const N: usize>(values: Simd<i32, N>) -> Simd<u8, N> {
+    // Staged narrowing lets LLVM use saturating SIMD packs.
+    values
+        .simd_clamp(Simd::splat(0), Simd::splat(65535))
+        .cast::<u16>()
+        .simd_min(Simd::splat(255))
+        .cast::<u8>()
+}
+
 pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
+    if mode == PixelMode::I && source.len() / 4 < 2 << 20 {
+        let (blocks, tail) = source.as_chunks::<256>();
+        let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+        output.extend(blocks.iter().map(|block| {
+            narrow_integer_l(Simd::<i32, 64>::from_array(std::array::from_fn(|lane| {
+                i32::from_le_bytes(block[lane * 4..lane * 4 + 4].try_into().unwrap())
+            })))
+            .to_array()
+        }));
+        let mut output = output.into_flattened();
+        output.extend(tail.as_chunks::<4>().0.iter().map(|&v| i32::from_le_bytes(v).clamp(0, 255) as u8));
+        return output;
+    }
     let stride = mode.sample_bytes();
     let mut output = vec![0; source.len() / stride];
     crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 << 20, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * stride..(chunk * CHUNK_PIXELS + dst.len()) * stride];
         match mode {
             PixelMode::I => {
-                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                let src = src.as_chunks::<4>().0;
+                let end = dst.len() / 16 * 16;
+                for i in (0..end).step_by(16) {
+                    let values = Simd::<i32, 16>::from_array(std::array::from_fn(|lane| i32::from_le_bytes(src[i + lane])));
+                    narrow_integer_l(values).copy_to_slice(&mut dst[i..i + 16]);
+                }
+                for (pixel, bytes) in dst[end..].iter_mut().zip(&src[end..]) {
                     *pixel = i32::from_le_bytes(*bytes).clamp(0, 255) as u8;
                 }
             }
@@ -331,6 +359,23 @@ pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     if to == PixelMode::L {
         return extract_channel::<2>(source, 0);
     }
+    if to == PixelMode::Rgba && source.len() < 2 << 20 {
+        let (blocks, tail) = source.as_chunks::<32>();
+        let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+        output.extend(blocks.iter().map(|block| {
+            std::simd::simd_swizzle!(
+                Simd::<u8, 32>::from_array(*block),
+                [
+                    0, 0, 0, 1, 2, 2, 2, 3, 4, 4, 4, 5, 6, 6, 6, 7, 8, 8, 8, 9, 10, 10, 10, 11, 12, 12, 12, 13, 14, 14, 14, 15, 16, 16, 16, 17, 18,
+                    18, 18, 19, 20, 20, 20, 21, 22, 22, 22, 23, 24, 24, 24, 25, 26, 26, 26, 27, 28, 28, 28, 29, 30, 30, 30, 31
+                ]
+            )
+            .to_array()
+        }));
+        let mut output = output.into_flattened();
+        output.extend(tail.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]));
+        return output;
+    }
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];
     crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 << 20, |chunk, dst| {
@@ -474,6 +519,8 @@ mod tests {
                     .collect();
                 assert_eq!(color_to_cmyk::<4>(rgba), expected);
                 let pairs = &source[offset..offset + count * 2];
+                let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
+                assert_eq!(convert_la(pairs, PixelMode::Rgba), expected);
                 for band in 0..2 {
                     let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().map(|p| p[band]).collect();
                     assert_eq!(extract_two_channel(pairs, band), expected);
@@ -489,7 +536,7 @@ mod tests {
     fn numeric_conversion_kernels_preserve_unaligned_tails_and_guards() {
         let floats = [f32::NAN, f32::NEG_INFINITY, f32::INFINITY, -0.0, 0.0, -1.5, 1.75, 254.9, 255.1];
         let integers = [i32::MIN, i32::MAX, -1, 0, 1, 127, 255, 256, 65535];
-        for count in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33] {
+        for count in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129] {
             for offset in 0..16 {
                 let source: Vec<_> = std::iter::repeat_n(93, offset)
                     .chain((0..count).flat_map(|i| floats[i % floats.len()].to_le_bytes()))
@@ -513,6 +560,17 @@ mod tests {
                         }))
                         .collect();
                     let gray = integer_to_l(&source[offset..], mode);
+                    let expected: Vec<_> = (0..count)
+                        .map(|i| {
+                            let value = integers[i % integers.len()];
+                            if mode == PixelMode::I {
+                                value.clamp(0, 255) as u8
+                            } else {
+                                (value as u16).min(255) as u8
+                            }
+                        })
+                        .collect();
+                    assert_eq!(gray, expected);
                     for channels in [3, 4] {
                         let mut output = vec![93; offset + count * channels + 16];
                         let dst = &mut output[offset..offset + count * channels];
@@ -532,6 +590,17 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn integer_narrowing_preserves_parallel_tail() {
+        let values = [i32::MIN, -1, 0, 1, 127, 255, 256, 65535, 65536, i32::MAX];
+        let count = (2 << 20) + 17;
+        let source: Vec<_> = (0..count).flat_map(|i| values[i % values.len()].to_le_bytes()).collect();
+        let output = integer_to_l(&source, PixelMode::I);
+        for (i, &value) in output.iter().enumerate() {
+            assert_eq!(value, values[i % values.len()].clamp(0, 255) as u8);
         }
     }
 

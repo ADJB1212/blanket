@@ -67,31 +67,32 @@ fn stat_count(histogram: &Bound<'_, PyList>) -> PyResult<Vec<u128>> {
 }
 
 #[pyfunction]
-fn stat_extrema(histogram: &Bound<'_, PyList>) -> PyResult<Vec<(u8, u8)>> {
+fn stat_extrema<'py>(histogram: &Bound<'py, PyList>) -> PyResult<Bound<'py, PyList>> {
     if !histogram.is_exact_instance_of::<PyList>() {
         let values = histogram.extract::<Vec<u64>>()?;
-        return Ok(bands(&values)?
-            .iter()
-            .map(|band| {
+        return PyList::new(
+            histogram.py(),
+            bands(&values)?.iter().map(|band| {
                 (
                     band.iter().position(|&n| n != 0).unwrap_or(255) as u8,
                     band.iter().rposition(|&n| n != 0).unwrap_or(0) as u8,
                 )
-            })
-            .collect());
+            }),
+        );
     }
     if !histogram.len().is_multiple_of(256) {
         return Err(PyValueError::new_err("histogram must contain 256 bins per band"));
     }
-    let mut result = vec![(255, 0); histogram.len() / 256];
-    for (i, (minimum, maximum)) in result.iter_mut().enumerate() {
-        for bin in 0..256 {
-            // Validate every count, including bins between the extrema.
-            if list_count(histogram, i * 256 + bin)? != 0 {
-                *minimum = (*minimum).min(bin as u8);
-                *maximum = bin as u8;
-            }
+    let result = PyList::empty(histogram.py());
+    for i in 0..histogram.len() / 256 {
+        let mut counts = [0; 256];
+        // Validate the full band before finding its occupied endpoints.
+        for (bin, count) in counts.iter_mut().enumerate() {
+            *count = list_count(histogram, i * 256 + bin)?;
         }
+        let minimum = counts.iter().position(|&n| n != 0).unwrap_or(255) as u8;
+        let maximum = counts.iter().rposition(|&n| n != 0).unwrap_or(0) as u8;
+        result.append((minimum, maximum))?;
     }
     Ok(result)
 }

@@ -10,11 +10,11 @@ publish = false
 
 [dependencies]
 blanket-core = { path = "../core" }
-pyo3 = { version = "0.30", features = ["abi3-py312"] }
+pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }
 jpegxl-rs = { version = "0.16", default-features = false }
 jpegxl-sys = { version = "0.13", default-features = false }
-rayon = {version = "1.12", default-features = false }
+rayon.workspace = true
 
 [features]
 default = []

@@ -9,6 +9,32 @@ from PIL import Image as PIL
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
+@pytest.mark.parametrize("size", [(0, 3), (257, 1)])
+def test_pixel_snapshots_are_independent_and_immutable(mode: str, size: tuple[int, int]) -> None:
+    expected = PIL.new(mode, size)
+    if size[0]:
+        channels = len(expected.getbands())
+        expected.putdata([i % 256 if channels == 1 else tuple((i + c * 71) % 256 for c in range(channels)) for i in range(size[0])])
+    expected = PIL.frombytes(mode, size, expected.tobytes())
+    actual = Image.frombytes(mode, size, expected.tobytes())
+    snapshot = actual.get_flattened_data()
+    values = actual.getdata()
+    assert type(snapshot) is tuple
+    assert type(values) is list
+    assert snapshot == expected.get_flattened_data()
+    assert values == list(snapshot)
+    for band in range(len(expected.getbands())):
+        assert actual.get_flattened_data(band) == (snapshot if len(expected.getbands()) == 1 else expected.get_flattened_data(band))
+    if size[0]:
+        actual.putpixel((0, 0), 0)
+    actual.close()
+    assert snapshot == expected.get_flattened_data()
+    assert values == list(snapshot)
+    with pytest.raises(ValueError, match="closed"):
+        actual.get_flattened_data()
+
+
 class ListValues(list[int]):
     @overload
     def __getitem__(self, item: SupportsIndex) -> int: ...

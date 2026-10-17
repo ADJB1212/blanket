@@ -68,8 +68,8 @@ def test_scaled_arithmetic(name: str, scale: float, offset: int) -> None:
     same(getattr(ImageChops, name)(first, second, scale, offset), getattr(PILChops, name)(pil_first, pil_second, scale, offset))
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 1), (17, 9), (513, 193)])
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
+@pytest.mark.parametrize("size", [(0, 3), (1, 1), (17, 9), (513, 193), (1025, 1027)])
 @pytest.mark.parametrize("shift", [(0, 0), (3, None), (-4, None), (39, -27), (-100000, 100001)])
 def test_offset(mode: str, size: tuple[int, int], shift: tuple[int, int | None]) -> None:
     image, pillow = pair(mode, size)
