@@ -11,8 +11,8 @@ if [[ "$RUNNER_OS" == macOS ]]; then
 fi
 case "$RUNNER_ARCH" in
 X64)
-	export CFLAGS="${CFLAGS:-} -O3 -march=x86-64-v2 -mtune=generic"
-	export CXXFLAGS="${CXXFLAGS:-} -O3 -march=x86-64-v2 -mtune=generic"
+	export CFLAGS="${CFLAGS:-} -O3 -march=x86-64 -mtune=generic"
+	export CXXFLAGS="${CXXFLAGS:-} -O3 -march=x86-64 -mtune=generic"
 	;;
 ARM64)
 	if [[ "$RUNNER_OS" == macOS ]]; then
@@ -32,7 +32,7 @@ aom)
 	clone_flags=(--depth 1)
 	;;
 x265)
-	repository=https://bitbucket.org/multicoreware/x265_git.git
+	repository=https://github.com/Multicorewareinc/x265.git
 	clone_flags=(--depth 1)
 	;;
 libde265)
@@ -65,15 +65,6 @@ git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
 
 case "$name" in
 x265)
-	json11_cpp="$source_dir/source/dynamicHDR10/json11/json11.cpp"
-	if [[ -f "$json11_cpp" ]] && ! grep -qE '^[[:space:]]*#include <cstdint>' "$json11_cpp"; then
-	  tmp_file=$(mktemp)
-	  {
-	    printf '#include <cstdint>\n'
-	    cat "$json11_cpp"
-	  } >"$tmp_file"
-	  mv "$tmp_file" "$json11_cpp"
-	fi
 	x265_neon_flag=()
 	if [[ "$RUNNER_ARCH" == "ARM64" ]]; then
 		x265_neon_flag=(-DHAVE_NEON=1)
@@ -152,6 +143,7 @@ libjxl)
 
 	cmake -S "$source_dir" -B "$source_dir/build" -G Ninja \
 		-DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$prefix" -DBUILD_TESTING=OFF \
+		-DCMAKE_INSTALL_LIBDIR=lib \
 		-DBUILD_SHARED_LIBS=ON -DJPEGXL_ENABLE_TOOLS=OFF \
 		-DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_MANPAGES=OFF \
 		-DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF \
