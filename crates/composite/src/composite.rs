@@ -1,3 +1,8 @@
+use std::simd::cmp::{SimdOrd, SimdPartialEq};
+use std::simd::num::SimdUint;
+use std::simd::{Select, Simd};
+
+use blanket_core::pixels::{Bytes, load, store};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -257,22 +262,55 @@ fn composite_pixels(pixels: &mut [u8], source: &[u8]) {
     const CHUNK: usize = 16 * 1024 * 4;
     blanket_core::parallel::chunks_mut(pixels, CHUNK, |i, pixels| {
         let source = &source[i * CHUNK..i * CHUNK + pixels.len()];
-        for (dst, src) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks::<4>().0) {
-            if src[3] == 0 {
+        let done = pixels.len() / 64 * 64;
+        for i in (0..done).step_by(64) {
+            let src = load::<4>(&source[i..]);
+            let active = src[3].simd_ne(Bytes::splat(0));
+            if !active.any() {
                 continue;
             }
-            let blend = u32::from(dst[3]) * (255 - u32::from(src[3]));
-            let alpha = u32::from(src[3]) * 255 + blend;
-            // Pillow's fixed-point coefficients retain seven extra precision bits.
-            let coefficient = u32::from(src[3]) * 255 * 255 * 128 / alpha;
-            for c in 0..3 {
-                let value = u32::from(src[c]) * coefficient + u32::from(dst[c]) * (255 * 128 - coefficient) + (128 << 7);
-                dst[c] = (((value >> 8) + value) >> 8 >> 7) as u8;
+            if src[3].simd_eq(Bytes::splat(255)).all() {
+                pixels[i..i + 64].copy_from_slice(&source[i..i + 64]);
+                continue;
             }
-            let value = alpha + 128;
-            dst[3] = (((value >> 8) + value) >> 8) as u8;
+            let dst = load::<4>(&pixels[i..]);
+            let source_alpha = src[3].cast::<u32>();
+            let alpha = source_alpha * Simd::splat(255) + dst[3].cast::<u32>() * (Simd::splat(255) - source_alpha);
+            // Inactive lanes can have zero combined alpha.
+            let coefficient = source_alpha * Simd::splat(255 * 255 * 128) / alpha.simd_max(Simd::splat(1));
+            let output = std::array::from_fn::<_, 4, _>(|c| {
+                let value = if c == 3 {
+                    let value = alpha + Simd::splat(128);
+                    ((value >> 8) + value) >> 8
+                } else {
+                    let value =
+                        src[c].cast::<u32>() * coefficient + dst[c].cast::<u32>() * (Simd::splat(255 * 128) - coefficient) + Simd::splat(128 << 7);
+                    ((value >> 8) + value) >> 15
+                };
+                active.select(value.cast::<u8>(), dst[c])
+            });
+            store(&mut pixels[i..], output);
         }
+        composite_scalar(&mut pixels[done..], &source[done..]);
     });
+}
+
+fn composite_scalar(pixels: &mut [u8], source: &[u8]) {
+    for (dst, src) in pixels.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks::<4>().0) {
+        if src[3] == 0 {
+            continue;
+        }
+        let blend = u32::from(dst[3]) * (255 - u32::from(src[3]));
+        let alpha = u32::from(src[3]) * 255 + blend;
+        // Pillow's fixed-point coefficients retain seven extra precision bits.
+        let coefficient = u32::from(src[3]) * 255 * 255 * 128 / alpha;
+        for c in 0..3 {
+            let value = u32::from(src[c]) * coefficient + u32::from(dst[c]) * (255 * 128 - coefficient) + (128 << 7);
+            dst[c] = (((value >> 8) + value) >> 8 >> 7) as u8;
+        }
+        let value = alpha + 128;
+        dst[3] = (((value >> 8) + value) >> 8) as u8;
+    }
 }
 
 #[pyfunction]
@@ -311,4 +349,49 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
         }
     });
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alpha_composite_matches_scalar_at_every_alpha_pair() {
+        for colors in [[0, 255, 127], [255, 0, 128], [75, 120, 210]] {
+            let mut background = Vec::new();
+            let mut overlay = Vec::new();
+            for a in 0..=255 {
+                for b in 0..=255 {
+                    background.extend_from_slice(&[colors[0], colors[1], colors[2], a]);
+                    overlay.extend_from_slice(&[colors[2], colors[0], colors[1], b]);
+                }
+            }
+            let mut expected = background.clone();
+            composite_scalar(&mut expected, &overlay);
+            composite_pixels(&mut background, &overlay);
+            assert_eq!(background, expected);
+        }
+    }
+
+    #[test]
+    fn alpha_composite_handles_unaligned_buffers_tails_and_guards() {
+        for offset in 0..16 {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 16 * 1024 + 1, 65537] {
+                for alpha in [None, Some(0), Some(255)] {
+                    let end = offset + count * 4;
+                    let mut background: Vec<u8> = (0..end + 16).map(|i| (i * 37 + i / 11) as u8).collect();
+                    let mut overlay: Vec<u8> = (0..end).map(|i| (i * 53 + i / 7) as u8).collect();
+                    if let Some(alpha) = alpha {
+                        for pixel in overlay[offset..].as_chunks_mut::<4>().0 {
+                            pixel[3] = alpha;
+                        }
+                    }
+                    let mut expected = background.clone();
+                    composite_scalar(&mut expected[offset..end], &overlay[offset..]);
+                    composite_pixels(&mut background[offset..end], &overlay[offset..]);
+                    assert_eq!(background, expected, "offset={offset}, count={count}, alpha={alpha:?}");
+                }
+            }
+        }
+    }
 }

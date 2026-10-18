@@ -1,6 +1,10 @@
 //! Native primitives used by the Python `ImageEnhance` API.
 
+use std::simd::Simd;
+use std::simd::num::SimdUint;
+
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
+use blanket_core::pixels::{Bytes, load};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -128,6 +132,13 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
     });
 }
 
+#[inline]
+fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
+    ((r.cast::<u32>() * Simd::splat(19_595) + g.cast::<u32>() * Simd::splat(38_470) + b.cast::<u32>() * Simd::splat(7_471) + Simd::splat(0x8000))
+        >> 16)
+        .cast()
+}
+
 #[pyfunction]
 fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
@@ -189,12 +200,24 @@ fn byte_sum(source: &[u8]) -> u64 {
 }
 
 fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
-    let pixels = source.as_chunks::<C>().0;
-    let luminance = |pixel: &[u8; C]| u64::from(blanket_core::simd::pillow_luma(pixel[0], pixel[1], pixel[2]));
+    let sum = |source: &[u8]| {
+        let done = source.len() / (16 * C) * 16 * C;
+        let mut sum = 0_u64;
+        for i in (0..done).step_by(16 * C) {
+            let channels = load::<C>(&source[i..]);
+            sum += u64::from(luminance(channels[0], channels[1], channels[2]).cast::<u32>().reduce_sum());
+        }
+        sum + source[done..]
+            .as_chunks::<C>()
+            .0
+            .iter()
+            .map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2])))
+            .sum::<u64>()
+    };
     if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) {
-        pixels.par_iter().map(luminance).sum()
+        source.par_chunks(CHUNK_PIXELS * C).map(sum).sum()
     } else {
-        pixels.iter().map(luminance).sum()
+        sum(source)
     }
 }
 
@@ -250,20 +273,37 @@ fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], widt
             if y == 0 || y + 1 >= height {
                 continue;
             }
-            for x in 1..width - 1 {
-                let center = y * row_bytes + x * C;
-                for channel in 0..B {
-                    let mut sum = u32::from(source[center + channel]) * 5;
-                    for dy in [0, row_bytes, row_bytes * 2] {
-                        let upper_left = center - row_bytes - C + dy + channel;
-                        sum += u32::from(source[upper_left]);
-                        sum += u32::from(source[upper_left + C]);
-                        sum += u32::from(source[upper_left + C * 2]);
+            let done = C + (row_bytes - C * 2) / 16 * 16;
+            for x in (C..done).step_by(16) {
+                let center = y * row_bytes + x;
+                let original = Bytes::from_slice(&source[center..]);
+                let mut sum = original.cast::<u16>() * Simd::splat(4);
+                for dy in [0, row_bytes, row_bytes * 2] {
+                    let left = center - row_bytes - C + dy;
+                    for dx in [0, C, C * 2] {
+                        sum += Bytes::from_slice(&source[left + dx..]).cast::<u16>();
                     }
-                    // The center was included once by the loop and needs a
-                    // total weight of five. Pillow adds 0.5 before truncation.
-                    sum -= u32::from(source[center + channel]);
-                    row[x * C + channel] = ((sum + 6) / 13) as u8;
+                }
+                let filtered = ((sum + Simd::splat(6)) / Simd::splat(13)).cast::<u8>();
+                let filtered = if B == C {
+                    filtered
+                } else {
+                    let mask = Bytes::from_array(std::array::from_fn(|i| if (x + i) % C < B { 255 } else { 0 }));
+                    (filtered & mask) | (original & !mask)
+                };
+                filtered.copy_to_slice(&mut row[x..x + 16]);
+            }
+            for (x, dst) in row.iter_mut().enumerate().take(row_bytes - C).skip(done) {
+                if x % C < B {
+                    let center = y * row_bytes + x;
+                    let mut sum = u32::from(source[center]) * 4;
+                    for dy in [0, row_bytes, row_bytes * 2] {
+                        let left = center - row_bytes - C + dy;
+                        for dx in [0, C, C * 2] {
+                            sum += u32::from(source[left + dx]);
+                        }
+                    }
+                    *dst = ((sum + 6) / 13) as u8;
                 }
             }
         }
@@ -316,6 +356,77 @@ mod tests {
                 assert_eq!(value, expected);
             }
         }
+    }
+
+    #[test]
+    fn luminance_sum_matches_scalar_with_unaligned_buffers_and_tails() {
+        fn check<const C: usize>(count: usize, offset: usize) {
+            for fill in [None, Some(0), Some(255)] {
+                let source: Vec<u8> = (0..offset + count * C).map(|i| fill.unwrap_or((i * 37 + i / 11) as u8)).collect();
+                let source = &source[offset..];
+                let sum: u64 = source
+                    .as_chunks::<C>()
+                    .0
+                    .iter()
+                    .map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2])))
+                    .sum();
+                assert_eq!(luminance_sum::<C>(source), sum);
+            }
+        }
+        for offset in 0..16 {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 65] {
+                check::<3>(count, offset);
+                check::<4>(count, offset);
+            }
+        }
+        for count in [CHUNK_PIXELS - 1, CHUNK_PIXELS, CHUNK_PIXELS + 1, MIN_PARALLEL_BYTES + 17] {
+            check::<3>(count, 1);
+            check::<4>(count, 1);
+        }
+    }
+
+    #[test]
+    fn smooth_matches_scalar_with_unaligned_buffers_tails_and_guards() {
+        fn check<const C: usize, const B: usize>(width: usize, height: usize, offset: usize) {
+            for fill in [None, Some(0), Some(255)] {
+                let source: Vec<u8> = (0..offset + width * height * C + 16)
+                    .map(|i| fill.unwrap_or((i * 37 + i / 11) as u8))
+                    .collect();
+                let mut expected = source.clone();
+                for y in 1..height - 1 {
+                    for x in 1..width - 1 {
+                        for c in 0..B {
+                            let mut sum = 0_u32;
+                            for dy in 0..3 {
+                                for dx in 0..3 {
+                                    let weight = if dx == 1 && dy == 1 { 5 } else { 1 };
+                                    sum += u32::from(source[offset + ((y + dy - 1) * width + x + dx - 1) * C + c]) * weight;
+                                }
+                            }
+                            expected[offset + (y * width + x) * C + c] = ((sum + 6) / 13) as u8;
+                        }
+                    }
+                }
+                let mut output = source.clone();
+                let end = offset + width * height * C;
+                smooth::<C, B>(&source[offset..end], &mut output[offset..end], width);
+                assert_eq!(output, expected, "C={C}, B={B}, width={width}, height={height}, offset={offset}");
+            }
+        }
+        for offset in 0..16 {
+            for width in 3..36 {
+                check::<1, 1>(width, 5, offset);
+                check::<2, 2>(width, 5, offset);
+                check::<3, 3>(width, 5, offset);
+                check::<4, 4>(width, 5, offset);
+                check::<4, 3>(width, 5, offset);
+            }
+        }
+        check::<1, 1>(521, 509, 1);
+        check::<2, 2>(521, 509, 1);
+        check::<3, 3>(521, 509, 1);
+        check::<4, 4>(521, 509, 1);
+        check::<4, 3>(521, 509, 1);
     }
 
     #[test]

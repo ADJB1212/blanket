@@ -177,10 +177,50 @@ fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, u
 }
 
 fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
+    use std::simd::Simd;
+    use std::simd::cmp::SimdOrd;
+    use std::simd::num::SimdUint;
+
+    use crate::pixels::{Bytes, load};
+
     let mut minimum = [255_u8; C];
     let mut maximum = [0_u8; C];
     for block in data.as_chunks::<C>().0.chunks(256) {
-        for pixel in block {
+        // The scalar RGB loop already vectorizes efficiently.
+        let done = if C == 3 {
+            0
+        } else {
+            let bytes = block.as_flattened();
+            let done = bytes.len() / 64 * 64;
+            let mut low = Simd::<u8, 64>::splat(255);
+            let mut high = Simd::<u8, 64>::splat(0);
+            for values in bytes[..done].as_chunks::<64>().0 {
+                let values = Simd::from_array(*values);
+                low = low.simd_min(values);
+                high = high.simd_max(values);
+            }
+            if C == 1 {
+                minimum[0] = minimum[0].min(low.reduce_min());
+                maximum[0] = maximum[0].max(high.reduce_max());
+            } else {
+                let low = low.to_array();
+                let high = high.to_array();
+                let mut low_channels = minimum.map(Bytes::splat);
+                let mut high_channels = maximum.map(Bytes::splat);
+                for i in (0..64).step_by(16 * C) {
+                    let low = load::<C>(&low[i..]);
+                    let high = load::<C>(&high[i..]);
+                    for c in 0..C {
+                        low_channels[c] = low_channels[c].simd_min(low[c]);
+                        high_channels[c] = high_channels[c].simd_max(high[c]);
+                    }
+                }
+                minimum = low_channels.map(SimdUint::reduce_min);
+                maximum = high_channels.map(SimdUint::reduce_max);
+            }
+            done / C
+        };
+        for pixel in &block[done..] {
             for c in 0..C {
                 minimum[c] = minimum[c].min(pixel[c]);
                 maximum[c] = maximum[c].max(pixel[c]);
@@ -1825,6 +1865,41 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extrema_matches_scalar_for_unaligned_buffers_and_tails() {
+        fn check<const C: usize>() {
+            for offset in 0..16 {
+                for count in [0, 1, 15, 16, 17, 31, 32, 33, 63, 64, 65, 127, 128, 129, 255, 256, 257, 521] {
+                    for fill in [None, Some(0), Some(255)] {
+                        let mut data: Vec<u8> = (0..offset + count * C)
+                            .map(|i| fill.unwrap_or(((i * 37 + i / 11) % 192 + 32) as u8))
+                            .collect();
+                        if fill.is_none() && count >= 2 {
+                            for c in 0..C {
+                                data[offset + (count - 1) * C + c] = c as u8;
+                                data[offset + (count - 2) * C + c] = 255 - c as u8;
+                            }
+                        }
+                        let data = &data[offset..];
+                        let expected: Vec<_> = (0..C)
+                            .map(|c| {
+                                data.as_chunks::<C>()
+                                    .0
+                                    .iter()
+                                    .fold((255_u16, 0_u16), |(low, high), p| (low.min(u16::from(p[c])), high.max(u16::from(p[c]))))
+                            })
+                            .collect();
+                        assert_eq!(extrema::<C>(data), expected, "C={C}, offset={offset}, count={count}");
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
 
     #[test]
     fn lab_encoding_and_reference_colors() {
