@@ -1,4 +1,4 @@
-#![feature(portable_simd)]
+#![feature(default_field_values, portable_simd)]
 pub mod color;
 pub mod parallel;
 pub mod pixels;

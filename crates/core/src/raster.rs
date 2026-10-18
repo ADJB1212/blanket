@@ -454,9 +454,9 @@ pub struct Image {
     pub height: u32,
     pub mode: PixelMode,
     pub pixels: Option<Vec<u8>>,
-    pub bit_depth: u8,
-    pub format: Option<String>,
-    pub palette: Option<(PixelMode, Vec<u8>)>,
+    pub bit_depth: u8 = 8,
+    pub format: Option<String> = None,
+    pub palette: Option<(PixelMode, Vec<u8>)> = None,
 }
 
 impl Image {
@@ -476,9 +476,8 @@ impl Image {
             height,
             mode,
             pixels: Some(pixels),
-            bit_depth: 8,
             format,
-            palette: None,
+            ..
         })
     }
 
@@ -504,8 +503,7 @@ impl Image {
             mode,
             pixels: Some(pixels),
             bit_depth: (mode.sample_bytes() << 3) as u8,
-            format: None,
-            palette: None,
+            ..
         })
     }
 
@@ -522,8 +520,7 @@ impl Image {
             mode: PixelMode::F,
             pixels: Some(pixels),
             bit_depth: 32,
-            format: None,
-            palette: None,
+            ..
         })
     }
 
@@ -563,7 +560,7 @@ impl Image {
             pixels: Some(pixels),
             bit_depth,
             format,
-            palette: None,
+            ..
         })
     }
 }
@@ -986,8 +983,8 @@ impl Image {
             mode: self.mode,
             pixels: Some(pixels),
             bit_depth: self.bit_depth,
-            format: None,
             palette: self.palette.clone(),
+            ..
         })
     }
 
@@ -1913,7 +1910,7 @@ mod tests {
     }
 
     #[test]
-    pub fn validates_buffer_length() {
+    pub(super) fn validates_buffer_length() {
         Python::initialize();
         Python::attach(|_| {
             let error = Image::from_pixels(2, 2, PixelMode::Rgb, vec![0; 11], None)
@@ -1924,13 +1921,13 @@ mod tests {
     }
 
     #[test]
-    pub fn converts_like_pillow_fixed_point_luminance() {
+    pub(super) fn converts_like_pillow_fixed_point_luminance() {
         let rgb = [255, 0, 0, 0, 255, 0, 0, 0, 255, 12, 34, 56];
         assert_eq!(convert_pixels(&rgb, PixelMode::Rgb, PixelMode::L), [76, 150, 29, 30]);
     }
 
     #[test]
-    pub fn expands_and_drops_channels() {
+    pub(super) fn expands_and_drops_channels() {
         assert_eq!(convert_pixels(&[7, 23], PixelMode::L, PixelMode::Rgba), [7, 7, 7, 255, 23, 23, 23, 255]);
         assert_eq!(convert_pixels(&[1, 2, 3, 4], PixelMode::Rgba, PixelMode::Rgb), [1, 2, 3]);
     }
@@ -1951,7 +1948,7 @@ mod tests {
     }
 
     #[test]
-    pub fn expands_palette_indices_with_opaque_black_fallback() {
+    pub(super) fn expands_palette_indices_with_opaque_black_fallback() {
         let palette = [10, 20, 30, 40, 50, 60];
         assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
         assert_eq!(expand_palette::<4>(&[0, 1], &[1, 2, 3, 4]), [1, 2, 3, 4, 0, 0, 0, 255]);
@@ -1959,7 +1956,7 @@ mod tests {
     }
 
     #[test]
-    pub fn infers_supported_array_modes() {
+    pub(super) fn infers_supported_array_modes() {
         assert_eq!(array_mode(&[3, 5], "|u1").unwrap(), PixelMode::L);
         assert_eq!(array_mode(&[3, 5, 3], "|u1").unwrap(), PixelMode::Rgb);
         assert_eq!(array_mode(&[3, 5, 4], "|u1").unwrap(), PixelMode::Rgba);

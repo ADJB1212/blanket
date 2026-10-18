@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 #[pyfunction(name = "_encode")]
 #[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None))]
 #[allow(clippy::too_many_arguments)]
-pub fn _encode(
+pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
 ) -> PyResult<Py<pyo3::types::PyBytes>> {
     let format = ImageFormat::parse(format)?;

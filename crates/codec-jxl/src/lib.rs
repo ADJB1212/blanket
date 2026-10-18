@@ -279,9 +279,9 @@ mod tests {
             let image = Image::from_pixels(side, side, PixelMode::Rgba, pixels.clone(), None).unwrap();
             let options = SaveOptions {
                 quality: 100,
-                compress_level: 6,
                 lossless: true,
                 effort: 1,
+                ..SaveOptions::default()
             };
             let output = PreparedJxl::new(&image)
                 .unwrap()
@@ -332,9 +332,9 @@ mod tests {
                         let prepared = PreparedJxl::new(&image).unwrap();
                         let options = SaveOptions {
                             quality: 71,
-                            compress_level: 6,
                             lossless: true,
                             effort: 3,
+                            ..SaveOptions::default()
                         };
                         let single = prepared.encode_with_threads(options, JxlThreads::Fixed(1)).unwrap();
                         JXL_ENCODE_RUNNER.with(|runner| assert!(runner.get().is_none()));

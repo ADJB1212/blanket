@@ -1,4 +1,4 @@
-#![feature(portable_simd)]
+#![feature(default_field_values, portable_simd)]
 
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
@@ -46,17 +46,14 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
 }
 
 /// Entropy coding choices for one JPEG encoding of the same DCT coefficients.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct JpegCoding {
-    pub optimize: bool,
-    pub progressive: bool,
+    pub optimize: bool = false,
+    pub progressive: bool = false,
 }
 
 impl JpegCoding {
-    pub const BASELINE: Self = Self {
-        optimize: false,
-        progressive: false,
-    };
+    pub const BASELINE: Self = Self { .. };
 }
 
 pub fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8>> {

@@ -67,6 +67,10 @@ codegen-units = 256
 [workspace.lints.rust]
 warnings = { level = "deny", priority = -1 }
 unused_mut = "deny"
+unused_assignments = "deny"
+unreachable_pub = "deny"
+unused_imports = "deny"
+unused_macros = "deny"
 
 [workspace.lints.clippy]
 needless_return = "allow"
@@ -97,3 +101,9 @@ borrow_as_ptr = "deny"
 unnecessary_unwrap = "deny"
 clone_on_ref_ptr = "deny"
 if_same_then_else = "deny"
+mem_forget = "deny"
+cast_ptr_alignment = "deny"
+transmute_ptr_to_ptr = "deny"
+as_ptr_cast_mut = "deny"
+drop_non_drop = "deny"
+uninit_vec = "deny"

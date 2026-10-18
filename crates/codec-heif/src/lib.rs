@@ -180,9 +180,8 @@ mod tests {
                 for (preset, lossless) in [("fast", false), ("slow", true), ("fast", false)] {
                     let options = SaveOptions {
                         quality: 71,
-                        compress_level: 6,
                         lossless,
-                        effort: 7,
+                        ..SaveOptions::default()
                     };
                     let reused = prepared.encode(options, preset).unwrap();
                     let fresh = PreparedHeif::new(&image).unwrap().encode(options, preset).unwrap();

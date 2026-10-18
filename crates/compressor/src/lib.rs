@@ -1,4 +1,4 @@
-#![feature(portable_simd)]
+#![feature(default_field_values, portable_simd)]
 
 pub mod compressor;
 pub mod compressor_simd;

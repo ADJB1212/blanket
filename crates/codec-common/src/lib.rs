@@ -1,14 +1,16 @@
+#![feature(default_field_values)]
+
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 
 const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Default)]
 pub struct SaveOptions {
-    pub quality: u8,
-    pub compress_level: u8,
-    pub lossless: bool,
-    pub effort: u8,
+    pub quality: u8 = 90,
+    pub compress_level: u8 = 6,
+    pub lossless: bool = false,
+    pub effort: u8 = 7,
 }
 
 pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {

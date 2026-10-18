@@ -1,7 +1,7 @@
 use pyo3::prelude::*;
 
 #[pyfunction]
-pub fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
+pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
     let version = match feature {
         "blanket" => Some(env!("CARGO_PKG_VERSION").to_owned()),
         "png" => Some(format!("png {}", env!("BLANKET_BACKEND_PNG"))),

@@ -80,10 +80,7 @@ impl LosslessImageCompressor {
         // wins ties and reports its validation errors first.
         const JOBS: [JpegCoding; 3] = [
             JpegCoding::BASELINE,
-            JpegCoding {
-                optimize: true,
-                progressive: false,
-            },
+            JpegCoding { optimize: true, .. },
             JpegCoding {
                 optimize: true,
                 progressive: true,
@@ -240,11 +237,9 @@ impl LosslessImageCompressor {
                 PixelMode::Rgba => png::ColorType::Rgba,
                 _ => return Err(PyValueError::new_err("unsupported mode for PNG optimization")),
             },
-            depth: png::BitDepth::Eight,
             pixels: Cow::Borrowed(pixels),
-            palette: Vec::new(),
-            transparency: Vec::new(),
             source: true,
+            ..
         }];
         self.palette_candidates(image, pixels, &mut candidates);
         self.gray_or_key_candidates(image, pixels, &mut candidates);
@@ -335,11 +330,8 @@ impl LosslessImageCompressor {
             };
             candidates.push(PngCandidate {
                 color,
-                depth: png::BitDepth::Eight,
                 pixels: Cow::Owned(reduced),
-                palette: Vec::new(),
-                transparency: Vec::new(),
-                source: false,
+                ..
             });
         }
         let mut key: Option<&[u8]> = None;
@@ -400,9 +392,8 @@ impl LosslessImageCompressor {
                 color: if grayscale { png::ColorType::Grayscale } else { png::ColorType::Rgb },
                 depth: png_depth(bits),
                 pixels: packed,
-                palette: Vec::new(),
                 transparency,
-                source: false,
+                ..
             });
         }
     }
@@ -410,7 +401,7 @@ impl LosslessImageCompressor {
     /// Build an exact palette, never quantizing or discarding invisible colors.
     fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) {
         let channels = image.mode.channels();
-        let mut lookup = ColorLookup::new();
+        let mut lookup = ColorLookup::default();
         let mut palette = Vec::new();
         let mut alpha = Vec::new();
         let mut frequencies = Vec::new();
@@ -522,7 +513,7 @@ impl LosslessImageCompressor {
                     pixels: Cow::Owned(samples),
                     palette: rgb.clone(),
                     transparency: transparency.clone(),
-                    source: false,
+                    ..
                 });
             }
         }
@@ -566,19 +557,13 @@ fn pixel_key(pixel: &[u8]) -> u32 {
 /// At most 256 exact colors, with at most 25% occupancy. Integer keys avoid
 /// hashing a slice (and its length) for each pixel. Even colliding input has a
 /// fixed, small bound; overflow rejects the palette rather than growing it.
+#[derive(Default)]
 struct ColorLookup {
-    keys: [u32; 1024],
-    values: [u16; 1024],
+    keys: [u32; 1024] = [0; 1024],
+    values: [u16; 1024] = [u16::MAX; 1024],
 }
 
 impl ColorLookup {
-    fn new() -> Self {
-        Self {
-            keys: [0; 1024],
-            values: [u16::MAX; 1024],
-        }
-    }
-
     fn slot(&self, key: u32) -> usize {
         let mixed = (key ^ (key >> 16)).wrapping_mul(0x7feb_352d);
         let mut slot = ((mixed ^ (mixed >> 15)) as usize) & 1023;
@@ -608,7 +593,7 @@ struct ColorCounts {
 impl ColorCounts {
     fn new() -> Self {
         Self {
-            lookup: ColorLookup::new(),
+            lookup: ColorLookup::default(),
             entries: Vec::with_capacity(256),
         }
     }
@@ -695,13 +680,13 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
 /// One exact pixel representation of the image, ready to encode.
 struct PngCandidate<'a> {
     color: png::ColorType,
-    depth: png::BitDepth,
+    depth: png::BitDepth = png::BitDepth::Eight,
     pixels: Cow<'a, [u8]>,
-    palette: Vec<u8>,
-    transparency: Vec<u8>,
+    palette: Vec<u8> = Vec::new(),
+    transparency: Vec<u8> = Vec::new(),
     /// The normal save already encoded this representation with Adaptive
     /// filtering at the requested level; skip repeating that trial.
-    source: bool,
+    source: bool = false,
 }
 
 impl PngCandidate<'_> {
@@ -725,9 +710,7 @@ impl PngCandidate<'_> {
             color,
             depth,
             pixels: Cow::Borrowed(pixels),
-            palette: Vec::new(),
-            transparency: Vec::new(),
-            source: false,
+            ..
         }
     }
 
@@ -741,11 +724,7 @@ impl PngCandidate<'_> {
     /// Encode unless the output reaches `limit`, which concurrent winners may
     /// tighten while this encoder runs.
     fn encode_bounded(&self, image: &Image, filter: png::Filter, level: u8, limit: &CandidateLimit) -> PyResult<Option<Vec<u8>>> {
-        let mut output = CandidateWriter {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        };
+        let mut output = CandidateWriter { limit, .. };
         let result = (|| {
             let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
             encoder.set_color(self.color);
@@ -780,10 +759,10 @@ impl PngCandidate<'_> {
 /// Stop collecting a candidate as soon as it cannot strictly beat the bound.
 /// Track our own cancellation so unrelated encoder errors still propagate.
 struct CandidateWriter<'a> {
-    bytes: Vec<u8>,
+    bytes: Vec<u8> = Vec::new(),
     /// Shared with concurrent trials, so a winner elsewhere stops this one.
     limit: &'a CandidateLimit,
-    exceeded: bool,
+    exceeded: bool = false,
 }
 
 #[derive(Debug)]
@@ -956,9 +935,9 @@ mod tests {
                 for lossless in [false, true] {
                     let options = SaveOptions {
                         quality: 71,
-                        compress_level: 6,
                         lossless,
                         effort: 1,
+                        ..
                     };
                     let expected = serial.install(|| compressor.encode(&image, ImageFormat::Jxl, options)).unwrap();
                     let actual = parallel
@@ -987,9 +966,9 @@ mod tests {
                     for lossless in [false, true] {
                         let options = SaveOptions {
                             quality: 71,
-                            compress_level: 6,
                             lossless,
                             effort: 2,
+                            ..
                         };
                         let mut expected = codecs::encode(&image, format, options).unwrap();
                         let reference = codecs::decode(&expected, format).unwrap();
@@ -1041,12 +1020,7 @@ mod tests {
                 let samples = (0..width * height * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
                 let image = Image::from_pixels(width as u32, height as u32, mode, samples, None).unwrap();
                 for quality in [1, 75, 100] {
-                    let options = SaveOptions {
-                        quality,
-                        compress_level: 6,
-                        lossless: false,
-                        effort: 7,
-                    };
+                    let options = SaveOptions { quality, .. };
                     let baseline = codecs::encode(&image, ImageFormat::Jpeg, options).unwrap();
                     assert_eq!(codecs::encode_jpeg_variant(&image, options, JpegCoding::BASELINE).unwrap(), baseline);
                     for progressive in [false, true] {
@@ -1070,12 +1044,7 @@ mod tests {
     #[test]
     fn jpeg_search_keeps_the_normal_save_unless_a_candidate_is_smaller() {
         let image = Image::from_pixels(64, 48, PixelMode::Rgb, (0..64 * 48 * 3).map(|i| (i * 71 + i / 13) as u8).collect(), None).unwrap();
-        let options = SaveOptions {
-            quality: 90,
-            compress_level: 6,
-            lossless: false,
-            effort: 7,
-        };
+        let options = SaveOptions { .. };
         let baseline = codecs::encode(&image, ImageFormat::Jpeg, options).unwrap();
         for threads in [1, 4] {
             rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
@@ -1163,11 +1132,9 @@ mod tests {
                             PixelMode::Rgba => png::ColorType::Rgba,
                             _ => unreachable!("test images are only L, RGB, or RGBA"),
                         },
-                        depth: png::BitDepth::Eight,
                         pixels: Cow::Borrowed(pixels),
-                        palette: Vec::new(),
-                        transparency: Vec::new(),
                         source: true,
+                        ..
                     }];
                     compressor.palette_candidates(image, pixels, &mut candidates);
                     compressor.gray_or_key_candidates(image, pixels, &mut candidates);
@@ -1185,18 +1152,7 @@ mod tests {
                     for threads in [1, 4] {
                         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                         let output = pool
-                            .install(|| {
-                                compressor.encode(
-                                    image,
-                                    ImageFormat::Png,
-                                    SaveOptions {
-                                        quality: 90,
-                                        compress_level,
-                                        lossless: false,
-                                        effort: 7,
-                                    },
-                                )
-                            })
+                            .install(|| compressor.encode(image, ImageFormat::Png, SaveOptions { compress_level, .. }))
                             .unwrap();
                         assert_eq!(
                             output, expected,
@@ -1216,11 +1172,7 @@ mod tests {
     fn candidate_writer_follows_a_tightening_bound() {
         use std::io::Write;
         let bound = CandidateLimit::new(100);
-        let mut writer = CandidateWriter {
-            bytes: Vec::new(),
-            limit: &bound,
-            exceeded: false,
-        };
+        let mut writer = CandidateWriter { limit: &bound, .. };
         writer.write_all(&[1; 40]).unwrap();
         // A concurrent winner of 45 bytes leaves no room to beat it.
         bound.tighten(46);
@@ -1228,11 +1180,7 @@ mod tests {
         assert_eq!(writer.bytes, [1; 40]);
         // Unlike a rejected write, tightening never truncates collected bytes.
         let bound = CandidateLimit::new(100);
-        let mut writer = CandidateWriter {
-            bytes: Vec::new(),
-            limit: &bound,
-            exceeded: false,
-        };
+        let mut writer = CandidateWriter { limit: &bound, .. };
         writer.write_all(&[1; 40]).unwrap();
         bound.tighten(46);
         writer.write_all(&[2; 5]).unwrap();
@@ -1270,7 +1218,7 @@ mod tests {
 
     #[test]
     fn integer_palette_counts_match_reference_with_collisions_and_runs() {
-        let empty = ColorLookup::new();
+        let empty = ColorLookup::default();
         let keys: Vec<_> = (0..1_000_000_u32).filter(|&key| empty.slot(key) == 0).take(257).collect();
         assert_eq!(keys.len(), 257);
         for channels in [3, 4] {
@@ -1300,11 +1248,10 @@ mod tests {
                 } else {
                     png::ColorType::Indexed
                 },
-                depth: png::BitDepth::Eight,
                 pixels: Cow::Borrowed(&[0]),
                 palette: palette.to_vec(),
                 transparency: transparency.to_vec(),
-                source: false,
+                ..
             };
             let encoded = candidate.encode(&image, png::Filter::Adaptive, 6).unwrap();
             assert!(candidate.minimum_size(&image) < encoded.len());
@@ -1377,11 +1324,7 @@ mod tests {
         use std::io::Write;
         for limit in [2, 12, 257, 1025] {
             let bound = CandidateLimit::new(limit);
-            let mut writer = CandidateWriter {
-                bytes: Vec::new(),
-                limit: &bound,
-                exceeded: false,
-            };
+            let mut writer = CandidateWriter { limit: &bound, .. };
             for _ in 1..limit {
                 writer.write_all(&[42]).unwrap();
                 assert!(writer.bytes.capacity() < limit);
@@ -1442,11 +1385,7 @@ mod tests {
     fn candidate_writer_never_retains_a_losing_chunk() {
         use std::io::Write;
         let bound = CandidateLimit::new(10);
-        let mut writer = CandidateWriter {
-            bytes: Vec::new(),
-            limit: &bound,
-            exceeded: false,
-        };
+        let mut writer = CandidateWriter { limit: &bound, .. };
         writer.write_all(&[1; 9]).unwrap();
         assert!(writer.write_all(&[2; 1024]).is_err());
         assert_eq!(writer.bytes, [1; 9]);
