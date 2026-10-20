@@ -74,6 +74,19 @@ _EXTENSIONS = {
     ".heif": "HEIF",
     ".avif": "AVIF",
     ".pdf": "PDF",
+    ".ppm": "PPM",
+    ".pgm": "PPM",
+    ".pbm": "PPM",
+    ".pnm": "PPM",
+    ".pam": "PAM",
+    ".tga": "TGA",
+    ".qoi": "QOI",
+    ".jp2": "JPEG2000",
+    ".j2k": "JPEG2000",
+    ".j2c": "JPEG2000",
+    ".jpc": "JPEG2000",
+    ".jpf": "JPEG2000",
+    ".jpx": "JPEG2000",
 }
 _BANDS = {
     "1": ("1",),
@@ -95,8 +108,26 @@ _BANDS = {
 }
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
 _RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}
-_FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF"}
+_FORMAT_ALIASES = {
+    "JPG": "JPEG",
+    "JPEGXL": "JXL",
+    "TIF": "TIFF",
+    "HEIC": "HEIF",
+    "PNM": "PPM",
+    "PBM": "PPM",
+    "PGM": "PPM",
+    "TARGA": "TGA",
+    "JP2": "JPEG2000",
+    "J2K": "JPEG2000",
+    "J2C": "JPEG2000",
+    "JPC": "JPEG2000",
+}
 _SAVE_OPTIONS = {
+    "PPM": frozenset(),
+    "PAM": frozenset(),
+    "TGA": frozenset(),
+    "QOI": frozenset(),
+    "JPEG2000": frozenset(),
     "BMP": frozenset(),
     "GIF": frozenset(),
     "ICO": frozenset(),
@@ -1615,7 +1646,7 @@ class Image:
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
-        """Save as PNG, JPEG, JPEG XL, TIFF, WebP, HEIF, AVIF, BMP, GIF, ICO, or PDF.
+        """Save in a supported raster format or PDF; see the formats guide.
 
         HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` writes
         JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
@@ -1666,9 +1697,9 @@ class Image:
                 raise ValueError("compression optimization is not supported for F images")
         if self.mode in ("I", "I;16", "I;16L", "I;16B"):
             if self.mode == "I":
-                depth = 16 if output_format in ("PNG", "TIFF", "JXL") else 8
+                depth = 16 if output_format in ("PNG", "TIFF", "JXL", "JPEG2000", "PPM", "PAM") else 8
                 return self.convert("L", bit_depth=depth).save(fp, output_format, compressor=compressor, **options)
-            if output_format not in ("PNG", "TIFF", "JXL"):
+            if output_format not in ("PNG", "TIFF", "JXL", "JPEG2000", "PPM", "PAM"):
                 return self.convert("L").save(fp, output_format, compressor=compressor, **options)
             return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()

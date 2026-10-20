@@ -21,7 +21,13 @@ pub(crate) fn _encode(
         let encoded = py.detach(|| codecs::encode_one_png(image, compress_level))?;
         return Ok(pyo3::types::PyBytes::new(py, &encoded).unbind());
     }
-    if matches!(image.mode, PixelMode::One | PixelMode::La | PixelMode::Pa) {
+    if matches!(image.mode, PixelMode::One | PixelMode::La | PixelMode::Pa)
+        && !matches!(
+            (image.mode, format),
+            (PixelMode::One, ImageFormat::Ppm | ImageFormat::Pam | ImageFormat::Jpeg2000)
+                | (PixelMode::La, ImageFormat::Pam | ImageFormat::Tga | ImageFormat::Jpeg2000)
+        )
+    {
         let target = if image.mode == PixelMode::One {
             "L"
         } else if format == ImageFormat::Png && image.mode == PixelMode::La && compressor.is_none() {

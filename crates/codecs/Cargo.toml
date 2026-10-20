@@ -22,6 +22,8 @@ blanket-codec-webp = { path = "../codec-webp" }
 blanket-codec-avif = { path = "../codec-avif" }
 blanket-codec-bmp-ico = { path = "../codec-bmp-ico" }
 blanket-codec-gif = { path = "../codec-gif" }
+blanket-codec-extended = { path = "../codec-extended" }
+blanket-codec-jpeg2000 = { path = "../codec-jpeg2000" }
 
 [features]
 default = []

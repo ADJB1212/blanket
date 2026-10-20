@@ -212,12 +212,12 @@ usage.
 
 ### High Priority
 
-- [ ] PPM / PGM / PBM / PAM (Netpbm family) — read/write
-- [ ] TGA — read/write
-- [ ] DDS — read (DirectDraw Surface, game assets)
-- [ ] EPS — read (via Ghostscript or rasterization fallback)
-- [ ] QOI — read/write (simple lossless format)
-- [ ] JPEG 2000 — read/write
+- [x] PPM / PGM / PBM / PAM (Netpbm family) — read/write
+- [x] TGA — read/write
+- [x] DDS — read (DXT1/DXT3/DXT5 textures, first surface)
+- [x] EPS — read (requires Ghostscript)
+- [x] QOI — read/write (simple lossless format)
+- [x] JPEG 2000 — read/write (grayscale/RGB, lossless JP2 output)
 
 ### Medium Priority
 

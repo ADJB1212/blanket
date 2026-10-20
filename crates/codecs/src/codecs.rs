@@ -1,11 +1,13 @@
 use blanket_codec_avif::{decode_avif, encode_avif};
 use blanket_codec_bmp_ico::{decode_bmp, decode_ico, encode_bmp, encode_ico};
 pub use blanket_codec_common::SaveOptions;
+use blanket_codec_extended::{decode_dds, decode_eps, decode_pnm, decode_qoi, decode_tga, encode_extended, encode_wide_pnm, is_tga};
 use blanket_codec_gif::{decode_gif, encode_gif};
 pub use blanket_codec_heif::{PreparedHeif, encode_heif_with_preset};
 use blanket_codec_heif::{decode_heif, encode_heif};
 pub use blanket_codec_jpeg::{JpegCoding, encode_jpeg_variant};
 use blanket_codec_jpeg::{decode_jpeg, encode_jpeg};
+use blanket_codec_jpeg2000::{decode_jpeg2000, encode_jpeg2000};
 pub use blanket_codec_jxl::{JXL_PARALLEL_MIN_BYTES, JxlThreads, PreparedJxl, jxl_candidate_threads};
 use blanket_codec_jxl::{decode_jxl, encode_jxl};
 use blanket_codec_pdf::encode_pdf;
@@ -33,12 +35,26 @@ pub enum ImageFormat {
     Heif,
     Avif,
     Pdf,
+    Ppm,
+    Pam,
+    Tga,
+    Dds,
+    Eps,
+    Qoi,
+    Jpeg2000,
 }
 
 impl ImageFormat {
     pub fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
             "BMP" => Ok(Self::Bmp),
+            "PPM" | "PNM" | "PGM" | "PBM" => Ok(Self::Ppm),
+            "PAM" => Ok(Self::Pam),
+            "TGA" | "TARGA" => Ok(Self::Tga),
+            "DDS" => Ok(Self::Dds),
+            "EPS" | "PS" => Ok(Self::Eps),
+            "QOI" => Ok(Self::Qoi),
+            "JPEG2000" | "JP2" | "J2K" | "J2C" | "JPC" => Ok(Self::Jpeg2000),
             "GIF" => Ok(Self::Gif),
             "ICO" => Ok(Self::Ico),
             "PDF" => Ok(Self::Pdf),
@@ -49,15 +65,20 @@ impl ImageFormat {
             "PNG" => Ok(Self::Png),
             "JPEG" | "JPG" => Ok(Self::Jpeg),
             "JXL" | "JPEGXL" | "JPEG XL" => Ok(Self::Jxl),
-            _ => Err(PyValueError::new_err(format!(
-                "unsupported image format {value:?}; expected PNG, JPEG, JXL, TIFF, WEBP, HEIF, AVIF, PDF, BMP, GIF, or ICO"
-            ))),
+            _ => Err(PyValueError::new_err(format!("unsupported image format {value:?}"))),
         }
     }
 
     const fn as_str(self) -> &'static str {
         match self {
             Self::Bmp => "BMP",
+            Self::Ppm => "PPM",
+            Self::Pam => "PAM",
+            Self::Tga => "TGA",
+            Self::Dds => "DDS",
+            Self::Eps => "EPS",
+            Self::Qoi => "QOI",
+            Self::Jpeg2000 => "JPEG2000",
             Self::Gif => "GIF",
             Self::Ico => "ICO",
             Self::Pdf => "PDF",
@@ -72,7 +93,17 @@ impl ImageFormat {
     }
 
     fn detect(data: &[u8]) -> Option<Self> {
-        if data.starts_with(b"BM") {
+        if data.starts_with(b"qoif") {
+            Some(Self::Qoi)
+        } else if data.starts_with(b"DDS ") {
+            Some(Self::Dds)
+        } else if data.starts_with(b"%!PS") || data.starts_with(b"\xc5\xd0\xd3\xc6") {
+            Some(Self::Eps)
+        } else if data.starts_with(b"\0\0\0\x0cjP  \r\n\x87\n") || data.starts_with(b"\xff\x4f\xff\x51") {
+            Some(Self::Jpeg2000)
+        } else if data.len() >= 3 && data[0] == b'P' && matches!(data[1], b'1'..=b'7') && data[2].is_ascii_whitespace() {
+            Some(Self::Ppm)
+        } else if data.starts_with(b"BM") {
             Some(Self::Bmp)
         } else if data.starts_with(b"GIF87a") || data.starts_with(b"GIF89a") {
             Some(Self::Gif)
@@ -92,6 +123,8 @@ impl ImageFormat {
             Some(Self::Avif)
         } else if is_heif(data) {
             Some(Self::Heif)
+        } else if is_tga(data) {
+            Some(Self::Tga)
         } else {
             None
         }
@@ -104,7 +137,7 @@ pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> 
         let allowed = formats
             .iter()
             .filter_map(|name| ImageFormat::parse(name).ok())
-            .any(|candidate| candidate == format);
+            .any(|candidate| candidate == format || (candidate == ImageFormat::Pam && format == ImageFormat::Ppm && data.starts_with(b"P7")));
         if !allowed {
             return Err(UnidentifiedImageError::new_err(format!(
                 "image format {} is not in formats",
@@ -118,6 +151,12 @@ pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> 
 
 pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Ppm | ImageFormat::Pam => decode_pnm(data),
+        ImageFormat::Tga => decode_tga(data),
+        ImageFormat::Dds => decode_dds(data),
+        ImageFormat::Eps => decode_eps(data),
+        ImageFormat::Qoi => decode_qoi(data),
+        ImageFormat::Jpeg2000 => decode_jpeg2000(data),
         ImageFormat::Bmp => decode_bmp(data),
         ImageFormat::Gif => decode_gif(data),
         ImageFormat::Ico => decode_ico(data),
@@ -161,11 +200,21 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
     if format == ImageFormat::Heif {
         return encode_heif(image, options);
     }
+    if format == ImageFormat::Jpeg2000 {
+        return encode_jpeg2000(image);
+    }
     if image.bit_depth > 8 {
+        if matches!(format, ImageFormat::Ppm | ImageFormat::Pam) {
+            return encode_wide_pnm(image, format == ImageFormat::Pam);
+        }
         return encode_wide(image, format, options);
     }
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Ppm | ImageFormat::Pam | ImageFormat::Tga | ImageFormat::Dds | ImageFormat::Eps | ImageFormat::Qoi => {
+            encode_extended(image, pixels, format.as_str())
+        }
+        ImageFormat::Jpeg2000 => unreachable!(),
         ImageFormat::Bmp => encode_bmp(image, pixels),
         ImageFormat::Gif => encode_gif(image, pixels),
         ImageFormat::Ico => encode_ico(image, pixels),
@@ -248,6 +297,17 @@ mod tests {
 
     #[test]
     fn detects_supported_signatures() {
+        for (data, format) in [
+            (b"P1\n".as_slice(), ImageFormat::Ppm),
+            (b"P7\n", ImageFormat::Ppm),
+            (b"qoif", ImageFormat::Qoi),
+            (b"DDS ", ImageFormat::Dds),
+            (b"%!PS-Adobe-3.0 EPSF-3.0", ImageFormat::Eps),
+            (b"\0\0\0\x0cjP  \r\n\x87\n", ImageFormat::Jpeg2000),
+            (b"\xff\x4f\xff\x51", ImageFormat::Jpeg2000),
+        ] {
+            assert_eq!(ImageFormat::detect(data), Some(format));
+        }
         assert_eq!(ImageFormat::detect(PNG_SIGNATURE), Some(ImageFormat::Png));
         assert_eq!(ImageFormat::detect(&[0xff, 0xd8, 0xff]), Some(ImageFormat::Jpeg));
         assert_eq!(ImageFormat::detect(&[0xff, 0x0a]), Some(ImageFormat::Jxl));

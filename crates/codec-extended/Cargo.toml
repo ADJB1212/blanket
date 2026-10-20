@@ -1,0 +1,18 @@
+[package]
+name = "blanket-codec-extended"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+blanket-codec-common = { path = "../codec-common" }
+blanket-codec-image = { path = "../codec-image" }
+pyo3.workspace = true
+image = { version = "0.25", default-features = false, features = ["pnm", "tga", "dds", "qoi"] }
+tempfile = { version = "3", default-features = false }
+
+[lints]
+workspace = true

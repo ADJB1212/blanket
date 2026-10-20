@@ -14,6 +14,8 @@ members = [
     "crates/codec-avif",
     "crates/codec-bmp-ico",
     "crates/codec-gif",
+    "crates/codec-extended",
+    "crates/codec-jpeg2000",
     "crates/compressor",
     "crates/ops",
     "crates/composite",

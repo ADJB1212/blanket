@@ -15,13 +15,15 @@ re-exports. Format implementations compile in separate crates:
 | `bmp-ico` | BMP and ICO |
 | `gif` | GIF |
 | `pdf` | PDF output |
+| `extended` | Netpbm, TGA, DDS, EPS, QOI |
+| `jpeg2000` | JPEG 2000 (built-in OpenJPEG) |
 
 All names use the `blanket-codec-` prefix. `blanket-codec-common` holds save
 options, dimension limits, and error conversion without codec dependencies.
 `blanket-codec-image` adapts the Rust `image` crate's decoded images.
 BMP/ICO also uses the PNG backend for embedded PNG payloads.
 
-JPEG, JPEG XL, HEIF, and PDF do not depend on `image`, allowing their backends
+JPEG, JPEG XL, JPEG 2000, HEIF, and PDF do not depend on `image`, allowing their backends
 to compile while its dependencies are building. Cargo unifies `image`
 features for the remaining backends in a workspace build. Splitting Blanket's
 code does not parallelize compilation within upstream libraries or final

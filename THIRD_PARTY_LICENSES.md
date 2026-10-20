@@ -9,6 +9,7 @@ codec dependencies:
 - libheif: LGPL-3.0-or-later
 - libjxl: BSD-3-Clause
 - libwebp: BSD-3-Clause
+- OpenJPEG (via openjpeg-sys): BSD-2-Clause
 - x265: GPL-2.0-or-later
 
 Full license texts are included in the corresponding Cargo source packages and

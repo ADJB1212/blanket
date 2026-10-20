@@ -9,7 +9,9 @@ from PIL import features as pillow_features
 from blanket import Image, __version__, features
 
 
-@pytest.mark.parametrize("feature", ["blanket", "png", "jpg", "jxl", "libtiff", "webp", "avif", "libheif", "bmp", "gif", "ico", "pdf", "littlecms2", "libjpeg_turbo"])
+@pytest.mark.parametrize(
+    "feature", ["blanket", "png", "jpg", "jxl", "libtiff", "webp", "avif", "libheif", "bmp", "gif", "ico", "pdf", "littlecms2", "libjpeg_turbo", "ppm", "pam", "tga", "dds", "qoi", "jpg_2000"]
+)
 def test_available_features(feature: str) -> None:
     assert features.check(feature) is True
     assert feature in features.get_supported()
@@ -36,7 +38,7 @@ def test_package_and_backend_versions() -> None:
         assert features.version(name).startswith(prefix)
 
 
-@pytest.mark.parametrize("feature", ["pil", "tkinter", "freetype2", "jpg_2000", "zlib", "raqm", "fribidi", "harfbuzz", "mozjpeg", "zlib_ng", "libimagequant", "xcb"])
+@pytest.mark.parametrize("feature", ["pil", "tkinter", "freetype2", "zlib", "raqm", "fribidi", "harfbuzz", "mozjpeg", "zlib_ng", "libimagequant", "xcb"])
 def test_unavailable_pillow_features(feature: str) -> None:
     assert features.check(feature) is False
     assert features.version(feature) is None

@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+blanket-codec-extended = { path = "../codec-extended" }
+blanket-codec-jpeg2000 = { path = "../codec-jpeg2000" }
 pyo3.workspace = true
 blanket-core = { path = "../core" }
 blanket-codecs = { path = "../codecs" }

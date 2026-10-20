@@ -14,9 +14,41 @@ if TYPE_CHECKING:
 
 __all__ = ["blanketinfo", "check", "get_supported", "version"]
 
-_FEATURES = ("blanket", "png", "jpg", "jxl", "libtiff", "webp", "avif", "libheif", "heif", "heif_decoder", "heif_encoder", "bmp", "gif", "ico", "pdf", "littlecms2", "libjpeg_turbo")
-_ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "heic": "heif"}
+_FEATURES = (
+    "blanket",
+    "png",
+    "jpg",
+    "jxl",
+    "libtiff",
+    "webp",
+    "avif",
+    "libheif",
+    "heif",
+    "heif_decoder",
+    "heif_encoder",
+    "bmp",
+    "gif",
+    "ico",
+    "pdf",
+    "littlecms2",
+    "libjpeg_turbo",
+    "ppm",
+    "pam",
+    "tga",
+    "dds",
+    "eps",
+    "qoi",
+    "jpg_2000",
+)
+_ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "heic": "heif", "jpeg2000": "jpg_2000", "pbm": "ppm", "pgm": "ppm", "pnm": "ppm"}
 _FORMATS = (
+    ("PPM/PGM/PBM", "ppm"),
+    ("PAM", "pam"),
+    ("TGA", "tga"),
+    ("DDS", "dds"),
+    ("EPS", "eps"),
+    ("QOI", "qoi"),
+    ("JPEG2000", "jpg_2000"),
     ("BMP", "bmp"),
     ("GIF", "gif"),
     ("ICO", "ico"),
@@ -131,5 +163,7 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
                 write = info["heif_encoder"][0]
             elif feature == "pdf":
                 read = False
+            elif feature in ("dds", "eps"):
+                write = False
             capabilities = [name for name, available in (("open", read), ("save", write)) if available]
             print(f"  {label}: {', '.join(capabilities) or 'unavailable'}", file=out)

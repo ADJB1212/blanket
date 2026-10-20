@@ -184,6 +184,21 @@ Use `from blanket import features` to inspect the installed build:
 | BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                |
 | GIF         | Yes  |  Yes  | First frame only; single-frame output with 256 colors and binary transparency |
 | ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension   |
+| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support |
+| TGA         | Yes  |  Yes  | Indexed/RLE input; grayscale, RGB, and alpha output |
+| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only |
+| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI |
+| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA |
+| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output |
+
+Netpbm opens with `image.format == "PPM"`, including PAM. Saving selects
+PBM, PGM, or PPM from modes `1`, `L`, or `RGB`; use `format="PAM"` or `.pam`
+for alpha. Netpbm writes high-bit-depth samples as normalized 16-bit values.
+JPEG 2000 accepts unsigned, equally sampled grayscale/RGB components up to
+16 bits, with optional alpha; signed samples, subsampling, and other color
+spaces are unsupported. All JPEG 2000 save extensions write JP2 containers.
+EPS requires Ghostscript (`gs`) on `PATH` and a numeric DSC `BoundingBox`;
+it rasterizes to RGB at 72 DPI with a 30-second timeout.
 
 Encoder settings and their defaults are listed in the
 [format guide](https://adjb1212.github.io/blanket-docs/formats/). HEIF lossless

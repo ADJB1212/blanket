@@ -8,7 +8,9 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "jpg" | "libjpeg_turbo" => Some(format!("turbojpeg {}", env!("BLANKET_BACKEND_TURBOJPEG"))),
         "libtiff" => Some(format!("tiff {}", env!("BLANKET_BACKEND_TIFF"))),
         "gif" => Some(format!("gif {}", env!("BLANKET_BACKEND_GIF"))),
-        "bmp" | "ico" => Some(format!("image {}", env!("BLANKET_BACKEND_IMAGE"))),
+        "bmp" | "ico" | "ppm" | "pam" | "tga" | "dds" | "qoi" => Some(format!("image {}", env!("BLANKET_BACKEND_IMAGE"))),
+        "jpg_2000" => Some(blanket_codec_jpeg2000::backend_version()),
+        "eps" => return Some((blanket_codec_extended::ghostscript_available(), None)),
         "avif" => Some(format!(
             "ravif {}; dav1d {}",
             env!("BLANKET_BACKEND_RAVIF"),
@@ -28,7 +30,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
             return Some((available, available.then_some(version)));
         }
         "pdf" => None,
-        "pil" | "tkinter" | "freetype2" | "jpg_2000" | "zlib" | "raqm" | "fribidi" | "harfbuzz" | "mozjpeg" | "zlib_ng" | "libimagequant" | "xcb" => {
+        "pil" | "tkinter" | "freetype2" | "zlib" | "raqm" | "fribidi" | "harfbuzz" | "mozjpeg" | "zlib_ng" | "libimagequant" | "xcb" => {
             return Some((false, None));
         }
         _ => return None,

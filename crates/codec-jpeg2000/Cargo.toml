@@ -1,0 +1,16 @@
+[package]
+name = "blanket-codec-jpeg2000"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-core = { path = "../core" }
+blanket-codec-common = { path = "../codec-common" }
+pyo3.workspace = true
+openjpeg-sys = { version = "1", default-features = false, features = ["threads", "parallel"] }
+
+[lints]
+workspace = true
