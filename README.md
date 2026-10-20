@@ -171,25 +171,25 @@ Use `from blanket import features` to inspect the installed build:
 `features.blanketinfo()` prints backend and format diagnostics. See the
 [features module](https://adjb1212.github.io/blanket-docs/features/) for feature names.
 
-| Format      | Read | Write | Notes                                                                     |
-| ----------- | :--: | :---: | ------------------------------------------------------------------------- |
-| PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                               |
-| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                           |
-| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                                 |
-| TIFF        | Yes  |  Yes  | First image only; uncompressed output                                     |
-| WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                                       |
-| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                   |
-| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                             |
-| PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency                      |
-| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                |
+| Format      | Read | Write | Notes                                                                         |
+| ----------- | :--: | :---: | ----------------------------------------------------------------------------- |
+| PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                                   |
+| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                               |
+| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                                     |
+| TIFF        | Yes  |  Yes  | First image only; uncompressed output                                         |
+| WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                                           |
+| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                       |
+| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                                 |
+| PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency                          |
+| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                    |
 | GIF         | Yes  |  Yes  | First frame only; single-frame output with 256 colors and binary transparency |
-| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension   |
-| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support |
-| TGA         | Yes  |  Yes  | Indexed/RLE input; grayscale, RGB, and alpha output |
-| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only |
-| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI |
-| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA |
-| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output |
+| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension       |
+| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support       |
+| TGA         | Yes  |  Yes  | Indexed/RLE input; uncompressed grayscale, RGB, and alpha output              |
+| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only                                            |
+| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI                      |
+| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA                                                       |
+| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output         |
 
 Netpbm opens with `image.format == "PPM"`, including PAM. Saving selects
 PBM, PGM, or PPM from modes `1`, `L`, or `RGB`; use `format="PAM"` or `.pam`
@@ -197,6 +197,8 @@ for alpha. Netpbm writes high-bit-depth samples as normalized 16-bit values.
 JPEG 2000 accepts unsigned, equally sampled grayscale/RGB components up to
 16 bits, with optional alpha; signed samples, subsampling, and other color
 spaces are unsupported. All JPEG 2000 save extensions write JP2 containers.
+Larger JPEG 2000 jobs use up to eight codec workers; `OPJ_NUM_THREADS`
+overrides automatic worker selection.
 EPS requires Ghostscript (`gs`) on `PATH` and a numeric DSC `BoundingBox`;
 it rasterizes to RGB at 72 DPI with a 30-second timeout.
 

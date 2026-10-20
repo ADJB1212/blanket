@@ -119,11 +119,80 @@ def test_external_tga_orientation_and_palette(mode: str, compression: str | None
     assert actual.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+@pytest.mark.parametrize("width", [1, 15, 16, 17, 33])
+@pytest.mark.parametrize("top_origin", [False, True])
+def test_tga_raw_rows_with_image_id(mode: str, width: int, top_origin: bool) -> None:
+    size = (width, 3)
+    raw = bytes((i * 37) % 256 for i in range(width * 3 * len(mode)))
+    source = PillowImage.frombytes(mode, size, raw)
+    stream = BytesIO()
+    source.save(stream, "TGA", orientation=1 if top_origin else -1, id_section=b"test image id")
+    actual = Image.open(stream)
+    assert (actual.mode, actual.size, actual.tobytes()) == (mode, size, raw)
+    assert actual.tobytes() == PillowImage.open(stream).tobytes()
+
+
+@pytest.mark.parametrize("width", [1, 7, 8, 9, 15, 16, 17])
+def test_binary_pbm_row_padding(width: int) -> None:
+    packed = bytes((i * 37 + 0x95) % 256 for i in range((width + 7) // 8 * 3))
+    stream = BytesIO(f"P4\n{width} 3\n".encode() + packed)
+    actual = Image.open(stream)
+    assert (actual.mode, actual.size) == ("1", (width, 3))
+    assert actual.tobytes() == PillowImage.open(stream).tobytes()
+
+
+@pytest.mark.parametrize("magic,mode,channels", [("P5", "L", 1), ("P6", "RGB", 3), ("P7", "RGBA", 4)])
+def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int) -> None:
+    samples = [0, 1, 255, 256, 32768, 65535] * channels
+    header = f"{magic}\n3 2\n65535\n" if magic != "P7" else "P7\nWIDTH 3\nHEIGHT 2\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
+    payload = header.encode() + struct.pack(">" + "H" * len(samples), *samples)
+    actual = Image.open(BytesIO(payload))
+    assert (actual.mode, actual.size, actual.bit_depth) == (mode, (3, 2), 16)
+    assert actual.tobytes() == struct.pack("<" + "H" * len(samples), *samples)
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(payload[:-1]))
+
+
 def test_lossy_jpeg2000_decode() -> None:
     source = PillowImage.frombytes("RGB", (13, 7), bytes((i * 37) % 256 for i in range(13 * 7 * 3)))
     stream = BytesIO()
     source.save(stream, "JPEG2000", irreversible=True)
     assert Image.open(stream).tobytes() == PillowImage.open(stream).tobytes()
+
+
+@pytest.mark.parametrize("mode,depth", [(mode, depth) for mode in ("L", "RGB", "RGBA") for depth in (8, 10, 12, 16)] + [("LA", 8)])
+def test_jpeg2000_parallel_codec_preserves_serial_output(monkeypatch: pytest.MonkeyPatch, mode: str, depth: int) -> None:
+    size = (513, 513)
+    count = size[0] * size[1] * len(mode)
+    values = [(i * 719) % (1 << depth) for i in range(count)]
+    raw = bytes(values) if depth == 8 else struct.pack("<" + "H" * count, *values)
+    source = Image.frombytes(mode, size, raw, bit_depth=depth)
+    monkeypatch.setenv("OPJ_NUM_THREADS", "1")
+    serial = BytesIO()
+    source.save(serial, "JPEG2000")
+    expected = Image.open(serial)
+    restored = expected if depth in (8, 16) else expected.convert(mode, bit_depth=depth)
+    assert restored.tobytes() == raw
+    monkeypatch.delenv("OPJ_NUM_THREADS")
+    parallel = BytesIO()
+    source.save(parallel, "JPEG2000")
+    assert parallel.getvalue() == serial.getvalue()
+    actual = Image.open(parallel)
+    assert (actual.mode, actual.size, actual.bit_depth) == (expected.mode, expected.size, expected.bit_depth)
+    assert actual.tobytes() == expected.tobytes()
+
+
+def test_jpeg2000_parallel_lossy_decode_matches_serial_and_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
+    size = (513, 513)
+    raw = bytes((i * 37 + i // 13) % 256 for i in range(size[0] * size[1] * 3))
+    stream = BytesIO()
+    monkeypatch.setenv("OPJ_NUM_THREADS", "1")
+    PillowImage.frombytes("RGB", size, raw).save(stream, "JPEG2000", irreversible=True)
+    expected = Image.open(stream).tobytes()
+    assert expected == PillowImage.open(stream).tobytes()
+    monkeypatch.delenv("OPJ_NUM_THREADS")
+    assert Image.open(stream).tobytes() == expected
 
 
 @pytest.mark.parametrize(

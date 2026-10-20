@@ -5,6 +5,22 @@ use std::simd::{Select, Simd, simd_swizzle};
 
 pub type Bytes = Simd<u8, 16>;
 
+pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
+    let end = source.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let nonzero = Bytes::from_slice(&source[i..]).simd_ne(Bytes::splat(0));
+        let bits = if INVERT { !nonzero } else { nonzero }.to_bitmask() as u16;
+        output[i / 8] = (bits as u8).reverse_bits();
+        output[i / 8 + 1] = ((bits >> 8) as u8).reverse_bits();
+    }
+    for (group, dst) in source[end..].chunks(8).zip(&mut output[end / 8..]) {
+        *dst = group
+            .iter()
+            .enumerate()
+            .fold(0, |bits, (bit, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - bit)));
+    }
+}
+
 #[inline]
 pub fn load<const C: usize>(source: &[u8]) -> [Bytes; C] {
     assert!(source.len() >= 16 * C);
@@ -193,6 +209,34 @@ pub fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bilevel_packing_preserves_polarity_padding_unaligned_slices_and_guards() {
+        fn check<const INVERT: bool>() {
+            for count in 0..=129 {
+                for offset in 0..16 {
+                    for fill in [None, Some(0), Some(1), Some(255)] {
+                        let source: Vec<_> = (0..offset + count).map(|i| fill.unwrap_or((i * 37) as u8)).collect();
+                        let source = &source[offset..];
+                        let length = count.div_ceil(8);
+                        let mut output = vec![0xa5; length + 2];
+                        pack_bilevel::<INVERT>(source, &mut output[1..length + 1]);
+                        for (group, &byte) in source.chunks(8).zip(&output[1..length + 1]) {
+                            let expected = group
+                                .iter()
+                                .enumerate()
+                                .fold(0, |bits, (i, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - i)));
+                            assert_eq!(byte, expected);
+                        }
+                        assert_eq!(output[0], 0xa5);
+                        assert_eq!(output[length + 1], 0xa5);
+                    }
+                }
+            }
+        }
+        check::<false>();
+        check::<true>();
+    }
 
     #[test]
     fn packed_layouts_match_scalar_at_every_alignment() {

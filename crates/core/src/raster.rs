@@ -24,42 +24,48 @@ const fn bilevel_bytes() -> [u64; 256] {
 const BILEVEL_BYTES: [u64; 256] = bilevel_bytes();
 
 pub fn unpack_bilevel(data: &[u8], width: usize, height: usize) -> Vec<u8> {
-    use rayon::prelude::*;
+    unpack_bilevel_bytes::<false>(data, width, height)
+}
 
+pub fn unpack_bilevel_inverted(data: &[u8], width: usize, height: usize) -> Vec<u8> {
+    unpack_bilevel_bytes::<true>(data, width, height)
+}
+
+fn unpack_bilevel_bytes<const INVERT: bool>(data: &[u8], width: usize, height: usize) -> Vec<u8> {
     let mut pixels = vec![0; width * height];
     if width == 0 {
         return pixels;
     }
     let row_bytes = width.div_ceil(8);
-    pixels.par_chunks_mut(width).enumerate().for_each(|(y, row)| {
-        let packed = &data[y * row_bytes..(y + 1) * row_bytes];
-        let (groups, tail) = row.as_chunks_mut::<8>();
-        for (byte, dst) in packed.iter().zip(groups) {
-            dst.copy_from_slice(&BILEVEL_BYTES[*byte as usize].to_le_bytes());
-        }
-        for (x, dst) in tail.iter_mut().enumerate() {
-            *dst = if packed[width >> 3] & (128 >> x) != 0 { 255 } else { 0 };
+    let rows_per_chunk = (128 * 1024 / width).max(1);
+    crate::parallel::chunks_mut_above(&mut pixels, rows_per_chunk * width, 4 * 1024 * 1024, |chunk, rows| {
+        for (row_index, row) in rows.chunks_mut(width).enumerate() {
+            let y = chunk * rows_per_chunk + row_index;
+            let packed = &data[y * row_bytes..(y + 1) * row_bytes];
+            let (groups, tail) = row.as_chunks_mut::<8>();
+            for (byte, dst) in packed.iter().zip(groups) {
+                let value = BILEVEL_BYTES[*byte as usize];
+                dst.copy_from_slice(&(if INVERT { !value } else { value }).to_le_bytes());
+            }
+            for (x, dst) in tail.iter_mut().enumerate() {
+                *dst = if (packed[width >> 3] & (128 >> x) != 0) != INVERT { 255 } else { 0 };
+            }
         }
     });
     pixels
 }
 
 pub fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
-    use rayon::prelude::*;
-
     let row_bytes = width.div_ceil(8);
     let mut packed = vec![0; row_bytes * height];
     if width == 0 {
         return packed;
     }
-    packed.par_chunks_mut(row_bytes).enumerate().for_each(|(y, row)| {
-        let pixels = &pixels[y * width..(y + 1) * width];
-        for (byte, group) in row.iter_mut().zip(pixels.chunks(8)) {
-            let mut bits = 0;
-            for (bit, &value) in group.iter().enumerate() {
-                bits |= u8::from(value != 0) << (7 - bit);
-            }
-            *byte = bits;
+    let rows_per_chunk = (128 * 1024 / width).max(1);
+    crate::parallel::chunks_mut_above(&mut packed, rows_per_chunk * row_bytes, 512 * 1024, |chunk, rows| {
+        for (row_index, row) in rows.chunks_mut(row_bytes).enumerate() {
+            let y = chunk * rows_per_chunk + row_index;
+            crate::pixels::pack_bilevel::<false>(&pixels[y * width..(y + 1) * width], row);
         }
     });
     packed
@@ -545,11 +551,12 @@ impl Image {
         }
         if !pixels.len().is_multiple_of(2)
             || pixels.len() / 2 != expected_len(width, height, mode)?
-            || pixels
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .any(|&v| u32::from(u16::from_le_bytes(v)) >= (1_u32 << bit_depth))
+            || bit_depth != 16
+                && pixels
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .any(|&v| u32::from(u16::from_le_bytes(v)) >= (1_u32 << bit_depth))
         {
             return Err(PyValueError::new_err("invalid sample count or sample outside bit_depth range"));
         }
@@ -1862,6 +1869,37 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bilevel_rows_preserve_partial_bytes_and_parallel_partitions() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                for width in [0_usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 800, 1023, 4097] {
+                    for height in [0, 1, 3, 129, 1025] {
+                        let row_bytes = width.div_ceil(8);
+                        let packed: Vec<_> = (0..row_bytes * height).map(|i| (i * 37 + 0x95) as u8).collect();
+                        let pixels = unpack_bilevel(&packed, width, height);
+                        let inverted = unpack_bilevel_inverted(&packed, width, height);
+                        assert_eq!(pixels.len(), width * height);
+                        for y in 0..height {
+                            for x in 0..width {
+                                let value = if packed[y * row_bytes + x / 8] & (128 >> (x % 8)) != 0 { 255 } else { 0 };
+                                assert_eq!(pixels[y * width + x], value);
+                                assert_eq!(inverted[y * width + x], !value);
+                            }
+                        }
+                        let mut expected = packed;
+                        if width % 8 != 0 {
+                            for row in expected.chunks_mut(row_bytes) {
+                                row[row_bytes - 1] &= 0xff << (8 - width % 8);
+                            }
+                        }
+                        assert_eq!(pack_bilevel(&pixels, width, height), expected);
+                    }
+                }
+            });
+        }
+    }
 
     #[test]
     fn extrema_matches_scalar_for_unaligned_buffers_and_tails() {

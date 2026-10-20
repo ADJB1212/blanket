@@ -95,6 +95,19 @@ unsafe extern "C" fn skip(offset: i64, context: *mut c_void) -> i64 {
 }
 
 impl Handles {
+    fn configure_threads(&self, parallel: bool) {
+        if parallel && std::env::var_os("OPJ_NUM_THREADS").is_none() {
+            let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(8));
+            if threads > 1 {
+                // SAFETY: The codec is live and has not created a tile coder yet.
+                // OpenJPEG falls back to serial execution if worker creation fails.
+                unsafe {
+                    opj_codec_set_threads(self.codec, threads as i32);
+                }
+            }
+        }
+    }
+
     fn new(format: CODEC_FORMAT, buffer: &mut Buffer<'_>) -> Result<Self, String> {
         // SAFETY: The buffer outlives all synchronous codec calls. No callback owns it.
         unsafe {
@@ -144,10 +157,11 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
     unsafe {
         let mut parameters = std::mem::zeroed();
         opj_set_default_decoder_parameters(&raw mut parameters);
-        if opj_setup_decoder(handles.codec, &raw mut parameters) == 0
-            || opj_read_header(handles.stream, handles.codec, &raw mut handles.image) == 0
-            || handles.image.is_null()
-        {
+        if opj_setup_decoder(handles.codec, &raw mut parameters) == 0 {
+            return Err("invalid JPEG 2000 decoder parameters".into());
+        }
+        handles.configure_threads(data.len() >= 32 * 1024);
+        if opj_read_header(handles.stream, handles.codec, &raw mut handles.image) == 0 || handles.image.is_null() {
             return Err("invalid JPEG 2000 header".into());
         }
         let header = &*handles.image;
@@ -301,8 +315,11 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
         parameters.cp_disto_alloc = 1;
         parameters.tcp_rates[0] = 0.0;
         parameters.numresolution = (image.width.min(image.height).ilog2() + 1).min(6) as i32;
-        if opj_setup_encoder(handles.codec, &raw mut parameters, handles.image) == 0
-            || opj_start_compress(handles.codec, handles.image, handles.stream) == 0
+        if opj_setup_encoder(handles.codec, &raw mut parameters, handles.image) == 0 {
+            return Err(PyOSError::new_err("could not configure JPEG 2000 encoder"));
+        }
+        handles.configure_threads(u64::from(image.width) * u64::from(image.height) >= 256 * 1024);
+        if opj_start_compress(handles.codec, handles.image, handles.stream) == 0
             || opj_encode(handles.codec, handles.stream) == 0
             || opj_end_compress(handles.codec, handles.stream) == 0
         {

@@ -109,14 +109,19 @@ def test_heif_concurrent_codec_lifetimes() -> None:
     assert results == [bytes([value] * (32 * 32 * 3)) for value in range(12)]
 
 
-def test_high_depth_validation_and_lifecycle() -> None:
-    image = Image.frombytes("L", (2, 1), struct.pack("<HH", 256, 1023), bit_depth=10)
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_high_depth_validation_and_lifecycle(depth: int) -> None:
+    maximum = (1 << depth) - 1
+    image = Image.frombytes("L", (2, 1), struct.pack("<HH", 256, maximum), bit_depth=depth)
     assert image.getpixel((0, 0)) == 256
-    assert image.convert("RGB").getpixel((1, 0)) == (1023, 1023, 1023)
-    with pytest.raises(ValueError, match="range"):
-        Image.frombytes("L", (1, 1), struct.pack("<H", 1024), bit_depth=10)
+    assert image.convert("RGB").getpixel((1, 0)) == (maximum, maximum, maximum)
+    if depth < 16:
+        with pytest.raises(ValueError, match="range"):
+            Image.frombytes("L", (1, 1), struct.pack("<H", maximum + 1), bit_depth=depth)
     with pytest.raises(ValueError):
-        Image.frombytes("L", (1, 1), b"\x00", bit_depth=10)
+        Image.frombytes("L", (1, 1), b"\x00", bit_depth=depth)
+    with pytest.raises(ValueError):
+        Image.frombytes("L", (1, 1), bytes(4), bit_depth=depth)
     with pytest.raises(ValueError, match="bit_depth"):
         Image.fromarray(np.zeros((1, 1), dtype=np.uint16), bit_depth=9)
     with pytest.raises(ValueError, match="8-bit"):
