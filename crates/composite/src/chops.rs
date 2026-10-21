@@ -1,6 +1,12 @@
 //! Channel arithmetic and wraparound translation for `ImageChops`.
 
+use std::mem::MaybeUninit;
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdUint;
+use std::simd::{Select, Simd};
+
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut_above};
+use blanket_core::pixels::Bytes;
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -105,6 +111,26 @@ impl Operation {
     }
 }
 
+fn hard_light_chunk<const OVERLAY: bool>(a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
+    let full = Simd::splat(255);
+    let done = output.len() / 16 * 16;
+    for i in (0..done).step_by(16) {
+        let x = Bytes::from_slice(&a[i..]).cast::<u16>();
+        let y = Bytes::from_slice(&b[i..]).cast::<u16>();
+        let selector = if OVERLAY { x } else { y };
+        let low = selector.simd_lt(Simd::splat(128));
+        let value = low.select(x, full - x) * low.select(y, full - y) / Simd::splat(127);
+        let values = low.select(value, full - value).cast::<u8>().to_array();
+        for (dst, value) in output[i..i + 16].iter_mut().zip(values) {
+            dst.write(value);
+        }
+    }
+    let operation = if OVERLAY { Operation::Overlay } else { Operation::HardLight };
+    for ((dst, &a), &b) in output[done..].iter_mut().zip(&a[done..]).zip(&b[done..]) {
+        dst.write(operation.apply(a, b, 1.0, 0));
+    }
+}
+
 fn bitwise_chunk<const OP: u8>(a: &[u8], b: &[u8], output: &mut [u8]) {
     let (words, tail) = output.as_chunks_mut::<8>();
     for ((dst, left), right) in words.iter_mut().zip(a.as_chunks::<8>().0).zip(b.as_chunks::<8>().0) {
@@ -202,8 +228,12 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                     Operation::Multiply => apply!(|a, b| Operation::Multiply.apply(a, b, scale, offset)),
                     Operation::Screen => apply!(|a, b| Operation::Screen.apply(a, b, scale, offset)),
                     Operation::SoftLight => apply!(|a, b| Operation::SoftLight.apply(a, b, scale, offset)),
-                    Operation::HardLight => apply!(|a, b| Operation::HardLight.apply(a, b, scale, offset)),
-                    Operation::Overlay => apply!(|a, b| Operation::Overlay.apply(a, b, scale, offset)),
+                    Operation::HardLight => {
+                        hard_light_chunk::<false>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row);
+                    }
+                    Operation::Overlay => {
+                        hard_light_chunk::<true>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row);
+                    }
                 }
             }
         });
@@ -313,4 +343,52 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
         format: None,
         palette: image.palette.clone(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn blend_chunk(operation: Operation, a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
+        match operation {
+            Operation::HardLight => hard_light_chunk::<false>(a, b, output),
+            Operation::Overlay => hard_light_chunk::<true>(a, b, output),
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn blends_match_scalar_for_every_channel_pair() {
+        let a: Vec<u8> = (0..=255).flat_map(|a| [a; 256]).collect();
+        let b: Vec<u8> = (0..=255).cycle().take(a.len()).collect();
+        let mut output = vec![MaybeUninit::uninit(); a.len()];
+        for operation in [Operation::HardLight, Operation::Overlay] {
+            blend_chunk(operation, &a, &b, &mut output);
+            for ((value, &a), &b) in output.iter().zip(&a).zip(&b) {
+                // SAFETY: blend_chunk initializes every output sample.
+                assert_eq!(unsafe { value.assume_init() }, operation.apply(a, b, 1.0, 0));
+            }
+        }
+    }
+
+    #[test]
+    fn blends_match_scalar_with_unaligned_buffers_tails_and_guards() {
+        for offset in 0..16 {
+            for len in 0..=65 {
+                let a: Vec<u8> = (0..offset + len).map(|i| (i * 37 + i / 11) as u8).collect();
+                let b: Vec<u8> = (0..offset + len + 1).map(|i| (i * 53 + i / 7) as u8).collect();
+                for operation in [Operation::HardLight, Operation::Overlay] {
+                    let mut expected = vec![0xa5; offset + len + 16];
+                    for i in 0..len {
+                        expected[offset + i] = operation.apply(a[offset + i], b[offset + i + 1], 1.0, 0);
+                    }
+                    let mut output = vec![MaybeUninit::new(0xa5); expected.len()];
+                    blend_chunk(operation, &a[offset..], &b[offset + 1..], &mut output[offset..offset + len]);
+                    // SAFETY: guards are initialized above and blend_chunk writes the entire output slice.
+                    let output: Vec<u8> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                    assert_eq!(output, expected, "offset={offset}, len={len}");
+                }
+            }
+        }
+    }
 }

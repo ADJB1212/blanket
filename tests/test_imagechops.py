@@ -22,7 +22,7 @@ def test_memory_operations_large_parallel_tail(name: str, size: tuple[int, int])
 
 
 def pair(mode: str, size: tuple[int, int], seed: int = 0) -> tuple[Image.Image, PILImage.Image]:
-    raw = bytes((i * 37 + i // 11 + seed) % 256 for i in range(size[0] * size[1] * len(mode)))
+    raw = bytes((i * 37 + i // 11 + seed) % 256 for i in range(size[0] * size[1] * PILImage.getmodebands(mode)))
     return Image.frombytes(mode, size, raw), PILImage.frombytes(mode, size, raw)
 
 
@@ -58,6 +58,15 @@ def test_binary_modes_sizes_and_parallel_chunks(mode: str, name: str, sizes: tup
     if result.width and result.height:
         result.putpixel((0, 0), 0)
         assert (first.tobytes(), second.tobytes()) == before
+
+
+@pytest.mark.parametrize("mode", ["LA", "PA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize("name", ["hard_light", "overlay"])
+@pytest.mark.parametrize("width", [15, 16, 17, 33])
+def test_blend_channel_modes_at_vector_boundaries(mode: str, name: str, width: int) -> None:
+    first, pil_first = pair(mode, (width + 2, 3))
+    second, pil_second = pair(mode, (width, 4), 71)
+    same(getattr(ImageChops, name)(first, second), getattr(PILChops, name)(pil_first, pil_second))
 
 
 @pytest.mark.parametrize("name", ["add", "subtract"])
