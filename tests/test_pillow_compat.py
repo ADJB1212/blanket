@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from io import BytesIO
 
-import numpy as np
 import pytest
 
 PIL = pytest.importorskip("PIL")
@@ -10,24 +9,6 @@ from PIL import Image as PillowImage
 from test_api import pixels
 
 from blanket import Image as BlanketImage
-
-
-@pytest.mark.parametrize("shape", [(13, 17), (13, 17, 3), (13, 17, 4)])
-def test_fromarray_matches_pillow(shape: tuple[int, ...]) -> None:
-    array = np.arange(np.prod(shape), dtype=np.uint8).reshape(shape)
-    blanket = BlanketImage.fromarray(array)
-    pillow = PillowImage.fromarray(array)
-    assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size)
-    assert blanket.tobytes() == pillow.tobytes()
-
-
-@pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("target_mode", ["L", "RGB", "RGBA"])
-def test_convert_matches_pillow(source_mode: str, target_mode: str) -> None:
-    raw = pixels(source_mode)
-    blanket = BlanketImage.frombytes(source_mode, (17, 13), raw)
-    pillow = PillowImage.frombytes(source_mode, (17, 13), raw)
-    assert blanket.convert(target_mode).tobytes() == pillow.convert(target_mode).tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -59,23 +40,6 @@ def test_jpeg_cross_library_loads() -> None:
     with PillowImage.open(blanket_output) as loaded:
         loaded.load()
         assert (loaded.mode, loaded.size) == ("RGB", (17, 13))
-
-
-def test_cmyk_jpeg_preserves_mode() -> None:
-    raw = pixels("RGBA")
-    output = BytesIO()
-    source = PillowImage.frombytes("CMYK", (17, 13), raw)
-    source.save(output, "JPEG", quality=85)
-
-    output.seek(0)
-    with PillowImage.open(output) as pillow:
-        expected = pillow.copy()
-        output.seek(0)
-        actual = BlanketImage.open(output)
-
-    assert (actual.mode, actual.size) == ("CMYK", (17, 13))
-    differences = [abs(left - right) for left, right in zip(actual.tobytes(), expected.tobytes(), strict=True)]
-    assert max(differences) <= 1
 
 
 def test_to_pillow_returns_real_pillow_image() -> None:

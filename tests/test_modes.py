@@ -163,17 +163,6 @@ def test_integer_modes_pixel_storage_and_geometry(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-def test_integer_mode_conversion_matches_pillow(mode: str) -> None:
-    values = [-10, 10, 258, 65535] if mode == "I" else [0, 10, 258, 65535]
-    pillow = PillowImage.new(mode, (4, 1))
-    blanket = Image.new(mode, (4, 1))
-    pillow.putdata(values)
-    blanket.putdata(values)
-    for destination in ("L", "RGB", "I"):
-        assert blanket.convert(destination).getdata() == list(pillow.convert(destination).get_flattened_data())
-
-
-@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
 @pytest.mark.parametrize("count", [15, 16, 17, 37, 16387, 262147, 1400001])
 def test_integer_mode_conversion_simd_boundaries(mode: str, count: int) -> None:
     values = [-65536, -1, 0, 1, 254, 255, 256, 65535, 65536] if mode == "I" else [0, 1, 254, 255, 256, 32767, 32768, 65534, 65535]

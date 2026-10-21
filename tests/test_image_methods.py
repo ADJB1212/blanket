@@ -164,19 +164,6 @@ def test_eager_verify_draft_and_core_shim() -> None:
         image.verify()
 
 
-@pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA", "I", "F"])
-def test_spread_preserves_mode_size_and_source_values(mode: str) -> None:
-    image = Image.new(mode, (5, 5))
-    for y in range(5):
-        for x in range(5):
-            value = (x + y) % 2 * 255 if mode == "1" else x + y * 5
-            image.putpixel((x, y), (value,) * len(mode) if mode in ("RGB", "RGBA") else value)
-    result = image.effect_spread(2)
-    assert (result.mode, result.size, result.bit_depth) == (image.mode, image.size, image.bit_depth)
-    assert set(result.getdata()) <= set(image.getdata())
-    assert image.effect_spread(0).tobytes() == image.tobytes()
-
-
 @pytest.mark.parametrize(
     "mode,depth,sample_bytes",
     [(mode, 8, channels) for mode, channels in (("1", 1), ("L", 1), ("LA", 2), ("P", 1), ("PA", 2), ("RGB", 3), ("RGBA", 4), ("HSV", 3), ("CMYK", 4), ("YCbCr", 3), ("LAB", 3))]
@@ -198,7 +185,7 @@ def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int
     if mode == "P":
         image.putpalette(bytes(range(256)) * 3)
     pixels = bytes(image.getdata()) if mode == "1" else image.tobytes()
-    for distance in (0, 1, -1, -(2**63)):
+    for distance in (0, 1, 2, -1, -(2**63)):
         result = image.effect_spread(distance)
         actual = bytes(result.getdata()) if mode == "1" else result.tobytes()
         assert (result.mode, result.bit_depth, result.size) == (image.mode, image.bit_depth, size)

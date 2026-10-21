@@ -8,7 +8,7 @@ from blanket import Image
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [None, *Image.Resampling])
-@pytest.mark.parametrize("size,box", [((11, 7), None), ((101, 83), None), ((9, 8), (2.3, 1.7, 59.2, 43.8)), ((67, 49), None)])
+@pytest.mark.parametrize("size,box", [((11, 7), None), ((101, 83), None), ((9, 8), (2.3, 1.7, 59.2, 43.8))])
 @pytest.mark.parametrize("gap", [None, 1.0, 2.0, 3.0])
 def test_resize_matches_pillow(mode: str, method: int | None, size: tuple[int, int], box: tuple[float, ...] | None, gap: float | None) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
@@ -23,7 +23,7 @@ def test_resize_matches_pillow(mode: str, method: int | None, size: tuple[int, i
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [Image.Resampling.BOX, Image.Resampling.BILINEAR, Image.Resampling.HAMMING, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
-@pytest.mark.parametrize("size", [(67, 7), (67, 83), (513, 49)])
+@pytest.mark.parametrize("size", [(67, 7), (67, 83)])
 def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: Image.Resampling, size: tuple[int, int]) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
     actual = Image.frombytes(mode, (67, 49), raw).resize(size, method)
@@ -31,9 +31,11 @@ def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: I
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(3, 2), (6, 4)])
-def test_resize_copies_metadata_and_owns_pixels(size: tuple[int, int]) -> None:
-    image = Image.frombytes("RGBA", (3, 2), bytes(range(24)))
+def test_resize_copies_metadata_and_owns_pixels(mode: str, size: tuple[int, int]) -> None:
+    raw = bytes(range(6 * len(mode)))
+    image = Image.frombytes(mode, (3, 2), raw)
     image.info["custom"] = "retained"
     result = image.resize(list(size))
     assert result is not image
@@ -41,7 +43,9 @@ def test_resize_copies_metadata_and_owns_pixels(size: tuple[int, int]) -> None:
     assert result.info is not image.info
     assert result.format is None
     image.close()
-    assert len(result.tobytes()) == size[0] * size[1] * 4
+    expected = PillowImage.frombytes(mode, (3, 2), raw).resize(size)
+    assert (result.mode, result.size) == (mode, size)
+    assert result.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])

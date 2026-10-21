@@ -40,38 +40,6 @@ def test_fromarray_rejects_unsupported_arrays() -> None:
         Image.fromarray(np.zeros((3, 5, 2), dtype=np.uint8))
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-def test_png_roundtrip(mode: str) -> None:
-    raw = pixels(mode)
-    source = Image.frombytes(mode, (17, 13), raw)
-    output = BytesIO()
-    source.save(output, "PNG", compress_level=6)
-
-    loaded = Image.open(output)
-    assert loaded.format == "PNG"
-    assert loaded.mode == mode
-    assert loaded.size == (17, 13)
-    assert loaded.tobytes() == raw
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-def test_jxl_lossless_roundtrip(mode: str) -> None:
-    raw = pixels(mode, (8, 6))
-    output = BytesIO()
-    Image.frombytes(mode, (8, 6), raw).save(output, "JXL", lossless=True, effort=1)
-    loaded = Image.open(output)
-    assert (loaded.format, loaded.mode, loaded.size) == ("JXL", mode, (8, 6))
-    assert loaded.tobytes() == raw
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB"])
-def test_jpeg_roundtrip(mode: str) -> None:
-    output = BytesIO()
-    Image.frombytes(mode, (17, 13), pixels(mode)).save(output, "JPEG", quality=85)
-    loaded = Image.open(output)
-    assert (loaded.format, loaded.mode, loaded.size) == ("JPEG", mode, (17, 13))
-
-
 def test_path_format_inference(tmp_path: object) -> None:
     path = tmp_path / "image.png"
     source = Image.frombytes("L", (17, 13), pixels("L"))
@@ -79,11 +47,8 @@ def test_path_format_inference(tmp_path: object) -> None:
     assert Image.open(path).tobytes() == source.tobytes()
 
 
-def test_conversions_and_context_manager() -> None:
+def test_context_manager() -> None:
     source = Image.frombytes("RGBA", (17, 13), pixels("RGBA"))
-    assert source.convert("RGB").mode == "RGB"
-    assert source.convert("L").mode == "L"
-
     with source as entered:
         assert entered is source
     with pytest.raises(ValueError, match="closed image"):

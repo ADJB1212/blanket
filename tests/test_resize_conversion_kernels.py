@@ -39,4 +39,7 @@ def test_conversion_vector_tails_and_parallel_chunks(source: str, target: str, c
     raw = random.Random(17).randbytes(count * len(source))
     image = Image.frombytes(source, (count, 1), raw)
     reference = PillowImage.frombytes(source, (count, 1), raw)
-    assert image.convert(target).tobytes() == reference.convert(target).tobytes()
+    actual = image.convert(target)
+    expected = reference.convert(target)
+    assert (actual.mode, actual.size) == (expected.mode, expected.size)
+    assert actual.tobytes() == expected.tobytes()
