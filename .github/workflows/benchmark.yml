@@ -12,9 +12,6 @@ env:
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
   UV_NO_SYNC: "1"
-  HOMEBREW_NO_ENV_HINTS: "1"
-  HOMEBREW_NO_ASK: "1"
-  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
 
 permissions:
   contents: read
@@ -108,6 +105,11 @@ jobs:
     needs: [prepare, libheif, libwebp, libjxl, lcms2]
     timeout-minutes: 60
     runs-on: ubuntu-26.04
+    container:
+      image: quay.io/pypa/manylinux_2_28_x86_64
+    defaults:
+      run:
+        shell: bash
     strategy:
       matrix:
         include:
@@ -115,41 +117,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-
       - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "latest"
           enable-cache: "false"
           save-cache: "false"
-
-      - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
-
-      - name: Install Rust
-        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
-
-      - name: Install Python from uv
-        run: |
-          uv python install 3.14
-          uv tool install 'maturin[patchelf]>=1.15,<2'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libnuma-dev
-          brew install llvm lld cmake meson nasm ninja pkg-config mold gcc
-
-      - name: Setup PATH
-        run: |
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
 
       - name: Restore x265
         uses: actions/cache/restore@v6
@@ -206,11 +178,18 @@ jobs:
           path: ~/deps/lcms2
           key: lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
           fail-on-cache-miss: true
-      - name: Configure LCMS2
+
+      - name: Install Rust
+        run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
+
+      - name: Configure manylinux toolchain
+        run: bash scripts/setup_manylinux.sh
+
+      - name: Install Python from uv
         run: |
-          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
-          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
-          PKG_CONFIG_PATH="$HOME/deps/lcms2/lib/pkgconfig" pkg-config --modversion lcms2
+          uv python install 3.14
+          uv tool install 'maturin[patchelf]>=1.15,<2'
+
       - name: Setup codec dependencies
         run: |
           echo "$HOME/deps/dav1d/bin" >> "$GITHUB_PATH"
@@ -220,8 +199,10 @@ jobs:
           echo "$HOME/deps/libheif/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libwebp/bin" >> "$GITHUB_PATH"
           echo "$HOME/deps/libjxl/bin" >> "$GITHUB_PATH"
+          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
+          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
 
-          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig" >> "$GITHUB_ENV"
+          echo "PKG_CONFIG_PATH=$HOME/deps/dav1d/lib/pkgconfig:$HOME/deps/aom/lib/pkgconfig:$HOME/deps/x265/lib/pkgconfig:$HOME/deps/libde265/lib/pkgconfig:$HOME/deps/libheif/lib/pkgconfig:$HOME/deps/libwebp/lib/pkgconfig:$HOME/deps/libjxl/lib/pkgconfig:$HOME/deps/lcms2/lib/pkgconfig" >> "$GITHUB_ENV"
 
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
 
@@ -229,9 +210,9 @@ jobs:
 
       - name: Install project and benchmark dependencies
         run: |
-          uv sync --no-install-project --only-group test --managed-python
-          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_39 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
+          uv sync --no-install-project --only-group test --python /opt/python/cp314-cp314/bin/python
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
-          uv pip install --compile-bytecode dist/*.whl
-          uv run scripts/benchmark.py --all -v --no-baseline -w 1 -i 10 --sizes web 4K
+          uv pip install --python .venv/bin/python --compile-bytecode dist/*.whl
+          .venv/bin/python scripts/benchmark.py --all -v --no-baseline -w 2 -i 10 --sizes web 4K
