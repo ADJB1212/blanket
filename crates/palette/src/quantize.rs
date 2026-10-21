@@ -1,13 +1,12 @@
 //! Color palette generation and mapping. All pixel work runs without the GIL.
 use std::cmp::Reverse;
-use std::collections::HashMap;
-use std::hash::{BuildHasherDefault, Hasher};
 
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 
 use crate::quantize_simd::PaletteSearch;
 
@@ -18,35 +17,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(quantize, module)?)?;
     Ok(())
 }
-
-/// Packed colors are already well-distributed 32-bit keys. One multiply and
-/// fold is far cheaper than `SipHash` for the millions of lookups a photo needs.
-#[derive(Default)]
-struct ColorHasher(u64);
-
-impl Hasher for ColorHasher {
-    fn finish(&self) -> u64 {
-        self.0
-    }
-
-    fn write(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.write_u64(u64::from(byte));
-        }
-    }
-
-    fn write_u32(&mut self, n: u32) {
-        self.write_u64(u64::from(n));
-    }
-
-    fn write_u64(&mut self, n: u64) {
-        let mixed = (self.0 ^ n).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        // hashbrown indexes with the low bits and tags with the top seven.
-        self.0 = mixed ^ (mixed >> 32);
-    }
-}
-
-type ColorMap<V> = HashMap<u32, V, BuildHasherDefault<ColorHasher>>;
 
 fn key(color: Color) -> u32 {
     u32::from_ne_bytes(color)
@@ -88,7 +58,7 @@ fn palette_nearest(color: Color, palette: &PaletteSearch<'_>, cache: &mut [u16])
 fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
     let pixels = source.as_chunks::<C>().0;
     let count = |pixels: &[[u8; C]]| {
-        let mut counts = ColorMap::<u64>::default();
+        let mut counts = FxHashMap::<u32, u64>::default();
         // Neighboring pixels usually repeat; count a run with one lookup.
         let mut run: Option<(u32, u64)> = None;
         for pixel in pixels {
@@ -109,7 +79,7 @@ fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
         counts
     };
     let counts = if should_parallel(pixels.len(), CHUNK_PIXELS * 4, MIN_PARALLEL_BYTES) {
-        pixels.par_chunks(CHUNK_PIXELS * 4).map(count).reduce(ColorMap::default, |mut a, mut b| {
+        pixels.par_chunks(CHUNK_PIXELS * 4).map(count).reduce(FxHashMap::default, |mut a, mut b| {
             if a.len() < b.len() {
                 std::mem::swap(&mut a, &mut b);
             }
@@ -128,7 +98,7 @@ fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
 }
 
 /// Map every pixel through the exact color table built from the histogram.
-fn map_colors<const C: usize>(source: &[u8], lookup: &ColorMap<u8>, indices: &mut [u8]) {
+fn map_colors<const C: usize>(source: &[u8], lookup: &FxHashMap<u32, u8>, indices: &mut [u8]) {
     let pixels = source.as_chunks::<C>().0;
     chunks_mut(indices, CHUNK_PIXELS, |chunk, out| {
         let start = chunk * CHUNK_PIXELS;
@@ -528,7 +498,7 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
     }
     let search = PaletteSearch::new(&entries);
     let entry = |(color, _): &(Color, u64)| (key(*color), search.nearest(*color) as u8);
-    let lookup: ColorMap<u8> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
+    let lookup: FxHashMap<u32, u8> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
         histogram.par_iter().map(entry).collect()
     } else {
         histogram.iter().map(entry).collect()

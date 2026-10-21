@@ -1,11 +1,10 @@
 //! Outline font shaping and coverage masks without FreeType.
 
-use std::collections::HashMap;
-
 use ab_glyph::{Font, FontVec, Glyph, GlyphId, Outline, OutlinedGlyph, PxScale, ScaleFont, point};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use rustc_hash::FxHashMap;
 use rustybuzz::{Direction, Feature, UnicodeBuffer};
 use unicode_bidi::{BidiInfo, Level};
 use unicode_script::{Script, UnicodeScript};
@@ -109,7 +108,7 @@ impl NativeFont {
             }
             let mut pen = point(0.0, 0.0);
             let mut glyphs = Vec::new();
-            let mut glyph_outlines: HashMap<GlyphId, Option<Outline>> = HashMap::new();
+            let mut glyph_outlines: FxHashMap<GlyphId, Option<Outline>> = FxHashMap::default();
             let mut ink: Option<Bounds> = None;
             let mut buffer = UnicodeBuffer::new();
             for (range, direction) in segments {

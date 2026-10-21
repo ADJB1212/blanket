@@ -55,6 +55,10 @@ libjxl)
 	repository=https://github.com/libjxl/libjxl.git
 	clone_flags=(--recursive --shallow-submodules)
 	;;
+lcms2)
+	repository=https://github.com/mm2/Little-CMS.git
+	clone_flags=(--depth 1)
+	;;
 *)
 	echo "Unknown dependency: $name" >&2
 	exit 1
@@ -64,6 +68,14 @@ esac
 git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
 
 case "$name" in
+lcms2)
+	meson setup "$source_dir/build" "$source_dir" \
+		-Dtests=disabled -Dutils=false -Djpeg=disabled -Dtiff=disabled \
+		--prefix="$prefix" --libdir=lib --buildtype=release --default-library=shared \
+		-Dthreaded=true -Dfastfloat=true
+	ninja -C "$source_dir/build" install
+	exit 0
+	;;
 x265)
 	x265_neon_flag=()
 	if [[ "$RUNNER_ARCH" == "ARM64" ]]; then

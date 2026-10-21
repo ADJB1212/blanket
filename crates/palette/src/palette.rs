@@ -1,10 +1,9 @@
 //! Small palette kernels. Python owns mutable palette storage and file parsing.
 
-use std::collections::HashSet;
-
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
+use rustc_hash::FxHashSet;
 
 use crate::palette_simd as kernels;
 
@@ -63,7 +62,7 @@ fn palette_decode<'py>(py: Python<'py>, mode: &str, rawmode: &str, data: &[u8]) 
 }
 
 fn index_bytes(py: Python<'_>, colors: &Bound<'_, PyDict>, data: &[u8], channels: usize) -> PyResult<()> {
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for (index, entry) in data.chunks(channels).enumerate() {
         if seen.insert(entry) {
             colors.set_item(PyTuple::new(py, entry.iter().copied())?, index)?;

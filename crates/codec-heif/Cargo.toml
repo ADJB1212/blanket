@@ -12,7 +12,7 @@ publish = false
 blanket-core = { path = "../core" }
 pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }
-libheif-rs = { version = "3.0", default-features = false, features = ["latest"] }
+libheif-rs = { version = "3", default-features = false, features = ["latest"] }
 
 [features]
 default = []

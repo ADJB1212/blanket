@@ -1,0 +1,74 @@
+name: Build LCMS2
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      version:
+        required: true
+        type: string
+env:
+  DO_NOT_TRACK: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
+  MACOSX_DEPLOYMENT_TARGET: "26.0"
+
+jobs:
+  build:
+    runs-on: ${{ inputs.runner }}
+    container:
+      image: ${{ startsWith(inputs.runner, 'ubuntu-') && format('quay.io/pypa/manylinux_2_28_{0}', endsWith(inputs.runner, '-arm') && 'aarch64' || 'x86_64') || '' }}
+    defaults:
+      run:
+        shell: bash
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - name: Restore LCMS2
+        id: cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/lcms2
+          key: lcms2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+      - name: Configure macOS toolchain
+        if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
+
+          echo "DEVELOPER_DIR=/Applications/Xcode_26.6.app/Contents/Developer" >> "$GITHUB_ENV"
+          echo "SDKROOT=$(xcrun --sdk macosx --show-sdk-path)" >> "$GITHUB_ENV"
+
+          xcodebuild -version
+          xcrun --sdk macosx --show-sdk-path
+      - name: Set up Homebrew
+        if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
+        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+      - name: Configure Linux toolchain
+        if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
+        run: bash scripts/setup_manylinux.sh
+      - name: Install macOS build tools
+        if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
+        run: |
+          brew install llvm lld cmake ninja meson nasm pkg-config gcc
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
+          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
+          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
+          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+      - name: Build LCMS2
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          CPPFLAGS: ""
+        run: bash scripts/build_release_dependency.sh lcms2 "${{ inputs.version }}"
+      - name: Save LCMS2
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/deps/lcms2
+          key: ${{ steps.cache.outputs.cache-primary-key }}

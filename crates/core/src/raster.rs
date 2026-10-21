@@ -1,9 +1,8 @@
-use std::collections::HashMap;
-
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
+use rustc_hash::FxHashMap;
 
 const fn bilevel_bytes() -> [u64; 256] {
     let mut table = [0; 256];
@@ -781,7 +780,7 @@ impl Image {
             return Ok(Some(result.unbind()));
         }
         let counts = py.detach(|| {
-            let mut counts = HashMap::<&[u8], (usize, usize)>::new();
+            let mut counts = FxHashMap::<&[u8], (usize, usize)>::default();
             for (i, pixel) in data.chunks_exact(stride).enumerate() {
                 let entry = counts.entry(pixel).or_insert((0, i));
                 entry.0 += 1;

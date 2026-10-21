@@ -12,6 +12,7 @@ publish = false
 blanket-core = { path = "../core" }
 pyo3.workspace = true
 rayon.workspace = true
+rustc-hash.workspace = true
 
 [lib]
 doctest = false

@@ -37,10 +37,11 @@ rust-version = "1.98"
 edition = "2024"
 
 [workspace.dependencies]
-rayon = { version = "1.12", default-features = false }
+rayon = { version = "1", default-features = false }
 pyo3 = { version = "0.30", features = ["abi3-py312"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
-turbojpeg = { version = "1.5", default-features = false, features = ["cmake", "require-simd"] }
+turbojpeg = { version = "1", default-features = false, features = ["cmake", "require-simd"] }
+rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
 
 [profile.release]
 opt-level = 3

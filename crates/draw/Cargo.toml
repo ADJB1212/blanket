@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 blanket-core = { path = "../core" }
 pyo3.workspace = true
+rustc-hash.workspace = true
 ab_glyph = { version = "0.2", default-features = false, features = ["std"]}
 rustybuzz = { version = "0.20", default-features = false, features = ["std"]}
 unicode-bidi = { version = "0.3", default-features = false, features = ["std", "hardcoded-data"]}

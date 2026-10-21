@@ -30,6 +30,7 @@ jobs:
       libheif-version: ${{ steps.versions.outputs.libheif }}
       libwebp-version: ${{ steps.versions.outputs.libwebp }}
       libjxl-version: ${{ steps.versions.outputs.libjxl }}
+      lcms2-version: ${{ steps.versions.outputs.lcms2 }}
     steps:
       - name: Set codec versions
         id: versions
@@ -41,6 +42,7 @@ jobs:
           echo "libheif=v1.23.6" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
           echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
+          echo "lcms2=lcms2.19.1" >> "$GITHUB_OUTPUT"
 
   aom:
     needs: prepare
@@ -95,8 +97,15 @@ jobs:
       runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libjxl-version }}
 
+  lcms2:
+    needs: prepare
+    uses: ./.github/workflows/build-lcms2.yml
+    with:
+      runner: ubuntu-26.04
+      version: ${{ needs.prepare.outputs.lcms2-version }}
+
   benchmark:
-    needs: [prepare, libheif, libwebp, libjxl]
+    needs: [prepare, libheif, libwebp, libjxl, lcms2]
     timeout-minutes: 60
     runs-on: ubuntu-26.04
     strategy:
@@ -191,6 +200,17 @@ jobs:
           key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
 
+      - name: Restore LCMS2
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/lcms2
+          key: lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          fail-on-cache-miss: true
+      - name: Configure LCMS2
+        run: |
+          echo "LCMS2_LIB_DIR=$HOME/deps/lcms2/lib" >> "$GITHUB_ENV"
+          echo "LCMS2_INCLUDE_DIR=$HOME/deps/lcms2/include" >> "$GITHUB_ENV"
+          PKG_CONFIG_PATH="$HOME/deps/lcms2/lib/pkgconfig" pkg-config --modversion lcms2
       - name: Setup codec dependencies
         run: |
           echo "$HOME/deps/dav1d/bin" >> "$GITHUB_PATH"
@@ -205,7 +225,7 @@ jobs:
 
           echo "CMAKE_PREFIX_PATH=$HOME/deps/dav1d:$HOME/deps/aom:$HOME/deps/x265:$HOME/deps/libde265:$HOME/deps/libheif:$HOME/deps/libwebp:$HOME/deps/libjxl" >> "$GITHUB_ENV"
 
-          echo "LD_LIBRARY_PATH=$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$HOME/deps/lcms2/lib:$HOME/deps/dav1d/lib:$HOME/deps/aom/lib:$HOME/deps/x265/lib:$HOME/deps/libde265/lib:$HOME/deps/libheif/lib:$HOME/deps/libwebp/lib:$HOME/deps/libjxl/lib" >> "$GITHUB_ENV"
 
       - name: Install project and benchmark dependencies
         run: |
