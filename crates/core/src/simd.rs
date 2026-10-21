@@ -25,8 +25,8 @@ pub fn integer_to_float(source: &[u8], mode: PixelMode) -> Vec<u8> {
 
 pub fn float_to_l(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0; source.len() / 4];
-    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, dst| {
-        float_to_l_chunk(&source[chunk * CHUNK_PIXELS * 4..][..dst.len() * 4], dst);
+    chunks_mut(&mut output, 64 << 10, |chunk, dst| {
+        float_to_l_chunk(&source[chunk * (64 << 10) * 4..][..dst.len() * 4], dst);
     });
     output
 }
@@ -37,7 +37,11 @@ fn float_to_l_chunk(source: &[u8], dst: &mut [u8]) {
     let end = dst.len() / 16 * 16;
     for i in (0..end).step_by(16) {
         let values = Simd::<f32, 16>::from_array(std::array::from_fn(|lane| f32::from_le_bytes(src[i + lane])));
-        values.cast::<u8>().copy_to_slice(&mut dst[i..i + 16]);
+        #[cfg(target_arch = "aarch64")]
+        let values = values.cast::<u8>();
+        #[cfg(not(target_arch = "aarch64"))]
+        let values = narrow_integer_l(values.cast::<i32>());
+        values.copy_to_slice(&mut dst[i..i + 16]);
     }
     for (dst, src) in dst[end..].iter_mut().zip(&src[end..]) {
         *dst = f32::from_le_bytes(*src) as u8;
@@ -72,6 +76,13 @@ pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
 
 fn narrow_integer_l<const N: usize>(values: Simd<i32, N>) -> Simd<u8, N> {
     // Staged narrowing lets LLVM use saturating SIMD packs.
+    #[cfg(not(target_arch = "aarch64"))]
+    return values
+        .simd_clamp(Simd::splat(-32768), Simd::splat(32767))
+        .cast::<i16>()
+        .simd_clamp(Simd::splat(0), Simd::splat(255))
+        .cast::<u8>();
+    #[cfg(target_arch = "aarch64")]
     values
         .simd_clamp(Simd::splat(0), Simd::splat(65535))
         .cast::<u16>()
@@ -196,6 +207,13 @@ fn integer_to_color_samples<const C: usize, const S: usize>(src: &[[u8; S]], dst
 }
 
 pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
+    if to == PixelMode::I && from != PixelMode::I {
+        return if from == PixelMode::I16B {
+            widen_integer::<true>(source)
+        } else {
+            widen_integer::<false>(source)
+        };
+    }
     let source_bytes = from.sample_bytes();
     let target_bytes = to.sample_bytes();
     let mut output = vec![0; source.len() / source_bytes * target_bytes];
@@ -248,6 +266,26 @@ pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8>
             }
         }
     });
+    output
+}
+
+fn widen_integer<const BIG_ENDIAN: bool>(source: &[u8]) -> Vec<u8> {
+    let sample = |bytes| {
+        if BIG_ENDIAN {
+            u16::from_be_bytes(bytes)
+        } else {
+            u16::from_le_bytes(bytes)
+        }
+    };
+    let (blocks, tail) = source.as_chunks::<32>();
+    let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+    output.extend(blocks.iter().map(|block| {
+        let values = Simd::<u16, 16>::from_array(std::array::from_fn(|i| sample([block[i * 2], block[i * 2 + 1]])));
+        let bytes: [u8; 64] = values.cast::<u32>().to_array().map(u32::to_le_bytes).as_flattened().try_into().unwrap();
+        bytes
+    }));
+    let mut output = output.into_flattened();
+    output.extend(tail.as_chunks::<2>().0.iter().flat_map(|&bytes| u32::from(sample(bytes)).to_le_bytes()));
     output
 }
 
@@ -325,12 +363,14 @@ pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
 
 pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
     fn extract<const S: usize, const BAND: usize>(source: &[u8]) -> Vec<u8> {
-        if S == 2 {
-            let (blocks, tail) = source.as_chunks::<32>();
-            let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
-            output.extend(blocks.iter().map(|block| load::<2>(block)[BAND].to_array()));
+        if S == 2 || S == 3 {
+            let count = source.len() / S / 16;
+            let blocks = &source[..count * S * 16];
+            let tail = &source[count * S * 16..];
+            let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
+            output.extend(blocks.chunks_exact(S * 16).map(|block| load::<S>(block)[BAND].to_array()));
             let mut output = output.into_flattened();
-            output.extend(tail.as_chunks::<2>().0.iter().map(|p| p[BAND]));
+            output.extend(tail.as_chunks::<S>().0.iter().map(|p| p[BAND]));
             return output;
         }
         if source.len() / S < 4 << 20 {
@@ -443,16 +483,18 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
 }
 
 fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
-    let pixel_count = source.len() / SOURCE_CHANNELS;
-    let mut output = vec![0u8; pixel_count];
-    let (colors, remainder) = source.as_chunks::<SOURCE_CHANNELS>();
-    debug_assert!(remainder.is_empty());
-    chunks_mut(&mut output, CHUNK_PIXELS, |i, dst| {
-        for (color, gray) in colors[i * CHUNK_PIXELS..].iter().zip(dst) {
-            *gray = pillow_luma(color[0], color[1], color[2]);
-        }
-    });
-    output
+    map_blocks::<SOURCE_CHANNELS, 1>(
+        source,
+        2 << 20,
+        |p| {
+            let sum = p[0].cast::<u32>() * Simd::splat(19_595)
+                + p[1].cast::<u32>() * Simd::splat(38_470)
+                + p[2].cast::<u32>() * Simd::splat(7_471)
+                + Simd::splat(0x8000);
+            [(sum >> 16).cast::<u8>()]
+        },
+        |p| [pillow_luma(p[0], p[1], p[2])],
+    )
 }
 
 #[inline(always)]
@@ -505,6 +547,12 @@ mod tests {
                 let gray = &source[offset..offset + count];
                 let rgb = &source[offset..offset + count * 3];
                 let rgba = &source[offset..];
+                assert_eq!(convert(rgb, PixelMode::Rgb, PixelMode::L), scalar_luminance_rgb(rgb));
+                assert_eq!(convert(rgba, PixelMode::Rgba, PixelMode::L), scalar_luminance_rgba(rgba));
+                for band in 0..3 {
+                    let expected: Vec<_> = rgb.as_chunks::<3>().0.iter().map(|p| p[band]).collect();
+                    assert_eq!(extract_channel::<3>(rgb, band), expected);
+                }
                 let expected: Vec<_> = gray.iter().flat_map(|&v| [v, v, v, 255]).collect();
                 assert_eq!(convert(gray, PixelMode::L, PixelMode::Rgba), expected);
                 let expected: Vec<_> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
@@ -571,6 +619,12 @@ mod tests {
                         })
                         .collect();
                     assert_eq!(gray, expected);
+                    if mode != PixelMode::I {
+                        let expected: Vec<_> = (0..count)
+                            .flat_map(|i| u32::from(integers[i % integers.len()] as u16).to_le_bytes())
+                            .collect();
+                        assert_eq!(convert_integer(&source[offset..], mode, PixelMode::I), expected);
+                    }
                     for channels in [3, 4] {
                         let mut output = vec![93; offset + count * channels + 16];
                         let dst = &mut output[offset..offset + count * channels];

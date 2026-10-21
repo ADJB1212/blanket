@@ -1321,6 +1321,7 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
 fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize]) {
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
+    let double_rgb = C == 3 && xs.len() == width as usize * 2 && xs.iter().enumerate().all(|(x, &sx)| sx == x / 2);
     let source = source.as_chunks::<C>().0;
     chunks_mut_above(output, row_bytes << 4, 1024 << 10, |band, rows| {
         for i in 0..rows.len() / row_bytes {
@@ -1332,7 +1333,9 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
             let src = &source[sy * width as usize..(sy + 1) * width as usize];
             let row = &mut rows[i * row_bytes..(i + 1) * row_bytes];
             let dst = row.as_chunks_mut::<C>().0;
-            if half_width {
+            if double_rgb {
+                crate::ops_simd::nearest_double_rgb(src.as_flattened(), dst.as_flattened_mut());
+            } else if half_width {
                 // Contiguous pairs expose the common 2:1 gather to SIMD.
                 crate::ops_simd::nearest_half::<C>(src.as_flattened(), dst.as_flattened_mut());
             } else {
@@ -1662,21 +1665,6 @@ fn ops_affine(
             if columns.iter().all(Option::is_some) && row_origins.iter().all(|&(_, y)| y >= 0.0 && y < image.height as f64) {
                 let xs: Vec<_> = columns.iter().map(|x| x.unwrap() / channels).collect();
                 let ys: Vec<_> = row_origins.iter().map(|&(_, y)| y as usize).collect();
-                if channels == 3 {
-                    // The grayscale table kernel also gathers RGB bytes when
-                    // each pixel coordinate is expanded into its three bands.
-                    let bytes: Vec<_> = columns.iter().flat_map(|x| (0..3).map(move |c| Some(x.unwrap() + c))).collect();
-                    let map = crate::ops_simd::NearestL::new(&bytes, image.width as usize * 3).unwrap();
-                    if map.is_vectorized() {
-                        chunks_mut_above(&mut pixels, row_bytes * 16, 512 << 10, |band, rows| {
-                            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                                let start = ys[band * 16 + i] * image.width as usize * 3;
-                                map.sample(&source[start..start + image.width as usize * 3], row);
-                            }
-                        });
-                        return;
-                    }
-                }
                 match image.mode {
                     PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                         resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys)

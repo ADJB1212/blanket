@@ -21,6 +21,16 @@ def test_nearest_gathers_and_repeated_rows(mode: str, size: tuple[int, int], tar
         assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["RGB", "HSV", "YCbCr", "LAB"])
+@pytest.mark.parametrize("size", [(1, 1), (15, 17), (16, 16), (17, 19), (803, 607)])
+def test_nearest_double_rgb_layout(mode: str, size: tuple[int, int]) -> None:
+    raw = random.Random(42).randbytes(size[0] * size[1] * 3)
+    actual = Image.frombytes(mode, size, raw)
+    expected = PillowImage.frombytes(mode, size, raw)
+    target = (size[0] * 2, size[1] * 2)
+    assert actual.resize(target, Image.Resampling.NEAREST).tobytes() == expected.resize(target, PillowImage.Resampling.NEAREST).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("target", [(101, 77), (37, 29), (13, 11)])
 @pytest.mark.parametrize("size", [(803, 607), (800, 600)])

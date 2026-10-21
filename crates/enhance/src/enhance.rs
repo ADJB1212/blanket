@@ -73,6 +73,10 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
 
 fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
     use std::simd::Simd;
+    #[cfg(not(target_arch = "aarch64"))]
+    use std::simd::cmp::SimdOrd;
+    #[cfg(not(target_arch = "aarch64"))]
+    use std::simd::num::SimdInt;
     use std::simd::num::{SimdFloat, SimdUint};
     let done = first.len().min(second.len()).min(output.len()) / 16 * 16;
     for i in (0..done).step_by(16) {
@@ -86,7 +90,16 @@ fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
         };
         #[cfg(not(target_arch = "aarch64"))]
         let blended = a + Simd::splat(factor) * (b - a);
-        blended.cast::<u8>().copy_to_slice(&mut output[i..i + 16]);
+        #[cfg(target_arch = "aarch64")]
+        let blended = blended.cast::<u8>();
+        #[cfg(not(target_arch = "aarch64"))]
+        let blended = blended
+            .cast::<i32>()
+            .simd_clamp(Simd::splat(-32768), Simd::splat(32767))
+            .cast::<i16>()
+            .simd_clamp(Simd::splat(0), Simd::splat(255))
+            .cast::<u8>();
+        blended.copy_to_slice(&mut output[i..i + 16]);
     }
     blend_bytes_scalar(&first[done..], &second[done..], &mut output[done..], factor);
 }
@@ -345,7 +358,7 @@ mod tests {
         let first: Vec<u8> = (0..=255).flat_map(|a| [a; 256]).collect();
         let second: Vec<u8> = (0..=255).cycle().take(first.len()).collect();
         let mut actual = vec![0; first.len()];
-        for factor in [0.1_f32, 0.6, -0.6, 1.6] {
+        for factor in [0.1_f32, 0.35, 0.6, -0.6, 1.6] {
             blend_bytes(&first, &second, &mut actual, factor);
             for ((&a, &b), &value) in first.iter().zip(&second).zip(&actual) {
                 let (a, b) = (f32::from(a), f32::from(b));
@@ -354,6 +367,35 @@ mod tests {
                 #[cfg(not(target_arch = "aarch64"))]
                 let expected = (a + factor * (b - a)) as u8;
                 assert_eq!(value, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn blend_unaligned_tails_and_guards() {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33, 257] {
+            for offset in 0..16 {
+                let first: Vec<u8> = (0..count + offset).map(|i| (i * 37) as u8).collect();
+                let second: Vec<u8> = (0..count + offset).map(|i| (i * 53 + 17) as u8).collect();
+                for factor in [0.35_f32, -1.5, 2.5, f32::MAX, f32::NAN, f32::INFINITY] {
+                    let mut output = vec![93; offset + count + 16];
+                    blend_bytes(&first[offset..], &second[offset..], &mut output[offset..offset + count], factor);
+                    for i in 0..count {
+                        let a = f32::from(first[offset + i]);
+                        let b = f32::from(second[offset + i]);
+                        #[cfg(target_arch = "aarch64")]
+                        let expected = if i < count / 16 * 16 {
+                            factor.mul_add(b - a, a)
+                        } else {
+                            a + factor * (b - a)
+                        };
+                        #[cfg(not(target_arch = "aarch64"))]
+                        let expected = a + factor * (b - a);
+                        assert_eq!(output[offset + i], expected as u8);
+                    }
+                    assert!(output[..offset].iter().all(|&v| v == 93));
+                    assert!(output[offset + count..].iter().all(|&v| v == 93));
+                }
             }
         }
     }

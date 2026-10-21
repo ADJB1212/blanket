@@ -59,6 +59,19 @@ def test_direct_color_conversion_chunks(source: str, target: str, count: int) ->
     assert actual.convert(target).tobytes() == expected.convert(target).tobytes()
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+def test_ycbcr_contribution_rounding(mode: str) -> None:
+    pixels = []
+    for value in range(256):
+        for channel in range(3):
+            pixel = [value if c == channel else 0 for c in range(3)]
+            pixels.extend([*pixel, 255 - value] if mode == "RGBA" else pixel)
+    raw = bytes(pixels)
+    actual = Image.frombytes(mode, (768, 1), raw)
+    expected = PIL.frombytes(mode, actual.size, raw)
+    assert actual.convert("YCbCr").tobytes() == expected.convert("YCbCr").tobytes()
+
+
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
 @pytest.mark.parametrize("other", ["1", "L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "I", "F"])
 @pytest.mark.parametrize("reverse", [False, True])

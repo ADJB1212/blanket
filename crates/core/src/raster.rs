@@ -1158,6 +1158,9 @@ impl Image {
             }
             let pixels = py.detach(|| crate::simd::float_to_l(data));
             let gray = Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)?;
+            if destination == PixelMode::L && bit_depth.is_none_or(|depth| depth == 8) {
+                return Ok(gray);
+            }
             return gray.convert(py, mode, bit_depth);
         }
         if matches!(self.mode, PixelMode::Cmyk | PixelMode::YCbCr) && destination != self.mode {
@@ -1710,12 +1713,30 @@ fn convert_lab(source: &[u8], to_lab: bool) -> PyResult<Vec<u8>> {
 
 fn rgb_to_ycbcr(p: [u8; 3]) -> [u8; 3] {
     // Pillow rounds each contribution at six fractional bits before summing.
-    let term = |coefficient: f64, value: u8| (coefficient * f64::from(value) * 64.0 + 0.5) as i32;
-    let [r, g, b] = p;
+    const fn table(coefficient: f64) -> [i32; 256] {
+        let mut values = [0; 256];
+        let mut i = 0;
+        while i < 256 {
+            values[i] = (coefficient * i as f64 * 64.0 + 0.5) as i32;
+            i += 1;
+        }
+        values
+    }
+    static TERMS: [[i32; 256]; 8] = [
+        table(0.299),
+        table(0.587),
+        table(0.114),
+        table(-0.16874),
+        table(-0.33126),
+        table(0.5),
+        table(-0.41869),
+        table(-0.08131),
+    ];
+    let [r, g, b] = p.map(usize::from);
     [
-        ((term(0.299, r) + term(0.587, g) + term(0.114, b)) >> 6) as u8,
-        (((term(-0.16874, r) + term(-0.33126, g) + term(0.5, b)) >> 6) + 128) as u8,
-        (((term(0.5, r) + term(-0.41869, g) + term(-0.08131, b)) >> 6) + 128) as u8,
+        ((TERMS[0][r] + TERMS[1][g] + TERMS[2][b]) >> 6) as u8,
+        (((TERMS[3][r] + TERMS[4][g] + TERMS[5][b]) >> 6) + 128) as u8,
+        (((TERMS[5][r] + TERMS[6][g] + TERMS[7][b]) >> 6) + 128) as u8,
     ]
 }
 

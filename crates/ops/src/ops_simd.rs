@@ -207,6 +207,23 @@ pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
     }
 }
 
+pub(crate) fn nearest_double_rgb(source: &[u8], output: &mut [u8]) {
+    assert_eq!(output.len(), source.len() * 2);
+    let done = source.len() / 48 * 48;
+    for i in (0..done).step_by(48) {
+        let [r, g, b] = load::<3>(&source[i..]);
+        let (r0, r1) = r.interleave(r);
+        let (g0, g1) = g.interleave(g);
+        let (b0, b1) = b.interleave(b);
+        store(&mut output[i * 2..], [r0, g0, b0]);
+        store(&mut output[i * 2 + 48..], [r1, g1, b1]);
+    }
+    for (src, dst) in source[done..].as_chunks::<3>().0.iter().zip(output[done * 2..].as_chunks_mut::<6>().0) {
+        dst[..3].copy_from_slice(src);
+        dst[3..].copy_from_slice(src);
+    }
+}
+
 pub(crate) fn reduce_three_l(upper: &[u8], middle: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
     assert_eq!(upper.len(), output.len() * 3);
     assert_eq!(middle.len(), upper.len());
@@ -339,6 +356,22 @@ mod tests {
         check::<2>();
         check::<3>();
         check::<4>();
+    }
+
+    #[test]
+    fn nearest_double_rgb_unaligned_tails_and_guards() {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33, 400] {
+            for offset in 0..16 {
+                let source: Vec<u8> = (0..count * 3 + offset).map(|i| (i * 37 + i / 11) as u8).collect();
+                let source = &source[offset..];
+                let mut output = vec![199; offset + count * 6 + 16];
+                super::nearest_double_rgb(source, &mut output[offset..offset + count * 6]);
+                let expected: Vec<_> = source.as_chunks::<3>().0.iter().flat_map(|p| [*p, *p]).flatten().collect();
+                assert_eq!(&output[offset..offset + count * 6], expected);
+                assert!(output[..offset].iter().all(|&v| v == 199));
+                assert!(output[offset + count * 6..].iter().all(|&v| v == 199));
+            }
+        }
     }
 
     use super::*;
