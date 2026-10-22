@@ -7,7 +7,7 @@ use std::simd::StdFloat;
 use std::simd::num::{SimdFloat, SimdUint};
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
-use blanket_core::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
@@ -20,15 +20,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(filter_lut, module)?)?;
     module.add_function(wrap_pyfunction!(filter_merge, module)?)?;
     Ok(())
-}
-
-fn buffer(len: usize) -> PyResult<Vec<u8>> {
-    let mut pixels = Vec::new();
-    pixels
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    pixels.resize(len, 0);
-    Ok(pixels)
 }
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
@@ -164,8 +155,8 @@ fn filter_mode(py: Python<'_>, image: &Image, size: i32) -> PyResult<Image> {
 fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
-        let mut horizontal = buffer(source.len())?;
-        let mut pixels = buffer(source.len())?;
+        let mut horizontal = alloc_pixels(source.len())?;
+        let mut pixels = alloc_pixels(source.len())?;
         if pixels.is_empty() {
             return Ok(pixels);
         }
@@ -229,7 +220,7 @@ fn extrema_line(source: &[u8], output: &mut [u8], step: usize, first: usize, rad
 
 fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = alloc_pixels(source.len())?;
     let width = image.width as usize;
     let height = image.height as usize;
     let channels = image.mode.channels();
@@ -460,7 +451,7 @@ fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
 
 fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
     debug_assert_eq!(source.len(), width * height * C);
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = alloc_pixels(source.len())?;
     if pixels.is_empty() {
         return Ok(pixels);
     }
@@ -480,7 +471,7 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
     if horizontal_passes + vertical_passes == 1 {
         return Ok(pixels);
     }
-    let mut scratch = buffer(source.len())?;
+    let mut scratch = alloc_pixels(source.len())?;
     for _ in 1..horizontal_passes {
         box_horizontal::<C>(&pixels, &mut scratch, width, radii.0);
         std::mem::swap(&mut pixels, &mut scratch);
@@ -578,7 +569,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
         .checked_mul(image.height as usize)
         .and_then(|n| n.checked_mul(output_channels))
         .ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?;
-    let mut pixels = buffer(len)?;
+    let mut pixels = alloc_pixels(len)?;
     py.detach(|| {
         chunks_mut(&mut pixels, CHUNK_PIXELS * output_channels, |chunk, dst| {
             for (i, pixel) in dst.chunks_exact_mut(output_channels).enumerate() {
@@ -629,7 +620,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         // another full-buffer write. This matters once the band exceeds cache.
         return Image::from_pixels(width, height, mode, py.detach(|| sources[0].to_vec()), None);
     }
-    let mut pixels = buffer(
+    let mut pixels = alloc_pixels(
         sources[0]
             .len()
             .checked_mul(bands.len())

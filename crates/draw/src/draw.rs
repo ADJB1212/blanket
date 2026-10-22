@@ -123,6 +123,11 @@ fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, co
     }
 }
 
+fn paint_subpixel(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, covered: i32, samples: i32) {
+    let total = samples * samples;
+    coverage_paint(image, x, y, ink, blend, ((covered * 255 + total / 2) / total) as u8);
+}
+
 fn check_coverage(image: &Image) -> PyResult<()> {
     if image.mode.is_wide_scalar() || image.palette.is_some() || matches!(image.mode, PixelMode::Pa | PixelMode::One) {
         return Err(PyValueError::new_err("anti-aliasing requires an 8-bit non-indexed image"));
@@ -218,14 +223,7 @@ fn draw_ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'
                         covered += i32::from(outer && !inner);
                     }
                 }
-                coverage_paint(
-                    image,
-                    x,
-                    y,
-                    &ink,
-                    blend,
-                    ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
-                );
+                paint_subpixel(image, x, y, &ink, blend, covered, samples);
             }
         }
     });
@@ -287,14 +285,7 @@ fn draw_path(
                         covered += i32::from(hit);
                     }
                 }
-                coverage_paint(
-                    image,
-                    x,
-                    y,
-                    &ink,
-                    blend,
-                    ((covered * 255 + samples * samples / 2) / (samples * samples)) as u8,
-                );
+                paint_subpixel(image, x, y, &ink, blend, covered, samples);
             }
         }
     });

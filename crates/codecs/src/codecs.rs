@@ -285,10 +285,10 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
     }
 }
 fn is_avif(data: &[u8]) -> bool {
-    has_brand(data, &[b"avif", b"avis"])
+    ftyp_has_brand(data, |brand| matches!(brand, b"avif" | b"avis"))
 }
 
-fn has_brand(data: &[u8], accepted: &[&[u8; 4]]) -> bool {
+fn ftyp_has_brand(data: &[u8], matches_brand: impl Fn(&[u8]) -> bool) -> bool {
     if data.get(4..8) != Some(b"ftyp") || data.len() < 16 {
         return false;
     }
@@ -298,19 +298,11 @@ fn has_brand(data: &[u8], accepted: &[&[u8; 4]]) -> bool {
     }
     std::iter::once(&data[8..12])
         .chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice))
-        .any(|brand| accepted.iter().any(|candidate| brand == candidate.as_slice()))
+        .any(matches_brand)
 }
 
 fn is_heif(data: &[u8]) -> bool {
-    if data.get(4..8) != Some(b"ftyp") || data.len() < 16 {
-        return false;
-    }
-    let size = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
-    if size < 16 || size > data.len() || !size.is_multiple_of(4) {
-        return false;
-    }
-    let brands = std::iter::once(&data[8..12]).chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice));
-    brands.into_iter().any(|brand| {
+    ftyp_has_brand(data, |brand| {
         matches!(
             brand,
             b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"

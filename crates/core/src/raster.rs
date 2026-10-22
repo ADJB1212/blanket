@@ -1,5 +1,5 @@
 use pyo3::buffer::PyBuffer;
-use pyo3::exceptions::{PyIndexError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
 use rustc_hash::FxHashMap;
@@ -469,6 +469,16 @@ fn integer_bytes(mode: PixelMode, value: i64) -> [u8; 4] {
     bytes
 }
 
+/// Allocate a zeroed pixel buffer of `len` bytes, returning a memory error on failure.
+pub fn alloc_pixels(len: usize) -> PyResult<Vec<u8>> {
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(len)
+        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.resize(len, 0);
+    Ok(pixels)
+}
+
 #[pyclass(name = "_Image", module = "blanket._blanket")]
 #[derive(Clone)]
 pub struct Image {
@@ -550,6 +560,19 @@ impl Image {
         self.pixels.as_deref().ok_or_else(|| PyValueError::new_err("operation on closed image"))
     }
 
+    /// Bytes occupied by one pixel in raw storage: accounts for wide scalars,
+    /// 16-bit high-bit-depth samples, and ordinary 8-bit packed pixels.
+    pub fn raw_bytes_per_pixel(&self) -> usize {
+        self.mode.channels()
+            * if self.mode.is_wide_scalar() {
+                self.mode.sample_bytes()
+            } else if self.bit_depth > 8 {
+                2
+            } else {
+                1
+            }
+    }
+
     pub fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
         let mut pixels = vec![0; samples.len() * 2];
         for (dst, value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(samples) {
@@ -580,6 +603,15 @@ impl Image {
             format,
             ..
         })
+    }
+
+    fn color_count_list<'py>(&self, py: Python<'py>, entries: impl IntoIterator<Item = (usize, usize)>) -> PyResult<Bound<'py, PyList>> {
+        let result = PyList::empty(py);
+        for (count, i) in entries {
+            let pixel = self.getpixel(py, ((i % self.width as usize) as i64, (i / self.width as usize) as i64))?;
+            result.append((count, pixel))?;
+        }
+        Ok(result)
     }
 }
 
@@ -647,18 +679,12 @@ impl Image {
     }
 
     pub fn getchannel(&self, py: Python<'_>, channel: usize) -> PyResult<Self> {
-        if self.mode == PixelMode::F {
+        if self.mode.is_wide_scalar() {
             return if channel == 0 {
                 self.copy(py)
             } else {
                 Err(PyValueError::new_err("band index out of range"))
             };
-        }
-        if self.mode.is_integer() {
-            if channel != 0 {
-                return Err(PyValueError::new_err("band index out of range"));
-            }
-            return self.copy(py);
         }
         let data = self.raw_data()?;
         let channels = self.mode.channels();
@@ -782,14 +808,8 @@ impl Image {
                 _ => return None,
             });
             let Some(counts) = counts else { return Ok(None) };
-            let result = PyList::empty(py);
-            for (_, count, i) in counts.into_iter().filter(|entry| entry.1 != 0) {
-                result.append((
-                    count,
-                    self.getpixel(py, ((i % self.width as usize) as i64, (i / self.width as usize) as i64))?,
-                ))?;
-            }
-            return Ok(Some(result.unbind()));
+            let entries = counts.into_iter().filter(|entry| entry.1 != 0).map(|(_, count, i)| (count, i));
+            return Ok(Some(self.color_count_list(py, entries)?.unbind()));
         }
         let counts = py.detach(|| {
             let mut counts = FxHashMap::<&[u8], (usize, usize)>::default();
@@ -803,12 +823,7 @@ impl Image {
             Some(counts)
         });
         let Some(counts) = counts else { return Ok(None) };
-        let result = PyList::empty(py);
-        for (count, i) in counts.into_values() {
-            let pixel = self.getpixel(py, ((i % self.width as usize) as i64, (i / self.width as usize) as i64))?;
-            result.append((count, pixel))?;
-        }
-        Ok(Some(result.unbind()))
+        Ok(Some(self.color_count_list(py, counts.into_values())?.unbind()))
     }
 
     pub fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {

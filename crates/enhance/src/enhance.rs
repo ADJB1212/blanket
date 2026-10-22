@@ -6,7 +6,7 @@ use std::simd::num::SimdUint;
 use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load};
-use blanket_core::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
@@ -18,15 +18,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(enhance_brightness, module)?)?;
     module.add_function(wrap_pyfunction!(enhance_sharpness, module)?)?;
     Ok(())
-}
-
-fn buffer(len: usize) -> PyResult<Vec<u8>> {
-    let mut result = Vec::new();
-    result
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    result.resize(len, 0);
-    Ok(result)
 }
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
@@ -57,7 +48,7 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
         return copy(second, second_pixels);
     }
 
-    let mut pixels = buffer(first_pixels.len())?;
+    let mut pixels = alloc_pixels(first_pixels.len())?;
     py.detach(|| {
         chunks_mut(&mut pixels, CHUNK_PIXELS * first.mode.channels(), |i, dst| {
             let start = i * CHUNK_PIXELS * first.mode.channels();
@@ -121,7 +112,7 @@ fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return copy(image, source);
     }
 
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = alloc_pixels(source.len())?;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
         PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels),
@@ -184,7 +175,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         (sum as f64 / pixel_count as f64 + 0.5) as u8
     };
 
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = alloc_pixels(source.len())?;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => pixels.fill(mean),
         PixelMode::La | PixelMode::Pa => {
@@ -240,7 +231,7 @@ fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
 
 #[pyfunction]
 fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
-    let mut pixels = buffer(
+    let mut pixels = alloc_pixels(
         (image.width as usize)
             .checked_mul(image.height as usize)
             .and_then(|count| count.checked_mul(image.mode.channels()))
@@ -263,7 +254,7 @@ fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 #[pyfunction]
 fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let mut pixels = buffer(source.len())?;
+    let mut pixels = alloc_pixels(source.len())?;
     pixels.copy_from_slice(source);
     if image.width < 3 || image.height < 3 {
         return output(image, pixels);

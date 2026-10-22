@@ -69,6 +69,27 @@ fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], c
     pixels.as_chunks_mut::<C>().0.fill(value);
 }
 
+fn paste_mask<'a>(mask: Option<&'a Image>, source: &Image) -> PyResult<Option<(&'a [u8], usize)>> {
+    mask.map(|mask| {
+        if mask.palette.is_some() || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba) {
+            return Err(PyValueError::new_err("bad transparency mask"));
+        }
+        if (mask.width, mask.height) != (source.width, source.height) {
+            return Err(PyValueError::new_err("images do not match"));
+        }
+        Ok((mask.pixel_data()?, mask.mode.channels()))
+    })
+    .transpose()
+}
+
+fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: usize, src_width: u32, src_height: u32) -> (i64, i64, i64, i64) {
+    let left = position.0.clamp(0, dst_width as i64);
+    let top = position.1.clamp(0, dst_height as i64);
+    let right = position.0.saturating_add(i64::from(src_width)).clamp(0, dst_width as i64);
+    let bottom = position.1.saturating_add(i64::from(src_height)).clamp(0, dst_height as i64);
+    (left, top, right, bottom)
+}
+
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
@@ -80,27 +101,13 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
     if image.mode != source.mode {
         return Err(PyValueError::new_err("images do not match"));
     }
-    let mask_pixels = if let Some(mask) = mask {
-        if mask.palette.is_some() || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba) {
-            return Err(PyValueError::new_err("bad transparency mask"));
-        }
-        if (mask.width, mask.height) != (source.width, source.height) {
-            return Err(PyValueError::new_err("images do not match"));
-        }
-        Some((mask.pixel_data()?, mask.mode.channels()))
-    } else {
-        None
-    };
+    let mask_pixels = paste_mask(mask, source)?;
     let c = image.mode.channels();
     let width = image.width as usize;
     let height = image.height as usize;
     let pixels = image.pixels.as_mut().expect("validated open image");
     py.detach(|| {
-        // Clip in destination coordinates before computing source offsets.
-        let left = position.0.clamp(0, width as i64);
-        let top = position.1.clamp(0, height as i64);
-        let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width as i64);
-        let bottom = position.1.saturating_add(i64::from(source.height)).clamp(0, height as i64);
+        let (left, top, right, bottom) = paste_bounds(position, width, height, source.width, source.height);
         if right <= left || bottom <= top {
             return;
         }
@@ -143,26 +150,12 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
         return Err(PyValueError::new_err("images do not match"));
     }
     let source_pixels = source.raw_data()?;
-    let mask_pixels = if let Some(mask) = mask {
-        if mask.palette.is_some()
-            || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba)
-            || (mask.width, mask.height) != (source.width, source.height)
-        {
-            return Err(PyValueError::new_err("bad transparency mask"));
-        }
-        Some((mask.pixel_data()?, mask.mode.channels()))
-    } else {
-        None
-    };
+    let mask_pixels = paste_mask(mask, source)?;
     let stride = image.mode.sample_bytes();
-    let width = i64::from(image.width);
-    let height = i64::from(image.height);
-    let left = position.0.clamp(0, width);
-    let top = position.1.clamp(0, height);
-    let right = position.0.saturating_add(i64::from(source.width)).clamp(0, width);
-    let bottom = position.1.saturating_add(i64::from(source.height)).clamp(0, height);
+    let width = image.width as i64;
     let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
     py.detach(|| {
+        let (left, top, right, bottom) = paste_bounds(position, image.width as usize, image.height as usize, source.width, source.height);
         if right <= left || bottom <= top {
             return;
         }
