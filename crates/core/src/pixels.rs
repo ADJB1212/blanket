@@ -1,13 +1,23 @@
 //! Portable kernels for packed byte pixels.
 use std::simd::cmp::SimdPartialEq;
 use std::simd::num::SimdUint;
-use std::simd::{Select, Simd, simd_swizzle};
+use std::simd::{Select, Simd, ToBytes, simd_swizzle};
 
 // Multiplication by ceil(2^24 / 9) implements division for a 3x3 box sum.
 pub const BOX_3X3_RECIPROCAL: u32 = 1_864_135;
 pub const BOX_3X3_RECIPROCAL_BITS: u32 = 24;
 
 pub type Bytes = Simd<u8, 16>;
+
+#[inline]
+pub(crate) fn load_u16<const BIG_ENDIAN: bool>(source: &[u8]) -> Simd<u16, 16> {
+    let bytes = Simd::<u8, 32>::from_slice(source);
+    if BIG_ENDIAN {
+        Simd::<u16, 16>::from_be_bytes(bytes)
+    } else {
+        Simd::<u16, 16>::from_le_bytes(bytes)
+    }
+}
 
 pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
     let end = source.len() / 16 * 16;

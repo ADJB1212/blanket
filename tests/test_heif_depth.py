@@ -163,7 +163,7 @@ def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int,
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("target_mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("source_depth,target_depth", [(8, 10), (10, 8), (10, 12), (12, 16), (16, 10), (16, 16)])
+@pytest.mark.parametrize("source_depth,target_depth", [(8, 10), (8, 16), (10, 8), (10, 12), (10, 16), (12, 8), (12, 10), (12, 16), (16, 8), (16, 10), (16, 12), (16, 16)])
 @pytest.mark.parametrize("count", [17, 262147])
 def test_wide_conversion_rounding_and_parallel_tails(source_mode: str, target_mode: str, source_depth: int, target_depth: int, count: int) -> None:
     source_max = (1 << source_depth) - 1

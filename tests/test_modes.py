@@ -275,10 +275,12 @@ def test_color_and_indexed_to_integer_owns_grayscale_samples(source_mode: str, d
 
 @pytest.mark.parametrize("destination", ["I", "I;16", "I;16L", "I;16B"])
 @pytest.mark.parametrize("depth", [10, 12, 16])
-def test_wide_grayscale_to_integer_preserves_full_samples(destination: str, depth: int) -> None:
+@pytest.mark.parametrize("count", [5, 15, 16, 17, 16387, 262147])
+def test_wide_grayscale_to_integer_preserves_full_samples(destination: str, depth: int, count: int) -> None:
     values = [0, 1, 255, 256, (1 << depth) - 1]
-    raw = struct.pack("<5H", *values)
-    image = Image.frombytes("L", (5, 1), raw, bit_depth=depth)
+    values = (values * ((count + 4) // 5))[:count]
+    raw = struct.pack(f"<{count}H", *values)
+    image = Image.frombytes("L", (count, 1), raw, bit_depth=depth)
     assert image.convert(destination).getdata() == values
     assert image.tobytes() == raw
 
@@ -331,7 +333,7 @@ def test_float_mode_storage_conversion_and_geometry() -> None:
 
 
 @pytest.mark.parametrize("mode", ["I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("count", [1, 37, 16385])
+@pytest.mark.parametrize("count", [1, 15, 16, 17, 37, 16385, 262147])
 def test_float_to_uint16_saturation_and_byte_order(mode: str, count: int) -> None:
     values = [float("nan"), float("inf"), -float("inf"), -1.75, 0, 1.75, 255.9, 256.25, 65535, 65536]
     expected = [0, 65535, 0, 0, 0, 1, 255, 256, 65535, 65535]
@@ -356,6 +358,16 @@ def test_integer_to_float_owns_converted_samples(mode: str, count: int) -> None:
     assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
     image.putpixel((0, 0), 42)
     assert converted.tobytes() == struct.pack(f"<{count}f", *samples)
+
+
+@pytest.mark.parametrize("count", [1, 15, 16, 17, 257, 16387, 262147])
+def test_gray_to_float_preserves_samples_and_owns_output(count: int) -> None:
+    raw = bytes((i * 37) % 256 for i in range(count))
+    image = Image.frombytes("L", (count, 1), raw)
+    converted = image.convert("F")
+    assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
+    image.putpixel((0, 0), 42)
+    assert converted.tobytes() == struct.pack(f"<{count}f", *raw)
 
 
 @pytest.mark.parametrize("count", [3, 15, 16, 17, 16387, 262147])

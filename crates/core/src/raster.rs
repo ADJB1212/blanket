@@ -567,12 +567,7 @@ impl Image {
         }
         if !pixels.len().is_multiple_of(2)
             || pixels.len() / 2 != expected_len(width, height, mode)?
-            || bit_depth != 16
-                && pixels
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .any(|&v| u32::from(u16::from_le_bytes(v)) >= (1_u32 << bit_depth))
+            || bit_depth != 16 && !crate::simd::samples_in_range(&pixels, bit_depth)
         {
             return Err(PyValueError::new_err("invalid sample count or sample outside bit_depth range"));
         }
@@ -1136,7 +1131,7 @@ impl Image {
                     if source.mode.is_integer() {
                         crate::simd::integer_to_float(data, source.mode)
                     } else {
-                        data.iter().flat_map(|&value| f32::from(value).to_le_bytes()).collect()
+                        crate::simd::gray_to_float(data)
                     }
                 });
                 return Self::from_float_bytes(self.width, self.height, pixels);
@@ -1157,20 +1152,7 @@ impl Image {
                 return Self::from_integer_bytes(self.width, self.height, destination, pixels);
             }
             if destination.is_integer() {
-                let pixels = py.detach(|| {
-                    data.as_chunks::<4>()
-                        .0
-                        .iter()
-                        .flat_map(|bytes| {
-                            let value = f64::from(float_value(bytes)).clamp(0.0, 65535.0) as u16;
-                            if destination == PixelMode::I16B {
-                                value.to_be_bytes()
-                            } else {
-                                value.to_le_bytes()
-                            }
-                        })
-                        .collect()
-                });
+                let pixels = py.detach(|| crate::simd::float_to_u16(data, destination == PixelMode::I16B));
                 return Self::from_integer_bytes(self.width, self.height, destination, pixels);
             }
             let pixels = py.detach(|| crate::simd::float_to_l(data));
@@ -1256,17 +1238,11 @@ impl Image {
                     let output = py.detach(|| crate::simd::convert_integer(data, source.mode, destination));
                     return Self::from_integer_bytes(self.width, self.height, destination, output);
                 }
-                let mut output = Vec::with_capacity(expected_len(self.width, self.height, destination)? * destination.sample_bytes());
-                py.detach(|| {
+                let output = py.detach(|| {
                     if source.bit_depth > 8 {
-                        for bytes in data.as_chunks::<2>().0 {
-                            let value = i64::from(u16::from_le_bytes(*bytes));
-                            output.extend_from_slice(&integer_bytes(destination, value)[..destination.sample_bytes()]);
-                        }
+                        crate::simd::convert_integer(data, PixelMode::I16, destination)
                     } else {
-                        for &value in data {
-                            output.extend_from_slice(&integer_bytes(destination, i64::from(value))[..destination.sample_bytes()]);
-                        }
+                        crate::simd::gray_to_integer(data, destination)
                     }
                 });
                 return Self::from_integer_bytes(self.width, self.height, destination, output);
@@ -1303,6 +1279,14 @@ impl Image {
                 return expanded.convert(py, mode, Some(depth));
             }
             let bytes = self.raw_data()?;
+            if self.mode == destination {
+                let output = py.detach(|| crate::simd::rescale_samples(bytes, self.bit_depth, depth));
+                return if depth == 8 {
+                    Self::from_pixels(self.width, self.height, destination, output, None)
+                } else {
+                    Self::from_sample_bytes(self.width, self.height, destination, output, depth, None)
+                };
+            }
             let source_max = (1_u32 << self.bit_depth) - 1;
             let target_max = (1_u32 << depth) - 1;
             let source_stride = self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
