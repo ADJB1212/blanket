@@ -60,6 +60,15 @@ from .Compressor import LosslessImageCompressor, LossyImageCompressor
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
 _EXTENSIONS = {
+    ".pcx": "PCX",
+    ".sgi": "SGI",
+    ".rgb": "SGI",
+    ".rgba": "SGI",
+    ".bw": "SGI",
+    ".xbm": "XBM",
+    ".xpm": "XPM",
+    ".msp": "MSP",
+    ".palm": "PALM",
     ".bmp": "BMP",
     ".gif": "GIF",
     ".ico": "ICO",
@@ -123,6 +132,12 @@ _FORMAT_ALIASES = {
     "JPC": "JPEG2000",
 }
 _SAVE_OPTIONS = {
+    "PCX": frozenset(),
+    "SGI": frozenset(),
+    "XBM": frozenset(),
+    "XPM": frozenset(),
+    "MSP": frozenset(),
+    "PALM": frozenset(),
     "PPM": frozenset(),
     "PAM": frozenset(),
     "TGA": frozenset(),
@@ -134,7 +149,7 @@ _SAVE_OPTIONS = {
     "PNG": frozenset({"compress_level"}),
     "JPEG": frozenset({"quality"}),
     "JXL": frozenset({"quality", "lossless", "effort"}),
-    "TIFF": frozenset(),
+    "TIFF": frozenset({"compression", "quality"}),
     "PDF": frozenset(),
     "WEBP": frozenset({"quality", "lossless"}),
     "HEIF": frozenset({"quality", "lossless"}),
@@ -2026,7 +2041,14 @@ def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]
     compress_level = _bounded_int("compress_level", supplied.get("compress_level", 6), 0, 9)
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
-    return {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    if format == "TIFF":
+        compression = supplied.get("compression", "raw")
+        methods = {"raw": 0, "tiff_lzw": 1, "tiff_adobe_deflate": 2, "tiff_deflate": 2, "deflate": 2, "jpeg": 3}
+        if not isinstance(compression, str) or compression not in methods:
+            raise ValueError(f"unsupported TIFF compression {compression!r}")
+        values["tiff_compression"] = methods[compression]
+    return values
 
 
 def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:

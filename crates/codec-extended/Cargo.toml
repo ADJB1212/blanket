@@ -11,6 +11,7 @@ blanket-core = { path = "../core" }
 blanket-codec-common = { path = "../codec-common" }
 blanket-codec-image = { path = "../codec-image" }
 pyo3.workspace = true
+rustc-hash.workspace = true
 image = { version = "0.25", default-features = false, features = ["pnm", "tga", "dds", "qoi"] }
 tempfile = { version = "3", default-features = false }
 

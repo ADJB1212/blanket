@@ -38,8 +38,8 @@ edition = "2024"
 
 [workspace.dependencies]
 rayon = { version = "1", default-features = false }
-pyo3 = { version = "0.30", features = ["abi3-py312"] }
-png = { version = "0.18", default-features = false, features = ["zlib-rs"]}
+pyo3 = { version = "0.30", features = ["abi3-py312", "nightly"] }
+png = { version = "0.18", default-features = false, features = ["zlib-rs"] }
 turbojpeg = { version = "1", default-features = false, features = ["cmake", "require-simd"] }
 rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
 

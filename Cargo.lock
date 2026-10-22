@@ -243,6 +243,7 @@ dependencies = [
  "blanket-core",
  "image",
  "pyo3",
+ "rustc-hash",
  "tempfile",
 ]
 
@@ -335,6 +336,7 @@ version = "0.0.5"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-image",
+ "blanket-codec-jpeg",
  "blanket-core",
  "image",
  "pyo3",

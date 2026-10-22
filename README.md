@@ -176,7 +176,7 @@ Use `from blanket import features` to inspect the installed build:
 | PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                                   |
 | JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                               |
 | JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                                     |
-| TIFF        | Yes  |  Yes  | First image only; uncompressed output                                         |
+| TIFF        | Yes  |  Yes  | First image only; raw, LZW, Deflate, or JPEG compression                      |
 | WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                                           |
 | AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                       |
 | HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                                 |
@@ -190,6 +190,15 @@ Use `from blanket import features` to inspect the installed build:
 | EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI                      |
 | QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA                                                       |
 | JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output         |
+| PCX         | Yes  |  Yes  | Bilevel, indexed, grayscale, and RGB; RLE output                              |
+| SGI         | Yes  |  Yes  | Raw/RLE 8/16-bit input; uncompressed 8-bit output                             |
+| XBM / XPM   | Yes  |  Yes  | Bilevel XBM; RGB/RGBA XPM with binary transparency                            |
+| FITS        | Yes  |  No   | Primary image, first plane; integer/float samples                             |
+| SPIDER      | Yes  |  No   | 2D float images and first image of a stack                                    |
+| Pixar       | Yes  |  No   | Uncompressed RGB raster                                                       |
+| MSP         | Yes  |  Yes  | Bilevel; raw/RLE input, uncompressed output                                   |
+| PALM        |  No  |  Yes  | Bilevel or 8-bit indexed output                                               |
+| Sun raster  | Yes  |  No   | Raw/RLE, packed grayscale, indexed, and RGB input                             |
 
 Netpbm opens with `image.format == "PPM"`, including PAM. Saving selects
 PBM, PGM, or PPM from modes `1`, `L`, or `RGB`; use `format="PAM"` or `.pam`
@@ -246,7 +255,9 @@ uv run --no-sync scripts/benchmark.py --sizes web
 ```
 
 Use `--all` for the full suite or `--sections Resize ImageOps` to select
-operations. Results depend on image size, operation, codec settings, and
+operations. Use `--sections "Codec I/O" --formats PNG JPEG TIFF` to benchmark
+selected image formats. Format names are case-insensitive; the filter only
+affects Codec I/O. Results depend on image size, operation, codec settings, and
 hardware. The [benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/)
 explains baseline comparisons and reproducible runs.
 

@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use blanket_codec_common::{codec_error, u16_bytes, validate_dimensions};
+use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
@@ -12,6 +12,9 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         return Ok(None);
     };
     let photometric = decoder.get_tag_u32(tiff::tags::Tag::PhotometricInterpretation).ok();
+    if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(7) {
+        return decode_jpeg_tiff(data, &mut decoder).map(Some);
+    }
     if matches!(photometric, Some(8 | 9)) {
         let signed = photometric == Some(8);
         // Decode LAB as raw three-channel samples; the TIFF crate cannot read LAB buffers.
@@ -52,6 +55,86 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         Image::from_float_bytes(width, height, values.into_iter().flat_map(f32::to_le_bytes).collect()).map_err(|error| error.to_string())?;
     image.format = Some("TIFF".to_owned());
     Ok(Some(image))
+}
+
+fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Image, String> {
+    use tiff::tags::Tag;
+
+    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    validate_dimensions(width, height)?;
+    if width == 0 || height == 0 || decoder.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1) != 1 {
+        return Err("unsupported JPEG TIFF layout".into());
+    }
+    let samples = decoder.get_tag_u32(Tag::SamplesPerPixel).unwrap_or(1);
+    let mode = match samples {
+        1 => PixelMode::L,
+        3 => PixelMode::Rgb,
+        _ => return Err("unsupported JPEG TIFF channels".into()),
+    };
+    if decoder
+        .get_tag_u16_vec(Tag::BitsPerSample)
+        .map_err(|e| e.to_string())?
+        .iter()
+        .any(|&v| v != 8)
+    {
+        return Err("JPEG TIFF requires 8-bit samples".into());
+    }
+    let tiled = decoder.get_tag_u32(Tag::TileWidth).is_ok();
+    let (chunk_width, chunk_height) = if tiled {
+        (
+            decoder.get_tag_u32(Tag::TileWidth).map_err(|e| e.to_string())?,
+            decoder.get_tag_u32(Tag::TileLength).map_err(|e| e.to_string())?,
+        )
+    } else {
+        (width, decoder.get_tag_u32(Tag::RowsPerStrip).unwrap_or(height).min(height))
+    };
+    if chunk_width == 0 || chunk_height == 0 {
+        return Err("invalid JPEG TIFF chunk size".into());
+    }
+    let across = width.div_ceil(chunk_width);
+    let count = across.checked_mul(height.div_ceil(chunk_height)).ok_or("invalid JPEG TIFF chunk count")?;
+    let offsets = decoder
+        .get_tag_u64_vec(if tiled { Tag::TileOffsets } else { Tag::StripOffsets })
+        .map_err(|e| e.to_string())?;
+    let lengths = decoder
+        .get_tag_u64_vec(if tiled { Tag::TileByteCounts } else { Tag::StripByteCounts })
+        .map_err(|e| e.to_string())?;
+    if offsets.len() != count as usize || lengths.len() != offsets.len() {
+        return Err("invalid JPEG TIFF chunk table".into());
+    }
+    let tables = decoder.get_tag_u8_vec(Tag::JPEGTables).unwrap_or_default();
+    if !tables.is_empty() && (!tables.starts_with(b"\xff\xd8") || !tables.ends_with(b"\xff\xd9")) {
+        return Err("invalid TIFF JPEG tables".into());
+    }
+    let channels = mode.channels();
+    let mut pixels = vec![0; width as usize * height as usize * channels];
+    for (index, (&offset, &length)) in offsets.iter().zip(&lengths).enumerate() {
+        let start = usize::try_from(offset).map_err(|_| "invalid JPEG TIFF offset")?;
+        let end = usize::try_from(offset.checked_add(length).ok_or("invalid JPEG TIFF length")?).map_err(|_| "invalid JPEG TIFF length")?;
+        let source = data.get(start..end).ok_or("truncated JPEG TIFF chunk")?;
+        let combined;
+        let jpeg = if tables.is_empty() {
+            source
+        } else {
+            combined = [tables[..tables.len() - 2].as_ref(), source.strip_prefix(b"\xff\xd8").unwrap_or(source)].concat();
+            &combined
+        };
+        let decoded = blanket_codec_jpeg::decode_jpeg(jpeg)?;
+        let x = (index as u32 % across) * chunk_width;
+        let y = (index as u32 / across) * chunk_height;
+        let rows = chunk_height.min(height - y);
+        let columns = chunk_width.min(width - x);
+        if decoded.mode != mode || decoded.width < columns || decoded.height < rows || decoded.width > chunk_width || decoded.height > chunk_height {
+            return Err("invalid JPEG TIFF chunk dimensions".into());
+        }
+        let raw = decoded.pixel_data().map_err(|e| e.to_string())?;
+        for row in 0..rows as usize {
+            let dst = ((y as usize + row) * width as usize + x as usize) * channels;
+            let src = row * decoded.width as usize * channels;
+            pixels[dst..dst + columns as usize * channels].copy_from_slice(&raw[src..src + columns as usize * channels]);
+        }
+    }
+    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map_err(|e| e.to_string())
 }
 
 fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -238,6 +321,97 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     image::codecs::tiff::TiffEncoder::new(&mut output)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
         .map_err(codec_error)?;
+    Ok(output.into_inner())
+}
+
+pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
+    use tiff::encoder::{Compression, TiffEncoder, colortype};
+    use tiff::tags::Tag;
+
+    if image.width == 0 || image.height == 0 {
+        return Err(PyValueError::new_err("cannot encode an empty image"));
+    }
+    let mut output = Cursor::new(Vec::new());
+    if options.tiff_compression == 3 {
+        if image.bit_depth != 8 || !matches!(image.mode, PixelMode::L | PixelMode::Rgb) {
+            return Err(PyValueError::new_err("JPEG TIFF requires 8-bit L or RGB"));
+        }
+        let jpeg = blanket_codec_jpeg::encode_jpeg(image, image.pixel_data()?, options.quality)?;
+        {
+            let mut encoder = TiffEncoder::new(&mut output).map_err(codec_error)?;
+            let mut directory = encoder.image_directory().map_err(codec_error)?;
+            let offset = u32::try_from(directory.write_data(jpeg.as_slice()).map_err(codec_error)?).map_err(codec_error)?;
+            let channels = image.mode.channels() as u16;
+            for (tag, value) in [
+                (Tag::ImageWidth, image.width),
+                (Tag::ImageLength, image.height),
+                (Tag::RowsPerStrip, image.height),
+                (Tag::StripOffsets, offset),
+                (Tag::StripByteCounts, jpeg.len() as u32),
+            ] {
+                directory.write_tag(tag, value).map_err(codec_error)?;
+            }
+            directory
+                .write_tag(Tag::BitsPerSample, vec![8_u16; channels as usize].as_slice())
+                .map_err(codec_error)?;
+            directory.write_tag(Tag::Compression, 7_u16).map_err(codec_error)?;
+            directory
+                .write_tag(Tag::PhotometricInterpretation, if channels == 1 { 1_u16 } else { 6 })
+                .map_err(codec_error)?;
+            directory.write_tag(Tag::SamplesPerPixel, channels).map_err(codec_error)?;
+            directory.write_tag(Tag::PlanarConfiguration, 1_u16).map_err(codec_error)?;
+            if channels == 3 {
+                directory.write_tag(Tag::Unknown(530), &[2_u16, 2][..]).map_err(codec_error)?;
+            }
+            directory.finish().map_err(codec_error)?;
+        }
+        return Ok(output.into_inner());
+    }
+    let compression = match options.tiff_compression {
+        1 => Compression::Lzw,
+        2 => Compression::Deflate(Default::default()),
+        _ => return Err(PyValueError::new_err("unsupported TIFF compression")),
+    };
+    {
+        let mut encoder = TiffEncoder::new(&mut output).map_err(codec_error)?.with_compression(compression);
+        if image.mode == PixelMode::F {
+            let values = image
+                .raw_data()?
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|v| f32::from_le_bytes(*v))
+                .collect::<Vec<_>>();
+            encoder
+                .write_image::<colortype::Gray32Float>(image.width, image.height, &values)
+                .map_err(codec_error)?;
+        } else if image.bit_depth > 8 {
+            let values = blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth);
+            match image.mode {
+                PixelMode::L => encoder.write_image::<colortype::Gray16>(image.width, image.height, &values),
+                PixelMode::Rgb => encoder.write_image::<colortype::RGB16>(image.width, image.height, &values),
+                PixelMode::Rgba => encoder.write_image::<colortype::RGBA16>(image.width, image.height, &values),
+                _ => return Err(PyValueError::new_err("unsupported compressed TIFF mode")),
+            }
+            .map_err(codec_error)?;
+        } else if image.mode == PixelMode::Lab {
+            let mut frame = encoder.new_image::<colortype::RGB8>(image.width, image.height).map_err(codec_error)?;
+            frame.encoder().write_tag(Tag::PhotometricInterpretation, 8_u16).map_err(codec_error)?;
+            frame
+                .write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?))
+                .map_err(codec_error)?;
+        } else {
+            let pixels = image.pixel_data()?;
+            match image.mode {
+                PixelMode::L | PixelMode::One => encoder.write_image::<colortype::Gray8>(image.width, image.height, pixels),
+                PixelMode::Rgb => encoder.write_image::<colortype::RGB8>(image.width, image.height, pixels),
+                PixelMode::Rgba => encoder.write_image::<colortype::RGBA8>(image.width, image.height, pixels),
+                PixelMode::Cmyk => encoder.write_image::<colortype::CMYK8>(image.width, image.height, pixels),
+                _ => return Err(PyValueError::new_err("unsupported compressed TIFF mode")),
+            }
+            .map_err(codec_error)?;
+        }
+    }
     Ok(output.into_inner())
 }
 

@@ -10,11 +10,12 @@ publish = false
 
 [dependencies]
 blanket-core = { path = "../core" }
+blanket-codec-jpeg = { path = "../codec-jpeg" }
 pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }
 blanket-codec-image = { path = "../codec-image" }
 image = { version = "0.25", default-features = false, features = ["tiff"] }
-tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"]}
+tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw", "jpeg"]}
 
 [lib]
 doctest = false

@@ -29,7 +29,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
             };
             return Some((available, available.then_some(version)));
         }
-        "pdf" => None,
+        "pdf" | "pcx" | "sgi" | "xbm" | "xpm" | "fits" | "spider" | "pixar" | "msp" | "palm" | "sun" => None,
         "pil" | "tkinter" | "freetype2" | "zlib" | "raqm" | "fribidi" | "harfbuzz" | "mozjpeg" | "zlib_ng" | "libimagequant" | "xcb" => {
             return Some((false, None));
         }

@@ -42,11 +42,31 @@ pub enum ImageFormat {
     Eps,
     Qoi,
     Jpeg2000,
+    Pcx,
+    Sgi,
+    Xbm,
+    Xpm,
+    Fits,
+    Spider,
+    Pixar,
+    Msp,
+    Palm,
+    Sun,
 }
 
 impl ImageFormat {
     pub fn parse(value: &str) -> PyResult<Self> {
         match value.to_ascii_uppercase().as_str() {
+            "PCX" => Ok(Self::Pcx),
+            "SGI" => Ok(Self::Sgi),
+            "XBM" => Ok(Self::Xbm),
+            "XPM" => Ok(Self::Xpm),
+            "FITS" => Ok(Self::Fits),
+            "SPIDER" => Ok(Self::Spider),
+            "PIXAR" => Ok(Self::Pixar),
+            "MSP" => Ok(Self::Msp),
+            "PALM" => Ok(Self::Palm),
+            "SUN" => Ok(Self::Sun),
             "BMP" => Ok(Self::Bmp),
             "PPM" | "PNM" | "PGM" | "PBM" => Ok(Self::Ppm),
             "PAM" => Ok(Self::Pam),
@@ -71,6 +91,16 @@ impl ImageFormat {
 
     const fn as_str(self) -> &'static str {
         match self {
+            Self::Pcx => "PCX",
+            Self::Sgi => "SGI",
+            Self::Xbm => "XBM",
+            Self::Xpm => "XPM",
+            Self::Fits => "FITS",
+            Self::Spider => "SPIDER",
+            Self::Pixar => "PIXAR",
+            Self::Msp => "MSP",
+            Self::Palm => "PALM",
+            Self::Sun => "SUN",
             Self::Bmp => "BMP",
             Self::Ppm => "PPM",
             Self::Pam => "PAM",
@@ -93,6 +123,9 @@ impl ImageFormat {
     }
 
     fn detect(data: &[u8]) -> Option<Self> {
+        if let Some(format) = blanket_codec_extended::legacy::detect(data) {
+            return Self::parse(format).ok();
+        }
         if data.starts_with(b"qoif") {
             Some(Self::Qoi)
         } else if data.starts_with(b"DDS ") {
@@ -151,6 +184,16 @@ pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> 
 
 pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
     match format {
+        ImageFormat::Pcx
+        | ImageFormat::Sgi
+        | ImageFormat::Xbm
+        | ImageFormat::Xpm
+        | ImageFormat::Fits
+        | ImageFormat::Spider
+        | ImageFormat::Pixar
+        | ImageFormat::Msp
+        | ImageFormat::Palm
+        | ImageFormat::Sun => blanket_codec_extended::legacy::decode(data, format.as_str()),
         ImageFormat::Ppm | ImageFormat::Pam => decode_pnm(data),
         ImageFormat::Tga => decode_tga(data),
         ImageFormat::Dds => decode_dds(data),
@@ -172,6 +215,9 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if format == ImageFormat::Tiff && options.tiff_compression != 0 {
+        return blanket_codec_tiff::encode_compressed_tiff(image, options);
+    }
     if image.mode == PixelMode::Lab {
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode LAB as {}", format.as_str())));
@@ -211,6 +257,16 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
     }
     let pixels = image.pixel_data()?;
     match format {
+        ImageFormat::Pcx
+        | ImageFormat::Sgi
+        | ImageFormat::Xbm
+        | ImageFormat::Xpm
+        | ImageFormat::Fits
+        | ImageFormat::Spider
+        | ImageFormat::Pixar
+        | ImageFormat::Msp
+        | ImageFormat::Palm
+        | ImageFormat::Sun => blanket_codec_extended::legacy::encode(image, pixels, format.as_str()).map_err(PyOSError::new_err),
         ImageFormat::Ppm | ImageFormat::Pam | ImageFormat::Tga | ImageFormat::Dds | ImageFormat::Eps | ImageFormat::Qoi => {
             encode_extended(image, pixels, format.as_str())
         }

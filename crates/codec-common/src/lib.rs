@@ -11,6 +11,7 @@ pub struct SaveOptions {
     pub compress_level: u8 = 6,
     pub lossless: bool = false,
     pub effort: u8 = 7,
+    pub tiff_compression: u8 = 0,
 }
 
 pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {

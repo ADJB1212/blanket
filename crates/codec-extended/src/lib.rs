@@ -1,5 +1,6 @@
 #![feature(portable_simd)]
 
+pub mod legacy;
 mod pixels;
 
 use std::io::Write;

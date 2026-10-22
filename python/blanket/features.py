@@ -15,6 +15,16 @@ if TYPE_CHECKING:
 __all__ = ["blanketinfo", "check", "get_supported", "version"]
 
 _FEATURES = (
+    "pcx",
+    "sgi",
+    "xbm",
+    "xpm",
+    "fits",
+    "spider",
+    "pixar",
+    "msp",
+    "palm",
+    "sun",
     "blanket",
     "png",
     "jpg",
@@ -42,6 +52,16 @@ _FEATURES = (
 )
 _ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "heic": "heif", "jpeg2000": "jpg_2000", "pbm": "ppm", "pgm": "ppm", "pnm": "ppm"}
 _FORMATS = (
+    ("PCX", "pcx"),
+    ("SGI", "sgi"),
+    ("XBM", "xbm"),
+    ("XPM", "xpm"),
+    ("FITS", "fits"),
+    ("SPIDER", "spider"),
+    ("PIXAR", "pixar"),
+    ("MSP", "msp"),
+    ("PALM", "palm"),
+    ("SUN", "sun"),
     ("PPM/PGM/PBM", "ppm"),
     ("PAM", "pam"),
     ("TGA", "tga"),

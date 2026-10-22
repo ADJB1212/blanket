@@ -8,6 +8,7 @@ import json
 import math
 import os
 import platform
+import struct
 import subprocess
 import warnings
 from collections.abc import Callable
@@ -63,6 +64,34 @@ pillow_heif.register_heif_opener()
 # ── image sizes ──────────────────────────────────────────────────────────
 
 SIZES: dict[str, tuple[int, int]] = {"web": (800, 600), "square": (1024, 1024), "HD": (1280, 720), "photo": (1920, 1280), "4K": (3840, 2160)}
+CODEC_FORMATS = (
+    "PNG",
+    "JPEG",
+    "JXL",
+    "TIFF",
+    "WEBP",
+    "HEIF",
+    "PBM",
+    "PGM",
+    "PPM",
+    "PAM",
+    "TGA",
+    "QOI",
+    "JPEG2000",
+    "PCX",
+    "SGI",
+    "XBM",
+    "MSP",
+    "SPIDER",
+    "FITS",
+    "PIXAR",
+    "SUN",
+    "PALM",
+    "XPM",
+    "DDS",
+    "EPS",
+)
+CODEC_ALIASES = {"JPG": "JPEG", "TIF": "TIFF", "HEIC": "HEIF", "JP2": "JPEG2000", "J2K": "JPEG2000"}
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -110,6 +139,39 @@ def pillow_payload(image: PillowImage.Image, fmt: str, **options: object) -> byt
     return output.getvalue()
 
 
+def legacy_load_payloads(size: tuple[int, int], rgb: bytes, gray: bytes, formats: set[str] | None = None) -> list[tuple[str, bytes]]:
+    """Build read-only raster fixtures outside the timed operations."""
+    w, h = size
+    payloads: list[tuple[str, bytes]] = []
+    if formats is None or "FITS" in formats:
+        for bits, mode, samples in (
+            (8, "L", gray),
+            (16, "I;16", np.frombuffer(make_integer(w, h, "I;16"), dtype="<u2").astype(">u2").tobytes()),
+            (32, "I", np.frombuffer(make_integer(w, h, "I"), dtype="<i4").astype(">i4").tobytes()),
+            (-32, "F", make_float(w, h).astype(">f4").tobytes()),
+            (-64, "F 64-bit source", make_float(w, h).astype(">f8").tobytes()),
+        ):
+            cards = ["SIMPLE  =                    T", f"BITPIX  = {bits:20}", "NAXIS   =                    2", f"NAXIS1  = {w:20}", f"NAXIS2  = {h:20}", "END"]
+            header = b"".join(card.encode("ascii").ljust(80) for card in cards).ljust(2880)
+            payloads.append((f"FITS {mode}", header + samples.ljust(((len(samples) + 2879) // 2880) * 2880, b"\0")))
+
+    if formats is None or "PIXAR" in formats:
+        header = bytearray(1024)
+        header[:4] = b"\x80\xe8\0\0"
+        struct.pack_into("<HH", header, 416, h, w)
+        struct.pack_into("<HH", header, 424, 14, 2)
+        payloads.append(("PIXAR RGB", bytes(header) + rgb))
+
+    if formats is None or "SUN" in formats:
+        for depth, mode, samples in ((1, "1", make_one(w, h)), (8, "L", gray), (24, "RGB", rgb)):
+            row_bytes = (w * depth + 7) // 8
+            stride = ((w * depth + 15) // 16) * 2
+            raw = b"".join(samples[y * row_bytes : (y + 1) * row_bytes].ljust(stride, b"\0") for y in range(h))
+            header = struct.pack(">8I", 0x59A66A95, w, h, depth, len(raw), 3, 0, 0)
+            payloads.append((f"SUN {mode}", header + raw))
+    return payloads
+
+
 def measure(operation: Callable[[], object], warmups: int, iterations: int) -> dict[str, float]:
     """Return median, p25, and p75 timings in seconds."""
     for _ in range(warmups):
@@ -132,8 +194,12 @@ def measure(operation: Callable[[], object], warmups: int, iterations: int) -> d
 Comparison = tuple[str, Callable[[], object], Callable[[], object] | None]
 
 
-def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool = False, include_unpaired: bool = True) -> list[Comparison]:
-    """Build load/save benchmarks for every codec."""
+def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired: bool = True, formats: set[str] | None = None) -> list[Comparison]:
+    """Build load/save benchmarks for the selected codecs."""
+
+    def enabled(fmt: str) -> bool:
+        return (formats is None or fmt in formats) and (not skip_jxl or fmt != "JXL")
+
     w, h = size
     raw_rgb = make_rgb(w, h)
     raw_rgba = make_rgba(w, h)
@@ -152,35 +218,47 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
 
     comps: list[Comparison] = []
 
-    if not jxl_only:
+    if any(enabled(fmt) for fmt in CODEC_FORMATS if fmt != "JXL"):
         # ── PNG ───────────────────────────────────────────────────────
         for label, _, p_img, _ in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
+            if not enabled("PNG"):
+                continue
             png = pillow_payload(p_img, "PNG", compress_level=6)
             comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)), lambda p=png: pillow_load(p)))
         comps.extend(
             (f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv))
             for level in (1, 6, 9)
+            if enabled("PNG")
         )
 
         # ── JPEG ──────────────────────────────────────────────────────
         for label, _, p_img in (("RGB", b_rgb, p_rgb), ("L", b_gray, p_gray)):
+            if not enabled("JPEG"):
+                continue
             jpeg = pillow_payload(p_img, "JPEG", quality=85)
             comps.append((f"load JPEG {label}", lambda p=jpeg: BlanketImage.open(BytesIO(p)), lambda p=jpeg: pillow_load(p)))
         comps.extend(
-            (f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)) for quality in (50, 85, 95)
+            (f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q))
+            for quality in (50, 85, 95)
+            if enabled("JPEG")
         )
 
         for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
             blanket = BlanketImage.frombytes(mode, size, raw)
             pillow = PillowImage.frombytes(mode, size, raw)
             for quality in (50, 85, 95):
+                if not enabled("JPEG"):
+                    continue
                 label = f"save JPEG q={quality} {mode}" + (" (via RGB)" if mode == "YCbCr" else "")
                 comps.append((label, lambda b=blanket, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=pillow, q=quality: p.save(BytesIO(), "JPEG", quality=q)))
             if mode == "CMYK":
                 for fmt in ("JPEG", "TIFF"):
+                    if not enabled(fmt):
+                        continue
                     payload = pillow_payload(pillow, fmt)
                     comps.append((f"load {fmt} CMYK", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: pillow_load(data)))
-                comps.append(("save TIFF CMYK", lambda b=blanket: b.save(BytesIO(), "TIFF"), lambda p=pillow: p.save(BytesIO(), "TIFF")))
+                if enabled("TIFF"):
+                    comps.append(("save TIFF CMYK", lambda b=blanket: b.save(BytesIO(), "TIFF"), lambda p=pillow: p.save(BytesIO(), "TIFF")))
 
         raw_one = make_one(w, h)
         raw_la = make_la(w, h)
@@ -191,6 +269,12 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
             "RGB": (b_rgb, p_rgb),
             "RGBA": (b_rgba, p_rgba),
         }
+        palette = bytes(value for i in range(256) for value in (i, 255 - i, (i * 37) % 256))
+        b_indexed = BlanketImage.frombytes("P", size, raw_gray)
+        p_indexed = PillowImage.frombytes("P", size, raw_gray)
+        b_indexed.putpalette(palette)
+        p_indexed.putpalette(palette)
+        extended_images["P"] = (b_indexed, p_indexed)
         for label, fmt, modes in (
             ("PBM", "PPM", ("1",)),
             ("PGM", "PPM", ("L",)),
@@ -198,7 +282,13 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
             ("TGA", "TGA", ("L", "LA", "RGB", "RGBA")),
             ("QOI", "QOI", ("RGB", "RGBA")),
             ("JPEG2000", "JPEG2000", ("L", "LA", "RGB", "RGBA")),
+            ("PCX", "PCX", ("1", "L", "P", "RGB")),
+            ("SGI", "SGI", ("L", "RGB", "RGBA")),
+            ("XBM", "XBM", ("1",)),
+            ("MSP", "MSP", ("1",)),
         ):
+            if not enabled(label):
+                continue
             for mode in modes:
                 b_img, p_img = extended_images[mode]
                 payload = pillow_payload(p_img, fmt)
@@ -208,12 +298,35 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
         raw_u16 = make_integer(w, h, "I;16")
         b_u16 = BlanketImage.frombytes("L", size, raw_u16, bit_depth=16)
         p_u16 = PillowImage.frombytes("I;16", size, raw_u16)
+        p_float = PillowImage.frombytes("F", size, make_float(w, h).tobytes())
+        if enabled("SPIDER"):
+            payload = pillow_payload(p_float, "SPIDER")
+            comps.append(("load SPIDER F", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
+        for label, payload in legacy_load_payloads(size, raw_rgb, raw_gray, {fmt for fmt in ("FITS", "PIXAR", "SUN") if enabled(fmt)}):
+            comps.append((f"load {label}", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
+        for mode in ("1", "P"):
+            if not enabled("PALM"):
+                continue
+            b_img, p_img = extended_images[mode]
+            comps.append((f"save PALM {mode}", lambda b=b_img: b.save(BytesIO(), "PALM"), lambda p=p_img: p.save(BytesIO(), "PALM")))
+        for mode in ("RGB", "RGBA"):
+            if not enabled("XPM"):
+                continue
+            b_img = b_rgb if mode == "RGB" else b_rgb.convert("RGBA")
+            output = BytesIO()
+            b_img.save(output, "XPM")
+            payload = output.getvalue()
+            comps.append((f"load XPM {mode}", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
+            if include_unpaired:
+                comps.append((f"save XPM {mode}", lambda b=b_img: b.save(BytesIO(), "XPM"), None))
         for label, fmt in (("PGM", "PPM"), ("JPEG2000", "JPEG2000")):
+            if not enabled(label):
+                continue
             payload = pillow_payload(p_u16, fmt)
             comps.append((f"load {label} L 16-bit", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
             comps.append((f"save {label} L 16-bit", lambda b=b_u16, f=fmt: b.save(BytesIO(), f), lambda p=p_u16, f=fmt: p.save(BytesIO(), f)))
 
-        if include_unpaired:
+        if include_unpaired and enabled("PAM"):
             for mode in ("L", "LA", "RGB", "RGBA"):
                 b_img, _ = extended_images[mode]
                 output = BytesIO()
@@ -223,25 +336,42 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
                 comps.append((f"save PAM {mode}", lambda b=b_img: b.save(BytesIO(), "PAM"), None))
 
         for compression, p_img in (("DXT1", p_rgb), ("DXT3", p_rgba), ("DXT5", p_rgba)):
+            if not enabled("DDS"):
+                continue
             payload = pillow_payload(p_img, "DDS", pixel_format=compression)
             comps.append((f"load DDS {compression}", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
 
-        if BlanketFeatures.check("eps"):
+        if enabled("EPS") and BlanketFeatures.check("eps"):
             payload = pillow_payload(p_rgb, "EPS")
             comps.append(("load EPS RGB (Ghostscript)", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
 
         # ── TIFF and WebP ─────────────────────────────────────────────
         for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
-            tiff = pillow_payload(p_img, "TIFF")
-            comps.append((f"load TIFF {mode}", lambda p=tiff: BlanketImage.open(BytesIO(p)), lambda p=tiff: pillow_load(p)))
-            comps.append((f"save TIFF {mode}", lambda b=b_img: b.save(BytesIO(), "TIFF"), lambda p=p_img: p.save(BytesIO(), "TIFF")))
+            if enabled("TIFF"):
+                tiff = pillow_payload(p_img, "TIFF")
+                comps.append((f"load TIFF {mode}", lambda p=tiff: BlanketImage.open(BytesIO(p)), lambda p=tiff: pillow_load(p)))
+                comps.append((f"save TIFF {mode}", lambda b=b_img: b.save(BytesIO(), "TIFF"), lambda p=p_img: p.save(BytesIO(), "TIFF")))
+            for compression in ("tiff_lzw", "tiff_adobe_deflate", "jpeg"):
+                if not enabled("TIFF") or (compression == "jpeg" and mode == "RGBA"):
+                    continue
+                options = {"compression": compression}
+                if compression == "jpeg":
+                    options["quality"] = 85
+                payload = pillow_payload(p_img, "TIFF", **options)
+                label = {"tiff_lzw": "LZW", "tiff_adobe_deflate": "Deflate", "jpeg": "JPEG q=85"}[compression]
+                comps.append((f"load TIFF {label} {mode}", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
+                comps.append((f"save TIFF {label} {mode}", lambda b=b_img, opts=options: b.save(BytesIO(), "TIFF", **opts), lambda p=p_img, opts=options: p.save(BytesIO(), "TIFF", **opts)))
             for label, options in (("lossless", {"lossless": True}), ("q=50", {"quality": 50}), ("q=85", {"quality": 85}), ("q=95", {"quality": 95})):
+                if not enabled("WEBP"):
+                    continue
                 webp = pillow_payload(p_img, "WEBP", **options)
                 comps.append((f"load WEBP {mode} {label}", lambda p=webp: BlanketImage.open(BytesIO(p)), lambda p=webp: pillow_load(p)))
                 comps.append((f"save WEBP {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "WEBP", **opts), lambda p=p_img, opts=options: p.save(BytesIO(), "WEBP", **opts)))
 
         # HEIC is an alias for the same HEIF codec.
         for mode, b_img, p_img in (("RGB", b_rgb, p_rgb), ("RGBA", b_rgba, p_rgba), ("L", b_gray, p_gray)):
+            if not enabled("HEIF"):
+                continue
             for label, options in (("lossless", {"lossless": True}), ("q=85", {"quality": 85})):
                 p_options = {"quality": -1} if options.get("lossless") else options
                 payload = BytesIO()
@@ -251,7 +381,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
                 comps.append((f"save HEIC/HEIF {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "HEIF", **opts), lambda p=p_img, opts=p_options: p.save(BytesIO(), "HEIF", **opts)))
 
     # ── JXL (Pillow support via pillow-jxl-plugin) ────────────────────
-    if not skip_jxl:
+    if enabled("JXL"):
         jxl_ll = BytesIO()
         b_rgb.save(jxl_ll, "JXL", lossless=True, effort=1)
         jxl_ll_bytes = jxl_ll.getvalue()
@@ -270,19 +400,21 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, jxl_only: bool =
     # Pillow's RGB/RGBA interface cannot preserve these 10-bit samples.
     if not include_unpaired:
         return comps
-    formats = [] if jxl_only else [("PNG", {}), ("TIFF", {}), ("HEIC/HEIF", {"quality": 85}), ("PPM", {}), ("PAM", {}), ("JPEG2000", {})]
-    if not skip_jxl:
-        formats.append(("JXL", {"lossless": True, "effort": 1}))
+    wide_formats = [("PNG", {}), ("TIFF", {}), ("HEIC/HEIF", {"quality": 85}), ("PPM", {}), ("PAM", {}), ("JPEG2000", {})]
+    if enabled("JXL"):
+        wide_formats.append(("JXL", {"lossless": True, "effort": 1}))
     for mode in ("L", "RGB", "RGBA"):
         wide = BlanketImage.fromarray(make_ten_bit(size, mode), mode, bit_depth=10)
-        for label, options in formats:
+        for label, options in wide_formats:
             if label == "PPM" and mode == "RGBA":
                 continue
             fmt = "HEIF" if label == "HEIC/HEIF" else label
+            name = "PGM" if label == "PPM" and mode == "L" else label
+            if not enabled("HEIF" if name == "HEIC/HEIF" else name):
+                continue
             output = BytesIO()
             wide.save(output, fmt, **options)
             payload = output.getvalue()
-            name = "PGM" if label == "PPM" and mode == "L" else label
             comps.append((f"load {name} {mode} 10-bit source", lambda p=payload: BlanketImage.open(BytesIO(p)), None))
             comps.append((f"save {name} {mode} 10-bit", lambda b=wide, f=fmt, opts=options: b.save(BytesIO(), f, **opts), None))
 
@@ -1094,6 +1226,7 @@ def run_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "python": platform.python_version(),
         "iterations": args.iterations,
         "warmups": args.warmups,
+        "codec_formats": args.formats,
     }
 
 
@@ -1190,8 +1323,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
+    parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O")
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
-    parser.add_argument("--jxl-only", action="store_true", help="only run JXL codec benchmarks (pillow-jxl-plugin required)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
     parser.add_argument("--json", type=Path, dest="json_path")
@@ -1222,16 +1355,17 @@ def parse_args() -> argparse.Namespace:
         parser.error("--iterations must be positive")
     if arguments.warmups < 0:
         parser.error("--warmups cannot be negative")
-    if arguments.skip_jxl and arguments.jxl_only:
-        parser.error("--skip-jxl and --jxl-only are mutually exclusive")
-    if arguments.sections is not None and arguments.jxl_only:
-        parser.error("--sections cannot be combined with --jxl-only")
-    if arguments.all and (arguments.sections is not None or arguments.jxl_only):
-        parser.error("--all cannot be combined with --sections or --jxl-only")
+    if arguments.all and arguments.sections is not None:
+        parser.error("--all cannot be combined with --sections")
     if arguments.sections is None:
-        arguments.sections = ["Codec I/O"] if arguments.jxl_only else list(SECTION_NAMES if arguments.all else DEFAULT_SECTIONS)
+        arguments.sections = list(SECTION_NAMES if arguments.all else DEFAULT_SECTIONS)
     if arguments.no_palette:
         arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
+    if arguments.formats:
+        if "Codec I/O" not in arguments.sections:
+            parser.error("--formats requires the Codec I/O section")
+        if arguments.skip_jxl and "JXL" in arguments.formats:
+            parser.error("--formats JXL cannot be combined with --skip-jxl")
     return arguments
 
 
@@ -1299,7 +1433,7 @@ def main() -> None:
             console.rule(f"[bold]{size_name}[/bold]  {w}x{h}  ({mpx:.2f} Mpx)  ---  median of {args.iterations} runs")
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
-            "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, jxl_only=args.jxl_only, include_unpaired=args.all),
+            "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, include_unpaired=args.all, formats=None if args.formats is None else set(args.formats)),
             "Conversions": partial(conversion_comparisons, size),
             "Mode Parity": partial(mode_parity_comparisons, size),
             "Resize": partial(resize_comparisons, size),

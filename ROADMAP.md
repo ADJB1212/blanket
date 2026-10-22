@@ -221,20 +221,19 @@ usage.
 
 ### Medium Priority
 
-- [ ] TIFF compressed (LZW, Deflate, JPEG) — read/write
-- [ ] PCX — read/write
-- [ ] SGI — read/write
-- [ ] XBM / XPM — read/write
-- [ ] FITS — read
+- [x] TIFF compressed (LZW, Deflate, JPEG) — read/write
+- [x] PCX — read/write
+- [x] SGI — read/write
+- [x] XBM / XPM — read/write
+- [x] FITS — read (primary image, first plane; uncompressed samples)
 
 ### Lower Priority
 
-- [ ] IM — read
-- [ ] SPIDER — read
-- [ ] Pixar — read
-- [ ] MSP — read/write
-- [ ] PALM — write
-- [ ] Sun raster — read
+- [x] SPIDER — read (2D images and first stack image)
+- [x] Pixar — read (uncompressed RGB)
+- [x] MSP — read/write
+- [x] PALM — write
+- [x] Sun raster — read
 
 ---
 
