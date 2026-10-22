@@ -5,6 +5,8 @@ use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use blanket_core::pixels::{self, Bytes, load, store};
 
+use crate::ops::{RESAMPLE_BITS, RESAMPLE_ROUND};
+
 pub(crate) fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
     let count = output.len();
     assert_eq!(source.len(), count);
@@ -169,18 +171,18 @@ fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
 /// Returns the byte count processed without overflowing fixed-point accumulators.
 pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights: &[i32]) -> usize {
     let magnitude: i64 = weights.iter().map(|&w| i64::from(w).abs()).sum();
-    if magnitude * 255 + (1 << 21) > i64::from(i32::MAX) {
+    if magnitude * 255 + i64::from(RESAMPLE_ROUND) > i64::from(i32::MAX) {
         return 0;
     }
     assert!(weights.is_empty() || source.len() >= (weights.len() - 1).saturating_mul(stride).saturating_add(output.len()));
     let end = output.len() / 8 * 8;
     for x in (0..end).step_by(8) {
-        let mut acc = Simd::<i32, 8>::splat(1 << 21);
+        let mut acc = Simd::<i32, 8>::splat(RESAMPLE_ROUND);
         for (i, &weight) in weights.iter().enumerate() {
             let values = Simd::<u8, 8>::from_slice(&source[i * stride + x..i * stride + x + 8]);
             acc += values.cast::<i32>() * Simd::splat(weight);
         }
-        (acc >> 22)
+        (acc >> RESAMPLE_BITS as i32)
             .simd_clamp(Simd::splat(0), Simd::splat(255))
             .cast::<u8>()
             .copy_to_slice(&mut output[x..x + 8]);

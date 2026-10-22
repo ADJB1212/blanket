@@ -3,8 +3,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
 
+// Smaller buffers generally cost more to schedule than to process serially.
 pub const MIN_PARALLEL_BYTES: usize = 256 * 1024;
+// Default pixel partitions balance scheduling overhead and available workers.
 pub const CHUNK_PIXELS: usize = 16 * 1024;
+// Independent encoders need enough work to amortize worker scheduling.
+const MIN_CANDIDATE_BYTES: usize = 128 * 1024;
+// Four input-sized buffers per encoder share an approximate 256 MiB budget.
+const CANDIDATE_INPUT_BUDGET: usize = 64 * 1024 * 1024;
 
 /// Live exclusive bound. Encoders may recheck it after expensive work, before
 /// copying or decoding a candidate that a concurrent job has already beaten.
@@ -90,11 +96,11 @@ pub fn best_candidate<T: Sync, E: Send>(
 }
 
 pub fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
-    if work_bytes >= 128 * 1024 && jobs > 1 {
+    if work_bytes >= MIN_CANDIDATE_BYTES && jobs > 1 {
         // Candidates are single-threaded, so every pool thread can run one.
-        // Allow roughly four input-sized working buffers per encoder within
-        // a 256 MiB budget. Very large images stay serial to bound memory.
-        rayon::current_num_threads().min(jobs).min((64 * 1024 * 1024 / work_bytes.max(1)).max(1))
+        rayon::current_num_threads()
+            .min(jobs)
+            .min((CANDIDATE_INPUT_BUDGET / work_bytes.max(1)).max(1))
     } else {
         1
     }

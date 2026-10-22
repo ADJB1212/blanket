@@ -23,7 +23,13 @@ if TYPE_CHECKING:
 
 __all__ = ["MAX_STRING_LENGTH", "ImageFont", "Layout", "TrueTypeFont", "load", "load_default", "truetype"]
 
+# Bound shaping work for a single text request.
 MAX_STRING_LENGTH: int | None = 1_000_000
+# Bound mask allocation and stroke expansion in both font implementations.
+_MAX_MASK_PIXELS = 100_000_000
+_MAX_STROKE_WIDTH = 1024
+# Match the native font scale limit before passing values to Rust.
+_MAX_FONT_SIZE = 1_000_000
 _BINARY_TABLE = bytes(255 if value >= 128 else 0 for value in range(256))
 
 
@@ -47,7 +53,7 @@ def _text(text: str | bytes) -> str:
 
 
 def _stroke_width(value: float) -> int:
-    if not isfinite(value) or value < 0 or value > 1024:
+    if not isfinite(value) or value < 0 or value > _MAX_STROKE_WIDTH:
         raise ValueError("stroke_width must be finite and between 0 and 1024")
     return ceil(value)
 
@@ -85,7 +91,7 @@ class ImageFont:
         encoded = text.encode("latin-1")
         width = max(0, sum(self._glyphs[char][0] for char in encoded))
         height = self._ascent + self._descent
-        if width * height > 100_000_000:
+        if width * height > _MAX_MASK_PIXELS:
             raise ValueError("font mask is too large")
         data = b""
         if render:
@@ -193,7 +199,7 @@ class TrueTypeFont(ImageFont):
     """
 
     def __init__(self, font: str | bytes | os.PathLike[str] | BinaryIO, size: float = 10, index: int = 0, encoding: str = "", layout_engine: Layout | int | None = None) -> None:
-        if not isfinite(size) or size <= 0 or size > 1_000_000:
+        if not isfinite(size) or size <= 0 or size > _MAX_FONT_SIZE:
             raise ValueError("font size must be finite, positive, and at most 1000000")
         index = integer_index(index)
         if index < 0 or index > 0xFFFFFFFF:
@@ -320,7 +326,7 @@ def _load_pbm(path: Path) -> Image.Image:
             width, height = map(int, tokens)
         except ValueError as exc:
             raise OSError("invalid PBM font atlas dimensions") from exc
-        if width <= 0 or height <= 0 or width * height > 100_000_000:
+        if width <= 0 or height <= 0 or width * height > _MAX_MASK_PIXELS:
             raise OSError("invalid PBM font atlas size")
         length = (width + 7) // 8 * height
         data = stream.read(length)

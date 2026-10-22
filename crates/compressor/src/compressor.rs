@@ -554,21 +554,29 @@ fn pixel_key(pixel: &[u8]) -> u32 {
     }
 }
 
+// Four slots per palette entry keep linear probing at most 25% full.
+const COLOR_LOOKUP_SIZE: usize = 1024;
+// Odd avalanche multiplier mixes packed color channels before slot selection.
+const COLOR_HASH_MULTIPLIER: u32 = 0x7feb_352d;
+// XOR folds mix the upper key bits into the low table-index bits.
+const COLOR_HASH_INITIAL_SHIFT: u32 = 16;
+const COLOR_HASH_FINAL_SHIFT: u32 = 15;
+
 /// At most 256 exact colors, with at most 25% occupancy. Integer keys avoid
 /// hashing a slice (and its length) for each pixel. Even colliding input has a
 /// fixed, small bound; overflow rejects the palette rather than growing it.
 #[derive(Default)]
 struct ColorLookup {
-    keys: [u32; 1024] = [0; 1024],
-    values: [u16; 1024] = [u16::MAX; 1024],
+    keys: [u32; COLOR_LOOKUP_SIZE] = [0; COLOR_LOOKUP_SIZE],
+    values: [u16; COLOR_LOOKUP_SIZE] = [u16::MAX; COLOR_LOOKUP_SIZE],
 }
 
 impl ColorLookup {
     fn slot(&self, key: u32) -> usize {
-        let mixed = (key ^ (key >> 16)).wrapping_mul(0x7feb_352d);
-        let mut slot = ((mixed ^ (mixed >> 15)) as usize) & 1023;
+        let mixed = (key ^ (key >> COLOR_HASH_INITIAL_SHIFT)).wrapping_mul(COLOR_HASH_MULTIPLIER);
+        let mut slot = ((mixed ^ (mixed >> COLOR_HASH_FINAL_SHIFT)) as usize) & (COLOR_LOOKUP_SIZE - 1);
         while self.values[slot] != u16::MAX && self.keys[slot] != key {
-            slot = (slot + 1) & 1023;
+            slot = (slot + 1) & (COLOR_LOOKUP_SIZE - 1);
         }
         slot
     }

@@ -175,8 +175,12 @@ fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
     Err("missing TIFF photometric tag".into())
 }
 
-// DNGVersion (50706) belongs to the first classic TIFF IFD. Read only the
-// bounded directory, never scan compressed image payloads for tag bytes.
+// DNGVersion identifies raw camera containers in the first classic TIFF IFD.
+const DNG_VERSION_TAG: u16 = 50706;
+// Classic TIFF directory entries contain a tag, type, count, and value/offset.
+const IFD_ENTRY_BYTES: usize = 12;
+
+// Read only the bounded directory, never scan compressed image payloads for tag bytes.
 // Reject DNG containers instead of opening their previews as ordinary TIFFs.
 pub fn is_dng(data: &[u8]) -> bool {
     if !data.starts_with(b"II*\0") && !data.starts_with(b"MM\0*") {
@@ -192,7 +196,7 @@ pub fn is_dng(data: &[u8]) -> bool {
     };
     let offset = if le { u32::from_le_bytes(bytes) } else { u32::from_be_bytes(bytes) } as usize;
     let Some(count) = u16_at(offset) else { return false };
-    (0..usize::from(count)).any(|i| offset.checked_add(2 + i * 12).and_then(u16_at) == Some(50706))
+    (0..usize::from(count)).any(|i| offset.checked_add(2 + i * IFD_ENTRY_BYTES).and_then(u16_at) == Some(DNG_VERSION_TAG))
 }
 
 /// Uncompressed little-endian TIFF with one strip preceding the directory.

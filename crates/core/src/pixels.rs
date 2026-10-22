@@ -3,6 +3,10 @@ use std::simd::cmp::SimdPartialEq;
 use std::simd::num::SimdUint;
 use std::simd::{Select, Simd, simd_swizzle};
 
+// Multiplication by ceil(2^24 / 9) implements division for a 3x3 box sum.
+pub const BOX_3X3_RECIPROCAL: u32 = 1_864_135;
+pub const BOX_3X3_RECIPROCAL_BITS: u32 = 24;
+
 pub type Bytes = Simd<u8, 16>;
 
 pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
@@ -139,7 +143,9 @@ pub fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
                 sum += v.cast();
             }
         }
-        ((sum * Simd::splat(1_864_135)) >> 24).cast::<u8>().copy_to_slice(&mut dst[i..i + 16]);
+        ((sum * Simd::splat(BOX_3X3_RECIPROCAL)) >> BOX_3X3_RECIPROCAL_BITS)
+            .cast::<u8>()
+            .copy_to_slice(&mut dst[i..i + 16]);
     }
     end
 }

@@ -2,6 +2,14 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyTuple;
 
+// Pillow-compatible BT.601 luminance coefficients, scaled by 2^16.
+pub const LUMA_RED: u32 = 19_595;
+pub const LUMA_GREEN: u32 = 38_470;
+pub const LUMA_BLUE: u32 = 7_471;
+// Half a fixed-point unit rounds luminance before the fractional bits are removed.
+pub const LUMA_BITS: u32 = 16;
+pub const LUMA_ROUND: u32 = 1 << (LUMA_BITS - 1);
+
 #[pyfunction]
 pub fn color_getcolor(py: Python<'_>, rgb: Vec<i64>, mode: &str) -> PyResult<Py<PyAny>> {
     if !matches!(rgb.len(), 3 | 4) {
@@ -10,7 +18,11 @@ pub fn color_getcolor(py: Python<'_>, rgb: Vec<i64>, mode: &str) -> PyResult<Py<
     let alpha = rgb.get(3).copied().unwrap_or(255);
     let components = match mode {
         "1" | "L" | "I" | "F" | "LA" => {
-            let luminance = (i128::from(rgb[0]) * 19595 + i128::from(rgb[1]) * 38470 + i128::from(rgb[2]) * 7471 + 32768) >> 16;
+            let luminance = (i128::from(rgb[0]) * i128::from(LUMA_RED)
+                + i128::from(rgb[1]) * i128::from(LUMA_GREEN)
+                + i128::from(rgb[2]) * i128::from(LUMA_BLUE)
+                + i128::from(LUMA_ROUND))
+                >> LUMA_BITS;
             if mode == "LA" {
                 return Ok((luminance, alpha).into_pyobject(py)?.into_any().unbind());
             }

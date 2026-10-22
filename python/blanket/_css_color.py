@@ -6,6 +6,22 @@ import colorsys
 import re
 from math import cbrt, copysign, cos, dist, isfinite, pi, sin
 
+# sRGB transfer-function breakpoints, linear slope, offset, and exponent.
+_SRGB_ENCODED_BREAK = 0.04045
+_SRGB_LINEAR_BREAK = 0.0031308
+_SRGB_SLOPE = 12.92
+_SRGB_OFFSET = 0.055
+_SRGB_SCALE = 1.055
+_SRGB_GAMMA = 2.4
+# Rec.2020 uses a separate display exponent with the same numeric value.
+_REC2020_GAMMA = 2.4
+# CSS local MINDE stops below a just-noticeable Oklab color difference.
+_GAMUT_JND = 0.02
+_GAMUT_EPSILON = 0.0001
+# Allow conversion roundoff at gamut edges and bound binary-search work.
+_GAMUT_EDGE_EPSILON = 1e-7
+_GAMUT_MAX_ITERATIONS = 64
+
 _NUMBER = re.compile(r"([+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)(%|deg|grad|rad|turn)?")
 _FUNCTION = re.compile(r"([a-z]+)\((.*)\)", re.DOTALL)
 _XYZ_TO_RGB = ((3.2409699419, -1.5373831776, -0.4986107603), (-0.9692436363, 1.8759675015, 0.0415550574), (0.0556300797, -0.2039769589, 1.0569715142))
@@ -51,11 +67,11 @@ def _matrix(matrix: tuple[tuple[float, ...], ...], values: tuple[float, ...]) ->
 
 
 def _linear(value: float) -> float:
-    return value / 12.92 if abs(value) <= 0.04045 else copysign(((abs(value) + 0.055) / 1.055) ** 2.4, value)
+    return value / _SRGB_SLOPE if abs(value) <= _SRGB_ENCODED_BREAK else copysign(((abs(value) + _SRGB_OFFSET) / _SRGB_SCALE) ** _SRGB_GAMMA, value)
 
 
 def _encoded(value: float) -> float:
-    return 12.92 * value if abs(value) <= 0.0031308 else copysign(1.055 * abs(value) ** (1 / 2.4) - 0.055, value)
+    return _SRGB_SLOPE * value if abs(value) <= _SRGB_LINEAR_BREAK else copysign(_SRGB_SCALE * abs(value) ** (1 / _SRGB_GAMMA) - _SRGB_OFFSET, value)
 
 
 def _xyz_rgb(xyz: tuple[float, ...], *, d50: bool = False) -> tuple[float, ...]:
@@ -87,7 +103,7 @@ def _gamut_map(rgb: tuple[float, ...]) -> tuple[float, ...]:
     """Reduce Oklab chroma using CSS local MINDE before quantizing to sRGB."""
     if not all(isfinite(v) for v in rgb):
         raise ValueError("color conversion overflow")
-    if all(-1e-7 <= v <= 1 + 1e-7 for v in rgb):
+    if all(-_GAMUT_EDGE_EPSILON <= v <= 1 + _GAMUT_EDGE_EPSILON for v in rgb):
         return rgb
     light, a, b = _rgb_oklab(rgb)
     if light >= 1:
@@ -95,13 +111,13 @@ def _gamut_map(rgb: tuple[float, ...]) -> tuple[float, ...]:
     if light <= 0:
         return 0.0, 0.0, 0.0
     clipped = tuple(_clamp(v) for v in rgb)
-    if dist(_rgb_oklab(clipped), (light, a, b)) < 0.02:
+    if dist(_rgb_oklab(clipped), (light, a, b)) < _GAMUT_JND:
         return clipped
     low, high = 0.0, 1.0
     in_gamut = True
     chroma = (a * a + b * b) ** 0.5
-    for _ in range(64):
-        if (high - low) * chroma <= 0.0001:
+    for _ in range(_GAMUT_MAX_ITERATIONS):
+        if (high - low) * chroma <= _GAMUT_EPSILON:
             break
         fraction = (low + high) / 2
         lab = (light, a * fraction, b * fraction)
@@ -111,8 +127,8 @@ def _gamut_map(rgb: tuple[float, ...]) -> tuple[float, ...]:
             continue
         clipped = tuple(_clamp(v) for v in candidate)
         error = dist(_rgb_oklab(clipped), lab)
-        if error < 0.02:
-            if 0.02 - error < 0.0001:
+        if error < _GAMUT_JND:
+            if _GAMUT_JND - error < _GAMUT_EPSILON:
                 return clipped
             in_gamut = False
             low = fraction
@@ -137,7 +153,7 @@ def _predefined(space: str, tokens: list[str]) -> tuple[float, ...]:
     elif space == "prophoto-rgb":
         linear = tuple(v / 16 if abs(v) <= 16 / 512 else copysign(abs(v) ** 1.8, v) for v in values)
     elif space == "rec2020":
-        linear = tuple(copysign(abs(v) ** 2.4, v) for v in values)
+        linear = tuple(copysign(abs(v) ** _REC2020_GAMMA, v) for v in values)
     else:
         raise ValueError("unknown color space")
     return _xyz_rgb(_matrix(_TO_XYZ[space], linear), d50=space == "prophoto-rgb")

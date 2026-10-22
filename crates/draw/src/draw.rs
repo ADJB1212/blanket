@@ -4,6 +4,11 @@ use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+// Include points on a stroke boundary despite floating-point roundoff.
+const STROKE_EPSILON: f64 = 1e-12;
+// Bound temporary coverage masks before allocating rasterization storage.
+const MAX_MASK_PIXELS: usize = 100_000_000;
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(draw_points, module)?)?;
     module.add_function(wrap_pyfunction!(draw_rectangle, module)?)?;
@@ -141,7 +146,7 @@ fn contains(points: &[(f64, f64)], point: (f64, f64)) -> bool {
     let mut inside = false;
     let mut previous = points[points.len() - 1];
     for &current in points {
-        if distance_squared(point, previous, current) < 1e-12 {
+        if distance_squared(point, previous, current) < STROKE_EPSILON {
             return true;
         }
         if (current.1 > point.1) != (previous.1 > point.1)
@@ -276,8 +281,8 @@ fn draw_path(
                         } else {
                             points
                                 .windows(2)
-                                .any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + 1e-12)
-                                || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + 1e-12)
+                                .any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + STROKE_EPSILON)
+                                || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + STROKE_EPSILON)
                         };
                         covered += i32::from(hit);
                     }
@@ -366,7 +371,7 @@ fn font_mask(glyphs: &[Vec<u8>], scale: usize) -> PyResult<(usize, usize, Vec<u8
     };
     let length = width
         .checked_mul(height)
-        .filter(|&length| length <= 100_000_000)
+        .filter(|&length| length <= MAX_MASK_PIXELS)
         .ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
     let mut mask = vec![0; length];
     for (i, rows) in glyphs.iter().enumerate() {

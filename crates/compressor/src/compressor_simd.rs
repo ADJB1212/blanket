@@ -9,7 +9,9 @@ use blanket_core::parallel::{chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load, store};
 use rayon::prelude::*;
 
+// Memory-bound scans need larger buffers to amortize parallel scheduling.
 const MEMORY_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+// Coarse pixel partitions keep preparation tasks large enough for Rayon.
 const CHUNK_PIXELS: usize = 64 * 1024;
 
 pub(crate) fn matches_key(source: &[u8], key: [u8; 3]) -> bool {
@@ -263,16 +265,25 @@ fn pack_row(source: &[u8], output: &mut [u8], bits: usize) {
     }
 }
 
+// Equality scans use byte partitions and a serial prefix for early mismatches.
+const EQUALITY_CHUNK_BYTES: usize = 256 * 1024;
+const EQUALITY_PARALLEL_BYTES: usize = 8 * 1024 * 1024;
+const EQUALITY_PREFIX_BYTES: usize = 1024;
+
 /// Slice equality already uses the platform's optimized SIMD memcmp. Only
 /// distribute very large scans, preserving the cheap early-mismatch path.
 pub(crate) fn equal(left: &[u8], right: &[u8]) -> bool {
     if left.len() != right.len() {
         return false;
     }
-    if !should_parallel(left.len(), 256 * 1024, 8 * 1024 * 1024) {
+    if !should_parallel(left.len(), EQUALITY_CHUNK_BYTES, EQUALITY_PARALLEL_BYTES) {
         return left == right;
     }
-    left[..1024] == right[..1024] && left.par_chunks(256 * 1024).zip(right.par_chunks(256 * 1024)).all(|(a, b)| a == b)
+    left[..EQUALITY_PREFIX_BYTES] == right[..EQUALITY_PREFIX_BYTES]
+        && left
+            .par_chunks(EQUALITY_CHUNK_BYTES)
+            .zip(right.par_chunks(EQUALITY_CHUNK_BYTES))
+            .all(|(a, b)| a == b)
 }
 
 #[cfg(test)]

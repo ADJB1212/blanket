@@ -4,6 +4,23 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
 use rustc_hash::FxHashMap;
 
+use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
+
+// Golden-ratio multipliers spread packed pixel keys across the high hash bits.
+const PIXEL_HASH_MULTIPLIER: u32 = 0x9e37_79b9;
+const COLOR_HASH_MULTIPLIER: u64 = 0x9e37_79b9_7f4a_7c15;
+// A direct-mapped cache reuses Python tuples for repeated pixel values.
+const PIXEL_CACHE_BITS: u32 = 8;
+const PIXEL_CACHE_SIZE: usize = 1 << PIXEL_CACHE_BITS;
+// Twice the 256-color palette limit keeps linear probing at most half full.
+const COLOR_TABLE_BITS: u32 = 9;
+const COLOR_TABLE_SIZE: usize = 1 << COLOR_TABLE_BITS;
+// Row-aligned bilevel tasks target 128 KiB of unpacked samples.
+const BILEVEL_CHUNK_BYTES: usize = 128 * 1024;
+// Packing and unpacking use separate thresholds because their output sizes differ.
+const PACK_PARALLEL_BYTES: usize = 512 * 1024;
+const UNPACK_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+
 const fn bilevel_bytes() -> [u64; 256] {
     let mut table = [0; 256];
     let mut value = 0;
@@ -36,8 +53,8 @@ fn unpack_bilevel_bytes<const INVERT: bool>(data: &[u8], width: usize, height: u
         return pixels;
     }
     let row_bytes = width.div_ceil(8);
-    let rows_per_chunk = (128 * 1024 / width).max(1);
-    crate::parallel::chunks_mut_above(&mut pixels, rows_per_chunk * width, 4 * 1024 * 1024, |chunk, rows| {
+    let rows_per_chunk = (BILEVEL_CHUNK_BYTES / width).max(1);
+    crate::parallel::chunks_mut_above(&mut pixels, rows_per_chunk * width, UNPACK_PARALLEL_BYTES, |chunk, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = chunk * rows_per_chunk + row_index;
             let packed = &data[y * row_bytes..(y + 1) * row_bytes];
@@ -60,8 +77,8 @@ pub fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
     if width == 0 {
         return packed;
     }
-    let rows_per_chunk = (128 * 1024 / width).max(1);
-    crate::parallel::chunks_mut_above(&mut packed, rows_per_chunk * row_bytes, 512 * 1024, |chunk, rows| {
+    let rows_per_chunk = (BILEVEL_CHUNK_BYTES / width).max(1);
+    crate::parallel::chunks_mut_above(&mut packed, rows_per_chunk * row_bytes, PACK_PARALLEL_BYTES, |chunk, rows| {
         for (row_index, row) in rows.chunks_mut(row_bytes).enumerate() {
             let y = chunk * rows_per_chunk + row_index;
             crate::pixels::pack_bilevel::<false>(&pixels[y * width..(y + 1) * width], row);
@@ -92,11 +109,11 @@ fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
     Ok(pixel)
 }
 
-type ColorCounts = [(u64, usize, usize); 512];
+type ColorCounts = [(u64, usize, usize); COLOR_TABLE_SIZE];
 
 fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8], tuple: bool) -> PyResult<Bound<'py, PyAny>> {
     let values: [_; 256] = std::array::from_fn(|v| (v as u8).into_pyobject(py).unwrap());
-    let mut cache: [Option<([u8; C], Bound<'py, PyAny>)>; 256] = std::array::from_fn(|_| None);
+    let mut cache: [Option<([u8; C], Bound<'py, PyAny>)>; PIXEL_CACHE_SIZE] = std::array::from_fn(|_| None);
     let count = data.len() / C;
     // SAFETY: fresh containers stay private until every slot is initialized.
     // Bound owns each allocation so errors release partially filled containers.
@@ -112,7 +129,7 @@ fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8], tuple: b
         for (i, pixel) in data.as_chunks::<C>().0.iter().enumerate() {
             let mut key = [0; 4];
             key[..C].copy_from_slice(pixel);
-            let slot = (u32::from_le_bytes(key).wrapping_mul(0x9e3779b9) >> 24) as usize;
+            let slot = (u32::from_le_bytes(key).wrapping_mul(PIXEL_HASH_MULTIPLIER) >> (u32::BITS - PIXEL_CACHE_BITS)) as usize;
             let item = if let Some((_, item)) = cache[slot].as_ref().filter(|(key, _)| key == pixel) {
                 item.clone()
             } else {
@@ -246,11 +263,11 @@ fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCo
             .par_chunks(CHUNK * N)
             .map(|chunk| count_colors_serial::<N>(chunk, maxcolors))
             .collect();
-        let mut merged = [(0, 0, 0); 512];
+        let mut merged = [(0, 0, 0); COLOR_TABLE_SIZE];
         let mut used = 0;
         for (chunk, table) in tables?.into_iter().enumerate() {
             for (key, count, index) in table.into_iter().filter(|entry| entry.1 != 0) {
-                let mut slot = (key.wrapping_mul(0x9e3779b97f4a7c15) >> 55) as usize;
+                let mut slot = (key.wrapping_mul(COLOR_HASH_MULTIPLIER) >> (u64::BITS - COLOR_TABLE_BITS)) as usize;
                 loop {
                     let entry = &mut merged[slot];
                     if entry.1 == 0 {
@@ -265,7 +282,7 @@ fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCo
                         entry.1 += count;
                         break;
                     }
-                    slot = (slot + 1) & 511;
+                    slot = (slot + 1) & (COLOR_TABLE_SIZE - 1);
                 }
             }
         }
@@ -275,13 +292,13 @@ fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCo
 }
 
 fn count_colors_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
-    let mut table = [(0_u64, 0_usize, 0_usize); 512];
+    let mut table = [(0_u64, 0_usize, 0_usize); COLOR_TABLE_SIZE];
     let mut used = 0;
     for (i, pixel) in data.as_chunks::<N>().0.iter().enumerate() {
         let mut bytes = [0; 8];
         bytes[..N].copy_from_slice(pixel);
         let key = u64::from_le_bytes(bytes);
-        let mut slot = (key.wrapping_mul(0x9e3779b97f4a7c15) >> 55) as usize;
+        let mut slot = (key.wrapping_mul(COLOR_HASH_MULTIPLIER) >> (u64::BITS - COLOR_TABLE_BITS)) as usize;
         loop {
             let entry = &mut table[slot];
             if entry.1 == 0 {
@@ -296,7 +313,7 @@ fn count_colors_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<
                 entry.1 += 1;
                 break;
             }
-            slot = (slot + 1) & 511;
+            slot = (slot + 1) & (COLOR_TABLE_SIZE - 1);
         }
     }
     Some(table)
@@ -1312,7 +1329,11 @@ impl Image {
                         };
                         let values = if destination == PixelMode::L {
                             [
-                                ((u64::from(r) * 19595 + u64::from(g) * 38470 + u64::from(b) * 7471 + 32768) >> 16) as u16,
+                                ((u64::from(r) * u64::from(LUMA_RED)
+                                    + u64::from(g) * u64::from(LUMA_GREEN)
+                                    + u64::from(b) * u64::from(LUMA_BLUE)
+                                    + u64::from(LUMA_ROUND))
+                                    >> LUMA_BITS) as u16,
                                 0,
                                 0,
                                 0,
@@ -1656,7 +1677,7 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         if to == PixelMode::L {
             return map_pixels::<3, 1>(source, |p| {
                 let [r, g, b] = hsv_to_rgb(p[0], p[1], p[2]);
-                [((u32::from(r) * 19595 + u32::from(g) * 38470 + u32::from(b) * 7471 + 32768) >> 16) as u8]
+                [((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8]
             });
         }
         if to == PixelMode::Rgba {
@@ -1831,7 +1852,7 @@ fn convert_pixels_generic(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<
             PixelMode::Pa => (pixel[0], pixel[0], pixel[0], pixel[1]),
             _ => unreachable!("integer modes handled before byte conversion"),
         };
-        let gray = ((u32::from(r) * 19595 + u32::from(g) * 38470 + u32::from(b) * 7471 + 32768) >> 16) as u8;
+        let gray = ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8;
         match to {
             PixelMode::One => result.push(if gray >= 128 { 255 } else { 0 }),
             PixelMode::L => result.push(gray),

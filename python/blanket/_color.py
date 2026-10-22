@@ -8,6 +8,10 @@ from functools import lru_cache
 from ._color_names import CSS_COLORS
 from ._css_color import functional_rgb
 
+# Bound parser input and cached results independently.
+_MAX_COLOR_LENGTH = 1024
+_COLOR_CACHE_SIZE = 512
+
 _HEX = re.compile(r"#[0-9a-f]{3,8}")
 
 
@@ -17,9 +21,9 @@ def _rgb(color: str) -> tuple[int, ...]:
     return _parse_rgb(color)
 
 
-@lru_cache(maxsize=512)
+@lru_cache(maxsize=_COLOR_CACHE_SIZE)
 def _parse_rgb(color: str) -> tuple[int, ...]:
-    if len(color) > 1024:
+    if len(color) > _MAX_COLOR_LENGTH:
         raise ValueError("color specifier is too long")
     value = color.strip().lower()
     value = CSS_COLORS.get(value, value)

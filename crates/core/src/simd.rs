@@ -2,6 +2,7 @@ use std::simd::Simd;
 use std::simd::cmp::SimdOrd;
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
+use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::pixels::{Bytes, load, store};
 use crate::raster::PixelMode;
@@ -487,11 +488,11 @@ fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
         source,
         2 << 20,
         |p| {
-            let sum = p[0].cast::<u32>() * Simd::splat(19_595)
-                + p[1].cast::<u32>() * Simd::splat(38_470)
-                + p[2].cast::<u32>() * Simd::splat(7_471)
-                + Simd::splat(0x8000);
-            [(sum >> 16).cast::<u8>()]
+            let sum = p[0].cast::<u32>() * Simd::splat(LUMA_RED)
+                + p[1].cast::<u32>() * Simd::splat(LUMA_GREEN)
+                + p[2].cast::<u32>() * Simd::splat(LUMA_BLUE)
+                + Simd::splat(LUMA_ROUND);
+            [(sum >> LUMA_BITS).cast::<u8>()]
         },
         |p| [pillow_luma(p[0], p[1], p[2])],
     )
@@ -499,7 +500,7 @@ fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
 
 #[inline(always)]
 pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
-    ((u32::from(r) * 19_595 + u32::from(g) * 38_470 + u32::from(b) * 7_471 + 0x8000) >> 16) as u8
+    ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8
 }
 
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve

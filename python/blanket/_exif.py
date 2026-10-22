@@ -6,6 +6,13 @@ import re
 import struct
 import zlib
 
+# Limit expansion of compressed PNG text while reading metadata.
+_MAX_TEXT_BYTES = 1024 * 1024
+# Classic TIFF identifies its header and IFD0 orientation with these values.
+_TIFF_MAGIC = 42
+_ORIENTATION_TAG = 0x112
+_IFD_ENTRY_BYTES = 12
+
 
 def _orientation(raw: bytes) -> tuple[int | None, bytes]:
     """Remove an IFD0 orientation entry without relocating referenced data."""
@@ -16,16 +23,16 @@ def _orientation(raw: bytes) -> tuple[int | None, bytes]:
     endian = "<" if data[:2] == b"II" else ">"
     try:
         magic, offset = struct.unpack_from(endian + "HI", data, 2)
-        if magic != 42:
+        if magic != _TIFF_MAGIC:
             return None, raw
         count = struct.unpack_from(endian + "H", data, offset)[0]
-        end = offset + 2 + 12 * count
+        end = offset + 2 + _IFD_ENTRY_BYTES * count
         if end + 4 > len(data):
             return None, raw
         for i in range(count):
-            pos = offset + 2 + i * 12
+            pos = offset + 2 + i * _IFD_ENTRY_BYTES
             tag, kind, length = struct.unpack_from(endian + "HHI", data, pos)
-            if tag != 0x112 or kind not in (3, 4) or length != 1:
+            if tag != _ORIENTATION_TAG or kind not in (3, 4) or length != 1:
                 continue
             orientation = struct.unpack_from(endian + ("H" if kind == 3 else "I"), data, pos + 8)[0]
             if orientation not in range(2, 9):
@@ -34,8 +41,8 @@ def _orientation(raw: bytes) -> tuple[int | None, bytes]:
             struct.pack_into(endian + "H", clean, offset, count - 1)
             # Shift the remaining entries and next-IFD pointer within IFD0.
             # The trailing gap keeps every external value/thumbnail offset valid.
-            clean[pos : end - 8] = data[pos + 12 : end + 4]
-            clean[end - 8 : end + 4] = bytes(12)
+            clean[pos : end - 8] = data[pos + _IFD_ENTRY_BYTES : end + 4]
+            clean[end - 8 : end + 4] = bytes(_IFD_ENTRY_BYTES)
             return orientation, prefix + bytes(clean)
     except (struct.error, OverflowError):
         pass
@@ -135,7 +142,7 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
                 text = payload.split(b"\0", 1)[1]
                 if kind == b"zTXt":
                     try:
-                        text = zlib.decompressobj().decompress(text[1:], 1024 * 1024) if text[:1] == b"\0" else b""
+                        text = zlib.decompressobj().decompress(text[1:], _MAX_TEXT_BYTES) if text[:1] == b"\0" else b""
                     except zlib.error:
                         text = b""
                 info["Raw profile type exif"] = text.decode("latin-1")
@@ -149,7 +156,7 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
                         if compressed == 1 and method == 0:
                             try:
                                 # Match Pillow's bounded text decompression.
-                                text = zlib.decompressobj().decompress(text, 1024 * 1024)
+                                text = zlib.decompressobj().decompress(text, _MAX_TEXT_BYTES)
                             except zlib.error:
                                 text = b""
                         info["XML:com.adobe.xmp"] = text.decode("utf-8", "replace")

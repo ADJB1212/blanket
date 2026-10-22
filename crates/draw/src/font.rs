@@ -9,6 +9,13 @@ use rustybuzz::{Direction, Feature, UnicodeBuffer};
 use unicode_bidi::{BidiInfo, Level};
 use unicode_script::{Script, UnicodeScript};
 
+// Bound outline coordinates and mask storage before rasterization.
+const MAX_MASK_PIXELS: usize = 100_000_000;
+const MAX_OUTLINE_COORDINATE: f32 = 100_000_000.0;
+// Match the Python font-size and stroke-width validation limits.
+const MAX_FONT_SIZE: f32 = 1_000_000.0;
+const MAX_STROKE_WIDTH: usize = 1024;
+
 type Bounds = (i32, i32, i32, i32);
 type MaskResult = (f32, Bounds, Py<PyBytes>);
 
@@ -132,7 +139,7 @@ impl NativeFont {
                         let rect = outline.px_bounds(scale_factor, glyph.position);
                         if [rect.min.x, rect.min.y, rect.max.x, rect.max.y]
                             .iter()
-                            .any(|value| !value.is_finite() || value.abs() > 100_000_000.0)
+                            .any(|value| !value.is_finite() || value.abs() > MAX_OUTLINE_COORDINATE)
                         {
                             return Err(PyValueError::new_err("glyph bounds are too large"));
                         }
@@ -147,7 +154,7 @@ impl NativeFont {
                     }
                     pen.x += position.x_advance as f32 * factor;
                     pen.y -= position.y_advance as f32 * factor;
-                    if !pen.x.is_finite() || !pen.y.is_finite() || pen.x.abs().max(pen.y.abs()) > 100_000_000.0 {
+                    if !pen.x.is_finite() || !pen.y.is_finite() || pen.x.abs().max(pen.y.abs()) > MAX_OUTLINE_COORDINATE {
                         return Err(PyValueError::new_err("text layout is too large"));
                     }
                 }
@@ -186,7 +193,7 @@ impl NativeFont {
 
 impl NativeFont {
     fn validate_size(&self, size: f32) -> PyResult<()> {
-        if !size.is_finite() || size <= 0.0 || size > 1_000_000.0 {
+        if !size.is_finite() || size <= 0.0 || size > MAX_FONT_SIZE {
             return Err(PyValueError::new_err("font size must be finite, positive, and at most 1000000"));
         }
         Ok(())
@@ -222,7 +229,7 @@ fn allocate_mask(bounds: Bounds) -> PyResult<Vec<u8>> {
     }
     let length = width
         .checked_mul(height)
-        .filter(|&length| (0..=100_000_000).contains(&length))
+        .filter(|&length| (0..=MAX_MASK_PIXELS as i64).contains(&length))
         .ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
     Ok(vec![0; length as usize])
 }
@@ -230,7 +237,7 @@ fn allocate_mask(bounds: Bounds) -> PyResult<Vec<u8>> {
 #[pyfunction]
 fn _font_stroke(py: Python<'_>, data: &[u8], size: (usize, usize), stroke: usize) -> PyResult<Py<PyBytes>> {
     let (width, height) = size;
-    if width.checked_mul(height) != Some(data.len()) || stroke > 1024 || width > 100_000_000 || height > 100_000_000 {
+    if width.checked_mul(height) != Some(data.len()) || stroke > MAX_STROKE_WIDTH || width > MAX_MASK_PIXELS || height > MAX_MASK_PIXELS {
         return Err(PyValueError::new_err("invalid font mask or stroke size"));
     }
     let output_width = width + 2 * stroke;

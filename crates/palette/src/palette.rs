@@ -7,6 +7,9 @@ use rustc_hash::FxHashSet;
 
 use crate::palette_simd as kernels;
 
+// GIMP gradient segments closer than this use the degenerate-segment path.
+const GRADIENT_EPSILON: f64 = 1e-10;
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_colors, module)?)?;
     module.add_function(wrap_pyfunction!(palette_decode, module)?)?;
@@ -106,8 +109,8 @@ fn palette_sepia(white: [i64; 3]) -> Vec<i128> {
 
 fn linear(middle: f64, position: f64) -> f64 {
     if position <= middle {
-        if middle < 1e-10 { 0.0 } else { 0.5 * position / middle }
-    } else if 1.0 - middle < 1e-10 {
+        if middle < GRADIENT_EPSILON { 0.0 } else { 0.5 * position / middle }
+    } else if 1.0 - middle < GRADIENT_EPSILON {
         1.0
     } else {
         0.5 + 0.5 * (position - middle) / (1.0 - middle)
@@ -118,7 +121,7 @@ fn blend(kind: usize, middle: f64, position: f64) -> PyResult<f64> {
     let value = linear(middle, position);
     let result = match kind {
         1 => {
-            let denominator = middle.max(1e-10).ln();
+            let denominator = middle.max(GRADIENT_EPSILON).ln();
             if denominator == 0.0 {
                 return Err(PyZeroDivisionError::new_err("float division by zero"));
             }
@@ -155,7 +158,7 @@ fn render_gradient(segments: &[(Vec<f64>, usize)]) -> PyResult<Vec<u8>> {
             segment += 1;
         };
         let width = values[2] - values[0];
-        let scale = if width < 1e-10 {
+        let scale = if width < GRADIENT_EPSILON {
             blend(*kind, 0.5, 0.5)?
         } else {
             blend(*kind, (values[1] - values[0]) / width, (position - values[0]) / width)?

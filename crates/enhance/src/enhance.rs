@@ -3,6 +3,7 @@
 use std::simd::Simd;
 use std::simd::num::SimdUint;
 
+use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load};
 use blanket_core::raster::{Image, PixelMode};
@@ -147,8 +148,11 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
 
 #[inline]
 fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
-    ((r.cast::<u32>() * Simd::splat(19_595) + g.cast::<u32>() * Simd::splat(38_470) + b.cast::<u32>() * Simd::splat(7_471) + Simd::splat(0x8000))
-        >> 16)
+    ((r.cast::<u32>() * Simd::splat(LUMA_RED)
+        + g.cast::<u32>() * Simd::splat(LUMA_GREEN)
+        + b.cast::<u32>() * Simd::splat(LUMA_BLUE)
+        + Simd::splat(LUMA_ROUND))
+        >> LUMA_BITS)
         .cast()
 }
 

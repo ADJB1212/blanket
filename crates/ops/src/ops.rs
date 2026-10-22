@@ -7,6 +7,12 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+// Pillow resampling coefficients retain 22 fractional bits between passes.
+pub(crate) const RESAMPLE_BITS: u32 = 22;
+pub(crate) const RESAMPLE_SCALE: i32 = 1 << RESAMPLE_BITS;
+// Half a coefficient unit rounds the accumulator before conversion to a sample.
+pub(crate) const RESAMPLE_ROUND: i32 = RESAMPLE_SCALE / 2;
+
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
 type Mesh = Vec<(BoxI, [f64; 8])>;
@@ -754,9 +760,13 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Resampl
         raw.extend((left..right).map(|x| kernel((x as f64 - center + 0.5) * (1.0 / filter_scale), method)));
         let sum: f64 = raw.iter().sum();
         let offset = weights.coefficients.len();
-        weights
-            .coefficients
-            .extend(raw.iter().map(|&v| if sum == 0.0 { 0 } else { (v / sum * 4194304.0).round() as i32 }));
+        weights.coefficients.extend(raw.iter().map(|&v| {
+            if sum == 0.0 {
+                0
+            } else {
+                (v / sum * f64::from(RESAMPLE_SCALE)).round() as i32
+            }
+        }));
         weights.bounds.push((left, offset..weights.coefficients.len()));
     }
     weights
@@ -949,7 +959,8 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
                         for samples in [upper, middle, lower] {
                             sum += u32::from(samples[0][channel]) + u32::from(samples[1][channel]) + u32::from(samples[2][channel]);
                         }
-                        dst[channel] = (((sum + 4) * 1_864_135) >> 24) as u8;
+                        dst[channel] =
+                            (((sum + 4) * blanket_core::pixels::BOX_3X3_RECIPROCAL) >> blanket_core::pixels::BOX_3X3_RECIPROCAL_BITS) as u8;
                     }
                 }
                 if (right - left).is_multiple_of(3) {
@@ -1197,7 +1208,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     dst[x] = coefficients
                         .iter()
                         .enumerate()
-                        .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(1 << 22))
+                        .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(RESAMPLE_SCALE))
                         .sum();
                 }
             }
@@ -1209,7 +1220,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     let sample: f64 = coefficients
                         .iter()
                         .enumerate()
-                        .map(|(i, &weight)| rows[(start - first + i) * row_width + x] * f64::from(weight) / f64::from(1 << 22))
+                        .map(|(i, &weight)| rows[(start - first + i) * row_width + x] * f64::from(weight) / f64::from(RESAMPLE_SCALE))
                         .sum();
                     let offset = x * stride;
                     match image.mode {
@@ -1282,7 +1293,7 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
                             } else {
                                 value
                             };
-                            value * f64::from(weight) / f64::from(1 << 22)
+                            value * f64::from(weight) / f64::from(RESAMPLE_SCALE)
                         })
                         .sum::<f64>();
                     row[x * channels + channel] = value;
@@ -1299,7 +1310,9 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
                     *value = coefficients
                         .iter()
                         .enumerate()
-                        .map(|(i, &weight)| temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(1 << 22))
+                        .map(|(i, &weight)| {
+                            temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(RESAMPLE_SCALE)
+                        })
                         .sum::<f64>()
                         .clamp(0.0, maximum);
                 }
@@ -1374,11 +1387,10 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
             let src = &temp[(start - first_row) * row_bytes..];
             let vectorized = crate::ops_simd::vertical(src, dst, row_bytes, coefficients);
             for (x, out) in dst.iter_mut().enumerate().skip(vectorized) {
-                let sum = coefficients
-                    .iter()
-                    .enumerate()
-                    .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[i * row_bytes + x]) * i64::from(w));
-                *out = (sum >> 22).clamp(0, 255) as u8;
+                let sum = coefficients.iter().enumerate().fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| {
+                    sum + i64::from(src[i * row_bytes + x]) * i64::from(w)
+                });
+                *out = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
             }
         }
     });
@@ -1388,31 +1400,30 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
 fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {
     let row_bytes = horizontal.bounds.len() * C;
     let input_stride = width * C;
-    let narrow = horizontal
-        .iter()
-        .all(|(_, coefficients)| coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + (1 << 21) <= i64::from(i32::MAX));
+    let narrow = horizontal.iter().all(|(_, coefficients)| {
+        coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + i64::from(RESAMPLE_ROUND) <= i64::from(i32::MAX)
+    });
     chunks_mut(output, row_bytes << 4, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y = first_row + band * 16 + i;
             let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
             for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
                 if narrow {
-                    let mut sums = [1_i32 << 21; C];
+                    let mut sums = [RESAMPLE_ROUND; C];
                     for (pixel, &weight) in src[start..start + coefficients.len()].iter().zip(coefficients) {
                         for c in 0..C {
                             sums[c] += i32::from(pixel[c]) * weight;
                         }
                     }
                     for c in 0..C {
-                        dst[c] = (sums[c] >> 22).clamp(0, 255) as u8;
+                        dst[c] = (sums[c] >> RESAMPLE_BITS).clamp(0, 255) as u8;
                     }
                 } else {
                     for c in 0..C {
-                        let sum = coefficients
-                            .iter()
-                            .enumerate()
-                            .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
-                        dst[c] = (sum >> 22).clamp(0, 255) as u8;
+                        let sum = coefficients.iter().enumerate().fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| {
+                            sum + i64::from(src[start + i][c]) * i64::from(w)
+                        });
+                        dst[c] = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
                     }
                 }
             }

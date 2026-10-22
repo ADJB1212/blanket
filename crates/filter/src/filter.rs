@@ -366,10 +366,15 @@ fn gaussian_radius(radius: f32) -> f32 {
     integer + fraction
 }
 
+// Fractional box-filter weights use 24 bits and round at half a unit.
+const BOX_WEIGHT_BITS: u32 = 24;
+const BOX_WEIGHT_SCALE: u32 = 1 << BOX_WEIGHT_BITS;
+const BOX_WEIGHT_ROUND: u64 = 1 << (BOX_WEIGHT_BITS - 1);
+
 fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize, radius: f32) {
     let integer = radius as usize;
-    let weight = ((1_u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u64;
-    let far_weight = u64::from((1_u32 << 24).wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
+    let far_weight = u64::from(BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
     let stride = width * C;
     let source = source.as_chunks::<C>().0;
     chunks_mut(pixels, stride * 16, |band, rows| {
@@ -391,7 +396,7 @@ fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize
                 let leaving = x.saturating_sub(integer);
                 for channel in 0..C {
                     let ends = u64::from(input[left][channel]) + u64::from(input[right][channel]);
-                    pixel[channel] = ((sums[channel] * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
+                    pixel[channel] = ((sums[channel] * weight + ends * far_weight + BOX_WEIGHT_ROUND) >> BOX_WEIGHT_BITS) as u8;
                     sums[channel] = sums[channel] - u64::from(input[leaving][channel]) + u64::from(input[right][channel]);
                 }
             }
@@ -402,8 +407,8 @@ fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize
 fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     let height = source.len() / stride;
     let integer = radius as usize;
-    let weight = ((1_u32 << 24) as f32 / (radius * 2.0 + 1.0)) as u64;
-    let far_weight = u64::from((1_u32 << 24).wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
+    let far_weight = u64::from(BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
     // Each band maintains one sum per byte column, allowing contiguous loads
     // and vectorization across columns without transposing the image.
     // Grow bands with the radius so rebuilding their initial sums stays
@@ -434,7 +439,7 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
             let leaving = &source[leaving..leaving + stride];
             for ((((dst, sum), &upper), &lower), &leaving) in row.iter_mut().zip(&mut sums).zip(upper).zip(lower).zip(leaving) {
                 let ends = u64::from(upper) + u64::from(lower);
-                *dst = ((*sum * weight + ends * far_weight + (1 << 23)) >> 24) as u8;
+                *dst = ((*sum * weight + ends * far_weight + BOX_WEIGHT_ROUND) >> BOX_WEIGHT_BITS) as u8;
                 *sum = *sum - u64::from(leaving) + u64::from(lower);
             }
         }
@@ -536,6 +541,14 @@ fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, thre
     output(image, pixels)
 }
 
+// Pillow stores LUT samples as signed 16-bit values with six fractional bits.
+const LUT_SAMPLE_BITS: u32 = 6;
+const LUT_SAMPLE_SCALE: f32 = (255 << LUT_SAMPLE_BITS) as f32;
+// Positions retain 18 fractional bits; interpolation uses the upper 15.
+const LUT_POSITION_BITS: u32 = 18;
+const LUT_BLEND_BITS: u32 = 15;
+const LUT_BLEND_SCALE: i32 = 1 << LUT_BLEND_BITS;
+
 #[pyfunction]
 fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: (usize, usize, usize), table: Vec<f32>) -> PyResult<Image> {
     let source = image.pixel_data()?;
@@ -556,8 +569,11 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
     if table.len() != channels * size.0 * size.1 * size.2 {
         return Err(PyValueError::new_err("table has wrong number of elements"));
     }
-    let prepared: Vec<i32> = table.into_iter().map(|v| ((v * 16320.0).round() as i32).clamp(-32768, 32767)).collect();
-    let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * f64::from(1 << 18)) as usize);
+    let prepared: Vec<i32> = table
+        .into_iter()
+        .map(|v| ((v * LUT_SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
+        .collect();
+    let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * f64::from(1 << LUT_POSITION_BITS)) as usize);
     let len = (image.width as usize)
         .checked_mul(image.height as usize)
         .and_then(|n| n.checked_mul(output_channels))
@@ -572,9 +588,12 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
                     usize::from(input[1]) * scales[1],
                     usize::from(input[2]) * scales[2],
                 ];
-                let shifts = positions.map(|p| ((p & ((1 << 18) - 1)) >> 3) as i32);
-                let index = channels * ((positions[0] >> 18) + (positions[1] >> 18) * size.0 + (positions[2] >> 18) * size.0 * size.1);
-                let blend = |a: i32, b: i32, shift: i32| (a * (32768 - shift) + b * shift) >> 15;
+                let shifts = positions.map(|p| ((p & ((1 << LUT_POSITION_BITS) - 1)) >> (LUT_POSITION_BITS - LUT_BLEND_BITS)) as i32);
+                let index = channels
+                    * ((positions[0] >> LUT_POSITION_BITS)
+                        + (positions[1] >> LUT_POSITION_BITS) * size.0
+                        + (positions[2] >> LUT_POSITION_BITS) * size.0 * size.1);
+                let blend = |a: i32, b: i32, shift: i32| (a * (LUT_BLEND_SCALE - shift) + b * shift) >> LUT_BLEND_BITS;
                 for (channel, value) in pixel.iter_mut().enumerate().take(channels) {
                     let mut planes = [0; 2];
                     for (z, plane) in planes.iter_mut().enumerate() {
@@ -583,7 +602,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
                         let upper = blend(prepared[base + size.0 * channels], prepared[base + (size.0 + 1) * channels], shifts[0]);
                         *plane = blend(lower, upper, shifts[1]);
                     }
-                    *value = ((blend(planes[0], planes[1], shifts[2]) + 32) >> 6).clamp(0, 255) as u8;
+                    *value = ((blend(planes[0], planes[1], shifts[2]) + (1 << (LUT_SAMPLE_BITS - 1))) >> LUT_SAMPLE_BITS).clamp(0, 255) as u8;
                 }
                 if output_channels > channels {
                     pixel[3] = input[3];
