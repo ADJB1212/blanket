@@ -182,10 +182,35 @@ fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -
     Ok(result)
 }
 
-fn median_cut(histogram: Histogram, colors: usize) -> Vec<Color> {
+fn sort_channel(histogram: &mut [(Color, u64)], channel: usize, scratch: &mut Histogram) {
+    if histogram.len() < 256 {
+        histogram.sort_by_key(|(color, _)| color[channel]);
+        return;
+    }
+    let mut offsets = [0; 256];
+    for (color, _) in histogram.iter() {
+        offsets[color[channel] as usize] += 1;
+    }
+    let mut start = 0;
+    for offset in &mut offsets {
+        let count = *offset;
+        *offset = start;
+        start += count;
+    }
+    scratch.resize(histogram.len(), ([0; 4], 0));
+    for &entry in histogram.iter() {
+        let offset = &mut offsets[entry.0[channel] as usize];
+        scratch[*offset] = entry;
+        *offset += 1;
+    }
+    histogram.copy_from_slice(scratch);
+}
+
+fn median_cut(histogram: &mut [(Color, u64)], colors: usize) -> Vec<Color> {
     let population = |b: &[(Color, u64)]| b.iter().map(|(_, n)| n).sum::<u64>();
     // Carry each box's population so choosing the next split is O(boxes).
-    let mut boxes = vec![(population(&histogram), histogram)];
+    let mut boxes = vec![(population(histogram), histogram)];
+    let mut scratch = Vec::new();
     while boxes.len() < colors {
         let Some(i) = boxes
             .iter()
@@ -197,14 +222,16 @@ fn median_cut(histogram: Histogram, colors: usize) -> Vec<Color> {
             break;
         };
         let (total, b) = &mut boxes[i];
-        let channel = (0..3)
-            .max_by_key(|&c| {
-                let low = b.iter().map(|(v, _)| v[c]).min().unwrap();
-                let high = b.iter().map(|(v, _)| v[c]).max().unwrap();
-                (high - low, 3 - c)
-            })
-            .unwrap();
-        b.sort_by_key(|(v, _)| v[channel]);
+        let mut low = [255; 3];
+        let mut high = [0; 3];
+        for (color, _) in b.iter() {
+            for c in 0..3 {
+                low[c] = low[c].min(color[c]);
+                high[c] = high[c].max(color[c]);
+            }
+        }
+        let channel = (0..3).max_by_key(|&c| (high[c] - low[c], 3 - c)).unwrap();
+        sort_channel(b, channel, &mut scratch);
         let half = total.div_ceil(2);
         let mut count = 0;
         let mut split = 1;
@@ -215,9 +242,10 @@ fn median_cut(histogram: Histogram, colors: usize) -> Vec<Color> {
                 break;
             }
         }
-        let right = b.split_off(split);
-        let moved = population(&right);
-        *total -= moved;
+        let (left, right) = std::mem::take(b).split_at_mut(split);
+        *b = left;
+        let moved = *total - count;
+        *total = count;
         boxes.push((moved, right));
     }
     boxes.iter().map(|(_, b)| average(b)).collect()
@@ -487,9 +515,9 @@ fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
 
 /// Median cut and maximum coverage work on the exact color histogram.
 fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) -> (Vec<Color>, Vec<u8>) {
-    let histogram = color_histogram::<C>(source);
+    let mut histogram = color_histogram::<C>(source);
     let mut entries = match method {
-        0 => median_cut(histogram.clone(), colors),
+        0 => median_cut(&mut histogram, colors),
         1 => maximum_coverage(&histogram, colors),
         _ => unreachable!(),
     };
@@ -646,10 +674,75 @@ mod tests {
     }
 
     #[test]
+    fn channel_sort_preserves_ties_and_reuses_scratch() {
+        let mut scratch = Vec::new();
+        for len in [4097, 256, 257, 255, 1, 0, 8193] {
+            for channel in 0..3 {
+                let mut histogram: Histogram = (0..len)
+                    .map(|i| ([(i * 73) as u8, (i * 31) as u8, (i % 7) as u8, 255], i as u64 + 1))
+                    .collect();
+                let mut expected = histogram.clone();
+                expected.sort_by_key(|(color, _)| color[channel]);
+                sort_channel(&mut histogram, channel, &mut scratch);
+                assert_eq!(histogram, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn median_cut_matches_owned_boxes_with_weighted_ties() {
+        fn reference(histogram: Histogram, colors: usize) -> Vec<Color> {
+            let population = |b: &Histogram| b.iter().map(|(_, n)| n).sum::<u64>();
+            let mut boxes = vec![histogram];
+            while boxes.len() < colors {
+                let Some(i) = (0..boxes.len()).filter(|&i| boxes[i].len() > 1).max_by_key(|&i| population(&boxes[i])) else {
+                    break;
+                };
+                let b = &mut boxes[i];
+                let half = population(b).div_ceil(2);
+                let channel = (0..3)
+                    .max_by_key(|&c| {
+                        (
+                            b.iter().map(|(v, _)| v[c]).max().unwrap() - b.iter().map(|(v, _)| v[c]).min().unwrap(),
+                            3 - c,
+                        )
+                    })
+                    .unwrap();
+                b.sort_by_key(|(v, _)| v[channel]);
+                let mut count = 0;
+                let mut split = 1;
+                for (j, (_, n)) in b.iter().enumerate().take(b.len() - 1) {
+                    count += n;
+                    split = j + 1;
+                    if count >= half {
+                        break;
+                    }
+                }
+                let right = b.split_off(split);
+                boxes.push(right);
+            }
+            boxes.iter().map(|b| average(b)).collect()
+        }
+        for len in [1, 17, 255, 256, 4097] {
+            let histogram: Histogram = (0..len)
+                .map(|i| ([(i * 73) as u8, (i / 256) as u8, (i * 31) as u8, 255], (i % 13 + 1) as u64))
+                .collect();
+            for colors in [1, 2, 16, 256] {
+                let mut actual = histogram.clone();
+                assert_eq!(median_cut(&mut actual, colors), reference(histogram.clone(), colors));
+                actual.sort_unstable();
+                let mut expected = histogram.clone();
+                expected.sort_unstable();
+                assert_eq!(actual, expected);
+            }
+        }
+    }
+
+    #[test]
     fn median_cut_and_coverage_split_populations() {
         let histogram: Histogram = vec![([0, 0, 0, 255], 4), ([255, 0, 0, 255], 1), ([0, 255, 0, 255], 1), ([0, 0, 255, 255], 1)];
-        assert_eq!(median_cut(histogram.clone(), 1), vec![[36, 36, 36, 255]]);
-        let two = median_cut(histogram.clone(), 2);
+        assert_eq!(median_cut(&mut histogram.clone(), 1), vec![[36, 36, 36, 255]]);
+        let two = median_cut(&mut histogram.clone(), 2);
         assert_eq!(two.len(), 2);
         let coverage = maximum_coverage(&histogram, 4);
         assert_eq!(coverage.len(), 4);

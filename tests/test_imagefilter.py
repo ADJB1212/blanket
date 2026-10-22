@@ -174,6 +174,26 @@ def test_unsharp(mode: str, args: tuple[float, ...]) -> None:
     compare(mode, (19, 13), ImageFilter.UnsharpMask(*args), PillowFilter.UnsharpMask(*args))
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK"])
+@pytest.mark.parametrize("args", [(8, 0, -1), (8, 150, 255), (8, -150, 256), (0, 150, -1)])
+def test_unsharp_identity_returns_independent_copy(mode: str, args: tuple[int, int, int]) -> None:
+    image = Image.frombytes(mode, (19, 13), random.Random(71).randbytes(19 * 13 * len(mode)))
+    original = image.tobytes()
+    result = image.filter(ImageFilter.UnsharpMask(*args))
+    assert result.mode == mode
+    assert result.size == image.size
+    assert result.tobytes() == original
+    result.putpixel((0, 0), 0 if mode == "L" else (0,) * len(mode))
+    assert image.tobytes() == original
+
+
+@pytest.mark.parametrize("radius", [float("inf"), float("nan"), 1e30])
+@pytest.mark.parametrize("percent,threshold", [(0, 0), (150, 255)])
+def test_unsharp_identity_still_validates_radius(radius: float, percent: int, threshold: int) -> None:
+    with pytest.raises(ValueError, match="radius"):
+        Image.new("RGB", (3, 3)).filter(ImageFilter.UnsharpMask(radius, percent, threshold))
+
+
 @pytest.mark.parametrize(
     "name,args",
     [

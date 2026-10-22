@@ -441,12 +441,7 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     });
 }
 
-fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
-    debug_assert_eq!(source.len(), width * height * C);
-    let mut pixels = buffer(source.len())?;
-    if pixels.is_empty() {
-        return Ok(pixels);
-    }
+fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
     let radii = if gaussian {
         (gaussian_radius(radii.0), gaussian_radius(radii.1))
     } else {
@@ -455,6 +450,16 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
     if [radii.0, radii.1].iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
     }
+    Ok(radii)
+}
+
+fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+    debug_assert_eq!(source.len(), width * height * C);
+    let mut pixels = buffer(source.len())?;
+    if pixels.is_empty() {
+        return Ok(pixels);
+    }
+    let radii = blur_radii(radii, gaussian)?;
     let passes = if gaussian { 3 } else { 1 };
     let horizontal_passes = if radii.0 > 0.0 { passes } else { 0 };
     let vertical_passes = if radii.1 > 0.0 { passes } else { 0 };
@@ -504,6 +509,17 @@ fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool)
 fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
+        if percent == 0 || threshold >= 255 || radius == 0.0 {
+            if !source.is_empty() {
+                blur_radii((radius, radius), true)?;
+            }
+            let mut pixels = Vec::new();
+            pixels
+                .try_reserve_exact(source.len())
+                .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+            pixels.extend_from_slice(source);
+            return Ok(pixels);
+        }
         let mut pixels = blur(image, source, (radius, radius), true)?;
         chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
             for (&original, blurred) in source[chunk * CHUNK_PIXELS..].iter().zip(dst) {
