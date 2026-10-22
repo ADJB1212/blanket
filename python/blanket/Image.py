@@ -6,7 +6,6 @@ Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
 
 from __future__ import annotations
 
-import builtins
 import contextlib
 import math
 import os
@@ -1719,8 +1718,10 @@ class Image:
             return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         values = _save_options(output_format, options)
-        encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native)
-        _write_bytes(fp, encoded)
+        output = None if hasattr(fp, "write") else os.fspath(fp)
+        encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native, output=output)
+        if output is None:
+            cast("BinaryIO", fp).write(encoded)
 
     def __enter__(self) -> Self:
         """Load the image and return it for use in a context manager.
@@ -2002,14 +2003,6 @@ def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
             raise ValueError("binary data must be used to open an image")
         return data
     return Path(os.fsdecode(os.fspath(fp))).read_bytes()
-
-
-def _write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, data: bytes) -> None:
-    if hasattr(fp, "write"):
-        fp.write(data)
-        return
-    with builtins.open(fp, "wb") as output:
-        output.write(data)
 
 
 def _output_format(fp: object, requested: str | None) -> str:
