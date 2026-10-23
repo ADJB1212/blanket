@@ -231,16 +231,19 @@ compression can still change RGB values during RGB/YUV conversion.
   Native, statically linked LittleCMS converts between sRGB and D50 LAB;
   other conversions pass through RGB. LAB save-time compression optimization
   is unsupported.
-- **Metadata:** PNG, JPEG, and uncompressed JPEG XL metadata boxes supply
-  EXIF/XMP for orientation handling. Saving writes pixels only; metadata is
-  not preserved.
+- **Metadata:** JPEG, PNG, WebP, JPEG XL, HEIF, and TIFF retain EXIF, XMP,
+  and ICC profiles on save. `getexif()` provides editable EXIF IFDs and JPEG
+  thumbnails. `PngImagePlugin.PngInfo` supplies custom PNG text chunks.
+  Explicit `exif`, `xmp`, and `icc_profile` save arguments override source
+  metadata; `None` or empty bytes remove it. Profiles are retained without
+  applying a color transform.
 - **Multiple frames:** GIF, WebP, APNG, and TIFF decode all frames eagerly.
   Use `seek()`, `tell()`, `n_frames`, and `ImageSequence` to navigate them.
   GIF, WebP, APNG, and PDF support `save_all=True, append_images=[...]`.
   Pixel operations and copies apply to the current frame. Animated GIF frames
   use composited RGBA canvases rather than Pillow's palette mode transitions.
 - **High bit depth:** sample retention is supported for selected operations
-  and formats; HDR tone mapping and HEIF HDR/ICC metadata retention are not.
+  and formats; HDR tone mapping and HEIF HDR metadata retention are not.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
   installed. High-bit-depth images must first be converted to 8 bits.
 

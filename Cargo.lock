@@ -377,6 +377,8 @@ dependencies = [
  "blanket-codec-tiff",
  "blanket-codec-webp",
  "blanket-core",
+ "crc32fast",
+ "flate2",
  "pyo3",
 ]
 

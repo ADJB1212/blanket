@@ -11,7 +11,8 @@ from typing import TYPE_CHECKING, BinaryIO
 if TYPE_CHECKING:
     import os
 
-from ._blanket import _encode_sequence
+from ._blanket import _encode_sequence, _write_metadata
+from ._exif import save_metadata
 from .Image import Image, _bounded_int, _save_options
 
 
@@ -32,6 +33,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     if unsupported:
         raise TypeError(f"unsupported {format} save option(s): {', '.join(sorted(unsupported))}")
     controls = {key: options.pop(key) for key in allowed if key in options}
+    metadata = save_metadata(image, format, options)
     values = _save_options(format, options)
     sources = [image]
     if save_all:
@@ -103,6 +105,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             raise ValueError("high-bit-depth images require explicit conversion for this format")
         prepared.append(frame.convert(target) if frame.mode != target else frame)
     encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"]))
+    if any(metadata):
+        encoded = _write_metadata(encoded, format, *metadata)
     if hasattr(fp, "write"):
         fp.write(encoded)
     else:

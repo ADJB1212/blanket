@@ -580,7 +580,7 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
         ```
     """
     image.load()
-    orientation, info = transpose_metadata(image.info)
+    orientation, info = transpose_metadata(image._metadata_info())
     if orientation in range(2, 9):
         native = ops_transpose(image._native, orientation)
         result = image if in_place else Image.Image(native)

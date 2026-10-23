@@ -1,12 +1,16 @@
-"""Read orientation metadata without decoding pixels or depending on Pillow."""
+"""Metadata parsing and save option adaptation without Pillow."""
 
 from __future__ import annotations
 
 __lazy_modules__ = {"zlib"}
 
+import contextlib
 import re
 import struct
 import zlib
+
+from ._ifd import Exif
+from .PngImagePlugin import PngInfo, iTXt
 
 # Limit expansion of compressed PNG text while reading metadata.
 _MAX_TEXT_BYTES = 1024 * 1024
@@ -98,10 +102,13 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
     return orientation, result
 
 
-def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
-    """Retain EXIF and XMP carried by PNG/JPEG/JXL containers."""
+def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[object, object]:
+    """Read metadata independently of pixel decoding."""
     info: dict[object, object] = {}
     if format == "JPEG":
+        profiles: dict[int, bytes] = {}
+        profile_count = 0
+        valid_profile = True
         pos = 2
         while pos + 4 <= len(data) and data[pos] == 255:
             pos += 1
@@ -126,7 +133,15 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
                     info.setdefault("exif", payload)
                 elif payload.startswith(b"http://ns.adobe.com/xap/1.0/\0"):
                     info["xmp"] = payload.split(b"\0", 1)[1]
+            elif marker == 0xE2 and data[pos + 2 : pos + 14] == b"ICC_PROFILE\0" and length >= 16:
+                part, count = data[pos + 14 : pos + 16]
+                if part in profiles or not 1 <= part <= count or profile_count not in (0, count):
+                    valid_profile = False
+                profile_count = count
+                profiles[part] = data[pos + 16 : pos + length]
             pos += length
+        if valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
+            info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
     elif format == "PNG":
         pos = 8
         while pos + 12 <= len(data):
@@ -134,34 +149,14 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
             kind = data[pos + 4 : pos + 8]
             if pos + 12 + length > len(data):
                 break
-            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt"):
+            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP"):
                 pos += length + 12
                 continue
             payload = data[pos + 8 : pos + 8 + length]
             if kind == b"eXIf":
                 info["exif"] = b"Exif\0\0" + payload
-            elif kind in (b"tEXt", b"zTXt") and payload.startswith(b"Raw profile type exif\0"):
-                text = payload.split(b"\0", 1)[1]
-                if kind == b"zTXt":
-                    try:
-                        text = zlib.decompressobj().decompress(text[1:], _MAX_TEXT_BYTES) if text[:1] == b"\0" else b""
-                    except zlib.error:
-                        text = b""
-                info["Raw profile type exif"] = text.decode("latin-1")
-            elif kind == b"iTXt" and payload.startswith(b"XML:com.adobe.xmp\0"):
-                parts = payload.split(b"\0", 1)[1]
-                if len(parts) >= 2:
-                    compressed, method = parts[:2]
-                    fields = parts[2:].split(b"\0", 2)
-                    if len(fields) == 3:
-                        text = fields[2]
-                        if compressed == 1 and method == 0:
-                            try:
-                                # Match Pillow's bounded text decompression.
-                                text = zlib.decompressobj().decompress(text, _MAX_TEXT_BYTES)
-                            except zlib.error:
-                                text = b""
-                        info["XML:com.adobe.xmp"] = text.decode("utf-8", "replace")
+            else:
+                _png_metadata(info, kind, payload)
             pos += length + 12
     elif format == "JXL" and data.startswith(b"\0\0\0\x0cJXL "):
         pos = 0
@@ -189,4 +184,118 @@ def read_metadata(data: bytes, format: str | None) -> dict[object, object]:
             elif kind == b"xml ":
                 info["xmp"] = payload
             pos += length
+    elif format == "WEBP":
+        pos = 12
+        while pos + 8 <= len(data):
+            kind, length = data[pos : pos + 4], int.from_bytes(data[pos + 4 : pos + 8], "little")
+            if pos + 8 + length > len(data):
+                break
+            key = {b"EXIF": "exif", b"XMP ": "xmp", b"ICCP": "icc_profile"}.get(kind)
+            if key:
+                raw = data[pos + 8 : pos + 8 + length]
+                info[key] = b"Exif\0\0" + raw.removeprefix(b"Exif\0\0") if key == "exif" else raw
+            pos += 8 + length + (length & 1)
+    elif format == "TIFF":
+        try:
+            exif = Exif()
+            exif.load(data)
+            for _ in range(frame):
+                exif._data, exif._next = exif._read_ifd(exif._next, 0)
+            exif._ifds.pop(1, None)
+            exif.thumbnail = None
+            thumbnail_offset = exif.pop(330, None)
+            if isinstance(thumbnail_offset, int):
+                exif._load_thumbnail(thumbnail_offset)
+            for tag in (34665, 34853):
+                if tag in exif:
+                    exif.get_ifd(tag)
+            if 40965 in exif._ifds.get(34665, {}):
+                exif.get_ifd(40965)
+            for tag, key in ((700, "xmp"), (34675, "icc_profile")):
+                value = exif.get(tag)
+                if value is not None:
+                    info[key] = value if isinstance(value, bytes) else bytes(value if isinstance(value, tuple) else (value,))
+            exif._raw, exif._entries, exif._next = b"", {}, 0
+            if exif or exif.thumbnail is not None:
+                info["exif"] = exif.tobytes()
+        except (ValueError, struct.error):
+            pass
+    if format in ("HEIF", "JXL"):
+        from ._blanket import _read_native_metadata
+
+        with contextlib.suppress(OSError):
+            info.update(_read_native_metadata(data, format))
     return info
+
+
+def _decompress(raw: bytes) -> bytes:
+    decoder = zlib.decompressobj()
+    value = decoder.decompress(raw, _MAX_TEXT_BYTES + 1)
+    if len(value) > _MAX_TEXT_BYTES or not decoder.eof:
+        raise ValueError("compressed PNG metadata exceeds limit or is truncated")
+    return value
+
+
+def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes) -> None:
+    try:
+        key, raw = payload.split(b"\0", 1)
+        if not 1 <= len(key) <= 79:
+            return
+        keyword = key.decode("latin-1")
+        if kind == b"iCCP":
+            if raw[:1] == b"\0":
+                info["icc_profile"] = _decompress(raw[1:])
+            return
+        if kind == b"zTXt":
+            if raw[:1] != b"\0":
+                return
+            raw = _decompress(raw[1:])
+        if kind == b"iTXt":
+            compressed, method = raw[:2]
+            lang, tkey, raw = raw[2:].split(b"\0", 2)
+            if compressed not in (0, 1) or method != 0:
+                return
+            if compressed:
+                raw = _decompress(raw)
+            info[keyword] = iTXt(raw.decode("utf-8"), lang.decode("ascii"), tkey.decode("utf-8"))
+            if keyword == "XML:com.adobe.xmp":
+                info["xmp"] = raw
+        else:
+            info[keyword] = raw.decode("latin-1")
+    except (ValueError, zlib.error):
+        pass
+
+
+def save_metadata(image: object, format: str, options: dict[str, object]) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
+    """Remove metadata options and resolve source defaults before encoding."""
+    supported = format in ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
+    keys = {"exif", "xmp", "icc_profile", "pnginfo"} & options.keys()
+    if keys and not supported:
+        raise TypeError(f"metadata saving is not supported for {format}")
+    if "pnginfo" in keys and format != "PNG":
+        raise TypeError("pnginfo is supported only for PNG")
+    if not supported:
+        return b"", b"", b"", []
+    values = []
+    for key in ("exif", "xmp", "icc_profile"):
+        value = options.pop(key) if key in options else image._metadata_value(key)
+        if key == "exif" and hasattr(value, "tobytes"):
+            value = value.tobytes()
+        if key == "xmp" and isinstance(value, str):
+            value = value.encode("utf-8")
+        if value is None:
+            value = b""
+        if not isinstance(value, (bytes, bytearray, memoryview)):
+            raise TypeError(f"{key} must be bytes" + (" or an Exif object" if key == "exif" else ""))
+        values.append(bytes(value))
+    pnginfo = options.pop("pnginfo", None)
+    if pnginfo is not None and not isinstance(pnginfo, PngInfo):
+        raise TypeError("pnginfo must be a PngInfo object or None")
+    chunks = [] if pnginfo is None else list(pnginfo.chunks)
+    if format == "PNG" and pnginfo is None:
+        text = PngInfo()
+        for key, value in image.info.items():
+            if isinstance(key, str) and isinstance(value, str) and key not in ("XML:com.adobe.xmp", "Raw profile type exif"):
+                text.add_text(key, value)
+        chunks = text.chunks
+    return values[0], values[1], values[2], chunks

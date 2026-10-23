@@ -157,9 +157,57 @@ impl PreparedHeif {
             })
             .map_err(codec_error)?;
         let mut context = HeifContext::new().map_err(codec_error)?;
-        context.encode_image(&self.native, &mut self.encoder, None).map_err(codec_error)?;
+        if !options.icc_profile.is_empty() {
+            self.native
+                .set_color_profile_raw(&libheif_rs::ColorProfileRaw::new(
+                    libheif_rs::color_profile_types::PROF,
+                    options.icc_profile.to_vec(),
+                ))
+                .map_err(codec_error)?;
+        }
+        let handle = context.encode_image(&self.native, &mut self.encoder, None).map_err(codec_error)?;
+        if !options.exif.is_empty() {
+            context
+                .add_exif_metadata(&handle, options.exif.strip_prefix(b"Exif\0\0").unwrap_or(options.exif))
+                .map_err(codec_error)?;
+        }
+        if !options.xmp.is_empty() {
+            context.add_xmp_metadata(&handle, options.xmp).map_err(codec_error)?;
+        }
         context.write_to_bytes().map_err(codec_error)
     }
+}
+
+pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
+    let _library = &*HEIF_LIBRARY;
+    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(codec_error)?;
+    let handle = context.primary_image_handle().map_err(codec_error)?;
+    let mut result = Vec::new();
+    if let Some(profile) = handle.color_profile_raw() {
+        result.push(("icc_profile".into(), profile.data));
+    }
+    let mut ids = vec![0; handle.number_of_metadata_blocks(0).max(0) as usize];
+    let count = handle.metadata_block_ids(&mut ids, 0);
+    for id in ids.into_iter().take(count) {
+        let key = match handle.metadata_type(id) {
+            Some("Exif") => "exif",
+            Some("mime") if handle.metadata_content_type(id) == Some("application/rdf+xml") => "xmp",
+            _ => continue,
+        };
+        let mut raw = handle.metadata(id).map_err(codec_error)?;
+        if key == "exif" {
+            if raw.len() < 4 {
+                continue;
+            }
+            let offset = u32::from_be_bytes(raw[..4].try_into().expect("four bytes")) as usize;
+            let Some(tiff) = offset.checked_add(4).and_then(|offset| raw.get(offset..)) else {
+                continue;
+            };
+            raw = [b"Exif\0\0".as_slice(), tiff].concat();
+        }
+        result.push((key.into(), raw));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

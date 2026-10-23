@@ -11,6 +11,8 @@ publish = false
 [dependencies]
 blanket-core = { path = "../core" }
 pyo3.workspace = true
+crc32fast = { version = "1", default-features = false, features = ["std", "nightly"] }
+flate2 = { version = "1", default-features = false, features = ["rust_backend", "zlib-rs"] }
 blanket-codec-common = { path = "../codec-common" }
 blanket-codec-png = { path = "../codec-png" }
 blanket-codec-jpeg = { path = "../codec-jpeg" }

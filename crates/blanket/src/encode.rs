@@ -8,11 +8,11 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
-    tiff_compression: u8, output: Option<Bound<'_, PyAny>>,
+    tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
@@ -21,6 +21,9 @@ pub(crate) fn _encode(
         lossless,
         effort,
         tiff_compression,
+        icc_profile: icc_profile.unwrap_or_default(),
+        exif: metadata_exif.unwrap_or_default(),
+        xmp: metadata_xmp.unwrap_or_default(),
     };
     let encoded = encode_image(py, image, format, options, compressor)?;
     if let Some(output) = output {

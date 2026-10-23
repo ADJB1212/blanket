@@ -31,12 +31,14 @@ import pillow_jxl
 from PIL import (
     Image as PillowImage,
     ImageChops as PillowChops,
+    ImageCms as PillowCms,
     ImageEnhance as PillowEnhance,
     ImageFilter as PillowFilter,
     ImageMath as PillowMath,
     ImageOps as PillowOps,
     ImagePalette as PillowPalette,
     ImageStat as PillowStat,
+    PngImagePlugin as PillowPng,
 )
 
 NO_RICH = os.environ.get("NO_RICH")
@@ -56,6 +58,7 @@ from blanket import (
     ImageOps as BlanketOps,
     ImagePalette as BlanketPalette,
     ImageStat as BlanketStat,
+    PngImagePlugin as BlanketPng,
     features as BlanketFeatures,
 )
 
@@ -92,6 +95,7 @@ CODEC_FORMATS = (
     "EPS",
 )
 CODEC_ALIASES = {"JPG": "JPEG", "TIF": "TIFF", "HEIC": "HEIF", "JP2": "JPEG2000", "J2K": "JPEG2000"}
+METADATA_FORMATS = ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -419,6 +423,129 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
             comps.append((f"save {name} {mode} 10-bit", lambda b=wide, f=fmt, opts=options: b.save(BytesIO(), f, **opts), None))
 
     return comps
+
+
+def metadata_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired: bool = True, formats: set[str] | None = None) -> list[Comparison]:
+    """Compare metadata APIs and explicit saves with equal prepared inputs.
+
+    Codec cases include pixel decoding/encoding. Fixtures and profiles are
+    prepared outside timing. Automatic preservation and thumbnail embedding
+    have no equivalent Pillow API; its JXL plugin also omits ICC encoding
+    and XMP exposure, so those cases are unpaired.
+    """
+    exif = PillowImage.Exif()
+    exif[270] = "Blanket metadata benchmark with an external ASCII value"
+    exif[274] = 1
+    exif[305] = "Blanket benchmark"
+    exif[34665] = {36867: "2026:10:23 10:00:00", 37510: b"ASCII\0\0\0" + b"metadata " * 128}
+    exif[34853] = {1: "N", 2: (51.5, 30.25, 1.125)}
+    raw_exif = exif.tobytes()
+    xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"/></x:xmpmeta>'
+    profile = PillowCms.ImageCmsProfile(PillowCms.createProfile("sRGB")).tobytes()
+    raw = make_rgb(*size)
+    blanket = BlanketImage.frombytes("RGB", size, raw)
+    pillow = PillowImage.frombytes("RGB", size, raw)
+
+    def load_exif(module: ModuleType, *, nested: bool = False, edit: bool = False) -> Any:
+        value = module.Exif()
+        value.load(raw_exif)
+        dict(value)
+        if nested:
+            value.get_ifd(34665)
+            value.get_ifd(34853)
+        if edit:
+            value[305] = "Edited benchmark"
+            value.get_ifd(34665)[36867] = "2026:10:24 10:00:00"
+            return value.tobytes()
+        return value
+
+    b_exif, p_exif = load_exif(BlanketImage, nested=True), load_exif(PillowImage, nested=True)
+    b_cached = BlanketImage.new("RGB", (1, 1))
+    p_cached = PillowImage.new("RGB", (1, 1))
+    b_cached.info["exif"] = p_cached.info["exif"] = raw_exif
+    b_cached.getexif()
+    p_cached.getexif()
+    comparisons: list[Comparison] = [
+        ("EXIF load and read tags", partial(load_exif, BlanketImage), partial(load_exif, PillowImage)),
+        ("EXIF load and nested IFDs", partial(load_exif, BlanketImage, nested=True), partial(load_exif, PillowImage, nested=True)),
+        ("EXIF serialize nested IFDs", b_exif.tobytes, p_exif.tobytes),
+        ("EXIF edit and serialize (load included)", partial(load_exif, BlanketImage, edit=True), partial(load_exif, PillowImage, edit=True)),
+        ("getexif cached", b_cached.getexif, p_cached.getexif),
+    ]
+    if include_unpaired:
+        thumbnail = pillow_payload(PillowImage.new("RGB", (160, 120), "navy"), "JPEG")
+
+        def embed_thumbnail() -> bytes:
+            value = load_exif(BlanketImage)
+            value.thumbnail = thumbnail
+            return value.tobytes()
+
+        comparisons.append(("EXIF embed thumbnail (load included)", embed_thumbnail, None))
+
+    def load_metadata(module: ModuleType, payload: bytes) -> None:
+        with module.open(BytesIO(payload)) as image:
+            image.load()
+            image.getexif().get_ifd(34665)
+            image.getexif().get_ifd(34853)
+
+    for fmt in METADATA_FORMATS:
+        if (formats is not None and fmt not in formats) or (skip_jxl and fmt == "JXL"):
+            continue
+        codec_options = {"quality": 85} if fmt in ("JPEG", "WEBP", "HEIF", "JXL") else {}
+        if fmt == "JXL":
+            codec_options["effort"] = 3
+        metadata = {"exif": raw_exif, "xmp": xmp, "icc_profile": profile}
+        output = BytesIO()
+        blanket.save(output, fmt, **codec_options, **metadata)
+        payload = output.getvalue()
+        if fmt != "JXL" or include_unpaired:
+            comparisons.append((f"load {fmt} RGB EXIF+XMP+ICC", partial(load_metadata, BlanketImage, payload), None if fmt == "JXL" else partial(load_metadata, PillowImage, payload)))
+        for key, value in metadata.items():
+            if fmt == "JXL" and key == "icc_profile" and not include_unpaired:
+                continue
+            b_options = {**codec_options, key: value}
+            p_options = b_options.copy()
+            if fmt == "JXL":
+                p_options["use_container"] = True
+            elif fmt == "PNG" and key == "xmp":
+                pnginfo = PillowPng.PngInfo()
+                pnginfo.add_itxt("XML:com.adobe.xmp", xmp)
+                p_options = {**codec_options, "pnginfo": pnginfo}
+            elif fmt == "TIFF" and key == "xmp":
+                p_options = {**codec_options, "tiffinfo": {700: xmp}}
+            label = {"exif": "EXIF", "xmp": "XMP", "icc_profile": "ICC"}[key]
+            comparisons.append(
+                (
+                    f"save {fmt} RGB {label}",
+                    lambda im=blanket, f=fmt, opts=b_options: im.save(BytesIO(), f, **opts),
+                    None if fmt == "JXL" and key == "icc_profile" else lambda im=pillow, f=fmt, opts=p_options: im.save(BytesIO(), f, **opts),
+                )
+            )
+        if include_unpaired:
+            opened = BlanketImage.open(BytesIO(payload))
+            comparisons.append((f"save {fmt} RGB automatic metadata preservation", lambda im=opened, f=fmt, opts=codec_options: im.save(BytesIO(), f, **opts), None))
+
+    if formats is None or "PNG" in formats:
+
+        def png_text(module: ModuleType, compressed: bool) -> Any:
+            info = module.PngInfo()
+            info.add_text("Author", "Andr\xe9", zip=compressed)
+            info.add_text("Description", "Unicode \u2603 " * 128, zip=compressed)
+            info.add_itxt("Title", "Translated title", lang="en", tkey="Title translation", zip=compressed)
+            return info
+
+        for compressed in (False, True):
+            label = "compressed" if compressed else "uncompressed"
+            b_text, p_text = png_text(BlanketPng, compressed), png_text(PillowPng, compressed)
+            payload = pillow_payload(pillow, "PNG", pnginfo=p_text)
+            comparisons.extend(
+                [
+                    (f"PngInfo build {label} text", partial(png_text, BlanketPng, compressed), partial(png_text, PillowPng, compressed)),
+                    (f"load PNG RGB {label} text", partial(load_metadata, BlanketImage, payload), partial(load_metadata, PillowImage, payload)),
+                    (f"save PNG RGB {label} text", lambda info=b_text: blanket.save(BytesIO(), "PNG", pnginfo=info), lambda info=p_text: pillow.save(BytesIO(), "PNG", pnginfo=info)),
+                ]
+            )
+    return comparisons
 
 
 def make_ten_bit(size: tuple[int, int], mode: str) -> np.ndarray:
@@ -1163,6 +1290,7 @@ def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
 SECTION_NAMES = (
     "ImagePalette",
     "Codec I/O",
+    "Metadata",
     "Conversions",
     "Mode Parity",
     "Resize",
@@ -1323,7 +1451,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
-    parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O")
+    parser.add_argument(
+        "-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O and Metadata"
+    )
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
@@ -1362,8 +1492,8 @@ def parse_args() -> argparse.Namespace:
     if arguments.no_palette:
         arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
     if arguments.formats:
-        if "Codec I/O" not in arguments.sections:
-            parser.error("--formats requires the Codec I/O section")
+        if not {"Codec I/O", "Metadata"} & set(arguments.sections):
+            parser.error("--formats requires the Codec I/O or Metadata section")
         if arguments.skip_jxl and "JXL" in arguments.formats:
             parser.error("--formats JXL cannot be combined with --skip-jxl")
     return arguments
@@ -1434,6 +1564,7 @@ def main() -> None:
 
         builders: dict[str, Callable[[], list[Comparison]]] = {
             "Codec I/O": partial(codec_comparisons, size, skip_jxl=args.skip_jxl, include_unpaired=args.all, formats=None if args.formats is None else set(args.formats)),
+            "Metadata": partial(metadata_comparisons, size, skip_jxl=args.skip_jxl, include_unpaired=args.all, formats=None if args.formats is None else set(args.formats)),
             "Conversions": partial(conversion_comparisons, size),
             "Mode Parity": partial(mode_parity_comparisons, size),
             "Resize": partial(resize_comparisons, size),

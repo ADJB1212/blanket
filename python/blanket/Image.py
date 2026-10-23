@@ -31,6 +31,7 @@ from ._blanket import (
     _encode,
     _Image,
     _open_sequence,
+    _write_metadata,
     enhance_blend,
     filter_merge,
     fromarray as _native_fromarray,
@@ -56,7 +57,8 @@ from ._blanket import (
     quantize as _native_quantize,
 )
 from ._color import color_pixel
-from ._exif import read_metadata
+from ._exif import ORIENTATION_RE, read_metadata, save_metadata
+from ._ifd import Exif
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
@@ -302,6 +304,8 @@ class Image:
         self._info: dict[object, object] = {}
         self._frames: list[Image] | None = None
         self._frame = 0
+        self._exif: Exif | None = None
+        self._exif_source: object = None
         palette_data = native.palette_data()
         if palette_data is not None:
             from .ImagePalette import ImagePalette
@@ -469,8 +473,10 @@ class Image:
         self._sync_palette()
         current = self._frames[self._frame]
         current._native, current.palette, current._info = self._native, self.palette, self._info
+        current._exif, current._exif_source = self._exif, self._exif_source
         selected = self._frames[frame]
         self._native, self.palette, self._info = selected._native, selected.palette, selected._info
+        self._exif, self._exif_source = selected._exif, selected._exif_source
         self._bands = _BANDS[self._native.mode]
         self._frame = frame
 
@@ -670,7 +676,7 @@ class Image:
             return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B") else self).quantize()
         self._sync_palette()
         result = Image(self._native.convert(mode, bit_depth))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def _sync_palette(self) -> None:
@@ -690,8 +696,48 @@ class Image:
         """
         self._sync_palette()
         result = Image(self._native.copy())
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
+
+    def getexif(self) -> Exif:
+        """Return the image's editable EXIF tags, including nested IFDs.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8))
+            image.getexif()[305] = "Blanket"
+            ```
+        """
+        self.load()
+        raw = self.info.get("exif")
+        if raw is None and isinstance(self.info.get("Raw profile type exif"), str):
+            value = self.info["Raw profile type exif"]
+            raw = bytes.fromhex("".join(value.split("\n")[3:]) if "\n" in value else value)
+        if self._exif is None or raw != self._exif_source:
+            self._exif = Exif()
+            if isinstance(raw, bytes):
+                self._exif.load(raw)
+            if 274 not in self._exif:
+                xmp = self.info.get("xmp", self.info.get("XML:com.adobe.xmp", ""))
+                if isinstance(xmp, bytes):
+                    xmp = xmp.decode("utf-8", "replace")
+                if isinstance(xmp, str) and (match := ORIENTATION_RE.search(xmp)):
+                    self._exif[274] = int(match[1] or match[2])
+            self._exif_source = raw
+        return self._exif
+
+    def _metadata_value(self, key: str) -> object:
+        if key == "exif" and self._exif is not None and self.info.get("exif") == self._exif_source:
+            return self._exif.tobytes() if self._exif or self._exif._hidden or self._exif.thumbnail is not None else b""
+        return self.info.get(key, self.info.get("XML:com.adobe.xmp") if key == "xmp" else None)
+
+    def _metadata_info(self) -> dict[object, object]:
+        info = self.info.copy()
+        if self._exif is not None:
+            info["exif"] = self._metadata_value("exif")
+        return info
 
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
         """Return a pixel value, accepting negative coordinates as Pillow does.
@@ -792,7 +838,7 @@ class Image:
             mapping[old_position] = new_position
         result = Image(ops_remap_indices(self._native, bytes(mapping)))
         result.putpalette(b"".join(entries[value * channels : (value + 1) * channels] for value in positions), palette_mode)
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         if isinstance(self.info.get("transparency"), int):
             old_transparency = self.info["transparency"]
             if old_transparency in positions:
@@ -965,7 +1011,7 @@ class Image:
                 raise ValueError("quantization error")
         source = self.convert("RGB") if self.mode == "P" else self
         result = Image(_native_quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def tobytes(self) -> bytes:
@@ -1025,7 +1071,7 @@ class Image:
 
         self.load()
         result = Image(ops_spread(self._native, index(distance)))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def filter(self, filter: Filter | type[Filter]) -> Image:
@@ -1053,11 +1099,11 @@ class Image:
         neighborhood_filter = isinstance(filter, (RankFilter, ModeFilter)) and getattr(filter.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
         if self.mode == "L" or isinstance(filter, MultibandFilter) or neighborhood_filter:
             result = Image(filter.filter(self._native))
-            result.info.update(self.info)
+            result.info.update(self._metadata_info())
             return result
         bands = [filter.filter(band._native) for band in self.split()]
         result = Image(filter_merge(self.mode, bands))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def paste(self, im: Image | str | int | tuple[int, ...], box: Image | tuple[int, ...] | None = None, mask: Image | None = None) -> None:
@@ -1186,7 +1232,7 @@ class Image:
             return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
         for band in bands:
-            band.info.update(self.info)
+            band.info.update(self._metadata_info())
         return bands
 
     def getbands(self) -> tuple[str, ...]:
@@ -1228,7 +1274,7 @@ class Image:
         if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
             return self.copy()
         result = Image(self._native.getchannel(channel))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:
@@ -1313,7 +1359,7 @@ class Image:
             if not callable(lut):
                 raise ValueError("point operation not supported for this mode")
             result = Image(self._native.point_float(lut))
-            result.info.update(self.info)
+            result.info.update(self._metadata_info())
             return result
         if mode is not None and mode != self.mode:
             raise ValueError("point mode conversion is not supported")
@@ -1321,7 +1367,7 @@ class Image:
         if len(values) != 256 * len(self.getbands()):
             raise ValueError("wrong number of lut entries")
         result = Image(ops_lut(self._native, [max(0, min(255, round(v))) for v in values]))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def thumbnail(self, size: tuple[float, float], resample: int = Resampling.BICUBIC, reducing_gap: float | None = 2.0) -> None:
@@ -1398,7 +1444,7 @@ class Image:
         if box[2] <= box[0] or box[3] <= box[1]:
             raise ValueError("box can't be empty")
         result = Image(ops_reduce(self._native, factor, box))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def entropy(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> float:
@@ -1445,7 +1491,7 @@ class Image:
         if method not in range(7):
             raise ValueError("No such transpose operation")
         result = Image(ops_transpose(self._native, (2, 4, 8, 3, 6, 5, 7)[method]))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def transform(
@@ -1526,7 +1572,7 @@ class Image:
                 mesh = [((0, 0, *size), coordinates(data, 8))]
             native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE), color if fillcolor is not None else None, isinstance(fillcolor, str))
         result = Image(native)
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def crop(self, box: tuple[float, float, float, float] | None = None) -> Image:
@@ -1561,7 +1607,7 @@ class Image:
                 left, upper, right, lower = round(left), round(upper), round(right), round(lower)
             native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (4 if self.mode == "F" else len(self._bands)))
         result = Image(native)
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def resize(self, size: tuple[int, int], resample: int | None = None, box: tuple[float, float, float, float] | None = None, reducing_gap: float | None = None) -> Image:
@@ -1619,7 +1665,7 @@ class Image:
                     box = ((box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy, (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy)
             native = ops_resize(native, size, method, box, reducing_gap if self.mode in ("LA", "RGBA") else None)
         result = Image(native)
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def rotate(
@@ -1691,7 +1737,7 @@ class Image:
                 w, h = nw, nh
             fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
             result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill, isinstance(fillcolor, str)))
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def to_pillow(self) -> object:
@@ -1718,7 +1764,7 @@ class Image:
         result = PillowImage.frombytes(self.mode, self.size, self.tobytes())
         if self.palette is not None:
             result.putpalette(self.palette.tobytes(), self.palette.mode)
-        result.info.update(self.info)
+        result.info.update(self._metadata_info())
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
@@ -1784,11 +1830,27 @@ class Image:
                 return self.convert("L").save(fp, output_format, compressor=compressor, **options)
             return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
+        metadata = save_metadata(self, output_format, options)
         values = _save_options(output_format, options)
-        output = None if hasattr(fp, "write") else os.fspath(fp)
-        encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native, output=output)
-        if output is None:
+        has_metadata = any(metadata)
+        output = None if hasattr(fp, "write") or has_metadata else os.fspath(fp)
+        encoded = _encode(
+            self._native,
+            output_format,
+            **values,
+            compressor=None if compressor is None else compressor._native,
+            output=output,
+            icc_profile=metadata[2] if output_format in ("JXL", "HEIF") else None,
+            metadata_exif=metadata[0] if output_format == "HEIF" else None,
+            metadata_xmp=metadata[1] if output_format == "HEIF" else None,
+        )
+        if has_metadata:
+            encoded = _write_metadata(encoded, output_format, *metadata)
+        if hasattr(fp, "write"):
             cast("BinaryIO", fp).write(encoded)
+        elif has_metadata:
+            with Path(os.fsdecode(os.fspath(fp))).open("wb") as stream:
+                stream.write(encoded)
         return None
 
     def __enter__(self) -> Self:
@@ -1929,7 +1991,7 @@ def blend(im1: Image, im2: Image, alpha: float) -> Image:
     if im1.mode == "P" or im2.mode == "P":
         raise ValueError("image has wrong mode")
     result = Image(enhance_blend(im1._native, im2._native, alpha))
-    result.info.update(im1.info)
+    result.info.update(im1._metadata_info())
     return result
 
 
@@ -1976,7 +2038,7 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
     """
 
     result = Image(image_alpha_composite(im1._native, im2._native))
-    result.info.update(im1.info)
+    result.info.update(im1._metadata_info())
     return result
 
 
@@ -2014,8 +2076,8 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
 
     image.info.update(read_metadata(data, image.format))
     decoded = [Image(frame) for frame in frames]
-    for frame, (duration, disposal, blend) in zip(decoded, controls, strict=True):
-        frame._info.update(image.info)
+    for i, (frame, (duration, disposal, blend)) in enumerate(zip(decoded, controls, strict=True)):
+        frame._info.update(read_metadata(data, image.format, i) if image.format == "TIFF" and i else image.info)
         if duration is not None:
             frame._info["duration"] = duration
         if loop_count is not None:
@@ -2155,6 +2217,7 @@ __all__ = [
     "ROTATE_270",
     "TRANSPOSE",
     "TRANSVERSE",
+    "Exif",
     "Image",
     "ImageTransformHandler",
     "Resampling",

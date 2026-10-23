@@ -19,6 +19,8 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_open_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_encode_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(encode::_encode, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_write_metadata, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_native_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
     blanket_enhance::enhance::register(module)?;
     blanket_composite::chops::register(module)?;

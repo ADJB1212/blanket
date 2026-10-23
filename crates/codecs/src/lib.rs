@@ -1,4 +1,5 @@
 pub mod codecs;
+pub mod metadata;
 
 pub use blanket_codec_heif::backend_info as heif_backend_info;
 pub use blanket_codec_jxl::backend_version as jxl_backend_version;

@@ -55,12 +55,15 @@ pub fn validate_frame_budget(total: &mut usize, width: u32, height: u32) -> Resu
 }
 
 #[derive(Clone, Copy, Default)]
-pub struct SaveOptions {
+pub struct SaveOptions<'a> {
     pub quality: u8 = 90,
     pub compress_level: u8 = 6,
     pub lossless: bool = false,
     pub effort: u8 = 7,
     pub tiff_compression: u8 = 0,
+    pub icc_profile: &'a [u8] = &[],
+    pub exif: &'a [u8] = &[],
+    pub xmp: &'a [u8] = &[],
 }
 
 pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {

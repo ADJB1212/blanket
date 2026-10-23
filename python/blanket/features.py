@@ -177,7 +177,7 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
         suffix = f" ({backend_version})" if backend_version is not None else ""
         print(f"  {feature}: {status}{suffix}", file=out)
     if supported_formats:
-        print("Formats (single image; metadata is not preserved on save):", file=out)
+        print("Formats (single image; EXIF/XMP/ICC supported by JPEG, PNG, WebP, JXL, HEIF, TIFF):", file=out)
         for label, feature in _FORMATS:
             read = write = info[feature][0]
             if feature == "heif":

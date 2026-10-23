@@ -104,6 +104,9 @@ enum JxlSamples<'a> {
 }
 
 fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
+    if !options.icc_profile.is_empty() {
+        return with_jxl_runner(image, threads, |runner| encode_profiled(image, pixels, options, runner));
+    }
     let (color_encoding, has_alpha) = match image.mode {
         PixelMode::L => (ColorEncoding::SrgbLuma, false),
         PixelMode::Rgb => (ColorEncoding::Srgb, false),
@@ -145,6 +148,10 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
             }
         }
     };
+    with_jxl_runner(image, threads, encode)
+}
+
+fn with_jxl_runner<T>(image: &Image, threads: JxlThreads, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
     match threads {
         // Do not even initialize a thread-local pool for single-threaded
         // Rayon candidates. Besides allocating unused state, pool creation
@@ -161,8 +168,208 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         JxlThreads::Pool => JXL_ENCODE_RUNNER.with(|runner| {
             let runner = runner.get_or_init(|| ResizableRunner::new(None));
             let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+            runner.set_num_threads(image.width.into(), image.height.into());
             encode(Some(runner))
         }),
+    }
+}
+
+fn encode_profiled(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, runner: Option<&dyn ParallelRunner>) -> PyResult<Vec<u8>> {
+    use jpegxl_sys::common::types::{JxlDataType, JxlEndianness, JxlPixelFormat};
+    use jpegxl_sys::encoder::encode::*;
+
+    struct Encoder(*mut JxlEncoder);
+    impl Drop for Encoder {
+        fn drop(&mut self) {
+            // SAFETY: this guard exclusively owns a non-null encoder.
+            unsafe { JxlEncoderDestroy(self.0) };
+        }
+    }
+    fn check(status: JxlEncoderStatus) -> PyResult<()> {
+        if status == JxlEncoderStatus::Success {
+            Ok(())
+        } else {
+            Err(codec_error("JPEG XL profile encoding failed"))
+        }
+    }
+    // SAFETY: null selects libjxl's default allocator.
+    let encoder = Encoder(unsafe { JxlEncoderCreate(std::ptr::null()) });
+    if encoder.0.is_null() {
+        return Err(codec_error("cannot allocate JPEG XL encoder"));
+    }
+    let mut info = std::mem::MaybeUninit::uninit();
+    // SAFETY: libjxl initializes the entire basic-info struct.
+    unsafe { JxlEncoderInitBasicInfo(info.as_mut_ptr()) };
+    // SAFETY: initialized above.
+    let mut info = unsafe { info.assume_init() };
+    info.xsize = image.width;
+    info.ysize = image.height;
+    info.bits_per_sample = match pixels {
+        JxlSamples::Byte(_) => 8,
+        JxlSamples::Wide(_) => 16,
+    };
+    info.num_color_channels = if image.mode == PixelMode::L { 1 } else { 3 };
+    info.uses_original_profile = true.into();
+    if image.mode == PixelMode::Rgba {
+        info.num_extra_channels = 1;
+        info.alpha_bits = info.bits_per_sample;
+    }
+    let (raw, length, data_type) = match pixels {
+        JxlSamples::Byte(raw) => (raw.as_ptr().cast(), raw.len(), JxlDataType::Uint8),
+        JxlSamples::Wide(raw) => (raw.as_ptr().cast(), std::mem::size_of_val(raw), JxlDataType::Uint16),
+    };
+    let format = JxlPixelFormat {
+        num_channels: image.mode.channels() as u32,
+        data_type,
+        endianness: JxlEndianness::Native,
+        align: 0,
+    };
+    // SAFETY: the encoder and all input buffers stay alive through processing.
+    unsafe {
+        if let Some(runner) = runner {
+            check(JxlEncoderSetParallelRunner(encoder.0, runner.runner(), runner.as_opaque_ptr()))?;
+        }
+        check(JxlEncoderSetBasicInfo(encoder.0, &raw const info))?;
+        check(JxlEncoderSetICCProfile(
+            encoder.0,
+            options.icc_profile.as_ptr(),
+            options.icc_profile.len(),
+        ))?;
+        let settings = JxlEncoderFrameSettingsCreate(encoder.0, std::ptr::null());
+        if settings.is_null() {
+            return Err(codec_error("cannot allocate JPEG XL settings"));
+        }
+        check(JxlEncoderFrameSettingsSetOption(
+            settings,
+            JxlEncoderFrameSettingId::Effort,
+            options.effort.into(),
+        ))?;
+        check(JxlEncoderSetFrameLossless(settings, options.lossless.into()))?;
+        check(JxlEncoderSetFrameDistance(
+            settings,
+            JxlEncoderDistanceFromQuality(options.quality.into()),
+        ))?;
+        check(JxlEncoderAddImageFrame(settings, &raw const format, raw, length))?;
+        JxlEncoderCloseInput(encoder.0);
+    }
+    let mut output = vec![0; 4096];
+    let mut written = 0;
+    loop {
+        let mut next = output[written..].as_mut_ptr();
+        let mut available = output.len() - written;
+        // SAFETY: next/available describe a valid writable slice for this call.
+        let status = unsafe { JxlEncoderProcessOutput(encoder.0, &raw mut next, &raw mut available) };
+        written = output.len() - available;
+        match status {
+            JxlEncoderStatus::Success => {
+                output.truncate(written);
+                return Ok(output);
+            }
+            JxlEncoderStatus::NeedMoreOutput => output.resize(output.len() * 2, 0),
+            _ => return Err(codec_error("JPEG XL profile encoding failed")),
+        }
+    }
+}
+
+pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
+    use jpegxl_sys::common::types::JxlBoxType;
+    use jpegxl_sys::decode::*;
+
+    const LIMIT: usize = 16 * 1024 * 1024;
+    struct Decoder(*mut JxlDecoder);
+    impl Drop for Decoder {
+        fn drop(&mut self) {
+            // SAFETY: the guard owns a non-null decoder.
+            unsafe { JxlDecoderDestroy(self.0) };
+        }
+    }
+    fn check(status: JxlDecoderStatus) -> PyResult<()> {
+        if status == JxlDecoderStatus::Success {
+            Ok(())
+        } else {
+            Err(codec_error("invalid JPEG XL metadata"))
+        }
+    }
+    let mut result = Vec::new();
+    let mut buffer = Vec::<u8>::new();
+    let mut key: Option<&str> = None;
+    // SAFETY: null selects the default allocator.
+    let decoder = Decoder(unsafe { JxlDecoderCreate(std::ptr::null()) });
+    if decoder.0.is_null() {
+        return Err(codec_error("cannot allocate JPEG XL decoder"));
+    }
+    // SAFETY: the decoder and its borrowed input/output buffers remain alive.
+    unsafe {
+        check(JxlDecoderSubscribeEvents(
+            decoder.0,
+            JxlDecoderStatus::ColorEncoding as i32 | JxlDecoderStatus::Box as i32 | JxlDecoderStatus::BoxComplete as i32,
+        ))?;
+        check(JxlDecoderSetDecompressBoxes(decoder.0, true.into()))?;
+        check(JxlDecoderSetInput(decoder.0, data.as_ptr(), data.len()))?;
+        JxlDecoderCloseInput(decoder.0);
+        loop {
+            let status = JxlDecoderProcessInput(decoder.0);
+            if matches!(status, JxlDecoderStatus::Box | JxlDecoderStatus::BoxComplete | JxlDecoderStatus::Success)
+                && let Some(key) = key.take()
+            {
+                let remaining = JxlDecoderReleaseBoxBuffer(decoder.0);
+                buffer.truncate(buffer.len() - remaining);
+                let raw = if key == "exif" {
+                    let offset = buffer.get(..4).map(|v| u32::from_be_bytes(v.try_into().expect("four bytes")) as usize);
+                    offset
+                        .and_then(|v| v.checked_add(4))
+                        .and_then(|offset| buffer.get(offset..))
+                        .map(|v| [b"Exif\0\0".as_slice(), v].concat())
+                } else {
+                    Some(std::mem::take(&mut buffer))
+                };
+                if let Some(raw) = raw {
+                    result.push((key.into(), raw));
+                }
+            }
+            match status {
+                JxlDecoderStatus::ColorEncoding => {
+                    let mut size = 0;
+                    check(JxlDecoderGetICCProfileSize(decoder.0, JxlColorProfileTarget::Original, &raw mut size))?;
+                    if size > LIMIT {
+                        return Err(codec_error("JPEG XL ICC profile exceeds 16 MiB"));
+                    }
+                    let mut profile = vec![0; size];
+                    check(JxlDecoderGetColorAsICCProfile(
+                        decoder.0,
+                        JxlColorProfileTarget::Original,
+                        profile.as_mut_ptr(),
+                        size,
+                    ))?;
+                    result.push(("icc_profile".into(), profile));
+                }
+                JxlDecoderStatus::Box => {
+                    let mut kind = JxlBoxType([0; 4]);
+                    check(JxlDecoderGetBoxType(decoder.0, &mut kind, true.into()))?;
+                    key = match kind.0.map(|v| v as u8) {
+                        [b'E', b'x', b'i', b'f'] => Some("exif"),
+                        [b'x', b'm', b'l', b' '] => Some("xmp"),
+                        _ => None,
+                    };
+                    if key.is_some() {
+                        buffer = vec![0; 1024];
+                        check(JxlDecoderSetBoxBuffer(decoder.0, buffer.as_mut_ptr(), buffer.len()))?;
+                    }
+                }
+                JxlDecoderStatus::BoxNeedMoreOutput => {
+                    let remaining = JxlDecoderReleaseBoxBuffer(decoder.0);
+                    let written = buffer.len() - remaining;
+                    if buffer.len() >= LIMIT {
+                        return Err(codec_error("JPEG XL metadata box exceeds 16 MiB"));
+                    }
+                    buffer.resize(buffer.len() * 2, 0);
+                    check(JxlDecoderSetBoxBuffer(decoder.0, buffer[written..].as_mut_ptr(), buffer.len() - written))?;
+                }
+                JxlDecoderStatus::Success => return Ok(result),
+                JxlDecoderStatus::Error | JxlDecoderStatus::NeedMoreInput => return Err(codec_error("invalid JPEG XL metadata")),
+                _ => {}
+            }
+        }
     }
 }
 
@@ -243,6 +450,61 @@ fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compressed_metadata_boxes_and_profile_are_read_without_pixel_output() {
+        let mut encoder = encoder_builder().use_container(true).build().unwrap();
+        let exif = b"\0\0\0\0II*\0\x08\0\0\0\0\0\0\0\0\0";
+        let xmp = vec![b'x'; 9000];
+        encoder.add_metadata(&jpegxl_rs::encode::Metadata::Exif(exif), true);
+        encoder.add_metadata(&jpegxl_rs::encode::Metadata::Xmp(&xmp), true);
+        let encoded = encoder.encode(&[30u8; 12], 2, 2).unwrap();
+        let metadata = read_metadata(&encoded).unwrap();
+        assert!(
+            metadata
+                .iter()
+                .any(|(key, raw)| key == "exif" && raw == &[b"Exif\0\0".as_slice(), &exif[4..]].concat())
+        );
+        assert!(metadata.iter().any(|(key, raw)| key == "xmp" && raw == &xmp));
+        assert!(metadata.iter().any(|(key, raw)| key == "icc_profile" && !raw.is_empty()));
+    }
+
+    #[test]
+    fn profiled_jxl_preserves_samples_and_original_icc() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [8, 16] {
+                let samples = (0..7 * 5 * mode.channels()).map(|i| (i * 19) as u16).collect::<Vec<_>>();
+                let image = if depth == 8 {
+                    Image::from_pixels(7, 5, mode, samples.iter().map(|&v| v as u8).collect(), None).unwrap()
+                } else {
+                    Image::from_samples(7, 5, mode, samples, depth, None).unwrap()
+                };
+                let options = SaveOptions {
+                    lossless: true,
+                    ..Default::default()
+                };
+                let prepared = PreparedJxl::new(&image).unwrap();
+                let baseline = prepared.encode(options).unwrap();
+                let metadata = read_metadata(&baseline).unwrap();
+                let profile = &metadata.iter().find(|(key, _)| key == "icc_profile").unwrap().1;
+                let encoded = prepared
+                    .encode(SaveOptions {
+                        icc_profile: profile,
+                        ..options
+                    })
+                    .unwrap();
+                let decoded = decode_jxl(&encoded).unwrap();
+                assert_eq!(decoded.raw_data().unwrap(), image.raw_data().unwrap(), "{mode:?}/{depth}");
+                assert!(
+                    read_metadata(&encoded)
+                        .unwrap()
+                        .iter()
+                        .any(|(key, raw)| key == "icc_profile" && raw == profile)
+                );
+            }
+        }
+    }
+
     #[test]
     fn jxl_wide_preparation_borrows_only_native_aligned_samples() {
         #[repr(align(2))]

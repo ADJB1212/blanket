@@ -180,19 +180,21 @@ memory limits, APNG sample precision and blending, and compatibility details.
 
 ---
 
-## Phase 6 — Metadata Preservation
+## Phase 6 — Metadata Preservation — Complete
 
-Currently, metadata is read for orientation handling and exposed via
-`image.info`, but saving writes pixels only. Full metadata round-tripping is
-required for a drop-in replacement.
+JPEG, PNG/APNG, WebP, JPEG XL, HEIF, and TIFF preserve EXIF, XMP, and ICC
+profiles when saving. Explicit save arguments override or remove metadata.
+EXIF IFDs and JPEG thumbnails are editable without Pillow. PNG text supports
+Latin-1, Unicode, compression, language, and translated keywords. See the
+metadata guide for container limits and opaque MakerNote behavior.
 
-- [ ] Preserve EXIF on save (JPEG, PNG, WebP, JXL, HEIF, TIFF)
-- [ ] Preserve XMP on save
-- [ ] Preserve ICC profiles on save
-- [ ] `Exif` class for reading and modifying EXIF IFDs (matching `PIL.Image.Exif`)
-- [ ] `image.getexif()` / `image.info["exif"]` parity
-- [ ] Thumbnail embedding in EXIF
-- [ ] `PngInfo` for custom PNG text chunks
+- [x] Preserve EXIF on save (JPEG, PNG, WebP, JXL, HEIF, TIFF)
+- [x] Preserve XMP on save
+- [x] Preserve ICC profiles on save
+- [x] `Exif` class for reading and modifying EXIF IFDs (matching `PIL.Image.Exif`)
+- [x] `image.getexif()` / `image.info["exif"]` parity
+- [x] Thumbnail embedding in EXIF
+- [x] `PngInfo` for custom PNG text chunks
 
 ---
 
