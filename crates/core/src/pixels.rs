@@ -198,6 +198,21 @@ pub fn putalpha_rgba(dst: &mut [u8], alpha: &[u8]) -> usize {
     end
 }
 
+pub fn paste_nontransparent_rgba(dst: &mut [u8], src: &[u8]) {
+    let end = dst.len() / 64 * 64;
+    for i in (0..end).step_by(64) {
+        let source = load::<4>(&src[i..]);
+        let output = load::<4>(&dst[i..]);
+        let opaque = source[3].simd_ne(Bytes::splat(0));
+        store(&mut dst[i..], std::array::from_fn::<_, 4, _>(|c| opaque.select(source[c], output[c])));
+    }
+    for (src, dst) in src[end..].as_chunks::<4>().0.iter().zip(dst[end..].as_chunks_mut::<4>().0) {
+        if src[3] != 0 {
+            *dst = *src;
+        }
+    }
+}
+
 fn blend(d: Bytes, s: Bytes, a: Bytes) -> Bytes {
     let a = a.cast::<u16>();
     let sum = d.cast::<u16>() * (Simd::splat(255) - a) + s.cast::<u16>() * a + Simd::splat(128);
@@ -225,6 +240,35 @@ pub fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nontransparent_paste_handles_unaligned_vectors_tails_and_guards() {
+        for count in 0..=65 {
+            for offset in 0..4 {
+                for alpha in [Some(0), Some(255), None] {
+                    let length = count * 4;
+                    let mut src: Vec<_> = (0..offset + length).map(|i| (i * 37) as u8).collect();
+                    for (i, pixel) in src[offset..].as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                        pixel[3] = alpha.unwrap_or([0, 1, 127, 255][i % 4]);
+                    }
+                    let mut dst: Vec<_> = (0..length + 2).map(|i| (i * 53) as u8).collect();
+                    let mut expected = dst.clone();
+                    for (src, dst) in src[offset..]
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(expected[1..length + 1].as_chunks_mut::<4>().0)
+                    {
+                        if src[3] != 0 {
+                            *dst = *src;
+                        }
+                    }
+                    paste_nontransparent_rgba(&mut dst[1..length + 1], &src[offset..]);
+                    assert_eq!(dst, expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn bilevel_packing_preserves_polarity_padding_unaligned_slices_and_guards() {

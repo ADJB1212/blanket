@@ -267,7 +267,7 @@ pub fn _encode_sequence(
             .iter()
             .enumerate()
             .map(|(i, image)| Frame {
-                image: (**image).clone(),
+                image: &**image,
                 duration: Some(durations[i]),
                 disposal: disposals[i],
                 blend: blends[i],
@@ -290,7 +290,7 @@ pub fn _encode_sequence(
             let pages = sequence
                 .frames
                 .iter()
-                .map(|frame| Ok((&frame.image, frame.image.pixel_data()?)))
+                .map(|frame| Ok((frame.image, frame.image.pixel_data()?)))
                 .collect::<PyResult<Vec<_>>>()?;
             blanket_codec_pdf::encode_pages(&pages)
         }

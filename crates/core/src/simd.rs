@@ -14,6 +14,40 @@ pub(crate) fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
         && tail.as_chunks::<2>().0.iter().all(|&bytes| u16::from_le_bytes(bytes) <= maximum)
 }
 
+pub fn samples_to_be16(source: &[u8], output: &mut [u8], depth: u8) {
+    fn convert<const DEPTH: u16>(source: &[u8], output: &mut [u8]) {
+        crate::parallel::chunks_mut_above(output, 128 * 1024, 4 * 1024 * 1024, |chunk, dst| {
+            let src = &source[chunk * 128 * 1024..][..dst.len()];
+            let (src_groups, src_tail) = src.as_chunks::<32>();
+            let (dst_groups, dst_tail) = dst.as_chunks_mut::<32>();
+            for (src, dst) in src_groups.iter().zip(dst_groups) {
+                let samples = load_u16::<false>(src);
+                let scaled = if DEPTH == 16 {
+                    samples
+                } else {
+                    let shift = 16 - DEPTH;
+                    let numerator = samples * Simd::splat((1 << shift) - 1) + Simd::splat(((1 << DEPTH) - 1) / 2);
+                    // Exact division by 2^DEPTH - 1 for this reduced numerator.
+                    let correction = (numerator + Simd::splat(1) + (numerator >> DEPTH)) >> DEPTH;
+                    (samples << shift) + correction
+                };
+                scaled.to_be_bytes().copy_to_slice(dst);
+            }
+            let maximum = (1_u32 << DEPTH) - 1;
+            for (src, dst) in src_tail.as_chunks::<2>().0.iter().zip(dst_tail.as_chunks_mut::<2>().0) {
+                let sample = (u32::from(u16::from_le_bytes(*src)) * 65535 + maximum / 2) / maximum;
+                *dst = (sample as u16).to_be_bytes();
+            }
+        });
+    }
+    match depth {
+        10 => convert::<10>(source, output),
+        12 => convert::<12>(source, output),
+        16 => convert::<16>(source, output),
+        _ => unreachable!("wide codecs require 10-, 12-, or 16-bit samples"),
+    }
+}
+
 pub fn rescale_samples(source: &[u8], source_depth: u8, target_depth: u8) -> Vec<u8> {
     fn convert<const SOURCE_MAX: u32>(source: &[u8], target_depth: u8) -> Vec<u8> {
         let source_bytes = if SOURCE_MAX == u32::from(u8::MAX) { 1 } else { 2 };
@@ -711,6 +745,25 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wide_conversion_preserves_rounding_endianness_and_partition_boundaries() {
+        for depth in [10, 12, 16] {
+            let maximum = (1_u32 << depth) - 1;
+            for count in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33, 65535, 65536, 65537, 2_097_153] {
+                let samples: Vec<_> = (0..count).map(|i| (i as u32 * 719 % (maximum + 1)) as u16).collect();
+                let mut input = vec![0x5a];
+                input.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+                let mut output = vec![0xa5; count * 2 + 2];
+                samples_to_be16(&input[1..], &mut output[1..count * 2 + 1], depth);
+                for (&sample, bytes) in samples.iter().zip(output[1..count * 2 + 1].as_chunks::<2>().0) {
+                    assert_eq!(u32::from(u16::from_be_bytes(*bytes)), (u32::from(sample) * 65535 + maximum / 2) / maximum);
+                }
+                assert_eq!(output[0], 0xa5);
+                assert_eq!(output[count * 2 + 1], 0xa5);
+            }
+        }
+    }
 
     #[test]
     fn sample_validation_checks_every_lane_unaligned_slice_and_tail() {

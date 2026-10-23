@@ -215,6 +215,58 @@ def test_save_defaults_and_path(tmp_path: Path) -> None:
     assert still.n_frames == 1 and still.tobytes() == source.tobytes()
 
 
+@pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "PDF"])
+def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -> None:
+    source = animation()
+    source.seek(1)
+    source.putpixel((0, 0), (17, 29, 51, 255))
+    source.info.update(duration=90, custom="edited")
+    expected = ImageSequence.all_frames(source)
+    stream = BytesIO()
+    source.save(stream, format, save_all=True, append_images=(frame for frame in [source]), **({"lossless": True} if format == "WEBP" else {}))
+    assert source.tell() == 1 and source.info["custom"] == "edited" and source.info["duration"] == 90
+    assert source.getpixel((0, 0)) == (17, 29, 51, 255)
+    if format == "PDF":
+        pdf = PdfParser.PdfParser(buf=stream.getvalue())
+        assert len(pdf.pages) == 6
+        for reference, frame in zip(pdf.pages, expected * 2, strict=True):
+            page = pdf.read_indirect(reference)
+            assert pdf.read_indirect(page[b"Resources"][b"XObject"][b"Im0"]).decode() == frame.convert("RGB").tobytes()
+    else:
+        reopened = Image.open(stream)
+        assert reopened.n_frames == 6
+        for actual, frame in zip(ImageSequence.Iterator(reopened), expected * 2, strict=True):
+            assert actual.tobytes() == frame.tobytes()
+            assert actual.info["duration"] == frame.info["duration"]
+    for actual, frame in zip(ImageSequence.Iterator(source), expected, strict=True):
+        assert actual.tobytes() == frame.tobytes() and actual.info == frame.info
+
+
+def test_pdf_save_includes_replaced_current_raster() -> None:
+    source = animation()
+    source.seek(1)
+    source.thumbnail((4, 4))
+    size, pixels = source.size, source.convert("RGB").tobytes()
+    stream = BytesIO()
+    source.save(stream, "PDF", save_all=True)
+    assert source.tell() == 1 and source.size == size
+    pdf = PdfParser.PdfParser(buf=stream.getvalue())
+    page = pdf.read_indirect(pdf.pages[1])
+    assert page[b"MediaBox"] == [0, 0, *size]
+    assert pdf.read_indirect(page[b"Resources"][b"XObject"][b"Im0"]).decode() == pixels
+
+
+@pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "PDF"])
+def test_closed_appended_source_does_not_write_or_change_position(format: str) -> None:
+    source, closed = animation(), animation()
+    source.seek(1)
+    closed.close()
+    stream = BytesIO()
+    with pytest.raises(ValueError, match="closed"):
+        source.save(stream, format, save_all=True, append_images=[closed])
+    assert source.tell() == 1 and not stream.getvalue()
+
+
 @pytest.mark.parametrize(
     "format,options,error",
     [
@@ -272,6 +324,31 @@ def test_apng_over_blending_retains_sample_precision(depth: int) -> None:
     assert image.info["blend"] == 1
     expected = (maximum // 2, 0, (maximum + 1) // 2, maximum)
     assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack("<4H", *expected))
+
+
+@pytest.mark.parametrize("depth", [8, 16])
+def test_apng_over_blending_alpha_boundaries(depth: int) -> None:
+    maximum = (1 << depth) - 1
+    alphas = (0, 1, maximum // 2, maximum)
+    background = [(maximum, maximum // 3, 0, da) for da in alphas for _ in alphas]
+    foreground = [(0, maximum // 5, maximum, sa) for _ in alphas for sa in alphas]
+
+    def pack(pixels: list[tuple[int, ...]]) -> bytes:
+        samples = [value for pixel in pixels for value in pixel]
+        return bytes(samples) if depth == 8 else struct.pack(f"<{len(samples)}H", *samples)
+
+    frames = [Image.frombytes("RGBA", (16, 1), pack(samples), bit_depth=depth) for samples in (background, foreground)]
+    stream = BytesIO()
+    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], blend=[0, 1])
+    reopened = Image.open(stream)
+    assert reopened.tobytes() == pack(background)
+    reopened.seek(1)
+    expected = []
+    for dst, src in zip(background, foreground, strict=True):
+        alpha = src[3] * maximum + dst[3] * (maximum - src[3])
+        rgb = tuple((src[c] * src[3] * maximum + dst[c] * dst[3] * (maximum - src[3]) + alpha // 2) // alpha if alpha else 0 for c in range(3))
+        expected.append((*rgb, (alpha + maximum // 2) // maximum))
+    assert reopened.tobytes() == pack(expected)
 
 
 def test_apng_declared_frame_budget_is_checked_before_decoding() -> None:

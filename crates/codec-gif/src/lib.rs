@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use blanket_codec_common::codec_error;
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
@@ -25,6 +27,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut canvas = blanket_core::raster::alloc_pixels(width as usize * height as usize * 4).map_err(|e| e.to_string())?;
     let mut sequence = Sequence::default();
     let mut total = 0;
+    let mut previous = Vec::new();
     while let Some(frame) = decoder.read_next_frame().map_err(|e| e.to_string())? {
         validate_frame_budget(&mut total, width, height)?;
         let (x, y, w, h) = (
@@ -51,15 +54,17 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
                 *pixel = clear;
             }
         }
-        let previous = (frame.dispose == gif::DisposalMethod::Previous).then(|| canvas.clone());
-        for row in 0..h as usize {
-            for col in 0..w as usize {
-                let src = (row * w as usize + col) * 4;
-                let dst = ((y as usize + row) * width as usize + x as usize + col) * 4;
-                if frame.buffer[src + 3] != 0 {
-                    canvas[dst..dst + 4].copy_from_slice(&frame.buffer[src..src + 4]);
-                }
+        if frame.dispose == gif::DisposalMethod::Previous && w != 0 {
+            previous.clear();
+            for row in y..y + h {
+                let start = (row as usize * width as usize + x as usize) * 4;
+                previous.extend_from_slice(&canvas[start..start + w as usize * 4]);
             }
+        }
+        for row in 0..h as usize {
+            let src = row * w as usize * 4;
+            let dst = ((y as usize + row) * width as usize + x as usize) * 4;
+            blanket_core::pixels::paste_nontransparent_rgba(&mut canvas[dst..dst + w as usize * 4], &frame.buffer[src..src + w as usize * 4]);
         }
         sequence.frames.push(Frame {
             image: Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|e| e.to_string())?,
@@ -67,8 +72,15 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
             disposal: frame.dispose as u8,
             blend: 0,
         });
-        if let Some(previous) = previous {
-            canvas = previous;
+        if frame.dispose == gif::DisposalMethod::Previous && w != 0 {
+            if previous.len() == canvas.len() {
+                std::mem::swap(&mut canvas, &mut previous);
+            } else {
+                for (row, saved) in (y..y + h).zip(previous.chunks_exact(w as usize * 4)) {
+                    let start = (row as usize * width as usize + x as usize) * 4;
+                    canvas[start..start + w as usize * 4].copy_from_slice(saved);
+                }
+            }
         } else if frame.dispose == gif::DisposalMethod::Background {
             for row in y..y + h {
                 for col in x..x + w {
@@ -92,8 +104,8 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     Ok(sequence)
 }
 
-pub fn encode_sequence(sequence: &blanket_codec_common::Sequence) -> PyResult<Vec<u8>> {
-    let first = &sequence.frames[0].image;
+pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>) -> PyResult<Vec<u8>> {
+    let first = sequence.frames[0].image.borrow();
     if first.width == 0 || first.height == 0 || first.width > 65535 || first.height > 65535 {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
@@ -109,8 +121,10 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence) -> PyResult<Ve
                 })
                 .map_err(codec_error)?;
         }
+        let mut pixels = Vec::new();
         for frame in &sequence.frames {
-            let mut pixels = frame.image.pixel_data()?.to_vec();
+            pixels.clear();
+            pixels.extend_from_slice(frame.image.borrow().pixel_data()?);
             let mut encoded = gif::Frame::from_rgba_speed(first.width as u16, first.height as u16, &mut pixels, 10);
             encoded.delay = (frame.duration.unwrap_or(0.0) / 10.0) as u16;
             encoded.dispose = gif::DisposalMethod::from_u8(frame.disposal).ok_or_else(|| PyValueError::new_err("invalid GIF disposal"))?;

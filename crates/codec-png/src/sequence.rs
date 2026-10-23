@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::io::Cursor;
 
 use blanket_codec_common::{Frame, SaveOptions, Sequence, codec_error, validate_frame_budget};
@@ -36,6 +37,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     let length = width as usize * height as usize;
     canvas.try_reserve_exact(length).map_err(|_| "cannot allocate APNG canvas")?;
     canvas.resize(length, [0_u16; 4]);
+    let mut previous = Vec::new();
     for frame_index in 0..count {
         let output = reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
         let control = reader.info().frame_control;
@@ -43,11 +45,19 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
         if x.checked_add(output.width).is_none_or(|v| v > width) || y.checked_add(output.height).is_none_or(|v| v > height) {
             return Err("APNG frame outside canvas".into());
         }
-        let previous = control.filter(|c| c.dispose_op == png::DisposeOp::Previous).map(|_| canvas.clone());
+        let restore_previous = control.is_some_and(|c| c.dispose_op == png::DisposeOp::Previous);
+        if restore_previous {
+            previous.clear();
+            for row in y..y + output.height {
+                let start = row as usize * width as usize + x as usize;
+                previous.extend_from_slice(&canvas[start..start + output.width as usize]);
+            }
+        }
         let channels = output.color_type.samples();
         let wide = output.bit_depth == png::BitDepth::Sixteen;
         let max = if wide { 65535_u64 } else { 255 };
         let bytes = if wide { 2 } else { 1 };
+        let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over);
         for row in 0..output.height as usize {
             for col in 0..output.width as usize {
                 let start = (row * output.width as usize + col) * channels * bytes;
@@ -66,7 +76,13 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
                     png::ColorType::Indexed => return Err("unexpanded APNG palette".into()),
                 };
                 let dst = &mut canvas[(y as usize + row) * width as usize + x as usize + col];
-                if control.is_some_and(|c| c.blend_op == png::BlendOp::Over) {
+                if !over || u64::from(src[3]) == max || (dst[3] == 0 && src[3] != 0) {
+                    *dst = src;
+                } else if src[3] == 0 {
+                    if dst[3] == 0 {
+                        *dst = [0; 4];
+                    }
+                } else {
                     let sa = u64::from(src[3]);
                     let da = u64::from(dst[3]);
                     let alpha = sa * max + da * (max - sa);
@@ -76,8 +92,6 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
                             .unwrap_or(0) as u16;
                     }
                     dst[3] = ((alpha + max / 2) / max) as u16;
-                } else {
-                    *dst = src;
                 }
             }
         }
@@ -108,13 +122,19 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
         });
         if default_image && frame_index == 0 {
             canvas.fill([0; 4]);
-        } else if let Some(previous) = previous {
-            canvas = previous;
+        } else if restore_previous {
+            if previous.len() == canvas.len() {
+                std::mem::swap(&mut canvas, &mut previous);
+            } else {
+                for (row, saved) in (y..y + output.height).zip(previous.chunks_exact(output.width as usize)) {
+                    let start = row as usize * width as usize + x as usize;
+                    canvas[start..start + output.width as usize].copy_from_slice(saved);
+                }
+            }
         } else if control.is_some_and(|c| c.dispose_op == png::DisposeOp::Background) {
             for row in y..y + output.height {
-                for col in x..x + output.width {
-                    canvas[row as usize * width as usize + col as usize] = [0; 4];
-                }
+                let start = row as usize * width as usize + x as usize;
+                canvas[start..start + output.width as usize].fill([0; 4]);
             }
         }
     }
@@ -122,8 +142,8 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     Ok(sequence)
 }
 
-pub fn encode_sequence(sequence: &Sequence, options: SaveOptions) -> PyResult<Vec<u8>> {
-    let first = &sequence.frames[0].image;
+pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
+    let first = sequence.frames[0].image.borrow();
     let mut output = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut output, first.width, first.height);
@@ -146,7 +166,9 @@ pub fn encode_sequence(sequence: &Sequence, options: SaveOptions) -> PyResult<Ve
             png::DeflateCompression::Level(options.compress_level)
         });
         let mut writer = encoder.write_header().map_err(codec_error)?;
+        let mut pixels = Vec::new();
         for (i, frame) in sequence.frames.iter().enumerate() {
+            let image = frame.image.borrow();
             if !(sequence.default_image && i == 0) {
                 let duration = frame.duration.unwrap_or(0.0);
                 let (num, den) = if duration <= 65535.0 {
@@ -163,21 +185,77 @@ pub fn encode_sequence(sequence: &Sequence, options: SaveOptions) -> PyResult<Ve
                     .map_err(codec_error)?;
             }
             if first.bit_depth > 8 {
-                let max = (1_u32 << frame.image.bit_depth) - 1;
-                let pixels: Vec<u8> = frame
-                    .image
-                    .raw_data()?
-                    .as_chunks::<2>()
-                    .0
-                    .iter()
-                    .flat_map(|v| (((u32::from(u16::from_le_bytes(*v)) * 65535 + max / 2) / max) as u16).to_be_bytes())
-                    .collect();
+                let raw = image.raw_data()?;
+                pixels.resize(raw.len(), 0);
+                blanket_core::simd::samples_to_be16(raw, &mut pixels, image.bit_depth);
                 writer.write_image_data(&pixels).map_err(codec_error)?;
             } else {
-                writer.write_image_data(frame.image.pixel_data()?).map_err(codec_error)?;
+                writer.write_image_data(image.pixel_data()?).map_err(codec_error)?;
             }
         }
         writer.finish().map_err(codec_error)?;
     }
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn partial_disposal_restores_changing_regions_at_both_depths() {
+        for wide in [false, true] {
+            let max = if wide { 65535_u16 } else { 255 };
+            let red = [max, 0, 0, max];
+            let green = [0, max, 0, max];
+            let blue = [0, 0, max, max];
+            let frames = [
+                (0, 0, 19, 5, png::DisposeOp::None, red),
+                (2, 1, 17, 3, png::DisposeOp::Previous, green),
+                (7, 2, 1, 1, png::DisposeOp::Previous, blue),
+                (1, 0, 16, 2, png::DisposeOp::Background, green),
+                (18, 4, 1, 1, png::DisposeOp::None, blue),
+            ];
+            let pack = |pixels: &[[u16; 4]], big_endian: bool| -> Vec<u8> {
+                let samples = pixels.iter().flatten().copied();
+                if !wide {
+                    samples.map(|v| v as u8).collect()
+                } else if big_endian {
+                    samples.flat_map(u16::to_be_bytes).collect()
+                } else {
+                    samples.flat_map(u16::to_le_bytes).collect()
+                }
+            };
+            let mut data = Vec::new();
+            let mut encoder = png::Encoder::new(&mut data, 19, 5);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(if wide { png::BitDepth::Sixteen } else { png::BitDepth::Eight });
+            encoder.set_animated(frames.len() as u32, 0).unwrap();
+            let mut writer = encoder.write_header().unwrap();
+            for &(x, y, w, h, disposal, color) in &frames {
+                writer.set_frame_position(0, 0).unwrap();
+                writer.set_frame_dimension(w, h).unwrap();
+                writer.set_frame_position(x, y).unwrap();
+                writer.set_dispose_op(disposal).unwrap();
+                writer.write_image_data(&pack(&vec![color; w as usize * h as usize], true)).unwrap();
+            }
+            writer.finish().unwrap();
+            let sequence = decode_sequence(&data).unwrap();
+            assert_eq!(sequence.frames.len(), frames.len());
+            for (i, &(x, y, w, h, _, color)) in frames.iter().enumerate() {
+                let mut expected = vec![red; 19 * 5];
+                if i == 4 {
+                    for row in 0..2 {
+                        expected[row * 19 + 1..row * 19 + 17].fill([0; 4]);
+                    }
+                }
+                for row in y..y + h {
+                    expected[row as usize * 19 + x as usize..row as usize * 19 + (x + w) as usize].fill(color);
+                }
+                let image = &sequence.frames[i].image;
+                assert_eq!(image.bit_depth, if wide { 16 } else { 8 });
+                assert_eq!(image.raw_data().unwrap(), pack(&expected, false));
+            }
+        }
+    }
 }

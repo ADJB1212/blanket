@@ -1,3 +1,5 @@
+use std::borrow::Borrow;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::decode_rust_image;
 use blanket_core::{Image, PixelMode};
@@ -84,15 +86,17 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     Ok(sequence)
 }
 
-pub fn encode_sequence(sequence: &blanket_codec_common::Sequence, options: SaveOptions) -> PyResult<Vec<u8>> {
-    let first = &sequence.frames[0].image;
+pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
+    let first = sequence.frames[0].image.borrow();
     let mut encoder =
         webpx::AnimationEncoder::with_options(first.width, first.height, false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
     encoder.set_quality(f32::from(options.quality));
     encoder.set_lossless(options.lossless);
     let mut timestamp: i32 = 0;
     for frame in &sequence.frames {
-        encoder.add_frame_rgba(frame.image.pixel_data()?, timestamp).map_err(codec_error)?;
+        encoder
+            .add_frame_rgba(frame.image.borrow().pixel_data()?, timestamp)
+            .map_err(codec_error)?;
         timestamp = timestamp
             .checked_add(frame.duration.unwrap_or(0.0) as i32)
             .ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;

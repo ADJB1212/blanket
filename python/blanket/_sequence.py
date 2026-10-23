@@ -11,7 +11,6 @@ from typing import TYPE_CHECKING, BinaryIO
 if TYPE_CHECKING:
     import os
 
-from . import ImageSequence
 from ._blanket import _encode_sequence
 from .Image import Image, _bounded_int, _save_options
 
@@ -41,9 +40,19 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         sources.extend(appended)
         if any(not isinstance(source, Image) for source in sources):
             raise TypeError("append_images must contain images")
-        frames = ImageSequence.all_frames(sources)
+        frames: list[Image] = []
+        for source in sources:
+            source._native.load()
+            source._sync_palette()
+            if source._frames is None:
+                frames.append(source)
+            else:
+                current = source._frames[source._frame]
+                current._native, current.palette, current._info = source._native, source.palette, source._info
+                current._bands = source._bands
+                frames.extend(source._frames)
     else:
-        frames = [image.copy()]
+        frames = [image]
     default_image = controls.get("default_image", image.info.get("default_image", False)) if format == "PNG" else False
     if not isinstance(default_image, bool):
         raise TypeError("default_image must be a bool")

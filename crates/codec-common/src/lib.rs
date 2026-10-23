@@ -6,18 +6,27 @@ use pyo3::prelude::*;
 
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
-pub struct Frame {
-    pub image: Image,
+pub struct Frame<I = Image> {
+    pub image: I,
     pub duration: Option<f64>,
     pub disposal: u8,
     pub blend: u8,
 }
 
-#[derive(Default)]
-pub struct Sequence {
-    pub frames: Vec<Frame>,
+pub struct Sequence<I = Image> {
+    pub frames: Vec<Frame<I>>,
     pub loop_count: Option<u32>,
     pub default_image: bool,
+}
+
+impl<I> Default for Sequence<I> {
+    fn default() -> Self {
+        Self {
+            frames: Vec::new(),
+            loop_count: None,
+            default_image: false,
+        }
+    }
 }
 
 impl Sequence {
