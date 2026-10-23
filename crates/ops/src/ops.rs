@@ -1090,7 +1090,9 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
             return Ok(());
         }
         let mut source = Cow::Borrowed(source);
-        premultiply_image(image.mode, source.to_mut());
+        if matches!(image.mode, PixelMode::La | PixelMode::Rgba) {
+            premultiply_image(image.mode, source.to_mut());
+        }
         let mut reduced = None;
         if let Some(gap) = reducing_gap {
             let fx = (((bounds.2 - bounds.0) / f64::from(size.0) / gap) as u32).max(1);
@@ -1339,6 +1341,21 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
 }
 
 fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8) -> PyResult<()> {
+    if method == 4
+        && u64::from(size.0) * 2 == u64::from(image.width)
+        && u64::from(size.1) * 2 == u64::from(image.height)
+        && b == [0.0, 0.0, f64::from(image.width), f64::from(image.height)]
+    {
+        let stride = image.width as usize * C;
+        let row_bytes = size.0 as usize * C;
+        chunks_mut(output, row_bytes * 16, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                let start = (band * 16 + i) * 2 * stride;
+                crate::ops_simd::box_half::<C>(&source[start..start + stride], &source[start + stride..start + 2 * stride], row);
+            }
+        });
+        return Ok(());
+    }
     if size.1 == image.height && b[1] == 0.0 && b[3] == f64::from(image.height) {
         let horizontal = weights(image.width, size.0, b[0], b[2], method);
         resample_horizontal::<C>(source, output, image.width as usize, 0, &horizontal);
@@ -1609,7 +1626,7 @@ fn ops_affine(
     }
     py.detach(|| {
         let mut source = Cow::Borrowed(source);
-        if method != 0 {
+        if method != 0 && matches!(image.mode, PixelMode::La | PixelMode::Rgba) {
             premultiply_image(image.mode, source.to_mut());
         }
         // Nearest's floating path advances coordinates incrementally. Direct
@@ -1646,6 +1663,17 @@ fn ops_affine(
             // Interior extents need neither per-pixel fill checks nor
             // optional byte offsets; reuse the typed resize gather.
             if columns.iter().all(Option::is_some) && row_origins.iter().all(|&(_, y)| y >= 0.0 && y < image.height as f64) {
+                if channels == 3 {
+                    let columns: Vec<_> = columns.iter().flat_map(|x| (0..3).map(move |c| x.map(|x| x + c))).collect();
+                    let map = crate::ops_simd::NearestL::new(&columns, image.width as usize * 3).expect("validated byte coordinates");
+                    chunks_mut_above(&mut pixels, row_bytes * 16, 1024 << 10, |band, rows| {
+                        for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                            let start = row_origins[band * 16 + i].1 as usize * image.width as usize * 3;
+                            map.sample(&source[start..start + image.width as usize * 3], row);
+                        }
+                    });
+                    return;
+                }
                 let xs: Vec<_> = columns.iter().map(|x| x.unwrap() / channels).collect();
                 let ys: Vec<_> = row_origins.iter().map(|&(_, y)| y as usize).collect();
                 match image.mode {
@@ -1830,7 +1858,7 @@ fn ops_warp(
             }
         }
         let mut source = Cow::Borrowed(source);
-        if method != 0 {
+        if method != 0 && matches!(image.mode, PixelMode::La | PixelMode::Rgba) {
             premultiply_image(image.mode, source.to_mut());
         }
         for ((left, top, right, bottom), q) in mesh {

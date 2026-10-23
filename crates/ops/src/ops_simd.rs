@@ -7,6 +7,32 @@ use blanket_core::pixels::{self, Bytes, load, store};
 
 use crate::ops::{RESAMPLE_BITS, RESAMPLE_ROUND};
 
+pub(crate) fn box_half<const C: usize>(upper: &[u8], lower: &[u8], output: &mut [u8]) {
+    let end = output.len() / (16 * C) * (16 * C);
+    for i in (0..end).step_by(16 * C) {
+        let horizontal = |row: &[u8]| {
+            let first = load::<C>(&row[i * 2..]);
+            let second = load::<C>(&row[i * 2 + 16 * C..]);
+            std::array::from_fn::<_, C, _>(|c| {
+                let (even, odd) = first[c].deinterleave(second[c]);
+                (even.cast::<u16>() + odd.cast::<u16>() + Simd::splat(1)) >> 1
+            })
+        };
+        let upper = horizontal(upper);
+        let lower = horizontal(lower);
+        store::<C>(
+            &mut output[i..],
+            std::array::from_fn(|c| ((upper[c] + lower[c] + Simd::splat(1)) >> 1).cast::<u8>()),
+        );
+    }
+    for (x, dst) in output[end..].iter_mut().enumerate() {
+        let x = end + x;
+        let start = x / C * 2 * C + x % C;
+        let average = |row: &[u8]| (u16::from(row[start]) + u16::from(row[start + C]) + 1) >> 1;
+        *dst = ((average(upper) + average(lower) + 1) >> 1) as u8;
+    }
+}
+
 pub(crate) fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
     let count = output.len();
     assert_eq!(source.len(), count);
@@ -252,6 +278,36 @@ pub(crate) fn reduce_two_l(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn box_half_preserves_pass_rounding_unaligned_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in 0..=65 {
+                for offset in 1..=3 {
+                    let upper: Vec<_> = (0..count * C * 2 + offset + 1).map(|i| (i * 37) as u8).collect();
+                    let lower: Vec<_> = (0..upper.len()).map(|i| (i * 73 + i / 7) as u8).collect();
+                    let mut output = vec![0xa5; count * C + 2];
+                    super::box_half::<C>(
+                        &upper[offset..offset + count * C * 2],
+                        &lower[offset..offset + count * C * 2],
+                        &mut output[1..count * C + 1],
+                    );
+                    for i in 0..count * C {
+                        let start = offset + i / C * C * 2 + i % C;
+                        let average = |row: &[u8]| (u16::from(row[start]) + u16::from(row[start + C])).div_ceil(2);
+                        let expected = (average(&upper) + average(&lower)).div_ceil(2) as u8;
+                        assert_eq!(output[i + 1], expected);
+                    }
+                    assert_eq!(output[0], 0xa5);
+                    assert_eq!(output[count * C + 1], 0xa5);
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
     #[test]
     fn float_reduction_preserves_odd_edges_and_accumulation_order() {
         for width in 0_usize..=33 {

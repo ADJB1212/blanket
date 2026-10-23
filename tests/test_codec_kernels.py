@@ -130,14 +130,15 @@ def test_wide_encoding_reuses_sample_storage_with_exact_byte_order(format: str, 
         assert image.tobytes() == raw
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA"])
 @pytest.mark.parametrize("level", range(10))
 @pytest.mark.parametrize("random_pixels", [False, True])
 def test_png_deflate_levels(mode: str, level: int, random_pixels: bool) -> None:
     size = (129, 65)
-    count = size[0] * size[1] * len(mode)
+    count = ((size[0] + 7) // 8) * size[1] if mode == "1" else size[0] * size[1] * len(mode)
     raw = random.Random(61).randbytes(count) if random_pixels else bytes(i % 251 for i in range(count))
     image = Image.frombytes(mode, size, raw)
+    raw = image.tobytes()
     encoded = BytesIO()
     image.save(encoded, "PNG", compress_level=level)
     for decoder in (Image.open, PillowImage.open):

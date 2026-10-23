@@ -193,6 +193,21 @@ def test_tiff_special_mode_on_later_page(mode: str) -> None:
     assert actual.tobytes() == second.tobytes()
 
 
+def test_tiff_lzw_large_pages_preserve_strip_order() -> None:
+    frames = []
+    for i, mode in enumerate(("L", "RGBA", "RGB")):
+        size = (513 + i * 2, 517 - i * 3)
+        raw = bytes((j * 37 + j // 7 + i * 13) % 256 for j in range(size[0] * size[1] * len(mode)))
+        frames.append(PillowImage.frombytes(mode, size, raw))
+    stream = BytesIO()
+    frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:], compression="tiff_lzw", strip_size=8192)
+    actual = Image.open(stream)
+    assert actual.n_frames == len(frames)
+    for i in (2, 0, 1):
+        actual.seek(i)
+        assert (actual.mode, actual.size, actual.tobytes()) == (frames[i].mode, frames[i].size, frames[i].tobytes())
+
+
 def test_multipage_pdf_and_save_positions() -> None:
     source = animation()
     source.seek(2)

@@ -84,7 +84,7 @@ pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
             4..=6 => png::Compression::Balanced,
             _ => png::Compression::High,
         });
-        encoder.set_filter(png::Filter::Sub);
+        encoder.set_filter(png::Filter::NoFilter);
         encoder
             .write_header()
             .map_err(codec_error)?

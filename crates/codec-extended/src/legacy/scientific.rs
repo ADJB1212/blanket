@@ -9,27 +9,30 @@ fn samples(w: usize, h: usize, data: &[u8], bits: i32, big: bool, flip: bool, fo
         return Err("unsupported sample type".into());
     }
     let source = bytes(data, 0, w * h * size)?;
-    let mut pixels = Vec::with_capacity(w * h * size);
-    for y in 0..h {
+    let output_size = size.min(4);
+    let mut pixels = vec![0; w * h * output_size];
+    for (y, row) in pixels.chunks_exact_mut(w * output_size).enumerate() {
         let sy = if flip { h - 1 - y } else { y };
-        for v in source[sy * w * size..(sy + 1) * w * size].chunks_exact(size) {
-            match bits {
-                8 => pixels.push(v[0]),
-                16 => {
-                    let v = v.try_into().unwrap();
-                    pixels.extend_from_slice(&if big { u16::from_be_bytes(v) } else { u16::from_le_bytes(v) }.to_le_bytes());
+        let source = &source[sy * w * size..(sy + 1) * w * size];
+        match bits {
+            8 => row.copy_from_slice(source),
+            16 => {
+                for (src, dst) in source.as_chunks::<2>().0.iter().zip(row.as_chunks_mut::<2>().0) {
+                    *dst = if big { u16::from_be_bytes(*src) } else { u16::from_le_bytes(*src) }.to_le_bytes();
                 }
-                32 | -32 => {
-                    let v = v.try_into().unwrap();
-                    pixels.extend_from_slice(&if big { u32::from_be_bytes(v) } else { u32::from_le_bytes(v) }.to_le_bytes());
-                }
-                -64 => {
-                    let v = v.try_into().unwrap();
-                    let v = if big { f64::from_be_bytes(v) } else { f64::from_le_bytes(v) };
-                    pixels.extend_from_slice(&(v as f32).to_le_bytes());
-                }
-                _ => unreachable!(),
             }
+            32 | -32 => {
+                for (src, dst) in source.as_chunks::<4>().0.iter().zip(row.as_chunks_mut::<4>().0) {
+                    *dst = if big { u32::from_be_bytes(*src) } else { u32::from_le_bytes(*src) }.to_le_bytes();
+                }
+            }
+            -64 => {
+                for (src, dst) in source.as_chunks::<8>().0.iter().zip(row.as_chunks_mut::<4>().0) {
+                    let value = if big { f64::from_be_bytes(*src) } else { f64::from_le_bytes(*src) };
+                    *dst = (value as f32).to_le_bytes();
+                }
+            }
+            _ => unreachable!(),
         }
     }
     let mut im = match bits {

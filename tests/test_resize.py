@@ -6,6 +6,23 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize("width", [1, 15, 16, 17, 33, 129])
+def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> None:
+    channels = 3 if mode == "YCbCr" else len(mode)
+    size = (width * 2, 34)
+    raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(size[0] * size[1] * channels))
+    actual = Image.frombytes(mode, size, raw)
+    expected = PillowImage.frombytes(mode, size, raw)
+    if mode in ("LA", "RGBA"):
+        expected = expected.convert("La" if mode == "LA" else "RGBa")
+    expected = expected.resize((width, 34), PillowImage.Resampling.BOX).resize((width, 17), PillowImage.Resampling.BOX)
+    if mode in ("LA", "RGBA"):
+        expected = expected.convert(mode)
+    assert actual.resize((width, 17), Image.Resampling.BOX).tobytes() == expected.tobytes()
+    assert actual.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [None, *Image.Resampling])
 def test_resize_matches_pillow(mode: str, method: int | None, subtests: pytest.Subtests) -> None:

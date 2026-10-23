@@ -37,12 +37,13 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
     if raw.len() < stride * h {
         return Err("truncated XBM pixels".into());
     }
-    let mut pixels = Vec::with_capacity(w * h);
+    let row_bytes = w.div_ceil(8);
     for y in 0..h {
-        for x in 0..w {
-            pixels.push(if raw[y * stride + x / 8] & (1 << (x % 8)) != 0 { 255 } else { 0 });
+        for x in 0..row_bytes {
+            raw[y * row_bytes + x] = raw[y * stride + x].reverse_bits();
         }
     }
+    let pixels = blanket_core::raster::unpack_bilevel(&raw, w, h);
     image(w, h, PixelMode::One, pixels, "XBM")
 }
 
@@ -53,16 +54,20 @@ pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     let mut out = format!(
         "#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n",
         im.width, im.height
-    );
-    for row in pixels.chunks_exact(im.width as usize) {
-        for chunk in row.chunks(8) {
-            let v = chunk.iter().enumerate().fold(0, |v, (i, &p)| v | (u8::from(p != 0) << i));
-            out.push_str(&format!("0x{v:02x},"));
+    )
+    .into_bytes();
+    let packed = blanket_core::raster::pack_bilevel(pixels, im.width as usize, im.height as usize);
+    out.reserve(packed.len() * 5 + im.height as usize + 3);
+    let hex = b"0123456789abcdef";
+    for row in packed.chunks_exact((im.width as usize).div_ceil(8)) {
+        for &v in row {
+            let v = v.reverse_bits();
+            out.extend_from_slice(&[b'0', b'x', hex[(v >> 4) as usize], hex[(v & 15) as usize], b',']);
         }
-        out.push('\n');
+        out.push(b'\n');
     }
-    out.push_str("};\n");
-    Ok(out.into_bytes())
+    out.extend_from_slice(b"};\n");
+    Ok(out)
 }
 
 fn strings(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {

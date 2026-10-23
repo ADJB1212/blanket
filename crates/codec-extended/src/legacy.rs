@@ -1,6 +1,8 @@
 mod scientific;
 mod x11;
 
+use std::borrow::Cow;
+
 use blanket_codec_common::validate_dimensions;
 use blanket_core::{Image, PixelMode};
 
@@ -114,37 +116,55 @@ fn decode_pcx(data: &[u8]) -> Result<Image, String> {
     if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err("invalid PCX stride".into());
     }
-    let mut pixels = vec![0; w * h * if planes == 3 { 3 } else { 1 }];
+    let mut pixels = if bits == 1 && planes == 1 {
+        Vec::new()
+    } else {
+        vec![0; w * h * if planes == 3 { 3 } else { 1 }]
+    };
     let mut pos = 128;
+    let mut row = vec![0; stride * planes];
+    let mut packed = Vec::with_capacity(if bits == 1 && planes == 1 { w.div_ceil(8) * h } else { 0 });
     for y in 0..h {
-        let mut row = Vec::with_capacity(stride * planes);
-        while row.len() < stride * planes {
+        let mut written = 0;
+        while written < row.len() {
             let v = bytes(data, pos, 1)?[0];
             pos += 1;
-            let (count, value) = if data[2] == 1 && v & 0xc0 == 0xc0 {
+            if data[2] == 1 && v & 0xc0 == 0xc0 {
                 let value = bytes(data, pos, 1)?[0];
                 pos += 1;
-                (usize::from(v & 63), value)
-            } else {
-                (1, v)
-            };
-            if count == 0 || row.len() + count > stride * planes {
-                return Err("invalid PCX run".into());
-            }
-            row.resize(row.len() + count, value);
-        }
-        for x in 0..w {
-            if bits == 1 {
-                let value = (0..planes).fold(0, |v, c| v | ((row[c * stride + x / 8] >> (7 - x % 8)) & 1) << c);
-                pixels[y * w + x] = if planes == 1 { value * 255 } else { value };
-            } else if planes == 3 {
-                for c in 0..3 {
-                    pixels[(y * w + x) * 3 + c] = row[c * stride + x];
+                let count = usize::from(v & 63);
+                if count == 0 || written + count > row.len() {
+                    return Err("invalid PCX run".into());
                 }
+                row[written..written + count].fill(value);
+                written += count;
             } else {
-                pixels[y * w + x] = row[x];
+                row[written] = v;
+                written += 1;
             }
         }
+        if bits == 1 && planes == 1 {
+            packed.extend_from_slice(&row[..w.div_ceil(8)]);
+        } else if bits == 1 {
+            for x in 0..w {
+                let value = (0..planes).fold(0, |v, c| v | ((row[c * stride + x / 8] >> (7 - x % 8)) & 1) << c);
+                pixels[y * w + x] = value;
+            }
+        } else if planes == 3 {
+            let output = pixels[y * w * 3..(y + 1) * w * 3].as_chunks_mut::<3>().0;
+            let bands = [&row[..w], &row[stride..stride + w], &row[2 * stride..2 * stride + w]];
+            let done = blanket_core::pixels::merge(bands, output);
+            for (x, pixel) in output.iter_mut().enumerate().skip(done) {
+                for c in 0..3 {
+                    pixel[c] = bands[c][x];
+                }
+            }
+        } else {
+            pixels[y * w..(y + 1) * w].copy_from_slice(&row[..w]);
+        }
+    }
+    if bits == 1 && planes == 1 {
+        pixels = blanket_core::raster::unpack_bilevel(&packed, w, h);
     }
     if bits == 1 && planes > 1 {
         return indexed(w, h, pixels, data[16..64].to_vec(), "PCX");
@@ -185,14 +205,17 @@ fn encode_pcx(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     out[10..12].copy_from_slice(&((h - 1) as u16).to_le_bytes());
     out[65] = planes as u8;
     out[66..68].copy_from_slice(&stride16.to_le_bytes());
+    let mut row = vec![0; stride];
     for y in 0..h {
         for c in 0..planes {
-            let mut row = vec![0; stride];
-            for x in 0..w {
-                if bits == 1 {
-                    row[x / 8] |= u8::from(pixels[y * w + x] != 0) << (7 - x % 8);
-                } else {
-                    row[x] = pixels[(y * w + x) * planes + c];
+            let source = &pixels[y * w * planes..(y + 1) * w * planes];
+            if bits == 1 {
+                blanket_core::pixels::pack_bilevel::<false>(source, &mut row);
+            } else if planes == 1 {
+                row[..w].copy_from_slice(source);
+            } else {
+                for (dst, pixel) in row[..w].iter_mut().zip(source.as_chunks::<3>().0) {
+                    *dst = pixel[c];
                 }
             }
             let mut x = 0;
@@ -239,6 +262,20 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
         3 => PixelMode::Rgb,
         _ => PixelMode::Rgba,
     };
+    if data[2] == 0 && bpc == 1 {
+        let source = bytes(data, 512, w * h * channels)?;
+        let mut pixels = vec![0; source.len()];
+        for (y, row) in pixels.chunks_exact_mut(w * channels).enumerate() {
+            let start = (h - 1 - y) * w;
+            match channels {
+                1 => row.copy_from_slice(&source[start..start + w]),
+                3 => merge_sgi_row::<3>(source, row, start, w * h),
+                4 => merge_sgi_row::<4>(source, row, start, w * h),
+                _ => unreachable!(),
+            }
+        }
+        return image(w, h, mode, pixels, "SGI");
+    }
     let mut pixels = vec![0; w * h * channels * bpc];
     for c in 0..channels {
         for y in 0..h {
@@ -297,21 +334,36 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
     }
 }
 
+fn merge_sgi_row<const C: usize>(source: &[u8], output: &mut [u8], start: usize, plane: usize) {
+    let output = output.as_chunks_mut::<C>().0;
+    let bands = std::array::from_fn(|c| &source[c * plane + start..][..output.len()]);
+    let done = blanket_core::pixels::merge(bands, output);
+    for (x, pixel) in output.iter_mut().enumerate().skip(done) {
+        for c in 0..C {
+            pixel[c] = bands[c][x];
+        }
+    }
+}
+
 fn encode_sgi(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     if !matches!(im.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) || im.width > 65535 || im.height > 65535 {
         return Err("unsupported SGI mode or dimensions".into());
     }
     let (w, h, c) = (im.width as usize, im.height as usize, im.mode.channels());
-    let mut out = vec![0; 512];
+    let mut out = vec![0; 512 + pixels.len()];
     out[..4].copy_from_slice(&[1, 218, 0, 1]);
     for (offset, value) in [(4, if c == 1 { 2 } else { 3 }), (6, w), (8, h), (10, c)] {
         out[offset..offset + 2].copy_from_slice(&(value as u16).to_be_bytes());
     }
     out[16..20].copy_from_slice(&255_u32.to_be_bytes());
     for band in 0..c {
-        for y in (0..h).rev() {
-            for x in 0..w {
-                out.push(pixels[(y * w + x) * c + band]);
+        for (y, row) in out[512 + band * w * h..512 + (band + 1) * w * h].chunks_exact_mut(w).enumerate() {
+            let source = &pixels[(h - 1 - y) * w * c..][..w * c];
+            match c {
+                1 => row.copy_from_slice(source),
+                3 => crate::pixels::extract_channel::<3>(source, row, band),
+                4 => crate::pixels::extract_channel::<4>(source, row, band),
+                _ => unreachable!(),
             }
         }
     }
@@ -365,10 +417,7 @@ fn decode_msp(data: &[u8]) -> Result<Image, String> {
             }
         }
     }
-    let pixels = (0..h)
-        .flat_map(|y| (0..w).map(move |x| (y, x)))
-        .map(|(y, x)| if packed[y * stride + x / 8] & (128 >> (x % 8)) == 0 { 0 } else { 255 })
-        .collect();
+    let pixels = blanket_core::raster::unpack_bilevel(&packed, w, h);
     image(w, h, PixelMode::One, pixels, "MSP")
 }
 
@@ -408,17 +457,18 @@ fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, Str
             }
         }
     }
-    for y in 0..h {
-        let mut row = vec![0; stride];
-        for x in 0..w {
-            if im.mode == PixelMode::One {
-                let set = (pixels[y * w + x] != 0) ^ (format == "PALM");
-                row[x / 8] |= u8::from(set) << (7 - x % 8);
+    let start = out.len();
+    out.resize(start + stride * h, 0);
+    for (source, row) in pixels.chunks_exact(w).zip(out[start..].chunks_exact_mut(stride)) {
+        if im.mode == PixelMode::One {
+            if format == "PALM" {
+                blanket_core::pixels::pack_bilevel::<true>(source, row);
             } else {
-                row[x] = pixels[y * w + x];
+                blanket_core::pixels::pack_bilevel::<false>(source, row);
             }
+        } else {
+            row[..w].copy_from_slice(source);
         }
-        out.extend_from_slice(&row);
     }
     Ok(out)
 }
@@ -435,8 +485,8 @@ fn decode_sun(data: &[u8]) -> Result<Image, String> {
     let palette = bytes(data, 32, maplen)?;
     let stride = (w * depth).div_ceil(16) * 2;
     let source = bytes(data, 32 + maplen, data.len().saturating_sub(32 + maplen))?;
-    let mut raw = Vec::new();
-    if kind == 2 {
+    let raw = if kind == 2 {
+        let mut raw = Vec::with_capacity(stride * h);
         let mut pos = 0;
         while raw.len() < stride * h {
             let v = bytes(source, pos, 1)?[0];
@@ -459,30 +509,49 @@ fn decode_sun(data: &[u8]) -> Result<Image, String> {
             }
             raw.resize(raw.len() + count, value);
         }
+        Cow::Owned(raw)
     } else {
-        raw = bytes(source, 0, stride * h)?.to_vec();
+        Cow::Borrowed(bytes(source, 0, stride * h)?)
+    };
+    let channels = if depth >= 24 { 3 } else { 1 };
+    if depth == 1 {
+        let row_bytes = w.div_ceil(8);
+        let packed = if row_bytes == stride {
+            Cow::Borrowed(raw.as_ref())
+        } else {
+            Cow::Owned(
+                raw.chunks_exact(stride)
+                    .flat_map(|row| row[..row_bytes].iter().copied())
+                    .collect::<Vec<_>>(),
+            )
+        };
+        return image(w, h, PixelMode::One, blanket_core::raster::unpack_bilevel_inverted(&packed, w, h), "SUN");
     }
-    let mut pixels = Vec::with_capacity(w * h * if depth >= 24 { 3 } else { 1 });
-    for y in 0..h {
-        for x in 0..w {
-            let row = &raw[y * stride..(y + 1) * stride];
-            match depth {
-                1 => pixels.push(if row[x / 8] & (128 >> (x % 8)) == 0 { 255 } else { 0 }),
-                4 => {
-                    let v = (row[x / 2] >> (if x % 2 == 0 { 4 } else { 0 })) & 15;
-                    pixels.push(if maplen == 0 { v * 17 } else { v });
-                }
-                8 => pixels.push(row[x]),
-                _ => {
-                    let p = &row[x * (depth / 8)..];
-                    if kind == 3 {
-                        pixels.extend_from_slice(&p[..3]);
-                    } else {
-                        pixels.extend_from_slice(&[p[2], p[1], p[0]]);
+    let mut pixels = vec![0; w * h * channels];
+    for (row, output) in raw.chunks_exact(stride).zip(pixels.chunks_exact_mut(w * channels)) {
+        match depth {
+            8 => output.copy_from_slice(&row[..w]),
+            24 if kind == 3 => output.copy_from_slice(&row[..w * 3]),
+            24 => crate::pixels::swap_red_blue::<3>(&row[..w * 3], output),
+            _ => {
+                for (x, pixel) in output.chunks_exact_mut(channels).enumerate() {
+                    match depth {
+                        4 => {
+                            let v = (row[x / 2] >> (if x % 2 == 0 { 4 } else { 0 })) & 15;
+                            pixel[0] = if maplen == 0 { v * 17 } else { v };
+                        }
+                        _ => {
+                            let p = &row[x * (depth / 8)..];
+                            if kind == 3 {
+                                pixel.copy_from_slice(&p[..3]);
+                            } else {
+                                pixel.copy_from_slice(&[p[2], p[1], p[0]]);
+                            }
+                        }
                     }
                 }
             }
-        }
+        };
     }
     if maplen > 0 && matches!(depth, 4 | 8) {
         let n = maplen / 3;

@@ -347,6 +347,24 @@ pub fn integer_to_color(source: &[u8], mode: PixelMode, channels: usize) -> Vec<
 
 fn integer_to_color_pixels<const C: usize>(source: &[u8], mode: PixelMode) -> Vec<u8> {
     let stride = mode.sample_bytes();
+    if C == 3 && mode == PixelMode::I && source.len() / 4 * 3 < 2 << 20 {
+        let (blocks, tail) = source.as_chunks::<64>();
+        let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+        output.extend(blocks.iter().map(|block| {
+            let values = Simd::<i32, 16>::from_array(std::array::from_fn(|i| i32::from_le_bytes(block[i * 4..i * 4 + 4].try_into().unwrap())));
+            let mut pixels = [0; 48];
+            crate::pixels::store_gray_rgb(&mut pixels, narrow_integer_l(values));
+            pixels
+        }));
+        let mut output = output.into_flattened();
+        output.extend(
+            tail.as_chunks::<4>()
+                .0
+                .iter()
+                .flat_map(|&v| [i32::from_le_bytes(v).clamp(0, 255) as u8; 3]),
+        );
+        return output;
+    }
     if C == 4 && source.len() / stride * C < 4 << 20 {
         return match mode {
             PixelMode::I => integer_to_color_serial::<C, 4>(source.as_chunks::<4>().0, i32::from_le_bytes),
@@ -606,6 +624,9 @@ pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     if to == PixelMode::L {
         return extract_channel::<2>(source, 0);
     }
+    if to == PixelMode::Rgb && source.len() / 2 * 3 < 2 << 20 {
+        return gray_to_rgb::<2>(source);
+    }
     if to == PixelMode::Rgba && source.len() < 2 << 20 {
         let (blocks, tail) = source.as_chunks::<32>();
         let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
@@ -661,6 +682,9 @@ pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
 }
 
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
+    if S == 1 && C == 3 && source.len() * 3 < 2 << 20 {
+        return gray_to_rgb::<1>(source);
+    }
     if C == 4 {
         if S == 3 {
             let (blocks, tail) = source.as_chunks::<48>();
@@ -687,6 +711,21 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
         |p| std::array::from_fn(|c| if c == 3 { Bytes::splat(255) } else { p[if S == 1 { 0 } else { c }] }),
         |p| std::array::from_fn(|c| if c == 3 { 255 } else { p[if S == 1 { 0 } else { c }] }),
     )
+}
+
+fn gray_to_rgb<const S: usize>(source: &[u8]) -> Vec<u8> {
+    let pixels = source.as_chunks::<S>().0;
+    let (blocks, tail) = pixels.as_chunks::<16>();
+    let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+    output.extend(blocks.iter().map(|block| {
+        let gray = load::<S>(block.as_flattened())[0];
+        let mut pixels = [0; 48];
+        crate::pixels::store_gray_rgb(&mut pixels, gray);
+        pixels
+    }));
+    let mut output = output.into_flattened();
+    output.extend(tail.iter().flat_map(|p| [p[0]; 3]));
+    output
 }
 
 fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
@@ -894,6 +933,8 @@ mod tests {
                 }
                 let expected: Vec<_> = gray.iter().flat_map(|&v| [v, v, v, 255]).collect();
                 assert_eq!(convert(gray, PixelMode::L, PixelMode::Rgba), expected);
+                let expected: Vec<_> = gray.iter().flat_map(|&v| [v; 3]).collect();
+                assert_eq!(convert(gray, PixelMode::L, PixelMode::Rgb), expected);
                 let expected: Vec<_> = rgb.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
                 assert_eq!(convert(rgb, PixelMode::Rgb, PixelMode::Rgba), expected);
                 let expected: Vec<_> = gray.iter().flat_map(|&v| [0, 0, 0, 255 - v]).collect();
@@ -908,6 +949,8 @@ mod tests {
                 let pairs = &source[offset..offset + count * 2];
                 let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().flat_map(|p| [p[0], p[0], p[0], p[1]]).collect();
                 assert_eq!(convert_la(pairs, PixelMode::Rgba), expected);
+                let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().flat_map(|p| [p[0]; 3]).collect();
+                assert_eq!(convert_la(pairs, PixelMode::Rgb), expected);
                 for band in 0..2 {
                     let expected: Vec<_> = pairs.as_chunks::<2>().0.iter().map(|p| p[band]).collect();
                     assert_eq!(extract_two_channel(pairs, band), expected);
@@ -1105,7 +1148,7 @@ mod tests {
     fn integer_to_color_matches_gray_expansion() {
         for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
             let values = [-10_i32, 0, 1, 127, 255, 256, 65535, 100000];
-            for count in [0, 1, 15, 16, 17, 257] {
+            for count in [0, 1, 15, 16, 17, 257, (2 << 20) / 3 - 1, (2 << 20) / 3 + 1] {
                 let source: Vec<u8> = values
                     .iter()
                     .cycle()
@@ -1116,10 +1159,13 @@ mod tests {
                         _ => (value as u16).to_le_bytes().to_vec(),
                     })
                     .collect();
-                let gray = integer_to_l(&source, mode);
+                let mut unaligned = vec![0xa5];
+                unaligned.extend_from_slice(&source);
+                let source = &unaligned[1..];
+                let gray = integer_to_l(source, mode);
                 for destination in [PixelMode::Rgb, PixelMode::Rgba] {
                     assert_eq!(
-                        integer_to_color(&source, mode, destination.channels()),
+                        integer_to_color(source, mode, destination.channels()),
                         convert(&gray, PixelMode::L, destination)
                     );
                 }

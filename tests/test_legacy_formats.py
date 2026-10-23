@@ -25,8 +25,9 @@ def patterned(mode: str, size: tuple[int, int] = (13, 7)) -> Image.Image:
 
 
 @pytest.mark.parametrize(("format", "mode"), [("PCX", "1"), ("PCX", "L"), ("PCX", "P"), ("PCX", "RGB"), ("SGI", "L"), ("SGI", "RGB"), ("SGI", "RGBA"), ("XBM", "1"), ("MSP", "1")])
-def test_legacy_interoperability(format: str, mode: str) -> None:
-    source = patterned(mode)
+@pytest.mark.parametrize("size", [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)])
+def test_legacy_interoperability(format: str, mode: str, size: tuple[int, int]) -> None:
+    source = patterned(mode, size)
     for writer in (source, source.to_pillow()):
         stream = BytesIO()
         writer.save(stream, format)
@@ -53,21 +54,33 @@ def test_spider_float_and_first_stack_image(big: bool) -> None:
         assert actual.tobytes() == struct.pack("<12f", *values)
 
 
-def fits_data(bits: int, values: list[int | float]) -> bytes:
-    cards = ["SIMPLE  =                    T", f"BITPIX  = {bits:20}", "NAXIS   =                    2", "NAXIS1  =                    3", "NAXIS2  =                    2", "END"]
+@pytest.mark.parametrize("bits", [8, 16, 32, -32, -64])
+@pytest.mark.parametrize("width", [3, 15, 16, 17, 33, 129])
+def test_fits_sample_depth_and_orientation(bits: int, width: int) -> None:
+    values = [0, 1, 17, 255, 31, 42] * width
+    cards = ["SIMPLE  =                    T", f"BITPIX  = {bits:20}", "NAXIS   =                    2", f"NAXIS1  = {width:20}", "NAXIS2  =                    6", "END"]
     header = b"".join(card.encode().ljust(80) for card in cards).ljust(2880)
     code = {8: "B", 16: "H", 32: "i", -32: "f", -64: "d"}[bits]
-    return header + struct.pack(">6" + code, *values).ljust(2880, b"\0")
-
-
-@pytest.mark.parametrize("bits", [8, 16, 32, -32, -64])
-def test_fits_sample_depth_and_orientation(bits: int) -> None:
-    values = [0, 1, 17, 255, 31, 42]
-    data = fits_data(bits, values)
+    data = header + struct.pack(f">{len(values)}{code}", *values).ljust(2880, b"\0")
     actual = Image.open(BytesIO(data), formats=["FITS"])
     expected = PillowImage.open(BytesIO(data))
     assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "FITS")
     assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("predictor", [1, 2])
+def test_tiff_lzw_strips_preserve_samples_and_reject_truncation(mode: str, predictor: int) -> None:
+    source = patterned(mode, (513, 517))
+    stream = BytesIO()
+    source.to_pillow().save(stream, "TIFF", compression="tiff_lzw", tiffinfo={317: predictor}, strip_size=8192)
+    data = stream.getvalue()
+    expected = PillowImage.open(BytesIO(data))
+    assert len(expected.tag_v2[273]) > 1
+    assert Image.open(BytesIO(data)).tobytes() == expected.tobytes() == source.tobytes()
+    offset = expected.tag_v2[273][-1]
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(data[: offset + 1]))
 
 
 def test_pixar_rgb() -> None:
@@ -84,14 +97,16 @@ def test_pixar_rgb() -> None:
 
 @pytest.mark.parametrize("depth", [1, 4, 8, 24, 32])
 @pytest.mark.parametrize("kind", [1, 2, 3])
-def test_sun_stride_channels_and_rle(depth: int, kind: int) -> None:
-    w, h = 16, 3
+@pytest.mark.parametrize("w", [1, 7, 16, 17, 33, 129])
+def test_sun_stride_channels_and_rle(depth: int, kind: int, w: int) -> None:
+    h = 3
     stride = ((w * depth + 15) // 16) * 2
     raw = bytes((i * 37) % 256 for i in range(stride * h))
     payload = raw.replace(b"\x80", b"\x80\0") if kind == 2 else raw
     data = struct.pack(">8I", 0x59A66A95, w, h, depth, len(payload), kind, 0, 0) + payload
     actual = Image.open(BytesIO(data), formats=["SUN"])
-    expected = PillowImage.open(BytesIO(data))
+    reference = struct.pack(">8I", 0x59A66A95, w, h, depth, len(raw), 1 if kind == 2 else kind, 0, 0) + raw
+    expected = PillowImage.open(BytesIO(reference))
     assert (actual.mode, actual.size) == (expected.mode, expected.size)
     assert actual.tobytes() == expected.tobytes()
 
@@ -136,15 +151,48 @@ def test_xpm_transparency_and_multichar_keys() -> None:
     assert Image.open(stream).tobytes() == actual.tobytes()
 
 
-def test_xbm_short_and_nonbyte_width() -> None:
-    data = b"#define im_width 9\n#define im_height 2\nstatic short im_bits[] = {0x0101,0x00fe};"
+@pytest.mark.parametrize("w", [9, 17, 33, 129])
+def test_xbm_short_and_nonbyte_width(w: int) -> None:
+    rows = [1 | (1 << (w - 1)), ((1 << (w - 2)) - 1) << 1]
+    words = [f"0x{(row >> shift) & 65535:04x}" for row in rows for shift in range(0, w, 16)]
+    data = (f"#define im_width {w}\n#define im_height 2\nstatic short im_bits[] = {{" + ",".join(words) + "};").encode()
     actual = Image.open(BytesIO(data))
-    assert actual.convert("L").tobytes() == bytes([255] + [0] * 7 + [255] + [0] + [255] * 7 + [0])
+    assert actual.convert("L").tobytes() == bytes(255 if row & (1 << x) else 0 for row in rows for x in range(w))
+
+
+@pytest.mark.parametrize(("bits", "planes"), [(1, 1), (8, 1), (8, 3)])
+def test_pcx_uncompressed_rows(bits: int, planes: int) -> None:
+    w, h = 33, 3
+    stride = ((w * bits + 7) // 8 + 1) // 2 * 2
+    header = bytearray(128)
+    header[:4] = bytes([10, 5, 0, bits])
+    struct.pack_into("<HH", header, 8, w - 1, h - 1)
+    header[65] = planes
+    struct.pack_into("<H", header, 66, stride)
+    raw = bytes((i * 37) % 256 for i in range(stride * planes * h))
+    actual = Image.open(BytesIO(bytes(header) + raw))
+    if bits == 1:
+        expected = bytes(255 if raw[y * stride + x // 8] & (128 >> (x % 8)) else 0 for y in range(h) for x in range(w))
+        assert (actual.mode, actual.size, actual.convert("L").tobytes()) == ("1", (w, h), expected)
+    else:
+        expected = bytes(raw[(y * planes + c) * stride + x] for y in range(h) for x in range(w) for c in range(planes))
+        assert (actual.mode, actual.size, actual.tobytes()) == ("RGB" if planes == 3 else "L", (w, h), expected)
+
+
+@pytest.mark.parametrize("run", [b"\xc0\x07", b"\xff\x07", b"\xc1"])
+def test_pcx_invalid_run(run: bytes) -> None:
+    header = bytearray(128)
+    header[:4] = bytes([10, 5, 1, 8])
+    header[65] = 1
+    struct.pack_into("<H", header, 66, 2)
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(bytes(header) + run))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "P"])
-def test_palm_write(mode: str) -> None:
-    source = patterned(mode)
+@pytest.mark.parametrize("size", [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)])
+def test_palm_write(mode: str, size: tuple[int, int]) -> None:
+    source = patterned(mode, size)
     stream = BytesIO()
     source.save(stream, "PALM")
     data = stream.getvalue()

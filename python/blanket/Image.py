@@ -710,7 +710,7 @@ class Image:
             image.getexif()[305] = "Blanket"
             ```
         """
-        self.load()
+        self._native.load()
         raw = self.info.get("exif")
         if raw is None and isinstance(self.info.get("Raw profile type exif"), str):
             value = self.info["Raw profile type exif"]

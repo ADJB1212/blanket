@@ -201,8 +201,9 @@ def test_animation_preserves_metadata(format: str, profile: bytes) -> None:
     assert pillow.info["icc_profile"] == profile
 
 
-def test_exif_edits_copy_and_orientation() -> None:
-    image = Image.new("RGB", (3, 2))
+@pytest.mark.parametrize("mode", ["RGB", "P", "PA"])
+def test_exif_edits_copy_and_orientation(mode: str) -> None:
+    image = Image.new(mode, (3, 2))
     exif = image.getexif()
     assert image.getexif() is exif
     exif[305] = "new EXIF"
@@ -216,6 +217,13 @@ def test_exif_edits_copy_and_orientation() -> None:
     result = ImageOps.exif_transpose(image)
     assert result.size == (2, 3)
     assert 274 not in result.getexif()
+    del image.info["exif"]
+    empty = image.getexif()
+    assert not empty
+    assert image.getexif() is empty
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.getexif()
 
 
 def test_jpeg_multisegment_icc_and_size_limits() -> None:

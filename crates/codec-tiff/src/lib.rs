@@ -6,6 +6,7 @@ use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
@@ -43,6 +44,11 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
             .map(Some)
             .map_err(|error| error.to_string());
     }
+    if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(5)
+        && let Some(image) = decode_lzw_strips(data, &mut decoder)?
+    {
+        return Ok(Some(image));
+    }
     if decoder.colortype().ok() != Some(tiff::ColorType::Gray(32)) {
         return Ok(None);
     }
@@ -55,6 +61,45 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         Image::from_float_bytes(width, height, values.into_iter().flat_map(f32::to_le_bytes).collect()).map_err(|error| error.to_string())?;
     image.format = Some("TIFF".to_owned());
     Ok(Some(image))
+}
+
+fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
+    use tiff::tags::Tag;
+
+    let mode = match decoder.colortype().map_err(|e| e.to_string())? {
+        tiff::ColorType::Gray(8) => PixelMode::L,
+        tiff::ColorType::RGB(8) => PixelMode::Rgb,
+        tiff::ColorType::RGBA(8) => PixelMode::Rgba,
+        _ => return Ok(None),
+    };
+    if decoder.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1) != 1 || decoder.get_tag_u32(Tag::TileWidth).is_ok() {
+        return Ok(None);
+    }
+    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    validate_dimensions(width, height)?;
+    let rows = decoder.get_tag_u32(Tag::RowsPerStrip).unwrap_or(height).min(height);
+    if width == 0 || rows == 0 {
+        return Ok(None);
+    }
+    let stride = width as usize * mode.channels();
+    let length = stride * height as usize;
+    if !blanket_core::parallel::should_parallel(length, stride * rows as usize, 256 * 1024) {
+        return Ok(None);
+    }
+    if decoder.strip_count().map_err(|e| e.to_string())? != height.div_ceil(rows) {
+        return Err("invalid TIFF strip count".into());
+    }
+    let mut pixels = vec![0; length];
+    pixels
+        .par_chunks_mut(stride * rows as usize)
+        .enumerate()
+        .try_for_each(|(index, output)| {
+            let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+            decoder.read_chunk_bytes(index as u32, output).map_err(|e| e.to_string())
+        })?;
+    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into()))
+        .map(Some)
+        .map_err(|e| e.to_string())
 }
 
 fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Image, String> {
@@ -499,6 +544,36 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lzw_strip_decoding_matches_serial_with_partial_last_strip() {
+        fn check<C: tiff::encoder::colortype::ColorType<Inner = u8>>(mode: PixelMode) {
+            let (width, height) = (513, 517);
+            let pixels: Vec<_> = (0..width * height * mode.channels()).map(|i| (i * 37 + i / 7) as u8).collect();
+            let mut data = Cursor::new(Vec::new());
+            {
+                let mut encoder = tiff::encoder::TiffEncoder::new(&mut data)
+                    .unwrap()
+                    .with_compression(tiff::encoder::Compression::Lzw);
+                let mut image = encoder.new_image::<C>(width as u32, height as u32).unwrap();
+                image.rows_per_strip(17).unwrap();
+                image.write_data(&pixels).unwrap();
+            }
+            for threads in [1, 4] {
+                rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                    let decoded = decode_tiff(data.get_ref()).unwrap();
+                    assert_eq!(decoded.mode, mode);
+                    assert_eq!(decoded.pixel_data().unwrap(), pixels);
+                    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data.get_ref().as_slice())).unwrap();
+                    assert_eq!(decode_lzw_strips(data.get_ref(), &mut decoder).unwrap().is_some(), threads > 1);
+                });
+            }
+        }
+        check::<tiff::encoder::colortype::Gray8>(PixelMode::L);
+        check::<tiff::encoder::colortype::RGB8>(PixelMode::Rgb);
+        check::<tiff::encoder::colortype::RGBA8>(PixelMode::Rgba);
+    }
+
     #[test]
     fn lab_tiff_directory_bounds_and_byte_order() {
         for little in [false, true] {

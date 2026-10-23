@@ -16,6 +16,7 @@ blanket-codec-common = { path = "../codec-common" }
 blanket-codec-image = { path = "../codec-image" }
 image = { version = "0.25", default-features = false, features = ["tiff"] }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw", "jpeg"]}
+rayon.workspace = true
 
 [lib]
 doctest = false
