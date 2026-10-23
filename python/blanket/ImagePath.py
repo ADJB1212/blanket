@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"struct", "math", "collections.abc"}
+
 import struct
 from math import fmod
 from operator import index

@@ -7,6 +7,8 @@ bitmap fallback or an explicitly supplied font object; Pillow is not required.
 
 from __future__ import annotations
 
+__lazy_modules__ = {"collections.abc"}
+
 from math import ceil, cos, isfinite, pi, sin
 from operator import index
 from typing import TYPE_CHECKING

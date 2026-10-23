@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"builtins", "collections.abc"}
+
 import builtins
 from types import CodeType
 from typing import TYPE_CHECKING, Any

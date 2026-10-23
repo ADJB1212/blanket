@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"colorsys"}
+
 import colorsys
 import re
 from math import cbrt, copysign, cos, dist, isfinite, pi, sin

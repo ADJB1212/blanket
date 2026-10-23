@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"contextlib", "collections.abc"}
+
 import math
 from array import array
 from contextlib import nullcontext

@@ -6,6 +6,8 @@ Glyph availability depends on the selected font; system fallback is not used.
 
 from __future__ import annotations
 
+__lazy_modules__ = {"collections.abc"}
+
 import os
 import struct
 from enum import IntEnum

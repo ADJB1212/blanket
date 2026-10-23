@@ -7,6 +7,8 @@ lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
 
 from __future__ import annotations
 
+__lazy_modules__ = {"collections.abc"}
+
 import struct
 from itertools import accumulate, pairwise
 from typing import TYPE_CHECKING, Literal, Protocol, overload

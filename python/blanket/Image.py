@@ -6,6 +6,8 @@ Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
 
 from __future__ import annotations
 
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "collections.abc"}
+
 import contextlib
 import math
 import os
@@ -1652,7 +1654,7 @@ class Image:
         try:
             from PIL import Image as PillowImage
         except ImportError as error:
-            raise ImportError("Pillow is required for to_pillow(); install blanket[test] or Pillow") from error
+            raise ImportError("Pillow is required for to_pillow(); install pyblanket[test] or Pillow") from error
         result = PillowImage.frombytes(self.mode, self.size, self.tobytes())
         if self.palette is not None:
             result.putpalette(self.palette.tobytes(), self.palette.mode)

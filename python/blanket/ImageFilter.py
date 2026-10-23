@@ -6,6 +6,8 @@ Convolution, rank, and blur filters operate on 8-bit images, including `1`,
 
 from __future__ import annotations
 
+__lazy_modules__ = {"collections.abc", "functools", "operator"}
+
 from abc import ABC, abstractmethod
 from functools import reduce
 from operator import add
