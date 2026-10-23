@@ -14,7 +14,7 @@ pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }
 blanket-codec-image = { path = "../codec-image" }
 image = { version = "0.25", default-features = false, features = ["webp"] }
-webpx = "0.4"
+webpx = { version = "0.4", default-features = false, features = ["animation", "decode", "encode", "std"] }
 libwebp-sys = { version = "0.14", default-features = false, features = ["std", "parallel"] }
 
 [target.'cfg(target_arch = "aarch64")'.dependencies]
@@ -26,6 +26,9 @@ libwebp-sys = { version = "0.14", default-features = false, features = ["avx2", 
 [features]
 default = []
 no-vendored-webp = ["libwebp-sys/system-dylib"]
+
+[build-dependencies]
+pkg-config = "0.3"
 
 [lib]
 doctest = false

@@ -171,34 +171,34 @@ Use `from blanket import features` to inspect the installed build:
 `features.blanketinfo()` prints backend and format diagnostics. See the
 [features module](https://adjb1212.github.io/blanket-docs/features/) for feature names.
 
-| Format      | Read | Write | Notes                                                                         |
-| ----------- | :--: | :---: | ----------------------------------------------------------------------------- |
-| PNG         | Yes  |  Yes  | Lossless; high-bit-depth and indexed output                                   |
-| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                               |
-| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                                     |
-| TIFF        | Yes  |  Yes  | First image only; raw, LZW, Deflate, or JPEG compression                      |
-| WebP        | Yes  |  Yes  | Lossy or lossless; first frame only                                           |
-| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                       |
-| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                                 |
-| PDF         |  —   |  Yes  | Single page; lossless 8-bit output with transparency                          |
-| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                                    |
-| GIF         | Yes  |  Yes  | First frame only; single-frame output with 256 colors and binary transparency |
-| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension       |
-| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support       |
-| TGA         | Yes  |  Yes  | Indexed/RLE input; uncompressed grayscale, RGB, and alpha output              |
-| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only                                            |
-| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI                      |
-| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA                                                       |
-| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output         |
-| PCX         | Yes  |  Yes  | Bilevel, indexed, grayscale, and RGB; RLE output                              |
-| SGI         | Yes  |  Yes  | Raw/RLE 8/16-bit input; uncompressed 8-bit output                             |
-| XBM / XPM   | Yes  |  Yes  | Bilevel XBM; RGB/RGBA XPM with binary transparency                            |
-| FITS        | Yes  |  No   | Primary image, first plane; integer/float samples                             |
-| SPIDER      | Yes  |  No   | 2D float images and first image of a stack                                    |
-| Pixar       | Yes  |  No   | Uncompressed RGB raster                                                       |
-| MSP         | Yes  |  Yes  | Bilevel; raw/RLE input, uncompressed output                                   |
-| PALM        |  No  |  Yes  | Bilevel or 8-bit indexed output                                               |
-| Sun raster  | Yes  |  No   | Raw/RLE, packed grayscale, indexed, and RGB input                             |
+| Format      | Read | Write | Notes                                                                   |
+| ----------- | :--: | :---: | ----------------------------------------------------------------------- |
+| PNG         | Yes  |  Yes  | Lossless; APNG animation, high-bit-depth and indexed output             |
+| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                         |
+| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                               |
+| TIFF        | Yes  |  Yes  | Multi-page read; single-page raw, LZW, Deflate, or JPEG output          |
+| WebP        | Yes  |  Yes  | Lossy or lossless; animation read/write                                 |
+| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                 |
+| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                           |
+| PDF         |  —   |  Yes  | Multi-page, lossless 8-bit output with transparency                     |
+| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                              |
+| GIF         | Yes  |  Yes  | Animation read/write; 256 colors and binary transparency                |
+| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension |
+| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support |
+| TGA         | Yes  |  Yes  | Indexed/RLE input; uncompressed grayscale, RGB, and alpha output        |
+| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only                                      |
+| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI                |
+| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA                                                 |
+| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output   |
+| PCX         | Yes  |  Yes  | Bilevel, indexed, grayscale, and RGB; RLE output                        |
+| SGI         | Yes  |  Yes  | Raw/RLE 8/16-bit input; uncompressed 8-bit output                       |
+| XBM / XPM   | Yes  |  Yes  | Bilevel XBM; RGB/RGBA XPM with binary transparency                      |
+| FITS        | Yes  |  No   | Primary image, first plane; integer/float samples                       |
+| SPIDER      | Yes  |  No   | 2D float images and first image of a stack                              |
+| Pixar       | Yes  |  No   | Uncompressed RGB raster                                                 |
+| MSP         | Yes  |  Yes  | Bilevel; raw/RLE input, uncompressed output                             |
+| PALM        |  No  |  Yes  | Bilevel or 8-bit indexed output                                         |
+| Sun raster  | Yes  |  No   | Raw/RLE, packed grayscale, indexed, and RGB input                       |
 
 Netpbm opens with `image.format == "PPM"`, including PAM. Saving selects
 PBM, PGM, or PPM from modes `1`, `L`, or `RGB`; use `format="PAM"` or `.pam`
@@ -234,7 +234,11 @@ compression can still change RGB values during RGB/YUV conversion.
 - **Metadata:** PNG, JPEG, and uncompressed JPEG XL metadata boxes supply
   EXIF/XMP for orientation handling. Saving writes pixels only; metadata is
   not preserved.
-- **Multiple frames:** animation and multipage editing are not supported.
+- **Multiple frames:** GIF, WebP, APNG, and TIFF decode all frames eagerly.
+  Use `seek()`, `tell()`, `n_frames`, and `ImageSequence` to navigate them.
+  GIF, WebP, APNG, and PDF support `save_all=True, append_images=[...]`.
+  Pixel operations and copies apply to the current frame. Animated GIF frames
+  use composited RGBA canvases rather than Pillow's palette mode transitions.
 - **High bit depth:** sample retention is supported for selected operations
   and formats; HDR tone mapping and HEIF HDR/ICC metadata retention are not.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is

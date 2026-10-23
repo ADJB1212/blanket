@@ -18,6 +18,7 @@ use blanket_codec_webp::{decode_webp, encode_webp};
 use blanket_core::{Image, PixelMode, UnidentifiedImageError};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 const JXL_CONTAINER_SIGNATURE: &[u8] = b"\0\0\0\x0cJXL \r\n\x87\n";
@@ -165,6 +166,11 @@ impl ImageFormat {
 }
 #[pyfunction]
 pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Image> {
+    let format = input_format(data, formats)?;
+    py.detach(|| decode(data, format)).map_err(UnidentifiedImageError::new_err)
+}
+
+fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageFormat> {
     let format = ImageFormat::detect(data).ok_or_else(|| UnidentifiedImageError::new_err("cannot identify image file"))?;
     if let Some(formats) = formats {
         let allowed = formats
@@ -179,7 +185,118 @@ pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> 
         }
     }
 
-    py.detach(|| decode(data, format)).map_err(UnidentifiedImageError::new_err)
+    Ok(format)
+}
+
+type OpenSequence = (Vec<Image>, Vec<(Option<f64>, u8, u8)>, Option<u32>, bool);
+
+#[pyfunction]
+pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<OpenSequence> {
+    use blanket_codec_common::Sequence;
+    let format = input_format(data, formats)?;
+    let sequence = py
+        .detach(|| match format {
+            ImageFormat::Gif => blanket_codec_gif::decode_sequence(data),
+            ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
+            ImageFormat::Png => blanket_codec_png::decode_sequence(data),
+            ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
+            _ => decode(data, format).map(Sequence::single),
+        })
+        .map_err(UnidentifiedImageError::new_err)?;
+    let (images, metadata) = sequence
+        .frames
+        .into_iter()
+        .map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend)))
+        .unzip();
+    Ok((images, metadata, sequence.loop_count, sequence.default_image))
+}
+
+#[pyfunction]
+#[allow(clippy::too_many_arguments)]
+pub fn _encode_sequence(
+    py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
+    default_image: bool, quality: u8, compress_level: u8, lossless: bool,
+) -> PyResult<Py<PyBytes>> {
+    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+    let format = ImageFormat::parse(format)?;
+    if images.is_empty() || durations.len() != images.len() || disposals.len() != images.len() || blends.len() != images.len() {
+        return Err(PyValueError::new_err("invalid frame arrays"));
+    }
+    let mut total = 0;
+    let first = &images[0];
+    for (i, image) in images.iter().enumerate() {
+        validate_frame_budget(&mut total, image.width, image.height).map_err(PyValueError::new_err)?;
+        image.raw_data()?;
+        if image.width == 0 || image.height == 0 {
+            return Err(PyValueError::new_err("cannot encode empty image"));
+        }
+        let valid_mode = if format == ImageFormat::Pdf {
+            matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::Cmyk)
+        } else {
+            image.mode == PixelMode::Rgba
+        };
+        if !valid_mode || (format != ImageFormat::Png && image.bit_depth != 8) {
+            return Err(PyValueError::new_err("unsupported multi-frame mode or sample depth"));
+        }
+        if format != ImageFormat::Pdf && (image.width != first.width || image.height != first.height || image.bit_depth != first.bit_depth) {
+            return Err(PyValueError::new_err("animation frames must have matching dimensions and sample depths"));
+        }
+        let maximum = match format {
+            ImageFormat::Gif => 655350.0,
+            ImageFormat::Png => 65535000.0,
+            _ => f64::from(i32::MAX),
+        };
+        if !durations[i].is_finite() || !(0.0..=maximum).contains(&durations[i]) {
+            return Err(PyValueError::new_err("invalid frame duration"));
+        }
+    }
+    if format == ImageFormat::Gif && loop_count.is_some_and(|n| n > 65535) {
+        return Err(PyValueError::new_err("GIF loop must be between 0 and 65535"));
+    }
+    if format == ImageFormat::Webp && loop_count.is_some_and(|n| n > 65535) {
+        return Err(PyValueError::new_err("WebP loop must be between 0 and 65535"));
+    }
+    if format == ImageFormat::Png && loop_count.is_some_and(|n| n > i32::MAX as u32) {
+        return Err(PyValueError::new_err("APNG loop exceeds 2147483647"));
+    }
+    if default_image && (format != ImageFormat::Png || images.len() < 2) {
+        return Err(PyValueError::new_err("default_image requires PNG with at least one animation frame"));
+    }
+    let sequence = Sequence {
+        frames: images
+            .iter()
+            .enumerate()
+            .map(|(i, image)| Frame {
+                image: (**image).clone(),
+                duration: Some(durations[i]),
+                disposal: disposals[i],
+                blend: blends[i],
+            })
+            .collect(),
+        loop_count,
+        default_image,
+    };
+    let options = SaveOptions {
+        quality,
+        compress_level,
+        lossless,
+        ..Default::default()
+    };
+    let encoded = py.detach(|| match format {
+        ImageFormat::Gif => blanket_codec_gif::encode_sequence(&sequence),
+        ImageFormat::Webp => blanket_codec_webp::encode_sequence(&sequence, options),
+        ImageFormat::Png => blanket_codec_png::encode_sequence(&sequence, options),
+        ImageFormat::Pdf => {
+            let pages = sequence
+                .frames
+                .iter()
+                .map(|frame| Ok((&frame.image, frame.image.pixel_data()?)))
+                .collect::<PyResult<Vec<_>>>()?;
+            blanket_codec_pdf::encode_pages(&pages)
+        }
+        _ => Err(PyValueError::new_err("unsupported multi-frame output format")),
+    })?;
+    Ok(PyBytes::new(py, &encoded).unbind())
 }
 
 pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {

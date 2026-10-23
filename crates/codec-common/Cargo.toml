@@ -9,6 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+blanket-core = { path = "../core" }
 pyo3.workspace = true
 
 [lib]

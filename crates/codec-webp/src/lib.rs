@@ -51,3 +51,51 @@ pub fn backend_version() -> String {
     let (major, minor, patch) = webpx::version();
     format!("{major}.{minor}.{patch}")
 }
+
+pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+    let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
+    if !info.has_animation {
+        return decode_webp(data).map(Sequence::single);
+    }
+    let mut decoder = webpx::AnimationDecoder::new(data).map_err(|e| e.to_string())?;
+    let mut sequence = Sequence {
+        loop_count: Some(decoder.info().loop_count),
+        ..Sequence::default()
+    };
+    let mut timestamp = 0;
+    let mut total = 0;
+    while decoder.has_more_frames() {
+        validate_frame_budget(&mut total, decoder.info().width, decoder.info().height)?;
+        let frame = decoder.next_frame().map_err(|e| e.to_string())?.ok_or("missing WebP frame")?;
+        let duration = frame
+            .timestamp_ms
+            .checked_sub(timestamp)
+            .filter(|d| *d >= 0)
+            .ok_or("invalid WebP timestamp")?;
+        timestamp = frame.timestamp_ms;
+        sequence.frames.push(Frame {
+            image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into())).map_err(|e| e.to_string())?,
+            duration: Some(f64::from(duration)),
+            disposal: 0,
+            blend: 0,
+        });
+    }
+    Ok(sequence)
+}
+
+pub fn encode_sequence(sequence: &blanket_codec_common::Sequence, options: SaveOptions) -> PyResult<Vec<u8>> {
+    let first = &sequence.frames[0].image;
+    let mut encoder =
+        webpx::AnimationEncoder::with_options(first.width, first.height, false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
+    encoder.set_quality(f32::from(options.quality));
+    encoder.set_lossless(options.lossless);
+    let mut timestamp: i32 = 0;
+    for frame in &sequence.frames {
+        encoder.add_frame_rgba(frame.image.pixel_data()?, timestamp).map_err(codec_error)?;
+        timestamp = timestamp
+            .checked_add(frame.duration.unwrap_or(0.0) as i32)
+            .ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
+    }
+    encoder.finish(timestamp).map_err(codec_error)
+}

@@ -167,3 +167,5 @@ pub fn encode_wide_png(image: &Image, mut samples: Vec<u16>, options: SaveOption
     }
     Ok(output)
 }
+mod sequence;
+pub use sequence::{decode_sequence, encode_sequence};

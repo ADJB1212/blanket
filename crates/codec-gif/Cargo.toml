@@ -9,6 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+gif = { version = "0.14", default-features = false, features = ["std"] }
 blanket-core = { path = "../core" }
 pyo3.workspace = true
 blanket-codec-common = { path = "../codec-common" }

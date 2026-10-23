@@ -443,7 +443,10 @@ fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
     } else {
         radii
     };
-    if [radii.0, radii.1].iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
+    if <[f32; 2]>::from(radii)
+        .iter()
+        .any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32)
+    {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
     }
     Ok(radii)
@@ -553,7 +556,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
     {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    let dimensions = [size.0, size.1, size.2];
+    let dimensions = <[_; 3]>::from(size);
     if dimensions.iter().any(|s| !(2..=65).contains(s)) {
         return Err(PyValueError::new_err("Table size in any dimension should be from 2 to 65"));
     }

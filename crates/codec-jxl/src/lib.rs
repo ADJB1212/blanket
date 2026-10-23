@@ -97,6 +97,7 @@ pub fn encode_jxl(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResul
     encode_jxl_samples(image, JxlSamples::Byte(pixels), options, JxlThreads::Pool)
 }
 
+#[derive(Clone, Copy)]
 enum JxlSamples<'a> {
     Byte(&'a [u8]),
     Wide(&'a [u16]),

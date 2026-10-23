@@ -36,6 +36,7 @@ from blanket import (
     ImageOps as BlanketOps,
     ImagePalette as BlanketPalette,
     ImagePath as BlanketPath,
+    ImageSequence as BlanketSequence,
     ImageStat as BlanketStat,
     features,
 )
@@ -1017,6 +1018,33 @@ def check_image_utilities() -> int:
     return checks + 1
 
 
+def check_sequences() -> int:
+    checks = 0
+    for format in ("GIF", "WEBP", "PNG", "TIFF"):
+        for writer in (BlanketImage, PillowImage) if format != "TIFF" else (PillowImage,):
+            frames = [writer.new("RGBA", (11, 7), color) for color in ("red", "green", "blue")]
+            output = BytesIO()
+            options = {"lossless": True} if format == "WEBP" else {}
+            if format != "TIFF":
+                options.update(duration=[20, 40, 60], loop=2)
+            frames[0].save(output, format, save_all=True, append_images=frames[1:], **options)
+            actual = BlanketImage.open(output)
+            expected = PillowImage.open(output)
+            assert actual.n_frames == expected.n_frames == 3
+            for i in range(3):
+                actual.seek(i)
+                expected.seek(i)
+                assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+                if format != "TIFF":
+                    expected.load()
+                    assert actual.info["duration"] == expected.info["duration"]
+                    assert actual.info["loop"] == expected.info["loop"] == 2
+                checks += 1
+            assert len(BlanketSequence.all_frames(actual)) == 3 and actual.tell() == 2
+            checks += 2
+    return checks
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
@@ -1037,6 +1065,7 @@ def main() -> None:
     checks += check_imagefont()
     checks += check_save_compressors()
     checks += check_image_utilities()
+    checks += check_sequences()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()

@@ -42,8 +42,8 @@ pub fn load<const C: usize>(source: &[u8]) -> [Bytes; C] {
     match C {
         1 => result[0] = Bytes::from_slice(&source[..16]),
         2 => {
-            let (a, b) = Bytes::from_slice(&source[..16]).deinterleave(Bytes::from_slice(&source[16..32]));
-            result.copy_from_slice(&[a, b]);
+            let channels = <[Bytes; 2]>::from(Bytes::from_slice(&source[..16]).deinterleave(Bytes::from_slice(&source[16..32])));
+            result.copy_from_slice(&channels);
         }
         3 => result.copy_from_slice(&load_rgb(source)),
         4 => {

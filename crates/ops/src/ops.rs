@@ -1026,7 +1026,7 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
         return Err(PyValueError::new_err("height and width must be > 0"));
     }
     // The public Pillow resize API passes its box through C floats.
-    let mut b = [bounds.0, bounds.1, bounds.2, bounds.3].map(|x| f64::from(x as f32));
+    let mut b = <[_; 4]>::from(bounds).map(|x| f64::from(x as f32));
     if b.iter().any(|x| !x.is_finite())
         || b[0] < 0.0
         || b[1] < 0.0

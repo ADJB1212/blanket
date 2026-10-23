@@ -40,14 +40,22 @@ fn append_rgba_channels<const C: usize>(output: &mut Vec<u8>, pixels: &[[u8; 4]]
 // PDF 1.4 image XObjects with an optional grayscale soft mask. Raw streams
 // retain exact samples without adding a runtime dependency or a lossy codec.
 pub fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    encode_pages(&[(image, pixels)])
+}
+
+pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
+    if pages.is_empty() || pages.iter().any(|(image, _)| image.width == 0 || image.height == 0) {
         return Err(PyValueError::new_err("cannot encode empty PDF image"));
     }
-    let (width, height) = (image.width, image.height);
     let mut output = Vec::new();
     // Color and alpha streams fit in pixels.len(); leave room for PDF objects.
     output
-        .try_reserve_exact(pixels.len().checked_add(2048).ok_or_else(|| PyMemoryError::new_err("PDF is too large"))?)
+        .try_reserve_exact(
+            pages
+                .iter()
+                .try_fold(2048_usize, |n, (_, pixels)| n.checked_add(pixels.len()).and_then(|v| v.checked_add(2048)))
+                .ok_or_else(|| PyMemoryError::new_err("PDF is too large"))?,
+        )
         .map_err(|_| PyMemoryError::new_err("cannot allocate PDF"))?;
     output.extend_from_slice(b"%PDF-1.4\n%\xe2\xe3\xcf\xd3\n");
     let mut offsets = Vec::with_capacity(6);
@@ -63,32 +71,49 @@ pub fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         }
     };
     object("/Type /Catalog /Pages 2 0 R", None);
-    object("/Type /Pages /Kids [3 0 R] /Count 1", None);
-    object(
-        &format!("/Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 5 0 R >> >> /Contents 4 0 R"),
-        None,
-    );
-    let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
-    object("", Some(Stream::Bytes(content.as_bytes())));
-    let color = match image.mode {
-        PixelMode::L => "DeviceGray",
-        PixelMode::Cmyk => "DeviceCMYK",
-        _ => "DeviceRGB",
-    };
-    let (samples, mask) = if image.mode == PixelMode::Rgba {
-        (Stream::Rgb(pixels.as_chunks::<4>().0), " /SMask 6 0 R")
-    } else {
-        (Stream::Bytes(pixels), "")
-    };
-    object(
-        &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{color} /BitsPerComponent 8{mask}"),
-        Some(samples),
-    );
-    if image.mode == PixelMode::Rgba {
+    let mut page_id = 3;
+    let mut kids = String::new();
+    for (image, _) in pages {
+        use std::fmt::Write;
+        write!(kids, "{page_id} 0 R ").unwrap();
+        page_id += if image.mode == PixelMode::Rgba { 4 } else { 3 };
+    }
+    object(&format!("/Type /Pages /Kids [{kids}] /Count {}", pages.len()), None);
+    page_id = 3;
+    for &(image, pixels) in pages {
+        let (width, height) = (image.width, image.height);
+        let content_id = page_id + 1;
+        let image_id = page_id + 2;
+        let mask_id = page_id + 3;
         object(
-            &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8"),
-            Some(Stream::Alpha(pixels.as_chunks::<4>().0)),
+            &format!(
+                "/Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R"
+            ),
+            None,
         );
+        let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
+        object("", Some(Stream::Bytes(content.as_bytes())));
+        let color = match image.mode {
+            PixelMode::L => "DeviceGray",
+            PixelMode::Cmyk => "DeviceCMYK",
+            _ => "DeviceRGB",
+        };
+        let (samples, mask) = if image.mode == PixelMode::Rgba {
+            (Stream::Rgb(pixels.as_chunks::<4>().0), format!(" /SMask {mask_id} 0 R"))
+        } else {
+            (Stream::Bytes(pixels), String::new())
+        };
+        object(
+            &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{color} /BitsPerComponent 8{mask}"),
+            Some(samples),
+        );
+        if image.mode == PixelMode::Rgba {
+            object(
+                &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8"),
+                Some(Stream::Alpha(pixels.as_chunks::<4>().0)),
+            );
+        }
+        page_id += if image.mode == PixelMode::Rgba { 4 } else { 3 };
     }
     let xref = output.len();
     let size = offsets.len() + 1;

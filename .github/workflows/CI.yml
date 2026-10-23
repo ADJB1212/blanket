@@ -114,8 +114,8 @@ jobs:
           echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=no-vendored-webp,use-system-lcms2" >> "$GITHUB_ENV"
-      - name: Check Rust formatting
-        run: cargo fmt --check
+      - name: Run Clippy
+        run: cargo clippy --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES
       - name: Force rebuild crates that use homebrew dylibs
         if: runner.os == 'macOS'
         run: |

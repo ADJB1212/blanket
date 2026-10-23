@@ -156,21 +156,27 @@ users expect.
 
 ---
 
-## Phase 5 — Animation & Multi-Frame Support
+## Phase 5 — Animation & Multi-Frame Support — Complete
 
 Support reading and writing animated and multi-page images. This is a large
 architectural change that touches codecs, the `Image` struct, and the Python
 API.
 
-- [ ] `Image.seek(frame)` / `Image.tell()` — frame navigation
-- [ ] `Image.n_frames` property, `is_animated` reflecting actual frame count
-- [ ] `ImageSequence.Iterator(image)` — frame iteration protocol
-- [ ] `ImageSequence.all_frames(image, func=None)`
-- [ ] Animated GIF read/write (frame delays, disposal, loop count)
-- [ ] Animated WebP read/write
-- [ ] APNG read/write
-- [ ] Multi-page TIFF read
-- [ ] Multi-page PDF write
+Frames decode eagerly into independent rasters. Animated GIFs expose composited
+RGBA canvases. Navigation retains frame edits; copies and transforms operate on
+the current frame. Sequence saving uses `save_all` and `append_images`, with
+format-specific timing and composition controls. See the formats guide for
+memory limits, APNG sample precision and blending, and compatibility details.
+
+- [x] `Image.seek(frame)` / `Image.tell()` — frame navigation
+- [x] `Image.n_frames` property, `is_animated` reflecting actual frame count
+- [x] `ImageSequence.Iterator(image)` — frame iteration protocol
+- [x] `ImageSequence.all_frames(image, func=None)`
+- [x] Animated GIF read/write (frame delays, disposal, loop count)
+- [x] Animated WebP read/write
+- [x] APNG read/write
+- [x] Multi-page TIFF read
+- [x] Multi-page PDF write
 
 ---
 

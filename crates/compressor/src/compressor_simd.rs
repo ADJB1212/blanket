@@ -66,12 +66,11 @@ fn properties_chunk(source: &[u8], channels: usize) -> (bool, bool) {
     let mut opaque = true;
     let mut offset = 0;
     while offset + 16 * channels <= source.len() {
-        let (r, g, b, a) = if channels == 3 {
+        let [r, g, b, a] = if channels == 3 {
             let [r, g, b] = load::<3>(&source[offset..]);
-            (r, g, b, Bytes::splat(255))
+            [r, g, b, Bytes::splat(255)]
         } else {
-            let [r, g, b, a] = load::<4>(&source[offset..]);
-            (r, g, b, a)
+            load::<4>(&source[offset..])
         };
         gray &= (r.simd_eq(g) & r.simd_eq(b)).all();
         opaque &= a.simd_eq(Bytes::splat(255)).all();
@@ -209,7 +208,7 @@ fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTran
     let fill = |i: usize, dst: &mut [u8], scratch: &mut Vec<u8>| {
         let start = i * rows_per_chunk * width;
         let source = &samples[start..start + dst.len() / row_bytes * width];
-        let source = if let PackTransform::Identity = transform {
+        let source = if matches!(transform, PackTransform::Identity) {
             source
         } else {
             scratch.resize(source.len(), 0);

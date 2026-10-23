@@ -274,6 +274,61 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
     decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)
 }
+
+pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+    let little = data.starts_with(b"II");
+    let read = |offset: usize, count: usize| -> Result<usize, String> {
+        let bytes = data
+            .get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?)
+            .ok_or("truncated TIFF directory")?;
+        let value = if little {
+            bytes.iter().rev().fold(0_u64, |v, &b| (v << 8) | u64::from(b))
+        } else {
+            bytes.iter().fold(0_u64, |v, &b| (v << 8) | u64::from(b))
+        };
+        usize::try_from(value).map_err(|_| "invalid TIFF offset".into())
+    };
+    let big = read(2, 2)? == 43;
+    let (header, offset_bytes, count_bytes, entry_bytes) = if big { (8, 8, 8, 20) } else { (4, 4, 2, 12) };
+    let mut offset = read(header, offset_bytes)?;
+    let mut seen = std::collections::HashSet::new();
+    let mut page_data = data.to_vec();
+    let mut sequence = Sequence::default();
+    let mut total = 0;
+    while offset != 0 {
+        if !seen.insert(offset) {
+            return Err("cyclic TIFF page directories".into());
+        }
+        let count = read(offset, count_bytes)?;
+        let next = offset
+            .checked_add(count_bytes)
+            .and_then(|v| count.checked_mul(entry_bytes).and_then(|n| v.checked_add(n)))
+            .ok_or("TIFF directory overflow")?;
+        let next_offset = read(next, offset_bytes)?;
+        let bytes = if little {
+            (offset as u64).to_le_bytes()
+        } else {
+            (offset as u64).to_be_bytes()
+        };
+        page_data[header..header + offset_bytes].copy_from_slice(if little { &bytes[..offset_bytes] } else { &bytes[8 - offset_bytes..] });
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_slice())).map_err(|e| e.to_string())?;
+        let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+        validate_frame_budget(&mut total, width, height)?;
+        let image = decode_tiff(&page_data)?;
+        sequence.frames.push(Frame {
+            image,
+            duration: None,
+            disposal: 0,
+            blend: 0,
+        });
+        offset = next_offset;
+    }
+    if sequence.frames.is_empty() {
+        return Err("TIFF contains no pages".into());
+    }
+    Ok(sequence)
+}
 pub fn encode_lab_tiff(image: &Image) -> PyResult<Vec<u8>> {
     if image.width == 0 || image.height == 0 {
         return Err(PyValueError::new_err("cannot encode an empty image"));

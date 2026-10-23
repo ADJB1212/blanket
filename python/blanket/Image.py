@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 from ._blanket import (
     _encode,
     _Image,
+    _open_sequence,
     enhance_blend,
     filter_merge,
     fromarray as _native_fromarray,
@@ -39,7 +40,6 @@ from ._blanket import (
     image_new,
     image_paste,
     image_putalpha,
-    open_bytes,
     ops_affine,
     ops_canvas,
     ops_entropy,
@@ -74,6 +74,7 @@ _EXTENSIONS = {
     ".gif": "GIF",
     ".ico": "ICO",
     ".png": "PNG",
+    ".apng": "PNG",
     ".jpg": "JPEG",
     ".jpeg": "JPEG",
     ".jxl": "JXL",
@@ -299,6 +300,8 @@ class Image:
         self.filename: str | bytes = ""
         self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
+        self._frames: list[Image] | None = None
+        self._frame = 0
         palette_data = native.palette_data()
         if palette_data is not None:
             from .ImagePalette import ImagePalette
@@ -405,7 +408,7 @@ class Image:
 
     @property
     def is_animated(self) -> bool:
-        """Blanket exposes a single frame for every supported image.
+        """Whether the image contains more than one frame or page.
 
         Examples:
             ```python
@@ -415,7 +418,61 @@ class Image:
             print(image.is_animated)
             ```
         """
-        return False
+        return self.n_frames > 1
+
+    @property
+    def n_frames(self) -> int:
+        """Number of eagerly decoded frames or pages.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            assert Image.new("RGB", (2, 2)).n_frames == 1
+            ```
+        """
+        return len(self._frames) if self._frames is not None else 1
+
+    def tell(self) -> int:
+        """Return the current zero-based frame index.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            assert Image.new("RGB", (2, 2)).tell() == 0
+            ```
+        """
+        self._native.load()
+        return self._frame
+
+    def seek(self, frame: int) -> None:
+        """Select a frame; raise EOFError when the index is outside the image.
+
+        Args:
+            frame: Zero-based frame or page index.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            image.seek(0)
+            ```
+        """
+        self._native.load()
+        frame = index(frame)
+        if not 0 <= frame < self.n_frames:
+            raise EOFError("attempt to seek outside sequence")
+        if self._frames is None or frame == self._frame:
+            return
+        self._sync_palette()
+        current = self._frames[self._frame]
+        current._native, current.palette, current._info = self._native, self.palette, self._info
+        selected = self._frames[frame]
+        self._native, self.palette, self._info = selected._native, selected.palette, selected._info
+        self._bands = _BANDS[self._native.mode]
+        self._frame = frame
 
     @property
     def has_transparency_data(self) -> bool:
@@ -565,6 +622,9 @@ class Image:
             ```
         """
         self._native.close()
+        if self._frames is not None:
+            for frame in self._frames:
+                frame._native.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
         """Return a new image converted to a supported mode.
@@ -1693,6 +1753,11 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if {"save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image"} & options.keys():
+            from ._sequence import save_sequence
+
+            if save_sequence(self, fp, output_format, options, compressor):
+                return
         if self.mode == "LAB":
             if output_format != "TIFF":
                 raise OSError(f"cannot write mode LAB as {output_format}")
@@ -1941,11 +2006,27 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
     data = _read_bytes(fp)
-    image = Image(open_bytes(data, formats))
+    frames, controls, loop_count, default_image = _open_sequence(data, formats)
+    image = Image(frames[0])
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
 
     image.info.update(read_metadata(data, image.format))
+    decoded = [Image(frame) for frame in frames]
+    for frame, (duration, disposal, blend) in zip(decoded, controls, strict=True):
+        frame._info.update(image.info)
+        if duration is not None:
+            frame._info["duration"] = duration
+        if loop_count is not None:
+            frame._info["loop"] = loop_count
+        if default_image:
+            frame._info["default_image"] = True
+        if image.format == "GIF":
+            frame._info["disposal"] = disposal
+        elif image.format == "PNG" and (len(frames) > 1 or loop_count is not None):
+            frame._info.update(disposal=disposal, blend=blend)
+    image._frames = decoded if len(decoded) > 1 else None
+    image._info = decoded[0]._info
     return image
 
 
