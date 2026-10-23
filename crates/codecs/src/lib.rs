@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 pub mod codecs;
 pub mod metadata;
 

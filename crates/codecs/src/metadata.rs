@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::simd::{Simd, simd_swizzle};
 
 use blanket_codec_common::codec_error;
 use pyo3::exceptions::PyValueError;
@@ -58,10 +59,11 @@ fn png_chunk(output: &mut Vec<u8>, kind: &[u8], payload: &[u8]) -> PyResult<()> 
     Ok(())
 }
 
-fn jpeg_segment(output: &mut Vec<u8>, marker: u8, payload: &[u8]) -> PyResult<()> {
-    let length = u16::try_from(payload.len() + 2).map_err(|_| PyValueError::new_err("JPEG metadata segment exceeds 65533 bytes"))?;
+fn jpeg_segment(output: &mut Vec<u8>, marker: u8, prefix: &[u8], payload: &[u8]) -> PyResult<()> {
+    let length = u16::try_from(prefix.len() + payload.len() + 2).map_err(|_| PyValueError::new_err("JPEG metadata segment exceeds 65533 bytes"))?;
     output.extend_from_slice(&[255, marker]);
     output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(prefix);
     output.extend_from_slice(payload);
     Ok(())
 }
@@ -87,23 +89,23 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
     let tiff = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
     match format {
         "JPEG" => {
-            let mut output = data[..2].to_vec();
+            let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + icc.len() + 64 + icc.len().div_ceil(65519) * 18);
+            output.extend_from_slice(&data[..2]);
             if !exif.is_empty() {
-                jpeg_segment(&mut output, 0xe1, &[b"Exif\0\0".as_slice(), tiff].concat())?;
+                jpeg_segment(&mut output, 0xe1, b"Exif\0\0", tiff)?;
             }
             if !xmp.is_empty() {
-                jpeg_segment(&mut output, 0xe1, &[b"http://ns.adobe.com/xap/1.0/\0".as_slice(), xmp].concat())?;
+                jpeg_segment(&mut output, 0xe1, b"http://ns.adobe.com/xap/1.0/\0", xmp)?;
             }
             let count = icc.len().div_ceil(65519);
             if count > 255 {
                 return Err(PyValueError::new_err("JPEG ICC profile exceeds 255 segments"));
             }
+            let mut prefix = *b"ICC_PROFILE\0\0\0";
+            prefix[13] = count as u8;
             for (i, part) in icc.chunks(65519).enumerate() {
-                jpeg_segment(
-                    &mut output,
-                    0xe2,
-                    &[b"ICC_PROFILE\0".as_slice(), &[i as u8 + 1, count as u8], part].concat(),
-                )?;
+                prefix[12] = i as u8 + 1;
+                jpeg_segment(&mut output, 0xe2, &prefix, part)?;
             }
             output.extend_from_slice(&data[2..]);
             Ok(output)
@@ -137,7 +139,8 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
                 }
                 png_chunk(if *after_idat { &mut after } else { &mut metadata }, kind, payload)?;
             }
-            let mut output = data[..33].to_vec();
+            let mut output = Vec::with_capacity(data.len() + metadata.len() + after.len());
+            output.extend_from_slice(&data[..33]);
             output.extend_from_slice(&metadata);
             output.extend_from_slice(&data[33..data.len() - 12]);
             output.extend_from_slice(&after);
@@ -145,7 +148,6 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
             Ok(output)
         }
         "WEBP" => {
-            let mut body = Vec::new();
             let mut flags = 0;
             if !icc.is_empty() {
                 flags |= 0x20;
@@ -167,8 +169,6 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
                     .ok_or_else(|| codec_error("invalid WebP chunk"))?;
                 if kind == b"VP8X" {
                     extended = Some(data[pos + 8..pos + 8 + length].to_vec());
-                } else {
-                    body.extend_from_slice(&data[pos..end]);
                 }
                 pos = end;
             }
@@ -185,12 +185,21 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
                 return Err(codec_error("invalid WebP extended header"));
             }
             header[0] |= flags;
-            let mut output = b"RIFF\0\0\0\0WEBP".to_vec();
+            let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + icc.len() + 48);
+            output.extend_from_slice(b"RIFF\0\0\0\0WEBP");
             chunk(&mut output, b"VP8X", &header, true)?;
             if !icc.is_empty() {
                 chunk(&mut output, b"ICCP", icc, true)?;
             }
-            output.extend_from_slice(&body);
+            pos = 12;
+            while pos + 8 <= data.len() {
+                let length = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().expect("validated chunk")) as usize;
+                let end = pos + 8 + length + (length & 1);
+                if &data[pos..pos + 4] != b"VP8X" {
+                    output.extend_from_slice(&data[pos..end]);
+                }
+                pos = end;
+            }
             if !exif.is_empty() {
                 chunk(&mut output, b"EXIF", exif, true)?;
             }
@@ -203,11 +212,8 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
         }
         "JXL" => {
             let container = data.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n") && data.len() >= 32;
-            let mut output = if container {
-                data[..32].to_vec()
-            } else {
-                b"\0\0\0\x0cJXL \r\n\x87\n".to_vec()
-            };
+            let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + 60);
+            output.extend_from_slice(if container { &data[..32] } else { b"\0\0\0\x0cJXL \r\n\x87\n" });
             if !container {
                 jxl_box(&mut output, b"ftyp", b"jxl \0\0\0\0jxl ")?;
             }
@@ -294,13 +300,12 @@ fn append_tiff(output: &mut Vec<u8>, raw: &[u8]) -> PyResult<u32> {
     Ok(offset)
 }
 
-fn record(tag: u16, kind: u16, count: u32, field: &[u8], little: bool) -> Vec<u8> {
-    let mut result = Vec::with_capacity(12);
-    result.extend_from_slice(&if little { tag.to_le_bytes() } else { tag.to_be_bytes() });
-    result.extend_from_slice(&if little { kind.to_le_bytes() } else { kind.to_be_bytes() });
-    result.extend_from_slice(&if little { count.to_le_bytes() } else { count.to_be_bytes() });
-    result.extend_from_slice(field);
-    result.resize(12, 0);
+fn record(tag: u16, kind: u16, count: u32, field: &[u8], little: bool) -> [u8; 12] {
+    let mut result = [0; 12];
+    result[..2].copy_from_slice(&if little { tag.to_le_bytes() } else { tag.to_be_bytes() });
+    result[2..4].copy_from_slice(&if little { kind.to_le_bytes() } else { kind.to_be_bytes() });
+    result[4..8].copy_from_slice(&word(count, little));
+    result[8..8 + field.len()].copy_from_slice(field);
     result
 }
 
@@ -308,12 +313,29 @@ fn word(value: u32, little: bool) -> [u8; 4] {
     if little { value.to_le_bytes() } else { value.to_be_bytes() }
 }
 
-fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool, depth: usize) -> PyResult<(Vec<Vec<u8>>, u32)> {
+fn swap_tiff_bytes<const N: usize>(data: &mut [u8]) {
+    let (blocks, tail) = data.as_chunks_mut::<16>();
+    for block in blocks {
+        let bytes = Simd::<u8, 16>::from_slice(block);
+        let swapped = match N {
+            2 => simd_swizzle!(bytes, [1, 0, 3, 2, 5, 4, 7, 6, 9, 8, 11, 10, 13, 12, 15, 14]),
+            4 => simd_swizzle!(bytes, [3, 2, 1, 0, 7, 6, 5, 4, 11, 10, 9, 8, 15, 14, 13, 12]),
+            8 => simd_swizzle!(bytes, [7, 6, 5, 4, 3, 2, 1, 0, 15, 14, 13, 12, 11, 10, 9, 8]),
+            _ => unreachable!(),
+        };
+        swapped.copy_to_slice(block);
+    }
+    for value in tail.as_chunks_mut::<N>().0 {
+        value.reverse();
+    }
+}
+
+fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool, depth: usize) -> PyResult<(Vec<[u8; 12]>, u32)> {
     if depth > 16 {
         return Err(codec_error("EXIF IFD nesting exceeds 16"));
     }
     let (entries, next) = source.entries(offset)?;
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(entries.len());
     for &(tag, kind, count, pos) in &entries {
         if depth == 0
             && matches!(tag, 256..=266 | 273 | 277..=279 | 284 | 317 | 320 | 322..=325 | 338 | 339 | 347 | 512..=521 | 529..=532 | 700 | 34675)
@@ -330,7 +352,7 @@ fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool
         let length = (count as usize).checked_mul(unit).ok_or_else(|| codec_error("EXIF value overflow"))?;
         let start = if length > 4 { source.number(pos, 4)? as usize } else { pos };
         let end = start.checked_add(length).ok_or_else(|| codec_error("EXIF offset overflow"))?;
-        let mut raw = source.data.get(start..end).ok_or_else(|| codec_error("truncated EXIF value"))?.to_vec();
+        let raw = source.data.get(start..end).ok_or_else(|| codec_error("truncated EXIF value"))?;
         if matches!(tag, 34665 | 34853 | 40965) && count == 1 {
             let (nested, following) = copy_ifd(source, source.number(pos, 4)? as usize, output, little, depth + 1)?;
             let pointer = write_ifd(output, nested, following, little)?;
@@ -353,16 +375,23 @@ fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool
             result.push(record(tag, 4, 1, &word(pointer, little), little));
             continue;
         }
-        if source.little != little && unit > 1 {
-            for value in raw.chunks_exact_mut(if matches!(kind, 5 | 10) { 4 } else { unit }) {
-                value.reverse();
+        let mut field = [0; 4];
+        let value = if length > 4 {
+            let pointer = append_tiff(output, raw)?;
+            field = word(pointer, little);
+            &mut output[pointer as usize..pointer as usize + length]
+        } else {
+            field[..length].copy_from_slice(raw);
+            &mut field[..length]
+        };
+        if source.little != little {
+            match if matches!(kind, 5 | 10) { 4 } else { unit } {
+                2 => swap_tiff_bytes::<2>(value),
+                4 => swap_tiff_bytes::<4>(value),
+                8 => swap_tiff_bytes::<8>(value),
+                _ => {}
             }
         }
-        let field = if length > 4 {
-            word(append_tiff(output, &raw)?, little).to_vec()
-        } else {
-            raw
-        };
         result.push(record(tag, kind, count, &field, little));
     }
     let following = if next != 0 {
@@ -374,7 +403,7 @@ fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool
     Ok((result, following))
 }
 
-fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<Vec<u8>>, following: u32, little: bool) -> PyResult<u32> {
+fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<[u8; 12]>, following: u32, little: bool) -> PyResult<u32> {
     entries.sort_by_key(|entry| {
         if little {
             u16::from_le_bytes([entry[0], entry[1]])
@@ -383,19 +412,22 @@ fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<Vec<u8>>, following: u32, li
         }
     });
     let count = u16::try_from(entries.len()).map_err(codec_error)?;
-    let mut raw = if little { count.to_le_bytes() } else { count.to_be_bytes() }.to_vec();
+    let offset = append_tiff(output, &[])?;
+    output.reserve(2 + entries.len() * 12 + 4);
+    output.extend_from_slice(&if little { count.to_le_bytes() } else { count.to_be_bytes() });
     for entry in entries {
-        raw.extend_from_slice(&entry);
+        output.extend_from_slice(&entry);
     }
-    raw.extend_from_slice(&word(following, little));
-    append_tiff(output, &raw)
+    output.extend_from_slice(&word(following, little));
+    Ok(offset)
 }
 
 fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<u8>> {
     let source = Tiff::new(data)?;
     let little = source.little;
     let (base, _) = source.entries(source.number(4, 4)? as usize)?;
-    let mut output = data.to_vec();
+    let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + icc.len() + 128);
+    output.extend_from_slice(data);
     let (mut entries, following) = if exif.is_empty() {
         (Vec::new(), 0)
     } else {
@@ -407,7 +439,7 @@ fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<
     }
     for (tag, _, _, pos) in base {
         entries.retain(|entry| &entry[..2] != if little { tag.to_le_bytes() } else { tag.to_be_bytes() }.as_slice());
-        entries.push(data[pos - 8..pos + 4].to_vec());
+        entries.push(data[pos - 8..pos + 4].try_into().expect("validated TIFF entry"));
     }
     for (tag, raw) in [(700u16, xmp), (34675, icc)] {
         if !raw.is_empty() {
@@ -429,6 +461,49 @@ fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tiff_byte_swaps_preserve_bits_tails_and_guards() {
+        for unit in [2, 4, 8] {
+            for offset in 0..16 {
+                for count in 0..66 {
+                    let length = count * unit;
+                    let mut data: Vec<u8> = (0..offset + length + 19).map(|i| (i * 71 + 255) as u8).collect();
+                    let mut expected = data.clone();
+                    for value in expected[offset..offset + length].chunks_exact_mut(unit) {
+                        value.reverse();
+                    }
+                    let values = &mut data[offset..offset + length];
+                    match unit {
+                        2 => swap_tiff_bytes::<2>(values),
+                        4 => swap_tiff_bytes::<4>(values),
+                        8 => swap_tiff_bytes::<8>(values),
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(data, expected, "unit={unit}, offset={offset}, count={count}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn webp_preserves_chunk_bytes_and_validates_later_chunks() {
+        let mut data = b"RIFF\0\0\0\0WEBP".to_vec();
+        let mut header = [0; 10];
+        header[0] = 0x12;
+        chunk(&mut data, b"VP8X", &header, true).unwrap();
+        let body_start = data.len();
+        chunk(&mut data, b"ANIM", &[0; 6], true).unwrap();
+        chunk(&mut data, b"ANMF", &vec![17; 65537], true).unwrap();
+        chunk(&mut data, b"JUNK", &[42; 3], true).unwrap();
+        let output = write_metadata(&data, "WEBP", b"exif", b"xmp", b"icc", &[]).unwrap();
+        assert_eq!(output[20], 0x3e);
+        assert_eq!(&output[30..34], b"ICCP");
+        assert_eq!(&output[42..42 + data.len() - body_start], &data[body_start..]);
+        assert_eq!(u32::from_le_bytes(output[4..8].try_into().unwrap()) as usize, output.len() - 8);
+        data.extend_from_slice(b"JUNK\xff\xff\xff\xff");
+        assert!(write_metadata(&data, "WEBP", &[], b"xmp", &[], &[]).is_err());
+    }
 
     #[test]
     fn metadata_rejects_truncated_containers_and_critical_png_chunks() {

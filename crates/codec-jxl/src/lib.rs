@@ -346,7 +346,7 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
                 JxlDecoderStatus::Box => {
                     let mut kind = JxlBoxType([0; 4]);
                     check(JxlDecoderGetBoxType(decoder.0, &mut kind, true.into()))?;
-                    key = match kind.0.map(|v| v as u8) {
+                    key = match kind.0.map(|v| v.to_ne_bytes()[0]) {
                         [b'E', b'x', b'i', b'f'] => Some("exif"),
                         [b'x', b'm', b'l', b' '] => Some("xmp"),
                         _ => None,

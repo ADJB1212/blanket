@@ -125,24 +125,25 @@ class Exif(MutableMapping[int, object]):
         types: dict[int, int] = {}
         entries: dict[int, tuple[bytes, object]] = {}
         for pos in range(offset + 2, end, 12):
-            tag, kind, length = struct.unpack_from(endian + "HHI", data, pos)
+            tag, kind, length, field = struct.unpack_from(endian + "HHII", data, pos)
             size = _SIZES.get(kind, 0) * length
             if not size:
                 continue
-            start = pos + 8 if size <= 4 else struct.unpack_from(endian + "I", data, pos + 8)[0]
+            start = pos + 8 if size <= 4 else field
             if start > len(data) or size > len(data) - start:
                 raise ValueError("truncated EXIF value")
-            raw = data[start : start + size]
             if kind == 2:
-                value = raw.rstrip(b"\0").decode("ascii", "replace")
+                value = data[start : start + size].rstrip(b"\0").decode("ascii", "replace")
             elif kind == 7 or (kind == 1 and tag in (700, 34675)):
-                value = raw
+                value = data[start : start + size]
             elif kind in (5, 10):
-                numbers = struct.unpack(endian + ("I" if kind == 5 else "i") * (length * 2), raw)
-                values = tuple(IFDRational(numbers[i], numbers[i + 1]) for i in range(0, len(numbers), 2))
-                value = values[0] if length == 1 else values
+                fmt = endian + ("II" if kind == 5 else "ii")
+                if length == 1:
+                    value = IFDRational(*struct.unpack_from(fmt, data, start))
+                else:
+                    value = tuple(IFDRational(n, d) for n, d in struct.iter_unpack(fmt, memoryview(data)[start : start + size]))
             else:
-                values = struct.unpack(endian + _FORMATS[kind] * length, raw)
+                values = struct.unpack_from(f"{endian}{length}{_FORMATS[kind]}", data, start)
                 value = values[0] if length == 1 else values
             result[tag], types[tag], entries[tag] = value, kind, (data[pos : pos + 12], value)
         self._types[key], self._entries[key] = types, entries
@@ -191,6 +192,8 @@ class Exif(MutableMapping[int, object]):
                 raise ValueError("cyclic EXIF IFD")
             active.add(id(values))
             records = []
+            previous_entries = self._entries.get(key, {})
+            types = self._types.get(key, {})
             for tag, value in sorted(values.items()):
                 if tag in _POINTERS:
                     nested = self._ifds.get(tag)
@@ -199,11 +202,11 @@ class Exif(MutableMapping[int, object]):
                     value = write(nested, tag)
                     kind = 4
                 else:
-                    previous = self._entries.get(key, {}).get(tag)
+                    previous = previous_entries.get(tag)
                     if previous is not None and value == previous[1]:
                         records.append(previous[0])
                         continue
-                    kind = self._types.get(key, {}).get(tag) or _TYPES.get(tag)
+                    kind = types.get(tag) or _TYPES.get(tag)
                 if kind is None:
                     items = value if isinstance(value, (tuple, list)) else (value,)
                     if isinstance(value, str):
@@ -230,9 +233,9 @@ class Exif(MutableMapping[int, object]):
                         for item in items:
                             rational = item if hasattr(item, "denominator") and not isinstance(item, int) else Fraction(item).limit_denominator(1000000)
                             numbers.extend((int(rational.numerator), int(rational.denominator)))
-                        raw = struct.pack(endian + ("I" if kind == 5 else "i") * len(numbers), *numbers)
+                        raw = struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers)
                     else:
-                        raw = struct.pack(endian + _FORMATS[kind] * count, *items)
+                        raw = struct.pack(f"{endian}{count}{_FORMATS[kind]}", *items)
                 field = raw.ljust(4, b"\0") if len(raw) <= 4 else struct.pack(endian + "I", append(raw))
                 records.append(struct.pack(endian + "HHI", tag, kind, count) + field)
             active.remove(id(values))

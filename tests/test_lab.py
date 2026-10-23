@@ -32,6 +32,19 @@ def test_reference_colors_and_raw_bytes() -> None:
     assert Image.new("LAB", (1, 1), (50, 0, 255)).tobytes() == bytes([50, 128, 127])
 
 
+@pytest.mark.parametrize("mode,target", [("RGB", "LAB"), ("LAB", "RGB")])
+def test_color_conversion_keeps_independent_storage(mode: str, target: str) -> None:
+    source = Image.new(mode, (17, 19), (70, 100, 130))
+    result = source.convert(target)
+    original = source.tobytes()
+    converted = result.tobytes()
+    source.paste((0, 0, 0), (0, 0, 17, 19))
+    assert result.tobytes() == converted
+    result.paste((255, 255, 255), (0, 0, 17, 19))
+    assert source.tobytes() != original
+    assert source.getpixel((0, 0)) == (0, 0, 0)
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "I", "I;16", "F", "P", "PA"])
 def test_conversion_routes(mode: str) -> None:
     source = Image.new(mode, (2, 3))

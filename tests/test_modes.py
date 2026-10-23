@@ -239,6 +239,29 @@ def test_integer_mode_fromarray(dtype: str) -> None:
     assert blanket.getdata() == list(pillow.get_flattened_data())
 
 
+@pytest.mark.parametrize("dtype", ["<i4", "<u2", ">u2"])
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("layout", ["contiguous", "strided", "fortran", "readonly", "empty"])
+def test_integer_array_conversion_owns_pixels(dtype: str, mode: str, layout: str) -> None:
+    import numpy as np
+
+    values = (np.arange(323).reshape(17, 19) * 197).astype(dtype)
+    if layout == "strided":
+        values = values[::-1, ::2]
+    elif layout == "fortran":
+        values = np.asfortranarray(values)
+    elif layout == "readonly":
+        values.flags.writeable = False
+    elif layout == "empty":
+        values = values[:0]
+    expected = Image.new(mode, (values.shape[1], values.shape[0]))
+    expected.putdata(values.ravel().tolist())
+    image = Image.fromarray(values, mode)
+    if values.flags.writeable:
+        values[:] = 0
+    assert image.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
 def test_integer_mode_png_save_preserves_sample_values(mode: str) -> None:
     values = [-1, 258, 65536] if mode == "I" else [0, 258, 65535]

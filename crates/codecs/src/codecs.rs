@@ -438,7 +438,7 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
         return PreparedJxl::new(image)?.encode(options);
     }
     match format {
-        ImageFormat::Png => encode_wide_png(image, blanket_core::simd::normalize_u16(pixels, image.bit_depth), options),
+        ImageFormat::Png => encode_wide_png(image, pixels, options),
         ImageFormat::Tiff => encode_wide_tiff(image),
         _ => unreachable!(),
     }

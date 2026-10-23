@@ -1,4 +1,4 @@
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 
 use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
 use blanket_codec_image::color_type;
@@ -138,7 +138,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
     Image::from_pixels(frame.width, frame.height, mode, pixels, Some("PNG".into())).map_err(|error| error.to_string())
 }
 
-pub fn encode_wide_png(image: &Image, mut samples: Vec<u16>, options: SaveOptions) -> PyResult<Vec<u8>> {
+pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
     {
         let mut info = png::Info::with_size(image.width, image.height);
@@ -160,10 +160,17 @@ pub fn encode_wide_png(image: &Image, mut samples: Vec<u16>, options: SaveOption
         writer
             .write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()])
             .map_err(codec_error)?;
-        for sample in &mut samples {
-            *sample = sample.to_be();
+        let mut stream = writer.stream_writer().map_err(codec_error)?;
+        let stride = image.width as usize * image.mode.channels() * 2;
+        for row in pixels.chunks_exact(stride) {
+            let mut samples = blanket_core::simd::normalize_u16(row, image.bit_depth);
+            for sample in &mut samples {
+                *sample = sample.to_be();
+            }
+            stream.write_all(u16_bytes(&samples)).map_err(codec_error)?;
         }
-        writer.write_image_data(u16_bytes(&samples)).map_err(codec_error)?;
+        stream.finish().map_err(codec_error)?;
+        writer.finish().map_err(codec_error)?;
     }
     Ok(output)
 }

@@ -1102,13 +1102,24 @@ impl Image {
         if self.mode == PixelMode::Lab && destination != PixelMode::Lab {
             let source = self.pixel_data()?;
             let pixels = py.detach(|| convert_lab(source, false))?;
-            return Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?.convert(py, mode, bit_depth);
+            let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
+            return if destination == PixelMode::Rgb && bit_depth.is_none_or(|depth| depth == 8) {
+                Ok(rgb)
+            } else {
+                rgb.convert(py, mode, bit_depth)
+            };
         }
         if destination == PixelMode::Lab && self.mode != PixelMode::Lab {
             if bit_depth.is_some_and(|depth| depth != 8) {
                 return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
             }
-            let rgb = self.convert(py, "RGB", Some(8))?;
+            let converted;
+            let rgb = if self.mode == PixelMode::Rgb && self.bit_depth == 8 {
+                self
+            } else {
+                converted = self.convert(py, "RGB", Some(8))?;
+                &converted
+            };
             let source = rgb.pixel_data()?;
             let pixels = py.detach(|| convert_lab(source, true))?;
             return Self::from_pixels(self.width, self.height, PixelMode::Lab, pixels, None);
@@ -1466,6 +1477,23 @@ pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_
     Image::from_pixels(size.0, size.1, mode, pixels, None)
 }
 
+fn with_array_bytes<T>(obj: &Bound<'_, PyAny>, convert: impl FnOnce(&[u8]) -> PyResult<T>) -> PyResult<T> {
+    if let Ok(buffer) = pyo3::buffer::PyUntypedBuffer::get(obj)
+        && buffer.is_c_contiguous()
+    {
+        // Keep the buffer export alive and Python attached while reading its bytes.
+        let raw = if buffer.len_bytes() == 0 {
+            &[]
+        } else {
+            unsafe { std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes()) }
+        };
+        convert(raw)
+    } else {
+        let bytes = obj.call_method0("tobytes")?;
+        convert(bytes.cast::<PyBytes>()?.as_bytes())
+    }
+}
+
 #[pyfunction(signature = (obj, mode = None, bit_depth = None))]
 pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit_depth: Option<u8>) -> PyResult<Image> {
     let interface = obj.getattr("__array_interface__")?;
@@ -1502,44 +1530,33 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         if bit_depth.is_some_and(|depth| depth != 32) {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
-        let raw = if let Ok(buffer) = pyo3::buffer::PyUntypedBuffer::get(obj)
-            && buffer.is_c_contiguous()
-        {
-            // The buffer export stays alive and Python remains attached during the copy.
-            if buffer.len_bytes() == 0 {
-                Vec::new()
-            } else {
-                unsafe { std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes()).to_vec() }
-            }
-        } else {
-            obj.call_method0("tobytes")?.extract::<Vec<u8>>()?
-        };
-        let pixels = match typestr.as_str() {
-            "<f4" | "=f4" => raw,
-            ">f4" => raw
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .flat_map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes())
-                .collect(),
-            "<f8" | "=f8" => raw
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .flat_map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes())
-                .collect(),
-            ">f8" => raw
-                .as_chunks::<8>()
-                .0
-                .iter()
-                .flat_map(|bytes| (f64::from_be_bytes(*bytes) as f32).to_le_bytes())
-                .collect(),
-            _ => return Err(PyTypeError::new_err("float mode requires float32 or float64 array")),
-        };
-        return Image::from_float_bytes(width, height, pixels);
+        return with_array_bytes(obj, |raw| {
+            let pixels = match typestr.as_str() {
+                "<f4" | "=f4" => raw.to_vec(),
+                ">f4" => raw
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .flat_map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes())
+                    .collect(),
+                "<f8" | "=f8" => raw
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .flat_map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes())
+                    .collect(),
+                ">f8" => raw
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .flat_map(|bytes| (f64::from_be_bytes(*bytes) as f32).to_le_bytes())
+                    .collect(),
+                _ => return Err(PyTypeError::new_err("float mode requires float32 or float64 array")),
+            };
+            Image::from_float_bytes(width, height, pixels)
+        });
     }
     if mode.is_integer() {
-        let raw: Vec<u8> = obj.call_method0("tobytes")?.extract()?;
         let source = match typestr.as_str() {
             "<i4" | "=i4" => PixelMode::I,
             "<u2" | "=u2" => PixelMode::I16L,
@@ -1551,6 +1568,16 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         {
             return Err(PyValueError::new_err("bit_depth does not match integer mode"));
         }
+        let raw = with_array_bytes(obj, |raw| Ok(raw.to_vec()))?;
+        if source != PixelMode::I && mode != PixelMode::I {
+            let mut raw = raw;
+            if (source == PixelMode::I16B) != (mode == PixelMode::I16B) {
+                for bytes in raw.as_chunks_mut::<2>().0 {
+                    bytes.swap(0, 1);
+                }
+            }
+            return Image::from_integer_bytes(width, height, mode, raw);
+        }
         let input = Image::from_integer_bytes(width, height, source, raw)?;
         return if source == mode {
             Ok(input)
@@ -1561,7 +1588,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
 
     let depth = bit_depth.unwrap_or(if wide { 16 } else { 8 });
     if wide {
-        let mut raw = obj.call_method0("tobytes")?.cast::<PyBytes>()?.as_bytes().to_vec();
+        let mut raw = with_array_bytes(obj, |raw| Ok(raw.to_vec()))?;
         if typestr == ">u2" {
             for bytes in raw.as_chunks_mut::<2>().0 {
                 bytes.swap(0, 1);

@@ -4,6 +4,7 @@ import struct
 import zlib
 from fractions import Fraction
 from io import BytesIO
+from math import isnan
 
 import pytest
 from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
@@ -89,6 +90,47 @@ def test_exif_mapping_nested_ifds_and_thumbnail(endian: str) -> None:
     again = Image.Exif()
     again.load(parsed.tobytes())
     assert again.thumbnail == thumb.getvalue()
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("count", [1, 3, 4097])
+@pytest.mark.parametrize("kind,code", [(1, "B"), (3, "H"), (4, "I"), (6, "b"), (8, "h"), (9, "i"), (11, "f"), (12, "d"), (13, "I"), (5, "II"), (10, "ii")])
+def test_exif_numeric_arrays_and_tiff_relocation(endian: str, count: int, kind: int, code: str) -> None:
+    values = (1, 2) * count if kind in (5, 10) else (3,) * count
+    payload = struct.pack(endian + code * count, *values)
+    field = payload.ljust(4, b"\0") if len(payload) <= 4 else struct.pack(endian + "I", 26)
+    raw = (b"II" if endian == "<" else b"MM") + struct.pack(endian + "HIH", 42, 8, 1)
+    raw += struct.pack(endian + "HHI", 65000, kind, count) + field + bytes(4)
+    if len(payload) > 4:
+        raw += payload
+    expected = 0.5 if kind in (5, 10) else 3
+    expected = expected if count == 1 else (expected,) * count
+    exif = Image.Exif()
+    exif.load(raw)
+    assert exif[65000] == expected
+    exif[65000] = 2 if count == 1 else (2,) * count
+    reloaded = Image.Exif()
+    reloaded.load(exif.tobytes())
+    assert reloaded[65000] == exif[65000]
+    image = Image.open(BytesIO(encode(Image.new("L", (1, 1)), "TIFF", exif=raw)))
+    assert image.getexif()[65000] == expected
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("signed", [False, True])
+@pytest.mark.parametrize("count", [1, 3])
+def test_exif_rational_preserves_zero_denominator(endian: str, signed: bool, count: int) -> None:
+    numerator = -7 if signed else 7
+    raw = (b"II" if endian == "<" else b"MM") + struct.pack(endian + "HIHHHII", 42, 8, 1, 65000, 10 if signed else 5, count, 26)
+    raw += bytes(4) + struct.pack(endian + ("ii" if signed else "II"), numerator, 0) * count
+    exif = Image.Exif()
+    for _ in range(2):
+        exif.load(raw)
+        values = (exif[65000],) if count == 1 else exif[65000]
+        for value in values:
+            assert isnan(value)
+            assert (value.numerator, value.denominator) == (numerator, 0)
+        raw = exif.tobytes()
 
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF"])

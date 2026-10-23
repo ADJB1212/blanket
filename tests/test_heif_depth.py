@@ -7,8 +7,39 @@ from pathlib import Path
 import numpy as np
 import pillow_heif
 import pytest
+from PIL import Image as PILImage
 
 from blanket import Image, UnidentifiedImageError
+
+
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("compress_level", [0, 1, 6, 9])
+def test_streamed_wide_png_samples(mode: str, channels: int, depth: int, compress_level: int) -> None:
+    values = np.random.default_rng(73).integers(0, 1 << depth, (19, 257, channels), dtype=np.uint16)
+    image = Image.fromarray(values[:, :, 0] if channels == 1 else values, bit_depth=depth)
+    stream = BytesIO()
+    image.save(stream, "PNG", compress_level=compress_level)
+    reopened = Image.open(BytesIO(stream.getvalue()))
+    assert (reopened.mode, reopened.bit_depth) == (mode, depth)
+    assert reopened.tobytes() == image.tobytes()
+    normalized = (values.astype(np.uint32) * 65535 + ((1 << depth) - 1) // 2) // ((1 << depth) - 1)
+    expected = normalized[:, :, 0] if channels == 1 else normalized >> 8
+    np.testing.assert_array_equal(np.asarray(PILImage.open(BytesIO(stream.getvalue()))), expected)
+
+
+@pytest.mark.parametrize("dtype", ["<u2", ">u2"])
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize("strided", [False, True])
+def test_wide_array_owns_pixels(dtype: str, mode: str, channels: int, strided: bool) -> None:
+    values = np.arange(17 * 19 * channels).reshape(17, 19, channels).astype(dtype)
+    values = values[:, :, 0] if channels == 1 else values
+    if strided:
+        values = values[::-1, ::2]
+    expected = values.astype("<u2").tobytes()
+    image = Image.fromarray(values, mode, bit_depth=16)
+    values[:] = 0
+    assert image.tobytes() == expected
 
 
 @pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
