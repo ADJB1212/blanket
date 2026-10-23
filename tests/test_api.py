@@ -14,7 +14,7 @@ def pixels(mode: str, size: tuple[int, int] = (17, 13)) -> bytes:
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
-@pytest.mark.parametrize("mode, channels", [("L", ()), ("RGB", (3,)), ("RGBA", (4,))])
+@pytest.mark.parametrize(("mode", "channels"), [("L", ()), ("RGB", (3,)), ("RGBA", (4,))])
 def test_fromarray(mode: str, channels: tuple[int, ...]) -> None:
     raw = pixels(mode)
     array = np.frombuffer(raw, dtype=np.uint8).reshape((13, 17, *channels)).copy()
@@ -73,7 +73,7 @@ def test_crop_matches_pillow(mode: str, box: tuple[float, float, float, float] |
     assert result.info is not image.info
 
 
-@pytest.mark.parametrize("box, message", [((2, 0, 1, 1), "right"), ((0, 2, 1, 1), "lower")])
+@pytest.mark.parametrize(("box", "message"), [((2, 0, 1, 1), "right"), ((0, 2, 1, 1), "lower")])
 def test_crop_rejects_reversed_box(box: tuple[int, int, int, int], message: str) -> None:
     image = Image.frombytes("L", (2, 2), b"abcd")
     with pytest.raises(ValueError, match=message):

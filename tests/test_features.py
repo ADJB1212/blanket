@@ -33,7 +33,8 @@ def test_package_and_backend_versions() -> None:
     assert features.version("jpg") == features.version("libjpeg_turbo")
     for name in ("jxl", "webp", "libheif", "littlecms2"):
         version = features.version(name)
-        assert version is not None and all(part.isdecimal() for part in version.split("."))
+        assert version is not None
+        assert all(part.isdecimal() for part in version.split("."))
     for name, prefix in (("png", "png "), ("jpg", "turbojpeg "), ("libtiff", "tiff "), ("gif", "gif "), ("bmp", "image "), ("avif", "ravif ")):
         assert features.version(name).startswith(prefix)
 
@@ -85,7 +86,8 @@ def test_blanketinfo_stream_and_default_stdout(capsys: pytest.CaptureFixture[str
     assert features.blanketinfo(report) is None
     output = report.getvalue()
     assert f"Blanket {__version__}" in output
-    assert "Python " in output and "Platform " in output
+    assert "Python " in output
+    assert "Platform " in output
     assert "png: available (png " in output
     assert "PNG: open, save" in output
     assert "PDF: save" in output

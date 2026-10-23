@@ -197,7 +197,7 @@ def test_big_endian_integer_bilinear_resize_matches_pillow_byte_order() -> None:
 
 @pytest.mark.parametrize("mode", ["I", "F", "I;16", "I;16L", "I;16B"])
 @pytest.mark.parametrize("resample", [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
-@pytest.mark.parametrize("box,crop", [((1.25, 129.5, 8.25, 133.75), (0, 113, 9, 153)), ((0, 0, 9, 3), (0, 0, 9, 40)), ((0, 254, 9, 257), (0, 217, 9, 257)), ((2, 130, 2, 130), (0, 113, 9, 153))])
+@pytest.mark.parametrize(("box", "crop"), [((1.25, 129.5, 8.25, 133.75), (0, 113, 9, 153)), ((0, 0, 9, 3), (0, 0, 9, 40)), ((0, 254, 9, 257), (0, 217, 9, 257)), ((2, 130, 2, 130), (0, 113, 9, 153))])
 def test_scalar_resize_uses_only_crop_rows(mode: str, resample: Image.Resampling, box: tuple[float, ...], crop: tuple[int, ...]) -> None:
     values = [((y * 103 + x * 29) % 65536) for y in range(257) for x in range(9)]
     code = "i" if mode == "I" else "f" if mode == "F" else "H"
@@ -221,7 +221,7 @@ def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, f
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("mode,value", [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
+@pytest.mark.parametrize(("mode", "value"), [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
 def test_integer_mode_new_fills_full_sample(mode: str, value: int) -> None:
     blanket = Image.new(mode, (37, 3), value)
     pillow = PillowImage.new(mode, (37, 3), value)

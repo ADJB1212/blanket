@@ -70,6 +70,13 @@ def test_color_allocation(mode: str) -> None:
         assert_palette(actual, expected)
 
 
+def test_color_allocation_requires_mutable_storage(monkeypatch: pytest.MonkeyPatch) -> None:
+    palette = ImagePalette.ImagePalette(palette=b"\x01\x02\x03")
+    monkeypatch.setattr(palette, "_new_color_index", lambda *args: 1)
+    with pytest.raises(TypeError, match="color allocation requires a bytearray palette"):
+        palette.getcolor((4, 5, 6))
+
+
 @pytest.mark.parametrize("color", ["red", [1, 2, 3], 0, None, (1, 2, 3, 0), (-1, 2, 3), (256, 2, 3), (1.0, 2, 3)])
 def test_invalid_color(color: object) -> None:
     with pytest.raises(Exception) as reference:
@@ -122,7 +129,7 @@ def test_raw_palette(rawmode: str) -> None:
     if rawmode == "RGB":
         assert actual.tobytes() == bytes(data)
         return
-    for operation in (lambda: actual.tobytes(), lambda: actual.tostring(), lambda: actual.getcolor((1, 2, 3)), lambda: actual.save(StringIO())):
+    for operation in (actual.tobytes, actual.tostring, lambda: actual.getcolor((1, 2, 3)), lambda: actual.save(StringIO())):
         with pytest.raises(ValueError, match="palette contains raw palette data"):
             operation()
 

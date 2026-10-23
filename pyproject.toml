@@ -75,15 +75,17 @@ target-version = "py312"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-extend-select = ["I", "E", "B", "F", "Q", "C4", "UP", "ARG", "TID", "RUF", "PIE", "TCH", "SIM", "ISC", "FLY", "PERF", "FURB", "D417"]
+extend-select = ["I", "E", "B", "F", "Q", "S", "C4", "UP", "ARG", "TID", "RUF", "RET", "PIE", "TCH", "SIM", "ISC", "FLY", "PERF", "FURB", "D417"]
 ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402", "SIM108"]
 future-annotations = true
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["TCH", "ARG"]
-"scripts/**/*.py" = ["TCH", "ARG"]
-"python/blanket/Image.py" = ["ARG002"]
+"tests/**/*.py" = ["TCH", "ARG", "S"]
+"scripts/**/*.py" = ["TCH", "ARG", "S"]
+"python/blanket/Image.py" = ["ARG002", "S606", "S603"]
 "python/blanket/ImageDraw.py" = ["ARG"]
+"python/blanket/ImageMath.py" = ["S307"]
+"python/blanket/ImagePalette.py" = ["S311"]
 
 [tool.ruff.format]
 quote-style = "double"

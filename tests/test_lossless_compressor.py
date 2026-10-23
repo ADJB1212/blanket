@@ -62,7 +62,7 @@ for image, fmt in [(images[0], 'PNG'), (images[1], 'PNG'), (images[1], 'JPEG')]:
 
 
 @pytest.mark.parametrize("effort", [1, 4, 6, 7, 10])
-@pytest.mark.parametrize("mode,kind", [("L", "gray"), ("RGB", "gray"), ("RGBA", "gray"), ("RGBA", "opaque"), ("RGBA", "transparent")])
+@pytest.mark.parametrize(("mode", "kind"), [("L", "gray"), ("RGB", "gray"), ("RGBA", "gray"), ("RGBA", "opaque"), ("RGBA", "transparent")])
 def test_png_optimization_roundtrip(effort: int, mode: str, kind: str) -> None:
     pixels = bytearray()
     for i in range(64 * 64):
@@ -111,7 +111,7 @@ def test_output_format_controls_optimization(tmp_path: Path) -> None:
         assert decoded.convert("RGB").tobytes() == original.tobytes()
 
 
-@pytest.mark.parametrize("colors,depth", [(2, 1), (4, 2), (16, 4), (256, 8)])
+@pytest.mark.parametrize(("colors", "depth"), [(2, 1), (4, 2), (16, 4), (256, 8)])
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 def test_exact_palette_png(colors: int, depth: int, mode: str) -> None:
     rng = random.Random(42)
@@ -408,7 +408,7 @@ def test_optimized_jxl_external_decode(mode: str) -> None:
         assert decoded.tobytes() == raw
 
 
-@pytest.mark.parametrize("format,mode,depth,error", [("JPEG", "RGBA", 8, OSError), ("JPEG", "RGB", 16, ValueError), ("HEIC", "RGB", 16, ValueError)])
+@pytest.mark.parametrize(("format", "mode", "depth", "error"), [("JPEG", "RGBA", 8, OSError), ("JPEG", "RGB", 16, ValueError), ("HEIC", "RGB", 16, ValueError)])
 def test_compressor_preserves_codec_validation(format: str, mode: str, depth: int, error: type[Exception]) -> None:
     source = Image.new(mode, (32, 32)).convert(mode, bit_depth=depth)
     output = io.BytesIO()

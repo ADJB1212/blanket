@@ -59,7 +59,7 @@ def test_global_alias_and_nonzero_mask_is_not_a_weight() -> None:
     assert stat.extrema == [(10, 40)]
 
 
-@pytest.mark.parametrize("samples,median", [([10, 200], 200), ([10, 10, 200], 10), ([0, 0, 255, 255], 255), ([30], 30)])
+@pytest.mark.parametrize(("samples", "median"), [([10, 200], 200), ([10, 10, 200], 10), ([0, 0, 255, 255], 255), ([30], 30)])
 def test_median_selects_upper_middle(samples: list[int], median: int) -> None:
     image = Image.frombytes("L", (len(samples), 1), bytes(samples))
     assert ImageStat.Stat(image).median == [median]
@@ -145,7 +145,7 @@ def test_incomplete_histogram_is_rejected(length: int) -> None:
         ImageStat.Stat([0] * length)
 
 
-@pytest.mark.parametrize("value,error", [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
+@pytest.mark.parametrize(("value", "error"), [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
 def test_invalid_histogram_count(value: object, error: type[Exception]) -> None:
     stat = ImageStat.Stat([value] + [0] * 255)
     with pytest.raises(error):
@@ -154,7 +154,7 @@ def test_invalid_histogram_count(value: object, error: type[Exception]) -> None:
 
 @pytest.mark.parametrize("property_name", ["count", "extrema"])
 @pytest.mark.parametrize("position", [0, 127, 255, 256, 767])
-@pytest.mark.parametrize("value,error", [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
+@pytest.mark.parametrize(("value", "error"), [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
 def test_histogram_reductions_validate_every_bin(property_name: str, position: int, value: object, error: type[Exception]) -> None:
     histogram = [1] * 768
     histogram[position] = value

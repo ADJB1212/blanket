@@ -57,7 +57,7 @@ def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, source_size:
     assert source.tobytes() == source_raw
 
 
-@pytest.mark.parametrize("mode,color", [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
+@pytest.mark.parametrize(("mode", "color"), [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
 def test_paste_fill_and_alias(mode, color):
     actual, expected = Image.new(mode, (6, 5)), PIL.new(mode, (6, 5))
     actual.paste(color, (-1, 1, 4, 3))
@@ -152,7 +152,7 @@ def test_high_depth_rejected():
             operation()
 
 
-@pytest.mark.parametrize("mode,color", [("L", (42,)), ("RGB", (20, 30, 40)), ("RGBA", (20, 30, 40)), ("RGBA", (20, 30, 40, 50)), ("P", (3,)), ("P", (20, 30, 40))])
+@pytest.mark.parametrize(("mode", "color"), [("L", (42,)), ("RGB", (20, 30, 40)), ("RGBA", (20, 30, 40)), ("RGBA", (20, 30, 40, 50)), ("P", (3,)), ("P", (20, 30, 40))])
 def test_new_tuple_color(mode, color):
     assert_same(Image.new(mode, (3, 2), color), PIL.new(mode, (3, 2), color))
 

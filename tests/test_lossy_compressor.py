@@ -134,7 +134,7 @@ def test_explicit_lossless_disables_additional_loss(format: str) -> None:
     assert output == encode(source, format, lossless=True, compressor=LosslessImageCompressor(effort=1))
 
 
-@pytest.mark.parametrize("format,depth", [("JXL", 10), ("JXL", 12), ("JXL", 16), ("HEIF", 10), ("HEIF", 12)])
+@pytest.mark.parametrize(("format", "depth"), [("JXL", 10), ("JXL", 12), ("JXL", 16), ("HEIF", 10), ("HEIF", 12)])
 def test_high_depth(format: str, depth: int) -> None:
     rng = random.Random(91)
     raw = b"".join(rng.randrange(1 << depth).to_bytes(2, "little") for _ in range(17 * 19 * 3))
@@ -194,7 +194,7 @@ def test_error_bound_range(value: float) -> None:
         LossyImageCompressor(max_rmse=value)
 
 
-@pytest.mark.parametrize("value,error", [(True, TypeError), (1.5, TypeError), ("7", TypeError), (None, TypeError), (0, ValueError), (11, ValueError)])
+@pytest.mark.parametrize(("value", "error"), [(True, TypeError), (1.5, TypeError), ("7", TypeError), (None, TypeError), (0, ValueError), (11, ValueError)])
 def test_effort_validation(value: object, error: type[Exception]) -> None:
     with pytest.raises(error, match="effort"):
         LossyImageCompressor(effort=value)

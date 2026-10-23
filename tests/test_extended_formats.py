@@ -142,7 +142,7 @@ def test_binary_pbm_row_padding(width: int) -> None:
     assert actual.tobytes() == PillowImage.open(stream).tobytes()
 
 
-@pytest.mark.parametrize("magic,mode,channels", [("P5", "L", 1), ("P6", "RGB", 3), ("P7", "RGBA", 4)])
+@pytest.mark.parametrize(("magic", "mode", "channels"), [("P5", "L", 1), ("P6", "RGB", 3), ("P7", "RGBA", 4)])
 def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int) -> None:
     samples = [0, 1, 255, 256, 32768, 65535] * channels
     header = f"{magic}\n3 2\n65535\n" if magic != "P7" else "P7\nWIDTH 3\nHEIGHT 2\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
@@ -161,7 +161,7 @@ def test_lossy_jpeg2000_decode() -> None:
     assert Image.open(stream).tobytes() == PillowImage.open(stream).tobytes()
 
 
-@pytest.mark.parametrize("mode,depth", [(mode, depth) for mode in ("L", "RGB", "RGBA") for depth in (8, 10, 12, 16)] + [("LA", 8)])
+@pytest.mark.parametrize(("mode", "depth"), [(mode, depth) for mode in ("L", "RGB", "RGBA") for depth in (8, 10, 12, 16)] + [("LA", 8)])
 def test_jpeg2000_parallel_codec_preserves_serial_output(monkeypatch: pytest.MonkeyPatch, mode: str, depth: int) -> None:
     size = (513, 513)
     count = size[0] * size[1] * len(mode)

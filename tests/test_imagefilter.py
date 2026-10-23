@@ -35,23 +35,25 @@ def compare(mode: str, size: tuple[int, int], actual_filter: ImageFilter.Filter,
 
 @pytest.mark.parametrize("name", BUILTINS)
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 1), (2, 7), (4, 4), (17, 13)])
-def test_builtin_filters(name: str, mode: str, size: tuple[int, int]) -> None:
+def test_builtin_filters(name: str, mode: str, subtests: pytest.Subtests) -> None:
     cls, reference = getattr(ImageFilter, name), getattr(PillowFilter, name)
     assert (cls.name, cls.filterargs) == (reference.name, reference.filterargs)
-    compare(mode, size, cls, reference)
-    compare(mode, size, cls(), reference())
+    for size in ((1, 1), (2, 7), (4, 4), (17, 13)):
+        with subtests.test(size=size):
+            compare(mode, size, cls, reference)
+            compare(mode, size, cls(), reference())
 
 
 @pytest.mark.parametrize("size", [3, 5])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("scale,offset", [(None, 0), (1, -1.5), (2.75, 20.1), (-3, 128), (0, 0)])
-def test_custom_kernel(size: int, mode: str, scale: float | None, offset: float) -> None:
+def test_custom_kernel(size: int, mode: str, subtests: pytest.Subtests) -> None:
     kernel = [random.Random(43 + i).uniform(-2, 3) for i in range(size * size)]
-    actual = ImageFilter.Kernel((size, size), kernel, scale, offset)
-    expected = PillowFilter.Kernel((size, size), kernel, scale, offset)
-    assert actual.filterargs == expected.filterargs
-    compare(mode, (19, 13), actual, expected)
+    for scale, offset in ((None, 0), (1, -1.5), (2.75, 20.1), (-3, 128), (0, 0)):
+        with subtests.test(scale=scale, offset=offset):
+            actual = ImageFilter.Kernel((size, size), kernel, scale, offset)
+            expected = PillowFilter.Kernel((size, size), kernel, scale, offset)
+            assert actual.filterargs == expected.filterargs
+            compare(mode, (19, 13), actual, expected)
 
 
 @pytest.mark.parametrize("name", ["RankFilter", "MedianFilter", "MinFilter", "MaxFilter", "ModeFilter"])
@@ -63,22 +65,24 @@ def test_neighborhood_filters(name: str, mode: str, size: int) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 1), (1, 17), (19, 1), (23, 19)])
-@pytest.mark.parametrize("rank", [0, 1, 12, 23, 24])
-def test_rank_histogram_groups_and_replicated_edges(mode: str, size: tuple[int, int], rank: int) -> None:
-    compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
+def test_rank_histogram_groups_and_replicated_edges(mode: str, subtests: pytest.Subtests) -> None:
+    for size in ((1, 1), (1, 17), (19, 1), (23, 19)):
+        for rank in (0, 1, 12, 23, 24):
+            with subtests.test(size=size, rank=rank):
+                compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 137), (43, 137), (137, 1)])
-@pytest.mark.parametrize("window", [3, 31, 129])
 @pytest.mark.parametrize("name", ["MinFilter", "MaxFilter"])
-def test_extrema_filters_cross_bands_and_large_windows(mode: str, size: tuple[int, int], window: int, name: str) -> None:
-    compare(mode, size, getattr(ImageFilter, name)(window), getattr(PillowFilter, name)(window))
+def test_extrema_filters_cross_bands_and_large_windows(mode: str, name: str, subtests: pytest.Subtests) -> None:
+    for size in ((1, 137), (43, 137), (137, 1)):
+        for window in (3, 31, 129):
+            with subtests.test(size=size, window=window):
+                compare(mode, size, getattr(ImageFilter, name)(window), getattr(PillowFilter, name)(window))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
-@pytest.mark.parametrize("name,args", [("RankFilter", (3, 2)), ("MinFilter", (3,)), ("MaxFilter", (3,)), ("ModeFilter", (3,))])
+@pytest.mark.parametrize(("name", "args"), [("RankFilter", (3, 2)), ("MinFilter", (3,)), ("MaxFilter", (3,)), ("ModeFilter", (3,))])
 def test_native_neighborhood_filters_do_not_split_bands(mode: str, name: str, args: tuple[int, ...], monkeypatch: pytest.MonkeyPatch) -> None:
     image = Image.new(mode, (7, 5))
     channels = len(image.getbands())
@@ -135,23 +139,25 @@ def test_mode_filter_ties_and_rare_values() -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 19), (19, 1), (23, 19), (513, 515)])
 @pytest.mark.parametrize("window", [3, 5, 12])
-def test_mode_filter_candidates_enter_leave_and_tie(mode: str, size: tuple[int, int], window: int) -> None:
-    rng = random.Random(81)
+def test_mode_filter_candidates_enter_leave_and_tie(mode: str, window: int, subtests: pytest.Subtests) -> None:
     values = (0, 63, 64, 127, 128, 191, 192, 255)
-    raw = bytes(rng.choice(values) for _ in range(size[0] * size[1] * len(mode)))
-    image = Image.frombytes(mode, size, raw)
-    reference = PillowImage.frombytes(mode, size, raw)
-    assert image.filter(ImageFilter.ModeFilter(window)).tobytes() == reference.filter(PillowFilter.ModeFilter(window)).tobytes()
+    for size in ((1, 19), (19, 1), (23, 19), (513, 515)):
+        with subtests.test(size=size):
+            rng = random.Random(81)
+            raw = bytes(rng.choice(values) for _ in range(size[0] * size[1] * len(mode)))
+            image = Image.frombytes(mode, size, raw)
+            reference = PillowImage.frombytes(mode, size, raw)
+            assert image.filter(ImageFilter.ModeFilter(window)).tobytes() == reference.filter(PillowFilter.ModeFilter(window)).tobytes()
 
 
 @pytest.mark.parametrize("name", ["BoxBlur", "GaussianBlur"])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("radius", [0, 0.1, 0.5, 1, 1.3, 2, 10, 100.5, (0, 2), (2.5, 0), (0.3, 1.7), [1, 2]])
-@pytest.mark.parametrize("size", [(1, 1), (1, 7), (17, 13)])
-def test_blurs(name: str, mode: str, radius: float | tuple[float, float], size: tuple[int, int]) -> None:
-    compare(mode, size, getattr(ImageFilter, name)(radius), getattr(PillowFilter, name)(radius))
+def test_blurs(name: str, mode: str, subtests: pytest.Subtests) -> None:
+    for size in ((1, 1), (1, 7), (17, 13)):
+        for radius in (0, 0.1, 0.5, 1, 1.3, 2, 10, 100.5, (0, 2), (2.5, 0), (0.3, 1.7), [1, 2]):
+            with subtests.test(size=size, radius=radius):
+                compare(mode, size, getattr(ImageFilter, name)(radius), getattr(PillowFilter, name)(radius))
 
 
 @pytest.mark.parametrize("name", ["BoxBlur", "GaussianBlur"])
@@ -188,14 +194,14 @@ def test_unsharp_identity_returns_independent_copy(mode: str, args: tuple[int, i
 
 
 @pytest.mark.parametrize("radius", [float("inf"), float("nan"), 1e30])
-@pytest.mark.parametrize("percent,threshold", [(0, 0), (150, 255)])
+@pytest.mark.parametrize(("percent", "threshold"), [(0, 0), (150, 255)])
 def test_unsharp_identity_still_validates_radius(radius: float, percent: int, threshold: int) -> None:
     with pytest.raises(ValueError, match="radius"):
         Image.new("RGB", (3, 3)).filter(ImageFilter.UnsharpMask(radius, percent, threshold))
 
 
 @pytest.mark.parametrize(
-    "name,args",
+    ("name", "args"),
     [
         ("Kernel", ((2, 2), [1] * 4)),
         ("RankFilter", (3, 9)),
@@ -219,12 +225,12 @@ def test_invalid_parameters(name: str, args: tuple[object, ...]) -> None:
 
 
 @pytest.mark.parametrize("size", [(0, 0), (0, 5), (5, 0)])
-@pytest.mark.parametrize("name,args", [("BLUR", ()), ("GaussianBlur", (2,)), ("BoxBlur", (3,)), ("UnsharpMask", ())])
+@pytest.mark.parametrize(("name", "args"), [("BLUR", ()), ("GaussianBlur", (2,)), ("BoxBlur", (3,)), ("UnsharpMask", ())])
 def test_empty_images(size: tuple[int, int], name: str, args: tuple[object, ...]) -> None:
     compare("RGBA", size, getattr(ImageFilter, name)(*args), getattr(PillowFilter, name)(*args))
 
 
-@pytest.mark.parametrize("name,args", [("SMOOTH", ()), ("BLUR", ()), ("MedianFilter", (3,)), ("ModeFilter", (5,)), ("GaussianBlur", (2.1,)), ("BoxBlur", (1.75,)), ("UnsharpMask", ())])
+@pytest.mark.parametrize(("name", "args"), [("SMOOTH", ()), ("BLUR", ()), ("MedianFilter", (3,)), ("ModeFilter", (5,)), ("GaussianBlur", (2.1,)), ("BoxBlur", (1.75,)), ("UnsharpMask", ())])
 def test_parallel_filters(name: str, args: tuple[object, ...]) -> None:
     compare("RGBA", (321, 289), getattr(ImageFilter, name)(*args), getattr(PillowFilter, name)(*args))
 
@@ -311,7 +317,7 @@ def test_lut_transform_copy_and_mutation() -> None:
     assert image.filter(shared).tobytes() == b"\0" * 12
 
 
-@pytest.mark.parametrize("size,table,channels", [(1, [0] * 3, 3), (66, [], 3), ((2, 3), [], 3), (2, [], 2), (2, [0] * 23, 3), (2, [(0, 0)] * 8, 3), (2, np.zeros((3, 8)), 3)])
+@pytest.mark.parametrize(("size", "table", "channels"), [(1, [0] * 3, 3), (66, [], 3), ((2, 3), [], 3), (2, [], 2), (2, [0] * 23, 3), (2, [(0, 0)] * 8, 3), (2, np.zeros((3, 8)), 3)])
 def test_invalid_lut(size: object, table: object, channels: int) -> None:
     with pytest.raises(Exception) as expected:
         PillowFilter.Color3DLUT(size, table, channels)
@@ -320,7 +326,7 @@ def test_invalid_lut(size: object, table: object, channels: int) -> None:
     assert str(actual.value) == str(expected.value)
 
 
-@pytest.mark.parametrize("mode,channels,target", [("L", 3, None), ("RGB", 4, None), ("RGB", 3, "RGBA"), ("RGBA", 4, "RGB")])
+@pytest.mark.parametrize(("mode", "channels", "target"), [("L", 3, None), ("RGB", 4, None), ("RGB", 3, "RGBA"), ("RGBA", 4, "RGB")])
 def test_lut_incompatible_modes(mode: str, channels: int, target: str | None) -> None:
     image, pillow = images(mode, (5, 5))
     for source, module in ((image, ImageFilter), (pillow, PillowFilter)):
@@ -340,7 +346,7 @@ def test_custom_filters_and_errors() -> None:
             return image.copy()
 
     image, _ = images("RGBA", (3, 4))
-    for custom in (CopyBand, CopyBand(), CopyImage, CopyImage(), lambda: CopyBand()):
+    for custom in (CopyBand, CopyBand(), CopyImage, CopyImage(), CopyBand):
         assert image.filter(custom).tobytes() == image.tobytes()
     for invalid in (None, 1, "blur", object()):
         with pytest.raises(TypeError, match=re.escape("filter argument should be ImageFilter.Filter instance or class")):
@@ -360,4 +366,5 @@ def test_opened_image_metadata_and_filename() -> None:
     result = image.filter(ImageFilter.BLUR)
     assert result.format is None
     assert result.filename == ""
-    assert result.info == image.info and result.info is not image.info
+    assert result.info == image.info
+    assert result.info is not image.info

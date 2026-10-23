@@ -60,7 +60,7 @@ def test_operations() -> None:
         assert getattr(ImageEnhance, name)(actual).enhance(0.6).mode == "LAB"
 
 
-@pytest.mark.parametrize("compression,byteorder,big_tiff", [("raw", "<", False), ("raw", ">", False), ("raw", "<", True), ("tiff_lzw", "<", False), ("tiff_adobe_deflate", "<", False)])
+@pytest.mark.parametrize(("compression", "byteorder", "big_tiff"), [("raw", "<", False), ("raw", ">", False), ("raw", "<", True), ("tiff_lzw", "<", False), ("tiff_adobe_deflate", "<", False)])
 def test_tiff_interoperability(compression: str, byteorder: str, big_tiff: bool, monkeypatch: pytest.MonkeyPatch) -> None:
     from PIL import TiffImagePlugin
 

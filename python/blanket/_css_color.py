@@ -44,10 +44,10 @@ def _byte(value: float) -> int:
     return int(_clamp(value) * 255 + 0.5)
 
 
-def _number(token: str, scale: float = 1, *, hue: bool = False) -> float:
-    if token == "none":
+def _number(component: str, scale: float = 1, *, hue: bool = False) -> float:
+    if component == "none":
         return 0.0
-    match = _NUMBER.fullmatch(token)
+    match = _NUMBER.fullmatch(component)
     if match is None:
         raise ValueError("invalid color component")
     value = float(match[1])

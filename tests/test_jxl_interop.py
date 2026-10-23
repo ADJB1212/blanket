@@ -12,7 +12,7 @@ from blanket import Image as BlanketImage
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("lossless,effort", [(True, 1), (True, 7), (False, 3), (False, 7)])
+@pytest.mark.parametrize(("lossless", "effort"), [(True, 1), (True, 7), (False, 3), (False, 7)])
 def test_jxl_cross_library_pixels(mode: str, lossless: bool, effort: int) -> None:
     # Cross a codec group boundary and exercise alpha and grayscale as well as RGB.
     size = (257, 259)

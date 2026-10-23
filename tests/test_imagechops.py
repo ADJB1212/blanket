@@ -70,7 +70,7 @@ def test_blend_channel_modes_at_vector_boundaries(mode: str, name: str, width: i
 
 
 @pytest.mark.parametrize("name", ["add", "subtract"])
-@pytest.mark.parametrize("scale,offset", [(2, 0), (0.7, -13), (-1.3, 123), (1, 300), (1, -300), (math.inf, 17), (math.nan, 0), (1e-5, 0)])
+@pytest.mark.parametrize(("scale", "offset"), [(2, 0), (0.7, -13), (-1.3, 123), (1, 300), (1, -300), (math.inf, 17), (math.nan, 0), (1e-5, 0)])
 def test_scaled_arithmetic(name: str, scale: float, offset: int) -> None:
     first, pil_first = pair("RGBA", (31, 19))
     second, pil_second = pair("RGBA", first.size, 99)

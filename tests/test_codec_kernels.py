@@ -37,7 +37,7 @@ def png_chunks(width: int, height: int, depth: int, color: int, pixels: list[tup
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + b"".join(chunk(kind, data) for kind, data in extra) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
-@pytest.mark.parametrize("color,depth", [(0, depth) for depth in (1, 2, 4, 8, 16)] + [(3, depth) for depth in (1, 2, 4, 8)] + [(color, depth) for color in (2, 4, 6) for depth in (8, 16)])
+@pytest.mark.parametrize(("color", "depth"), [(0, depth) for depth in (1, 2, 4, 8, 16)] + [(3, depth) for depth in (1, 2, 4, 8)] + [(color, depth) for color in (2, 4, 6) for depth in (8, 16)])
 @pytest.mark.parametrize("interlaced", [False, True])
 @pytest.mark.parametrize("transparent", [False, True])
 @pytest.mark.parametrize("size", [(1, 1), (17, 9)])
@@ -55,7 +55,8 @@ def test_png_single_decoder_preserves_layout_and_transparency(color: int, depth:
     encoded = png_chunks(*size, depth, color, pixels, interlaced, extra)
     actual = Image.open(BytesIO(encoded))
     external = PillowImage.open(BytesIO(encoded))
-    assert actual.size == size and actual.format == "PNG"
+    assert actual.size == size
+    assert actual.format == "PNG"
     if depth < 16:
         assert actual.bit_depth == 8
         assert actual.convert("RGBA").tobytes() == external.convert("RGBA").tobytes()
@@ -77,7 +78,7 @@ def test_png_single_decoder_preserves_layout_and_transparency(color: int, depth:
         assert actual.tobytes() == struct.pack("<" + "H" * len(expected), *expected)
 
 
-@pytest.mark.parametrize("color,channels", [(0, 1), (2, 3), (4, 2), (6, 4)])
+@pytest.mark.parametrize(("color", "channels"), [(0, 1), (2, 3), (4, 2), (6, 4)])
 @pytest.mark.parametrize("bits", [8, 10, 12, 16, None])
 def test_png_sbit_preserves_supported_depth_and_grayscale_alpha(color: int, channels: int, bits: int | None) -> None:
     pixels = [tuple((i * 137 + c * 911) % 65536 for c in range(channels)) for i in range(15)]
@@ -99,7 +100,8 @@ def test_png_decoder_keeps_first_image_for_animated_containers(default_image: bo
     encoded = BytesIO()
     first.save(encoded, "PNG", save_all=True, append_images=[second], default_image=default_image)
     actual = Image.open(encoded)
-    assert actual.size == first.size and actual.mode == first.mode
+    assert actual.size == first.size
+    assert actual.mode == first.mode
     assert actual.tobytes() == first.tobytes()
 
 
@@ -140,7 +142,8 @@ def test_png_deflate_levels(mode: str, level: int, random_pixels: bool) -> None:
     image.save(encoded, "PNG", compress_level=level)
     for decoder in (Image.open, PillowImage.open):
         decoded = decoder(BytesIO(encoded.getvalue()))
-        assert decoded.mode == mode and decoded.size == size
+        assert decoded.mode == mode
+        assert decoded.size == size
         assert decoded.tobytes() == raw
 
 
@@ -158,7 +161,8 @@ def test_jxl_reused_runners_are_independent() -> None:
             with pytest.raises(UnidentifiedImageError):
                 Image.open(BytesIO(b"\xff\x0a\0"))
             decoded = Image.open(BytesIO(payload))
-            assert decoded.mode == mode and decoded.size == size
+            assert decoded.mode == mode
+            assert decoded.size == size
             assert decoded.tobytes() == raw
 
     decode_cases(0)

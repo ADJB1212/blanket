@@ -8,7 +8,7 @@ from PIL import Image as PillowImage, ImageOps as PillowOps
 from blanket import Image, ImageOps
 
 
-@pytest.mark.parametrize("mode,color", [("RGB", (19, 29, 39)), ("RGBA", (19, 29, 39, 149)), ("I", -1024), ("F", -12.5), ("I;16B", 1024), ("LA", (19, 149))])
+@pytest.mark.parametrize(("mode", "color"), [("RGB", (19, 29, 39)), ("RGBA", (19, 29, 39, 149)), ("I", -1024), ("F", -12.5), ("I;16B", 1024), ("LA", (19, 149))])
 @pytest.mark.parametrize("size", [(0, 3), (17, 19), (800, 600), (1025, 1025), (1400001, 1)])
 def test_new_fills_serial_and_parallel_buffers(mode: str, color: object, size: tuple[int, int]) -> None:
     actual = Image.new(mode, size, color)

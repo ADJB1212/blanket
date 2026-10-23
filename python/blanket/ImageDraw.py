@@ -584,6 +584,7 @@ class ImageDraw:
             render(stroke_fill, stroke)
         if not stroke or self._ink(fill) != self._ink(stroke_fill):
             render(fill, 0)
+        return None
 
     def multiline_text(
         self,

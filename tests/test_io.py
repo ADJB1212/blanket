@@ -14,7 +14,7 @@ from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 
 @pytest.mark.parametrize(
-    "mode, depth, format",
+    ("mode", "depth", "format"),
     [
         ("1", 8, "PNG"),
         ("L", 8, "PNG"),

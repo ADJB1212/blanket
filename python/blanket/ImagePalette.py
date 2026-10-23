@@ -192,7 +192,8 @@ class ImagePalette:
             return colors[color]
         except KeyError as error:
             slot = self._new_color_index(image, error)
-        assert isinstance(self._palette, bytearray)
+        if not isinstance(self._palette, bytearray):
+            raise TypeError("color allocation requires a bytearray palette")
         offset = slot * len(self.mode)
         if offset < len(self.palette):
             self._palette = self._palette[:offset] + bytes(color) + self._palette[offset + len(self.mode) :]

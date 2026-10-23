@@ -9,7 +9,7 @@ from PIL import PdfParser
 from blanket import Image, UnidentifiedImageError
 
 
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4), ("CMYK", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4), ("CMYK", 4)])
 @pytest.mark.parametrize("destination", ["stream", "path", "bytes_path"])
 def test_pdf_save(mode: str, channels: int, destination: str, tmp_path: Path) -> None:
     pixels = bytes((i * 37) % 256 for i in range(6 * channels))

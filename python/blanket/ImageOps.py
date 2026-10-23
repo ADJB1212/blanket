@@ -148,10 +148,12 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
         result = ImageOps.colorize(image.convert("L"), "navy", "white")
         ```
     """
-    assert image.mode == "L"
-    assert 0 <= blackpoint <= whitepoint <= 255
-    if mid is not None:
-        assert blackpoint <= midpoint <= whitepoint
+    if image.mode != "L":
+        raise ValueError("colorize requires an L image")
+    if not 0 <= blackpoint <= whitepoint <= 255:
+        raise ValueError("expected 0 <= blackpoint <= whitepoint <= 255")
+    if mid is not None and not blackpoint <= midpoint <= whitepoint:
+        raise ValueError("expected blackpoint <= midpoint <= whitepoint")
     stops = [(blackpoint, color_pixel(black, "RGB"))]
     if mid is not None:
         stops.append((midpoint, color_pixel(mid, "RGB")))

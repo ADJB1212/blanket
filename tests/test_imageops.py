@@ -34,7 +34,7 @@ def test_public_functions_match_pillow() -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
 @pytest.mark.parametrize(
-    "name,kwargs",
+    ("name", "kwargs"),
     [
         ("autocontrast", {}),
         ("autocontrast", {"cutoff": 4}),
@@ -140,7 +140,8 @@ def test_crop_border_and_box_are_distinct(mode: str) -> None:
     assert sides.size == (b.width - 4, b.height - 6)
     for result in (border, region, sides, ImageOps.crop(b), b.crop()):
         assert result is not b
-        assert result.info == b.info and result.info is not b.info
+        assert result.info == b.info
+        assert result.info is not b.info
     with pytest.raises(TypeError):
         cast("Callable[..., object]", b.crop)(border=2)
     with pytest.raises(TypeError):
@@ -167,9 +168,8 @@ def test_fill_colors(mode: str, color: object) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("method", list(Image.Resampling))
 @pytest.mark.parametrize(
-    "name,kwargs",
+    ("name", "kwargs"),
     [
         ("contain", {"size": (19, 17)}),
         ("contain", {"size": (62, 65)}),
@@ -182,19 +182,22 @@ def test_fill_colors(mode: str, color: object) -> None:
         ("pad", {"size": (70, 50), "color": "#1234", "centering": (2, -1)}),
     ],
 )
-def test_resize_operations(mode: str, method: int, name: str, kwargs: dict) -> None:
+def test_resize_operations(mode: str, name: str, kwargs: dict, subtests: pytest.Subtests) -> None:
     b, p = pair(mode)
-    same(getattr(ImageOps, name)(b, method=method, **kwargs), getattr(PILOps, name)(p, method=method, **kwargs))
+    for method in Image.Resampling:
+        with subtests.test(method=method):
+            same(getattr(ImageOps, name)(b, method=method, **kwargs), getattr(PILOps, name)(p, method=method, **kwargs))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", list(Image.Resampling))
-@pytest.mark.parametrize("factor", [0.5, 1, 1.75])
-def test_scale(mode: str, method: int, factor: float) -> None:
+def test_scale(mode: str, method: int, subtests: pytest.Subtests) -> None:
     b, p = pair(mode)
-    result = ImageOps.scale(b, factor, method)
-    assert result is not b
-    same(result, PILOps.scale(p, factor, method))
+    for factor in (0.5, 1, 1.75):
+        with subtests.test(factor=factor):
+            result = ImageOps.scale(b, factor, method)
+            assert result is not b
+            same(result, PILOps.scale(p, factor, method))
 
 
 class Deformer:
@@ -291,7 +294,7 @@ def test_xmp_only_png() -> None:
     same(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
 
 
-@pytest.mark.parametrize("name,kwargs", [("autocontrast", {}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {})])
+@pytest.mark.parametrize(("name", "kwargs"), [("autocontrast", {}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {})])
 def test_unsupported_lut_mode(name: str, kwargs: dict) -> None:
     b, p = pair("RGBA")
     for ops, image in ((ImageOps, b), (PILOps, p)):
@@ -300,7 +303,7 @@ def test_unsupported_lut_mode(name: str, kwargs: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    "name,args",
+    ("name", "args"),
     [
         ("scale", (0,)),
         ("scale", (-1,)),
@@ -322,7 +325,7 @@ def test_invalid_arguments(name: str, args: tuple) -> None:
         getattr(ImageOps, name)(b, *args)
 
 
-@pytest.mark.parametrize("mode,size", [("RGB", (2, 2)), ("L", (1, 1))])
+@pytest.mark.parametrize(("mode", "size"), [("RGB", (2, 2)), ("L", (1, 1))])
 def test_invalid_masks(mode: str, size: tuple[int, int]) -> None:
     b, _ = pair()
     mask, _ = pair(mode, size)
@@ -369,11 +372,14 @@ def test_processed_png_interop(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("method", list(Image.Resampling))
-@pytest.mark.parametrize("source,target", [((1, 1), (7, 9)), ((1, 7), (3, 11)), ((7, 1), (11, 3)), ((4, 4), (2, 4)), ((4, 4), (4, 2)), ((4, 4), (3, 3)), ((10, 10), (15, 15)), ((2, 205), (5, 61))])
-def test_resize_thin_and_small_images(mode: str, method: int, source: tuple, target: tuple) -> None:
+@pytest.mark.parametrize(
+    ("source", "target"), [((1, 1), (7, 9)), ((1, 7), (3, 11)), ((7, 1), (11, 3)), ((4, 4), (2, 4)), ((4, 4), (4, 2)), ((4, 4), (3, 3)), ((10, 10), (15, 15)), ((2, 205), (5, 61))]
+)
+def test_resize_thin_and_small_images(mode: str, source: tuple, target: tuple, subtests: pytest.Subtests) -> None:
     b, p = pair(mode, source)
-    same(ImageOps.fit(b, target, method), PILOps.fit(p, target, method))
+    for method in Image.Resampling:
+        with subtests.test(method=method):
+            same(ImageOps.fit(b, target, method), PILOps.fit(p, target, method))
 
 
 @pytest.mark.parametrize("method", [0, 2, 3])
@@ -448,7 +454,7 @@ def test_deform_zero_area_box() -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize(
-    "name,kwargs",
+    ("name", "kwargs"),
     [
         ("crop", {"border": (7, 9, 11, 13)}),
         ("expand", {"border": (3, 5), "fill": "#1234"}),
@@ -466,7 +472,9 @@ def test_parallel_imageops_match_pillow(mode: str, name: str, kwargs: dict) -> N
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
-@pytest.mark.parametrize("name,kwargs", [("autocontrast", {"cutoff": (2, 7), "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {"threshold": 173})])
+@pytest.mark.parametrize(
+    ("name", "kwargs"), [("autocontrast", {"cutoff": (2, 7), "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {"threshold": 173})]
+)
 def test_parallel_luts_and_histograms(mode: str, name: str, kwargs: dict) -> None:
     b, p = pair(mode, (521, 509))
     b_options, p_options = kwargs.copy(), kwargs.copy()

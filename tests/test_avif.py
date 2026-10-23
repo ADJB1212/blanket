@@ -59,7 +59,7 @@ def test_avif_nonuniform_pixels_and_alpha() -> None:
 
 
 @pytest.mark.parametrize(
-    "options,error",
+    ("options", "error"),
     [({"quality": 0}, ValueError), ({"quality": 101}, ValueError), ({"effort": 0}, ValueError), ({"effort": 11}, ValueError), ({"quality": True}, TypeError), ({"lossless": True}, TypeError)],
 )
 def test_avif_invalid_options(options: dict[str, object], error: type[Exception]) -> None:

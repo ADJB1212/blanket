@@ -82,7 +82,8 @@ def check_lab() -> int:
     actual.save(stream, "TIFF")
     for module in (BlanketImage, PillowImage):
         reopened = module.open(BytesIO(stream.getvalue()))
-        assert reopened.mode == "LAB" and reopened.tobytes() == actual.tobytes()
+        assert reopened.mode == "LAB"
+        assert reopened.tobytes() == actual.tobytes()
         checks += 1
     return checks
 
@@ -722,7 +723,8 @@ def check_heif_and_high_depth() -> int:
         output = BytesIO()
         image.save(output, "PNG")
         result = BlanketImage.open(output)
-        assert result.bit_depth == 10 and result.tobytes() == image.tobytes()
+        assert result.bit_depth == 10
+        assert result.tobytes() == image.tobytes()
         checks += 1
         output = BytesIO()
         image.save(output, "HEIC", quality=95)
@@ -736,7 +738,8 @@ def check_heif_and_high_depth() -> int:
         external.save(output, bit_depth=10, quality=95)
         expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
         result = BlanketImage.open(output)
-        assert result.bit_depth == 10 and result.tobytes() == expected.astype("<u2").tobytes()
+        assert result.bit_depth == 10
+        assert result.tobytes() == expected.astype("<u2").tobytes()
         checks += 1
     return checks
 
@@ -988,7 +991,8 @@ def check_image_utilities() -> int:
     actual = BlanketImage.frombytes("L", (37, 29), pixels("L")).convert("1")
     expected = PillowImage.frombytes("1", actual.size, actual.tobytes())
     with PillowImage.open(BytesIO(actual.tobitmap("sample"))) as decoded:
-        assert decoded.size == expected.size and decoded.tobytes() == expected.tobytes()
+        assert decoded.size == expected.size
+        assert decoded.tobytes() == expected.tobytes()
     checks += 1
     for mode in ("L", "RGB", "RGBA"):
         image = BlanketImage.frombytes(mode, (37, 29), pixels(mode))
@@ -1014,7 +1018,8 @@ def check_image_utilities() -> int:
         checks += 1
     report = StringIO()
     features.blanketinfo(report)
-    assert "Blanket " in report.getvalue() and "PNG: open, save" in report.getvalue()
+    assert "Blanket " in report.getvalue()
+    assert "PNG: open, save" in report.getvalue()
     return checks + 1
 
 
@@ -1040,7 +1045,8 @@ def check_sequences() -> int:
                     assert actual.info["duration"] == expected.info["duration"]
                     assert actual.info["loop"] == expected.info["loop"] == 2
                 checks += 1
-            assert len(BlanketSequence.all_frames(actual)) == 3 and actual.tell() == 2
+            assert len(BlanketSequence.all_frames(actual)) == 3
+            assert actual.tell() == 2
             checks += 2
     return checks
 

@@ -1757,7 +1757,7 @@ class Image:
             from ._sequence import save_sequence
 
             if save_sequence(self, fp, output_format, options, compressor):
-                return
+                return None
         if self.mode == "LAB":
             if output_format != "TIFF":
                 raise OSError(f"cannot write mode LAB as {output_format}")
@@ -1789,6 +1789,7 @@ class Image:
         encoded = _encode(self._native, output_format, **values, compressor=None if compressor is None else compressor._native, output=output)
         if output is None:
             cast("BinaryIO", fp).write(encoded)
+        return None
 
     def __enter__(self) -> Self:
         """Load the image and return it for use in a context manager.

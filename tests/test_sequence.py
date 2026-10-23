@@ -22,18 +22,25 @@ def animation(format: str = "PNG", **options: object) -> Image.Image:
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])
 def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     image = animation(format, **({"lossless": True} if format == "WEBP" else {}))
-    assert image.n_frames == 3 and image.is_animated and image.tell() == 0
+    assert image.n_frames == 3
+    assert image.is_animated
+    assert image.tell() == 0
     for i, duration in enumerate((20, 40, 60)):
         image.seek(i)
-        assert image.tell() == i and image.info["duration"] == duration and image.info["loop"] == 2
+        assert image.tell() == i
+        assert image.info["duration"] == duration
+        assert image.info["loop"] == 2
     image.putpixel((0, 0), (50, 60, 70, 255))
     image.info["custom"] = "third"
     copied = image.copy()
-    assert copied.n_frames == 1 and not copied.is_animated and copied.tell() == 0
+    assert copied.n_frames == 1
+    assert not copied.is_animated
+    assert copied.tell() == 0
     image.seek(0)
     assert "custom" not in image.info
     image.seek(2)
-    assert image.getpixel((0, 0)) == (50, 60, 70, 255) and image.info["custom"] == "third"
+    assert image.getpixel((0, 0)) == (50, 60, 70, 255)
+    assert image.info["custom"] == "third"
     for frame in (-1, 3, 100):
         with pytest.raises(EOFError):
             image.seek(frame)
@@ -55,11 +62,14 @@ def test_static_navigation_and_sequence_protocol() -> None:
         still.seek(1)
     image = animation()
     iterator = ImageSequence.Iterator(image)
-    assert iter(iterator) is iterator and iterator[1] is image and image.tell() == 1
+    assert iter(iterator) is iterator
+    assert iterator[1] is image
+    assert image.tell() == 1
     assert [frame.tell() for frame in iterator] == [0, 1, 2]
     assert image.tell() == 2
     frames = ImageSequence.all_frames([still, image], lambda frame: frame.convert("RGB"))
-    assert len(frames) == 4 and image.tell() == 2
+    assert len(frames) == 4
+    assert image.tell() == 2
     assert all(frame.n_frames == 1 and frame.mode == "RGB" for frame in frames)
     frames[-1].putpixel((0, 0), (1, 2, 3))
     assert image.getpixel((0, 0)) != (1, 2, 3, 255)
@@ -98,7 +108,7 @@ def test_animation_interoperability(format: str, writer: str) -> None:
             assert actual.tobytes() == frames[i].tobytes()
 
 
-@pytest.mark.parametrize("format,disposal", [("GIF", 1), ("GIF", 2), ("GIF", 3), ("PNG", 0), ("PNG", 1), ("PNG", 2)])
+@pytest.mark.parametrize(("format", "disposal"), [("GIF", 1), ("GIF", 2), ("GIF", 3), ("PNG", 0), ("PNG", 1), ("PNG", 2)])
 def test_partial_frames_and_disposal(format: str, disposal: int) -> None:
     frames = [PillowImage.new("RGBA", (13, 7), (0, 0, 0, 0)) for _ in range(3)]
     frames[0].paste("red", (0, 0, 5, 5))
@@ -121,7 +131,8 @@ def test_apng_separate_default_image(writer: str) -> None:
     frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], default_image=True, duration=[40, 60], loop=4)
     actual = Image.open(stream)
     expected = PillowImage.open(stream)
-    assert actual.n_frames == 3 and actual.info["default_image"] is True
+    assert actual.n_frames == 3
+    assert actual.info["default_image"] is True
     assert "duration" not in actual.info
     for i in range(3):
         actual.seek(i)
@@ -156,11 +167,13 @@ def test_tiff_pages_preserve_modes_and_dimensions(compression: str) -> None:
     stream = BytesIO()
     frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:], compression=compression)
     actual, expected = Image.open(stream), PillowImage.open(stream)
-    assert actual.n_frames == 3 and actual.is_animated
+    assert actual.n_frames == 3
+    assert actual.is_animated
     for i in range(3):
         actual.seek(i)
         expected.seek(i)
-        assert actual.size == expected.size and actual.mode == expected.mode
+        assert actual.size == expected.size
+        assert actual.mode == expected.mode
         assert actual.tobytes() == expected.tobytes()
 
 
@@ -176,7 +189,8 @@ def test_tiff_special_mode_on_later_page(mode: str) -> None:
         assert actual.bit_depth == 16
     else:
         assert actual.mode == mode
-    assert actual.size == second.size and actual.tobytes() == second.tobytes()
+    assert actual.size == second.size
+    assert actual.tobytes() == second.tobytes()
 
 
 def test_multipage_pdf_and_save_positions() -> None:
@@ -185,7 +199,8 @@ def test_multipage_pdf_and_save_positions() -> None:
     extra = Image.new("CMYK", (2, 3), (10, 20, 30, 40))
     stream = BytesIO()
     source.save(stream, "PDF", save_all=True, append_images=[extra])
-    assert source.tell() == 2 and extra.tell() == 0
+    assert source.tell() == 2
+    assert extra.tell() == 0
     pdf = PdfParser.PdfParser(buf=stream.getvalue())
     assert len(pdf.pages) == 4
     for i, reference in enumerate(pdf.pages):
@@ -207,12 +222,14 @@ def test_save_defaults_and_path(tmp_path: Path) -> None:
     path = tmp_path / "animated.apng"
     source.save(bytes(path), save_all=True)
     reopened = Image.open(path)
-    assert reopened.n_frames == 3 and source.tell() == 1
+    assert reopened.n_frames == 3
+    assert source.tell() == 1
     assert [frame.info["duration"] for frame in ImageSequence.Iterator(reopened)] == [20, 40, 60]
     stream = BytesIO()
     source.save(stream, "PNG", save_all=False, append_images=[Image.new("RGB", (2, 2))])
     still = Image.open(stream)
-    assert still.n_frames == 1 and still.tobytes() == source.tobytes()
+    assert still.n_frames == 1
+    assert still.tobytes() == source.tobytes()
 
 
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "PDF"])
@@ -224,7 +241,9 @@ def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -
     expected = ImageSequence.all_frames(source)
     stream = BytesIO()
     source.save(stream, format, save_all=True, append_images=(frame for frame in [source]), **({"lossless": True} if format == "WEBP" else {}))
-    assert source.tell() == 1 and source.info["custom"] == "edited" and source.info["duration"] == 90
+    assert source.tell() == 1
+    assert source.info["custom"] == "edited"
+    assert source.info["duration"] == 90
     assert source.getpixel((0, 0)) == (17, 29, 51, 255)
     if format == "PDF":
         pdf = PdfParser.PdfParser(buf=stream.getvalue())
@@ -239,7 +258,8 @@ def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -
             assert actual.tobytes() == frame.tobytes()
             assert actual.info["duration"] == frame.info["duration"]
     for actual, frame in zip(ImageSequence.Iterator(source), expected, strict=True):
-        assert actual.tobytes() == frame.tobytes() and actual.info == frame.info
+        assert actual.tobytes() == frame.tobytes()
+        assert actual.info == frame.info
 
 
 def test_pdf_save_includes_replaced_current_raster() -> None:
@@ -249,7 +269,8 @@ def test_pdf_save_includes_replaced_current_raster() -> None:
     size, pixels = source.size, source.convert("RGB").tobytes()
     stream = BytesIO()
     source.save(stream, "PDF", save_all=True)
-    assert source.tell() == 1 and source.size == size
+    assert source.tell() == 1
+    assert source.size == size
     pdf = PdfParser.PdfParser(buf=stream.getvalue())
     page = pdf.read_indirect(pdf.pages[1])
     assert page[b"MediaBox"] == [0, 0, *size]
@@ -264,11 +285,12 @@ def test_closed_appended_source_does_not_write_or_change_position(format: str) -
     stream = BytesIO()
     with pytest.raises(ValueError, match="closed"):
         source.save(stream, format, save_all=True, append_images=[closed])
-    assert source.tell() == 1 and not stream.getvalue()
+    assert source.tell() == 1
+    assert not stream.getvalue()
 
 
 @pytest.mark.parametrize(
-    "format,options,error",
+    ("format", "options", "error"),
     [
         ("JPEG", {"save_all": True}, ValueError),
         ("PNG", {"save_all": 1}, TypeError),
@@ -291,7 +313,8 @@ def test_invalid_sequence_options_do_not_write(format: str, options: dict[str, o
     stream = BytesIO()
     with pytest.raises(error):
         image.save(stream, format, **options)
-    assert stream.getvalue() == b"" and image.tell() == 1
+    assert stream.getvalue() == b""
+    assert image.tell() == 1
 
 
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])

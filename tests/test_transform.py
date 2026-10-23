@@ -14,9 +14,8 @@ def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("resample", [0, 2, 3])
 @pytest.mark.parametrize(
-    "method,data",
+    ("method", "data"),
     [
         (Image.AFFINE, (0.3, 0, -0.05, 0, -1.1, 210)),
         (Image.AFFINE, (0.7, 0.2, -2, -0.1, 1.2, 1)),
@@ -26,14 +25,16 @@ def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
         (Image.MESH, [((0, 0, 259, 193), (-1, 1, 2, 211, 277, 208, 280, -2)), ((31, 17, 241, 181), (0, 0, 0, 211, 277, 211, 277, 0))]),
     ],
 )
-def test_transform_parallel_rows(mode: str, resample: int, method: int, data: object) -> None:
+def test_transform_parallel_rows(mode: str, method: int, data: object, subtests: pytest.Subtests) -> None:
     size = (277, 211)
     raw = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
     image = Image.frombytes(mode, size, raw)
     reference = PILImage.frombytes(mode, size, raw)
-    actual = image.transform((259, 193), method, data, resample, fillcolor=17)
-    expected = reference.transform((259, 193), method, data, resample, fillcolor=17)
-    assert actual.tobytes() == expected.tobytes()
+    for resample in (0, 2, 3):
+        with subtests.test(resample=resample):
+            actual = image.transform((259, 193), method, data, resample, fillcolor=17)
+            expected = reference.transform((259, 193), method, data, resample, fillcolor=17)
+            assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -46,17 +47,15 @@ def test_transpose(mode: str, method: int) -> None:
     assert result.mode == expected.mode
     assert result.size == expected.size
     assert result.tobytes() == expected.tobytes()
-    assert result.info == image.info and result.info is not image.info
+    assert result.info == image.info
+    assert result.info is not image.info
     image.close()
     assert result.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("resample", [0, 2, 3])
-@pytest.mark.parametrize("fillcolor", [None, "#12345680", 17])
-@pytest.mark.parametrize("size", [(13, 9), (19, 14)])
 @pytest.mark.parametrize(
-    "method,data",
+    ("method", "data"),
     [
         (Image.AFFINE, (1, 0, 0, 0, 1, 0)),
         (Image.AFFINE, (0.7, 0.2, -2, -0.1, 1.2, 1)),
@@ -68,21 +67,26 @@ def test_transpose(mode: str, method: int) -> None:
         (Image.MESH, []),
     ],
 )
-def test_transform_parity(mode: str, resample: int, fillcolor: object, size: tuple[int, int], method: int, data: object) -> None:
+def test_transform_parity(mode: str, method: int, data: object, subtests: pytest.Subtests) -> None:
     image, reference = pair(mode)
     image.info["test"] = 42
-    result = image.transform(size, method, data, resample, fillcolor=fillcolor)
-    expected = reference.transform(size, method, data, resample, fillcolor=fillcolor)
-    assert result.size == expected.size
-    assert result.mode == expected.mode
-    assert result.tobytes() == expected.tobytes()
-    assert result.info == image.info and result.info is not image.info
+    for resample in (0, 2, 3):
+        for fillcolor in (None, "#12345680", 17):
+            for size in ((13, 9), (19, 14)):
+                with subtests.test(resample=resample, fillcolor=fillcolor, size=size):
+                    result = image.transform(size, method, data, resample, fillcolor=fillcolor)
+                    expected = reference.transform(size, method, data, resample, fillcolor=fillcolor)
+                    assert result.size == expected.size
+                    assert result.mode == expected.mode
+                    assert result.tobytes() == expected.tobytes()
+                    assert result.info == image.info
+                    assert result.info is not image.info
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("fillcolor", [None, 17])
 @pytest.mark.parametrize(
-    "method,data",
+    ("method", "data"),
     [
         (Image.PERSPECTIVE, (0.87, 0.14, -1.3, -0.12, 1.06, 0.7, 0.015, -0.009)),
         (Image.QUAD, (-1.4, 0.8, 1.7, 9.3, 12.6, 8.1, 14.2, -1.6)),
@@ -105,14 +109,16 @@ def test_transform_getdata() -> None:
 def test_transform_handler() -> None:
     class Handler(Image.ImageTransformHandler):
         def transform(self, size, image, resample=0, fill=1):
-            assert size == (8, 7) and resample == 2 and fill == 0
+            assert size == (8, 7)
+            assert resample == 2
+            assert fill == 0
             return image.crop((0, 0, *size))
 
     image, _ = pair("RGB")
     assert image.transform((8, 7), Handler(), resample=2, fill=0).size == (8, 7)
 
 
-@pytest.mark.parametrize("method,data,resample", [(99, (), 0), (0, None, 0), (0, (1, 2), 0), (0, (1, 0, 0, 0, 1, 0), 1), (2, (float("nan"),) * 8, 0)])
+@pytest.mark.parametrize(("method", "data", "resample"), [(99, (), 0), (0, None, 0), (0, (1, 2), 0), (0, (1, 0, 0, 0, 1, 0), 1), (2, (float("nan"),) * 8, 0)])
 def test_invalid_transform(method: int, data: object, resample: int) -> None:
     image, _ = pair("L")
     with pytest.raises(ValueError):
@@ -138,22 +144,24 @@ def test_nearest_fractional_boundaries(scale: float) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("target", [(15, 17), (16, 16), (33, 31), (400, 300), (800, 600)])
 @pytest.mark.parametrize("extent", [(80.0, 60.0, 720.0, 540.0), (799.9, 599.9, 0.1, 0.1), (0.1, 0.1, 10.1, 10.1), (3.5, 2.5, 3.5, 2.5), (-10.0, -10.0, 810.0, 610.0)])
-def test_nearest_extent_gather(mode: str, target: tuple[int, int], extent: tuple[float, float, float, float]) -> None:
+def test_nearest_extent_gather(mode: str, extent: tuple[float, float, float, float], subtests: pytest.Subtests) -> None:
     raw = bytes((i * 37 + i // 7) % 256 for i in range(800 * 600 * len(mode)))
     image = Image.frombytes(mode, (800, 600), raw)
     reference = PILImage.frombytes(mode, (800, 600), raw)
-    actual = image.transform(target, Image.EXTENT, extent, fillcolor=19)
-    expected = reference.transform(target, PILImage.Transform.EXTENT, extent, fillcolor=19)
-    assert actual.tobytes() == expected.tobytes()
+    for target in ((15, 17), (16, 16), (33, 31), (400, 300), (800, 600)):
+        with subtests.test(target=target):
+            actual = image.transform(target, Image.EXTENT, extent, fillcolor=19)
+            expected = reference.transform(target, PILImage.Transform.EXTENT, extent, fillcolor=19)
+            assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("size", [(0, 5), (5, 0), (0, 0)])
 def test_empty_affine_and_transpose(size: tuple[int, int]) -> None:
     image, _ = pair("L")
     result = image.transform(size, Image.AFFINE, (1, 0, 0, 0, 1, 0))
-    assert result.size == size and result.tobytes() == b""
+    assert result.size == size
+    assert result.tobytes() == b""
     assert result.transpose(Image.TRANSPOSE).size == size[::-1]
 
 

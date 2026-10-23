@@ -11,7 +11,7 @@ import pytest
 from blanket import Image, UnidentifiedImageError
 
 
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
 @pytest.mark.parametrize("depth", [10, 12, 16])
 def test_wide_pixels_and_png(mode: str, channels: int, depth: int) -> None:
     maximum = (1 << depth) - 1
@@ -35,7 +35,7 @@ def test_wide_pixels_and_png(mode: str, channels: int, depth: int) -> None:
 
 
 @pytest.mark.parametrize("depth", [8, 10, 12])
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
 def test_heif_roundtrip(depth: int, mode: str, channels: int) -> None:
     maximum = (1 << depth) - 1
     array = np.full((32, 32, channels), maximum // 2, dtype=np.uint8 if depth == 8 else np.uint16)
@@ -73,7 +73,7 @@ def test_heif_extension(tmp_path: Path, extension: str) -> None:
 
 
 @pytest.mark.parametrize("depth", [8, 10, 12])
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
 @pytest.mark.parametrize("size", [(64, 32), (67, 35), (513, 515)])
 def test_heif_pixel_rows(depth: int, mode: str, channels: int, size: tuple[int, int]) -> None:
     """Exercise packed and padded rows with distinct pixels, including wide alpha."""
@@ -141,7 +141,7 @@ def test_big_endian_strided_uint16() -> None:
     assert image.tobytes() == source.astype("<u2").tobytes()
 
 
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("byteorder", ["<", ">"])
 def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int, byteorder: str) -> None:
@@ -163,7 +163,7 @@ def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int,
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("target_mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("source_depth,target_depth", [(8, 10), (8, 16), (10, 8), (10, 12), (10, 16), (12, 8), (12, 10), (12, 16), (16, 8), (16, 10), (16, 12), (16, 16)])
+@pytest.mark.parametrize(("source_depth", "target_depth"), [(8, 10), (8, 16), (10, 8), (10, 12), (10, 16), (12, 8), (12, 10), (12, 16), (16, 8), (16, 10), (16, 12), (16, 16)])
 @pytest.mark.parametrize("count", [17, 262147])
 def test_wide_conversion_rounding_and_parallel_tails(source_mode: str, target_mode: str, source_depth: int, target_depth: int, count: int) -> None:
     source_max = (1 << source_depth) - 1
@@ -227,7 +227,7 @@ def test_wide_geometry_and_bands() -> None:
 
 
 @pytest.mark.parametrize("method", list(Image.Resampling))
-@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+@pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
 def test_wide_resize_preserves_constant_samples(method: int, mode: str, channels: int) -> None:
     samples = np.full((4, 6, channels), 713, dtype=np.uint16)
     if channels == 4:

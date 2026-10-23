@@ -125,7 +125,7 @@ def test_font_collection_face_selection(font_data: bytes) -> None:
         ImageFont.truetype(BytesIO(collection), index=2)
 
 
-@pytest.mark.parametrize("text,direction", [("éΩЖ😀", None), ("אב", "rtl"), ("سلام", "rtl"), ("क", None), ("AאבV", "ltr"), ("AV", "ttb")])
+@pytest.mark.parametrize(("text", "direction"), [("éΩЖ😀", None), ("אב", "rtl"), ("سلام", "rtl"), ("क", None), ("AאבV", "ltr"), ("AV", "ttb")])
 def test_unicode_layout_and_bounds(font: ImageFont.TrueTypeFont, text: str, direction: str | None) -> None:
     assert font.getlength(text, direction=direction) > 0
     mask, offset = font.getmask2(text, direction=direction)
@@ -141,7 +141,7 @@ def test_unicode_uses_mapped_glyphs(font: ImageFont.TrueTypeFont, text: str) -> 
     assert bytes(font.getmask(text)) != bytes(font.getmask("\U0010ffff"))
 
 
-@pytest.mark.parametrize("text,direction,visual", [("אב", "rtl", "בא"), ("אב", None, "בא"), ("AאבV", "ltr", "AבאV")])
+@pytest.mark.parametrize(("text", "direction", "visual"), [("אב", "rtl", "בא"), ("אב", None, "בא"), ("AאבV", "ltr", "AבאV")])
 def test_bidirectional_visual_order(font: ImageFont.TrueTypeFont, text: str, direction: str | None, visual: str) -> None:
     actual = Image.new("L", (80, 30))
     expected = Image.new("L", actual.size)
@@ -164,7 +164,8 @@ def test_horizontal_anchors(font: ImageFont.TrueTypeFont, anchor: str) -> None:
     if anchor[1] == "b":
         assert box[3] == 0
     if anchor[1] == "s":
-        assert box[1] < 0 and box[3] == 0
+        assert box[1] < 0
+        assert box[3] == 0
 
 
 @pytest.mark.parametrize("anchor", ["lt", "mt", "rt", "st", "lm", "mb", "rb"])

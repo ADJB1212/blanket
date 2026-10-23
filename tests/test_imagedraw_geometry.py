@@ -9,7 +9,7 @@ from blanket import Image, ImageDraw
 
 
 @pytest.mark.parametrize("points", [[(1, 2), (12, 9)], [(12, 9), (1, 2)], [(-4, -3), (20, 10)], [(0, 0), (7, 14)], [(7, 14), (0, 0)], [(2, 2), (2, 2)], [(2, 2), (2, 9), (8, 9)]])
-@pytest.mark.parametrize("mode,ink", [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16", 500)])
+@pytest.mark.parametrize(("mode", "ink"), [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16", 500)])
 def test_thin_lines_match_pillow(points: list[tuple[int, int]], mode: str, ink: object) -> None:
     actual = Image.new(mode, (15, 15))
     expected = PILImage.new(mode, actual.size)
@@ -36,7 +36,7 @@ def test_short_line_segments_on_large_canvas(vertical: bool, reverse: bool) -> N
 
 @pytest.mark.parametrize("operation", ["line", "polygon", "ellipse", "arc", "chord", "pieslice", "rounded_rectangle", "regular_polygon"])
 @pytest.mark.parametrize(
-    "mode,ink",
+    ("mode", "ink"),
     [
         ("1", 1),
         ("L", 117),
@@ -117,7 +117,7 @@ def test_clipping_and_single_alpha_blend() -> None:
     assert len(set(image.tobytes()[::3])) == 1
 
 
-@pytest.mark.parametrize("mode,ink", [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16B", 500)])
+@pytest.mark.parametrize(("mode", "ink"), [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16B", 500)])
 def test_filled_circle_matches_pillow(mode: str, ink: object) -> None:
     actual = Image.new(mode, (15, 15))
     expected = PILImage.new(mode, actual.size)
@@ -169,7 +169,7 @@ def test_floodfill_matches_pillow(border: int | None, threshold: int) -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("mode,fill", [("L", 100), ("RGB", (10, 20, 30)), ("RGBA", (10, 20, 30, 40))])
+@pytest.mark.parametrize(("mode", "fill"), [("L", 100), ("RGB", (10, 20, 30)), ("RGBA", (10, 20, 30, 40))])
 @pytest.mark.parametrize("border", [False, True])
 def test_floodfill_connected_region_and_holes(mode: str, fill: object, border: bool) -> None:
     actual = Image.new(mode, (97, 89), 0)
@@ -183,7 +183,7 @@ def test_floodfill_connected_region_and_holes(mode: str, fill: object, border: b
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("mode,value,background", [("RGB", (1, 2, 3), (1, 2, 4)), ("RGBA", (1, 2, 3, 4), (1, 2, 3, 5)), ("I", -7, -8), ("F", 1.25, 1.5), ("I;16B", 1000, 1001), ("P", 7, 8)])
+@pytest.mark.parametrize(("mode", "value", "background"), [("RGB", (1, 2, 3), (1, 2, 4)), ("RGBA", (1, 2, 3, 4), (1, 2, 3, 5)), ("I", -7, -8), ("F", 1.25, 1.5), ("I;16B", 1000, 1001), ("P", 7, 8)])
 def test_floodfill_modes_and_diagonal_separation(mode: str, value: object, background: object) -> None:
     image = Image.new(mode, (3, 3), background)
     image.putpixel((0, 0), value)
@@ -196,7 +196,7 @@ def test_floodfill_modes_and_diagonal_separation(mode: str, value: object, backg
     assert image.getpixel((2, 2)) == background
 
 
-@pytest.mark.parametrize("mode,value", [("L", 117), ("LA", (117, 81)), ("RGB", (117, 81, 39)), ("RGBA", (117, 81, 39, 17)), ("I", -7), ("F", 1.25), ("I;16B", 1000), ("P", 7), ("PA", (7, 81))])
+@pytest.mark.parametrize(("mode", "value"), [("L", 117), ("LA", (117, 81)), ("RGB", (117, 81, 39)), ("RGBA", (117, 81, 39, 17)), ("I", -7), ("F", 1.25), ("I;16B", 1000), ("P", 7), ("PA", (7, 81))])
 @pytest.mark.parametrize("border", [False, True])
 def test_floodfill_scanlines_expand_merge_and_preserve_enclosed_regions(mode: str, value: object, border: bool) -> None:
     rows = ["####....#####", "##........###", "##..##..##.##", "##..##..##.##", "##.........##", "########..###", "...#####..###", "...#####....#", "#############"]
@@ -289,7 +289,7 @@ def test_multiline_text_layout_and_stroke_bounds(anchor: str | None, align: str)
     assert ImageDraw.Draw(default).textbbox((3, 3), "A", stroke_width=2) == (1, 1, 11, 12)
 
 
-@pytest.mark.parametrize("mode,draw_mode", [("L", None), ("RGB", None), ("RGBA", None), ("RGB", "RGBA")])
+@pytest.mark.parametrize(("mode", "draw_mode"), [("L", None), ("RGB", None), ("RGBA", None), ("RGB", "RGBA")])
 @pytest.mark.parametrize("stroke_fill", [None, "red"])
 def test_supplied_font_stroke_and_fractional_position(mode: str, draw_mode: str | None, stroke_fill: str | None) -> None:
     font = PILFont.load_default(size=15)

@@ -7,7 +7,7 @@ from blanket import Image, ImageDraw
 
 
 @pytest.mark.parametrize(
-    "mode,ink",
+    ("mode", "ink"),
     [
         ("1", 1),
         ("L", 117),
@@ -69,7 +69,7 @@ def test_point_blending_and_flat_coordinates() -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("image_mode,draw_mode", [("RGBA", "RGB"), ("L", "RGBA"), ("RGB", "L")])
+@pytest.mark.parametrize(("image_mode", "draw_mode"), [("RGBA", "RGB"), ("L", "RGBA"), ("RGB", "L")])
 def test_context_rejects_mode_mismatch(image_mode: str, draw_mode: str) -> None:
     with pytest.raises(ValueError, match="mode mismatch"):
         ImageDraw.Draw(Image.new(image_mode, (2, 2)), draw_mode)

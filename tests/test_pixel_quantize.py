@@ -29,7 +29,7 @@ def test_getpixel_errors(xy: object) -> None:
         actual.getpixel(xy)
 
 
-@pytest.mark.parametrize("mode,methods", [("L", [0, 1, 2]), ("RGB", [0, 1, 2]), ("RGBA", [2])])
+@pytest.mark.parametrize(("mode", "methods"), [("L", [0, 1, 2]), ("RGB", [0, 1, 2]), ("RGBA", [2])])
 def test_quantize_lossless_small_palette(mode: str, methods: list[int]) -> None:
     colors = {"L": [b"\x00", b"\xff"], "RGB": [b"\xff\x00\x00", b"\x00\xff\x00"], "RGBA": [b"\xff\x00\x00\xff", b"\x00\xff\x00\x80"]}[mode]
     raw = b"".join(colors * 4)
@@ -87,7 +87,7 @@ def test_fixed_palette(mode: str, dither: int) -> None:
 
 
 @pytest.mark.parametrize(
-    "kwargs,exception",
+    ("kwargs", "exception"),
     [
         ({"colors": 0}, ValueError),
         ({"colors": 257}, ValueError),
@@ -166,7 +166,7 @@ def test_empty_supplied_palette() -> None:
     assert result.convert("RGB").tobytes() == bytes(3)
 
 
-@pytest.mark.parametrize("mode,method", [("L", 0), ("RGB", 0), ("RGB", 1), ("RGB", 2), ("RGBA", 2)])
+@pytest.mark.parametrize(("mode", "method"), [("L", 0), ("RGB", 0), ("RGB", 1), ("RGB", 2), ("RGBA", 2)])
 def test_parallel_quantize_preserves_serial_palette(mode: str, method: int) -> None:
     # Tiling preserves color counts in proportion. Palette decisions and
     # first-entry ties must survive worker-local histogram merging.

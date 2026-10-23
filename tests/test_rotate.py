@@ -11,20 +11,19 @@ from blanket import Image
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(13, 8), (9, 9), (1, 7)])
 @pytest.mark.parametrize("method", [0, 2, 3])
-@pytest.mark.parametrize("angle", [0, 90, 180, 270, 45, -32.5, 721])
-@pytest.mark.parametrize(
-    "options", [{}, {"expand": True}, {"center": (2.25, 4.5)}, {"translate": (3, -2)}, {"expand": True, "center": (1, 3), "translate": (-2.5, 1)}, {"expand": True, "fillcolor": "#12345680"}]
-)
-def test_rotate_parity(mode, size, method, angle, options):
+def test_rotate_parity(mode: str, size: tuple[int, int], method: int, subtests: pytest.Subtests) -> None:
     data = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
     image = Image.frombytes(mode, size, data)
     reference = PillowImage.frombytes(mode, size, data)
-    actual = image.rotate(angle, method, **options)
-    expected = reference.rotate(angle, method, **options)
-    assert actual.size == expected.size
-    assert actual.mode == expected.mode
-    assert actual.tobytes() == expected.tobytes()
-    assert image.tobytes() == data
+    for angle in (0, 90, 180, 270, 45, -32.5, 721):
+        for options in ({}, {"expand": True}, {"center": (2.25, 4.5)}, {"translate": (3, -2)}, {"expand": True, "center": (1, 3), "translate": (-2.5, 1)}, {"expand": True, "fillcolor": "#12345680"}):
+            with subtests.test(angle=angle, options=options):
+                actual = image.rotate(angle, method, **options)
+                expected = reference.rotate(angle, method, **options)
+                assert actual.size == expected.size
+                assert actual.mode == expected.mode
+                assert actual.tobytes() == expected.tobytes()
+                assert image.tobytes() == data
 
 
 def test_rotate_metadata_and_independence():

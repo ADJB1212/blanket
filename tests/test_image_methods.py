@@ -165,7 +165,7 @@ def test_eager_verify_draft_and_core_shim() -> None:
 
 
 @pytest.mark.parametrize(
-    "mode,depth,sample_bytes",
+    ("mode", "depth", "sample_bytes"),
     [(mode, 8, channels) for mode, channels in (("1", 1), ("L", 1), ("LA", 2), ("P", 1), ("PA", 2), ("RGB", 3), ("RGBA", 4), ("HSV", 3), ("CMYK", 4), ("YCbCr", 3), ("LAB", 3))]
     + [(mode, 32 if mode in ("I", "F") else 16, 4 if mode in ("I", "F") else 2) for mode in ("I", "F", "I;16", "I;16L", "I;16B")]
     + [(mode, depth, channels * 2) for mode, channels in (("L", 1), ("RGB", 3), ("RGBA", 4)) for depth in (10, 12, 16)],
@@ -203,7 +203,7 @@ def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int
             assert actual[i * sample_bytes : (i + 1) * sample_bytes] in neighbors
 
 
-@pytest.mark.parametrize("mode,data", [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
+@pytest.mark.parametrize(("mode", "data"), [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
 def test_wide_entropy_matches_pillow(mode: str, data: list[int | float]) -> None:
     image = Image.new(mode, (4, 1))
     reference = PIL.new(mode, image.size)
@@ -215,7 +215,7 @@ def test_wide_entropy_matches_pillow(mode: str, data: list[int | float]) -> None
     assert image.entropy(mask) == pytest.approx(1.0)
 
 
-@pytest.mark.parametrize("mode,data", [("I", [-10, 0, 1, 2, 255, 256, 1000]), ("F", [-1.0, 0.0, 0.1, 0.5, 1.0, 2.0, 10.0])])
+@pytest.mark.parametrize(("mode", "data"), [("I", [-10, 0, 1, 2, 255, 256, 1000]), ("F", [-1.0, 0.0, 0.1, 0.5, 1.0, 2.0, 10.0])])
 def test_wide_entropy_extrema_binning_matches_pillow(mode: str, data: list[int | float]) -> None:
     image = Image.new(mode, (len(data), 1))
     reference = PIL.new(mode, image.size)

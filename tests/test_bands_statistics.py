@@ -20,11 +20,14 @@ def test_split(mode: str) -> None:
     image, reference = pair(mode)
     image.info["custom"] = 42
     bands = image.split()
-    assert isinstance(bands, tuple) and len(bands) == len(mode)
+    assert isinstance(bands, tuple)
+    assert len(bands) == len(mode)
     for band, expected in zip(bands, reference.split(), strict=False):
-        assert band.mode == "L" and band.size == image.size
+        assert band.mode == "L"
+        assert band.size == image.size
         assert band.tobytes() == expected.tobytes()
-        assert band.info == image.info and band.info is not image.info
+        assert band.info == image.info
+        assert band.info is not image.info
     image.close()
     assert bands[0].tobytes() == reference.split()[0].tobytes()
     if len(bands) > 1:
@@ -40,10 +43,12 @@ def test_reduce(mode: str, factor: object, box: object) -> None:
     image.info["custom"] = 42
     result = image.reduce(factor, box)
     expected = reference.reduce(factor, box)
-    assert result.size == expected.size and result.mode == expected.mode
+    assert result.size == expected.size
+    assert result.mode == expected.mode
     assert result.tobytes() == expected.tobytes()
     assert result is not image
-    assert result.info == image.info and result.info is not image.info
+    assert result.info == image.info
+    assert result.info is not image.info
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -69,7 +74,7 @@ def test_constant_entropy(mode: str) -> None:
     assert image.entropy() == pytest.approx(math.log2(len(mode)))
 
 
-@pytest.mark.parametrize("factor,box", [(0, None), (-1, None), ((2, 0), None), (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
+@pytest.mark.parametrize(("factor", "box"), [(0, None), (-1, None), ((2, 0), None), (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
 def test_invalid_reduce(factor: object, box: object) -> None:
     image, _ = pair("L")
     with pytest.raises(ValueError):

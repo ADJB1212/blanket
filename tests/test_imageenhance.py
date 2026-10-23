@@ -28,12 +28,13 @@ def test_public_classes_match_pillow() -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
-@pytest.mark.parametrize("factor", [-2, -0.5, 0, 0.1, 0.5, 1, 1.5, 2, 10, math.nan, math.inf, -math.inf])
-def test_enhancers_match_pillow(mode: str, name: str, factor: float) -> None:
+def test_enhancers_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:
     blanket, pillow = pair(mode)
-    actual = getattr(ImageEnhance, name)(blanket).enhance(factor)
-    expected = getattr(PILEnhance, name)(pillow).enhance(factor)
-    same(actual, expected)
+    for factor in (-2, -0.5, 0, 0.1, 0.5, 1, 1.5, 2, 10, math.nan, math.inf, -math.inf):
+        with subtests.test(factor=factor):
+            actual = getattr(ImageEnhance, name)(blanket).enhance(factor)
+            expected = getattr(PILEnhance, name)(pillow).enhance(factor)
+            same(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -49,18 +50,19 @@ def test_degenerate_images_and_attributes_match_pillow(mode: str, name: str) -> 
         assert actual.degenerate is blanket
 
 
-@pytest.mark.parametrize("size", [(0, 0), (1, 1), (1, 4), (2, 2), (3, 2), (3, 3)])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
-def test_small_images_match_pillow(size: tuple[int, int], mode: str, name: str) -> None:
+def test_small_images_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:
     channels = len(mode)
-    raw = bytes((i * 37 + 11) % 256 for i in range(size[0] * size[1] * channels))
-    blanket = Image.frombytes(mode, size, raw)
-    pillow = PILImage.frombytes(mode, size, raw)
-    actual = getattr(ImageEnhance, name)(blanket)
-    expected = getattr(PILEnhance, name)(pillow)
-    same(actual.degenerate, expected.degenerate)
-    same(actual.enhance(1.75), expected.enhance(1.75))
+    for size in ((0, 0), (1, 1), (1, 4), (2, 2), (3, 2), (3, 3)):
+        with subtests.test(size=size):
+            raw = bytes((i * 37 + 11) % 256 for i in range(size[0] * size[1] * channels))
+            blanket = Image.frombytes(mode, size, raw)
+            pillow = PILImage.frombytes(mode, size, raw)
+            actual = getattr(ImageEnhance, name)(blanket)
+            expected = getattr(PILEnhance, name)(pillow)
+            same(actual.degenerate, expected.degenerate)
+            same(actual.enhance(1.75), expected.enhance(1.75))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

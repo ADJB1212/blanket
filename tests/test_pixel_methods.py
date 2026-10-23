@@ -153,7 +153,7 @@ def test_putpixel(mode: str, value: int) -> None:
         actual.putpixel((3, 0), value)
 
 
-@pytest.mark.parametrize("mode,value", [("L", (400,)), ("RGB", (-5, 120, 400)), ("RGBA", (1, 2, 3)), ("RGBA", (1, 2, 3, 4))])
+@pytest.mark.parametrize(("mode", "value"), [("L", (400,)), ("RGB", (-5, 120, 400)), ("RGBA", (1, 2, 3)), ("RGBA", (1, 2, 3, 4))])
 def test_tuple_pixels(mode: str, value: tuple[int, ...]) -> None:
     actual, expected = Image.new(mode, (2, 1)), PIL.new(mode, (2, 1))
     actual.putpixel((1, 0), value)
@@ -169,7 +169,7 @@ def test_tuple_pixels(mode: str, value: tuple[int, ...]) -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("scale,offset", [(1, 0), (1.7, -20), (-2, 255)])
+@pytest.mark.parametrize(("scale", "offset"), [(1, 0), (1.7, -20), (-2, 255)])
 def test_scaled_putdata(scale: float, offset: float) -> None:
     actual, expected = Image.new("L", (6, 1)), PIL.new("L", (6, 1))
     values = [-10, 1.9, 10, 120, 255, 300]
@@ -179,7 +179,7 @@ def test_scaled_putdata(scale: float, offset: float) -> None:
 
 
 @pytest.mark.parametrize("container", [list, tuple])
-@pytest.mark.parametrize("scale,offset", [(1, 0), (0.75, 20)])
+@pytest.mark.parametrize(("scale", "offset"), [(1, 0), (0.75, 20)])
 @pytest.mark.parametrize("mode", ["1", "L", "P"])
 def test_putdata_integer_conversion(container: type, scale: float, offset: float, mode: str) -> None:
     class Sample(int):
@@ -214,7 +214,8 @@ def test_composite(mode: str, mask_mode: str) -> None:
     pa, pb = (PIL.frombytes(mode, (6, 3), v) for v in (first, first[::-1]))
     result = Image.composite(a, b, Image.frombytes(mask_mode, (6, 3), mask))
     assert result.tobytes() == PIL.composite(pa, pb, PIL.frombytes(mask_mode, (6, 3), mask)).tobytes()
-    assert a.tobytes() == first and b.tobytes() == first[::-1]
+    assert a.tobytes() == first
+    assert b.tobytes() == first[::-1]
 
 
 def test_high_depth_reads() -> None:
@@ -234,7 +235,8 @@ def test_errors_and_empty() -> None:
     with pytest.raises(ValueError):
         Image.composite(image, image, Image.new("L", (2, 1)))
     empty = Image.new("L", (0, 0))
-    assert empty.getdata() == [] and empty.getcolors() == []
+    assert empty.getdata() == []
+    assert empty.getcolors() == []
     image.close()
     for method in (image.getdata, image.getcolors, image.getextrema):
         with pytest.raises(ValueError):
