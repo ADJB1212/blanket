@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Cursor;
 
 use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
@@ -90,12 +91,18 @@ fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[
         return Err("invalid TIFF strip count".into());
     }
     let mut pixels = vec![0; length];
+    let strips_per_worker = height.div_ceil(rows).div_ceil(rayon::current_num_threads() as u32) as usize;
     pixels
-        .par_chunks_mut(stride * rows as usize)
+        .par_chunks_mut(stride * rows as usize * strips_per_worker)
         .enumerate()
         .try_for_each(|(index, output)| {
             let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
-            decoder.read_chunk_bytes(index as u32, output).map_err(|e| e.to_string())
+            for (strip, output) in output.chunks_mut(stride * rows as usize).enumerate() {
+                decoder
+                    .read_chunk_bytes((index * strips_per_worker + strip) as u32, output)
+                    .map_err(|e| e.to_string())?;
+            }
+            Ok::<_, String>(())
         })?;
     Image::from_pixels(width, height, mode, pixels, Some("TIFF".into()))
         .map(Some)
@@ -338,7 +345,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let (header, offset_bytes, count_bytes, entry_bytes) = if big { (8, 8, 8, 20) } else { (4, 4, 2, 12) };
     let mut offset = read(header, offset_bytes)?;
     let mut seen = std::collections::HashSet::new();
-    let mut page_data = data.to_vec();
+    let mut page_data = Cow::Borrowed(data);
     let mut sequence = Sequence::default();
     let mut total = 0;
     while offset != 0 {
@@ -356,8 +363,11 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
         } else {
             (offset as u64).to_be_bytes()
         };
-        page_data[header..header + offset_bytes].copy_from_slice(if little { &bytes[..offset_bytes] } else { &bytes[8 - offset_bytes..] });
-        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_slice())).map_err(|e| e.to_string())?;
+        let offset_data = if little { &bytes[..offset_bytes] } else { &bytes[8 - offset_bytes..] };
+        if &page_data[header..header + offset_bytes] != offset_data {
+            page_data.to_mut()[header..header + offset_bytes].copy_from_slice(offset_data);
+        }
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(|e| e.to_string())?;
         let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
         validate_frame_budget(&mut total, width, height)?;
         let image = decode_tiff(&page_data)?;
@@ -547,7 +557,7 @@ mod tests {
 
     #[test]
     fn lzw_strip_decoding_matches_serial_with_partial_last_strip() {
-        fn check<C: tiff::encoder::colortype::ColorType<Inner = u8>>(mode: PixelMode) {
+        fn check<C: tiff::encoder::colortype::ColorType<Inner = u8>>(mode: PixelMode, rows_per_strip: u32) {
             let (width, height) = (513, 517);
             let pixels: Vec<_> = (0..width * height * mode.channels()).map(|i| (i * 37 + i / 7) as u8).collect();
             let mut data = Cursor::new(Vec::new());
@@ -556,7 +566,7 @@ mod tests {
                     .unwrap()
                     .with_compression(tiff::encoder::Compression::Lzw);
                 let mut image = encoder.new_image::<C>(width as u32, height as u32).unwrap();
-                image.rows_per_strip(17).unwrap();
+                image.rows_per_strip(rows_per_strip).unwrap();
                 image.write_data(&pixels).unwrap();
             }
             for threads in [1, 4] {
@@ -569,9 +579,11 @@ mod tests {
                 });
             }
         }
-        check::<tiff::encoder::colortype::Gray8>(PixelMode::L);
-        check::<tiff::encoder::colortype::RGB8>(PixelMode::Rgb);
-        check::<tiff::encoder::colortype::RGBA8>(PixelMode::Rgba);
+        for rows in [1, 17, 128] {
+            check::<tiff::encoder::colortype::Gray8>(PixelMode::L, rows);
+            check::<tiff::encoder::colortype::RGB8>(PixelMode::Rgb, rows);
+            check::<tiff::encoder::colortype::RGBA8>(PixelMode::Rgba, rows);
+        }
     }
 
     #[test]

@@ -32,7 +32,7 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
     if i64::from(size.0) * i64::from(size.1) != kernel.len() as i64 {
         return Err(PyValueError::new_err("bad kernel size"));
     }
-    let mut pixels = source.to_vec();
+    let mut pixels = py.detach(|| source.to_vec());
     if i64::from(image.width) < i64::from(size.0) || i64::from(image.height) < i64::from(size.1) {
         return output(image, pixels);
     }
@@ -232,6 +232,21 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
         return output(image, pixels);
     }
     py.detach(|| {
+        // Column histograms remove the window-height factor for large ranks.
+        // Bound all concurrently live column buffers to 32 MiB.
+        let column_bytes = width * 272 * size_of::<u64>();
+        let bands = (32 * 1024 * 1024 / column_bytes).min(height);
+        if let Some(rank) = rank
+            && radius >= 128
+            && height >= 128
+            && bands > 0
+        {
+            let band_rows = radius.max(height.div_ceil(bands));
+            chunks_mut(&mut pixels, width * channels * band_rows, |band, rows| {
+                rank_columns(source, rows, width, channels, band * band_rows, radius, rank);
+            });
+            return;
+        }
         chunks_mut(&mut pixels, width * channels * 8, |band, rows| {
             for (i, row) in rows.chunks_exact_mut(width * channels).enumerate() {
                 let y = band * 8 + i;
@@ -312,7 +327,7 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
 
 // Locate the occupied group before scanning its sixteen values. Updating the
 // group counts with the sliding window bounds rank selection to 32 bins.
-fn select_rank(histogram: &[u64; 256], coarse: &[u64; 16], mut rank: u64) -> u8 {
+fn select_rank(histogram: &[u64], coarse: &[u64], mut rank: u64) -> u8 {
     for (group, &frequency) in coarse.iter().enumerate() {
         if rank >= frequency {
             rank -= frequency;
@@ -327,6 +342,64 @@ fn select_rank(histogram: &[u64; 256], coarse: &[u64; 16], mut rank: u64) -> u8 
         }
     }
     unreachable!("rank is within the populated histogram")
+}
+
+fn rank_columns(source: &[u8], output: &mut [u8], width: usize, channels: usize, first: usize, radius: usize, rank: u64) {
+    let stride = width * channels;
+    let height = source.len() / stride;
+    let rows = output.len() / stride;
+    let mut columns = vec![[0_u64; 272]; width];
+    for channel in 0..channels {
+        if channel > 0 {
+            columns.fill([0; 272]);
+        }
+        for y in first.saturating_sub(radius)..=(first + radius).min(height - 1) {
+            let weight = 1
+                + if y == 0 { radius.saturating_sub(first) as u64 } else { 0 }
+                + if y == height - 1 {
+                    (first + radius).saturating_sub(height - 1) as u64
+                } else {
+                    0
+                };
+            for (x, column) in columns.iter_mut().enumerate() {
+                let value = usize::from(source[y * stride + x * channels + channel]);
+                column[value] += weight;
+                column[256 + (value >> 4)] += weight;
+            }
+        }
+        for (i, row) in output.chunks_exact_mut(stride).enumerate() {
+            let y = first + i;
+            let mut histogram = [0_u64; 272];
+            for (x, column) in columns.iter().enumerate().take(radius.min(width - 1) + 1) {
+                let weight = 1 + if x == 0 { radius as u64 } else { 0 } + if x == width - 1 { radius.saturating_sub(width - 1) as u64 } else { 0 };
+                for (total, &count) in histogram.iter_mut().zip(column) {
+                    *total += count * weight;
+                }
+            }
+            for x in 0..width {
+                row[x * channels + channel] = select_rank(&histogram[..256], &histogram[256..], rank);
+                if x + 1 < width {
+                    let leaving = &columns[x.saturating_sub(radius)];
+                    let entering = &columns[(x + radius + 1).min(width - 1)];
+                    for ((total, &leaving), &entering) in histogram.iter_mut().zip(leaving).zip(entering) {
+                        *total = *total - leaving + entering;
+                    }
+                }
+            }
+            if i + 1 < rows {
+                let leaving = y.saturating_sub(radius) * stride;
+                let entering = (y + radius + 1).min(height - 1) * stride;
+                for (x, column) in columns.iter_mut().enumerate() {
+                    let old = usize::from(source[leaving + x * channels + channel]);
+                    let new = usize::from(source[entering + x * channels + channel]);
+                    column[old] -= 1;
+                    column[256 + (old >> 4)] -= 1;
+                    column[new] += 1;
+                    column[256 + (new >> 4)] += 1;
+                }
+            }
+        }
+    }
 }
 
 fn select_mode(histogram: &[u64; 256], candidates: &[u64; 4], original: u8) -> u8 {
@@ -655,6 +728,60 @@ fn merge<const C: usize>(sources: &[&[u8]], pixels: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn column_ranks_preserve_edges_channels_bands_and_guards() {
+        for width in [1, 7, 33] {
+            for channels in 1..=4 {
+                let height = 137;
+                let backing: Vec<_> = (0..width * height * channels + 1).map(|i| (i * 71 + i / 7) as u8).collect();
+                let source = &backing[1..];
+                for radius in [1_usize, 128, 1000] {
+                    let count = (2 * radius + 1).pow(2) as u64;
+                    for first in [0, 64, 128] {
+                        let rows = 9.min(height - first);
+                        for rank in [1, count / 2, count - 2] {
+                            let mut output = vec![173; rows * width * channels + 2];
+                            rank_columns(source, &mut output[1..1 + rows * width * channels], width, channels, first, radius, rank);
+                            for y in first..first + rows {
+                                for x in 0..width {
+                                    for channel in 0..channels {
+                                        let mut histogram = [0_u64; 256];
+                                        for yy in y.saturating_sub(radius)..=(y + radius).min(height - 1) {
+                                            let wy = 1
+                                                + if yy == 0 { radius.saturating_sub(y) } else { 0 }
+                                                + if yy == height - 1 { (y + radius).saturating_sub(height - 1) } else { 0 };
+                                            for xx in x.saturating_sub(radius)..=(x + radius).min(width - 1) {
+                                                let wx = 1
+                                                    + if xx == 0 { radius.saturating_sub(x) } else { 0 }
+                                                    + if xx == width - 1 { (x + radius).saturating_sub(width - 1) } else { 0 };
+                                                histogram[usize::from(source[(yy * width + xx) * channels + channel])] += (wx * wy) as u64;
+                                            }
+                                        }
+                                        let mut remaining = rank;
+                                        let expected = histogram
+                                            .iter()
+                                            .position(|&frequency| {
+                                                if remaining < frequency {
+                                                    true
+                                                } else {
+                                                    remaining -= frequency;
+                                                    false
+                                                }
+                                            })
+                                            .unwrap() as u8;
+                                        assert_eq!(output[1 + ((y - first) * width + x) * channels + channel], expected);
+                                    }
+                                }
+                            }
+                            assert_eq!(output[0], 173);
+                            assert_eq!(output[output.len() - 1], 173);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn sliding_extrema_preserve_strides_offsets_and_guards() {

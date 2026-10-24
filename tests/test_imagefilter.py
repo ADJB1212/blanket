@@ -72,6 +72,11 @@ def test_rank_histogram_groups_and_replicated_edges(mode: str, subtests: pytest.
                 compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGBA"])
+def test_large_rank_column_histograms(mode: str) -> None:
+    compare(mode, (17, 137), ImageFilter.MedianFilter(257), PillowFilter.MedianFilter(257))
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ["MinFilter", "MaxFilter"])
 def test_extrema_filters_cross_bands_and_large_windows(mode: str, name: str, subtests: pytest.Subtests) -> None:

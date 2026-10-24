@@ -300,6 +300,125 @@ Rust backend for performance and functionality Pillow doesn't offer.
       operations
 - [ ] **WebAssembly target** — compile to Wasm for browser-side image processing
 
+### Future Ideas
+
+Exploratory candidates beyond the planned work above. These are not release
+commitments; scope and priority depend on use cases, backend support, and
+measured benefits. Existing Pillow-shaped APIs should retain their behavior,
+with new processing semantics exposed explicitly.
+
+#### Precision and Color
+
+- [ ] **High-bit-depth processing coverage** — extend filters, enhancement,
+      compositing, and statistics to 16-bit samples without an 8-bit conversion
+- [ ] **Floating-point color images** — support RGB/RGBA float storage and
+      processing with defined handling of negative values, NaNs, and infinities
+- [ ] **Linear-light processing** — opt-in resizing and compositing in linear
+      light, with explicit alpha premultiplication and transfer functions
+
+#### Large Images and Resource Control
+
+- [ ] **Region and tile decoding** — decode requested regions where codecs
+      support it, with explicit fallback behavior for full-image decoders
+- [ ] **Lazy frame access** — opt-in on-demand animation and TIFF page decoding
+      with bounded caching and documented seeking and frame-edit behavior
+- [ ] **Processing budgets** — configurable memory, decoded-pixel, frame-count,
+      and worker limits for applications handling many images concurrently
+- [ ] **Reusable processing plans** — combine compatible operations to reduce
+      intermediate allocations while preserving rounding and operation order
+
+#### Format and Sequence Extensions
+
+- [ ] **Multi-page TIFF writing** — save pages with independent dimensions,
+      supported modes, sample depths, metadata, and compression settings
+- [ ] **AVIF and JPEG XL animation** — expose frame timing and loop controls
+      through the existing sequence API where codec backends support them
+- [ ] **Multi-resolution containers** — select and write multiple ICO sizes,
+      and expose TIFF pyramid levels without treating them as animation frames
+- [ ] **OpenEXR support** — read and write half/float RGB and alpha samples,
+      building on floating-point color storage
+
+#### Drawing and Analysis
+
+- [ ] **Font fallback and variable fonts** — explicit fallback chains,
+      variation-axis selection, and metrics consistent with rendered glyphs
+- [ ] **Paragraph layout** — width-constrained wrapping, Unicode line breaking,
+      and justification integrated with shaping and bidirectional text
+- [ ] **Morphology and segmentation** — explicit erosion, dilation, opening,
+      closing, connected components, and adaptive thresholding APIs
+- [ ] **Image comparison metrics** — sample-aware error metrics and difference
+      maps with documented alpha and color-space handling
+
+#### Interoperability
+
+- [ ] **Buffer views and array exchange** — opt-in zero-copy access for compatible
+      layouts, with explicit ownership, lifetime, mutability, and stride rules
+- [ ] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
+      aligned cropping of encoded JPEGs with explicit metadata handling
+
+#### Codec Controls and Inspection
+
+- [ ] **Header-only inspection** — report dimensions, mode, sample depth, and
+      available container metadata without allocating decoded image rasters
+- [ ] **Decode-time thumbnails** — request reduced-resolution decoding where
+      supported, making `draft` useful before full raster allocation
+- [ ] **Encoding capability queries** — report supported modes, sample depths,
+      compression methods, and animation options for each installed backend
+- [ ] **Structured codec errors** — distinguish unsupported features, corrupt
+      input, missing backends, and resource-limit failures for callers
+- [ ] **Additional TIFF layouts** — BigTIFF and tiled output with configurable
+      tile sizes, predictors, and explicit compression compatibility checks
+- [ ] **Texture container access** — expose DDS mip levels, array layers, and
+      cubemap faces through a dedicated surface API
+
+#### Metadata Workflows
+
+- [ ] **Metadata-only rewrites** — edit supported container metadata without
+      decoding and re-encoding image pixels
+- [ ] **Metadata policies** — select which EXIF, XMP, text, and location fields
+      to retain or remove, with separate control over color profiles
+- [ ] **Resolution and physical units** — normalize DPI and pixel-aspect metadata
+      across formats with explicit conflict and unit-conversion rules
+- [ ] **Embedded preview access** — extract EXIF thumbnails and container
+      previews without requiring users to parse their binary representations
+
+#### Drawing and Compositing Extensions
+
+- [ ] **Bezier paths** — quadratic and cubic curves with configurable stroke
+      joins, caps, dash patterns, and fill rules
+- [ ] **Gradient and pattern fills** — linear and radial gradients, repeated
+      image patterns, and reusable clipping masks for drawing operations
+- [ ] **Extended blend modes** — compositing operators such as multiply, screen,
+      overlay, and soft light with defined alpha behavior
+- [ ] **Color glyph rendering** — support selected color-font formats with
+      explicit fallback for unsupported glyph representations
+- [ ] **Distance-field masks** — signed distance fields from bilevel or alpha
+      masks for scalable outlines, glows, and feathered selections
+
+#### Filtering and Restoration
+
+- [ ] **Edge-preserving smoothing** — bilateral or guided filters with explicit
+      radius, range, and boundary behavior
+- [ ] **Local contrast adjustment** — adaptive histogram equalization with
+      configurable tiles and contrast limits
+- [ ] **Edge detection** — Sobel and Scharr gradients plus Canny edges with
+      explicit threshold and output conventions
+- [ ] **Lens correction and remapping** — radial distortion correction and
+      reusable coordinate maps with configurable interpolation and borders
+
+#### Compression and Animation Optimization
+
+- [ ] **Target-size encoding** — search supported encoder settings for a byte
+      budget and report when the requested size cannot be reached
+- [ ] **Compression reports** — expose chosen settings, candidate sizes,
+      measured error, and search cost from compressor runs
+- [ ] **Animation delta optimization** — choose frame rectangles and disposal
+      or blending controls while preserving rendered frames and timing
+- [ ] **Shared animation palettes** — optimize a palette across frames with
+      temporal stability and explicit transparency constraints
+- [ ] **Sequence editing helpers** — trim, concatenate, and retime animations
+      while preserving source positions and validating frame compatibility
+
 ---
 
 ## Non-Goals
