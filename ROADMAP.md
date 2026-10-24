@@ -276,6 +276,8 @@ Rust backend for performance and functionality Pillow doesn't offer.
       larger rank and morphology windows retain histogram and sliding-window paths
 - [x] **Streaming decode/encode** — progressive JXL input through
       `ImageFile.Parser` and incremental PNG row output through `ImageFile.PngWriter`
+- [x] **Image hashing** — `ImageHash.average_hash`, `dhash`, and `phash` with
+      configurable sizes, hexadecimal serialization, and Hamming distance
 
 ### Planned
 
@@ -285,8 +287,6 @@ Rust backend for performance and functionality Pillow doesn't offer.
       shared pipeline configuration
 - [ ] **GPU acceleration** — optional compute shader backend for large-image
       operations (resize, convolution, compositing)
-- [ ] **Image hashing** — perceptual hashing (pHash, dHash, aHash) for
-      deduplication and similarity search
 - [ ] **Smart cropping** — content-aware crop using saliency detection or
       face detection hints
 - [ ] **Advanced quantization** — neural-network-based color quantization,

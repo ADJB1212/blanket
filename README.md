@@ -32,6 +32,8 @@ with Image.open("photo.jpg") as image:
   supported operations, with small-image fast paths.
 - **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
   using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.
+- **Image hashing.** Find visually similar images using native aHash, dHash,
+  and pHash kernels, with no NumPy or SciPy runtime dependency.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
   PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
@@ -62,6 +64,26 @@ See the [development notes](https://adjb1212.github.io/blanket-docs/development/
 for information on building from source.
 
 ## Examples
+
+### Compare image fingerprints
+
+```python
+from blanket import Image, ImageHash
+
+with Image.open("first.jpg") as first, Image.open("second.jpg") as second:
+    first_hash = ImageHash.phash(first)
+    second_hash = ImageHash.phash(second)
+    print(first_hash - second_hash)  # Hamming distance: smaller is more similar.
+    restored = ImageHash.hex_to_hash(str(first_hash))
+```
+
+`average_hash`, `dhash`, and `phash` produce immutable 64-bit values by default.
+Pass `hash_size` (2 to 64) for a square of that many bits per side. Compare only
+hashes using the same algorithm and settings. Hashing uses the current frame,
+converts to 8-bit grayscale, discards alpha, and resizes with Lanczos. Apply
+`ImageOps.exif_transpose` first if orientation should affect the fingerprint.
+Perceptual hashes are approximate visual fingerprints; choose a distance
+threshold for your data and confirm duplicates separately.
 
 ### Convert between formats
 

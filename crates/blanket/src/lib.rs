@@ -31,6 +31,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_compressor::register(module)?;
     blanket_filter::filter::register(module)?;
     blanket_ops::math::register(module)?;
+    blanket_ops::hash::register(module)?;
     blanket_ops::ops::register(module)?;
     blanket_palette::palette::register(module)?;
     blanket_palette::quantize::register(module)?;
