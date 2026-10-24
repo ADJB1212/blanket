@@ -10,6 +10,7 @@ class iTXt(str):
     """International text with its language and translated keyword."""
 
     def __new__(cls, text: str, lang: str = "", tkey: str = "") -> Self:
+        """Create a text value carrying a language tag and translated keyword."""
         result = super().__new__(cls, text)
         result.lang, result.tkey = lang, tkey
         return result
@@ -19,6 +20,7 @@ class PngInfo:
     """Container for ancillary PNG chunks passed to ``save(pnginfo=...)``."""
 
     def __init__(self) -> None:
+        """Create an empty collection of ancillary PNG chunks."""
         self.chunks: list[tuple[bytes, bytes, bool]] = []
 
     def add(self, cid: bytes, data: bytes, after_idat: bool = False) -> None:

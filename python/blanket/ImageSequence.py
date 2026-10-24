@@ -16,13 +16,16 @@ class Iterator:
     """Iterate from frame zero, yielding the source image at each position."""
 
     def __init__(self, image: Image) -> None:
+        """Retain the source image and start iteration at frame zero."""
         self.image = image
         self.position = 0
 
     def __iter__(self) -> Iterator:
+        """Return this iterator without resetting its position."""
         return self
 
     def __next__(self) -> Image:
+        """Select and return the next frame on the shared source image."""
         try:
             frame = self[self.position]
         except EOFError:
@@ -31,6 +34,7 @@ class Iterator:
         return frame
 
     def __getitem__(self, index: int) -> Image:
+        """Seek the source image to a frame and return it, raising EOFError if absent."""
         self.image.seek(index)
         return self.image
 

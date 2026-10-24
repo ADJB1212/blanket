@@ -12,6 +12,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("UnidentifiedImageError", module.py().get_type::<UnidentifiedImageError>())?;
     module.add_class::<Image>()?;
+    blanket_core::cms::register(module)?;
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;

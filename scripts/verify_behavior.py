@@ -11,6 +11,7 @@ import numpy as np
 from PIL import (
     Image as PillowImage,
     ImageChops as PillowChops,
+    ImageCms as PillowCms,
     ImageColor as PillowColor,
     ImageDraw as PillowDraw,
     ImageEnhance as PillowEnhance,
@@ -27,6 +28,7 @@ from PIL.FontFile import FontFile
 from blanket import (
     Image as BlanketImage,
     ImageChops as BlanketChops,
+    ImageCms as BlanketCms,
     ImageColor as BlanketColor,
     ImageDraw as BlanketDraw,
     ImageEnhance as BlanketEnhance,
@@ -85,6 +87,27 @@ def check_lab() -> int:
         assert reopened.mode == "LAB"
         assert reopened.tobytes() == actual.tobytes()
         checks += 1
+    return checks
+
+
+def check_imagecms() -> int:
+    checks = 0
+    output = BlanketCms.createProfile("sRGB")
+    pillow_output = PillowCms.ImageCmsProfile(BytesIO(output.tobytes()))
+    for space in ("sRGB", "Adobe RGB", "Display P3"):
+        source = BlanketCms.createProfile(space)
+        pillow_source = PillowCms.ImageCmsProfile(BytesIO(source.tobytes()))
+        for mode in ("RGB", "RGBA"):
+            raw = pixels(mode)
+            image = BlanketImage.frombytes(mode, (37, 29), raw)
+            pillow = PillowImage.frombytes(mode, image.size, raw)
+            for intent in BlanketCms.Intent:
+                actual = BlanketCms.profileToProfile(image, source, output, intent)
+                expected = PillowCms.profileToProfile(pillow, pillow_source, pillow_output, intent)
+                assert actual is not None
+                compare_images(actual, expected, (space, mode, intent))
+                assert actual.info["icc_profile"] == output.tobytes()
+                checks += 1
     return checks
 
 
@@ -1055,6 +1078,7 @@ def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
     checks += check_lab()
+    checks += check_imagecms()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
     checks += check_bmp_gif_ico_interop()

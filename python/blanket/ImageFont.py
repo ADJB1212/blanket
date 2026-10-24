@@ -68,6 +68,7 @@ class ImageFont:
     """
 
     def __init__(self, size: float | None = None) -> None:
+        """Create the built-in bitmap fallback, optionally scaled to a pixel size."""
         self._fallback = BitmapFont(size)
         self._atlas: Image.Image | None = None
         self._glyphs: list[tuple[int, ...]] = []
@@ -201,6 +202,11 @@ class TrueTypeFont(ImageFont):
     """
 
     def __init__(self, font: str | bytes | os.PathLike[str] | BinaryIO, size: float = 10, index: int = 0, encoding: str = "", layout_engine: Layout | int | None = None) -> None:
+        """Load a font face from a path or binary stream at the given pixels per em.
+
+        ``index`` selects a collection face. Only Unicode encoding is supported;
+        both layout engines use the native OpenType shaper.
+        """
         if not isfinite(size) or size <= 0 or size > _MAX_FONT_SIZE:
             raise ValueError("font size must be finite, positive, and at most 1000000")
         index = integer_index(index)

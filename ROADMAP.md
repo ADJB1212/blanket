@@ -198,18 +198,25 @@ metadata guide for container limits and opaque MakerNote behavior.
 
 ---
 
-## Phase 7 — ICC Color Management (ImageCms)
+## Phase 7 — ICC Color Management (ImageCms) — Complete
 
 ICC color management enables accurate color conversion between devices and
 color spaces.
 
-- [ ] `ImageCms.profileToProfile(image, inputProfile, outputProfile, ...)`
-- [ ] `ImageCms.buildTransform` / `buildProofTransform`
-- [ ] `ImageCms.createProfile(colorSpace)` — sRGB, Adobe RGB, display P3
-- [ ] `ImageCms.getProfileInfo`, `getProfileName`, `getProfileDescription`
-- [ ] `ImageCms.applyTransform(image, transform)` — in-place transform
-- [ ] Intent support (perceptual, relative colorimetric, saturation, absolute)
-- [ ] Rust-native ICC parsing (e.g. via `lcms2` bindings or pure Rust)
+The public `ImageCms` module uses LittleCMS through Rust bindings for profile
+parsing, reusable transforms, and soft proofing. Transforms support 8-bit `L`,
+`RGB`, `RGBA`, `CMYK`, and `LAB` with compatible profiles, preserve RGBA alpha,
+and embed the output profile in image metadata. In-place transforms affect only
+the current frame and require matching input/output modes. Profiles load from
+paths or binary streams and serialize with `ImageCmsProfile.tobytes()`.
+
+- [x] `ImageCms.profileToProfile(image, inputProfile, outputProfile, ...)`
+- [x] `ImageCms.buildTransform` / `buildProofTransform`
+- [x] `ImageCms.createProfile(colorSpace)` — sRGB, Adobe RGB, display P3 (plus LAB and XYZ)
+- [x] `ImageCms.getProfileInfo`, `getProfileName`, `getProfileDescription`
+- [x] `ImageCms.applyTransform(image, transform, inPlace=True)` — in-place transform
+- [x] Intent support (perceptual, relative colorimetric, saturation, absolute)
+- [x] Rust-native ICC parsing through `lcms2` bindings
 
 ---
 
@@ -242,19 +249,6 @@ usage.
 - [x] MSP — read/write
 - [x] PALM — write
 - [x] Sun raster — read
-
----
-
-## Phase 9 — Platform Utilities
-
-Modules providing system integration. Lower priority for a processing-focused
-library, but needed for full parity.
-
-- [ ] `ImageGrab.grab(bbox=None, include_layered_windows=False, all_screens=False)` — screenshot
-- [ ] `ImageGrab.grabclipboard()` — clipboard image
-- [ ] `Image.show()` backend infrastructure (viewer registry)
-- [ ] `ImageWin` — Windows-specific display (DIB, HDC) — low priority
-- [ ] `PSDraw` — PostScript generation — low priority
 
 ---
 

@@ -25,11 +25,13 @@ with Image.open("photo.jpg") as image:
 
 ## Why Blanket?
 
-- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageColor`,
+- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageColor`, `ImageCms`,
   `ImageDraw`, `ImageEnhance`, `ImageFilter`, `ImageFont`, `ImageMath`, `ImagePalette`,
   `ImagePath`, and `ImageStat`.
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
+- **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
+  using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
   PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
@@ -127,6 +129,26 @@ with Image.open("photo.jpg") as image:
 cropping, padding, flips, color adjustments, and EXIF orientation correction.
 `ImageFilter` provides blur, convolution, and rank filters, as well as 3D color
 LUTs.
+
+### Convert ICC color profiles
+
+```python
+from io import BytesIO
+from blanket import Image, ImageCms
+
+with Image.open("photo.jpg") as image:
+    source = ImageCms.ImageCmsProfile(BytesIO(image.info["icc_profile"]))
+    target = ImageCms.createProfile("sRGB")
+    converted = ImageCms.profileToProfile(image, source, target, outputMode="RGB")
+    converted.save("srgb.jpg", quality=90)
+```
+
+Profiles can also load from a filename. Use `buildTransform()` and
+`applyTransform()` to reuse a conversion, or `buildProofTransform()` for soft
+proofing. Transforms require 8-bit `L`, `RGB`, `RGBA`, `CMYK`, or `LAB` pixels
+and compatible profiles. `applyTransform(..., inPlace=True)` changes only the
+current frame and requires identical input/output modes. The output ICC
+profile is attached to the transformed image for saving.
 
 ### Build an image with transparency
 

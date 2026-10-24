@@ -24,6 +24,7 @@ class Path:
     """
 
     def __init__(self, xy: int | Sequence[float] | Sequence[tuple[float, float]] | Buffer | Path) -> None:
+        """Copy coordinates or native float pairs, or allocate an integer count of zero vertices."""
         self._mapping = False
         if isinstance(xy, int):
             if xy < 0:
@@ -67,9 +68,11 @@ class Path:
         return cls._number(x), cls._number(y)
 
     def __len__(self) -> int:
+        """Return the number of vertices."""
         return len(self._points)
 
     def __iter__(self) -> Iterator[tuple[float, float]]:
+        """Iterate over the coordinate pairs in path order."""
         return iter(self._points)
 
     @overload
@@ -79,6 +82,7 @@ class Path:
     def __getitem__(self, key: slice) -> Path: ...
 
     def __getitem__(self, key: int | slice) -> tuple[float, float] | Path:
+        """Return a coordinate pair or an independent path for a contiguous slice."""
         if isinstance(key, slice):
             points = self._points[key]
             if points and key.step not in (None, 1):
@@ -87,6 +91,7 @@ class Path:
         return self._points[index(key)]
 
     def __setitem__(self, key: int, value: tuple[float, float]) -> None:
+        """Replace the vertex at an index with a numeric coordinate tuple."""
         key = index(key)
         if not -len(self) <= key < len(self):
             raise IndexError("path assignment index out of range")
@@ -95,6 +100,7 @@ class Path:
         self._points[key] = self._pair(value)
 
     def __delitem__(self, key: int | slice) -> None:
+        """Raise TypeError because deleting vertices by index or slice is unsupported."""
         raise TypeError("cannot delete from path")
 
     def compact(self, distance: float = 2) -> int:
