@@ -50,19 +50,27 @@ fn phash(pixels: &[u8], size: usize, side: usize) -> Vec<u8> {
             *value = 0.0;
         }
     }
-    let mut ordered = coefficients.clone();
-    ordered.sort_unstable_by(f64::total_cmp);
-    let middle = ordered.len() / 2;
-    let median = if ordered.len().is_multiple_of(2) {
-        (ordered[middle - 1] + ordered[middle]) / 2.0
-    } else {
-        ordered[middle]
-    };
+    let median = median(&mut coefficients.clone());
     pack(coefficients.iter().map(|&value| value > median))
 }
 
+fn median(values: &mut [f64]) -> f64 {
+    let middle = values.len() / 2;
+    let even = values.len().is_multiple_of(2);
+    let (lower, median, _) = values.select_nth_unstable_by(middle, f64::total_cmp);
+    if even {
+        (*lower.iter().max_by(|a, b| a.total_cmp(b)).unwrap() + *median) / 2.0
+    } else {
+        *median
+    }
+}
+
 #[pyfunction]
-fn image_hash(pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyResult<Vec<u8>> {
+fn image_hash(py: Python<'_>, pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyResult<Vec<u8>> {
+    py.detach(|| hash_pixels(pixels, size, side, algorithm))
+}
+
+fn hash_pixels(pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyResult<Vec<u8>> {
     if !(2..=64).contains(&size) {
         return Err(PyValueError::new_err("hash_size must be between 2 and 64"));
     }
@@ -93,6 +101,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn selected_median_matches_sorted_coefficients() {
+        for size in 2..=64 {
+            for repeated in [false, true] {
+                let mut values: Vec<f64> = (0..size * size)
+                    .map(|i| {
+                        if repeated {
+                            (i % 3) as f64
+                        } else {
+                            ((i * 7919 % 4093) as f64 - 2046.0) / 7.0
+                        }
+                    })
+                    .collect();
+                let mut sorted = values.clone();
+                sorted.sort_unstable_by(f64::total_cmp);
+                let middle = sorted.len() / 2;
+                let expected = if sorted.len().is_multiple_of(2) {
+                    (sorted[middle - 1] + sorted[middle]) / 2.0
+                } else {
+                    sorted[middle]
+                };
+                assert_eq!(median(&mut values), expected);
+            }
+        }
+    }
+
+    #[test]
     fn packing_preserves_leading_padding_and_order() {
         assert_eq!(pack([true, false, false, false, false, false, false, false, true].into_iter()), [1, 1]);
         assert_eq!(pack([true, false, false, false, false, false, false, false].into_iter()), [128]);
@@ -112,9 +146,9 @@ mod tests {
 
     #[test]
     fn rejects_invalid_native_inputs() {
-        assert!(image_hash(&[], 0, 0, "average").is_err());
-        assert!(image_hash(&[], 8, 32, "perceptual").is_err());
-        assert!(image_hash(&[], 8, usize::MAX, "perceptual").is_err());
-        assert!(image_hash(&[], 8, 8, "unknown").is_err());
+        assert!(hash_pixels(&[], 0, 0, "average").is_err());
+        assert!(hash_pixels(&[], 8, 32, "perceptual").is_err());
+        assert!(hash_pixels(&[], 8, usize::MAX, "perceptual").is_err());
+        assert!(hash_pixels(&[], 8, 8, "unknown").is_err());
     }
 }

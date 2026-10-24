@@ -1,5 +1,7 @@
 //! Native primitives used by the Python `ImageDraw` API.
 
+use std::collections::VecDeque;
+
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -80,7 +82,8 @@ fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound
                 hline(image, left, right, y, &ink, blend);
             }
         } else {
-            for i in 0..width {
+            let ranges = outline_ranges(bounds, width, (image.width, image.height));
+            for i in ranges.into_iter().flatten() {
                 hline(image, left, right, top.saturating_add(i), &ink, blend);
                 hline(image, left, right, bottom.saturating_sub(i), &ink, blend);
                 let start = top.saturating_add(width);
@@ -94,6 +97,34 @@ fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound
         }
     });
     Ok(())
+}
+
+fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) -> [std::ops::Range<i64>; 4] {
+    let width = width.max(0);
+    let (left, top, right, bottom) = bounds;
+    let interval = |origin: i64, limit: u32, increasing: bool| {
+        let origin = i128::from(origin);
+        let limit = i128::from(limit);
+        let (start, end) = if increasing {
+            (-origin, limit - origin)
+        } else {
+            (origin - limit + 1, origin + 1)
+        };
+        start.clamp(0, i128::from(width)) as i64..end.clamp(0, i128::from(width)) as i64
+    };
+    let mut ranges = [
+        interval(top, size.1, true),
+        interval(bottom, size.1, false),
+        interval(left, size.0, true),
+        interval(right, size.0, false),
+    ];
+    ranges.sort_unstable_by_key(|range| range.start);
+    let mut end = 0;
+    for range in &mut ranges {
+        range.start = range.start.max(end);
+        end = end.max(range.end);
+    }
+    ranges
 }
 
 fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bool) {
@@ -294,35 +325,38 @@ fn draw_path(
 
 #[pyfunction]
 fn draw_mask(
-    image: &mut Image, position: (i64, i64), size: (usize, usize), mask: Vec<u8>, value: &Bound<'_, PyAny>, blend: bool, stroke: usize,
+    image: &mut Image, position: (i64, i64), size: (usize, usize), mask: &[u8], value: &Bound<'_, PyAny>, blend: bool, stroke: usize,
 ) -> PyResult<()> {
     let ink = ink(image, value, blend)?;
     if size.0.checked_mul(size.1) != Some(mask.len()) {
         return Err(PyValueError::new_err("invalid mask size"));
     }
-    if mask.iter().any(|&sample| sample != 0 && sample != 255) {
+    if value.py().detach(|| mask.iter().any(|&sample| sample != 0 && sample != 255)) {
         check_coverage(image)?;
     }
     let stroke = i64::try_from(stroke).map_err(|_| PyValueError::new_err("stroke is too large"))?;
     value.py().detach(|| {
+        let left = (-stroke).max(position.0.saturating_neg());
+        let right = (size.0 as i64)
+            .saturating_add(stroke)
+            .min(i64::from(image.width).saturating_sub(position.0));
+        if left >= right || mask.is_empty() {
+            return;
+        }
+        let mut row = vec![0; if stroke == 0 { 0 } else { (right - left) as usize }];
+        let mut queue = VecDeque::new();
         for y in (-stroke).max(position.1.saturating_neg())
             ..(size.1 as i64)
                 .saturating_add(stroke)
                 .min(i64::from(image.height).saturating_sub(position.1))
         {
-            for x in (-stroke).max(position.0.saturating_neg())
-                ..(size.0 as i64)
-                    .saturating_add(stroke)
-                    .min(i64::from(image.width).saturating_sub(position.0))
-            {
-                let mut coverage = 0;
-                for my in y.saturating_sub(stroke).max(0)..=y.saturating_add(stroke).min(size.1 as i64 - 1) {
-                    for mx in x.saturating_sub(stroke).max(0)..=x.saturating_add(stroke).min(size.0 as i64 - 1) {
-                        if (mx as f64 - x as f64).powi(2) + (my as f64 - y as f64).powi(2) <= (stroke as f64).powi(2) {
-                            coverage = coverage.max(mask[my as usize * size.0 + mx as usize]);
-                        }
-                    }
-                }
+            let coverage = if stroke == 0 {
+                &mask[y as usize * size.0 + left as usize..y as usize * size.0 + right as usize]
+            } else {
+                mask_row(mask, size, (left, y), stroke, &mut row, &mut queue);
+                &row
+            };
+            for (x, &coverage) in (left..right).zip(coverage) {
                 if image.mode == PixelMode::Rgba && coverage != 0 {
                     let offset = ((position.1 + y) as usize * image.width as usize + (position.0 + x) as usize) * 4;
                     let dst = &image.pixels.as_ref().unwrap()[offset..offset + 4];
@@ -339,6 +373,56 @@ fn draw_mask(
         }
     });
     Ok(())
+}
+
+fn mask_row(mask: &[u8], size: (usize, usize), origin: (i64, i64), stroke: i64, output: &mut [u8], queue: &mut VecDeque<(i64, u8)>) {
+    output.fill(0);
+    let (left, y) = origin;
+    if stroke == 0 {
+        if y >= 0 && y < size.1 as i64 {
+            let first = left.max(0);
+            let last = (left + output.len() as i64).min(size.0 as i64);
+            if first < last {
+                output[(first - left) as usize..(last - left) as usize]
+                    .copy_from_slice(&mask[y as usize * size.0 + first as usize..y as usize * size.0 + last as usize]);
+            }
+        }
+        return;
+    }
+    let squared = (stroke as f64).powi(2);
+    for my in y.saturating_sub(stroke).max(0)..=y.saturating_add(stroke).min(size.1 as i64 - 1) {
+        let dy = (my as f64 - y as f64).powi(2);
+        let mut span = (squared - dy).sqrt() as i64;
+        // Correct square-root rounding at the disk boundary.
+        while span > 0 && (span as f64).powi(2) + dy > squared {
+            span -= 1;
+        }
+        while span < stroke && ((span + 1) as f64).powi(2) + dy <= squared {
+            span += 1;
+        }
+        queue.clear();
+        let source = &mask[my as usize * size.0..][..size.0];
+        let mut next = left.saturating_sub(span).max(0);
+        for (i, dst) in output.iter_mut().enumerate() {
+            let x = left + i as i64;
+            let first = x.saturating_sub(span);
+            while queue.front().is_some_and(|&(index, _)| index < first) {
+                queue.pop_front();
+            }
+            let last = x.saturating_add(span).min(size.0 as i64 - 1);
+            while next <= last {
+                let value = source[next as usize];
+                while queue.back().is_some_and(|&(_, previous)| previous <= value) {
+                    queue.pop_back();
+                }
+                queue.push_back((next, value));
+                next += 1;
+            }
+            if let Some(&(_, value)) = queue.front() {
+                *dst = (*dst).max(value);
+            }
+        }
+    }
 }
 
 #[pyfunction]
@@ -468,6 +552,60 @@ fn flood_run(pixels: &mut [u8], index: usize, width: usize, stride: usize, fill:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipped_mask_rows_match_disk_reference() {
+        for width in [1, 7, 33] {
+            let height = 9;
+            let mask: Vec<u8> = (0..width * height).map(|i| (i * 73 + i / 7) as u8).collect();
+            for stroke in [0i64, 1, 2, 5, 17, 100] {
+                for left in [-20, -3, 0, 5, 40] {
+                    for y in [-20, -2, 0, 4, 8, 10, 30] {
+                        let mut actual = [91; 23];
+                        mask_row(&mask, (width, height), (left, y), stroke, &mut actual[1..22], &mut VecDeque::new());
+                        for (i, &value) in actual[1..22].iter().enumerate() {
+                            let x = left + i as i64;
+                            let expected = mask
+                                .iter()
+                                .enumerate()
+                                .filter_map(|(index, &sample)| {
+                                    let dx = index as i64 % width as i64 - x;
+                                    let dy = index as i64 / width as i64 - y;
+                                    (dx * dx + dy * dy <= stroke * stroke).then_some(sample)
+                                })
+                                .max()
+                                .unwrap_or(0);
+                            assert_eq!(value, expected, "width {width}, stroke {stroke}, ({x}, {y})");
+                        }
+                        assert_eq!(actual[0], 91);
+                        assert_eq!(actual[22], 91);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn outline_ranges_preserve_visible_iteration_order() {
+        for bounds in [(-20, -10, 40, 30), (2, 3, 5, 6), (20, 20, 30, 30), (0, 0, 0, 0)] {
+            for width in [1, 5, 30, 100] {
+                let (left, top, right, bottom) = bounds;
+                let expected: Vec<_> = (0..width)
+                    .filter(|&i| {
+                        (0..7).contains(&(top + i)) || (0..7).contains(&(bottom - i)) || (0..9).contains(&(left + i)) || (0..9).contains(&(right - i))
+                    })
+                    .collect();
+                assert_eq!(outline_ranges(bounds, width, (9, 7)).into_iter().flatten().collect::<Vec<_>>(), expected);
+            }
+        }
+        assert_eq!(
+            outline_ranges((i64::MIN, i64::MIN, i64::MAX, i64::MAX), i64::MAX, (9, 7))
+                .into_iter()
+                .flatten()
+                .count(),
+            8
+        );
+    }
 
     #[test]
     fn polygon_includes_edges_and_uses_even_odd_fill() {

@@ -293,11 +293,17 @@ fn spread_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUni
 }
 
 #[pyfunction]
-fn ops_remap_indices(image: &Image, mapping: Vec<u8>) -> PyResult<Image> {
+fn ops_remap_indices(py: Python<'_>, image: &Image, mapping: Vec<u8>) -> PyResult<Image> {
+    py.detach(|| remap_indices(image, &mapping))
+}
+
+fn remap_indices(image: &Image, mapping: &[u8]) -> PyResult<Image> {
     if image.mode != PixelMode::L || mapping.len() != 256 {
         return Err(PyValueError::new_err("invalid palette remapping"));
     }
-    let pixels = image.pixel_data()?.iter().map(|&value| mapping[value as usize]).collect();
+    let source = image.pixel_data()?;
+    let mut pixels = buffer((image.width, image.height), 1)?;
+    apply_lut::<1>(source, &mut pixels, mapping);
     Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None)
 }
 
@@ -2137,7 +2143,13 @@ mod tests {
         let indexed = Image::from_pixels(3, 1, PixelMode::L, vec![0, 1, 2], None).unwrap();
         let mut mapping: Vec<u8> = (0..=255).collect();
         mapping[..3].copy_from_slice(&[1, 2, 0]);
-        assert_eq!(ops_remap_indices(&indexed, mapping).unwrap().pixel_data().unwrap(), [1, 2, 0]);
+        assert_eq!(remap_indices(&indexed, &mapping).unwrap().pixel_data().unwrap(), [1, 2, 0]);
+        for length in [0, 15, 16, 17, CHUNK_PIXELS * 3 + 7] {
+            let source: Vec<_> = (0..length).map(|i| (i * 73) as u8).collect();
+            let expected: Vec<_> = source.iter().map(|&value| mapping[value as usize]).collect();
+            let indexed = Image::from_pixels(length as u32, 1, PixelMode::L, source, None).unwrap();
+            assert_eq!(remap_indices(&indexed, &mapping).unwrap().pixel_data().unwrap(), expected);
+        }
         let bitmap = Image::from_pixels(
             9,
             2,
