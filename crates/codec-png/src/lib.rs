@@ -1,5 +1,7 @@
 use std::io::{Cursor, Write};
 
+pub mod stream;
+
 use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
 use blanket_codec_image::color_type;
 use blanket_core::{Image, PixelMode};

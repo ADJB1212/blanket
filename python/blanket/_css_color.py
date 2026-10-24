@@ -37,14 +37,17 @@ _TO_XYZ = {
 
 
 def _clamp(value: float, upper: float = 1) -> float:
+    """Clamp a value to the inclusive range from zero to upper."""
     return max(0.0, min(upper, value))
 
 
 def _byte(value: float) -> int:
+    """Clamp and round a normalized sample to an 8-bit integer."""
     return int(_clamp(value) * 255 + 0.5)
 
 
 def _number(component: str, scale: float = 1, *, hue: bool = False) -> float:
+    """Parse a CSS component, scaling percentages or normalizing hue to degrees."""
     if component == "none":
         return 0.0
     match = _NUMBER.fullmatch(component)
@@ -65,24 +68,29 @@ def _number(component: str, scale: float = 1, *, hue: bool = False) -> float:
 
 
 def _matrix(matrix: tuple[tuple[float, ...], ...], values: tuple[float, ...]) -> tuple[float, ...]:
+    """Multiply a color conversion matrix by a component vector."""
     return tuple(sum(a * b for a, b in zip(row, values, strict=True)) for row in matrix)
 
 
 def _linear(value: float) -> float:
+    """Decode an sRGB sample to linear light, preserving its sign."""
     return value / _SRGB_SLOPE if abs(value) <= _SRGB_ENCODED_BREAK else copysign(((abs(value) + _SRGB_OFFSET) / _SRGB_SCALE) ** _SRGB_GAMMA, value)
 
 
 def _encoded(value: float) -> float:
+    """Encode a linear-light sample as sRGB, preserving its sign."""
     return _SRGB_SLOPE * value if abs(value) <= _SRGB_LINEAR_BREAK else copysign(_SRGB_SCALE * abs(value) ** (1 / _SRGB_GAMMA) - _SRGB_OFFSET, value)
 
 
 def _xyz_rgb(xyz: tuple[float, ...], *, d50: bool = False) -> tuple[float, ...]:
+    """Convert XYZ to encoded sRGB, optionally adapting D50 to D65."""
     if d50:
         xyz = _matrix(_D50_TO_D65, xyz)
     return tuple(_encoded(v) for v in _matrix(_XYZ_TO_RGB, xyz))
 
 
 def _oklab_rgb(lab: tuple[float, ...]) -> tuple[float, ...]:
+    """Convert Oklab components to encoded sRGB without gamut clipping."""
     light, a, b = lab
     long = (light + 0.3963377774 * a + 0.2158037573 * b) ** 3
     m = (light - 0.1055613458 * a - 0.0638541728 * b) ** 3
@@ -94,6 +102,7 @@ def _oklab_rgb(lab: tuple[float, ...]) -> tuple[float, ...]:
 
 
 def _rgb_oklab(rgb: tuple[float, ...]) -> tuple[float, ...]:
+    """Convert encoded sRGB components to Oklab."""
     r, g, b = (_linear(v) for v in rgb)
     long = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
     m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
@@ -140,6 +149,7 @@ def _gamut_map(rgb: tuple[float, ...]) -> tuple[float, ...]:
 
 
 def _predefined(space: str, tokens: list[str]) -> tuple[float, ...]:
+    """Convert CSS color() components from a predefined space to encoded sRGB."""
     values = tuple(_number(v) for v in tokens)
     if space == "srgb":
         return values
@@ -162,6 +172,7 @@ def _predefined(space: str, tokens: list[str]) -> tuple[float, ...]:
 
 
 def _lab_rgb(model: str, tokens: list[str]) -> tuple[float, ...]:
+    """Convert CSS Lab, LCH, Oklab, or Oklch components to encoded sRGB."""
     ok = model.startswith("ok")
     polar = model.endswith("lch")
     light = _clamp(_number(tokens[0], 1 if ok else 100), 1 if ok else 100)
@@ -179,6 +190,7 @@ def _lab_rgb(model: str, tokens: list[str]) -> tuple[float, ...]:
 
 
 def functional_rgb(value: str) -> tuple[int, ...]:
+    """Parse a CSS color function into gamut-mapped 8-bit RGB or RGBA samples."""
     match = _FUNCTION.fullmatch(value)
     if match is None:
         raise ValueError("invalid color function")

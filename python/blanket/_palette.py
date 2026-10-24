@@ -11,6 +11,7 @@ _GIMP_COMMENT = re.compile(rb"\w+:|#")
 
 
 def _text_palette(stream: BinaryIO) -> tuple[bytes, str]:
+    """Read indexed grayscale or RGB text entries into a 256-color palette."""
     entries = [bytes([value]) * 3 for value in range(256)]
     for line in stream:
         if line.startswith(b"#"):
@@ -29,6 +30,7 @@ def _text_palette(stream: BinaryIO) -> tuple[bytes, str]:
 
 
 def _gimp_palette(stream: BinaryIO) -> tuple[bytes, str]:
+    """Read up to 256 RGB entries from a GIMP palette."""
     if not stream.readline().startswith(b"GIMP Palette"):
         raise SyntaxError("not a GIMP palette file")
     entries = bytearray()
@@ -50,6 +52,7 @@ def _gimp_palette(stream: BinaryIO) -> tuple[bytes, str]:
 
 
 def _gimp_gradient(stream: BinaryIO) -> tuple[bytes, str]:
+    """Sample a GIMP gradient with RGB segments into an RGBA palette."""
     if not stream.readline().startswith(b"GIMP Gradient"):
         raise SyntaxError("not a GIMP gradient file")
     count = stream.readline()
@@ -67,6 +70,7 @@ def _gimp_gradient(stream: BinaryIO) -> tuple[bytes, str]:
 
 
 def load_palette(stream: BinaryIO) -> tuple[bytes, str]:
+    """Try supported palette readers and return palette bytes and mode."""
     for reader in (_gimp_palette, _gimp_gradient, _text_palette):
         stream.seek(0)
         try:

@@ -72,6 +72,26 @@ def test_rank_histogram_groups_and_replicated_edges(mode: str, subtests: pytest.
                 compare(mode, size, ImageFilter.RankFilter(5, rank), PillowFilter.RankFilter(5, rank))
 
 
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+@pytest.mark.parametrize(("window", "rank"), [(3, 0), (3, 4), (3, 8), (5, 0), (5, 24)])
+def test_small_rank_simd_matches_pillow_bands(mode: str, window: int, rank: int, subtests: pytest.Subtests) -> None:
+    for size in ((19, 17), (513, 137)):
+        with subtests.test(size=size):
+            image = Image.new(mode, size)
+            channels = len(image.getbands())
+            rng = random.Random(87)
+            if channels == 1:
+                image.putdata([rng.choice((0, 255)) if mode == "1" else rng.randrange(256) for _ in range(size[0] * size[1])])
+            else:
+                image.putdata([tuple(rng.randrange(256) for _ in range(channels)) for _ in range(size[0] * size[1])])
+            result = image.filter(ImageFilter.RankFilter(window, rank))
+            for channel in range(channels):
+                band = image.getchannel(channel).convert("L")
+                reference = PillowImage.frombytes("L", size, band.tobytes())
+                expected = reference.filter(PillowFilter.RankFilter(window, rank))
+                assert result.getchannel(channel).convert("L").tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGBA"])
 def test_large_rank_column_histograms(mode: str) -> None:
     compare(mode, (17, 137), ImageFilter.MedianFilter(257), PillowFilter.MedianFilter(257))

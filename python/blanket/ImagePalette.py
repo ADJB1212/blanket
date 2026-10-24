@@ -19,10 +19,16 @@ from .Image import Image
 
 
 class _PaletteImage(Protocol):
-    @property
-    def info(self) -> dict[object, object]: ...
+    """Describe image metadata and usage counts needed to allocate palette slots."""
 
-    def histogram(self) -> list[int]: ...
+    @property
+    def info(self) -> dict[object, object]:
+        """Return metadata identifying reserved background and transparency slots."""
+        ...
+
+    def histogram(self) -> list[int]:
+        """Return pixel counts for each palette index."""
+        ...
 
 
 class ImagePalette:
@@ -65,6 +71,7 @@ class ImagePalette:
 
     @palette.setter
     def palette(self, palette: Sequence[int] | bytes | bytearray) -> None:
+        """Replace palette entries and invalidate the cached color lookup."""
         self._palette = palette
         self._colors: dict[tuple[int, ...], int] | None = None
 
@@ -89,6 +96,7 @@ class ImagePalette:
 
     @colors.setter
     def colors(self, colors: dict[tuple[int, ...], int]) -> None:
+        """Replace the cached mapping from colors to palette indices."""
         self._colors = colors
 
     def copy(self) -> ImagePalette:
@@ -138,10 +146,12 @@ class ImagePalette:
     tostring = tobytes
 
     def _check_raw(self) -> None:
+        """Reject operations that require a decoded palette when raw data is present."""
         if self.rawmode:
             raise ValueError("palette contains raw palette data")
 
     def _new_color_index(self, image: Image | _PaletteImage | None = None, e: Exception | None = None) -> int:
+        """Find an available palette slot while avoiding reserved image indices."""
         if not isinstance(self.palette, bytearray):
             self._palette = bytearray(self.palette)
         slot = len(self.palette) // len(self.mode)

@@ -63,6 +63,7 @@ ORIENTATION_REMOVE_BYTES_RE = re.compile(ORIENTATION_REMOVE_RE.pattern.encode())
 
 
 def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, object]]:
+    """Return the orientation and a metadata copy with applied orientation removed."""
     result = info.copy()
     raw = info.get("exif")
     profile = False
@@ -229,6 +230,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
 
 
 def _decompress(raw: bytes) -> bytes:
+    """Decompress a complete PNG metadata stream within the text size limit."""
     decoder = zlib.decompressobj()
     value = decoder.decompress(raw, _MAX_TEXT_BYTES + 1)
     if len(value) > _MAX_TEXT_BYTES or not decoder.eof:
@@ -237,6 +239,7 @@ def _decompress(raw: bytes) -> bytes:
 
 
 def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes) -> None:
+    """Extract a PNG text or ICC chunk into info, ignoring malformed metadata."""
     try:
         key, raw = payload.split(b"\0", 1)
         if not 1 <= len(key) <= 79:

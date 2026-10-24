@@ -38,6 +38,7 @@ class IFDRational(float):
     """A TIFF rational, retaining its numerator and denominator."""
 
     def __new__(cls, numerator: float, denominator: int = 1) -> Self:
+        """Create a rational float, using NaN when the denominator is zero."""
         value = super().__new__(cls, numerator / denominator if denominator else float("nan"))
         value.numerator = numerator
         value.denominator = denominator
@@ -52,6 +53,7 @@ class Exif(MutableMapping[int, object]):
     """
 
     def __init__(self) -> None:
+        """Create an empty EXIF mapping with no thumbnail or byte-order preference."""
         self.endian: str | None = None
         self.bigtiff = False
         self._data: dict[int, object] = {}
@@ -64,22 +66,27 @@ class Exif(MutableMapping[int, object]):
         self.thumbnail: bytes | None = None
 
     def __getitem__(self, tag: int) -> object:
+        """Return a visible top-level tag value."""
         return self._data[tag]
 
     def __setitem__(self, tag: int, value: object) -> None:
+        """Set a visible tag and invalidate any cached IFD for its pointer."""
         self._data[tag] = value
         self._hidden.pop(tag, None)
         if tag in _POINTERS:
             self._ifds.pop(tag, None)
 
     def __delitem__(self, tag: int) -> None:
+        """Delete a visible tag and its cached IFD."""
         del self._data[tag]
         self._ifds.pop(tag, None)
 
     def __iter__(self) -> Iterator[int]:
+        """Iterate over visible top-level tag identifiers."""
         return iter(self._data)
 
     def __len__(self) -> int:
+        """Return the number of visible top-level tags."""
         return len(self._data)
 
     def load(self, data: bytes) -> None:
@@ -100,6 +107,7 @@ class Exif(MutableMapping[int, object]):
             self._load_thumbnail(self._next)
 
     def _load_thumbnail(self, offset: int) -> None:
+        """Read IFD1 and retain thumbnail bytes when their bounds are valid."""
         ifd, _ = self._read_ifd(offset, 1)
         self._ifds[1] = ifd
         start, length = ifd.get(513), ifd.get(514)
@@ -114,6 +122,7 @@ class Exif(MutableMapping[int, object]):
             self._data, self._next = self._read_ifd(offset, 0)
 
     def _read_ifd(self, offset: int, key: int) -> tuple[dict[int, object], int]:
+        """Decode an IFD, cache its entry types, and return tags and the next offset."""
         data, endian = self._raw, self.endian or ">"
         if offset < 8 or offset + 2 > len(data):
             raise ValueError("invalid EXIF IFD offset")
@@ -179,6 +188,7 @@ class Exif(MutableMapping[int, object]):
             output.extend(bytes(max(0, offset - len(output))))
 
         def append(raw: bytes) -> int:
+            """Append bytes on a word boundary and return their TIFF-relative offset."""
             if len(output) & 1:
                 output.append(0)
             start = len(output)
@@ -188,6 +198,7 @@ class Exif(MutableMapping[int, object]):
         active: set[int] = set()
 
         def write(values: Mapping[int, object], key: int, following: int = 0) -> int:
+            """Serialize an IFD and its nested directories, returning its offset."""
             if id(values) in active:
                 raise ValueError("cyclic EXIF IFD")
             active.add(id(values))

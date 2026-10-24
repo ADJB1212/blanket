@@ -17,6 +17,7 @@ from .Image import Image, _bounded_int, _save_options
 
 
 def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str, options: dict[str, object], compressor: object) -> bool:
+    """Consume sequence options and save frames, returning False for ordinary saves."""
     save_all = options.pop("save_all", False)
     if not isinstance(save_all, bool):
         raise TypeError("save_all must be a bool")
@@ -64,6 +65,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         raise ValueError("default_image requires at least one animation frame")
 
     def array(name: str, default: int, maximum: int | None = None) -> list[float | int]:
+        """Normalize a frame control, padding a separate APNG default image with zero."""
         supplied = controls.get(name)
         if isinstance(supplied, (list, tuple)):
             if len(supplied) != count:

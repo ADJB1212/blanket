@@ -680,6 +680,7 @@ class Image:
         return result
 
     def _sync_palette(self) -> None:
+        """Copy the Python palette to the native indexed raster when present."""
         if self.mode in ("P", "PA") and self.palette is not None:
             self._native.set_palette(self.palette.mode, self.palette.tobytes())
 
@@ -729,11 +730,13 @@ class Image:
         return self._exif
 
     def _metadata_value(self, key: str) -> object:
+        """Resolve a metadata value, including cached EXIF edits and the XMP alias."""
         if key == "exif" and self._exif is not None and self.info.get("exif") == self._exif_source:
             return self._exif.tobytes() if self._exif or self._exif._hidden or self._exif.thumbnail is not None else b""
         return self.info.get(key, self.info.get("XML:com.adobe.xmp") if key == "xmp" else None)
 
     def _metadata_info(self) -> dict[object, object]:
+        """Copy image metadata with any cached EXIF edits serialized."""
         info = self.info.copy()
         if self._exif is not None:
             info["exif"] = self._metadata_value("exif")
@@ -2140,6 +2143,7 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
 
 
 def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
+    """Read encoded bytes from a path or stream, rewinding when supported."""
     if hasattr(fp, "read"):
         stream = fp
         with contextlib.suppress(AttributeError, OSError):
@@ -2152,6 +2156,7 @@ def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
 
 
 def _output_format(fp: object, requested: str | None) -> str:
+    """Resolve a supported save format from an explicit name or filename extension."""
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
         normalized = _FORMAT_ALIASES.get(normalized, normalized)
@@ -2168,6 +2173,7 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 
 def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
+    """Validate format-specific save options and supply native encoder defaults."""
     unknown = supplied.keys() - _SAVE_OPTIONS[format]
     if unknown:
         names = ", ".join(sorted(unknown))
@@ -2191,6 +2197,7 @@ def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]
 
 
 def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:
+    """Require a non-boolean integer within inclusive bounds."""
     if not isinstance(value, int) or isinstance(value, bool):
         raise TypeError(f"{name} must be an int")
     if not minimum <= value <= maximum:

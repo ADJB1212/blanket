@@ -37,6 +37,7 @@ __all__ = [
 
 
 def _logical(image1: Image.Image, image2: Image.Image, operation: str) -> Image.Image:
+    """Validate bilevel inputs and apply a native logical operation."""
     if image1.mode != "1" or image2.mode != "1":
         raise ValueError("image has wrong mode")
     return Image.Image(chops_binary(image1._native, image2._native, operation, 1.0, 0))
@@ -58,6 +59,7 @@ def logical_xor(image1: Image.Image, image2: Image.Image) -> Image.Image:
 
 
 def _binary(image1: Image.Image, image2: Image.Image, operation: str, scale: float = 1.0, offset: int = 0) -> Image.Image:
+    """Apply native channel arithmetic and copy metadata from the first image."""
     image1.load()
     image2.load()
     result = Image.Image(chops_binary(image1._native, image2._native, operation, scale, offset))

@@ -5,6 +5,7 @@ from __future__ import annotations
 __lazy_modules__ = {"builtins", "collections.abc"}
 
 import builtins
+from functools import lru_cache
 from types import CodeType
 from typing import TYPE_CHECKING, Any
 
@@ -164,6 +165,11 @@ def _unwrap(value: Any) -> Any:
     return value.im if isinstance(value, _Operand) else value
 
 
+@lru_cache(maxsize=128)
+def _compile_expression(expression: str) -> CodeType:
+    return compile(expression, "<ImageMath>", "eval")
+
+
 def lambda_eval(expression: Callable[[dict[str, Any]], Any], **operands: Any) -> Any:
     """Evaluate a callable receiving a dictionary of images, values, and helpers.
 
@@ -184,7 +190,7 @@ def unsafe_eval(expression: str, **operands: Any) -> Any:
         if "__" in name or hasattr(builtins, name):
             raise ValueError(f"'{name}' not allowed")
     context = _context(operands)
-    code = compile(expression, "<ImageMath>", "eval")
+    code = _compile_expression(expression)
 
     def validate(compiled: CodeType) -> None:
         for name in compiled.co_names:

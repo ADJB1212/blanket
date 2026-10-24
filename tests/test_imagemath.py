@@ -116,6 +116,15 @@ def test_expression_names_restricted(expression: str) -> None:
         ImageMath.eval(expression, a=Image.new("L", (1, 1)))
 
 
+@pytest.mark.parametrize("expression", ["value + 1", "(lambda x: x + 1)(value)"])
+def test_repeated_expression_validates_current_operands(expression: str) -> None:
+    assert ImageMath.unsafe_eval(expression, value=3) == 4
+    assert ImageMath.unsafe_eval(expression, value=7) == 8
+    with pytest.raises(ValueError, match="'value' not allowed"):
+        ImageMath.unsafe_eval(expression, other=3)
+    assert ImageMath.unsafe_eval(expression, value=9) == 10
+
+
 @pytest.mark.parametrize("name", ["__builtins__", "open", "abs"])
 def test_operand_names_restricted(name: str) -> None:
     with pytest.raises(ValueError, match="not allowed"):

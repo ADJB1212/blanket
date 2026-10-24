@@ -60,7 +60,11 @@ class Flags(IntFlag):
 
 
 class _Readable(Protocol):
-    def read(self) -> bytes: ...
+    """Describe a binary stream supplying serialized ICC data."""
+
+    def read(self) -> bytes:
+        """Read the remaining profile bytes."""
+        ...
 
 
 class ImageCmsProfile:
@@ -142,6 +146,7 @@ def getOpenProfile(profileFilename: _Profile) -> ImageCmsProfile:
 
 
 def _profile(profile: _Profile) -> ImageCmsProfile:
+    """Return an existing profile or load one from its source."""
     return profile if isinstance(profile, ImageCmsProfile) else ImageCmsProfile(profile)
 
 
@@ -277,6 +282,7 @@ def getProfileModel(profile: _Profile) -> str:
 
 
 def _intent(value: int) -> int:
+    """Validate a rendering intent and return its integer value."""
     if not isinstance(value, int) or not 0 <= value <= 3:
         raise PyCMSError("rendering intent must be an integer between 0 and 3")
     return int(value)

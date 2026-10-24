@@ -225,6 +225,18 @@ def test_default_font_public_api_and_no_pillow_import() -> None:
     subprocess.run([sys.executable, "-c", "import sys; from blanket import ImageFont; ImageFont.load_default().getmask('abc'); assert 'PIL' not in sys.modules"], check=True)
 
 
+@pytest.mark.parametrize("size", [7, 14])
+def test_default_font_repeated_and_fallback_glyphs(size: int) -> None:
+    font = ImageFont.load_default(size)
+    text = "aA\u00df\u03a9" * 10
+    actual = font.getmask(text)
+    expected = Image.new("L", actual.size)
+    for position, char in enumerate("AA??" * 10):
+        glyph = font.getmask(char)
+        expected.paste(Image.frombytes("L", glyph.size, bytes(glyph)), (position * 6 * (size // 7), 0))
+    assert bytes(actual) == expected.tobytes()
+
+
 @pytest.mark.parametrize("text", ["", " "])
 def test_empty_and_whitespace(font: ImageFont.TrueTypeFont, text: str) -> None:
     for direction in (None, "ttb"):
@@ -290,7 +302,8 @@ def test_advance_only_matches_full_layout(font: ImageFont.TrueTypeFont, text: st
 
 
 @pytest.mark.parametrize("suffix", [".png", ".gif", ".pbm"])
-def test_load_bitmap_font(tmp_path: Path, suffix: str) -> None:
+@pytest.mark.parametrize(("cache_pixels", "crop_count"), [(0, 41), (6, 2), (1024 * 1024, 2)])
+def test_load_bitmap_font(tmp_path: Path, suffix: str, cache_pixels: int, crop_count: int, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "font.pil"
     glyphs = [(0,) * 10 for _ in range(256)]
     glyphs[ord("A")] = (4, 0, 0, 0, 3, 2, 0, 0, 3, 2)
@@ -308,6 +321,20 @@ def test_load_bitmap_font(tmp_path: Path, suffix: str) -> None:
     assert any(image.tobytes())
     with pytest.raises(UnicodeEncodeError):
         font.getlength("Ω")
+    crops = []
+    crop = Image.Image.crop
+
+    def track_crop(image: Image.Image, box: tuple[int, int, int, int]) -> Image.Image:
+        crops.append(box)
+        return crop(image, box)
+
+    monkeypatch.setattr(Image.Image, "crop", track_crop)
+    monkeypatch.setattr(ImageFont, "_MAX_GLYPH_CACHE_PIXELS", cache_pixels)
+    text = "A A" * 20
+    assert bytes(font.getmask(text)) == bytes(reference.getmask(text))
+    assert len(crops) == crop_count
+    font._atlas.paste(0, (0, 0, 3, 2))
+    assert not any(bytes(font.getmask(text)))
 
 
 def test_corrupt_bitmap_font(tmp_path: Path) -> None:

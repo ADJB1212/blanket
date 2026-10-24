@@ -48,22 +48,26 @@ Border = int | tuple[int, ...]
 
 
 def _result(image: Image.Image, native: _Image) -> Image.Image:
+    """Wrap a native result and copy metadata from the source image."""
     result = Image.Image(native)
     result.info.update(image.info)
     return result
 
 
 def _copy(image: Image.Image) -> Image.Image:
+    """Copy the native raster and source metadata."""
     return _result(image, ops_transpose(image._native, 1))
 
 
 def _lut(image: Image.Image, table: list[int]) -> Image.Image:
+    """Apply a clamped 8-bit lookup table to an L or RGB image."""
     if image.mode not in ("L", "RGB"):
         raise OSError(f"not supported for mode {image.mode}")
     return _result(image, ops_lut(image._native, [max(0, min(255, v)) for v in table]))
 
 
 def _border(border: Border) -> tuple[int, int, int, int]:
+    """Expand a border specification to left, top, right, and bottom widths."""
     if isinstance(border, tuple):
         if len(border) == 2:
             return border[0], border[1], border[0], border[1]
@@ -74,6 +78,7 @@ def _border(border: Border) -> tuple[int, int, int, int]:
 
 
 def _resize(image: Image.Image, size: tuple[int, int], method: int, box: tuple[float, float, float, float] | None = None) -> Image.Image:
+    """Resize an image using the requested resampling method and source box."""
     return image.resize(size, method, box)
 
 

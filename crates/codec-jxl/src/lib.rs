@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 
+pub mod stream;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderSpeed};

@@ -54,7 +54,8 @@ class Path:
                 values.append(self._number(value))
         if len(values) % 2:
             raise ValueError("wrong number of coordinates")
-        self._points = list(zip(values[::2], values[1::2], strict=True))
+        coordinates = iter(values)
+        self._points = list(zip(coordinates, coordinates, strict=True))
 
     @staticmethod
     def _number(value: float) -> float:
@@ -87,7 +88,9 @@ class Path:
             points = self._points[key]
             if points and key.step not in (None, 1):
                 raise TypeError("slice steps not supported")
-            return Path(points)
+            result = Path(0)
+            result._points = points
+            return result
         return self._points[index(key)]
 
     def __setitem__(self, key: int, value: tuple[float, float]) -> None:
@@ -110,8 +113,9 @@ class Path:
         distance = float(distance)
         if not self._points:
             return 0
-        points = [self._points[0]]
-        for x, y in self._points[1:]:
+        remaining = iter(self._points)
+        points = [next(remaining)]
+        for x, y in remaining:
             if abs(x - points[-1][0]) + abs(y - points[-1][1]) >= distance:
                 points.append((x, y))
         removed = len(self) - len(points)

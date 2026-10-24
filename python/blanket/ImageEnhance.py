@@ -13,6 +13,8 @@ __all__ = ["Brightness", "Color", "Contrast", "Sharpness"]
 
 
 class _Enhance:
+    """Share factor-based blending between an image and its degenerate form."""
+
     image: Image.Image
     degenerate: Image.Image
 

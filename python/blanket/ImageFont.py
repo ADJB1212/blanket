@@ -29,6 +29,7 @@ __all__ = ["MAX_STRING_LENGTH", "ImageFont", "Layout", "TrueTypeFont", "load", "
 MAX_STRING_LENGTH: int | None = 1_000_000
 # Bound mask allocation and stroke expansion in both font implementations.
 _MAX_MASK_PIXELS = 100_000_000
+_MAX_GLYPH_CACHE_PIXELS = 1024 * 1024
 _MAX_STROKE_WIDTH = 1024
 # Match the native font scale limit before passing values to Rust.
 _MAX_FONT_SIZE = 1_000_000
@@ -43,6 +44,7 @@ class Layout(IntEnum):
 
 
 def _text(text: str | bytes) -> str:
+    """Decode UTF-8 text and enforce single-line and length limits."""
     if isinstance(text, bytes):
         text = text.decode("utf-8")
     if not isinstance(text, str):
@@ -55,6 +57,7 @@ def _text(text: str | bytes) -> str:
 
 
 def _stroke_width(value: float) -> int:
+    """Validate a stroke width and round it up to whole pixels."""
     if not isfinite(value) or value < 0 or value > _MAX_STROKE_WIDTH:
         raise ValueError("stroke_width must be finite and between 0 and 1024")
     return ceil(value)
@@ -83,6 +86,7 @@ class ImageFont:
     def _layout(
         self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)
     ) -> tuple[float, tuple[int, int, int, int], bytes]:
+        """Measure bitmap text and optionally render its coverage mask."""
         del start
         if direction not in (None, "ltr") or features or language:
             raise ValueError("bitmap fonts support only unshaped left-to-right text")
@@ -99,10 +103,18 @@ class ImageFont:
         data = b""
         if render:
             mask = Image.new("L", (width, height))
+            glyphs: dict[int, Image.Image] = {}
+            cache_remaining = _MAX_GLYPH_CACHE_PIXELS
             x, y = 0, self._ascent
             for char in encoded:
                 dx, dy, x0, y0, _, _, sx0, sy0, sx1, sy1 = self._glyphs[char]
-                glyph = self._atlas.crop((sx0, sy0, sx1, sy1))
+                glyph = glyphs.get(char)
+                if glyph is None:
+                    glyph = self._atlas.crop((sx0, sy0, sx1, sy1))
+                    pixels = (sx1 - sx0) * (sy1 - sy0)
+                    if pixels <= cache_remaining:
+                        glyphs[char] = glyph
+                        cache_remaining -= pixels
                 mask.paste(glyph, (x + x0, y + y0))
                 x += dx
                 y += dy
@@ -110,6 +122,7 @@ class ImageFont:
         return float(width), (0, -self._ascent, width, self._descent), data
 
     def _anchor(self, bounds: tuple[int, int, int, int], advance: float, anchor: str | None, direction: str | None) -> tuple[int, int]:
+        """Resolve a text anchor to integer offsets from the layout origin."""
         left, top, right, bottom = bounds
         if direction == "ttb":
             anchor = "lt" if anchor is None else anchor
@@ -230,6 +243,7 @@ class TrueTypeFont(ImageFont):
     def _layout(
         self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)
     ) -> tuple[float, tuple[int, int, int, int], bytes]:
+        """Shape outline text and optionally rasterize it through the native font."""
         return self._native.layout(text, self.size, direction, [] if features is None else list(features), language, render, start)
 
     def getname(self) -> tuple[str, str]:
@@ -319,6 +333,7 @@ def load(filename: str | bytes | os.PathLike[str]) -> ImageFont:
 
 
 def _load_pbm(path: Path) -> Image.Image:
+    """Load a binary PBM font atlas as an L coverage image."""
     with path.open("rb") as stream:
         if stream.readline().strip() != b"P4":
             raise OSError("font atlas must be a binary PBM")

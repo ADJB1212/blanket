@@ -16,6 +16,7 @@ _HEX = re.compile(r"#[0-9a-f]{3,8}")
 
 
 def _rgb(color: str) -> tuple[int, ...]:
+    """Validate a color string and return its RGB or RGBA samples."""
     if not isinstance(color, str):
         raise TypeError("color must be a string")
     return _parse_rgb(color)
@@ -23,6 +24,7 @@ def _rgb(color: str) -> tuple[int, ...]:
 
 @lru_cache(maxsize=_COLOR_CACHE_SIZE)
 def _parse_rgb(color: str) -> tuple[int, ...]:
+    """Parse a named, hexadecimal, or functional color into 8-bit samples."""
     if len(color) > _MAX_COLOR_LENGTH:
         raise ValueError("color specifier is too long")
     value = color.strip().lower()

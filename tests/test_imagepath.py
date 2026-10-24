@@ -37,6 +37,18 @@ def test_compact_matches_pillow(distance: float) -> None:
     assert ImagePath.Path([]).compact(distance) == 0
 
 
+@pytest.mark.parametrize("key", [slice(None), slice(1, 3), slice(-2, None), slice(3, 1), slice(0, 0, 2)])
+def test_slice_mutation_is_independent(key: slice) -> None:
+    path = ImagePath.Path([(1, 2), (3, 4), (5, 6)])
+    result = path[key]
+    original = result.tolist()
+    path[1] = (30, 40)
+    assert result.tolist() == original
+    result.map(lambda x, y: (x + 10, y + 20))
+    assert path.tolist() == [(1, 2), (30, 40), (5, 6)]
+    assert result.tolist() == [(x + 10, y + 20) for x, y in original]
+
+
 @pytest.mark.parametrize("matrix", [(2, 0, 3, 0, -2, 5), (0.5, 2, -1, -2, 0.25, 4)])
 @pytest.mark.parametrize("wrap", [0, 3])
 def test_map_and_transform_match_pillow(matrix: tuple[float, ...], wrap: float) -> None:

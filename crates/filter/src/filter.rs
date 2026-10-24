@@ -141,6 +141,14 @@ fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<
     if rank < 0 || i64::from(rank) >= count {
         return Err(PyValueError::new_err("bad rank value"));
     }
+    match (size, rank) {
+        (3, 0) => return small_rank::<3, 0>(py, image),
+        (3, 4) => return small_rank::<3, 4>(py, image),
+        (3, 8) => return small_rank::<3, 8>(py, image),
+        (5, 0) => return small_rank::<5, 0>(py, image),
+        (5, 24) => return small_rank::<5, 24>(py, image),
+        _ => (),
+    }
     if size > 1 && (rank == 0 || i64::from(rank) == count - 1) {
         return extrema_filter(py, image, (size / 2) as usize, rank != 0);
     }
@@ -150,6 +158,23 @@ fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<
 #[pyfunction]
 fn filter_mode(py: Python<'_>, image: &Image, size: i32) -> PyResult<Image> {
     neighborhood(py, image, (size / 2).max(0) as usize, None)
+}
+
+fn small_rank<const K: usize, const R: usize>(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    let source = image.pixel_data()?;
+    let mut pixels = alloc_pixels(source.len())?;
+    if !pixels.is_empty() {
+        let channels = image.mode.channels();
+        let stride = image.width as usize * channels;
+        py.detach(|| {
+            chunks_mut(&mut pixels, stride * 16, |band, rows| {
+                for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+                    crate::filter_simd::rank_row::<K, R>(source, row, channels, band * 16 + i);
+                }
+            });
+        });
+    }
+    output(image, pixels)
 }
 
 fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -> PyResult<Image> {

@@ -271,15 +271,20 @@ Rust backend for performance and functionality Pillow doesn't offer.
       small-buffer fast paths
 - [x] **3D color LUTs** — `Color3DLUT` with trilinear interpolation,
       generation, and chained transforms
+- [x] **SIMD filter kernels** — portable SIMD 3x3/5x5 convolution,
+      3x3 median, and 3x3/5x5 min/max morphology, with scalar edges and tails;
+      larger rank and morphology windows retain histogram and sliding-window paths
+- [x] **Streaming decode/encode** — progressive JXL input through
+      `ImageFile.Parser` and incremental PNG row output through `ImageFile.PngWriter`
 
 ### Planned
 
+- [ ] **Progressive JPEG streaming decode** — consume JPEG chunks with bounded
+      encoded input storage and progressive previews
 - [ ] **Batch processing API** — process multiple images in parallel with
       shared pipeline configuration
 - [ ] **GPU acceleration** — optional compute shader backend for large-image
       operations (resize, convolution, compositing)
-- [ ] **Streaming decode/encode** — progressive JPEG/JXL decode, incremental
-      PNG write for memory-constrained workflows
 - [ ] **Image hashing** — perceptual hashing (pHash, dHash, aHash) for
       deduplication and similarity search
 - [ ] **Smart cropping** — content-aware crop using saliency detection or
@@ -290,8 +295,6 @@ Rust backend for performance and functionality Pillow doesn't offer.
       via `rawler` or `libraw` bindings
 - [ ] **HDR pipeline** — tone mapping operators (Reinhard, ACES, filmic),
       HDR10/PQ/HLG metadata handling
-- [ ] **SIMD filter kernels** — vectorized convolution, median, and morphological
-      operations
 - [ ] **WebAssembly target** — compile to Wasm for browser-side image processing
 
 ### Future Ideas

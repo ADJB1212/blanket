@@ -85,6 +85,33 @@ with Image.open("input.png") as image:
     png_bytes = buffer.getvalue()
 ```
 
+### Stream image input and output
+
+Feed JPEG XL chunks to `ImageFile.Parser`. Its `image` property returns
+an independent preview when a progressive pass is available; `close()`
+requires a complete image. Decoding retains a full raster and codec working
+memory, while consumed encoded input is discarded.
+
+```python
+from blanket import ImageFile
+
+parser = ImageFile.Parser()
+with open("input.jxl", "rb") as source:
+    while chunk := source.read(64 * 1024):
+        parser.feed(chunk)
+image = parser.close()
+
+with ImageFile.PngWriter("gradient.png", "L", (1024, 1024)) as writer:
+    for y in range(1024):
+        writer.write(bytes([y % 256]) * 1024)
+```
+
+`PngWriter` accepts complete raw rows and keeps row buffers and compression
+state instead of a full raster or encoded output. It supports bilevel, grayscale,
+RGB, and alpha, with 10/12/16-bit samples for L/RGB/RGBA. Streaming does not
+retain container metadata or support animation. See the
+[ImageFile reference](https://adjb1212.github.io/blanket-docs/ImageFile/) for details.
+
 ### Optimize a save without additional loss
 
 ```python
