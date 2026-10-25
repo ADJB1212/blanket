@@ -98,9 +98,8 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         return py.detach(|| {
             (0..image.mode.channels())
                 .map(|channel| {
-                    let samples =
-                        source.chunks_exact(image.mode.channels() * 2).map(|v| u16::from_le_bytes([v[channel * 2], v[channel * 2 + 1]])).collect();
-                    Image::from_samples(image.width, image.height, PixelMode::L, samples, image.bit_depth, None)
+                    let pixels = blanket_core::simd::extract_sample_channel(source, image.mode.channels(), channel);
+                    Image::from_sample_bytes(image.width, image.height, PixelMode::L, pixels, image.bit_depth, None)
                 })
                 .collect()
         });
@@ -112,6 +111,22 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     }
     let mut bands = (0..channels).map(|_| buffer((image.width, image.height), 1)).collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
+        if let [luma, alpha] = bands.as_mut_slice() {
+            let split = |offset: usize, luma: &mut [u8], alpha: &mut [u8]| {
+                for ((l, a), pixel) in luma.iter_mut().zip(alpha).zip(source[offset * 2..].as_chunks::<2>().0) {
+                    [*l, *a] = *pixel;
+                }
+            };
+            if should_parallel(source.len(), CHUNK_PIXELS * 2, 2 * 1024 * 1024) {
+                luma.par_chunks_mut(CHUNK_PIXELS)
+                    .zip(alpha.par_chunks_mut(CHUNK_PIXELS))
+                    .enumerate()
+                    .for_each(|(i, (l, a))| split(i * CHUNK_PIXELS, l, a));
+            } else {
+                split(0, luma, alpha);
+            }
+            return;
+        }
         let split = |offset: usize, red: &mut [u8], green: &mut [u8], blue: &mut [u8], alpha: Option<&mut [u8]>| {
             let src = &source[offset * channels..(offset + red.len()) * channels];
             if let Some(alpha) = alpha {

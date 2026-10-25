@@ -122,8 +122,41 @@ fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bo
     if y < 0 || y >= i64::from(image.height) {
         return;
     }
-    for x in left.max(0)..=right.min(i64::from(image.width) - 1) {
-        paint(image, x, y, ink, blend);
+    let left = left.max(0);
+    let right = right.min(i64::from(image.width) - 1);
+    if left > right {
+        return;
+    }
+    let stride = image.mode.channels() * image.mode.sample_bytes();
+    let start = (y as usize * image.width as usize + left as usize) * stride;
+    let pixels = &mut image.pixels.as_mut().unwrap()[start..start + (right - left + 1) as usize * stride];
+    match stride {
+        1 => fill_span::<1>(pixels, ink, blend),
+        2 => fill_span::<2>(pixels, ink, blend),
+        3 => fill_span::<3>(pixels, ink, blend),
+        4 => fill_span::<4>(pixels, ink, blend),
+        _ => unreachable!(),
+    }
+}
+
+fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8], blend: bool) {
+    if blend && ink[3] != 255 {
+        let alpha = u32::from(ink[3]);
+        if alpha == 0 {
+            return;
+        }
+        for pixel in pixels.as_chunks_mut::<C>().0 {
+            for c in 0..C {
+                pixel[c] = ((u32::from(pixel[c]) * (255 - alpha) + u32::from(ink[c]) * alpha + 127) / 255) as u8;
+            }
+        }
+    } else if C == 3 {
+        let tile = std::array::from_fn::<_, 48, _>(|i| ink[i % C]);
+        let (tiles, tail) = pixels.as_chunks_mut::<48>();
+        tiles.fill(tile);
+        tail.as_chunks_mut::<C>().0.fill(std::array::from_fn(|c| ink[c]));
+    } else {
+        pixels.as_chunks_mut::<C>().0.fill(std::array::from_fn(|c| ink[c]));
     }
 }
 
@@ -161,21 +194,38 @@ fn distance_squared(point: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     (point.0 - a.0 - t * dx).powi(2) + (point.1 - a.1 - t * dy).powi(2)
 }
 
-fn contains(points: &[(f64, f64)], point: (f64, f64)) -> bool {
-    let mut inside = false;
-    let mut previous = points[points.len() - 1];
-    for &current in points {
-        if distance_squared(point, previous, current) < STROKE_EPSILON {
-            return true;
-        }
-        if (current.1 > point.1) != (previous.1 > point.1)
-            && point.0 < (previous.0 - current.0) * (point.1 - current.1) / (previous.1 - current.1) + current.0
-        {
-            inside = !inside;
-        }
-        previous = current;
+struct PathEdge {
+    a: (f64, f64),
+    b: (f64, f64),
+    left: f64,
+    right: f64,
+    top: f64,
+    bottom: f64,
+}
+
+impl PathEdge {
+    fn new(a: (f64, f64), b: (f64, f64)) -> Self {
+        Self { a, b, left: a.0.min(b.0), right: a.0.max(b.0), top: a.1.min(b.1), bottom: a.1.max(b.1) }
     }
-    inside
+
+    fn near(&self, point: (f64, f64), radius: f64) -> bool {
+        point.0 >= self.left - radius && point.0 <= self.right + radius && point.1 >= self.top - radius && point.1 <= self.bottom + radius
+    }
+
+    fn crossing(&self, y: f64) -> Option<f64> {
+        if (self.b.1 > y) != (self.a.1 > y) {
+            let x = (self.a.0 - self.b.0) * (y - self.b.1) / (self.a.1 - self.b.1) + self.b.0;
+            if !x.is_nan() {
+                return Some(x);
+            }
+        }
+        None
+    }
+}
+
+fn path_contains(edges: &[&PathEdge], crossings: &[f64], point: (f64, f64)) -> bool {
+    (crossings.len() - crossings.partition_point(|&x| x <= point.0)) % 2 != 0
+        || edges.iter().any(|edge| edge.near(point, STROKE_EPSILON.sqrt()) && distance_squared(point, edge.a, edge.b) < STROKE_EPSILON)
 }
 
 fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) {
@@ -271,7 +321,29 @@ fn draw_path(
         let top = points.iter().map(|p| p.1).fold(f64::INFINITY, f64::min) - radius;
         let bottom = points.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max) + radius;
         let samples = if antialias { 4 } else { 1 };
+        let mut edges: Vec<_> = points.windows(2).map(|p| PathEdge::new(p[0], p[1])).collect();
+        if closed {
+            edges.push(PathEdge::new(points[points.len() - 1], points[0]));
+        }
+        let limit = if filled { STROKE_EPSILON } else { radius * radius + STROKE_EPSILON };
+        let margin = limit.sqrt();
+        let mut active = Vec::new();
+        let mut crossings: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::new());
         for y in (top.floor() as i64).max(0)..=(bottom.ceil() as i64).min(i64::from(image.height) - 1) {
+            active.clear();
+            active.extend(edges.iter().filter(|edge| y as f64 + 0.5 >= edge.top - margin && y as f64 - 0.5 <= edge.bottom + margin));
+            if active.is_empty() {
+                continue;
+            }
+            if filled {
+                for sy in 0..samples {
+                    let scan_y = y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5;
+                    let row = &mut crossings[sy as usize];
+                    row.clear();
+                    row.extend(active.iter().filter_map(|edge| edge.crossing(scan_y)));
+                    row.sort_unstable_by(f64::total_cmp);
+                }
+            }
             for x in (left.floor() as i64).max(0)..=(right.ceil() as i64).min(i64::from(image.width) - 1) {
                 let mut covered = 0;
                 for sy in 0..samples {
@@ -281,10 +353,9 @@ fn draw_path(
                             y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5,
                         );
                         let hit = if filled {
-                            contains(&points, point)
+                            path_contains(&active, &crossings[sy as usize], point)
                         } else {
-                            points.windows(2).any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + STROKE_EPSILON)
-                                || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + STROKE_EPSILON)
+                            active.iter().any(|edge| edge.near(point, margin) && distance_squared(point, edge.a, edge.b) < limit)
                         };
                         covered += i32::from(hit);
                     }
@@ -563,6 +634,13 @@ mod tests {
 
     #[test]
     fn polygon_includes_edges_and_uses_even_odd_fill() {
+        let contains = |points: &[(f64, f64)], point: (f64, f64)| {
+            let edges: Vec<_> = points.iter().zip(points.iter().cycle().skip(1)).map(|(&a, &b)| PathEdge::new(a, b)).collect();
+            let active: Vec<_> = edges.iter().collect();
+            let mut crossings: Vec<_> = edges.iter().filter_map(|edge| edge.crossing(point.1)).collect();
+            crossings.sort_unstable_by(f64::total_cmp);
+            path_contains(&active, &crossings, point)
+        };
         let square = [(0.0, 0.0), (4.0, 0.0), (4.0, 4.0), (0.0, 4.0)];
         assert!(contains(&square, (0.0, 2.0)));
         assert!(contains(&square, (4.0, 4.0)));

@@ -180,6 +180,28 @@ def test_tiff_pages_preserve_modes_and_dimensions(compression: str) -> None:
         assert actual.tobytes() == expected.tobytes()
 
 
+def test_tiff_metadata_visits_each_page_once(monkeypatch) -> None:
+    pages = [PillowImage.new("L", (i + 1, 2), i) for i in range(40)]
+    stream = BytesIO()
+    pages[0].save(stream, "TIFF", save_all=True, append_images=pages[1:])
+    read_ifd = Image.Exif._read_ifd
+    offsets = []
+
+    def tracked(self, offset, key):
+        offsets.append(offset)
+        return read_ifd(self, offset, key)
+
+    monkeypatch.setattr(Image.Exif, "_read_ifd", tracked)
+    actual = Image.open(stream)
+    assert len(offsets) == len(pages)
+    assert len(set(offsets)) == len(pages)
+    for i in reversed(range(len(pages))):
+        actual.seek(i)
+        assert actual.getexif()[256] == i + 1
+        assert actual.getexif()[257] == 2
+        assert actual.tobytes() == pages[i].tobytes()
+
+
 @pytest.mark.parametrize("mode", ["LAB", "F", "I;16"])
 def test_tiff_special_mode_on_later_page(mode: str) -> None:
     first = PillowImage.new("RGB", (3, 2), "red")

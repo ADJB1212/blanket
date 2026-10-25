@@ -1,11 +1,61 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+from itertools import pairwise
 
 import pytest
 from PIL import Image as PILImage, ImageDraw as PILDraw, ImageFont as PILFont
 
 from blanket import Image, ImageDraw
+from blanket._blanket import draw_path
+
+
+@pytest.mark.parametrize("style", ["fill", "outline", "line"])
+@pytest.mark.parametrize("antialias", [False, True])
+@pytest.mark.parametrize("width", [3, 7])
+@pytest.mark.parametrize(
+    "points",
+    [
+        [(3.0, 4.0)],
+        [(1.0, 2.0), (12.0, 2.0)],
+        [(-100.5, -80.0), (100.0, -80.0), (100.0, 80.0), (-100.5, 80.0)],
+        [(1.25, 1.5), (13.5, 10.25), (1.25, 10.25), (13.5, 1.5)],
+        [(2.0, 2.0), (12.0, 2.0), (12.0, 2.0), (7.0, 6.0), (12.0, 10.0), (2.0, 10.0)],
+        [((i * 71 % 23) - 4.375, (i * 53 % 19) - 3.125) for i in range(73)],
+    ],
+)
+def test_path_scanlines_match_scalar_coverage(style, antialias, width, points) -> None:
+    actual = Image.new("L", (15, 13), 23)
+    draw_path(actual._native, points, 193, width, style, False, antialias)
+    edges = list(pairwise(points))
+    if style != "line":
+        edges.append((points[-1], points[0]))
+
+    def distance_squared(point, a, b):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length = dx * dx + dy * dy
+        t = max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length)) if length else 0.0
+        return (point[0] - a[0] - t * dx) ** 2 + (point[1] - a[1] - t * dy) ** 2
+
+    def hit(point):
+        if style != "fill":
+            return any(distance_squared(point, a, b) < (width / 2) ** 2 + 1e-12 for a, b in edges)
+        inside = False
+        for a, b in edges:
+            if distance_squared(point, a, b) < 1e-12:
+                return True
+            if (b[1] > point[1]) != (a[1] > point[1]) and point[0] < (a[0] - b[0]) * (point[1] - b[1]) / (a[1] - b[1]) + b[0]:
+                inside = not inside
+        return inside
+
+    samples = 4 if antialias else 1
+    expected = bytearray()
+    for y in range(13):
+        for x in range(15):
+            count = sum(hit((x + (sx + 0.5) / samples - 0.5, y + (sy + 0.5) / samples - 0.5)) for sy in range(samples) for sx in range(samples))
+            coverage = (count * 255 + samples * samples // 2) // (samples * samples)
+            expected.append((23 * (255 - coverage) + 193 * coverage + 127) // 255)
+    assert actual.tobytes() == expected
 
 
 @pytest.mark.parametrize("points", [[(1, 2), (12, 9)], [(12, 9), (1, 2)], [(-4, -3), (20, 10)], [(0, 0), (7, 14)], [(7, 14), (0, 0)], [(2, 2), (2, 2)], [(2, 2), (2, 9), (8, 9)]])

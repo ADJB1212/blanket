@@ -2,7 +2,7 @@ use std::io::{Cursor, Write};
 
 pub mod stream;
 
-use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
+use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::color_type;
 use blanket_core::{Image, PixelMode};
 use image::ImageEncoder;
@@ -99,7 +99,13 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
     validate_dimensions(header.width, header.height)?;
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
     decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let reader = decoder.read_info().map_err(|error| error.to_string())?;
+    decode_png_reader(reader, bilevel)
+}
+
+fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> Result<Image, String> {
+    let (width, height) = reader.info().size();
+    validate_dimensions(width, height)?;
     let mut pixels = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
     let frame = reader.next_frame(&mut pixels).map_err(|error| error.to_string())?;
     pixels.truncate(frame.buffer_size());
@@ -156,12 +162,10 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
         writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()]).map_err(codec_error)?;
         let mut stream = writer.stream_writer().map_err(codec_error)?;
         let stride = image.width as usize * image.mode.channels() * 2;
+        let mut samples = vec![0; stride];
         for row in pixels.chunks_exact(stride) {
-            let mut samples = blanket_core::simd::normalize_u16(row, image.bit_depth);
-            for sample in &mut samples {
-                *sample = sample.to_be();
-            }
-            stream.write_all(u16_bytes(&samples)).map_err(codec_error)?;
+            blanket_core::simd::samples_to_be16(row, &mut samples, image.bit_depth);
+            stream.write_all(&samples).map_err(codec_error)?;
         }
         stream.finish().map_err(codec_error)?;
         writer.finish().map_err(codec_error)?;

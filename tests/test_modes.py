@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
+from math import isnan
 
 import pytest
 from PIL import Image as PillowImage, ImageOps as PillowOps
@@ -278,6 +279,24 @@ def test_signed_integer_to_uint16_clips_out_of_range_values() -> None:
     image = Image.new("I", (3, 1))
     image.putdata([-1, 258, 70000])
     assert image.convert("I;16").getdata() == [0, 258, 65535]
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+@pytest.mark.parametrize("count", [0, 1, 7, 8, 15, 16, 17, 131073])
+def test_scalar_to_wide_grayscale_keeps_saturation_and_byte_order(mode: str, count: int) -> None:
+    values = [-100, -0.5, 0, 1.5, 255, 256, 65535, 65536, float("nan"), float("inf"), -float("inf")] if mode == "F" else [-100, 0, 1, 255, 256, 65535, 65536]
+    if mode not in ("I", "F"):
+        values = [value & 65535 for value in values]
+    values = [values[i % len(values)] for i in range(count)]
+    code = "f" if mode == "F" else "i" if mode == "I" else "H"
+    raw = struct.pack((">" if mode == "I;16B" else "<") + str(count) + code, *values)
+    image = Image.frombytes(mode, (count, 1), raw)
+    converted = image.convert("L", bit_depth=16)
+    expected = [0 if isnan(value) else 65535 if value >= 65535 else 0 if value <= 0 else int(value) for value in values]
+    assert converted.mode == "L"
+    assert converted.bit_depth == 16
+    assert converted.tobytes() == struct.pack(f"<{count}H", *expected)
+    assert image.tobytes() == raw
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA", "P", "PA"])

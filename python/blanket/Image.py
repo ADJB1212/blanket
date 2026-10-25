@@ -57,7 +57,7 @@ from ._blanket import (
     quantize as _native_quantize,
 )
 from ._color import color_pixel
-from ._exif import ORIENTATION_RE, read_metadata, save_metadata
+from ._exif import ORIENTATION_RE, read_metadata, read_tiff_metadata, save_metadata
 from ._ifd import Exif
 from ._io import write_all
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
@@ -1233,8 +1233,9 @@ class Image:
         if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
             return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
+        info = self._metadata_info()
         for band in bands:
-            band.info.update(self._metadata_info())
+            band.info.update(info)
         return bands
 
     def getbands(self) -> tuple[str, ...]:
@@ -2078,10 +2079,12 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
 
-    image.info.update(read_metadata(data, image.format))
+    metadata = read_tiff_metadata(data, len(frames)) if image.format == "TIFF" else None
+    if metadata is None:
+        image.info.update(read_metadata(data, image.format))
     decoded = [Image(frame) for frame in frames]
-    for i, (frame, (duration, disposal, blend)) in enumerate(zip(decoded, controls, strict=True)):
-        frame._info.update(read_metadata(data, image.format, i) if image.format == "TIFF" and i else image.info)
+    for frame, (duration, disposal, blend) in zip(decoded, controls, strict=True):
+        frame._info.update(next(metadata) if metadata is not None else image.info)
         if duration is not None:
             frame._info["duration"] = duration
         if loop_count is not None:

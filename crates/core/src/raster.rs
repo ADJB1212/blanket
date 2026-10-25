@@ -647,9 +647,8 @@ impl Image {
                 };
                 Self::from_pixels(self.width, self.height, PixelMode::L, pixels, None)
             } else {
-                let samples =
-                    data.chunks_exact(channels << 1).map(|pixel| u16::from_le_bytes([pixel[channel << 1], pixel[channel * 2 + 1]])).collect();
-                Self::from_samples(self.width, self.height, PixelMode::L, samples, self.bit_depth, None)
+                let pixels = crate::simd::extract_sample_channel(data, channels, channel);
+                Self::from_sample_bytes(self.width, self.height, PixelMode::L, pixels, self.bit_depth, None)
             }
         })
     }
@@ -1053,13 +1052,15 @@ impl Image {
             if bit_depth.is_some_and(|depth| depth != 32) {
                 return Err(PyValueError::new_err("bit_depth does not match float mode"));
             }
-            let rgb = convert_pixels(self.pixel_data()?, self.mode, PixelMode::Rgb);
-            let pixels = rgb
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .flat_map(|p| ((f64::from(p[0]) * 299.0 + f64::from(p[1]) * 587.0 + f64::from(p[2]) * 114.0) as f32 / 1000.0).to_le_bytes())
-                .collect();
+            let source = self.pixel_data()?;
+            let pixels = py.detach(|| {
+                let rgb = convert_pixels(source, self.mode, PixelMode::Rgb);
+                rgb.as_chunks::<3>()
+                    .0
+                    .iter()
+                    .flat_map(|p| ((f64::from(p[0]) * 299.0 + f64::from(p[1]) * 587.0 + f64::from(p[2]) * 114.0) as f32 / 1000.0).to_le_bytes())
+                    .collect()
+            });
             return Self::from_float_bytes(self.width, self.height, pixels);
         }
         if self.mode == PixelMode::F || destination == PixelMode::F {
@@ -1084,8 +1085,9 @@ impl Image {
                 return Self::from_float_bytes(self.width, self.height, pixels);
             }
             if destination == PixelMode::L && bit_depth == Some(16) {
-                let samples = self.raw_data()?.as_chunks::<4>().0.iter().map(|bytes| float_value(bytes).clamp(0.0, 65535.0) as u16).collect();
-                return Self::from_samples(self.width, self.height, PixelMode::L, samples, 16, None);
+                let source = self.raw_data()?;
+                let pixels = py.detach(|| crate::simd::float_to_u16(source, false));
+                return Self::from_sample_bytes(self.width, self.height, PixelMode::L, pixels, 16, None);
             }
             let data = self.raw_data()?;
             if destination == PixelMode::I {
@@ -1128,6 +1130,9 @@ impl Image {
                 return Self::from_pixels(self.width, self.height, destination, pixels, None);
             }
             let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
+            if destination == PixelMode::Rgb && bit_depth.is_none_or(|depth| depth == 8) {
+                return Ok(rgb);
+            }
             return rgb.convert(py, mode, bit_depth);
         }
         if matches!(destination, PixelMode::Cmyk | PixelMode::YCbCr) && self.bit_depth > 8 && !self.mode.is_wide_scalar() {
@@ -1180,16 +1185,18 @@ impl Image {
             }
             let data = self.raw_data()?;
             if destination == PixelMode::L && bit_depth == Some(16) {
-                let samples =
-                    data.chunks_exact(self.mode.sample_bytes()).map(|bytes| integer_value(self.mode, bytes).clamp(0, 65535) as u16).collect();
-                return Self::from_samples(self.width, self.height, PixelMode::L, samples, 16, None);
+                let pixels = py.detach(|| crate::simd::convert_integer(data, self.mode, PixelMode::I16));
+                return Self::from_sample_bytes(self.width, self.height, PixelMode::L, pixels, 16, None);
             }
             if matches!(destination, PixelMode::Rgb | PixelMode::Rgba) {
                 let pixels = py.detach(|| crate::simd::integer_to_color(data, self.mode, destination.channels()));
                 return Self::from_pixels(self.width, self.height, destination, pixels, None);
             }
-            let clipped = crate::simd::integer_to_l(data, self.mode);
+            let clipped = py.detach(|| crate::simd::integer_to_l(data, self.mode));
             let grayscale = Self::from_pixels(self.width, self.height, PixelMode::L, clipped, None)?;
+            if destination == PixelMode::L && bit_depth.is_none_or(|depth| depth == 8) {
+                return Ok(grayscale);
+            }
             return grayscale.convert(py, mode, bit_depth);
         }
         let depth = bit_depth.unwrap_or(self.bit_depth);

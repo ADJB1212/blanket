@@ -669,6 +669,12 @@ pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
 
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
 /// the existing rounded full-range mapping, including 16-bit identity input.
+pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) -> Vec<u8> {
+    let mut pixels = Vec::with_capacity(source.len() / channels);
+    pixels.extend(source.chunks_exact(channels * 2).flat_map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]));
+    pixels
+}
+
 pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
     use rayon::prelude::*;
 

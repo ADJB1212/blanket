@@ -8,6 +8,10 @@ import contextlib
 import re
 import struct
 import zlib
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from ._ifd import Exif
 from .PngImagePlugin import PngInfo, iTXt
@@ -205,13 +209,31 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 info[key] = b"Exif\0\0" + raw.removeprefix(b"Exif\0\0") if key == "exif" else raw
             pos += 8 + length + (length & 1)
     elif format == "TIFF":
+        for page in read_tiff_metadata(data, frame + 1):
+            info = page
+        return info
+    if format in ("HEIF", "JXL"):
+        from ._blanket import _read_native_metadata
+
+        with contextlib.suppress(OSError):
+            info.update(_read_native_metadata(data, format))
+    return info
+
+
+def read_tiff_metadata(data: bytes, count: int) -> Iterator[dict[object, object]]:
+    """Read page metadata in one traversal of the TIFF directory chain."""
+    offset = 0
+    endian = "<" if data[:2] == b"II" else ">"
+    if len(data) >= 8 and data[:2] in (b"II", b"MM"):
+        magic, first = struct.unpack_from(endian + "HI", data, 2)
+        if magic == _TIFF_MAGIC:
+            offset = first
+    for _ in range(count):
+        info: dict[object, object] = {}
         try:
             exif = Exif()
-            exif.load(data)
-            for _ in range(frame):
-                exif._data, exif._next = exif._read_ifd(exif._next, 0)
-            exif._ifds.pop(1, None)
-            exif.thumbnail = None
+            exif.endian, exif._raw = endian, data
+            exif._data, offset = exif._read_ifd(offset, 0)
             thumbnail_offset = exif.pop(330, None)
             if isinstance(thumbnail_offset, int):
                 exif._load_thumbnail(thumbnail_offset)
@@ -229,12 +251,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 info["exif"] = exif.tobytes()
         except (ValueError, struct.error):
             pass
-    if format in ("HEIF", "JXL"):
-        from ._blanket import _read_native_metadata
-
-        with contextlib.suppress(OSError):
-            info.update(_read_native_metadata(data, format))
-    return info
+        yield info
 
 
 def _decompress(raw: bytes, maximum: int = _MAX_TEXT_BYTES) -> bytes:

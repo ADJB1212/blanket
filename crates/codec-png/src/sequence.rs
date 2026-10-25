@@ -11,7 +11,10 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let Some(animation) = reader.info().animation_control else {
-        return super::decode_png(data).map(Sequence::single);
+        if reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One {
+            return super::decode_png(data).map(Sequence::single);
+        }
+        return super::decode_png_reader(reader, false).map(Sequence::single);
     };
     let (width, height) = (reader.info().width, reader.info().height);
     let default_image = reader.info().frame_control.is_none();
@@ -82,7 +85,8 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
             }
         }
         let image = if wide {
-            Image::from_samples(width, height, PixelMode::Rgba, canvas.iter().flatten().copied().collect(), 16, Some("PNG".into()))
+            let pixels = canvas.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+            Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
         } else {
             Image::from_pixels(width, height, PixelMode::Rgba, canvas.iter().flatten().map(|&v| v as u8).collect(), Some("PNG".into()))
         }

@@ -103,6 +103,18 @@ def test_rectangle_outline_matches_pillow(width: int, bounds: tuple[int, ...], b
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("count", [1, 15, 16, 17, 33, 65])
+@pytest.mark.parametrize("alpha", [None, 0, 1, 127, 254, 255])
+def test_rectangle_row_tiles_and_blending_preserve_guards(count: int, alpha: int | None) -> None:
+    actual = Image.new("RGB", (count + 2, 3), (81, 93, 117))
+    expected = PILImage.new("RGB", actual.size, (81, 93, 117))
+    mode = "RGB" if alpha is None else "RGBA"
+    ink = (31, 173, 59) if alpha is None else (31, 173, 59, alpha)
+    ImageDraw.Draw(actual, mode).rectangle((1, 1, count, 1), fill=ink)
+    PILDraw.Draw(expected, mode).rectangle((1, 1, count, 1), fill=ink)
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("blend", [False, True])
 def test_rectangle_enormous_outline_preserves_overlapping_edges(blend: bool) -> None:
     actual = Image.new("RGB", (13, 11), (81, 93, 117))

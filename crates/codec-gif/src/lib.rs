@@ -1,9 +1,9 @@
-use std::borrow::Borrow;
+use std::borrow::{Borrow, Cow};
 
 use blanket_codec_common::codec_error;
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
-use image::{ExtendedColorType, ImageFormat as RustFormat};
+use image::ImageFormat as RustFormat;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -130,14 +130,25 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
     let mut output = Vec::new();
-    let rgb;
-    let (pixels, color) = if image.mode == PixelMode::L {
-        rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
-        (rgb.as_slice(), ExtendedColorType::Rgb8)
+    if image.mode == PixelMode::L {
+        let mut used = [false; 256];
+        for &value in pixels {
+            used[usize::from(value)] = true;
+        }
+        let mut palette = Vec::with_capacity(768);
+        let mut indices = [0; 256];
+        for (value, &present) in used.iter().enumerate() {
+            if present {
+                indices[value] = (palette.len() / 3) as u8;
+                palette.extend_from_slice(&[value as u8; 3]);
+            }
+        }
+        let buffer = if palette.len() == 768 { Cow::Borrowed(pixels) } else { Cow::Owned(pixels.iter().map(|&v| indices[usize::from(v)]).collect()) };
+        let frame = gif::Frame { width: image.width as u16, height: image.height as u16, buffer, ..gif::Frame::default() };
+        gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
     } else {
-        (pixels, color_type(image.mode))
-    };
-    image::codecs::gif::GifEncoder::new(&mut output).encode(pixels, image.width, image.height, color).map_err(codec_error)?;
+        image::codecs::gif::GifEncoder::new(&mut output).encode(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
+    }
 
     Ok(output)
 }

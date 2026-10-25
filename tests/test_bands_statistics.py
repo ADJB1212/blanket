@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import struct
 
 import pytest
 from PIL import Image as PILImage
@@ -15,7 +16,7 @@ def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
     return Image.frombytes(mode, (17, 13), raw), PILImage.frombytes(mode, (17, 13), raw)
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "PA"])
 def test_split(mode: str) -> None:
     image, reference = pair(mode)
     image.info["custom"] = 42
@@ -33,6 +34,52 @@ def test_split(mode: str) -> None:
     if len(bands) > 1:
         bands[0].close()
         assert bands[1].tobytes() == reference.split()[1].tobytes()
+
+
+@pytest.mark.parametrize("mode", ["LA", "PA"])
+@pytest.mark.parametrize("count", [0, 1, 17, 1048577])
+def test_two_band_split_preserves_parallel_tail(mode: str, count: int) -> None:
+    raw = (bytes(range(256)) * (count * 2 // 256 + 1))[: count * 2]
+    image = Image.frombytes(mode, (count, 1), raw)
+    luma, alpha = image.split()
+    assert luma.tobytes() == raw[::2]
+    assert alpha.tobytes() == raw[1::2]
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("count", [0, 1, 17, 131073])
+def test_wide_split_and_getchannel_preserve_samples(mode: str, depth: int, count: int) -> None:
+    maximum = (1 << depth) - 1
+    values = [(i * 719 + i // 7) & maximum for i in range(count * len(mode))]
+    raw = struct.pack(f"<{len(values)}H", *values)
+    image = Image.frombytes(mode, (count, 1), raw, bit_depth=depth)
+    for channel, band in enumerate(image.split()):
+        expected = struct.pack(f"<{count}H", *values[channel :: len(mode)])
+        assert band.bit_depth == depth
+        assert band.tobytes() == expected
+        assert image.getchannel(channel).tobytes() == expected
+    assert image.tobytes() == raw
+
+
+def test_split_serializes_edited_exif_once(monkeypatch) -> None:
+    image = Image.new("RGBA", (3, 2))
+    exif = image.getexif()
+    exif[305] = "Edited"
+    serialize = Image.Exif.tobytes
+    calls = []
+
+    def tracked(self, *args, **kwargs):
+        calls.append(self)
+        return serialize(self, *args, **kwargs)
+
+    monkeypatch.setattr(Image.Exif, "tobytes", tracked)
+    bands = image.split()
+    assert calls == [exif]
+    for band in bands:
+        assert band.getexif()[305] == "Edited"
+        assert band.info is not image.info
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])

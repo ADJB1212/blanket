@@ -130,6 +130,18 @@ def test_wide_encoding_reuses_sample_storage_with_exact_byte_order(format: str, 
         assert image.tobytes() == raw
 
 
+@pytest.mark.parametrize("values", [[0], [255], [3, 17, 249], list(range(256))])
+@pytest.mark.parametrize("count", [1, 17, 4097])
+def test_grayscale_gif_preserves_exact_samples(values: list[int], count: int) -> None:
+    raw = bytes(values[i % len(values)] for i in range(count))
+    image = Image.frombytes("L", (count, 1), raw)
+    encoded = BytesIO()
+    image.save(encoded, "GIF")
+    assert Image.open(encoded).convert("L").tobytes() == raw
+    assert PillowImage.open(encoded).convert("L").tobytes() == raw
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA"])
 @pytest.mark.parametrize("level", range(10))
 @pytest.mark.parametrize("random_pixels", [False, True])
