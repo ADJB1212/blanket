@@ -1424,9 +1424,13 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         return with_array_bytes(obj, |raw| {
             let pixels = match typestr.as_str() {
                 "<f4" | "=f4" => raw.to_vec(),
-                ">f4" => raw.as_chunks::<4>().0.iter().flat_map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes()).collect(),
-                "<f8" | "=f8" => raw.as_chunks::<8>().0.iter().flat_map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes()).collect(),
-                ">f8" => raw.as_chunks::<8>().0.iter().flat_map(|bytes| (f64::from_be_bytes(*bytes) as f32).to_le_bytes()).collect(),
+                ">f4" => raw.as_chunks::<4>().0.iter().map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes()).collect::<Vec<_>>().into_flattened(),
+                "<f8" | "=f8" => {
+                    raw.as_chunks::<8>().0.iter().map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes()).collect::<Vec<_>>().into_flattened()
+                }
+                ">f8" => {
+                    raw.as_chunks::<8>().0.iter().map(|bytes| (f64::from_be_bytes(*bytes) as f32).to_le_bytes()).collect::<Vec<_>>().into_flattened()
+                }
                 _ => return Err(PyTypeError::new_err("float mode requires float32 or float64 array")),
             };
             Image::from_float_bytes(width, height, pixels)
@@ -1598,20 +1602,39 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
 }
 
 pub fn lab_raw_bytes(source: &[u8]) -> Vec<u8> {
-    source.iter().enumerate().map(|(i, &v)| if i % 3 == 0 { v } else { v ^ 128 }).collect()
+    const MASK: [u8; 48] = {
+        let mut mask = [128; 48];
+        let mut i = 0;
+        while i < 48 {
+            mask[i] = 0;
+            i += 3;
+        }
+        mask
+    };
+    let (blocks, tail) = source.as_chunks::<48>();
+    let mut output = Vec::with_capacity(source.len());
+    output.extend(blocks.iter().map(|block| std::array::from_fn::<u8, 48, _>(|i| block[i] ^ MASK[i])));
+    let mut output = output.into_flattened();
+    output.extend(tail.iter().zip(MASK).map(|(&v, mask)| v ^ mask));
+    output
 }
 
 fn convert_lab(source: &[u8], to_lab: bool) -> PyResult<Vec<u8>> {
-    use lcms2::{CIExyY, Intent, PixelFormat, Profile, ThreadContext, Transform};
+    use lcms2::{CIExyY, Flags, Intent, PixelFormat, Profile, ThreadContext, Transform};
     let context = ThreadContext::new();
     let srgb = Profile::new_srgb_context(&context);
     let lab = Profile::new_lab4_context(&context, CIExyY::d50()).map_err(|error| PyValueError::new_err(error.to_string()))?;
     let (input, input_format, output, output_format) =
         if to_lab { (&srgb, PixelFormat::RGB_8, &lab, PixelFormat::Lab_8) } else { (&lab, PixelFormat::Lab_8, &srgb, PixelFormat::RGB_8) };
-    let transform = Transform::new_context(&context, input, input_format, output, output_format, Intent::Perceptual)
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
+    // NO_CACHE makes the transform Sync; the cache only memoizes repeated pixels.
+    let transform: Transform<u8, u8, ThreadContext, _> =
+        Transform::new_flags_context(&context, input, input_format, output, output_format, Intent::Perceptual, Flags::NO_CACHE)
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
     let mut pixels = vec![0_u8; source.len()];
-    transform.transform_pixels(source, &mut pixels);
+    let chunk = crate::parallel::CHUNK_PIXELS * 3;
+    crate::parallel::chunks_mut_above(&mut pixels, chunk, 64 * 1024, |i, dst| {
+        transform.transform_pixels(&source[i * chunk..i * chunk + dst.len()], dst);
+    });
     Ok(pixels)
 }
 
@@ -1717,28 +1740,37 @@ fn hsv_to_rgb(h: u8, s: u8, v: u8) -> [u8; 3] {
 }
 
 fn convert_pixels_generic(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
-    let mut result = Vec::with_capacity(source.len() / from.channels() * to.channels());
-    for pixel in source.chunks_exact(from.channels()) {
-        let (r, g, b, a) = match from {
-            PixelMode::One | PixelMode::L => (pixel[0], pixel[0], pixel[0], 255),
-            PixelMode::La => (pixel[0], pixel[0], pixel[0], pixel[1]),
-            PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], 255),
-            PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
-            PixelMode::Pa => (pixel[0], pixel[0], pixel[0], pixel[1]),
-            _ => unreachable!("integer modes handled before byte conversion"),
-        };
-        let gray = ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8;
-        match to {
-            PixelMode::One => result.push(if gray >= 128 { 255 } else { 0 }),
-            PixelMode::L => result.push(gray),
-            PixelMode::La => result.extend_from_slice(&[gray, a]),
-            PixelMode::Rgb => result.extend_from_slice(&[r, g, b]),
-            PixelMode::Rgba => result.extend_from_slice(&[r, g, b, a]),
-            PixelMode::Pa => result.extend_from_slice(&[gray, a]),
-            _ => unreachable!("integer modes handled before byte conversion"),
+    let (source_channels, target_channels) = (from.channels(), to.channels());
+    let mut result = vec![0; source.len() / source_channels * target_channels];
+    let chunk_pixels = crate::parallel::CHUNK_PIXELS;
+    crate::parallel::chunks_mut(&mut result, chunk_pixels * target_channels, |chunk, dst| {
+        let src = &source[chunk * chunk_pixels * source_channels..];
+        for (pixel, out) in src.chunks_exact(source_channels).zip(dst.chunks_exact_mut(target_channels)) {
+            convert_pixel_generic(pixel, out, from, to);
         }
-    }
+    });
     result
+}
+
+#[inline(always)]
+fn convert_pixel_generic(pixel: &[u8], out: &mut [u8], from: PixelMode, to: PixelMode) {
+    let (r, g, b, a) = match from {
+        PixelMode::One | PixelMode::L => (pixel[0], pixel[0], pixel[0], 255),
+        PixelMode::La => (pixel[0], pixel[0], pixel[0], pixel[1]),
+        PixelMode::Rgb => (pixel[0], pixel[1], pixel[2], 255),
+        PixelMode::Rgba => (pixel[0], pixel[1], pixel[2], pixel[3]),
+        PixelMode::Pa => (pixel[0], pixel[0], pixel[0], pixel[1]),
+        _ => unreachable!("integer modes handled before byte conversion"),
+    };
+    let gray = ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8;
+    match to {
+        PixelMode::One => out[0] = if gray >= 128 { 255 } else { 0 },
+        PixelMode::L => out[0] = gray,
+        PixelMode::La | PixelMode::Pa => out.copy_from_slice(&[gray, a]),
+        PixelMode::Rgb => out.copy_from_slice(&[r, g, b]),
+        PixelMode::Rgba => out.copy_from_slice(&[r, g, b, a]),
+        _ => unreachable!("integer modes handled before byte conversion"),
+    }
 }
 
 /// Resolve palette indices through a complete 256-entry table. Missing
@@ -1856,6 +1888,37 @@ mod tests {
         assert_eq!(lab_raw_bytes(&raw), [0, 128, 127, 255, 0, 255]);
         assert_eq!(lab_raw_bytes(&lab_raw_bytes(&raw)), raw);
         assert_eq!(convert_lab(&[0, 0, 0, 255, 255, 255, 255, 0, 0], true).unwrap(), [0, 128, 128, 255, 128, 128, 138, 209, 198]);
+        for count in [0, 1, 15, 16, 17, 33] {
+            let raw: Vec<u8> = (0..count * 3 + 1).map(|i| (i * 37) as u8).collect();
+            let expected: Vec<u8> = raw[1..].iter().enumerate().map(|(i, &v)| if i % 3 == 0 { v } else { v ^ 128 }).collect();
+            assert_eq!(lab_raw_bytes(&raw[1..]), expected);
+        }
+    }
+
+    #[test]
+    fn parallel_lab_and_generic_conversion_match_serial_pixels() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                let count = crate::parallel::CHUNK_PIXELS * 5 + 7;
+                let rgb: Vec<u8> = (0..count * 3).map(|i| (i * 37 + i / 7) as u8).collect();
+                for to_lab in [true, false] {
+                    let converted = convert_lab(&rgb, to_lab).unwrap();
+                    for (i, pixel) in rgb.as_chunks::<3>().0.iter().enumerate().step_by(4099) {
+                        assert_eq!(convert_lab(pixel, to_lab).unwrap(), converted[i * 3..i * 3 + 3]);
+                    }
+                }
+                for to in [PixelMode::One, PixelMode::La, PixelMode::Pa] {
+                    let converted = convert_pixels_generic(&rgb, PixelMode::Rgb, to);
+                    let channels = to.channels();
+                    assert_eq!(converted.len(), count * channels);
+                    for (pixel, out) in rgb.as_chunks::<3>().0.iter().zip(converted.chunks_exact(channels)) {
+                        let gray = crate::simd::pillow_luma(pixel[0], pixel[1], pixel[2]);
+                        let expected = if to == PixelMode::One { vec![if gray >= 128 { 255 } else { 0 }] } else { vec![gray, 255] };
+                        assert_eq!(out, expected);
+                    }
+                }
+            });
+        }
     }
 
     #[test]

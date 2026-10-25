@@ -233,13 +233,10 @@ pub fn float_to_integer(source: &[u8]) -> Vec<u8> {
     chunks_mut(&mut output, CHUNK_PIXELS << 2, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * 4..][..dst.len()];
         let mut offset = 0;
-        while offset + 16 <= dst.len() {
-            let values =
-                Simd::<f32, 4>::from_array(std::array::from_fn(|i| f32::from_le_bytes(src[offset + i * 4..offset + i * 4 + 4].try_into().unwrap())));
-            for (dst, value) in dst[offset..offset + 16].as_chunks_mut::<4>().0.iter_mut().zip(values.cast::<i32>().to_array()) {
-                *dst = value.to_le_bytes();
-            }
-            offset += 16;
+        while offset + 64 <= dst.len() {
+            let values = Simd::<f32, 16>::from_le_bytes(Simd::from_slice(&src[offset..]));
+            values.cast::<i32>().to_le_bytes().copy_to_slice(&mut dst[offset..offset + 64]);
+            offset += 64;
         }
         for (src, dst) in src[offset..].as_chunks::<4>().0.iter().zip(dst[offset..].as_chunks_mut::<4>().0) {
             *dst = (f32::from_le_bytes(*src) as i32).to_le_bytes();
@@ -389,25 +386,20 @@ pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8>
     let mut output = vec![0; source.len() / source_bytes * target_bytes];
     chunks_mut(&mut output, CHUNK_PIXELS * target_bytes, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * source_bytes..(chunk * CHUNK_PIXELS + dst.len() / target_bytes) * source_bytes];
-        let offset = dst.len() / target_bytes / 8 * 8;
-        for i in (0..offset).step_by(8) {
-            let values = Simd::<i32, 8>::from_array(std::array::from_fn(|lane| {
-                let input = &src[(i + lane) * source_bytes..(i + lane + 1) * source_bytes];
-                match from {
-                    PixelMode::I => i32::from_le_bytes(input.try_into().unwrap()),
-                    PixelMode::I16B => i32::from(u16::from_be_bytes(input.try_into().unwrap())),
-                    _ => i32::from(u16::from_le_bytes(input.try_into().unwrap())),
-                }
-            }));
+        let offset = dst.len() / target_bytes / 16 * 16;
+        for i in (0..offset).step_by(16) {
+            let input = &src[i * source_bytes..];
+            let values = match from {
+                PixelMode::I => Simd::<i32, 16>::from_le_bytes(Simd::from_slice(input)),
+                PixelMode::I16B => load_u16::<true>(input).cast::<i32>(),
+                _ => load_u16::<false>(input).cast::<i32>(),
+            };
             if to == PixelMode::I {
-                for (dst, value) in dst[i * 4..(i + 8) * 4].as_chunks_mut::<4>().0.iter_mut().zip(values.to_array()) {
-                    *dst = value.to_le_bytes();
-                }
+                values.to_le_bytes().copy_to_slice(&mut dst[i * 4..(i + 16) * 4]);
             } else {
                 let values = values.simd_clamp(Simd::splat(0), Simd::splat(65535)).cast::<u16>();
-                for (dst, value) in dst[i * 2..(i + 8) * 2].as_chunks_mut::<2>().0.iter_mut().zip(values.to_array()) {
-                    *dst = if to == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
-                }
+                let bytes = if to == PixelMode::I16B { values.to_be_bytes() } else { values.to_le_bytes() };
+                bytes.copy_to_slice(&mut dst[i * 2..(i + 16) * 2]);
             }
         }
         for (input, output) in
@@ -670,9 +662,7 @@ pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
 /// the existing rounded full-range mapping, including 16-bit identity input.
 pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) -> Vec<u8> {
-    let mut pixels = Vec::with_capacity(source.len() / channels);
-    pixels.extend(source.chunks_exact(channels * 2).flat_map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]));
-    pixels
+    source.chunks_exact(channels * 2).map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]).collect::<Vec<_>>().into_flattened()
 }
 
 pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
@@ -1017,6 +1007,28 @@ mod tests {
         let output = integer_to_l(&source, PixelMode::I);
         for (i, &value) in output.iter().enumerate() {
             assert_eq!(value, values[i % values.len()].clamp(0, 255) as u8);
+        }
+    }
+
+    #[test]
+    fn integer_narrowing_and_byte_order_match_scalar_at_vector_boundaries() {
+        let values = [i32::MIN, -1, 0, 1, 255, 256, 65535, 65536, i32::MAX];
+        let modes = [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B];
+        let encode = |mode: PixelMode, v: i32| match mode {
+            PixelMode::I => v.to_le_bytes().to_vec(),
+            PixelMode::I16B => (v.clamp(0, 65535) as u16).to_be_bytes().to_vec(),
+            _ => (v.clamp(0, 65535) as u16).to_le_bytes().to_vec(),
+        };
+        for count in [0, 1, 15, 16, 17, 31, 32, 33] {
+            for from in modes {
+                for to in modes.into_iter().filter(|&to| to != PixelMode::I && to != from) {
+                    let samples: Vec<i32> = (0..count).map(|i| values[i % values.len()]).collect();
+                    let source: Vec<u8> = std::iter::once(93).chain(samples.iter().flat_map(|&v| encode(from, v))).collect();
+                    let input = |v: i32| if from == PixelMode::I { v } else { v.clamp(0, 65535) };
+                    let expected: Vec<u8> = samples.iter().flat_map(|&v| encode(to, input(v))).collect();
+                    assert_eq!(convert_integer(&source[1..], from, to), expected);
+                }
+            }
         }
     }
 

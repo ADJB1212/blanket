@@ -235,6 +235,7 @@ version = "0.1.0"
 dependencies = [
  "blanket-core",
  "pyo3",
+ "zerocopy",
 ]
 
 [[package]]
@@ -312,6 +313,7 @@ dependencies = [
  "jpegxl-sys",
  "pyo3",
  "rayon",
+ "zerocopy",
 ]
 
 [[package]]

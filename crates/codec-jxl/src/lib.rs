@@ -12,6 +12,8 @@ use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
 use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+#[cfg(target_endian = "little")]
+use zerocopy::FromBytes;
 
 pub const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
 
@@ -358,13 +360,10 @@ pub struct PreparedJxl<'a> {
 
 fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
     #[cfg(target_endian = "little")]
-    if depth == 16 {
-        // SAFETY: every bit pattern is a valid u16; align_to checks alignment
-        // and bounds. The immutable borrow cannot outlive the input buffer.
-        let (prefix, samples, suffix) = unsafe { raw.align_to::<u16>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            return Cow::Borrowed(samples);
-        }
+    if depth == 16
+        && let Ok(samples) = <[u16]>::ref_from_bytes(raw)
+    {
+        return Cow::Borrowed(samples);
     }
     Cow::Owned(blanket_core::simd::normalize_u16(raw, depth))
 }

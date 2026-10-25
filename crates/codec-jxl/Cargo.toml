@@ -15,6 +15,7 @@ blanket-codec-common.workspace = true
 jpegxl-rs = { version = "0.16", default-features = false }
 jpegxl-sys = { version = "0.13", default-features = false }
 rayon.workspace = true
+zerocopy.workspace = true
 
 [features]
 default = []

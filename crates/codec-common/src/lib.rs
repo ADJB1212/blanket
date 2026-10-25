@@ -3,6 +3,7 @@
 use blanket_core::Image;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
+use zerocopy::IntoBytes;
 
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
@@ -66,9 +67,7 @@ pub fn codec_error(error: impl std::fmt::Display) -> PyErr {
 
 /// Borrow native-endian sample bytes without copying the sample buffer.
 pub fn u16_bytes(samples: &[u16]) -> &[u8] {
-    // SAFETY: u16 has no padding, every byte is initialized, and the returned
-    // slice shares the immutable borrow and lifetime of the source samples.
-    unsafe { std::slice::from_raw_parts(samples.as_ptr().cast::<u8>(), std::mem::size_of_val(samples)) }
+    samples.as_bytes()
 }
 
 #[cfg(test)]

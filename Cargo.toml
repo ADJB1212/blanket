@@ -51,6 +51,7 @@ pyo3 = { version = "0.30", features = ["nightly"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"] }
 turbojpeg = { version = "1", default-features = false, features = ["cmake", "require-simd"] }
 rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
+zerocopy = { version = "0.8", default-features = false, features = ["std", "simd-nightly", "float-nightly"]}
 
 [profile.release]
 opt-level = 3
