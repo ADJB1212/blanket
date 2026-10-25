@@ -6,16 +6,87 @@ use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+trait CanvasSample: Copy + Into<u64> {
+    const MAX_SAMPLE: u64;
+    fn read(bytes: &[u8]) -> Self;
+    fn value(value: u64) -> Self;
+    fn pack(canvas: &[[Self; 4]]) -> Vec<u8>;
+    fn over(src: [Self; 4], dst: &mut [Self; 4]);
+    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]);
+}
+
+impl CanvasSample for u8 {
+    const MAX_SAMPLE: u64 = 255;
+    fn read(bytes: &[u8]) -> Self {
+        bytes[0]
+    }
+    fn value(value: u64) -> Self {
+        value as u8
+    }
+    fn pack(canvas: &[[Self; 4]]) -> Vec<u8> {
+        canvas.as_flattened().to_vec()
+    }
+    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
+        canvas.as_flattened_mut().copy_from_slice(source);
+    }
+    fn over(src: [Self; 4], dst: &mut [Self; 4]) {
+        let sa = u32::from(src[3]);
+        let da = u32::from(dst[3]);
+        let alpha = sa * 255 + da * (255 - sa);
+        for c in 0..3 {
+            dst[c] = (u32::from(src[c]) * sa * 255 + u32::from(dst[c]) * da * (255 - sa) + alpha / 2).checked_div(alpha).unwrap_or(0) as u8;
+        }
+        dst[3] = ((alpha + 127) / 255) as u8;
+    }
+}
+
+impl CanvasSample for u16 {
+    const MAX_SAMPLE: u64 = 65535;
+    fn read(bytes: &[u8]) -> Self {
+        u16::from_be_bytes([bytes[0], bytes[1]])
+    }
+    fn value(value: u64) -> Self {
+        value as u16
+    }
+    fn pack(canvas: &[[Self; 4]]) -> Vec<u8> {
+        canvas.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+    }
+    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
+        for (src, dst) in source.as_chunks::<8>().0.iter().zip(canvas) {
+            *dst = std::array::from_fn(|c| u16::from_be_bytes([src[c * 2], src[c * 2 + 1]]));
+        }
+    }
+    fn over(src: [Self; 4], dst: &mut [Self; 4]) {
+        let sa = u64::from(src[3]);
+        let da = u64::from(dst[3]);
+        let alpha = sa * Self::MAX_SAMPLE + da * (Self::MAX_SAMPLE - sa);
+        for c in 0..3 {
+            dst[c] = (u64::from(src[c]) * sa * Self::MAX_SAMPLE + u64::from(dst[c]) * da * (Self::MAX_SAMPLE - sa) + alpha / 2)
+                .checked_div(alpha)
+                .unwrap_or(0) as u16;
+        }
+        dst[3] = ((alpha + Self::MAX_SAMPLE / 2) / Self::MAX_SAMPLE) as u16;
+    }
+}
+
 pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     decoder.set_transformations(png::Transformations::EXPAND);
-    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let reader = decoder.read_info().map_err(|e| e.to_string())?;
     let Some(animation) = reader.info().animation_control else {
         if reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One {
             return super::decode_png(data).map(Sequence::single);
         }
         return super::decode_png_reader(reader, false).map(Sequence::single);
     };
+    if reader.info().bit_depth == png::BitDepth::Sixteen {
+        decode_animation::<u16>(reader, animation)
+    } else {
+        decode_animation::<u8>(reader, animation)
+    }
+}
+
+fn decode_animation<T: CanvasSample>(mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl) -> Result<Sequence, String> {
     let (width, height) = (reader.info().width, reader.info().height);
     let default_image = reader.info().frame_control.is_none();
     let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
@@ -30,7 +101,8 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     let mut canvas = Vec::new();
     let length = width as usize * height as usize;
     canvas.try_reserve_exact(length).map_err(|_| "cannot allocate APNG canvas")?;
-    canvas.resize(length, [0_u16; 4]);
+    let zero = T::value(0);
+    canvas.resize(length, [zero; 4]);
     let mut previous = Vec::new();
     for frame_index in 0..count {
         let output = reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
@@ -48,47 +120,43 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
             }
         }
         let channels = output.color_type.samples();
-        let wide = output.bit_depth == png::BitDepth::Sixteen;
-        let max = if wide { 65535_u64 } else { 255 };
-        let bytes = if wide { 2 } else { 1 };
+        let max = T::MAX_SAMPLE;
+        let bytes = size_of::<T>();
         let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over);
         for row in 0..output.height as usize {
+            if !over && output.color_type == png::ColorType::Rgba {
+                let start = row * output.width as usize * 4 * bytes;
+                let dst = (y as usize + row) * width as usize + x as usize;
+                T::copy_rgba(&buffer[start..start + output.width as usize * 4 * bytes], &mut canvas[dst..dst + output.width as usize]);
+                continue;
+            }
             for col in 0..output.width as usize {
                 let start = (row * output.width as usize + col) * channels * bytes;
-                let sample = |c: usize| -> u16 {
-                    if wide { u16::from_be_bytes([buffer[start + c * 2], buffer[start + c * 2 + 1]]) } else { u16::from(buffer[start + c]) }
-                };
+                let sample = |c: usize| T::read(&buffer[start + c * bytes..]);
                 let src = match output.color_type {
-                    png::ColorType::Grayscale => [sample(0), sample(0), sample(0), max as u16],
+                    png::ColorType::Grayscale => [sample(0), sample(0), sample(0), T::value(max)],
                     png::ColorType::GrayscaleAlpha => [sample(0), sample(0), sample(0), sample(1)],
-                    png::ColorType::Rgb => [sample(0), sample(1), sample(2), max as u16],
+                    png::ColorType::Rgb => [sample(0), sample(1), sample(2), T::value(max)],
                     png::ColorType::Rgba => [sample(0), sample(1), sample(2), sample(3)],
                     png::ColorType::Indexed => return Err("unexpanded APNG palette".into()),
                 };
                 let dst = &mut canvas[(y as usize + row) * width as usize + x as usize + col];
-                if !over || u64::from(src[3]) == max || (dst[3] == 0 && src[3] != 0) {
+                if !over || src[3].into() == max || (dst[3].into() == 0 && src[3].into() != 0) {
                     *dst = src;
-                } else if src[3] == 0 {
-                    if dst[3] == 0 {
-                        *dst = [0; 4];
+                } else if src[3].into() == 0 {
+                    if dst[3].into() == 0 {
+                        *dst = [zero; 4];
                     }
                 } else {
-                    let sa = u64::from(src[3]);
-                    let da = u64::from(dst[3]);
-                    let alpha = sa * max + da * (max - sa);
-                    for c in 0..3 {
-                        dst[c] =
-                            (u64::from(src[c]) * sa * max + u64::from(dst[c]) * da * (max - sa) + alpha / 2).checked_div(alpha).unwrap_or(0) as u16;
-                    }
-                    dst[3] = ((alpha + max / 2) / max) as u16;
+                    T::over(src, dst);
                 }
             }
         }
-        let image = if wide {
-            let pixels = canvas.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
+        let pixels = T::pack(&canvas);
+        let image = if bytes == 2 {
             Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
         } else {
-            Image::from_pixels(width, height, PixelMode::Rgba, canvas.iter().flatten().map(|&v| v as u8).collect(), Some("PNG".into()))
+            Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("PNG".into()))
         }
         .map_err(|e| e.to_string())?;
         sequence.frames.push(Frame {
@@ -98,7 +166,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
             blend: control.map_or(0, |c| c.blend_op as u8),
         });
         if default_image && frame_index == 0 {
-            canvas.fill([0; 4]);
+            canvas.fill([zero; 4]);
         } else if restore_previous {
             if previous.len() == canvas.len() {
                 std::mem::swap(&mut canvas, &mut previous);
@@ -111,7 +179,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
         } else if control.is_some_and(|c| c.dispose_op == png::DisposeOp::Background) {
             for row in y..y + output.height {
                 let start = row as usize * width as usize + x as usize;
-                canvas[start..start + output.width as usize].fill([0; 4]);
+                canvas[start..start + output.width as usize].fill([zero; 4]);
             }
         }
     }
@@ -170,6 +238,42 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animated_sources_expand_at_each_sample_width() {
+        for wide in [false, true] {
+            let samples = if wide { [0x1234_u16, 0x4567, 0x89ab, 0xcdef] } else { [17, 81, 157, 239] };
+            let max = if wide { 65535 } else { 255 };
+            for color in [png::ColorType::Grayscale, png::ColorType::GrayscaleAlpha, png::ColorType::Rgb, png::ColorType::Rgba] {
+                let source: Vec<u16> = samples[..color.samples()].repeat(17 * 3);
+                let pixels: Vec<u8> =
+                    if wide { source.iter().flat_map(|v| v.to_be_bytes()).collect() } else { source.iter().map(|&v| v as u8).collect() };
+                let mut encoded = Vec::new();
+                let mut encoder = png::Encoder::new(&mut encoded, 17, 3);
+                encoder.set_color(color);
+                encoder.set_depth(if wide { png::BitDepth::Sixteen } else { png::BitDepth::Eight });
+                encoder.set_animated(2, 0).unwrap();
+                let mut writer = encoder.write_header().unwrap();
+                writer.write_image_data(&pixels).unwrap();
+                writer.set_dispose_op(png::DisposeOp::Previous).unwrap();
+                writer.write_image_data(&pixels).unwrap();
+                writer.finish().unwrap();
+                let expected = match color {
+                    png::ColorType::Grayscale => [samples[0], samples[0], samples[0], max],
+                    png::ColorType::GrayscaleAlpha => [samples[0], samples[0], samples[0], samples[1]],
+                    png::ColorType::Rgb => [samples[0], samples[1], samples[2], max],
+                    _ => samples,
+                }
+                .repeat(17 * 3);
+                let expected: Vec<u8> =
+                    if wide { expected.iter().flat_map(|v| v.to_le_bytes()).collect() } else { expected.iter().map(|&v| v as u8).collect() };
+                let sequence = decode_sequence(&encoded).unwrap();
+                for frame in sequence.frames {
+                    assert_eq!(frame.image.raw_data().unwrap(), expected);
+                }
+            }
+        }
+    }
 
     #[test]
     fn partial_disposal_restores_changing_regions_at_both_depths() {

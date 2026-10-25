@@ -50,6 +50,9 @@ fn palette_nearest(color: Color, palette: &PaletteSearch<'_>, cache: &mut [u16])
 }
 
 fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
+    if C == 1 {
+        return grayscale_histogram(source);
+    }
     let pixels = source.as_chunks::<C>().0;
     let count = |pixels: &[[u8; C]]| {
         let mut counts = FxHashMap::<u32, u64>::default();
@@ -89,6 +92,48 @@ fn color_histogram<const C: usize>(source: &[u8]) -> Histogram {
     // Tree ordering is part of the existing palette selection/tie behavior.
     histogram.sort_unstable_by_key(|(color, _)| *color);
     histogram
+}
+
+fn grayscale_histogram(source: &[u8]) -> Histogram {
+    let count = |source: &[u8]| {
+        let mut counts = Box::new([0_u64; 256]);
+        let mut run: Option<(u8, u64)> = None;
+        for &value in source {
+            match &mut run {
+                Some((current, n)) if *current == value => *n += 1,
+                _ => {
+                    if let Some((current, n)) = run {
+                        counts[usize::from(current)] += n;
+                    }
+                    run = Some((value, 1));
+                }
+            }
+        }
+        if let Some((current, n)) = run {
+            counts[usize::from(current)] += n;
+        }
+        counts
+    };
+    let counts = if should_parallel(source.len(), CHUNK_PIXELS * 4, MIN_PARALLEL_BYTES) {
+        source.par_chunks(CHUNK_PIXELS * 4).map(count).reduce(
+            || Box::new([0; 256]),
+            |mut a, b| {
+                for (a, &b) in a.iter_mut().zip(b.iter()) {
+                    *a += b;
+                }
+                a
+            },
+        )
+    } else {
+        count(source)
+    };
+    counts
+        .iter()
+        .copied()
+        .enumerate()
+        .filter(|&(_, count)| count != 0)
+        .map(|(value, count)| ([value as u8, value as u8, value as u8, 255], count))
+        .collect()
 }
 
 /// Map every pixel through the exact color table built from the histogram.
@@ -311,6 +356,17 @@ struct Cube {
     buckets: Vec<Bucket>,
 }
 
+#[inline(always)]
+fn cube_offset(bits: [u32; 4], coordinates: [u32; 4]) -> usize {
+    let [_, g, b, a] = bits;
+    ((coordinates[0] << (g + b + a)) | (coordinates[1] << (b + a)) | (coordinates[2] << a) | coordinates[3]) as usize
+}
+
+#[inline(always)]
+fn cube_index(bits: [u32; 4], color: Color) -> usize {
+    cube_offset(bits, std::array::from_fn(|c| u32::from(color[c]) >> (8 - bits[c])))
+}
+
 impl Cube {
     fn new(bits: [u32; 4]) -> Self {
         Self { bits, buckets: vec![Bucket::default(); 1 << bits.iter().sum::<u32>()] }
@@ -318,13 +374,12 @@ impl Cube {
 
     #[inline(always)]
     fn offset(&self, coordinates: [u32; 4]) -> usize {
-        let [_, g, b, a] = self.bits;
-        ((coordinates[0] << (g + b + a)) | (coordinates[1] << (b + a)) | (coordinates[2] << a) | coordinates[3]) as usize
+        cube_offset(self.bits, coordinates)
     }
 
     #[inline(always)]
     fn index(&self, color: Color) -> usize {
-        self.offset(std::array::from_fn(|c| u32::from(color[c]) >> (8 - self.bits[c])))
+        cube_index(self.bits, color)
     }
 
     fn used(&self) -> usize {
@@ -370,6 +425,30 @@ impl Cube {
             self.buckets[index].subtract(bucket);
         }
     }
+}
+
+fn palette_lookup(fine_bits: [u32; 4], coarse_bits: [u32; 4], palette: &[Bucket], coarse_count: usize) -> Vec<u8> {
+    let mut coarse = vec![0_u8; 1 << coarse_bits.iter().sum::<u32>()];
+    for (i, bucket) in palette[..coarse_count].iter().enumerate().rev() {
+        coarse[cube_index(coarse_bits, bucket.average())] = i as u8;
+    }
+    let shifts: [u32; 4] = std::array::from_fn(|c| fine_bits[c] - coarse_bits[c]);
+    let mut table = Vec::with_capacity(1 << fine_bits.iter().sum::<u32>());
+    for r in 0..1 << fine_bits[0] {
+        for g in 0..1 << fine_bits[1] {
+            for b in 0..1 << fine_bits[2] {
+                for a in 0..1 << fine_bits[3] {
+                    let position = [r, g, b, a];
+                    let index = cube_offset(coarse_bits, std::array::from_fn(|c| position[c] >> shifts[c]));
+                    table.push(coarse[index]);
+                }
+            }
+        }
+    }
+    for (i, bucket) in palette.iter().enumerate().skip(coarse_count).rev() {
+        table[cube_index(fine_bits, bucket.average())] = i as u8;
+    }
+    table
 }
 
 fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Color>, Vec<u8>) {
@@ -420,23 +499,15 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
 
     // Coarse entries claim whole coarse cells; fine entries then override
     // their own cell. Lower indices win ties, as in Pillow's reverse loop.
-    let mut coarse_lookup = Cube::new(coarse_bits);
-    for (i, bucket) in palette[..coarse_count].iter().enumerate().rev() {
-        let index = coarse_lookup.index(bucket.average());
-        coarse_lookup.buckets[index].count = i as u64;
-    }
-    let mut lookup = coarse_lookup.resized(fine_bits);
-    for (i, bucket) in palette.iter().enumerate().skip(coarse_count).rev() {
-        let index = lookup.index(bucket.average());
-        lookup.buckets[index].count = i as u64;
-    }
-    let table: Vec<u8> = lookup.buckets.iter().map(|bucket| bucket.count as u8).collect();
+    let table = palette_lookup(fine_bits, coarse_bits, &palette, coarse_count);
+    drop(fine);
+    drop(coarse);
 
     let mut indices = vec![0; pixels.len()];
     chunks_mut(&mut indices, CHUNK_PIXELS, |chunk, out| {
         let start = chunk * CHUNK_PIXELS;
         for (index, pixel) in out.iter_mut().zip(&pixels[start..]) {
-            *index = table[lookup.index(color_of(pixel))];
+            *index = table[cube_index(fine_bits, color_of(pixel))];
         }
     });
     (palette.iter().map(Bucket::average).collect(), indices)
@@ -497,6 +568,19 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
         refine(&histogram, &mut entries, kmeans);
     }
     let search = PaletteSearch::new(&entries);
+    if C == 1 {
+        let mut lookup = [0_u8; 256];
+        for (color, _) in &histogram {
+            lookup[usize::from(color[0])] = search.nearest(*color) as u8;
+        }
+        let mut indices = vec![0; source.len()];
+        chunks_mut(&mut indices, CHUNK_PIXELS, |chunk, out| {
+            for (index, &value) in out.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
+                *index = lookup[usize::from(value)];
+            }
+        });
+        return (entries, indices);
+    }
     let entry = |(color, _): &(Color, u64)| (key(*color), search.nearest(*color) as u8);
     let lookup: FxHashMap<u32, u8> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
         histogram.par_iter().map(entry).collect()
@@ -575,6 +659,53 @@ mod tests {
         let histogram = color_histogram::<1>(&source);
         assert_eq!(histogram, vec![([1, 1, 1, 255], 2), ([2, 2, 2, 255], 1), ([5, 5, 5, 255], 4)]);
         assert!(color_histogram::<3>(&[]).is_empty());
+        assert!(color_histogram::<1>(&[]).is_empty());
+    }
+
+    #[test]
+    fn grayscale_tables_preserve_exact_rgb_quantization() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                for length in [1, 257, CHUNK_PIXELS * 8 + 17] {
+                    let source: Vec<u8> = (0..length).map(|i| (i * 73 + i / 4096) as u8).collect();
+                    let rgb: Vec<u8> = source.iter().flat_map(|&value| [value; 3]).collect();
+                    assert_eq!(color_histogram::<1>(&source), color_histogram::<3>(&rgb));
+                    for colors in [1, 16, 256] {
+                        for method in [0, 1] {
+                            for kmeans in [0, 1] {
+                                assert_eq!(exact::<1>(&source, colors, method, kmeans), exact::<3>(&rgb, colors, method, kmeans));
+                            }
+                        }
+                    }
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn byte_lookup_preserves_cube_expansion_and_palette_ties() {
+        let palette: Vec<Bucket> = (0..256)
+            .map(|i| {
+                let color = [i as u8, (i * 31) as u8, (i * 137) as u8, (i * 17) as u8];
+                if i % 11 == 0 { Bucket::default() } else { Bucket { count: 1, sums: color.map(u64::from) } }
+            })
+            .collect();
+        for (fine_bits, coarse_bits) in [([4, 4, 4, 0], [2, 2, 2, 0]), ([3, 4, 3, 3], [2, 2, 2, 2])] {
+            for coarse_count in [0, 1, 16, 64, 256] {
+                let mut coarse = Cube::new(coarse_bits);
+                for (i, bucket) in palette[..coarse_count].iter().enumerate().rev() {
+                    let index = coarse.index(bucket.average());
+                    coarse.buckets[index].count = i as u64;
+                }
+                let mut expected = coarse.resized(fine_bits);
+                for (i, bucket) in palette.iter().enumerate().skip(coarse_count).rev() {
+                    let index = expected.index(bucket.average());
+                    expected.buckets[index].count = i as u64;
+                }
+                let expected: Vec<u8> = expected.buckets.iter().map(|bucket| bucket.count as u8).collect();
+                assert_eq!(palette_lookup(fine_bits, coarse_bits, &palette, coarse_count), expected);
+            }
+        }
     }
 
     #[test]

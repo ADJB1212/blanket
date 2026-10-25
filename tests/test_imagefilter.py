@@ -97,6 +97,14 @@ def test_large_rank_column_histograms(mode: str) -> None:
     compare(mode, (17, 137), ImageFilter.MedianFilter(257), PillowFilter.MedianFilter(257))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGBA"])
+def test_largest_rank_window_keeps_replicated_counts_in_range(mode: str) -> None:
+    color = 157 if mode == "L" else (17, 81, 157, 239)
+    image = Image.new(mode, (17, 137), color)
+    result = image.filter(ImageFilter.MedianFilter(23169))
+    assert result.tobytes() == image.tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ["MinFilter", "MaxFilter"])
 def test_extrema_filters_cross_bands_and_large_windows(mode: str, name: str, subtests: pytest.Subtests) -> None:

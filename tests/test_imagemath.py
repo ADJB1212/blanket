@@ -162,6 +162,31 @@ def test_float_scalar_overflow(value: float) -> None:
         ImageMath.unsafe_eval("a + n", a=image, n=value)
 
 
+@pytest.mark.parametrize("mode", ["1", "L", "I"])
+@pytest.mark.parametrize("value", [0, -1, -2147483648, 2147483647, 2**63, 10**100])
+@pytest.mark.parametrize("expression", ["a + n", "n - a", "a * n", "a / n", "n % a", "a & n", "a << n", "a > n"])
+def test_integer_scalars_without_constant_images(mode: str, value: int, expression: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    image, reference = pair(mode, (17, 1))
+    wrapped = ((value + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+    expected = PILMath.unsafe_eval(expression, a=reference, n=PILImage.new("I", reference.size, wrapped))
+
+    def constant_image(*args: object, **kwargs: object) -> None:
+        raise AssertionError("integer scalar math must not allocate a constant image")
+
+    monkeypatch.setattr(Image, "new", constant_image)
+    same(ImageMath.unsafe_eval(expression, a=image, n=value), expected)
+
+
+def test_integer_scalar_subclasses_use_their_index_value() -> None:
+    class Scalar(int):
+        def __add__(self, other: object) -> int:
+            raise AssertionError("scalar coercion must not invoke arithmetic overrides")
+
+    image = Image.new("I", (3, 1), 17)
+    assert ImageMath.unsafe_eval("a + n", a=image, n=Scalar(3)).getdata() == [20, 20, 20]
+    assert ImageMath.unsafe_eval("n - a", a=image, n=Scalar(3)).getdata() == [-14, -14, -14]
+
+
 @pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259), (1025, 1025)])
 @pytest.mark.parametrize("mode", ["I", "F"])
 def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
@@ -200,7 +225,7 @@ def test_integer_boundaries_and_zero_divisors() -> None:
     assert list(ImageMath.eval("a % 0", a=image).getdata()) == [0, 0, 0]
 
 
-@pytest.mark.parametrize("mode", ["I", "F"])
+@pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
 @pytest.mark.parametrize("sizes", [((257, 259), (257, 259)), ((263, 259), (257, 263)), ((257, 263), (263, 259)), ((17003, 5), (17001, 4))])
 @pytest.mark.parametrize("expression", ["-a", "a + b", "a / b", "a < b", "min(a, b)", "equal(a, b)"])
 def test_chunk_boundaries_and_operand_strides(mode: str, sizes: tuple[tuple[int, int], tuple[int, int]], expression: str) -> None:

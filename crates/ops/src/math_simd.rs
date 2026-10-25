@@ -1,10 +1,61 @@
 //! Four-lane ImageMath kernels with scalar fallbacks for unsupported operations.
 
 use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
-use std::simd::num::{SimdFloat, SimdInt};
+use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, f32x4, i32x4};
 
 use super::Operation;
+
+#[derive(Clone, Copy)]
+pub(super) enum IntegerInput<'a> {
+    Bytes(&'a [u8]),
+    Wide(&'a [[u8; 4]]),
+    Scalar(i32),
+}
+
+impl<'a> IntegerInput<'a> {
+    pub(super) fn new(data: &'a [u8], byte: bool) -> Self {
+        if byte { Self::Bytes(data) } else { Self::Wide(data.as_chunks::<4>().0) }
+    }
+
+    pub(super) fn slice(self, start: usize, len: usize) -> Self {
+        match self {
+            Self::Bytes(data) => Self::Bytes(&data[start..start + len]),
+            Self::Wide(data) => Self::Wide(&data[start..start + len]),
+            Self::Scalar(_) => self,
+        }
+    }
+
+    pub(super) fn sample(self, index: usize) -> i32 {
+        match self {
+            Self::Bytes(data) => i32::from(data[index]),
+            Self::Wide(data) => i32::from_le_bytes(data[index]),
+            Self::Scalar(value) => value,
+        }
+    }
+
+    fn vector(self, index: usize) -> i32x4 {
+        match self {
+            Self::Bytes(data) => std::simd::Simd::<u8, 4>::from_slice(&data[index..index + 4]).cast(),
+            Self::Wide(data) => i32x4::from_array(std::array::from_fn(|lane| i32::from_le_bytes(data[index + lane]))),
+            Self::Scalar(value) => i32x4::splat(value),
+        }
+    }
+}
+
+#[inline(always)]
+pub(super) fn apply_integer(output: &mut [[u8; 4]], a: IntegerInput<'_>, b: IntegerInput<'_>, op: Operation, reverse: bool) {
+    let end =
+        if matches!(op, Operation::Div | Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift) { 0 } else { output.len() / 4 * 4 };
+    for i in (0..end).step_by(4) {
+        let (a, b) = if reverse { (b.vector(i), a.vector(i)) } else { (a.vector(i), b.vector(i)) };
+        output[i..i + 4].copy_from_slice(&integer(op, a, b).to_array().map(i32::to_le_bytes));
+    }
+    for (i, out) in output.iter_mut().enumerate().skip(end) {
+        let (a, b) = if reverse { (b.sample(i), a.sample(i)) } else { (a.sample(i), b.sample(i)) };
+        *out = op.integer(a, b).to_le_bytes();
+    }
+}
 
 #[inline(always)]
 pub(super) fn apply_float(
@@ -117,6 +168,34 @@ fn float_operation(op: Operation, a: f32x4, b: f32x4) -> f32x4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integer_inputs_preserve_unaligned_samples_tails_and_guards() {
+        let values = [i32::MIN, i32::MAX, -1, 0, 1, 31, 32, -33, 123456789];
+        for len in [0, 1, 3, 4, 5, 15, 16, 17, 67] {
+            for offset in 0..16 {
+                let bytes: Vec<u8> = (0..offset + len).map(|i| (i * 79) as u8).collect();
+                let wide: Vec<u8> = std::iter::repeat_n(0, offset).chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes())).collect();
+                let inputs = [IntegerInput::Bytes(&bytes[offset..]), IntegerInput::new(&wide[offset..], false), IntegerInput::Scalar(-1)];
+                for a in inputs {
+                    for b in inputs {
+                        for reverse in [false, true] {
+                            for op in Operation::ALL {
+                                let mut output = vec![[0xa5; 4]; len + 2];
+                                apply_integer(&mut output[1..len + 1], a, b, op, reverse);
+                                assert_eq!(output[0], [0xa5; 4]);
+                                assert_eq!(output[len + 1], [0xa5; 4]);
+                                for (i, actual) in output[1..len + 1].iter().enumerate() {
+                                    let (a, b) = if reverse { (b.sample(i), a.sample(i)) } else { (a.sample(i), b.sample(i)) };
+                                    assert_eq!(*actual, op.integer(a, b).to_le_bytes());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn scalar_broadcast_preserves_operand_order_tails_and_guards() {

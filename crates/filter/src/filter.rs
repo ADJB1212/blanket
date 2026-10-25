@@ -247,9 +247,9 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
     }
     py.detach(|| {
         // Column histograms remove the window-height factor for large ranks.
-        // Bound all concurrently live column buffers to 32 MiB.
-        let column_bytes = width * 272 * size_of::<u64>();
-        let bands = (32 * 1024 * 1024 / column_bytes).min(height);
+        // Bound all concurrently live column buffers to 8 MiB.
+        let column_bytes = width * 272 * size_of::<u16>();
+        let bands = (8 * 1024 * 1024 / column_bytes).min(height);
         if let Some(rank) = rank
             && radius >= 128
             && height >= 128
@@ -337,14 +337,16 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
 
 // Locate the occupied group before scanning its sixteen values. Updating the
 // group counts with the sliding window bounds rank selection to 32 bins.
-fn select_rank(histogram: &[u64], coarse: &[u64], mut rank: u64) -> u8 {
+fn select_rank<T: Copy + Into<u64>>(histogram: &[T], coarse: &[T], mut rank: u64) -> u8 {
     for (group, &frequency) in coarse.iter().enumerate() {
+        let frequency = frequency.into();
         if rank >= frequency {
             rank -= frequency;
             continue;
         }
         let start = group << 4;
         for (offset, &frequency) in histogram[start..start + 16].iter().enumerate() {
+            let frequency = frequency.into();
             if rank < frequency {
                 return (start + offset) as u8;
             }
@@ -358,15 +360,15 @@ fn rank_columns(source: &[u8], output: &mut [u8], width: usize, channels: usize,
     let stride = width * channels;
     let height = source.len() / stride;
     let rows = output.len() / stride;
-    let mut columns = vec![[0_u64; 272]; width];
+    let mut columns = vec![[0_u16; 272]; width];
     for channel in 0..channels {
         if channel > 0 {
             columns.fill([0; 272]);
         }
         for y in first.saturating_sub(radius)..=(first + radius).min(height - 1) {
             let weight = 1
-                + if y == 0 { radius.saturating_sub(first) as u64 } else { 0 }
-                + if y == height - 1 { (first + radius).saturating_sub(height - 1) as u64 } else { 0 };
+                + if y == 0 { radius.saturating_sub(first) as u16 } else { 0 }
+                + if y == height - 1 { (first + radius).saturating_sub(height - 1) as u16 } else { 0 };
             for (x, column) in columns.iter_mut().enumerate() {
                 let value = usize::from(source[y * stride + x * channels + channel]);
                 column[value] += weight;
@@ -375,11 +377,11 @@ fn rank_columns(source: &[u8], output: &mut [u8], width: usize, channels: usize,
         }
         for (i, row) in output.chunks_exact_mut(stride).enumerate() {
             let y = first + i;
-            let mut histogram = [0_u64; 272];
+            let mut histogram = [0_u32; 272];
             for (x, column) in columns.iter().enumerate().take(radius.min(width - 1) + 1) {
-                let weight = 1 + if x == 0 { radius as u64 } else { 0 } + if x == width - 1 { radius.saturating_sub(width - 1) as u64 } else { 0 };
+                let weight = 1 + if x == 0 { radius as u32 } else { 0 } + if x == width - 1 { radius.saturating_sub(width - 1) as u32 } else { 0 };
                 for (total, &count) in histogram.iter_mut().zip(column) {
-                    *total += count * weight;
+                    *total += u32::from(count) * weight;
                 }
             }
             for x in 0..width {
@@ -388,7 +390,7 @@ fn rank_columns(source: &[u8], output: &mut [u8], width: usize, channels: usize,
                     let leaving = &columns[x.saturating_sub(radius)];
                     let entering = &columns[(x + radius + 1).min(width - 1)];
                     for ((total, &leaving), &entering) in histogram.iter_mut().zip(leaving).zip(entering) {
-                        *total = *total - leaving + entering;
+                        *total = *total - u32::from(leaving) + u32::from(entering);
                     }
                 }
             }

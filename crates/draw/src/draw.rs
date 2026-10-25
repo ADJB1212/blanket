@@ -327,11 +327,30 @@ fn draw_path(
         }
         let limit = if filled { STROKE_EPSILON } else { radius * radius + STROKE_EPSILON };
         let margin = limit.sqrt();
-        let mut active = Vec::new();
+        let first_row = (top.floor() as i64).max(0);
+        let last_row = (bottom.ceil() as i64).min(i64::from(image.height) - 1);
+        let minimum_edges = if filled { 64 } else { 1024 };
+        let sorted = edges.len() >= minimum_edges && last_row.saturating_sub(first_row) >= 32;
+        if sorted {
+            edges.sort_unstable_by(|a, b| a.top.total_cmp(&b.top));
+        }
+        let mut next_edge = 0;
+        let mut active: Vec<&PathEdge> = Vec::new();
         let mut crossings: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::new());
-        for y in (top.floor() as i64).max(0)..=(bottom.ceil() as i64).min(i64::from(image.height) - 1) {
-            active.clear();
-            active.extend(edges.iter().filter(|edge| y as f64 + 0.5 >= edge.top - margin && y as f64 - 0.5 <= edge.bottom + margin));
+        for y in first_row..=last_row {
+            if sorted {
+                active.retain(|edge| y as f64 - 0.5 <= edge.bottom + margin);
+                while next_edge < edges.len() && y as f64 + 0.5 >= edges[next_edge].top - margin {
+                    let edge = &edges[next_edge];
+                    if y as f64 - 0.5 <= edge.bottom + margin {
+                        active.push(edge);
+                    }
+                    next_edge += 1;
+                }
+            } else {
+                active.clear();
+                active.extend(edges.iter().filter(|edge| y as f64 + 0.5 >= edge.top - margin && y as f64 - 0.5 <= edge.bottom + margin));
+            }
             if active.is_empty() {
                 continue;
             }

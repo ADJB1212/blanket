@@ -12,6 +12,24 @@ from blanket._blanket import draw_path
 
 @pytest.mark.parametrize("style", ["fill", "outline", "line"])
 @pytest.mark.parametrize("antialias", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_sorted_path_edges_match_independently_clipped_bands(style: str, antialias: bool, reverse: bool) -> None:
+    count = 129 if style == "fill" else 1025
+    points = [((i * 71 % 31) - 4.375, (i * 53 % 173) - 24.125) for i in range(count)]
+    if reverse:
+        points.reverse()
+    actual = Image.new("L", (23, 137), 23)
+    draw_path(actual._native, points, 193, 3.0, style, False, antialias)
+    expected = bytearray()
+    for top in range(0, actual.height, 16):
+        band = Image.new("L", (actual.width, min(16, actual.height - top)), 23)
+        draw_path(band._native, [(x, y - top) for x, y in points], 193, 3.0, style, False, antialias)
+        expected.extend(band.tobytes())
+    assert actual.tobytes() == expected
+
+
+@pytest.mark.parametrize("style", ["fill", "outline", "line"])
+@pytest.mark.parametrize("antialias", [False, True])
 @pytest.mark.parametrize("width", [3, 7])
 @pytest.mark.parametrize(
     "points",

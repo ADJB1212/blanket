@@ -289,16 +289,27 @@ fn apply_pixels(
     });
 }
 
-fn widen_u8_to_i32(source: &[u8], stride: usize, width: usize, height: usize) -> Vec<u8> {
-    let mut out = vec![0u8; width * height * 4];
-    for y in 0..height {
-        let src_row = &source[y * stride..y * stride + width];
-        let dst_row = &mut out[y * width * 4..(y + 1) * width * 4];
-        for (dst, &src) in dst_row.as_chunks_mut::<4>().0.iter_mut().zip(src_row) {
-            *dst = (src as i32).to_le_bytes();
+fn integer_pixels<const OP: usize>(
+    output: &mut [u8], [a, b]: [simd::IntegerInput<'_>; 2], [width, left_width, right_width]: [usize; 3], reverse: bool,
+) {
+    chunks_mut(output, CHUNK_PIXELS << 2, |start, chunk| {
+        let mut output = chunk.as_chunks_mut::<4>().0;
+        let mut index = start * CHUNK_PIXELS;
+        while !output.is_empty() {
+            let contiguous = left_width == width && (matches!(b, simd::IntegerInput::Scalar(_)) || right_width == width);
+            let (ai, bi, len) = if contiguous {
+                (index, index, output.len())
+            } else {
+                let x = index % width;
+                let y = index / width;
+                (y * left_width + x, y * right_width + x, output.len().min(width - x))
+            };
+            let (span, rest) = output.split_at_mut(len);
+            simd::apply_integer(span, a.slice(ai, len), b.slice(bi, len), Operation::ALL[OP], reverse);
+            output = rest;
+            index += len;
         }
-    }
-    out
+    });
 }
 
 fn float_pixels(
@@ -348,12 +359,15 @@ fn float_pixels_impl<const OP: usize>(
 }
 
 #[pyfunction]
-#[pyo3(signature = (operation, left, right=None, integer_output=false, *, scalar=None, reverse=false))]
+#[pyo3(signature = (operation, left, right=None, integer_output=false, *, scalar=None, reverse=false, integer_scalar=None))]
+#[allow(clippy::too_many_arguments)]
 fn math_apply(
     py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool, scalar: Option<f64>, reverse: bool,
+    integer_scalar: Option<i32>,
 ) -> PyResult<Image> {
     let op = Operation::parse(operation)?;
-    if op.unary() != (right.is_none() && scalar.is_none()) || (right.is_some() && scalar.is_some()) {
+    let has_scalar = scalar.is_some() || integer_scalar.is_some();
+    if op.unary() != (right.is_none() && !has_scalar) || (right.is_some() && has_scalar) || (scalar.is_some() && integer_scalar.is_some()) {
         return Err(PyValueError::new_err("wrong number of image math operands"));
     }
     if scalar.is_some() && left.mode != PixelMode::F {
@@ -368,6 +382,9 @@ fn math_apply(
     let left_byte = matches!(left.mode, PixelMode::One | PixelMode::L);
     let right_byte = right.is_some_and(|r| matches!(r.mode, PixelMode::One | PixelMode::L));
     let integer_group = |mode: PixelMode| matches!(mode, PixelMode::One | PixelMode::L | PixelMode::I);
+    if integer_scalar.is_some() && !integer_group(left.mode) {
+        return Err(PyValueError::new_err("integer scalar image math requires 1, L, or I mode"));
+    }
     if left_byte || right_byte {
         if !integer_group(left.mode) || right.is_some_and(|r| !integer_group(r.mode)) {
             return Err(PyValueError::new_err("image math requires matching I or F operands"));
@@ -397,30 +414,20 @@ fn math_apply(
     output.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     output.resize(len, 0);
     py.detach(|| {
-        let a_widened;
-        let b_widened;
-        let (a, left_width) = if left_byte {
-            a_widened = widen_u8_to_i32(a_raw, left.width as usize, width, height);
-            (a_widened.as_slice(), width)
-        } else {
-            (a_raw, left.width as usize)
-        };
-        let (b, right_width) = match (b_raw, right) {
-            (Some(b_raw), Some(r)) if matches!(r.mode, PixelMode::One | PixelMode::L) => {
-                b_widened = widen_u8_to_i32(b_raw, r.width as usize, width, height);
-                (Some(b_widened.as_slice()), width)
-            }
-            (Some(b_raw), Some(r)) => (Some(b_raw), r.width as usize),
-            _ => (None, 0),
-        };
+        let dimensions = [width, left.width as usize, right.map_or(0, |r| r.width as usize)];
+        let a = simd::IntegerInput::new(a_raw, left_byte);
+        let b = b_raw.map_or_else(|| simd::IntegerInput::Scalar(integer_scalar.unwrap_or(0)), |data| simd::IntegerInput::new(data, right_byte));
         macro_rules! dispatch {
             ($($variant:ident),+ $(,)?) => {
                 match op {
                     $(Operation::$variant => {
-                        apply_pixels(&mut output, a, b, [width, left_width,
-                            right_width], |a, b| {
+                        if !left_byte && !right_byte && integer_scalar.is_none() {
+                            apply_pixels(&mut output, a_raw, b_raw, dimensions, |a, b| {
                                 Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
                             }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
+                        } else {
+                            integer_pixels::<{Operation::$variant as usize}>(&mut output, [a, b], dimensions, reverse);
+                        }
                     }),+
                 }
             }

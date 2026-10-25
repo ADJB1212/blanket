@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"builtins", "collections.abc"}
+__lazy_modules__ = {"operator", "builtins", "collections.abc"}
 
 import builtins
 from functools import lru_cache
+from operator import index
 from types import CodeType
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,10 @@ class _Operand:
         if isinstance(operand, _Operand) and operand.im.mode == "F" and isinstance(value, (int, float)):
             operand.im.load()
             return _Operand(Image.Image(math_apply(operation, operand.im._native, integer_output=integer_output, scalar=float(value), reverse=reverse)))
+        if isinstance(operand, _Operand) and operand.im.mode in _INTEGER_MODES and isinstance(value, int):
+            operand.im.load()
+            value = ((index(value) + 0x80000000) & 0xFFFFFFFF) - 0x80000000
+            return _Operand(Image.Image(math_apply(operation, operand.im._native, integer_output=integer_output, integer_scalar=value, reverse=reverse)))
         first = self._coerce(left)
         second = None if right is None else self._coerce(right)
         if second is not None and first.mode != second.mode and not {first.mode, second.mode} <= _INTEGER_MODES:
