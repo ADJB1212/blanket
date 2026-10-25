@@ -9,8 +9,8 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
-blanket-codec-common = { path = "../codec-common" }
+blanket-core.workspace = true
+blanket-codec-common.workspace = true
 image = { version = "0.25", default-features = false }
 
 [lib]

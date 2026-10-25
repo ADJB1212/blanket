@@ -9,7 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
+blanket-core.workspace = true
 pyo3.workspace = true
 rustc-hash.workspace = true
 ab_glyph = { version = "0.2", default-features = false, features = ["std"]}

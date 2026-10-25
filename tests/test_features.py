@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from collections.abc import Callable
 from io import BytesIO, StringIO
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import features as pillow_features
 
 from blanket import Image, __version__, features
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @pytest.mark.parametrize(

@@ -7,15 +7,18 @@ in-memory Aileron font fixture; timed operations all run through Blanket.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from io import BytesIO
 from statistics import median
 from timeit import repeat
+from typing import TYPE_CHECKING
 
 from PIL import ImageFont as PILFont
 
 from blanket import ImageFont
 from blanket._blanket import _font_stroke
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def main() -> None:

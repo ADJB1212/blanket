@@ -37,6 +37,15 @@ rust-version = "1.98"
 edition = "2024"
 
 [workspace.dependencies]
+blanket-codec-common = { path = "crates/codec-common" }
+blanket-codec-extended = { path = "crates/codec-extended" }
+blanket-codec-image = { path = "crates/codec-image" }
+blanket-codec-jpeg = { path = "crates/codec-jpeg" }
+blanket-codec-jpeg2000 = { path = "crates/codec-jpeg2000" }
+blanket-codec-png = { path = "crates/codec-png" }
+blanket-codecs = { path = "crates/codecs" }
+blanket-core = { path = "crates/core" }
+blanket-ops = { path = "crates/ops" }
 rayon = { version = "1", default-features = false }
 pyo3 = { version = "0.30", features = ["nightly"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"] }
@@ -142,3 +151,4 @@ tuple_array_conversions = "deny"
 unnecessary_self_imports = "deny"
 unnecessary_wraps = "deny"
 unused_async = "deny"
+declare_interior_mutable_const = "deny"

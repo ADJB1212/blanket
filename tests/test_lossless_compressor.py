@@ -5,13 +5,16 @@ import os
 import random
 import subprocess
 import sys
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.parametrize("effort", [1, 7])

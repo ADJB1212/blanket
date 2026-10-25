@@ -12,13 +12,16 @@ import json
 import math
 import platform
 import struct
-from collections.abc import Iterator
 from pathlib import Path
 from statistics import median
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 TEST_IMAGES_DIR = Path(__file__).resolve().parent.parent / "test_images"
 

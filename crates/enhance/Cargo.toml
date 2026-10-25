@@ -9,7 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
+blanket-core.workspace = true
 pyo3.workspace = true
 rayon.workspace = true
 

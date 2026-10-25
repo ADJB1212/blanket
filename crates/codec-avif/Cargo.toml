@@ -9,10 +9,10 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
+blanket-core.workspace = true
 pyo3.workspace = true
-blanket-codec-common = { path = "../codec-common" }
-blanket-codec-image = { path = "../codec-image" }
+blanket-codec-common.workspace = true
+blanket-codec-image.workspace = true
 image = { version = "0.25", default-features = false, features = ["avif", "avif-native", "nasm", "rayon"] }
 
 [lib]

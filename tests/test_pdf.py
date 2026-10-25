@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import PdfParser
 
 from blanket import Image, UnidentifiedImageError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4), ("CMYK", 4)])

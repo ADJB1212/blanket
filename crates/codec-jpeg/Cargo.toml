@@ -9,9 +9,9 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
+blanket-core.workspace = true
 pyo3.workspace = true
-blanket-codec-common = { path = "../codec-common" }
+blanket-codec-common.workspace = true
 turbojpeg.workspace = true
 rayon.workspace = true
 

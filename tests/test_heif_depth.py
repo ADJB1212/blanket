@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pillow_heif
@@ -10,6 +10,9 @@ import pytest
 from PIL import Image as PILImage
 
 from blanket import Image, UnidentifiedImageError
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])

@@ -7,10 +7,11 @@ __lazy_modules__ = {"builtins", "collections.abc"}
 import builtins
 from functools import lru_cache
 from types import CodeType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Any
 
 from . import Image
 from ._blanket import math_apply
@@ -161,7 +162,7 @@ def _context(operands: dict[str, Any]) -> dict[str, Any]:
     return {name: _Operand(value) if isinstance(value, Image.Image) else value for name, value in context.items()}
 
 
-def _unwrap(value: Any) -> Any:
+def _unwrap(value: object) -> object:
     return value.im if isinstance(value, _Operand) else value
 
 
@@ -170,7 +171,7 @@ def _compile_expression(expression: str) -> CodeType:
     return compile(expression, "<ImageMath>", "eval")
 
 
-def lambda_eval(expression: Callable[[dict[str, Any]], Any], **operands: Any) -> Any:
+def lambda_eval(expression: Callable[[dict[str, Any]], object], **operands: object) -> object:
     """Evaluate a callable receiving a dictionary of images, values, and helpers.
 
     Helpers are int, float, convert, min, max, equal, and notequal. Image
@@ -180,7 +181,7 @@ def lambda_eval(expression: Callable[[dict[str, Any]], Any], **operands: Any) ->
     return _unwrap(expression(_context(operands)))
 
 
-def unsafe_eval(expression: str, **operands: Any) -> Any:
+def unsafe_eval(expression: str, **operands: object) -> object:
     """Evaluate a trusted Python expression using native image arithmetic.
 
     This calls Python eval and is not a sandbox for untrusted expressions
@@ -204,6 +205,6 @@ def unsafe_eval(expression: str, **operands: Any) -> Any:
     return _unwrap(builtins.eval(code, {"__builtins__": {"abs": abs}}, context))
 
 
-def eval(expression: str, **operands: Any) -> Any:
+def eval(expression: str, **operands: object) -> object:
     """Compatibility alias for unsafe_eval; evaluate only trusted expressions."""
     return unsafe_eval(expression, **operands)

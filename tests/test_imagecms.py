@@ -2,12 +2,15 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage, ImageCms as PillowCms
 
 from blanket import Image, ImageCms
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.parametrize("space", ["sRGB", "Adobe RGB", "Display P3", "LAB", "XYZ"])

@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def patterned(mode: str, size: tuple[int, int] = (13, 7)) -> Image.Image:

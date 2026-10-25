@@ -3,12 +3,15 @@ from __future__ import annotations
 import random
 from array import array
 from io import StringIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage, ImagePalette as PillowPalette
 
 from blanket import Image, ImagePalette
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:

@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import os
 import sys
-from collections.abc import Callable
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from pathlib import Path
 
 
 @pytest.mark.parametrize(

@@ -3,9 +3,8 @@ from __future__ import annotations
 import inspect
 import subprocess
 import sys
-from collections.abc import Callable
 from io import BytesIO
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
@@ -13,6 +12,9 @@ from PIL import Image as PILImage, ImageOps as PILOps
 from PIL.PngImagePlugin import PngInfo
 
 from blanket import Image, ImageOps
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:

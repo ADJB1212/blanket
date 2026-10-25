@@ -75,14 +75,14 @@ target-version = "py312"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-extend-select = ["I", "E", "B", "F", "Q", "S", "C4", "UP", "ARG", "TID", "RUF", "RET", "PIE", "TCH", "SIM", "ISC", "FLY", "PERF", "FURB", "D417"]
-ignore = ["F401", "N999", "TRY004", "B023", "BLE001", "E501", "C901", "E402", "SIM108"]
+extend-select = ["B", "E", "F", "I", "Q", "S", "C4", "FA", "TC", "UP", "ANN", "ARG", "FLY", "ICN", "ISC", "PIE", "RET", "RUF", "SIM", "TCH", "TID", "D417", "FURB", "PERF"]
+ignore = ["B023", "C901", "E402", "E501", "F401", "N999", "BLE001", "SIM108", "TRY004"]
 future-annotations = true
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["TCH", "ARG", "S"]
-"scripts/**/*.py" = ["TCH", "ARG", "S"]
-"python/blanket/Image.py" = ["ARG002", "S606", "S603"]
+"tests/**/*.py" = ["S", "ANN", "ARG"]
+"scripts/**/*.py" = ["S", "ANN", "ARG"]
+"python/blanket/Image.py" = ["S603", "S606", "ARG002"]
 "python/blanket/ImageDraw.py" = ["ARG"]
 "python/blanket/ImageMath.py" = ["S307"]
 "python/blanket/ImagePalette.py" = ["S311"]

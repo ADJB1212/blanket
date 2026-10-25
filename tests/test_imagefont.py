@@ -4,13 +4,16 @@ import struct
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from math import ceil, floor
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PILImage, ImageFont as PILFont
 from PIL.FontFile import FontFile
 
 from blanket import Image, ImageDraw, ImageFont
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _u16(*values: int) -> bytes:

@@ -11,10 +11,11 @@ __lazy_modules__ = {"collections.abc", "functools", "operator"}
 from abc import ABC, abstractmethod
 from functools import reduce
 from operator import add
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from typing import Any
 
 from ._blanket import _Image, filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
 
@@ -616,7 +617,7 @@ class Color3DLUT(MultibandFilter):
 
     name = "Color 3D LUT"
 
-    def __init__(self, size: int | tuple[int, int, int], table: Sequence[float] | Sequence[Sequence[float]] | Any, channels: int = 3, target_mode: str | None = None, **kwargs: bool) -> None:
+    def __init__(self, size: int | tuple[int, int, int], table: object, channels: int = 3, target_mode: str | None = None, **kwargs: bool) -> None:
         """Configure Color3DLUT.
 
         Args:
@@ -670,7 +671,7 @@ class Color3DLUT(MultibandFilter):
         self.table = table
 
     @staticmethod
-    def _check_size(size: Any) -> tuple[int, int, int]:
+    def _check_size(size: int | tuple[int, int, int]) -> tuple[int, int, int]:
         try:
             x, y, z = size
         except ValueError as error:

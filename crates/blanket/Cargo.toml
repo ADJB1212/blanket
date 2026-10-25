@@ -14,13 +14,13 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
-blanket-codec-extended = { path = "../codec-extended" }
-blanket-codec-jpeg2000 = { path = "../codec-jpeg2000" }
+blanket-codec-extended.workspace = true
+blanket-codec-jpeg2000.workspace = true
 pyo3.workspace = true
-blanket-core = { path = "../core" }
-blanket-codecs = { path = "../codecs" }
+blanket-core.workspace = true
+blanket-codecs.workspace = true
 blanket-compressor = { path = "../compressor" }
-blanket-ops = { path = "../ops" }
+blanket-ops.workspace = true
 blanket-composite = { path = "../composite" }
 blanket-enhance = { path = "../enhance" }
 blanket-filter = { path = "../filter" }

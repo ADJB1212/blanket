@@ -9,9 +9,9 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
-blanket-codecs = { path = "../codecs" }
-blanket-ops = { path = "../ops" }
+blanket-core.workspace = true
+blanket-codecs.workspace = true
+blanket-ops.workspace = true
 pyo3.workspace = true
 png.workspace = true
 rayon.workspace = true

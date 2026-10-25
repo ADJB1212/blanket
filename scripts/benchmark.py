@@ -19,8 +19,7 @@ from pathlib import Path
 from statistics import geometric_mean, median
 from tempfile import TemporaryDirectory
 from time import perf_counter
-from types import ModuleType
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -61,6 +60,9 @@ from blanket import (
     PngImagePlugin as BlanketPng,
     features as BlanketFeatures,
 )
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pillow_heif.register_heif_opener()
 

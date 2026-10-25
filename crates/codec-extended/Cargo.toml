@@ -7,9 +7,9 @@ license.workspace = true
 publish = false
 
 [dependencies]
-blanket-core = { path = "../core" }
-blanket-codec-common = { path = "../codec-common" }
-blanket-codec-image = { path = "../codec-image" }
+blanket-core.workspace = true
+blanket-codec-common.workspace = true
+blanket-codec-image.workspace = true
 pyo3.workspace = true
 rustc-hash.workspace = true
 image = { version = "0.25", default-features = false, features = ["pnm", "tga", "dds", "qoi"] }

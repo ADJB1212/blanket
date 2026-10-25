@@ -3,13 +3,16 @@ from __future__ import annotations
 import io
 import math
 import random
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def encode(image: Image.Image, format: str, **options: object) -> bytes:

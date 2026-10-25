@@ -3,13 +3,16 @@ from __future__ import annotations
 import struct
 import zlib
 from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
 from blanket.Compressor import LosslessImageCompressor
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def animation(format: str = "PNG", **options: object) -> Image.Image:
