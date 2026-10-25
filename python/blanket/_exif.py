@@ -14,6 +14,7 @@ from .PngImagePlugin import PngInfo, iTXt
 
 # Limit expansion of compressed PNG text while reading metadata.
 _MAX_TEXT_BYTES = 1024 * 1024
+_MAX_PNG_METADATA_BYTES = 64 * _MAX_TEXT_BYTES
 # Classic TIFF identifies its header and IFD0 orientation with these values.
 _TIFF_MAGIC = 42
 _ORIENTATION_TAG = 0x112
@@ -145,19 +146,26 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
             info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
     elif format == "PNG":
         pos = 8
+        remaining = _MAX_PNG_METADATA_BYTES
         while pos + 12 <= len(data):
             length = int.from_bytes(data[pos : pos + 4], "big")
             kind = data[pos + 4 : pos + 8]
             if pos + 12 + length > len(data):
+                break
+            if kind == b"IEND":
                 break
             if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP"):
                 pos += length + 12
                 continue
             payload = data[pos + 8 : pos + 8 + length]
             if kind == b"eXIf":
-                info["exif"] = b"Exif\0\0" + payload
+                if length + 6 <= remaining:
+                    info["exif"] = b"Exif\0\0" + payload
+                    remaining -= length + 6
             else:
-                _png_metadata(info, kind, payload)
+                remaining -= _png_metadata(info, kind, payload, remaining)
+            if remaining == 0:
+                break
             pos += length + 12
     elif format == "JXL" and data.startswith(b"\0\0\0\x0cJXL "):
         pos = 0
@@ -229,44 +237,59 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
     return info
 
 
-def _decompress(raw: bytes) -> bytes:
+def _decompress(raw: bytes, maximum: int = _MAX_TEXT_BYTES) -> bytes:
     """Decompress a complete PNG metadata stream within the text size limit."""
     decoder = zlib.decompressobj()
-    value = decoder.decompress(raw, _MAX_TEXT_BYTES + 1)
-    if len(value) > _MAX_TEXT_BYTES or not decoder.eof:
+    maximum = min(maximum, _MAX_TEXT_BYTES)
+    value = decoder.decompress(raw, maximum + 1)
+    if len(value) > maximum or not decoder.eof:
         raise ValueError("compressed PNG metadata exceeds limit or is truncated")
     return value
 
 
-def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes) -> None:
+def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maximum: int = _MAX_PNG_METADATA_BYTES) -> int:
     """Extract a PNG text or ICC chunk into info, ignoring malformed metadata."""
     try:
         key, raw = payload.split(b"\0", 1)
-        if not 1 <= len(key) <= 79:
-            return
+        if not 1 <= len(key) <= 79 or len(key) + 1 > maximum:
+            return 0
+        overhead = len(key) + 1
+        maximum -= overhead
         keyword = key.decode("latin-1")
         if kind == b"iCCP":
             if raw[:1] == b"\0":
-                info["icc_profile"] = _decompress(raw[1:])
-            return
+                value = _decompress(raw[1:], maximum)
+                info["icc_profile"] = value
+                return overhead + len(value)
+            return 0
         if kind == b"zTXt":
             if raw[:1] != b"\0":
-                return
-            raw = _decompress(raw[1:])
+                return 0
+            raw = _decompress(raw[1:], maximum)
         if kind == b"iTXt":
             compressed, method = raw[:2]
             lang, tkey, raw = raw[2:].split(b"\0", 2)
             if compressed not in (0, 1) or method != 0:
-                return
+                return 0
+            fields = len(lang) + len(tkey) + 4
+            if fields > maximum:
+                return 0
+            overhead += fields
+            maximum -= fields
             if compressed:
-                raw = _decompress(raw)
+                raw = _decompress(raw, maximum)
+            if len(raw) > maximum:
+                return 0
             info[keyword] = iTXt(raw.decode("utf-8"), lang.decode("ascii"), tkey.decode("utf-8"))
             if keyword == "XML:com.adobe.xmp":
                 info["xmp"] = raw
         else:
+            if len(raw) > maximum:
+                return 0
             info[keyword] = raw.decode("latin-1")
+        return overhead + len(raw)
     except (ValueError, zlib.error):
-        pass
+        return 0
 
 
 def save_metadata(image: object, format: str, options: dict[str, object]) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:

@@ -1,12 +1,68 @@
 from __future__ import annotations
 
 import struct
+import zlib
 from io import BytesIO
 
 import pytest
 
 from blanket import Image, ImageOps
 from blanket._exif import _png_metadata, read_metadata, transpose_metadata
+
+
+def png_chunk(kind: bytes, payload: bytes) -> bytes:
+    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
+
+
+@pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])
+def test_png_metadata_ignores_chunks_after_iend(kind: bytes) -> None:
+    output = BytesIO()
+    Image.new("L", (1, 1)).save(output, "PNG")
+    payload = {
+        b"tEXt": b"key\0value",
+        b"zTXt": b"key\0\0" + zlib.compress(b"value"),
+        b"iTXt": b"key\0\1\0\0\0" + zlib.compress(b"value"),
+        b"iCCP": b"key\0\0" + zlib.compress(b"value"),
+        b"eXIf": b"II*\0\x08\0\0\0" + bytes(6),
+    }[kind]
+    data = output.getvalue() + png_chunk(kind, payload)
+    assert read_metadata(data, "PNG") == {}
+    assert Image.open(BytesIO(data)).info == {}
+
+
+@pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])
+@pytest.mark.parametrize("repeated", [False, True])
+def test_png_metadata_has_a_cumulative_budget(monkeypatch, kind: bytes, repeated: bool) -> None:
+    monkeypatch.setattr("blanket._exif._MAX_PNG_METADATA_BYTES", 100)
+    output = BytesIO()
+    Image.new("L", (1, 1)).save(output, "PNG")
+    chunks = []
+    for i in range(10):
+        key = b"key" if repeated else f"key{i}".encode()
+        value = bytes([65 + i]) * 40
+        payload = {
+            b"tEXt": key + b"\0" + value,
+            b"zTXt": key + b"\0\0" + zlib.compress(value),
+            b"iTXt": key + b"\0\1\0\0\0" + zlib.compress(value),
+            b"iCCP": key + b"\0\0" + zlib.compress(value),
+            b"eXIf": value,
+        }[kind]
+        chunks.append(png_chunk(kind, payload))
+    data = output.getvalue()
+    data = data[:33] + b"".join(chunks) + data[33:]
+    info = read_metadata(data, "PNG")
+    assert info
+    assert sum(len(value) for value in info.values()) <= 100
+    assert all(b"C" not in value if isinstance(value, bytes) else "C" not in value for value in info.values())
+
+
+@pytest.mark.parametrize("kind", [b"zTXt", b"iTXt", b"iCCP"])
+def test_png_metadata_retains_per_chunk_expansion_limit(kind: bytes) -> None:
+    raw = zlib.compress(b"x" * (1024 * 1024 + 1))
+    prefix = b"key\0\1\0\0\0" if kind == b"iTXt" else b"key\0\0"
+    info = {}
+    assert _png_metadata(info, kind, prefix + raw) == 0
+    assert info == {}
 
 
 @pytest.mark.parametrize(

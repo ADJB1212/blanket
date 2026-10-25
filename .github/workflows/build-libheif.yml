@@ -46,7 +46,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: libheif-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ inputs.aom-version }}-${{ inputs.x265-version }}-${{ inputs.libde265-version }}-${{ inputs.dav1d-version }}
+          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}-${{ inputs.aom-version }}-${{ inputs.x265-version }}-${{ inputs.libde265-version }}-${{ inputs.dav1d-version }}
       - name: Configure macOS toolchain
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
         run: |
@@ -77,28 +77,28 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: aom-${{ runner.os }}-${{ runner.arch }}-${{ inputs.aom-version }}
+          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ inputs.aom-version }}
           fail-on-cache-miss: true
       - name: Restore x265
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: x265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.x265-version }}
+          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.x265-version }}
           fail-on-cache-miss: true
       - name: Restore libde265
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: libde265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.libde265-version }}
+          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ inputs.libde265-version }}
           fail-on-cache-miss: true
       - name: Restore dav1d
         if: steps.cache.outputs.cache-hit != 'true'
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dav1d-version }}
+          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ inputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Set codec paths
         if: steps.cache.outputs.cache-hit != 'true'

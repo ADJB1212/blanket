@@ -14,6 +14,8 @@ pyo3.workspace = true
 blanket-codec-common.workspace = true
 blanket-codec-image.workspace = true
 image = { version = "0.25", default-features = false, features = ["avif", "avif-native", "nasm", "rayon"] }
+mp4parse = { version = "0.17", default-features = false }
+bitreader = { version = "0.3", default-features = false, features = ["std"] }
 
 [lib]
 doctest = false

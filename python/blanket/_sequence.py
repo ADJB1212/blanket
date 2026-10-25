@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 
 from ._blanket import _encode_sequence, _write_metadata
 from ._exif import save_metadata
+from ._io import write_all
 from .Image import Image, _bounded_int, _save_options
 
 
@@ -110,7 +111,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     if any(metadata):
         encoded = _write_metadata(encoded, format, *metadata)
     if hasattr(fp, "write"):
-        fp.write(encoded)
+        write_all(fp, encoded)
     else:
         with open(fp, "wb") as output:
             output.write(encoded)

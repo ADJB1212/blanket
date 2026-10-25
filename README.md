@@ -4,7 +4,7 @@
 
 [![CI](https://github.com/ADJB1212/blanket/actions/workflows/CI.yml/badge.svg)](https://github.com/ADJB1212/blanket/actions/workflows/CI.yml)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Source license: MIT](https://img.shields.io/badge/source_license-MIT-green)](LICENSE)
 
 Blanket is a Rust-backed image library with a familiar, Pillow-shaped Python
 API. Open, transform, and save images using native pixel kernels, with no
@@ -365,5 +365,7 @@ report a problem, [open an issue](https://github.com/ADJB1212/blanket/issues).
 
 ## License
 
-Blanket is licensed under the [MIT License](LICENSE). See
-[third-party licenses](THIRD_PARTY_LICENSES.md) for native dependency notices.
+Blanket's original source is licensed under the [MIT License](LICENSE).
+Official binary wheels include GPL components and are distributed under
+GPL-3.0-or-later with their third-party notices and corresponding source.
+See [distribution licenses](THIRD_PARTY_LICENSES.md) for details.

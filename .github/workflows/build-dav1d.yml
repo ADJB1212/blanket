@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
       - name: Configure macOS toolchain
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
         run: |

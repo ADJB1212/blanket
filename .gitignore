@@ -1,4 +1,5 @@
 /target
+/licenses/third-party/
 *.bak
 
 # Byte-compiled / optimized / DLL files

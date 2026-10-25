@@ -211,49 +211,49 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
           fail-on-cache-miss: true
       - name: Restore x265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
           fail-on-cache-miss: true
       - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
           fail-on-cache-miss: true
       - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          key: sources-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
       - name: Restore libjxl
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
+          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
       - name: Restore LCMS2
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/lcms2
-          key: lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
           fail-on-cache-miss: true
       - name: Configure LCMS2
         run: |
@@ -275,6 +275,10 @@ jobs:
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
           pkg-config --modversion libjxl
+      - name: Prepare licenses and corresponding source
+        env:
+          BLANKET_RELEASE_TAG: ${{ inputs.tag }}
+        run: bash scripts/prepare_release_sources.sh
       - name: Build wheels
         id: build-wheel
         env:
@@ -312,7 +316,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-linux-${{ matrix.target }}
-          path: dist/*.whl
+          path: |
+            dist/*.whl
+            dist/*-sources-*.tar.bz2
 
   macos:
     needs: [prepare, libheif, libwebp, libjxl, lcms2]
@@ -370,49 +376,49 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/aom
-          key: aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
+          key: sources-v1-aom-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.aom-version }}
           fail-on-cache-miss: true
       - name: Restore x265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/x265
-          key: x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
+          key: sources-v1-x265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.x265-version }}
           fail-on-cache-miss: true
       - name: Restore libde265
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libde265
-          key: libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
+          key: sources-v1-libde265-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libde265-version }}
           fail-on-cache-miss: true
       - name: Restore dav1d
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/dav1d
-          key: dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: sources-v1-dav1d-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libheif
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libheif
-          key: libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
+          key: sources-v1-libheif-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}
           fail-on-cache-miss: true
       - name: Restore libwebp
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libwebp
-          key: libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
+          key: sources-v1-libwebp-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libwebp-version }}
           fail-on-cache-miss: true
       - name: Restore libjxl
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
+          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.libjxl-version }}
           fail-on-cache-miss: true
       - name: Restore LCMS2
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/lcms2
-          key: lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
+          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ needs.prepare.outputs.lcms2-version }}
           fail-on-cache-miss: true
       - name: Configure LCMS2
         run: |
@@ -434,6 +440,10 @@ jobs:
           pkg-config --modversion libheif
           pkg-config --modversion libwebp
           pkg-config --modversion libjxl
+      - name: Prepare licenses and corresponding source
+        env:
+          BLANKET_RELEASE_TAG: ${{ inputs.tag }}
+        run: bash scripts/prepare_release_sources.sh
       - name: Build wheels
         id: build-wheel
         run: |
@@ -458,7 +468,9 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: wheels-macos-aarch64
-          path: dist/*.whl
+          path: |
+            dist/*.whl
+            dist/*-sources-*.tar.bz2
 
   sdist:
     needs: prepare

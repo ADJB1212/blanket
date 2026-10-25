@@ -111,10 +111,56 @@ def test_stream_save_receives_bytes() -> None:
     class Output:
         data: bytes
 
-        def write(self, data: bytes) -> None:
+        def write(self, data: bytes) -> int:
             assert isinstance(data, bytes)
             self.data = data
+            return len(data)
 
     output = Output()
     Image.new("RGB", (1, 1)).save(output, "PNG")
     assert Image.open(BytesIO(output.data)).size == (1, 1)
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+@pytest.mark.parametrize("metadata", [False, True])
+def test_stream_save_retries_partial_writes(sequence: bool, metadata: bool) -> None:
+    class PartialOutput(BytesIO):
+        def write(self, data: bytes) -> int:
+            assert isinstance(data, bytes)
+            return super().write(data[:7])
+
+    source = Image.new("RGB", (17, 13), (23, 57, 91))
+    options = {"save_all": True, "append_images": [source.copy()]} if sequence else {}
+    if metadata:
+        options["xmp"] = b"test packet"
+    expected, actual = BytesIO(), PartialOutput()
+    source.save(expected, "PNG", **options)
+    source.save(actual, "PNG", **options)
+    assert actual.getvalue() == expected.getvalue()
+    assert Image.open(BytesIO(actual.getvalue())).n_frames == (2 if sequence else 1)
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+@pytest.mark.parametrize("count", [None, 0, -1, 1.5, True, 100000])
+def test_stream_save_rejects_no_progress_and_invalid_counts(sequence: bool, count: object) -> None:
+    class Output:
+        def write(self, data: bytes) -> object:
+            return count
+
+    with pytest.raises(OSError):
+        Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence)
+
+
+@pytest.mark.parametrize("sequence", [False, True])
+def test_stream_save_propagates_write_errors(sequence: bool) -> None:
+    class Output:
+        calls = 0
+
+        def write(self, data: bytes) -> int:
+            self.calls += 1
+            if self.calls == 1:
+                return 7
+            raise BlockingIOError("output would block")
+
+    with pytest.raises(BlockingIOError, match="output would block"):
+        Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence)

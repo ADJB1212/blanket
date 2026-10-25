@@ -117,7 +117,7 @@ jobs:
       - name: Run Clippy
         run: cargo clippy --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES
       - name: Run Rust Tests
-        run: cargo test --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES -q
+        run: cargo test --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES
       - name: Force rebuild crates that use homebrew dylibs
         if: runner.os == 'macOS'
         run: |

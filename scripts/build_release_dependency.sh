@@ -65,7 +65,18 @@ lcms2)
 	;;
 esac
 
-git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
+if [[ -n "${BLANKET_SOURCE_ROOT:-}" ]]; then
+	cp -R "$BLANKET_SOURCE_ROOT/$name" "$source_dir"
+else
+	git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
+	printf '%s\n' "$repository" "$version" >"$source_dir/SOURCE.txt"
+	git -C "$source_dir" rev-parse HEAD >>"$source_dir/SOURCE.txt"
+	git -C "$source_dir" submodule status --recursive >>"$source_dir/SOURCE.txt"
+fi
+mkdir -p "$prefix/share/blanket-sources"
+cp "$source_dir/SOURCE.txt" "$prefix/share/blanket-sources/$name.txt"
+tar --exclude=.git -czf "$prefix/share/blanket-sources/$name.tar.gz" -C "$RUNNER_TEMP" "$name"
+bash scripts/collect_release_licenses.sh "$source_dir" "$prefix/share/blanket-licenses/$name"
 
 case "$name" in
 lcms2)
@@ -143,7 +154,7 @@ libwebp)
 		-DWEBP_BUILD_DWEBP=OFF -DWEBP_BUILD_GIF2WEBP=OFF \
 		-DWEBP_BUILD_IMG2WEBP=OFF -DWEBP_BUILD_VWEBP=OFF \
 		-DWEBP_BUILD_WEBPINFO=OFF -DWEBP_BUILD_WEBPMUX=OFF \
-		-DWEBP_BUILD_LIBWEBPMUX=OFF -DWEBP_BUILD_EXTRAS=OFF \
+		-DWEBP_BUILD_LIBWEBPMUX=ON -DWEBP_BUILD_EXTRAS=OFF \
 		-DWEBP_BUILD_WEBP_JS=OFF -DWEBP_BUILD_FUZZTEST=OFF \
 		-DWEBP_ENABLE_SIMD=ON -DWEBP_USE_THREAD=ON
 	;;
@@ -171,3 +182,6 @@ esac
 
 cmake --build "$source_dir/build" --parallel
 cmake --install "$source_dir/build"
+if [[ "$name" == libwebp ]]; then
+	PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --exists libwebp libwebpmux libwebpdemux
+fi

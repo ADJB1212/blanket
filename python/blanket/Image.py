@@ -59,6 +59,7 @@ from ._blanket import (
 from ._color import color_pixel
 from ._exif import ORIENTATION_RE, read_metadata, save_metadata
 from ._ifd import Exif
+from ._io import write_all
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
@@ -1778,6 +1779,8 @@ class Image:
         Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
         ``compressor`` to optimize this save.
         Omitting it (or passing None) uses the normal encoder settings.
+        Binary streams must return written byte counts from ``write()``;
+        streams that make no progress raise ``BlockingIOError``.
 
         Args:
             fp: Filename, path-like object, or binary stream.
@@ -1848,7 +1851,7 @@ class Image:
         if has_metadata:
             encoded = _write_metadata(encoded, output_format, *metadata)
         if hasattr(fp, "write"):
-            cast("BinaryIO", fp).write(encoded)
+            write_all(cast("BinaryIO", fp), encoded)
         elif has_metadata:
             with Path(os.fsdecode(os.fspath(fp))).open("wb") as stream:
                 stream.write(encoded)

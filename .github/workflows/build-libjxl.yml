@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/deps/libjxl
-          key: libjxl-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
+          key: sources-v1-libjxl-${{ runner.os }}-${{ runner.arch }}-${{ inputs.version }}
       - name: Configure macOS toolchain
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
         run: |
