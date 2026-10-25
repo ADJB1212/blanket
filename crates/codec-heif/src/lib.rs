@@ -107,9 +107,7 @@ impl PreparedHeif {
         let color_space = if grayscale { ColorSpace::Monochrome } else { ColorSpace::Rgb(chroma) };
         let channel = if grayscale { Channel::Y } else { Channel::Interleaved };
         let mut native = libheif_rs::Image::new(image.width, image.height, color_space).map_err(codec_error)?;
-        native
-            .create_plane(channel, image.width, image.height, image.bit_depth)
-            .map_err(codec_error)?;
+        native.create_plane(channel, image.width, image.height, image.bit_depth).map_err(codec_error)?;
         let row = image.width as usize * image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
         let planes = native.planes_mut();
         let plane = if grayscale { planes.y } else { planes.interleaved }.ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
@@ -128,9 +126,7 @@ impl PreparedHeif {
                 target[..row].copy_from_slice(source);
             }
         }
-        let encoder = HEIF_LIBRARY
-            .encoder_for_format(libheif_rs::CompressionFormat::Hevc)
-            .map_err(codec_error)?;
+        let encoder = HEIF_LIBRARY.encoder_for_format(libheif_rs::CompressionFormat::Hevc).map_err(codec_error)?;
         let presets = encoder.name().starts_with("x265 ");
         Ok(Self { native, encoder, presets })
     }
@@ -145,31 +141,20 @@ impl PreparedHeif {
         // Other HEVC plugins keep their defaults rather than receiving an
         // x265-specific parameter.
         if self.presets {
-            self.encoder
-                .set_parameter_value("preset", EncoderParameterValue::String(preset.into()))
-                .map_err(codec_error)?;
+            self.encoder.set_parameter_value("preset", EncoderParameterValue::String(preset.into())).map_err(codec_error)?;
         }
         self.encoder
-            .set_quality(if options.lossless {
-                EncoderQuality::LossLess
-            } else {
-                EncoderQuality::Lossy(options.quality)
-            })
+            .set_quality(if options.lossless { EncoderQuality::LossLess } else { EncoderQuality::Lossy(options.quality) })
             .map_err(codec_error)?;
         let mut context = HeifContext::new().map_err(codec_error)?;
         if !options.icc_profile.is_empty() {
             self.native
-                .set_color_profile_raw(&libheif_rs::ColorProfileRaw::new(
-                    libheif_rs::color_profile_types::PROF,
-                    options.icc_profile.to_vec(),
-                ))
+                .set_color_profile_raw(&libheif_rs::ColorProfileRaw::new(libheif_rs::color_profile_types::PROF, options.icc_profile.to_vec()))
                 .map_err(codec_error)?;
         }
         let handle = context.encode_image(&self.native, &mut self.encoder, None).map_err(codec_error)?;
         if !options.exif.is_empty() {
-            context
-                .add_exif_metadata(&handle, options.exif.strip_prefix(b"Exif\0\0").unwrap_or(options.exif))
-                .map_err(codec_error)?;
+            context.add_exif_metadata(&handle, options.exif.strip_prefix(b"Exif\0\0").unwrap_or(options.exif)).map_err(codec_error)?;
         }
         if !options.xmp.is_empty() {
             context.add_xmp_metadata(&handle, options.xmp).map_err(codec_error)?;
@@ -226,11 +211,7 @@ mod tests {
                 };
                 let mut prepared = PreparedHeif::new(&image).unwrap();
                 for (preset, lossless) in [("fast", false), ("slow", true), ("fast", false)] {
-                    let options = SaveOptions {
-                        quality: 71,
-                        lossless,
-                        ..SaveOptions::default()
-                    };
+                    let options = SaveOptions { quality: 71, lossless, ..SaveOptions::default() };
                     let reused = prepared.encode(options, preset).unwrap();
                     let fresh = PreparedHeif::new(&image).unwrap().encode(options, preset).unwrap();
                     assert_eq!(reused, fresh, "mode={mode:?}, depth={depth}, preset={preset}");

@@ -98,9 +98,7 @@ pub fn best_candidate<T: Sync, E: Send>(
 pub fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
     if work_bytes >= MIN_CANDIDATE_BYTES && jobs > 1 {
         // Candidates are single-threaded, so every pool thread can run one.
-        rayon::current_num_threads()
-            .min(jobs)
-            .min((CANDIDATE_INPUT_BUDGET / work_bytes.max(1)).max(1))
+        rayon::current_num_threads().min(jobs).min((CANDIDATE_INPUT_BUDGET / work_bytes.max(1)).max(1))
     } else {
         1
     }
@@ -119,11 +117,7 @@ impl<E> Default for CandidateResult<E> {
 
 impl<E> CandidateResult<E> {
     fn keep(&mut self, index: usize, candidate: Vec<u8>) {
-        if self
-            .best
-            .as_ref()
-            .is_none_or(|(old, bytes)| (candidate.len(), index) < (bytes.len(), *old))
-        {
+        if self.best.as_ref().is_none_or(|(old, bytes)| (candidate.len(), index) < (bytes.len(), *old)) {
             self.best = Some((index, candidate));
         }
     }
@@ -183,9 +177,8 @@ mod tests {
                 assert_eq!(output, vec![11; 5]);
                 let empty = best_candidate::<_, ()>(&jobs, 256 * 1024, 5, |_, _| Ok(None)).unwrap();
                 assert!(empty.is_none());
-                let error = best_candidate(&jobs, 256 * 1024, 5, |&index, _| {
-                    if index == 7 || index == 19 { Err(index) } else { Ok(Some(vec![0; 4])) }
-                });
+                let error =
+                    best_candidate(&jobs, 256 * 1024, 5, |&index, _| if index == 7 || index == 19 { Err(index) } else { Ok(Some(vec![0; 4])) });
                 assert_eq!(error, Err(7));
             });
         }

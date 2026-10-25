@@ -112,11 +112,7 @@ impl Handles {
         // SAFETY: The buffer outlives all synchronous codec calls. No callback owns it.
         unsafe {
             let handles = Self {
-                codec: if buffer.writing {
-                    opj_create_compress(format)
-                } else {
-                    opj_create_decompress(format)
-                },
+                codec: if buffer.writing { opj_create_compress(format) } else { opj_create_decompress(format) },
                 stream: opj_stream_default_create(i32::from(!buffer.writing)),
                 image: ptr::null_mut(),
             };
@@ -140,17 +136,8 @@ pub fn backend_version() -> String {
 }
 
 pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
-    let format = if data.starts_with(&[0xff, 0x4f]) {
-        CODEC_FORMAT::OPJ_CODEC_J2K
-    } else {
-        CODEC_FORMAT::OPJ_CODEC_JP2
-    };
-    let mut buffer = Buffer {
-        input: data,
-        output: Vec::new(),
-        position: 0,
-        writing: false,
-    };
+    let format = if data.starts_with(&[0xff, 0x4f]) { CODEC_FORMAT::OPJ_CODEC_J2K } else { CODEC_FORMAT::OPJ_CODEC_JP2 };
+    let mut buffer = Buffer { input: data, output: Vec::new(), position: 0, writing: false };
     let mut handles = Handles::new(format, &mut buffer)?;
     // SAFETY: OpenJPEG initializes parameters and owns all image/component allocations.
     // Header dimensions and component layouts are validated before reading sample buffers.
@@ -181,9 +168,7 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
         let components = std::slice::from_raw_parts(header.comps, channels);
         let depth = components[0].prec;
         if !(1..=16).contains(&depth)
-            || components
-                .iter()
-                .any(|c| c.prec != depth || c.sgnd != 0 || c.w != width || c.h != height || c.dx != 1 || c.dy != 1)
+            || components.iter().any(|c| c.prec != depth || c.sgnd != 0 || c.w != width || c.h != height || c.dx != 1 || c.dy != 1)
         {
             return Err("unsupported JPEG 2000 sample precision or subsampling".into());
         }
@@ -208,13 +193,8 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
         };
         let maximum = (1_i32 << depth) - 1;
         if depth <= 8 {
-            let pixels = (0..count)
-                .flat_map(|i| {
-                    planes
-                        .iter()
-                        .map(move |plane| ((plane[i].clamp(0, maximum) * 255 + maximum / 2) / maximum) as u8)
-                })
-                .collect();
+            let pixels =
+                (0..count).flat_map(|i| planes.iter().map(move |plane| ((plane[i].clamp(0, maximum) * 255 + maximum / 2) / maximum) as u8)).collect();
             Image::from_pixels(width, height, mode, pixels, Some("JPEG2000".into())).map_err(|e| e.to_string())
         } else {
             let mut samples = Vec::with_capacity(count * if channels == 2 { 4 } else { channels });
@@ -227,15 +207,8 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
                     samples.extend((0..channels).map(value));
                 }
             }
-            Image::from_samples(
-                width,
-                height,
-                if channels == 2 { PixelMode::Rgba } else { mode },
-                samples,
-                16,
-                Some("JPEG2000".into()),
-            )
-            .map_err(|e| e.to_string())
+            Image::from_samples(width, height, if channels == 2 { PixelMode::Rgba } else { mode }, samples, 16, Some("JPEG2000".into()))
+                .map_err(|e| e.to_string())
         }
     }
 }
@@ -243,47 +216,23 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
 pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
     if image.width == 0
         || image.height == 0
-        || !matches!(
-            image.mode,
-            PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba
-        )
+        || !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
     {
         return Err(PyOSError::new_err("JPEG 2000 requires a nonempty grayscale or RGB image"));
     }
-    let mut buffer = Buffer {
-        input: &[],
-        output: Vec::new(),
-        position: 0,
-        writing: true,
-    };
+    let mut buffer = Buffer { input: &[], output: Vec::new(), position: 0, writing: true };
     let mut handles = Handles::new(CODEC_FORMAT::OPJ_CODEC_JP2, &mut buffer).map_err(codec_error)?;
     let channels = image.mode.channels();
     let depth = u32::from(image.bit_depth);
     // SAFETY: OpenJPEG initializes all C structures, owns planar allocations, and
     // receives validated image dimensions. Handles frees resources on every exit.
     unsafe {
-        let mut components = vec![
-            opj_image_cmptparm_t {
-                dx: 1,
-                dy: 1,
-                w: image.width,
-                h: image.height,
-                x0: 0,
-                y0: 0,
-                prec: depth,
-                bpp: depth,
-                sgnd: 0
-            };
-            channels
-        ];
+        let mut components =
+            vec![opj_image_cmptparm_t { dx: 1, dy: 1, w: image.width, h: image.height, x0: 0, y0: 0, prec: depth, bpp: depth, sgnd: 0 }; channels];
         handles.image = opj_image_create(
             channels as u32,
             components.as_mut_ptr(),
-            if channels <= 2 {
-                COLOR_SPACE::OPJ_CLRSPC_GRAY
-            } else {
-                COLOR_SPACE::OPJ_CLRSPC_SRGB
-            },
+            if channels <= 2 { COLOR_SPACE::OPJ_CLRSPC_GRAY } else { COLOR_SPACE::OPJ_CLRSPC_SRGB },
         );
         if handles.image.is_null() {
             return Err(PyOSError::new_err("could not allocate JPEG 2000 image"));
@@ -297,16 +246,10 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
                 return Err(PyOSError::new_err("could not allocate JPEG 2000 samples"));
             }
             plane.alpha = u16::from(channel == channels - 1 && matches!(channels, 2 | 4));
-            for (i, sample) in std::slice::from_raw_parts_mut(plane.data, image.width as usize * image.height as usize)
-                .iter_mut()
-                .enumerate()
-            {
+            for (i, sample) in std::slice::from_raw_parts_mut(plane.data, image.width as usize * image.height as usize).iter_mut().enumerate() {
                 let index = i * channels + channel;
-                *sample = if depth > 8 {
-                    i32::from(u16::from_le_bytes([pixels[index * 2], pixels[index * 2 + 1]]))
-                } else {
-                    i32::from(pixels[index])
-                };
+                *sample =
+                    if depth > 8 { i32::from(u16::from_le_bytes([pixels[index * 2], pixels[index * 2 + 1]])) } else { i32::from(pixels[index]) };
             }
         }
         let mut parameters = std::mem::zeroed();
@@ -336,12 +279,7 @@ mod tests {
 
     #[test]
     fn input_callbacks_bound_reads_and_preserve_failed_seek_position() {
-        let mut buffer = Buffer {
-            input: &[1, 2, 3],
-            output: Vec::new(),
-            position: 0,
-            writing: false,
-        };
+        let mut buffer = Buffer { input: &[1, 2, 3], output: Vec::new(), position: 0, writing: false };
         let context = ptr::from_mut(&mut buffer).cast();
         let mut output = [0xcc_u8; 8];
         // SAFETY: All buffers and the context remain live and match the requested sizes.
@@ -360,12 +298,7 @@ mod tests {
 
     #[test]
     fn output_callbacks_support_header_rewrites_and_zero_filled_holes() {
-        let mut buffer = Buffer {
-            input: &[],
-            output: Vec::new(),
-            position: 0,
-            writing: true,
-        };
+        let mut buffer = Buffer { input: &[], output: Vec::new(), position: 0, writing: true };
         let context = ptr::from_mut(&mut buffer).cast();
         let mut input = [1_u8, 2, 3];
         // SAFETY: The callback only reads the provided input and writes its live context.

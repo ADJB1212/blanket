@@ -25,13 +25,7 @@ fn key(color: Color) -> u32 {
 /// Expand an L, RGB, or RGBA pixel to the RGBA color used for palette work.
 #[inline(always)]
 fn color_of<const C: usize>(pixel: &[u8; C]) -> Color {
-    std::array::from_fn(|c| {
-        if c == 3 {
-            pixel.get(3).copied().unwrap_or(255)
-        } else {
-            pixel[c.min(C - 1)]
-        }
-    })
+    std::array::from_fn(|c| if c == 3 { pixel.get(3).copied().unwrap_or(255) } else { pixel[c.min(C - 1)] })
 }
 
 fn distance(a: Color, b: Color) -> u32 {
@@ -118,10 +112,7 @@ fn map_colors<const C: usize>(source: &[u8], lookup: &FxHashMap<u32, u8>, indice
 }
 
 fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -> PyResult<Image> {
-    let (mode, data) = reference
-        .palette
-        .as_ref()
-        .ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
+    let (mode, data) = reference.palette.as_ref().ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
     let mut entries: Vec<Color> = data.chunks_exact(mode.channels()).map(|v| [v[0], v[1], v[2], 255]).collect();
     if entries.is_empty() {
         entries.push([0, 0, 0, 255]);
@@ -212,13 +203,7 @@ fn median_cut(histogram: &mut [(Color, u64)], colors: usize) -> Vec<Color> {
     let mut boxes = vec![(population(histogram), histogram)];
     let mut scratch = Vec::new();
     while boxes.len() < colors {
-        let Some(i) = boxes
-            .iter()
-            .enumerate()
-            .filter(|(_, (_, b))| b.len() > 1)
-            .max_by_key(|(_, (n, _))| *n)
-            .map(|(i, _)| i)
-        else {
+        let Some(i) = boxes.iter().enumerate().filter(|(_, (_, b))| b.len() > 1).max_by_key(|(_, (n, _))| *n).map(|(i, _)| i) else {
             break;
         };
         let (total, b) = &mut boxes[i];
@@ -328,10 +313,7 @@ struct Cube {
 
 impl Cube {
     fn new(bits: [u32; 4]) -> Self {
-        Self {
-            bits,
-            buckets: vec![Bucket::default(); 1 << bits.iter().sum::<u32>()],
-        }
+        Self { bits, buckets: vec![Bucket::default(); 1 << bits.iter().sum::<u32>()] }
     }
 
     #[inline(always)]
@@ -391,11 +373,7 @@ impl Cube {
 }
 
 fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Color>, Vec<u8>) {
-    let (fine_bits, coarse_bits) = if alpha {
-        ([3, 4, 3, 3], [2, 2, 2, 2])
-    } else {
-        ([4, 4, 4, 0], [2, 2, 2, 0])
-    };
+    let (fine_bits, coarse_bits) = if alpha { ([3, 4, 3, 3], [2, 2, 2, 2]) } else { ([4, 4, 4, 0], [2, 2, 2, 0]) };
     let pixels = source.as_chunks::<C>().0;
     let accumulate = |pixels: &[[u8; C]]| {
         let mut cube = Cube::new(fine_bits);
@@ -438,11 +416,7 @@ fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Col
         coarse.subtract(&fine_palette[subtracted..fine_count]);
     }
     let coarse_palette = coarse.sorted(coarse_count);
-    let palette: Vec<Bucket> = coarse_palette[..coarse_count]
-        .iter()
-        .chain(&fine_palette[..fine_count])
-        .copied()
-        .collect();
+    let palette: Vec<Bucket> = coarse_palette[..coarse_count].iter().chain(&fine_palette[..fine_count]).copied().collect();
 
     // Coarse entries claim whole coarse cells; fine entries then override
     // their own cell. Lower indices win ties, as in Pillow's reverse loop.
@@ -486,19 +460,17 @@ fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
             (sums, changed)
         };
         let (sums, changed) = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
-            previous
-                .par_iter_mut()
-                .zip(histogram.par_iter())
-                .with_min_len(CHUNK_PIXELS)
-                .fold(empty, accumulate)
-                .reduce(empty, |(mut a, changed_a), (b, changed_b)| {
+            previous.par_iter_mut().zip(histogram.par_iter()).with_min_len(CHUNK_PIXELS).fold(empty, accumulate).reduce(
+                empty,
+                |(mut a, changed_a), (b, changed_b)| {
                     for (a, b) in a.iter_mut().zip(b) {
                         for (a, b) in a.iter_mut().zip(b) {
                             *a += b;
                         }
                     }
                     (a, changed_a + changed_b)
-                })
+                },
+            )
         } else {
             previous.iter_mut().zip(histogram).fold(empty(), accumulate)
         };
@@ -550,9 +522,7 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
         return Err(PyValueError::new_err("quantization error"));
     }
     if method == 3 && palette.is_none() {
-        return Err(PyRuntimeError::new_err(
-            "dependency required by this method was not enabled at compile time",
-        ));
+        return Err(PyRuntimeError::new_err("dependency required by this method was not enabled at compile time"));
     }
     if image.mode == PixelMode::Rgba && method < 2 {
         return Err(PyValueError::new_err("only FASTOCTREE and LIBIMAGEQUANT support RGBA"));
@@ -564,11 +534,7 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
         if let Some(reference) = palette {
             return fixed_palette(image, source, reference, dither);
         }
-        let palette_mode = if image.mode == PixelMode::Rgba {
-            PixelMode::Rgba
-        } else {
-            PixelMode::Rgb
-        };
+        let palette_mode = if image.mode == PixelMode::Rgba { PixelMode::Rgba } else { PixelMode::Rgb };
         let (entries, indices) = if source.is_empty() {
             (Vec::new(), Vec::new())
         } else if method == 2 {
@@ -587,10 +553,7 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
             }
         };
         let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
-        result.palette = Some((
-            palette_mode,
-            entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect(),
-        ));
+        result.palette = Some((palette_mode, entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect()));
         Ok(result)
     })
 }
@@ -678,9 +641,7 @@ mod tests {
         let mut scratch = Vec::new();
         for len in [4097, 256, 257, 255, 1, 0, 8193] {
             for channel in 0..3 {
-                let mut histogram: Histogram = (0..len)
-                    .map(|i| ([(i * 73) as u8, (i * 31) as u8, (i % 7) as u8, 255], i as u64 + 1))
-                    .collect();
+                let mut histogram: Histogram = (0..len).map(|i| ([(i * 73) as u8, (i * 31) as u8, (i % 7) as u8, 255], i as u64 + 1)).collect();
                 let mut expected = histogram.clone();
                 expected.sort_by_key(|(color, _)| color[channel]);
                 sort_channel(&mut histogram, channel, &mut scratch);
@@ -700,14 +661,8 @@ mod tests {
                 };
                 let b = &mut boxes[i];
                 let half = population(b).div_ceil(2);
-                let channel = (0..3)
-                    .max_by_key(|&c| {
-                        (
-                            b.iter().map(|(v, _)| v[c]).max().unwrap() - b.iter().map(|(v, _)| v[c]).min().unwrap(),
-                            3 - c,
-                        )
-                    })
-                    .unwrap();
+                let channel =
+                    (0..3).max_by_key(|&c| (b.iter().map(|(v, _)| v[c]).max().unwrap() - b.iter().map(|(v, _)| v[c]).min().unwrap(), 3 - c)).unwrap();
                 b.sort_by_key(|(v, _)| v[channel]);
                 let mut count = 0;
                 let mut split = 1;
@@ -724,9 +679,7 @@ mod tests {
             boxes.iter().map(|b| average(b)).collect()
         }
         for len in [1, 17, 255, 256, 4097] {
-            let histogram: Histogram = (0..len)
-                .map(|i| ([(i * 73) as u8, (i / 256) as u8, (i * 31) as u8, 255], (i % 13 + 1) as u64))
-                .collect();
+            let histogram: Histogram = (0..len).map(|i| ([(i * 73) as u8, (i / 256) as u8, (i * 31) as u8, 255], (i % 13 + 1) as u64)).collect();
             for colors in [1, 2, 16, 256] {
                 let mut actual = histogram.clone();
                 assert_eq!(median_cut(&mut actual, colors), reference(histogram.clone(), colors));
@@ -761,9 +714,8 @@ mod tests {
 
     #[test]
     fn refinement_preserves_weighted_results_across_worker_counts() {
-        let histogram: Histogram = (0..CHUNK_PIXELS * 2 + 17)
-            .map(|i| ([i as u8, (i / 256) as u8, (i * 73) as u8, 255], (i % 7 + 1) as u64))
-            .collect();
+        let histogram: Histogram =
+            (0..CHUNK_PIXELS * 2 + 17).map(|i| ([i as u8, (i / 256) as u8, (i * 73) as u8, 255], (i % 7 + 1) as u64)).collect();
         for colors in [1, 16, 256] {
             let initial: Vec<Color> = (0..colors).map(|i| [i as u8, (i * 31) as u8, (i * 17) as u8, 255]).collect();
             for threshold in [1, histogram.iter().map(|(_, count)| count).sum()] {

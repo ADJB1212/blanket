@@ -7,8 +7,7 @@ use blanket_codec_common::validate_dimensions;
 use blanket_core::{Image, PixelMode};
 
 fn bytes(data: &[u8], offset: usize, length: usize) -> Result<&[u8], String> {
-    data.get(offset..offset.checked_add(length).ok_or("invalid image offset")?)
-        .ok_or_else(|| "truncated image data".into())
+    data.get(offset..offset.checked_add(length).ok_or("invalid image offset")?).ok_or_else(|| "truncated image data".into())
 }
 
 fn word(data: &[u8], offset: usize, big: bool) -> Result<u16, String> {
@@ -54,10 +53,7 @@ pub fn detect(data: &[u8]) -> Option<&'static str> {
         Some("FITS")
     } else if data.starts_with(b"/* XPM */") {
         Some("XPM")
-    } else if data
-        .get(..4096.min(data.len()))
-        .is_some_and(|v| v.windows(6).any(|w| w == b"_width") && v.windows(7).any(|w| w == b"_height"))
-    {
+    } else if data.get(..4096.min(data.len())).is_some_and(|v| v.windows(6).any(|w| w == b"_width") && v.windows(7).any(|w| w == b"_height")) {
         Some("XBM")
     } else if scientific::spider_header(data).is_some() {
         Some("SPIDER")
@@ -103,10 +99,7 @@ fn decode_pcx(data: &[u8]) -> Result<Image, String> {
     bytes(data, 0, 128)?;
     let w = i32::from(word(data, 8, false)?) - i32::from(word(data, 4, false)?) + 1;
     let h = i32::from(word(data, 10, false)?) - i32::from(word(data, 6, false)?) + 1;
-    let (w, h) = dimensions(
-        w.try_into().map_err(|_| "invalid PCX width")?,
-        h.try_into().map_err(|_| "invalid PCX height")?,
-    )?;
+    let (w, h) = dimensions(w.try_into().map_err(|_| "invalid PCX width")?, h.try_into().map_err(|_| "invalid PCX height")?)?;
     let bits = data[3];
     let planes = usize::from(data[65]);
     if !matches!((bits, planes), (1, 1 | 2 | 4) | (8, 1 | 3)) || data[2] > 1 {
@@ -116,11 +109,7 @@ fn decode_pcx(data: &[u8]) -> Result<Image, String> {
     if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err("invalid PCX stride".into());
     }
-    let mut pixels = if bits == 1 && planes == 1 {
-        Vec::new()
-    } else {
-        vec![0; w * h * if planes == 3 { 3 } else { 1 }]
-    };
+    let mut pixels = if bits == 1 && planes == 1 { Vec::new() } else { vec![0; w * h * if planes == 3 { 3 } else { 1 }] };
     let mut pos = 128;
     let mut row = vec![0; stride * planes];
     let mut packed = Vec::with_capacity(if bits == 1 && planes == 1 { w.div_ceil(8) * h } else { 0 });
@@ -288,11 +277,7 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
                 let mut row = Vec::with_capacity(w * bpc);
                 let mut pos = 0;
                 loop {
-                    let control = if bpc == 1 {
-                        u16::from(bytes(source, pos, 1)?[0])
-                    } else {
-                        word(source, pos, true)?
-                    };
+                    let control = if bpc == 1 { u16::from(bytes(source, pos, 1)?[0]) } else { word(source, pos, true)? };
                     pos += bpc;
                     let count = usize::from(control & 127);
                     if count == 0 {
@@ -519,11 +504,7 @@ fn decode_sun(data: &[u8]) -> Result<Image, String> {
         let packed = if row_bytes == stride {
             Cow::Borrowed(raw.as_ref())
         } else {
-            Cow::Owned(
-                raw.chunks_exact(stride)
-                    .flat_map(|row| row[..row_bytes].iter().copied())
-                    .collect::<Vec<_>>(),
-            )
+            Cow::Owned(raw.chunks_exact(stride).flat_map(|row| row[..row_bytes].iter().copied()).collect::<Vec<_>>())
         };
         return image(w, h, PixelMode::One, blanket_core::raster::unpack_bilevel_inverted(&packed, w, h), "SUN");
     }

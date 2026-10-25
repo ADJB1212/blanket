@@ -31,9 +31,7 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
             return Err("invalid LAB TIFF samples".into());
         };
         let pixels = if signed { blanket_core::raster::lab_raw_bytes(&pixels) } else { pixels };
-        return Image::from_pixels(width, height, PixelMode::Lab, pixels, Some("TIFF".into()))
-            .map(Some)
-            .map_err(|error| error.to_string());
+        return Image::from_pixels(width, height, PixelMode::Lab, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string());
     }
     if decoder.colortype().ok() == Some(tiff::ColorType::CMYK(8)) {
         let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
@@ -41,9 +39,7 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         let tiff::decoder::DecodingResult::U8(pixels) = decoder.read_image().map_err(|error| error.to_string())? else {
             return Err("invalid CMYK TIFF samples".into());
         };
-        return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into()))
-            .map(Some)
-            .map_err(|error| error.to_string());
+        return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string());
     }
     if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(5)
         && let Some(image) = decode_lzw_strips(data, &mut decoder)?
@@ -92,21 +88,14 @@ fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[
     }
     let mut pixels = vec![0; length];
     let strips_per_worker = height.div_ceil(rows).div_ceil(rayon::current_num_threads() as u32) as usize;
-    pixels
-        .par_chunks_mut(stride * rows as usize * strips_per_worker)
-        .enumerate()
-        .try_for_each(|(index, output)| {
-            let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
-            for (strip, output) in output.chunks_mut(stride * rows as usize).enumerate() {
-                decoder
-                    .read_chunk_bytes((index * strips_per_worker + strip) as u32, output)
-                    .map_err(|e| e.to_string())?;
-            }
-            Ok::<_, String>(())
-        })?;
-    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into()))
-        .map(Some)
-        .map_err(|e| e.to_string())
+    pixels.par_chunks_mut(stride * rows as usize * strips_per_worker).enumerate().try_for_each(|(index, output)| {
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+        for (strip, output) in output.chunks_mut(stride * rows as usize).enumerate() {
+            decoder.read_chunk_bytes((index * strips_per_worker + strip) as u32, output).map_err(|e| e.to_string())?;
+        }
+        Ok::<_, String>(())
+    })?;
+    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map(Some).map_err(|e| e.to_string())
 }
 
 fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Image, String> {
@@ -123,20 +112,12 @@ fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u
         3 => PixelMode::Rgb,
         _ => return Err("unsupported JPEG TIFF channels".into()),
     };
-    if decoder
-        .get_tag_u16_vec(Tag::BitsPerSample)
-        .map_err(|e| e.to_string())?
-        .iter()
-        .any(|&v| v != 8)
-    {
+    if decoder.get_tag_u16_vec(Tag::BitsPerSample).map_err(|e| e.to_string())?.iter().any(|&v| v != 8) {
         return Err("JPEG TIFF requires 8-bit samples".into());
     }
     let tiled = decoder.get_tag_u32(Tag::TileWidth).is_ok();
     let (chunk_width, chunk_height) = if tiled {
-        (
-            decoder.get_tag_u32(Tag::TileWidth).map_err(|e| e.to_string())?,
-            decoder.get_tag_u32(Tag::TileLength).map_err(|e| e.to_string())?,
-        )
+        (decoder.get_tag_u32(Tag::TileWidth).map_err(|e| e.to_string())?, decoder.get_tag_u32(Tag::TileLength).map_err(|e| e.to_string())?)
     } else {
         (width, decoder.get_tag_u32(Tag::RowsPerStrip).unwrap_or(height).min(height))
     };
@@ -145,12 +126,8 @@ fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u
     }
     let across = width.div_ceil(chunk_width);
     let count = across.checked_mul(height.div_ceil(chunk_height)).ok_or("invalid JPEG TIFF chunk count")?;
-    let offsets = decoder
-        .get_tag_u64_vec(if tiled { Tag::TileOffsets } else { Tag::StripOffsets })
-        .map_err(|e| e.to_string())?;
-    let lengths = decoder
-        .get_tag_u64_vec(if tiled { Tag::TileByteCounts } else { Tag::StripByteCounts })
-        .map_err(|e| e.to_string())?;
+    let offsets = decoder.get_tag_u64_vec(if tiled { Tag::TileOffsets } else { Tag::StripOffsets }).map_err(|e| e.to_string())?;
+    let lengths = decoder.get_tag_u64_vec(if tiled { Tag::TileByteCounts } else { Tag::StripByteCounts }).map_err(|e| e.to_string())?;
     if offsets.len() != count as usize || lengths.len() != offsets.len() {
         return Err("invalid JPEG TIFF chunk table".into());
     }
@@ -192,9 +169,7 @@ fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u
 fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
-        let bytes = data
-            .get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?)
-            .ok_or("truncated TIFF directory")?;
+        let bytes = data.get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?).ok_or("truncated TIFF directory")?;
         let value = if little {
             bytes.iter().rev().fold(0_u64, |value, &byte| (value << 8) | u64::from(byte))
         } else {
@@ -271,16 +246,7 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     let mut entries: Vec<(u16, u16, u32, u32)> = vec![
         (256, 4, 1, image.width),
         (257, 4, 1, image.height),
-        (
-            258,
-            3,
-            u32::from(samples),
-            if samples > 2 {
-                u32::try_from(bits_offset).map_err(|_| too_large())?
-            } else {
-                u32::from(bits)
-            },
-        ),
+        (258, 3, u32::from(samples), if samples > 2 { u32::try_from(bits_offset).map_err(|_| too_large())? } else { u32::from(bits) }),
         (259, 3, 1, 1),
         (262, 3, 1, u32::from(photometric)),
         (273, 4, 1, 8),
@@ -331,9 +297,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
-        let bytes = data
-            .get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?)
-            .ok_or("truncated TIFF directory")?;
+        let bytes = data.get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?).ok_or("truncated TIFF directory")?;
         let value = if little {
             bytes.iter().rev().fold(0_u64, |v, &b| (v << 8) | u64::from(b))
         } else {
@@ -358,11 +322,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
             .and_then(|v| count.checked_mul(entry_bytes).and_then(|n| v.checked_add(n)))
             .ok_or("TIFF directory overflow")?;
         let next_offset = read(next, offset_bytes)?;
-        let bytes = if little {
-            (offset as u64).to_le_bytes()
-        } else {
-            (offset as u64).to_be_bytes()
-        };
+        let bytes = if little { (offset as u64).to_le_bytes() } else { (offset as u64).to_be_bytes() };
         let offset_data = if little { &bytes[..offset_bytes] } else { &bytes[8 - offset_bytes..] };
         if &page_data[header..header + offset_bytes] != offset_data {
             page_data.to_mut()[header..header + offset_bytes].copy_from_slice(offset_data);
@@ -371,12 +331,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
         let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
         validate_frame_budget(&mut total, width, height)?;
         let image = decode_tiff(&page_data)?;
-        sequence.frames.push(Frame {
-            image,
-            duration: None,
-            disposal: 0,
-            blend: 0,
-        });
+        sequence.frames.push(Frame { image, duration: None, disposal: 0, blend: 0 });
         offset = next_offset;
     }
     if sequence.frames.is_empty() {
@@ -391,16 +346,9 @@ pub fn encode_lab_tiff(image: &Image) -> PyResult<Vec<u8>> {
     let mut output = Cursor::new(Vec::new());
     {
         let mut encoder = tiff::encoder::TiffEncoder::new(&mut output).map_err(codec_error)?;
-        let mut frame = encoder
-            .new_image::<tiff::encoder::colortype::RGB8>(image.width, image.height)
-            .map_err(codec_error)?;
-        frame
-            .encoder()
-            .write_tag(tiff::tags::Tag::PhotometricInterpretation, 8_u16)
-            .map_err(codec_error)?;
-        frame
-            .write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?))
-            .map_err(codec_error)?;
+        let mut frame = encoder.new_image::<tiff::encoder::colortype::RGB8>(image.width, image.height).map_err(codec_error)?;
+        frame.encoder().write_tag(tiff::tags::Tag::PhotometricInterpretation, 8_u16).map_err(codec_error)?;
+        frame.write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?)).map_err(codec_error)?;
     }
     return Ok(output.into_inner());
 }
@@ -412,13 +360,7 @@ pub fn encode_float_tiff(image: &Image) -> PyResult<Vec<u8>> {
     if cfg!(target_endian = "little") {
         return encode_raw_tiff(image, image.raw_data()?);
     }
-    let samples: Vec<f32> = image
-        .raw_data()?
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .map(|bytes| f32::from_le_bytes(*bytes))
-        .collect();
+    let samples: Vec<f32> = image.raw_data()?.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
     let mut output = Cursor::new(Vec::new());
     tiff::encoder::TiffEncoder::new(&mut output)
         .map_err(codec_error)?
@@ -432,9 +374,7 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         return encode_raw_tiff(image, pixels);
     }
     let mut output = Cursor::new(Vec::with_capacity(pixels.len().saturating_add(1024)));
-    image::codecs::tiff::TiffEncoder::new(&mut output)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
-        .map_err(codec_error)?;
+    image::codecs::tiff::TiffEncoder::new(&mut output).write_image(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
     Ok(output.into_inner())
 }
 
@@ -465,13 +405,9 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
             ] {
                 directory.write_tag(tag, value).map_err(codec_error)?;
             }
-            directory
-                .write_tag(Tag::BitsPerSample, vec![8_u16; channels as usize].as_slice())
-                .map_err(codec_error)?;
+            directory.write_tag(Tag::BitsPerSample, vec![8_u16; channels as usize].as_slice()).map_err(codec_error)?;
             directory.write_tag(Tag::Compression, 7_u16).map_err(codec_error)?;
-            directory
-                .write_tag(Tag::PhotometricInterpretation, if channels == 1 { 1_u16 } else { 6 })
-                .map_err(codec_error)?;
+            directory.write_tag(Tag::PhotometricInterpretation, if channels == 1 { 1_u16 } else { 6 }).map_err(codec_error)?;
             directory.write_tag(Tag::SamplesPerPixel, channels).map_err(codec_error)?;
             directory.write_tag(Tag::PlanarConfiguration, 1_u16).map_err(codec_error)?;
             if channels == 3 {
@@ -489,16 +425,8 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
     {
         let mut encoder = TiffEncoder::new(&mut output).map_err(codec_error)?.with_compression(compression);
         if image.mode == PixelMode::F {
-            let values = image
-                .raw_data()?
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|v| f32::from_le_bytes(*v))
-                .collect::<Vec<_>>();
-            encoder
-                .write_image::<colortype::Gray32Float>(image.width, image.height, &values)
-                .map_err(codec_error)?;
+            let values = image.raw_data()?.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>();
+            encoder.write_image::<colortype::Gray32Float>(image.width, image.height, &values).map_err(codec_error)?;
         } else if image.bit_depth > 8 {
             let values = blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth);
             match image.mode {
@@ -511,9 +439,7 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
         } else if image.mode == PixelMode::Lab {
             let mut frame = encoder.new_image::<colortype::RGB8>(image.width, image.height).map_err(codec_error)?;
             frame.encoder().write_tag(Tag::PhotometricInterpretation, 8_u16).map_err(codec_error)?;
-            frame
-                .write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?))
-                .map_err(codec_error)?;
+            frame.write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?)).map_err(codec_error)?;
         } else {
             let pixels = image.pixel_data()?;
             match image.mode {
@@ -545,9 +471,7 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
         u16_bytes(&normalized)
     };
     let mut output = Cursor::new(Vec::with_capacity(samples.len().saturating_add(1024)));
-    image::codecs::tiff::TiffEncoder::new(&mut output)
-        .write_image(samples, image.width, image.height, color)
-        .map_err(codec_error)?;
+    image::codecs::tiff::TiffEncoder::new(&mut output).write_image(samples, image.width, image.height, color).map_err(codec_error)?;
     return Ok(output.into_inner());
 }
 
@@ -562,9 +486,7 @@ mod tests {
             let pixels: Vec<_> = (0..width * height * mode.channels()).map(|i| (i * 37 + i / 7) as u8).collect();
             let mut data = Cursor::new(Vec::new());
             {
-                let mut encoder = tiff::encoder::TiffEncoder::new(&mut data)
-                    .unwrap()
-                    .with_compression(tiff::encoder::Compression::Lzw);
+                let mut encoder = tiff::encoder::TiffEncoder::new(&mut data).unwrap().with_compression(tiff::encoder::Compression::Lzw);
                 let mut image = encoder.new_image::<C>(width as u32, height as u32).unwrap();
                 image.rows_per_strip(rows_per_strip).unwrap();
                 image.write_data(&pixels).unwrap();

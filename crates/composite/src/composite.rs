@@ -27,9 +27,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> Py
         .and_then(|n| n.checked_mul(color.len()))
         .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     let mut pixels = Vec::<u8>::new();
-    pixels
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {
@@ -206,12 +204,8 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
 
 fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) {
     let offset = blanket_core::pixels::paste_masked::<C, M>(dst, src, mask, fill);
-    for ((d, s), m) in dst[offset * C..]
-        .as_chunks_mut::<C>()
-        .0
-        .iter_mut()
-        .zip(src[offset * C..].as_chunks::<C>().0)
-        .zip(mask[offset * M..].as_chunks::<M>().0)
+    for ((d, s), m) in
+        dst[offset * C..].as_chunks_mut::<C>().0.iter_mut().zip(src[offset * C..].as_chunks::<C>().0).zip(mask[offset * M..].as_chunks::<M>().0)
     {
         let alpha = u32::from(m[M - 1]);
         let replace_rgb = fill && C == 4 && M == 1 && d[C - 1] == 0 && alpha != 0;
@@ -324,12 +318,8 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
         let mut pixels = vec![0; alpha.len() * 4];
         py.detach(|| {
             let offset = blanket_core::pixels::putalpha_rgb(source, alpha, &mut pixels);
-            for ((dst, src), &a) in pixels[offset * 4..]
-                .as_chunks_mut::<4>()
-                .0
-                .iter_mut()
-                .zip(source[offset * 3..].as_chunks::<3>().0)
-                .zip(&alpha[offset..])
+            for ((dst, src), &a) in
+                pixels[offset * 4..].as_chunks_mut::<4>().0.iter_mut().zip(source[offset * 3..].as_chunks::<3>().0).zip(&alpha[offset..])
             {
                 *dst = [src[0], src[1], src[2], a];
             }

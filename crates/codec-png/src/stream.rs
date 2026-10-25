@@ -19,10 +19,7 @@ impl Write for Sink {
             return Err(io::Error::other("closed PNG output"));
         }
         Python::attach(|py| {
-            let result = self
-                .object
-                .call_method1(py, "write", (PyBytes::new(py, data),))
-                .and_then(|count| count.extract::<usize>(py));
+            let result = self.object.call_method1(py, "write", (PyBytes::new(py, data),)).and_then(|count| count.extract::<usize>(py));
             match result {
                 Ok(count) if count <= data.len() => Ok(count),
                 Ok(_) => {
@@ -90,22 +87,10 @@ impl PngStreamWriter {
     fn new(sink: Py<PyAny>, mode: &str, size: (u32, u32), bit_depth: u8, compress_level: u8) -> PyResult<Self> {
         let (width, height) = size;
         let (color, channels, depth) = layout(mode, size, bit_depth, compress_level)?;
-        let stride = if depth == 1 {
-            (width as usize).div_ceil(8)
-        } else {
-            width as usize * channels * if depth > 8 { 2 } else { 1 }
-        };
+        let stride = if depth == 1 { (width as usize).div_ceil(8) } else { width as usize * channels * if depth > 8 { 2 } else { 1 } };
         let error = Arc::new(Mutex::new(None));
         let active = Arc::new(AtomicBool::new(true));
-        let mut encoder = png::Encoder::new(
-            Sink {
-                object: sink,
-                error: Arc::clone(&error),
-                active: Arc::clone(&active),
-            },
-            width,
-            height,
-        );
+        let mut encoder = png::Encoder::new(Sink { object: sink, error: Arc::clone(&error), active: Arc::clone(&active) }, width, height);
         encoder.set_color(color);
         encoder.set_depth(if depth == 1 {
             png::BitDepth::One
@@ -127,14 +112,7 @@ impl PngStreamWriter {
             writer.into_stream_writer()
         })();
         let writer = result.map_err(|err| error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(err)))?;
-        Ok(Self {
-            writer: Some(writer),
-            error,
-            active,
-            stride,
-            remaining: stride * height as usize,
-            depth,
-        })
+        Ok(Self { writer: Some(writer), error, active, stride, remaining: stride * height as usize, depth })
     }
 
     fn write(&mut self, data: &[u8]) -> PyResult<()> {
@@ -144,13 +122,7 @@ impl PngStreamWriter {
         if !data.len().is_multiple_of(self.stride) || data.len() > self.remaining {
             return Err(PyValueError::new_err("write requires complete rows within the declared image size"));
         }
-        if self.depth > 8
-            && data
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .any(|&sample| u16::from_le_bytes(sample) as u32 >= (1_u32 << self.depth))
-        {
+        if self.depth > 8 && data.as_chunks::<2>().0.iter().any(|&sample| u16::from_le_bytes(sample) as u32 >= (1_u32 << self.depth)) {
             return Err(PyValueError::new_err("sample exceeds bit depth"));
         }
         let result = if self.depth > 8 {
@@ -184,9 +156,7 @@ impl PngStreamWriter {
             self.active.store(false, Ordering::Relaxed);
             return Err(PyOSError::new_err("incomplete PNG rows"));
         }
-        writer
-            .finish()
-            .map_err(|error| self.error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(error)))?;
+        writer.finish().map_err(|error| self.error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(error)))?;
         let error = self.error.lock().expect("sink error lock").take();
         if let Some(error) = error {
             return Err(error);

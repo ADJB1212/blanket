@@ -11,11 +11,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "bmp" | "ico" | "ppm" | "pam" | "tga" | "dds" | "qoi" => Some(format!("image {}", env!("BLANKET_BACKEND_IMAGE"))),
         "jpg_2000" => Some(blanket_codec_jpeg2000::backend_version()),
         "eps" => return Some((blanket_codec_extended::ghostscript_available(), None)),
-        "avif" => Some(format!(
-            "ravif {}; dav1d {}",
-            env!("BLANKET_BACKEND_RAVIF"),
-            env!("BLANKET_BACKEND_DAV1D")
-        )),
+        "avif" => Some(format!("ravif {}; dav1d {}", env!("BLANKET_BACKEND_RAVIF"), env!("BLANKET_BACKEND_DAV1D"))),
         "jxl" => Some(blanket_codecs::jxl_backend_version()),
         "webp" => Some(blanket_codecs::webp_backend_version()),
         "littlecms2" => Some(blanket_core::littlecms_version()),

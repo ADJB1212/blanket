@@ -21,33 +21,19 @@ pub struct Sequence<I = Image> {
 
 impl<I> Default for Sequence<I> {
     fn default() -> Self {
-        Self {
-            frames: Vec::new(),
-            loop_count: None,
-            default_image: false,
-        }
+        Self { frames: Vec::new(), loop_count: None, default_image: false }
     }
 }
 
 impl Sequence {
     pub fn single(image: Image) -> Self {
-        Self {
-            frames: vec![Frame {
-                image,
-                duration: None,
-                disposal: 0,
-                blend: 0,
-            }],
-            ..Self::default()
-        }
+        Self { frames: vec![Frame { image, duration: None, disposal: 0, blend: 0 }], ..Self::default() }
     }
 }
 
 pub fn validate_frame_budget(total: &mut usize, width: u32, height: u32) -> Result<(), String> {
     validate_dimensions(width, height)?;
-    *total = total
-        .checked_add((width as usize) * (height as usize))
-        .ok_or("frame pixel count overflow")?;
+    *total = total.checked_add((width as usize) * (height as usize)).ok_or("frame pixel count overflow")?;
     if *total > MAX_IMAGE_PIXELS {
         return Err(format!("sequence exceeds Blanket limit of {MAX_IMAGE_PIXELS} decoded pixels"));
     }
@@ -67,9 +53,7 @@ pub struct SaveOptions<'a> {
 }
 
 pub fn validate_dimensions(width: u32, height: u32) -> Result<(), String> {
-    let pixels = (width as usize)
-        .checked_mul(height as usize)
-        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    let pixels = (width as usize).checked_mul(height as usize).ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
     if pixels > MAX_IMAGE_PIXELS {
         return Err(format!("image size ({pixels} pixels) exceeds Blanket limit of {MAX_IMAGE_PIXELS} pixels"));
     }

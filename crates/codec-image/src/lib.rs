@@ -22,9 +22,7 @@ pub fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> 
 pub fn decode_with_metadata(
     data: &[u8], format: RustFormat, format_name: &str, significant_bits: Option<&[u8]>, bilevel: bool,
 ) -> Result<Image, String> {
-    let decoder = image::ImageReader::with_format(Cursor::new(data), format)
-        .into_decoder()
-        .map_err(|error| error.to_string())?;
+    let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(|error| error.to_string())?;
     let dimensions = decoder.dimensions();
     validate_dimensions(dimensions.0, dimensions.1)?;
     let color = decoder.color_type();

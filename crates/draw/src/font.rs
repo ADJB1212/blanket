@@ -50,13 +50,7 @@ impl NativeFont {
 
     fn name(&self) -> (String, String) {
         let face = rustybuzz::Face::from_slice(self.font.font_data(), self.index).unwrap();
-        let find = |id| {
-            face.names()
-                .into_iter()
-                .filter(|name| name.name_id == id)
-                .find_map(|name| name.to_string())
-                .unwrap_or_default()
-        };
+        let find = |id| face.names().into_iter().filter(|name| name.name_id == id).find_map(|name| name.to_string()).unwrap_or_default();
         (find(1), find(2))
     }
 
@@ -73,13 +67,9 @@ impl NativeFont {
         if !start.0.is_finite() || !start.1.is_finite() || start.0.abs() > 1.0 || start.1.abs() > 1.0 {
             return Err(PyValueError::new_err("start must contain fractional pixel offsets"));
         }
-        let features: Vec<Feature> = features
-            .iter()
-            .map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid OpenType feature")))
-            .collect::<PyResult<_>>()?;
-        let language = language
-            .map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid language tag")))
-            .transpose()?;
+        let features: Vec<Feature> =
+            features.iter().map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid OpenType feature"))).collect::<PyResult<_>>()?;
+        let language = language.map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid language tag"))).transpose()?;
         let (advance, bounds, data) = py.detach(|| {
             let face = rustybuzz::Face::from_slice(self.font.font_data(), self.index).unwrap();
             let factor = size / face.units_per_em() as f32;
@@ -105,10 +95,7 @@ impl NativeFont {
                             scripts.reverse();
                         }
                         segments.extend(scripts.into_iter().map(|script| {
-                            (
-                                range.start + script.start..range.start + script.end,
-                                if rtl { Direction::RightToLeft } else { Direction::LeftToRight },
-                            )
+                            (range.start + script.start..range.start + script.end, if rtl { Direction::RightToLeft } else { Direction::LeftToRight })
                         }));
                     }
                 }
@@ -130,10 +117,7 @@ impl NativeFont {
                     let glyph = Glyph {
                         id: GlyphId(info.glyph_id as u16),
                         scale,
-                        position: point(
-                            pen.x + position.x_offset as f32 * factor + start.0,
-                            pen.y - position.y_offset as f32 * factor + start.1,
-                        ),
+                        position: point(pen.x + position.x_offset as f32 * factor + start.0, pen.y - position.y_offset as f32 * factor + start.1),
                     };
                     if !advance_only && let Some(outline) = glyph_outlines.entry(glyph.id).or_insert_with(|| self.font.outline(glyph.id)) {
                         let rect = outline.px_bounds(scale_factor, glyph.position);
@@ -291,10 +275,7 @@ mod tests {
     fn splits_scripts_at_utf8_boundaries_and_keeps_marks() {
         let text = "Latin a\u{301} Ελληνικά Русский";
         let runs = script_runs(text);
-        assert_eq!(
-            runs.iter().map(|range| &text[range.clone()]).collect::<Vec<_>>(),
-            ["Latin a\u{301} ", "Ελληνικά ", "Русский"]
-        );
+        assert_eq!(runs.iter().map(|range| &text[range.clone()]).collect::<Vec<_>>(), ["Latin a\u{301} ", "Ελληνικά ", "Русский"]);
         assert!(script_runs("").is_empty());
     }
 

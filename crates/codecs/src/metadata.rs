@@ -118,11 +118,7 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
             if !icc.is_empty() {
                 let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
                 encoder.write_all(icc).map_err(codec_error)?;
-                png_chunk(
-                    &mut metadata,
-                    b"iCCP",
-                    &[b"ICC Profile\0\0".as_slice(), &encoder.finish().map_err(codec_error)?].concat(),
-                )?;
+                png_chunk(&mut metadata, b"iCCP", &[b"ICC Profile\0\0".as_slice(), &encoder.finish().map_err(codec_error)?].concat())?;
             }
             if !xmp.is_empty() {
                 png_chunk(&mut metadata, b"iTXt", &[b"XML:com.adobe.xmp\0\0\0\0\0".as_slice(), xmp].concat())?;
@@ -163,10 +159,8 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
             while pos + 8 <= data.len() {
                 let kind = &data[pos..pos + 4];
                 let length = u32::from_le_bytes(data[pos + 4..pos + 8].try_into().expect("four bytes")) as usize;
-                let end = pos
-                    .checked_add(8 + length + (length & 1))
-                    .filter(|&end| end <= data.len())
-                    .ok_or_else(|| codec_error("invalid WebP chunk"))?;
+                let end =
+                    pos.checked_add(8 + length + (length & 1)).filter(|&end| end <= data.len()).ok_or_else(|| codec_error("invalid WebP chunk"))?;
                 if kind == b"VP8X" {
                     extended = Some(data[pos + 8..pos + 8 + length].to_vec());
                 }
@@ -258,10 +252,7 @@ struct Tiff<'a> {
 
 impl<'a> Tiff<'a> {
     fn new(data: &'a [u8]) -> PyResult<Self> {
-        let this = Self {
-            data,
-            little: data.starts_with(b"II"),
-        };
+        let this = Self { data, little: data.starts_with(b"II") };
         if !(data.starts_with(b"II") || data.starts_with(b"MM")) || this.number(2, 2)? != 42 {
             return Err(codec_error("invalid classic TIFF metadata"));
         }
@@ -269,23 +260,14 @@ impl<'a> Tiff<'a> {
     }
     fn number(&self, pos: usize, size: usize) -> PyResult<u32> {
         let bytes = self.data.get(pos..pos + size).ok_or_else(|| codec_error("truncated TIFF metadata"))?;
-        Ok(if self.little {
-            bytes.iter().rev().fold(0, |n, &b| (n << 8) | b as u32)
-        } else {
-            bytes.iter().fold(0, |n, &b| (n << 8) | b as u32)
-        })
+        Ok(if self.little { bytes.iter().rev().fold(0, |n, &b| (n << 8) | b as u32) } else { bytes.iter().fold(0, |n, &b| (n << 8) | b as u32) })
     }
     fn entries(&self, offset: usize) -> PyResult<(Vec<TiffEntry>, usize)> {
         let count = self.number(offset, 2)? as usize;
         let mut entries = Vec::with_capacity(count);
         for i in 0..count {
             let pos = offset + 2 + i * 12;
-            entries.push((
-                self.number(pos, 2)? as u16,
-                self.number(pos + 2, 2)? as u16,
-                self.number(pos + 4, 4)?,
-                pos + 8,
-            ));
+            entries.push((self.number(pos, 2)? as u16, self.number(pos + 2, 2)? as u16, self.number(pos + 4, 4)?, pos + 8));
         }
         Ok((entries, self.number(offset + 2 + count * 12, 4)? as usize))
     }
@@ -360,17 +342,10 @@ fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool
             continue;
         }
         if tag == 513 && count == 1 {
-            let size_pos = entries
-                .iter()
-                .find(|entry| entry.0 == 514)
-                .ok_or_else(|| codec_error("missing EXIF thumbnail length"))?
-                .3;
+            let size_pos = entries.iter().find(|entry| entry.0 == 514).ok_or_else(|| codec_error("missing EXIF thumbnail length"))?.3;
             let start = source.number(pos, 4)? as usize;
             let size = source.number(size_pos, 4)? as usize;
-            let thumbnail = source
-                .data
-                .get(start..start.saturating_add(size))
-                .ok_or_else(|| codec_error("truncated EXIF thumbnail"))?;
+            let thumbnail = source.data.get(start..start.saturating_add(size)).ok_or_else(|| codec_error("truncated EXIF thumbnail"))?;
             let pointer = append_tiff(output, thumbnail)?;
             result.push(record(tag, 4, 1, &word(pointer, little), little));
             continue;
@@ -404,13 +379,7 @@ fn copy_ifd(source: &Tiff<'_>, offset: usize, output: &mut Vec<u8>, little: bool
 }
 
 fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<[u8; 12]>, following: u32, little: bool) -> PyResult<u32> {
-    entries.sort_by_key(|entry| {
-        if little {
-            u16::from_le_bytes([entry[0], entry[1]])
-        } else {
-            u16::from_be_bytes([entry[0], entry[1]])
-        }
-    });
+    entries.sort_by_key(|entry| if little { u16::from_le_bytes([entry[0], entry[1]]) } else { u16::from_be_bytes([entry[0], entry[1]]) });
     let count = u16::try_from(entries.len()).map_err(codec_error)?;
     let offset = append_tiff(output, &[])?;
     output.reserve(2 + entries.len() * 12 + 4);
@@ -444,11 +413,7 @@ fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<
     for (tag, raw) in [(700u16, xmp), (34675, icc)] {
         if !raw.is_empty() {
             let count = u32::try_from(raw.len()).map_err(codec_error)?;
-            let field = if raw.len() > 4 {
-                word(append_tiff(&mut output, raw)?, little).to_vec()
-            } else {
-                raw.to_vec()
-            };
+            let field = if raw.len() > 4 { word(append_tiff(&mut output, raw)?, little).to_vec() } else { raw.to_vec() };
             entries.retain(|entry| &entry[..2] != if little { tag.to_le_bytes() } else { tag.to_be_bytes() }.as_slice());
             entries.push(record(tag, 1, count, &field, little));
         }

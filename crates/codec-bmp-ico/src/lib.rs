@@ -48,9 +48,7 @@ pub fn encode_bmp(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         return Err(PyValueError::new_err("cannot encode an empty image"));
     }
     let mut output = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut output)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
-        .map_err(codec_error)?;
+    image::codecs::bmp::BmpEncoder::new(&mut output).write_image(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
     Ok(output)
 }
 pub fn encode_ico(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
@@ -61,8 +59,6 @@ pub fn encode_ico(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         return Err(PyValueError::new_err("ICO dimensions must be between 1 and 256"));
     }
     let mut output = Vec::new();
-    image::codecs::ico::IcoEncoder::new(&mut output)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
-        .map_err(codec_error)?;
+    image::codecs::ico::IcoEncoder::new(&mut output).write_image(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
     Ok(output)
 }

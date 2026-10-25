@@ -12,11 +12,7 @@ pub type Bytes = Simd<u8, 16>;
 #[inline]
 pub(crate) fn load_u16<const BIG_ENDIAN: bool>(source: &[u8]) -> Simd<u16, 16> {
     let bytes = Simd::<u8, 32>::from_slice(source);
-    if BIG_ENDIAN {
-        Simd::<u16, 16>::from_be_bytes(bytes)
-    } else {
-        Simd::<u16, 16>::from_le_bytes(bytes)
-    }
+    if BIG_ENDIAN { Simd::<u16, 16>::from_be_bytes(bytes) } else { Simd::<u16, 16>::from_le_bytes(bytes) }
 }
 
 pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
@@ -28,10 +24,7 @@ pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
         output[i / 8 + 1] = ((bits >> 8) as u8).reverse_bits();
     }
     for (group, dst) in source[end..].chunks(8).zip(&mut output[end / 8..]) {
-        *dst = group
-            .iter()
-            .enumerate()
-            .fold(0, |bits, (bit, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - bit)));
+        *dst = group.iter().enumerate().fold(0, |bits, (bit, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - bit)));
     }
 }
 
@@ -153,9 +146,7 @@ pub fn reduce_three_l(rows: [&[u8]; 3], dst: &mut [u8]) -> usize {
                 sum += v.cast();
             }
         }
-        ((sum * Simd::splat(BOX_3X3_RECIPROCAL)) >> BOX_3X3_RECIPROCAL_BITS)
-            .cast::<u8>()
-            .copy_to_slice(&mut dst[i..i + 16]);
+        ((sum * Simd::splat(BOX_3X3_RECIPROCAL)) >> BOX_3X3_RECIPROCAL_BITS).cast::<u8>().copy_to_slice(&mut dst[i..i + 16]);
     }
     end
 }
@@ -225,15 +216,9 @@ pub fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], 
         let d = load::<C>(&dst[i * C..]);
         let s = load::<C>(&src[i * C..]);
         let a = load::<M>(&mask[i * M..])[M - 1];
-        let rgb_a = if fill && C == 4 && M == 1 {
-            (d[C - 1].simd_eq(Bytes::splat(0)) & a.simd_ne(Bytes::splat(0))).select(Bytes::splat(255), a)
-        } else {
-            a
-        };
-        store(
-            &mut dst[i * C..],
-            std::array::from_fn::<_, C, _>(|c| blend(d[c], s[c], if c == 3 { a } else { rgb_a })),
-        );
+        let rgb_a =
+            if fill && C == 4 && M == 1 { (d[C - 1].simd_eq(Bytes::splat(0)) & a.simd_ne(Bytes::splat(0))).select(Bytes::splat(255), a) } else { a };
+        store(&mut dst[i * C..], std::array::from_fn::<_, C, _>(|c| blend(d[c], s[c], if c == 3 { a } else { rgb_a })));
     }
     end
 }
@@ -253,12 +238,7 @@ mod tests {
                     }
                     let mut dst: Vec<_> = (0..length + 2).map(|i| (i * 53) as u8).collect();
                     let mut expected = dst.clone();
-                    for (src, dst) in src[offset..]
-                        .as_chunks::<4>()
-                        .0
-                        .iter()
-                        .zip(expected[1..length + 1].as_chunks_mut::<4>().0)
-                    {
+                    for (src, dst) in src[offset..].as_chunks::<4>().0.iter().zip(expected[1..length + 1].as_chunks_mut::<4>().0) {
                         if src[3] != 0 {
                             *dst = *src;
                         }
@@ -282,10 +262,7 @@ mod tests {
                         let mut output = vec![0xa5; length + 2];
                         pack_bilevel::<INVERT>(source, &mut output[1..length + 1]);
                         for (group, &byte) in source.chunks(8).zip(&output[1..length + 1]) {
-                            let expected = group
-                                .iter()
-                                .enumerate()
-                                .fold(0, |bits, (i, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - i)));
+                            let expected = group.iter().enumerate().fold(0, |bits, (i, &value)| bits | (u8::from((value != 0) != INVERT) << (7 - i)));
                             assert_eq!(byte, expected);
                         }
                         assert_eq!(output[0], 0xa5);

@@ -122,11 +122,7 @@ mod tests {
                                 }
                             }
                             values.sort_unstable();
-                            assert_eq!(
-                                output[x + 1],
-                                values[R],
-                                "K={K} R={R} channels={channels} size={width}x{height} x={x} y={y}"
-                            );
+                            assert_eq!(output[x + 1], values[R], "K={K} R={R} channels={channels} size={width}x{height} x={x} y={y}");
                         }
                     }
                 }

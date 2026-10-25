@@ -35,11 +35,12 @@ pub(crate) fn _encode(
         if path.as_os_str().as_encoded_bytes().contains(&0) {
             return Err(PyValueError::new_err("embedded null byte"));
         }
-        py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string())))
-            .map_err(|(errno, message)| match errno {
+        py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string()))).map_err(|(errno, message)| {
+            match errno {
                 Some(errno) => PyOSError::new_err((errno, message, output.unbind())),
                 None => PyOSError::new_err(message),
-            })?;
+            }
+        })?;
         return Ok(None);
     }
     Ok(Some(PyBytes::new(py, &encoded).unbind()))

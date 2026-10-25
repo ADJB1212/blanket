@@ -105,19 +105,10 @@ fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) ->
     let interval = |origin: i64, limit: u32, increasing: bool| {
         let origin = i128::from(origin);
         let limit = i128::from(limit);
-        let (start, end) = if increasing {
-            (-origin, limit - origin)
-        } else {
-            (origin - limit + 1, origin + 1)
-        };
+        let (start, end) = if increasing { (-origin, limit - origin) } else { (origin - limit + 1, origin + 1) };
         start.clamp(0, i128::from(width)) as i64..end.clamp(0, i128::from(width)) as i64
     };
-    let mut ranges = [
-        interval(top, size.1, true),
-        interval(bottom, size.1, false),
-        interval(left, size.0, true),
-        interval(right, size.0, false),
-    ];
+    let mut ranges = [interval(top, size.1, true), interval(bottom, size.1, false), interval(left, size.0, true), interval(right, size.0, false)];
     ranges.sort_unstable_by_key(|range| range.start);
     let mut end = 0;
     for range in &mut ranges {
@@ -143,11 +134,7 @@ fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, co
         let stride = image.mode.channels();
         let offset = (y as usize * image.width as usize + x as usize) * stride;
         let pixel = &mut image.pixels.as_mut().unwrap()[offset..offset + stride];
-        let alpha = if blend {
-            (u32::from(coverage) * u32::from(ink[3]) + 127) / 255
-        } else {
-            u32::from(coverage)
-        };
+        let alpha = if blend { (u32::from(coverage) * u32::from(ink[3]) + 127) / 255 } else { u32::from(coverage) };
         for (dst, src) in pixel.iter_mut().zip(ink) {
             *dst = ((u32::from(*dst) * (255 - alpha) + u32::from(*src) * alpha + 127) / 255) as u8;
         }
@@ -170,11 +157,7 @@ fn distance_squared(point: (f64, f64), a: (f64, f64), b: (f64, f64)) -> f64 {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
     let length = dx * dx + dy * dy;
-    let t = if length == 0.0 {
-        0.0
-    } else {
-        (((point.0 - a.0) * dx + (point.1 - a.1) * dy) / length).clamp(0.0, 1.0)
-    };
+    let t = if length == 0.0 { 0.0 } else { (((point.0 - a.0) * dx + (point.1 - a.1) * dy) / length).clamp(0.0, 1.0) };
     (point.0 - a.0 - t * dx).powi(2) + (point.1 - a.1 - t * dy).powi(2)
 }
 
@@ -199,11 +182,7 @@ fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend:
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
     let horizontal = dx.abs() > dy.abs();
-    let (start, delta, minor, limit) = if horizontal {
-        (a.0, dx, dy, image.width)
-    } else {
-        (a.1, dy, dx, image.height)
-    };
+    let (start, delta, minor, limit) = if horizontal { (a.0, dx, dy, image.width) } else { (a.1, dy, dx, image.height) };
     if delta == 0.0 {
         return;
     }
@@ -218,11 +197,7 @@ fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend:
             continue;
         }
         let offset = (step * minor.abs() / length + 0.5).floor() * minor.signum();
-        let point = if horizontal {
-            (i64::from(coordinate), (a.1 + offset) as i64)
-        } else {
-            ((a.0 + offset) as i64, i64::from(coordinate))
-        };
+        let point = if horizontal { (i64::from(coordinate), (a.1 + offset) as i64) } else { ((a.0 + offset) as i64, i64::from(coordinate)) };
         paint(image, point.0, point.1, ink, blend);
     }
 }
@@ -308,9 +283,7 @@ fn draw_path(
                         let hit = if filled {
                             contains(&points, point)
                         } else {
-                            points
-                                .windows(2)
-                                .any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + STROKE_EPSILON)
+                            points.windows(2).any(|pair| distance_squared(point, pair[0], pair[1]) < radius * radius + STROKE_EPSILON)
                                 || (closed && distance_squared(point, points[points.len() - 1], points[0]) < radius * radius + STROKE_EPSILON)
                         };
                         covered += i32::from(hit);
@@ -337,18 +310,14 @@ fn draw_mask(
     let stroke = i64::try_from(stroke).map_err(|_| PyValueError::new_err("stroke is too large"))?;
     value.py().detach(|| {
         let left = (-stroke).max(position.0.saturating_neg());
-        let right = (size.0 as i64)
-            .saturating_add(stroke)
-            .min(i64::from(image.width).saturating_sub(position.0));
+        let right = (size.0 as i64).saturating_add(stroke).min(i64::from(image.width).saturating_sub(position.0));
         if left >= right || mask.is_empty() {
             return;
         }
         let mut row = vec![0; if stroke == 0 { 0 } else { (right - left) as usize }];
         let mut queue = VecDeque::new();
-        for y in (-stroke).max(position.1.saturating_neg())
-            ..(size.1 as i64)
-                .saturating_add(stroke)
-                .min(i64::from(image.height).saturating_sub(position.1))
+        for y in
+            (-stroke).max(position.1.saturating_neg())..(size.1 as i64).saturating_add(stroke).min(i64::from(image.height).saturating_sub(position.1))
         {
             let coverage = if stroke == 0 {
                 &mask[y as usize * size.0 + left as usize..y as usize * size.0 + right as usize]
@@ -434,20 +403,11 @@ fn font_mask(glyphs: &[Vec<u8>], scale: usize) -> PyResult<(usize, usize, Vec<u8
     if scale == 0 || glyphs.iter().any(|rows| rows.len() != 7) {
         return Err(PyValueError::new_err("invalid bitmap glyph or scale"));
     }
-    let width = glyphs
-        .len()
-        .checked_mul(6)
-        .and_then(|value| value.checked_mul(scale))
-        .ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
-    let height = if glyphs.is_empty() {
-        0
-    } else {
-        7usize.checked_mul(scale).ok_or_else(|| PyValueError::new_err("font mask is too large"))?
-    };
-    let length = width
-        .checked_mul(height)
-        .filter(|&length| length <= MAX_MASK_PIXELS)
-        .ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
+    let width =
+        glyphs.len().checked_mul(6).and_then(|value| value.checked_mul(scale)).ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
+    let height = if glyphs.is_empty() { 0 } else { 7usize.checked_mul(scale).ok_or_else(|| PyValueError::new_err("font mask is too large"))? };
+    let length =
+        width.checked_mul(height).filter(|&length| length <= MAX_MASK_PIXELS).ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
     let mut mask = vec![0; length];
     for (i, rows) in glyphs.iter().enumerate() {
         for (y, &row) in rows.iter().enumerate() {
@@ -598,13 +558,7 @@ mod tests {
                 assert_eq!(outline_ranges(bounds, width, (9, 7)).into_iter().flatten().collect::<Vec<_>>(), expected);
             }
         }
-        assert_eq!(
-            outline_ranges((i64::MIN, i64::MIN, i64::MAX, i64::MAX), i64::MAX, (9, 7))
-                .into_iter()
-                .flatten()
-                .count(),
-            8
-        );
+        assert_eq!(outline_ranges((i64::MIN, i64::MIN, i64::MAX, i64::MAX), i64::MAX, (9, 7)).into_iter().flatten().count(), 8);
     }
 
     #[test]
@@ -633,10 +587,7 @@ mod tests {
 
     #[test]
     fn flood_distance_retains_scalar_values() {
-        assert_eq!(
-            sample_distance(PixelMode::I, &i32::MIN.to_ne_bytes(), &i32::MAX.to_ne_bytes()),
-            4_294_967_295.0
-        );
+        assert_eq!(sample_distance(PixelMode::I, &i32::MIN.to_ne_bytes(), &i32::MAX.to_ne_bytes()), 4_294_967_295.0);
         assert_eq!(sample_distance(PixelMode::I16B, &1000u16.to_be_bytes(), &1001u16.to_be_bytes()), 1.0);
         assert_eq!(sample_distance(PixelMode::F, &1.25f32.to_ne_bytes(), &1.5f32.to_ne_bytes()), 0.25);
         assert!(sample_distance(PixelMode::F, &f32::NAN.to_ne_bytes(), &1.0f32.to_ne_bytes()).is_nan());

@@ -14,20 +14,10 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     if features.has_animation {
         return decode_rust_image(data, RustFormat::WebP, "WEBP");
     }
-    let (pixels, width, height) = if features.has_alpha {
-        webpx::decode_rgba(data)
-    } else {
-        webpx::decode_rgb(data)
-    }
-    .map_err(|error| error.to_string())?;
-    Image::from_pixels(
-        width,
-        height,
-        if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb },
-        pixels,
-        Some("WEBP".into()),
-    )
-    .map_err(|error| error.to_string())
+    let (pixels, width, height) =
+        if features.has_alpha { webpx::decode_rgba(data) } else { webpx::decode_rgb(data) }.map_err(|error| error.to_string())?;
+    Image::from_pixels(width, height, if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb }, pixels, Some("WEBP".into()))
+        .map_err(|error| error.to_string())
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -61,20 +51,13 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
         return decode_webp(data).map(Sequence::single);
     }
     let mut decoder = webpx::AnimationDecoder::new(data).map_err(|e| e.to_string())?;
-    let mut sequence = Sequence {
-        loop_count: Some(decoder.info().loop_count),
-        ..Sequence::default()
-    };
+    let mut sequence = Sequence { loop_count: Some(decoder.info().loop_count), ..Sequence::default() };
     let mut timestamp = 0;
     let mut total = 0;
     while decoder.has_more_frames() {
         validate_frame_budget(&mut total, decoder.info().width, decoder.info().height)?;
         let frame = decoder.next_frame().map_err(|e| e.to_string())?.ok_or("missing WebP frame")?;
-        let duration = frame
-            .timestamp_ms
-            .checked_sub(timestamp)
-            .filter(|d| *d >= 0)
-            .ok_or("invalid WebP timestamp")?;
+        let duration = frame.timestamp_ms.checked_sub(timestamp).filter(|d| *d >= 0).ok_or("invalid WebP timestamp")?;
         timestamp = frame.timestamp_ms;
         sequence.frames.push(Frame {
             image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into())).map_err(|e| e.to_string())?,
@@ -94,12 +77,8 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
     encoder.set_lossless(options.lossless);
     let mut timestamp: i32 = 0;
     for frame in &sequence.frames {
-        encoder
-            .add_frame_rgba(frame.image.borrow().pixel_data()?, timestamp)
-            .map_err(codec_error)?;
-        timestamp = timestamp
-            .checked_add(frame.duration.unwrap_or(0.0) as i32)
-            .ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
+        encoder.add_frame_rgba(frame.image.borrow().pixel_data()?, timestamp).map_err(codec_error)?;
+        timestamp = timestamp.checked_add(frame.duration.unwrap_or(0.0) as i32).ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
     }
     encoder.finish(timestamp).map_err(codec_error)
 }

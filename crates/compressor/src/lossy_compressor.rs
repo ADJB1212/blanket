@@ -44,12 +44,7 @@ impl LossyImageCompressor {
             return Ok(output);
         }
         let png = format == ImageFormat::Png && image.bit_depth == 8;
-        if !png
-            && !matches!(
-                format,
-                ImageFormat::Jpeg | ImageFormat::Jxl | ImageFormat::Webp | ImageFormat::Avif | ImageFormat::Heif
-            )
-        {
+        if !png && !matches!(format, ImageFormat::Jpeg | ImageFormat::Jxl | ImageFormat::Webp | ImageFormat::Avif | ImageFormat::Heif) {
             return Ok(output);
         }
         if png {
@@ -66,11 +61,7 @@ impl LossyImageCompressor {
             if lower > upper {
                 break;
             }
-            let quality = if bracketed {
-                lower + (upper - lower) / 2
-            } else {
-                options.quality.saturating_sub(drop).max(1)
-            };
+            let quality = if bracketed { lower + (upper - lower) / 2 } else { options.quality.saturating_sub(drop).max(1) };
             let candidate = codecs::encode(image, format, SaveOptions { quality, ..options })?;
             let decoded = codecs::decode(&candidate, format).map_err(PyOSError::new_err)?;
             if within_error(&decoded, &reference, self.max_rmse)? {
@@ -109,13 +100,8 @@ impl LossyImageCompressor {
         let mut smallest = usize::MAX;
         let mut trials = 0;
         'steps: for step in (2..=256).rev() {
-            let uniform = std::array::from_fn(|sample| {
-                if histogram[sample] == 0 {
-                    sample as u8
-                } else {
-                    ((sample + step / 2) / step * step).min(255) as u8
-                }
-            });
+            let uniform =
+                std::array::from_fn(|sample| if histogram[sample] == 0 { sample as u8 } else { ((sample + step / 2) / step * step).min(255) as u8 });
             for color_table in [uniform, png_centroid_table(&histogram, step)] {
                 if tried.contains(&color_table) || !png_rounding_within_error(&histogram, &color_table, channels, limit) {
                     continue;
@@ -307,14 +293,7 @@ mod tests {
                 for table in [&first, &second, &first] {
                     round_png_pixels(&source, &mut destination[1..source.len() + 1], channels, table);
                     for (i, (&actual, &sample)) in destination[1..source.len() + 1].iter().zip(&source).enumerate() {
-                        assert_eq!(
-                            actual,
-                            if channels == 4 && i % 4 == 3 {
-                                sample
-                            } else {
-                                table[usize::from(sample)]
-                            }
-                        );
+                        assert_eq!(actual, if channels == 4 && i % 4 == 3 { sample } else { table[usize::from(sample)] });
                     }
                     assert_eq!(destination[0], 19);
                     assert_eq!(*destination.last().unwrap(), 19);
@@ -406,9 +385,7 @@ mod tests {
                 let pixels = (0..count * channels).map(|i| (i * 53 % 256) as u8).collect::<Vec<_>>();
                 let histogram = png_rounding_histogram(&pixels, channels);
                 for step in [2_u16, 3, 6, 12, 64] {
-                    let table = (0..256)
-                        .map(|sample| ((sample as u16 + step / 2) / step * step).min(255) as u8)
-                        .collect::<Vec<_>>();
+                    let table = (0..256).map(|sample| ((sample as u16 + step / 2) / step * step).min(255) as u8).collect::<Vec<_>>();
                     let mut error = 0_u64;
                     for (index, &sample) in pixels.iter().enumerate() {
                         if channels != 4 || index % 4 != 3 {

@@ -59,9 +59,7 @@ fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
     let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
     reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
     let pixels = blanket_core::raster::unpack_bilevel(&packed, width as usize, height as usize);
-    Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into()))
-        .map(Some)
-        .map_err(|error| error.to_string())
+    Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into())).map(Some).map_err(|error| error.to_string())
 }
 
 pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
@@ -87,11 +85,7 @@ pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
             _ => png::Compression::High,
         });
         encoder.set_filter(png::Filter::NoFilter);
-        encoder
-            .write_header()
-            .map_err(codec_error)?
-            .write_image_data(&packed)
-            .map_err(codec_error)?;
+        encoder.write_header().map_err(codec_error)?.write_image_data(&packed).map_err(codec_error)?;
     }
     Ok(output)
 }
@@ -159,9 +153,7 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
             png::DeflateCompression::Level(options.compress_level)
         });
         let mut writer = encoder.write_header().map_err(codec_error)?;
-        writer
-            .write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()])
-            .map_err(codec_error)?;
+        writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()]).map_err(codec_error)?;
         let mut stream = writer.stream_writer().map_err(codec_error)?;
         let stride = image.width as usize * image.mode.channels() * 2;
         for row in pixels.chunks_exact(stride) {

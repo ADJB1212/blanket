@@ -26,9 +26,7 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 
 fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
     let mut pixels = Vec::new();
-    pixels
-        .try_reserve_exact(source.len())
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     pixels.extend_from_slice(source);
     output(image, pixels)
 }
@@ -52,12 +50,7 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
     py.detach(|| {
         chunks_mut(&mut pixels, CHUNK_PIXELS * first.mode.channels(), |i, dst| {
             let start = i * CHUNK_PIXELS * first.mode.channels();
-            blend_bytes(
-                &first_pixels[start..start + dst.len()],
-                &second_pixels[start..start + dst.len()],
-                dst,
-                factor,
-            );
+            blend_bytes(&first_pixels[start..start + dst.len()], &second_pixels[start..start + dst.len()], dst, factor);
         });
     });
     output(first, pixels)
@@ -152,13 +145,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
-        let mean = py.detach(|| {
-            if source.is_empty() {
-                0
-            } else {
-                (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8
-            }
-        });
+        let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8 });
         let gray = py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, vec![mean; source.len()], None))?;
         return gray.convert(py, image.mode.as_str(), None);
     }
@@ -171,11 +158,7 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         _ => unreachable!(),
     });
     let pixel_count = source.len() / image.mode.channels();
-    let mean = if pixel_count == 0 {
-        0
-    } else {
-        (sum as f64 / pixel_count as f64 + 0.5) as u8
-    };
+    let mean = if pixel_count == 0 { 0 } else { (sum as f64 / pixel_count as f64 + 0.5) as u8 };
 
     let mut pixels = alloc_pixels(source.len())?;
     py.detach(|| match image.mode {
@@ -217,18 +200,9 @@ fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
             let channels = load::<C>(&source[i..]);
             sum += u64::from(luminance(channels[0], channels[1], channels[2]).cast::<u32>().reduce_sum());
         }
-        sum + source[done..]
-            .as_chunks::<C>()
-            .0
-            .iter()
-            .map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2])))
-            .sum::<u64>()
+        sum + source[done..].as_chunks::<C>().0.iter().map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2]))).sum::<u64>()
     };
-    if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) {
-        source.par_chunks(CHUNK_PIXELS * C).map(sum).sum()
-    } else {
-        sum(source)
-    }
+    if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) { source.par_chunks(CHUNK_PIXELS * C).map(sum).sum() } else { sum(source) }
 }
 
 #[pyfunction]
@@ -258,9 +232,7 @@ fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let mut pixels = py.detach(|| -> PyResult<Vec<u8>> {
         let mut pixels = Vec::new();
-        pixels
-            .try_reserve_exact(source.len())
-            .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+        pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
         pixels.extend_from_slice(source);
         Ok(pixels)
     })?;
@@ -387,11 +359,7 @@ mod tests {
                         let a = f32::from(first[offset + i]);
                         let b = f32::from(second[offset + i]);
                         #[cfg(target_arch = "aarch64")]
-                        let expected = if i < count / 16 * 16 {
-                            factor.mul_add(b - a, a)
-                        } else {
-                            a + factor * (b - a)
-                        };
+                        let expected = if i < count / 16 * 16 { factor.mul_add(b - a, a) } else { a + factor * (b - a) };
                         #[cfg(not(target_arch = "aarch64"))]
                         let expected = a + factor * (b - a);
                         assert_eq!(output[offset + i], expected as u8);
@@ -409,12 +377,7 @@ mod tests {
             for fill in [None, Some(0), Some(255)] {
                 let source: Vec<u8> = (0..offset + count * C).map(|i| fill.unwrap_or((i * 37 + i / 11) as u8)).collect();
                 let source = &source[offset..];
-                let sum: u64 = source
-                    .as_chunks::<C>()
-                    .0
-                    .iter()
-                    .map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2])))
-                    .sum();
+                let sum: u64 = source.as_chunks::<C>().0.iter().map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2]))).sum();
                 assert_eq!(luminance_sum::<C>(source), sum);
             }
         }
@@ -434,9 +397,7 @@ mod tests {
     fn smooth_matches_scalar_with_unaligned_buffers_tails_and_guards() {
         fn check<const C: usize, const B: usize>(width: usize, height: usize, offset: usize) {
             for fill in [None, Some(0), Some(255)] {
-                let source: Vec<u8> = (0..offset + width * height * C + 16)
-                    .map(|i| fill.unwrap_or((i * 37 + i / 11) as u8))
-                    .collect();
+                let source: Vec<u8> = (0..offset + width * height * C + 16).map(|i| fill.unwrap_or((i * 37 + i / 11) as u8)).collect();
                 let mut expected = source.clone();
                 for y in 1..height - 1 {
                     for x in 1..width - 1 {

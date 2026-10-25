@@ -72,12 +72,9 @@ fn stat_extrema<'py>(histogram: &Bound<'py, PyList>) -> PyResult<Bound<'py, PyLi
         let values = histogram.extract::<Vec<u64>>()?;
         return PyList::new(
             histogram.py(),
-            bands(&values)?.iter().map(|band| {
-                (
-                    band.iter().position(|&n| n != 0).unwrap_or(255) as u8,
-                    band.iter().rposition(|&n| n != 0).unwrap_or(0) as u8,
-                )
-            }),
+            bands(&values)?
+                .iter()
+                .map(|band| (band.iter().position(|&n| n != 0).unwrap_or(255) as u8, band.iter().rposition(|&n| n != 0).unwrap_or(0) as u8)),
         );
     }
     if !histogram.len().is_multiple_of(256) {
@@ -101,11 +98,7 @@ fn weighted_sum(histogram: &[u64; 256], squared: bool) -> f64 {
     let mut result = 0.0;
     for (value, &count) in histogram.iter().enumerate() {
         // Match Pillow's accumulation order and conversion to floating point.
-        result += if squared {
-            (value * value) as f64 * count as f64
-        } else {
-            (value as u128 * u128::from(count)) as f64
-        };
+        result += if squared { (value * value) as f64 * count as f64 } else { (value as u128 * u128::from(count)) as f64 };
     }
     result
 }
@@ -167,16 +160,7 @@ fn stat_normalize(py: Python<'_>, values: Vec<f64>, counts: Vec<u128>, sums: Opt
 #[pyfunction]
 fn stat_sqrt(py: Python<'_>, values: Vec<f64>) -> PyResult<Vec<f64>> {
     py.detach(|| {
-        values
-            .into_iter()
-            .map(|value| {
-                if value < 0.0 {
-                    Err(PyValueError::new_err("math domain error"))
-                } else {
-                    Ok(value.sqrt())
-                }
-            })
-            .collect()
+        values.into_iter().map(|value| if value < 0.0 { Err(PyValueError::new_err("math domain error")) } else { Ok(value.sqrt()) }).collect()
     })
 }
 

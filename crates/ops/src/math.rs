@@ -20,17 +20,7 @@ mod tests {
     #[test]
     fn vector_math_matches_scalar_with_cropped_rows_and_tails() {
         let integers = [i32::MIN, i32::MAX, -1, 0, 1, 31, 32, -33, 123456789];
-        let floats = [
-            f32::NEG_INFINITY,
-            -3.5,
-            -0.0,
-            0.0,
-            2.5,
-            f32::INFINITY,
-            f32::NAN,
-            f32::MIN_POSITIVE,
-            f32::from_bits(1),
-        ];
+        let floats = [f32::NEG_INFINITY, -3.5, -0.0, 0.0, 2.5, f32::INFINITY, f32::NAN, f32::MIN_POSITIVE, f32::from_bits(1)];
         for name in [
             "abs", "neg", "invert", "add", "sub", "mul", "div", "mod", "pow", "and", "or", "xor", "lshift", "rshift", "eq", "ne", "lt", "le", "gt",
             "ge", "min", "max",
@@ -40,19 +30,13 @@ mod tests {
                 if float && op.integer_only() {
                     continue;
                 }
-                let values: Vec<[u8; 4]> = if float {
-                    floats.map(f32::to_le_bytes).to_vec()
-                } else {
-                    integers.map(i32::to_le_bytes).to_vec()
-                };
+                let values: Vec<[u8; 4]> = if float { floats.map(f32::to_le_bytes).to_vec() } else { integers.map(i32::to_le_bytes).to_vec() };
                 for width in [1, 3, 4, 5, 17, CHUNK_PIXELS + 3, CHUNK_PIXELS * 4 + 3] {
                     for cropped in [false, true] {
                         let left_width = width + usize::from(cropped) * 3;
                         let right_width = width + usize::from(cropped) * 5;
                         let a: Vec<u8> = (0..left_width * 3).flat_map(|i| values[i % values.len()]).collect();
-                        let b: Vec<u8> = (0..right_width * 3)
-                            .flat_map(|i| values[(i / values.len() + i * 2) % values.len()])
-                            .collect();
+                        let b: Vec<u8> = (0..right_width * 3).flat_map(|i| values[(i / values.len() + i * 2) % values.len()]).collect();
                         let b = (!op.unary()).then_some(b.as_slice());
                         let scalar = |a, b| {
                             if float {
@@ -64,9 +48,7 @@ mod tests {
                         let mut expected = vec![0; width * 3 * 4];
                         let mut actual = expected.clone();
                         apply_pixels(&mut expected, &a, b, [width, left_width, right_width], scalar, |_, _, _| 0);
-                        apply_pixels(&mut actual, &a, b, [width, left_width, right_width], scalar, |out, a, b| {
-                            simd::apply(out, a, b, op, float)
-                        });
+                        apply_pixels(&mut actual, &a, b, [width, left_width, right_width], scalar, |out, a, b| simd::apply(out, a, b, op, float));
                         if float {
                             let result = float_pixels(expected.len(), &a, b, [width, left_width, right_width], None, op, false).unwrap();
                             for (actual, expected) in result.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0) {
@@ -330,26 +312,18 @@ fn float_pixels(
             }
         }
     }
-    dispatch!(
-        Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max
-    )
+    dispatch!(Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max)
 }
 
 fn float_pixels_impl<const OP: usize>(
     len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, reverse: bool,
 ) -> PyResult<Vec<u8>> {
     let mut output = Vec::<[u8; 4]>::new();
-    output
-        .try_reserve_exact(len / 4)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    output.try_reserve_exact(len / 4).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     let a = a.as_chunks::<4>().0;
     let b = b.map(|b| b.as_chunks::<4>().0);
     const CHUNK: usize = 64 << 10;
-    let threshold = if matches!(Operation::ALL[OP], Operation::Mod | Operation::Pow) {
-        256 << 10
-    } else {
-        4 << 20
-    };
+    let threshold = if matches!(Operation::ALL[OP], Operation::Mod | Operation::Pow) { 256 << 10 } else { 4 << 20 };
     chunks_mut_above(&mut output.spare_capacity_mut()[..len / 4], CHUNK, threshold, |chunk, dst| {
         let mut index = chunk * CHUNK;
         let mut dst = dst;
@@ -363,14 +337,7 @@ fn float_pixels_impl<const OP: usize>(
                 (y * left_width + x, y * right_width + x, dst.len().min(width - x))
             };
             let (span, rest) = dst.split_at_mut(count);
-            simd::apply_float(
-                span,
-                &a[ai..ai + count],
-                b.map(|b| &b[bi..bi + count]),
-                scalar,
-                Operation::ALL[OP],
-                reverse,
-            );
+            simd::apply_float(span, &a[ai..ai + count], b.map(|b| &b[bi..bi + count]), scalar, Operation::ALL[OP], reverse);
             index += count;
             dst = rest;
         }
@@ -395,11 +362,7 @@ fn math_apply(
     let scalar = scalar
         .map(|value| {
             let sample = value as f32;
-            if value.is_finite() && !sample.is_finite() {
-                Err(PyOverflowError::new_err("float too large to pack with f format"))
-            } else {
-                Ok(sample)
-            }
+            if value.is_finite() && !sample.is_finite() { Err(PyOverflowError::new_err("float too large to pack with f format")) } else { Ok(sample) }
         })
         .transpose()?;
     let left_byte = matches!(left.mode, PixelMode::One | PixelMode::L);
@@ -420,22 +383,10 @@ fn math_apply(
     let b_raw = right.map(Image::raw_data).transpose()?;
     let width = right.map_or(left.width, |r| r.width.min(left.width)) as usize;
     let height = right.map_or(left.height, |r| r.height.min(left.height)) as usize;
-    let len = width
-        .checked_mul(height)
-        .and_then(|n| n.checked_mul(4))
-        .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    let len = width.checked_mul(height).and_then(|n| n.checked_mul(4)).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     if float {
-        let output = py.detach(|| {
-            float_pixels(
-                len,
-                a_raw,
-                b_raw,
-                [width, left.width as usize, right.map_or(0, |r| r.width as usize)],
-                scalar,
-                op,
-                reverse,
-            )
-        })?;
+        let output =
+            py.detach(|| float_pixels(len, a_raw, b_raw, [width, left.width as usize, right.map_or(0, |r| r.width as usize)], scalar, op, reverse))?;
         return if integer_output {
             Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
         } else {
@@ -443,9 +394,7 @@ fn math_apply(
         };
     }
     let mut output = Vec::new();
-    output
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    output.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     output.resize(len, 0);
     py.detach(|| {
         let a_widened;
@@ -476,9 +425,7 @@ fn math_apply(
                 }
             }
         }
-        dispatch!(
-            Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max
-        );
+        dispatch!(Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max);
     });
     Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
 }

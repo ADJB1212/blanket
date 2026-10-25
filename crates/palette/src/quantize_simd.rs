@@ -44,11 +44,7 @@ fn distance(a: Color, b: Color) -> u32 {
 
 #[cfg(test)]
 fn scalar(color: Color, entries: &[Color]) -> usize {
-    entries
-        .iter()
-        .enumerate()
-        .min_by_key(|(_, entry)| distance(color, **entry))
-        .map_or(0, |(i, _)| i)
+    entries.iter().enumerate().min_by_key(|(_, entry)| distance(color, **entry)).map_or(0, |(i, _)| i)
 }
 
 #[cfg(test)]

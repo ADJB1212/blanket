@@ -15,23 +15,14 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
     };
     let (width, height) = (reader.info().width, reader.info().height);
     let default_image = reader.info().frame_control.is_none();
-    let count = animation
-        .num_frames
-        .checked_add(u32::from(default_image))
-        .ok_or("APNG frame count overflow")?;
+    let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
     if count == 0 {
         return Err("APNG contains no frames".into());
     }
-    let mut total = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|v| v.checked_mul(count as usize - 1))
-        .ok_or("APNG pixel count overflow")?;
+    let mut total =
+        (width as usize).checked_mul(height as usize).and_then(|v| v.checked_mul(count as usize - 1)).ok_or("APNG pixel count overflow")?;
     validate_frame_budget(&mut total, width, height)?;
-    let mut sequence = Sequence {
-        loop_count: Some(animation.num_plays),
-        default_image,
-        ..Sequence::default()
-    };
+    let mut sequence = Sequence { loop_count: Some(animation.num_plays), default_image, ..Sequence::default() };
     let mut buffer = blanket_core::raster::alloc_pixels(reader.output_buffer_size().ok_or("PNG buffer overflow")?).map_err(|e| e.to_string())?;
     let mut canvas = Vec::new();
     let length = width as usize * height as usize;
@@ -62,11 +53,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
             for col in 0..output.width as usize {
                 let start = (row * output.width as usize + col) * channels * bytes;
                 let sample = |c: usize| -> u16 {
-                    if wide {
-                        u16::from_be_bytes([buffer[start + c * 2], buffer[start + c * 2 + 1]])
-                    } else {
-                        u16::from(buffer[start + c])
-                    }
+                    if wide { u16::from_be_bytes([buffer[start + c * 2], buffer[start + c * 2 + 1]]) } else { u16::from(buffer[start + c]) }
                 };
                 let src = match output.color_type {
                     png::ColorType::Grayscale => [sample(0), sample(0), sample(0), max as u16],
@@ -87,31 +74,17 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
                     let da = u64::from(dst[3]);
                     let alpha = sa * max + da * (max - sa);
                     for c in 0..3 {
-                        dst[c] = (u64::from(src[c]) * sa * max + u64::from(dst[c]) * da * (max - sa) + alpha / 2)
-                            .checked_div(alpha)
-                            .unwrap_or(0) as u16;
+                        dst[c] =
+                            (u64::from(src[c]) * sa * max + u64::from(dst[c]) * da * (max - sa) + alpha / 2).checked_div(alpha).unwrap_or(0) as u16;
                     }
                     dst[3] = ((alpha + max / 2) / max) as u16;
                 }
             }
         }
         let image = if wide {
-            Image::from_samples(
-                width,
-                height,
-                PixelMode::Rgba,
-                canvas.iter().flatten().copied().collect(),
-                16,
-                Some("PNG".into()),
-            )
+            Image::from_samples(width, height, PixelMode::Rgba, canvas.iter().flatten().copied().collect(), 16, Some("PNG".into()))
         } else {
-            Image::from_pixels(
-                width,
-                height,
-                PixelMode::Rgba,
-                canvas.iter().flatten().map(|&v| v as u8).collect(),
-                Some("PNG".into()),
-            )
+            Image::from_pixels(width, height, PixelMode::Rgba, canvas.iter().flatten().map(|&v| v as u8).collect(), Some("PNG".into()))
         }
         .map_err(|e| e.to_string())?;
         sequence.frames.push(Frame {
@@ -148,11 +121,7 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
     {
         let mut encoder = png::Encoder::new(&mut output, first.width, first.height);
         encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(if first.bit_depth > 8 {
-            png::BitDepth::Sixteen
-        } else {
-            png::BitDepth::Eight
-        });
+        encoder.set_depth(if first.bit_depth > 8 { png::BitDepth::Sixteen } else { png::BitDepth::Eight });
         encoder
             .set_animated(
                 u32::try_from(sequence.frames.len() - usize::from(sequence.default_image)).map_err(codec_error)?,
@@ -171,11 +140,7 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
             let image = frame.image.borrow();
             if !(sequence.default_image && i == 0) {
                 let duration = frame.duration.unwrap_or(0.0);
-                let (num, den) = if duration <= 65535.0 {
-                    (duration.round() as u16, 1000)
-                } else {
-                    ((duration / 1000.0).round() as u16, 1)
-                };
+                let (num, den) = if duration <= 65535.0 { (duration.round() as u16, 1000) } else { ((duration / 1000.0).round() as u16, 1) };
                 writer.set_frame_delay(num, den).map_err(codec_error)?;
                 writer
                     .set_dispose_op(png::DisposeOp::from_u8(frame.disposal).ok_or_else(|| PyValueError::new_err("invalid APNG disposal"))?)

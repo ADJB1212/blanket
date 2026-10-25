@@ -48,9 +48,7 @@ fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
         .and_then(|n| n.checked_mul(channels))
         .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
     let mut result = Vec::new();
-    result
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    result.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     Ok(result)
 }
 
@@ -100,10 +98,8 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         return py.detach(|| {
             (0..image.mode.channels())
                 .map(|channel| {
-                    let samples = source
-                        .chunks_exact(image.mode.channels() * 2)
-                        .map(|v| u16::from_le_bytes([v[channel * 2], v[channel * 2 + 1]]))
-                        .collect();
+                    let samples =
+                        source.chunks_exact(image.mode.channels() * 2).map(|v| u16::from_le_bytes([v[channel * 2], v[channel * 2 + 1]])).collect();
                     Image::from_samples(image.width, image.height, PixelMode::L, samples, image.bit_depth, None)
                 })
                 .collect()
@@ -114,9 +110,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     if channels == 1 {
         return py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, source.to_vec(), None).map(|band| vec![band]));
     }
-    let mut bands = (0..channels)
-        .map(|_| buffer((image.width, image.height), 1))
-        .collect::<PyResult<Vec<_>>>()?;
+    let mut bands = (0..channels).map(|_| buffer((image.width, image.height), 1)).collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
         let split = |offset: usize, red: &mut [u8], green: &mut [u8], blue: &mut [u8], alpha: Option<&mut [u8]>| {
             let src = &source[offset * channels..(offset + red.len()) * channels];
@@ -131,9 +125,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
             }
         };
         // Deinterleave all bands in one source pass and one Rayon dispatch.
-        let [red, green, blue, rest @ ..] = bands.as_mut_slice() else {
-            unreachable!()
-        };
+        let [red, green, blue, rest @ ..] = bands.as_mut_slice() else { unreachable!() };
         if !should_parallel(source.len(), CHUNK_PIXELS * channels, 2 * 1024 * 1024) {
             split(0, red, green, blue, rest.first_mut().map(Vec::as_mut_slice));
         } else if let Some(alpha) = rest.first_mut() {
@@ -151,10 +143,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
                 .for_each(|(i, ((r, g), b))| split(i * CHUNK_PIXELS, r, g, b, None));
         }
     });
-    bands
-        .into_iter()
-        .map(|pixels| Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None))
-        .collect()
+    bands.into_iter().map(|pixels| Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None)).collect()
 }
 
 #[pyfunction(signature = (image, mask=None, extrema=None))]
@@ -212,11 +201,7 @@ fn sample_histogram<const N: usize>(
         return Ok(bins);
     }
     let (low, high) = extrema.unwrap_or_else(|| {
-        samples
-            .iter()
-            .map(&sample)
-            .filter(|v| v.is_finite())
-            .fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
+        samples.iter().map(&sample).filter(|v| v.is_finite()).fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), v| (lo.min(v), hi.max(v)))
     });
     if !low.is_finite() || !high.is_finite() || high < low {
         return Err(PyValueError::new_err("invalid extrema"));
@@ -249,11 +234,7 @@ fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
     if distance == 0 || image.width == 0 || image.height == 0 {
         return output(image, (image.width, image.height), py.detach(|| source.to_vec()));
     }
-    let mut state = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64
-        | 1;
+    let mut state = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 | 1;
     let mut pixels = reserved_buffer((image.width, image.height), channels)?;
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..source.len()];
@@ -408,19 +389,15 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
     if !should_parallel(source.len(), CHUNK_PIXELS * C, MIN_PARALLEL_BYTES) {
         return count(0, source);
     }
-    source
-        .par_chunks(CHUNK_PIXELS * C)
-        .enumerate()
-        .map(|(i, bytes)| count(i * CHUNK_PIXELS, bytes))
-        .reduce(
-            || vec![0; C << 8],
-            |mut total, bins| {
-                for (a, b) in total.iter_mut().zip(bins) {
-                    *a += b;
-                }
-                total
-            },
-        )
+    source.par_chunks(CHUNK_PIXELS * C).enumerate().map(|(i, bytes)| count(i * CHUNK_PIXELS, bytes)).reduce(
+        || vec![0; C << 8],
+        |mut total, bins| {
+            for (a, b) in total.iter_mut().zip(bins) {
+                *a += b;
+            }
+            total
+        },
+    )
 }
 
 /// Place the source on a filled canvas. Negative offsets clip the source.
@@ -440,9 +417,7 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
         }
     } else if image.bit_depth > 8 {
         let maximum = (1_u32 << image.bit_depth) - 1;
-        fill.into_iter()
-            .flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes())
-            .collect()
+        fill.into_iter().flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes()).collect()
     } else {
         fill
     };
@@ -499,11 +474,7 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
     if orientation == 1 {
         return image.copy(py);
     }
-    let size = if orientation >= 5 {
-        (image.height, image.width)
-    } else {
-        (image.width, image.height)
-    };
+    let size = if orientation >= 5 { (image.height, image.width) } else { (image.width, image.height) };
     let c = image.raw_bytes_per_pixel();
     if orientation == 4 {
         let mut pixels = reserved_buffer(size, c)?;
@@ -591,9 +562,7 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                     let src = src.as_flattened();
                     let end = w / 64 * 64;
                     for x in (0..end).step_by(64) {
-                        std::simd::Simd::<u8, 64>::from_slice(&src[w - x - 64..w - x])
-                            .reverse()
-                            .copy_to_slice(&mut row[x..x + 64]);
+                        std::simd::Simd::<u8, 64>::from_slice(&src[w - x - 64..w - x]).reverse().copy_to_slice(&mut row[x..x + 64]);
                     }
                     for (dst, src) in row[end..].iter_mut().zip(src[..w - end].iter().rev()) {
                         *dst = *src;
@@ -609,11 +578,7 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                 let count = rows.len() / (width * C);
                 for x in x0..(x0 + 32).min(width) {
                     let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
-                    let sx = if orientation == 7 || orientation == 8 {
-                        w - band * 32 - count
-                    } else {
-                        band << 5
-                    };
+                    let sx = if orientation == 7 || orientation == 8 { w - band * 32 - count } else { band << 5 };
                     let src = &source[sy * w + sx..sy * w + sx + count];
                     for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
                         let i = if orientation == 7 || orientation == 8 { count - 1 - i } else { i };
@@ -726,10 +691,7 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Resampl
         _ => 1.0,
     } * filter_scale;
     let mut raw = Vec::new();
-    let mut weights = ResampleWeights {
-        bounds: Vec::with_capacity(output as usize),
-        coefficients: Vec::new(),
-    };
+    let mut weights = ResampleWeights { bounds: Vec::with_capacity(output as usize), coefficients: Vec::new() };
     for i in 0..output {
         let center = start + (f64::from(i) + 0.5) * scale;
         let left = ((center - support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
@@ -738,13 +700,7 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Resampl
         raw.extend((left..right).map(|x| kernel((x as f64 - center + 0.5) * (1.0 / filter_scale), method)));
         let sum: f64 = raw.iter().sum();
         let offset = weights.coefficients.len();
-        weights.coefficients.extend(raw.iter().map(|&v| {
-            if sum == 0.0 {
-                0
-            } else {
-                (v / sum * f64::from(RESAMPLE_SCALE)).round() as i32
-            }
-        }));
+        weights.coefficients.extend(raw.iter().map(|&v| if sum == 0.0 { 0 } else { (v / sum * f64::from(RESAMPLE_SCALE)).round() as i32 }));
         weights.bounds.push((left, offset..weights.coefficients.len()));
     }
     weights
@@ -1053,14 +1009,7 @@ fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bound
     // storage. Pass order affects 8-bit rounding, so retain it as well.
     if u64::from(image.height) > u64::from(image.width) * 100 && size.1 < image.height && image.width > 0 {
         let transposed = ops_transpose(py, image, 5)?;
-        let resized = ops_resize(
-            py,
-            &transposed,
-            (size.1, size.0),
-            method,
-            (bounds.1, bounds.0, bounds.3, bounds.2),
-            reducing_gap,
-        )?;
+        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap)?;
         return ops_transpose(py, &resized, 5);
     }
     let c = image.mode.channels();
@@ -1255,12 +1204,9 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
     let (last, tail) = vertical.get(size.1 as usize - 1);
     let rows = last + tail.len() - first;
     let stride = size.0 as usize * channels;
-    let length = rows
-        .checked_mul(stride)
-        .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    let length = rows.checked_mul(stride).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     let mut temp = Vec::new();
-    temp.try_reserve_exact(length)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    temp.try_reserve_exact(length).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     temp.resize(length, 0.0);
     let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
     chunks_mut_above(&mut temp, stride * 8, MIN_PARALLEL_BYTES, |band, rows| {
@@ -1274,11 +1220,7 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
                         .map(|(i, &weight)| {
                             let offset = ((y + first) * image.width as usize + start + i) * channels;
                             let value = sample(offset + channel);
-                            let value = if channels == 4 && channel < 3 {
-                                value * sample(offset + 3) / maximum
-                            } else {
-                                value
-                            };
+                            let value = if channels == 4 && channel < 3 { value * sample(offset + 3) / maximum } else { value };
                             value * f64::from(weight) / f64::from(RESAMPLE_SCALE)
                         })
                         .sum::<f64>();
@@ -1388,9 +1330,10 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
             let src = &temp[(start - first_row) * row_bytes..];
             let vectorized = crate::ops_simd::vertical(src, dst, row_bytes, coefficients);
             for (x, out) in dst.iter_mut().enumerate().skip(vectorized) {
-                let sum = coefficients.iter().enumerate().fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| {
-                    sum + i64::from(src[i * row_bytes + x]) * i64::from(w)
-                });
+                let sum = coefficients
+                    .iter()
+                    .enumerate()
+                    .fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| sum + i64::from(src[i * row_bytes + x]) * i64::from(w));
                 *out = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
             }
         }
@@ -1421,9 +1364,10 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
                     }
                 } else {
                     for c in 0..C {
-                        let sum = coefficients.iter().enumerate().fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| {
-                            sum + i64::from(src[start + i][c]) * i64::from(w)
-                        });
+                        let sum = coefficients
+                            .iter()
+                            .enumerate()
+                            .fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
                         dst[c] = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
                     }
                 }
@@ -1441,11 +1385,7 @@ fn cubic(v: [f64; 4], t: f64) -> f64 {
 
 fn interpolate(a: f64, b: f64, t: f64) -> f64 {
     // C compilers contract this expression on ARM; preserve that rounding.
-    if cfg!(target_arch = "aarch64") {
-        (b - a).mul_add(t, a)
-    } else {
-        a + (b - a) * t
-    }
+    if cfg!(target_arch = "aarch64") { (b - a).mul_add(t, a) } else { a + (b - a) * t }
 }
 
 fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u8]) {
@@ -1504,29 +1444,17 @@ fn sample_float(source: &[u8], width: usize, height: usize, x: f64, y: f64, meth
 
 fn affine_coordinate(a: f64, b: f64, c: f64, x: f64, y: f64) -> f64 {
     // Match the contraction order used by Pillow's ARM affine mapper.
-    if cfg!(target_arch = "aarch64") {
-        a.mul_add(x, b * y) + c
-    } else {
-        a * x + b * y + c
-    }
+    if cfg!(target_arch = "aarch64") { a.mul_add(x, b * y) + c } else { a * x + b * y + c }
 }
 
 fn quad_coordinate(origin: f64, a: f64, b: f64, c: f64, u: f64, v: f64) -> f64 {
-    if cfg!(target_arch = "aarch64") {
-        (c * u).mul_add(v, b.mul_add(v, a.mul_add(u, origin)))
-    } else {
-        origin + a * u + b * v + c * u * v
-    }
+    if cfg!(target_arch = "aarch64") { (c * u).mul_add(v, b.mul_add(v, a.mul_add(u, origin))) } else { origin + a * u + b * v + c * u * v }
 }
 
 fn nearest_columns<const C: usize>(source: Option<&[u8]>, row: &mut [u8], columns: &[Option<usize>], fill: &[u8]) {
     let fill: [u8; C] = fill.try_into().unwrap();
     for (dst, column) in row.as_chunks_mut::<C>().0.iter_mut().zip(columns) {
-        *dst = if let (Some(src), Some(offset)) = (source, column) {
-            src[*offset..*offset + C].try_into().unwrap()
-        } else {
-            fill
-        };
+        *dst = if let (Some(src), Some(offset)) = (source, column) { src[*offset..*offset + C].try_into().unwrap() } else { fill };
     }
 }
 
@@ -1565,10 +1493,7 @@ fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &Neares
         let u = x as f64 + 0.5;
         let (sx, sy) = if warp.perspective {
             let divisor = affine_coordinate(warp.q[6], warp.q[7], 1.0, u, v);
-            (
-                affine_coordinate(warp.q[0], warp.q[1], warp.q[2], u, v) / divisor,
-                affine_coordinate(warp.q[3], warp.q[4], warp.q[5], u, v) / divisor,
-            )
+            (affine_coordinate(warp.q[0], warp.q[1], warp.q[2], u, v) / divisor, affine_coordinate(warp.q[3], warp.q[4], warp.q[5], u, v) / divisor)
         } else {
             (quad_coordinate(warp.q[0], ax, bx, cx, u, v), quad_coordinate(warp.q[1], ay, by, cy, u, v))
         };
@@ -1694,17 +1619,10 @@ fn ops_affine(
                 return;
             }
         }
-        let nearest_l = columns
-            .as_ref()
-            .filter(|_| channels == 1)
-            .and_then(|columns| crate::ops_simd::NearestL::new(columns, image.width as usize));
+        let nearest_l = columns.as_ref().filter(|_| channels == 1).and_then(|columns| crate::ops_simd::NearestL::new(columns, image.width as usize));
         // Table gathers are memory work: small outputs cost less than a Rayon
         // dispatch. Other transforms still benefit from finer scheduling.
-        let threshold = if nearest_l.as_ref().is_some_and(|map| map.is_vectorized()) {
-            MIN_PARALLEL_BYTES
-        } else {
-            32 << 10
-        };
+        let threshold = if nearest_l.as_ref().is_some_and(|map| map.is_vectorized()) { MIN_PARALLEL_BYTES } else { 32 << 10 };
         chunks_mut_above(&mut pixels, row_bytes * 16, threshold, |band, rows| {
             for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                 let y = (band * 16 + i) as f64;
@@ -1753,10 +1671,7 @@ fn ops_affine(
                         nearest.1 += d;
                         coordinate
                     } else {
-                        (
-                            affine_coordinate(a, b, c, x as f64 + 0.5, y + 0.5),
-                            affine_coordinate(d, e, f, x as f64 + 0.5, y + 0.5),
-                        )
+                        (affine_coordinate(a, b, c, x as f64 + 0.5, y + 0.5), affine_coordinate(d, e, f, x as f64 + 0.5, y + 0.5))
                     };
                     if sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64 {
                         sample(&source, image, sx, sy, method, dst);
@@ -1813,10 +1728,7 @@ fn ops_warp(
                         let v = (y - top) as f64 + 0.5;
                         let (sx, sy) = if perspective {
                             let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
-                            (
-                                affine_coordinate(q[0], q[1], q[2], u, v) / divisor,
-                                affine_coordinate(q[3], q[4], q[5], u, v) / divisor,
-                            )
+                            (affine_coordinate(q[0], q[1], q[2], u, v) / divisor, affine_coordinate(q[3], q[4], q[5], u, v) / divisor)
                         } else {
                             (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
                         };
@@ -1897,44 +1809,36 @@ fn ops_warp(
             };
             // Mesh entries retain their order (later boxes overwrite earlier
             // ones); only disjoint rows within an entry execute concurrently.
-            chunks_mut_above(
-                &mut result[first * row_bytes..last * row_bytes],
-                row_bytes << 4,
-                32 << 10,
-                |band, rows| {
-                    for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                        let y = (first + band * 16 + i) as i64;
-                        let v = (y - top.max(0)) as f64 + 0.5;
-                        if method == 0 {
-                            let dst = &mut row[start * c..end * c];
-                            match image.mode {
-                                PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
-                                PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
-                                PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => warp_nearest_row::<3>(&source, dst, &warp, v),
-                                PixelMode::Rgba | PixelMode::Cmyk => warp_nearest_row::<4>(&source, dst, &warp, v),
-                                _ => unreachable!(),
-                            }
-                            continue;
+            chunks_mut_above(&mut result[first * row_bytes..last * row_bytes], row_bytes << 4, 32 << 10, |band, rows| {
+                for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                    let y = (first + band * 16 + i) as i64;
+                    let v = (y - top.max(0)) as f64 + 0.5;
+                    if method == 0 {
+                        let dst = &mut row[start * c..end * c];
+                        match image.mode {
+                            PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
+                            PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
+                            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => warp_nearest_row::<3>(&source, dst, &warp, v),
+                            PixelMode::Rgba | PixelMode::Cmyk => warp_nearest_row::<4>(&source, dst, &warp, v),
+                            _ => unreachable!(),
                         }
-                        for x in start..end {
-                            let u = (x - start) as f64 + 0.5;
-                            let (sx, sy) = if perspective {
-                                let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
-                                (
-                                    affine_coordinate(q[0], q[1], q[2], u, v) / divisor,
-                                    affine_coordinate(q[3], q[4], q[5], u, v) / divisor,
-                                )
-                            } else {
-                                (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
-                            };
-                            let dst = x * c;
-                            if fill.is_none() || (sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64) {
-                                sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
-                            }
+                        continue;
+                    }
+                    for x in start..end {
+                        let u = (x - start) as f64 + 0.5;
+                        let (sx, sy) = if perspective {
+                            let divisor = affine_coordinate(q[6], q[7], 1.0, u, v);
+                            (affine_coordinate(q[0], q[1], q[2], u, v) / divisor, affine_coordinate(q[3], q[4], q[5], u, v) / divisor)
+                        } else {
+                            (quad_coordinate(q[0], ax, bx, cx, u, v), quad_coordinate(q[1], ay, by, cy, u, v))
+                        };
+                        let dst = x * c;
+                        if fill.is_none() || (sx >= 0.0 && sy >= 0.0 && sx < image.width as f64 && sy < image.height as f64) {
+                            sample(&source, image, sx, sy, method, &mut row[dst..dst + c]);
                         }
                     }
-                },
-            );
+                }
+            });
         }
         if method != 0 {
             unpremultiply_image(image.mode, &mut result);
@@ -2005,21 +1909,12 @@ mod tests {
                     crate::ops_simd::reverse_gray(&source[offset..offset + width], &mut spare[offset..offset + width]);
                     // SAFETY: the whole buffer was initialized before the call.
                     let actual: Vec<_> = spare.into_iter().map(|v| unsafe { v.assume_init() }).collect();
-                    assert_eq!(
-                        &actual[offset..offset + width],
-                        source[offset..offset + width].iter().rev().copied().collect::<Vec<_>>()
-                    );
+                    assert_eq!(&actual[offset..offset + width], source[offset..offset + width].iter().rev().copied().collect::<Vec<_>>());
                     assert!(actual[..offset].iter().all(|&v| v == 93));
                     assert!(actual[offset + width..].iter().all(|&v| v == 93));
                     for orientation in [2, 3] {
                         let mut output = vec![93; offset + width * height + 16];
-                        transpose::<1>(
-                            &source[offset..],
-                            &mut output[offset..offset + width * height],
-                            width,
-                            height,
-                            orientation,
-                        );
+                        transpose::<1>(&source[offset..], &mut output[offset..offset + width * height], width, height, orientation);
                         for y in 0..height {
                             let sy = if orientation == 3 { height - 1 - y } else { y };
                             for x in 0..width {
@@ -2150,14 +2045,7 @@ mod tests {
             let indexed = Image::from_pixels(length as u32, 1, PixelMode::L, source, None).unwrap();
             assert_eq!(remap_indices(&indexed, &mapping).unwrap().pixel_data().unwrap(), expected);
         }
-        let bitmap = Image::from_pixels(
-            9,
-            2,
-            PixelMode::One,
-            vec![255, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255],
-            None,
-        )
-        .unwrap();
+        let bitmap = Image::from_pixels(9, 2, PixelMode::One, vec![255, 0, 0, 0, 0, 0, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255], None).unwrap();
         assert_eq!(ops_xbm_bits(&bitmap).unwrap(), [0x81, 0, 0, 1]);
     }
 }

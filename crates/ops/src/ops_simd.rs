@@ -20,10 +20,7 @@ pub(crate) fn box_half<const C: usize>(upper: &[u8], lower: &[u8], output: &mut 
         };
         let upper = horizontal(upper);
         let lower = horizontal(lower);
-        store::<C>(
-            &mut output[i..],
-            std::array::from_fn(|c| ((upper[c] + lower[c] + Simd::splat(1)) >> 1).cast::<u8>()),
-        );
+        store::<C>(&mut output[i..], std::array::from_fn(|c| ((upper[c] + lower[c] + Simd::splat(1)) >> 1).cast::<u8>()));
     }
     for (x, dst) in output[end..].iter_mut().enumerate() {
         let x = end + x;
@@ -38,10 +35,7 @@ pub(crate) fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8
     assert_eq!(source.len(), count);
     let (blocks, tail) = output.as_chunks_mut::<64>();
     for (i, block) in blocks.iter_mut().enumerate() {
-        *block = Simd::<u8, 64>::from_slice(&source[count - (i + 1) * 64..count - i * 64])
-            .reverse()
-            .to_array()
-            .map(std::mem::MaybeUninit::new);
+        *block = Simd::<u8, 64>::from_slice(&source[count - (i + 1) * 64..count - i * 64]).reverse().to_array().map(std::mem::MaybeUninit::new);
     }
     let length = tail.len();
     for (dst, &src) in tail.iter_mut().zip(source[..length].iter().rev()) {
@@ -186,10 +180,7 @@ fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
     let end = source.len() / 16 * 16;
     for i in (0..end).step_by(16) {
         let indices = Bytes::from_slice(&source[i..i + 16]).cast::<usize>();
-        store(
-            &mut output[i * 3..],
-            std::array::from_fn::<_, 3, _>(|c| Bytes::gather_or_default(&tables[c * 256..(c + 1) * 256], indices)),
-        );
+        store(&mut output[i * 3..], std::array::from_fn::<_, 3, _>(|c| Bytes::gather_or_default(&tables[c * 256..(c + 1) * 256], indices)));
     }
     end
 }
@@ -208,10 +199,7 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
             let values = Simd::<u8, 8>::from_slice(&source[i * stride + x..i * stride + x + 8]);
             acc += values.cast::<i32>() * Simd::splat(weight);
         }
-        (acc >> RESAMPLE_BITS as i32)
-            .simd_clamp(Simd::splat(0), Simd::splat(255))
-            .cast::<u8>()
-            .copy_to_slice(&mut output[x..x + 8]);
+        (acc >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>().copy_to_slice(&mut output[x..x + 8]);
     }
     end
 }
@@ -225,12 +213,7 @@ pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
         let values = std::array::from_fn::<_, C, _>(|c| first[c].deinterleave(second[c]).1);
         store(&mut output[i..], values);
     }
-    for (dst, pair) in output[done..]
-        .as_chunks_mut::<C>()
-        .0
-        .iter_mut()
-        .zip(source[done * 2..].as_chunks::<C>().0.as_chunks::<2>().0)
-    {
+    for (dst, pair) in output[done..].as_chunks_mut::<C>().0.iter_mut().zip(source[done * 2..].as_chunks::<C>().0.as_chunks::<2>().0) {
         *dst = pair[1];
     }
 }
@@ -311,21 +294,9 @@ mod tests {
     #[test]
     fn float_reduction_preserves_odd_edges_and_accumulation_order() {
         for width in 0_usize..=33 {
-            let samples = [
-                0.0_f32,
-                -0.0,
-                f32::MAX,
-                -f32::MAX,
-                1.25,
-                -2.75,
-                f32::MIN_POSITIVE,
-                f32::INFINITY,
-                f32::NAN,
-            ];
+            let samples = [0.0_f32, -0.0, f32::MAX, -f32::MAX, 1.25, -2.75, f32::MIN_POSITIVE, f32::INFINITY, f32::NAN];
             let rows: [Vec<u8>; 2] = std::array::from_fn(|r| {
-                std::iter::once(93)
-                    .chain((0..width).flat_map(|i| samples[(i + r * 3) % samples.len()].to_le_bytes()))
-                    .collect()
+                std::iter::once(93).chain((0..width).flat_map(|i| samples[(i + r * 3) % samples.len()].to_le_bytes())).collect()
             });
             let mut output = vec![93; width.div_ceil(2) * 4 + 2];
             let len = output.len();
@@ -357,11 +328,7 @@ mod tests {
                 let mut output = vec![73; count + 2];
                 let done = super::reduce_two_l(&upper[1..], &lower[1..], &mut output[1..count + 1]);
                 for i in 0..done {
-                    let sum: u32 = [&upper, &lower]
-                        .iter()
-                        .flat_map(|r| &r[1 + i * 2..1 + (i + 1) * 2])
-                        .map(|&v| u32::from(v))
-                        .sum();
+                    let sum: u32 = [&upper, &lower].iter().flat_map(|r| &r[1 + i * 2..1 + (i + 1) * 2]).map(|&v| u32::from(v)).sum();
                     assert_eq!(output[i + 1], ((sum + 2) / 4) as u8);
                 }
                 assert_eq!(output[0], 73);
@@ -381,11 +348,7 @@ mod tests {
                 let done = super::reduce_three_l(&upper[1..], &middle[1..], &lower[1..], &mut output[1..count + 1]);
                 assert_eq!(done, count / 16 * 16);
                 for i in 0..done {
-                    let sum: u32 = [&upper, &middle, &lower]
-                        .iter()
-                        .flat_map(|r| &r[1 + i * 3..1 + (i + 1) * 3])
-                        .map(|&v| u32::from(v))
-                        .sum();
+                    let sum: u32 = [&upper, &middle, &lower].iter().flat_map(|r| &r[1 + i * 3..1 + (i + 1) * 3]).map(|&v| u32::from(v)).sum();
                     assert_eq!(output[i + 1], (((sum + 4) * 1_864_135) >> 24) as u8);
                 }
                 assert_eq!(output[0], 73);
@@ -401,10 +364,7 @@ mod tests {
                 let source: Vec<u8> = (0..count * C * 2 + 1).map(|i| (i * 37 + i / 11) as u8).collect();
                 let mut output = vec![199; count * C + 2];
                 super::nearest_half::<C>(&source[1..], &mut output[1..count * C + 1]);
-                let expected: Vec<_> = (0..count)
-                    .flat_map(|i| (0..C).map(move |c| 1 + (i * 2 + 1) * C + c))
-                    .map(|i| source[i])
-                    .collect();
+                let expected: Vec<_> = (0..count).flat_map(|i| (0..C).map(move |c| 1 + (i * 2 + 1) * C + c)).map(|i| source[i]).collect();
                 assert_eq!(&output[1..count * C + 1], expected);
                 assert_eq!(output[0], 199);
                 assert_eq!(output[count * C + 1], 199);
@@ -463,10 +423,7 @@ mod tests {
         let count = vertical(&source, &mut actual, 31, &weights);
         assert_eq!(count, 24);
         for x in 0..count {
-            let sum = weights
-                .iter()
-                .enumerate()
-                .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[i * 31 + x]) * i64::from(w));
+            let sum = weights.iter().enumerate().fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[i * 31 + x]) * i64::from(w));
             assert_eq!(actual[x], (sum >> 22).clamp(0, 255) as u8);
         }
     }
@@ -474,13 +431,7 @@ mod tests {
     #[test]
     fn vertical_preserves_tails_and_guards() {
         for width in [0, 1, 7, 8, 9, 15, 16, 17, 31, 32, 33] {
-            for weights in [
-                &[][..],
-                &[1 << 22][..],
-                &[-(1 << 22)][..],
-                &[2 << 22][..],
-                &[-400_000, 2_000_000, 3_000_000, -405_696][..],
-            ] {
+            for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
                 let stride = width + 3;
                 // Offset both buffers by one to exercise unaligned loads/stores.
                 let source: Vec<u8> = (0..1 + weights.len() * stride).map(|i| (i * 67) as u8).collect();
@@ -488,10 +439,7 @@ mod tests {
                 let count = vertical(&source[1..], &mut actual[1..1 + width], stride, weights);
                 assert_eq!(count, width / 8 * 8);
                 for x in 0..count {
-                    let sum = weights
-                        .iter()
-                        .enumerate()
-                        .fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[1 + i * stride + x]) * i64::from(w));
+                    let sum = weights.iter().enumerate().fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[1 + i * stride + x]) * i64::from(w));
                     assert_eq!(actual[1 + x], (sum >> 22).clamp(0, 255) as u8);
                 }
                 assert_eq!(actual[0], 123);

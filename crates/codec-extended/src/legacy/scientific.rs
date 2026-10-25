@@ -57,12 +57,7 @@ pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
             break;
         }
         if card[8] == b'=' {
-            let value = std::str::from_utf8(&card[10..])
-                .map_err(|_| "invalid FITS value")?
-                .split('/')
-                .next()
-                .unwrap()
-                .trim();
+            let value = std::str::from_utf8(&card[10..]).map_err(|_| "invalid FITS value")?.split('/').next().unwrap().trim();
             headers.insert(key, value);
         }
     }
@@ -70,11 +65,7 @@ pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
         return Err("invalid FITS primary header".into());
     }
     let number = |key: &str| -> Result<i32, String> {
-        headers
-            .get(key)
-            .ok_or_else(|| format!("missing FITS {key}"))?
-            .parse()
-            .map_err(|_| format!("invalid FITS {key}"))
+        headers.get(key).ok_or_else(|| format!("missing FITS {key}"))?.parse().map_err(|_| format!("invalid FITS {key}"))
     };
     let axes = number("NAXIS")?;
     if axes < 1 {
@@ -82,10 +73,7 @@ pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
     }
     let width = number("NAXIS1")?;
     let height = if axes == 1 { 1 } else { number("NAXIS2")? };
-    let (w, h) = dimensions(
-        width.try_into().map_err(|_| "invalid FITS width")?,
-        height.try_into().map_err(|_| "invalid FITS height")?,
-    )?;
+    let (w, h) = dimensions(width.try_into().map_err(|_| "invalid FITS width")?, height.try_into().map_err(|_| "invalid FITS height")?)?;
     let start = pos.next_multiple_of(2880);
     let source = bytes(data, start, data.len().saturating_sub(start))?;
     samples(w, h, source, number("BITPIX")?, true, true, "FITS")
@@ -100,10 +88,7 @@ pub(super) fn spider_header(data: &[u8]) -> Option<(bool, usize, u32, u32)> {
             let v = data[(i - 1) * 4..i * 4].try_into().unwrap();
             if big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) }
         };
-        if [1, 2, 5, 12, 13, 22, 23, 24, 27]
-            .iter()
-            .any(|&i| !f(i).is_finite() || f(i).fract() != 0.0 || f(i) < 0.0)
-        {
+        if [1, 2, 5, 12, 13, 22, 23, 24, 27].iter().any(|&i| !f(i).is_finite() || f(i).fract() != 0.0 || f(i) < 0.0) {
             continue;
         }
         if f(5) != 1.0 || f(1) != 1.0 || f(12) < 1.0 || f(2) < 1.0 || f(22) < 108.0 || f(23) != f(12) * 4.0 || f(22) != f(13) * f(23) {
@@ -119,8 +104,6 @@ pub(super) fn decode_spider(data: &[u8]) -> Result<Image, String> {
     let (w, h) = dimensions(w, h)?;
     let v = bytes(data, 92, 4)?.try_into().unwrap();
     let stack = if big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) };
-    let start = header
-        .checked_mul(if stack > 0.0 { 2 } else { 1 })
-        .ok_or("invalid SPIDER header length")?;
+    let start = header.checked_mul(if stack > 0.0 { 2 } else { 1 }).ok_or("invalid SPIDER header length")?;
     samples(w, h, bytes(data, start, w * h * 4)?, -32, big, false, "SPIDER")
 }

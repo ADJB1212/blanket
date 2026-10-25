@@ -11,17 +11,11 @@ pub(super) fn apply_float(
     output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, scalar: Option<f32>, op: Operation, reverse: bool,
 ) {
     assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
-    let end = if matches!(op, Operation::Mod | Operation::Pow) {
-        0
-    } else {
-        output.len() / 4 * 4
-    };
+    let end = if matches!(op, Operation::Mod | Operation::Pow) { 0 } else { output.len() / 4 * 4 };
     let write = |dst: &mut [std::mem::MaybeUninit<[u8; 4]>; 4], left: &[[u8; 4]; 4], right| {
         let left = f32x4::from_array(left.map(f32::from_le_bytes));
         let (left, right) = if reverse { (right, left) } else { (left, right) };
-        *dst = float_operation(op, left, right)
-            .to_array()
-            .map(|v| std::mem::MaybeUninit::new(v.to_le_bytes()));
+        *dst = float_operation(op, left, right).to_array().map(|v| std::mem::MaybeUninit::new(v.to_le_bytes()));
     };
     let dst = output[..end].as_chunks_mut::<4>().0;
     let left = a[..end].as_chunks::<4>().0;
@@ -58,21 +52,13 @@ pub(super) fn apply(output: &mut [[u8; 4]], a: &[[u8; 4]], b: Option<&[[u8; 4]]>
         let left = std::array::from_fn(|lane| a[i + lane]);
         let right = std::array::from_fn(|lane| b.map_or([0; 4], |b| b[i + lane]));
         let result = if float {
-            float_operation(
-                op,
-                f32x4::from_array(left.map(f32::from_le_bytes)),
-                f32x4::from_array(right.map(f32::from_le_bytes)),
-            )
-            .to_array()
-            .map(f32::to_le_bytes)
+            float_operation(op, f32x4::from_array(left.map(f32::from_le_bytes)), f32x4::from_array(right.map(f32::from_le_bytes)))
+                .to_array()
+                .map(f32::to_le_bytes)
         } else {
-            integer(
-                op,
-                i32x4::from_array(left.map(i32::from_le_bytes)),
-                i32x4::from_array(right.map(i32::from_le_bytes)),
-            )
-            .to_array()
-            .map(i32::to_le_bytes)
+            integer(op, i32x4::from_array(left.map(i32::from_le_bytes)), i32x4::from_array(right.map(i32::from_le_bytes)))
+                .to_array()
+                .map(i32::to_le_bytes)
         };
         output[i..i + 4].copy_from_slice(&result);
     }
@@ -141,9 +127,8 @@ mod tests {
                 for reverse in [false, true] {
                     for len in [0, 1, 3, 4, 5, 15, 16, 17, 67] {
                         for offset in 0..16 {
-                            let source: Vec<u8> = std::iter::repeat_n(0, offset)
-                                .chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes()))
-                                .collect();
+                            let source: Vec<u8> =
+                                std::iter::repeat_n(0, offset).chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes())).collect();
                             let input = source[offset..].as_chunks::<4>().0;
                             let mut uninit = vec![std::mem::MaybeUninit::new([0xa5; 4]); len + 2];
                             apply_float(&mut uninit[1..len + 1], input, None, Some(value), op, reverse);
@@ -197,13 +182,7 @@ mod tests {
                             };
                         }
                         let mut output = vec![0xa5; offset + len * 4 + 16];
-                        let done = apply(
-                            output[offset..offset + len * 4].as_chunks_mut::<4>().0,
-                            a,
-                            (!op.unary()).then_some(b),
-                            op,
-                            float,
-                        );
+                        let done = apply(output[offset..offset + len * 4].as_chunks_mut::<4>().0, a, (!op.unary()).then_some(b), op, float);
                         let fallback = matches!(op, Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift)
                             || (!float && matches!(op, Operation::Div));
                         assert_eq!(done, if fallback { 0 } else { len / 4 * 4 });
@@ -218,11 +197,7 @@ mod tests {
                                     assert_eq!(*actual, expected.to_le_bytes(), "{name}");
                                 }
                             } else {
-                                assert_eq!(
-                                    *actual,
-                                    op.integer(i32::from_le_bytes(a[i]), i32::from_le_bytes(b[i])).to_le_bytes(),
-                                    "{name}"
-                                );
+                                assert_eq!(*actual, op.integer(i32::from_le_bytes(a[i]), i32::from_le_bytes(b[i])).to_le_bytes(), "{name}");
                             }
                         }
                     }

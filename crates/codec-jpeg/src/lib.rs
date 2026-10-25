@@ -18,26 +18,11 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
         Colorspace::CMYK | Colorspace::YCCK => (PixelMode::Cmyk, PixelFormat::CMYK),
         Colorspace::RGB | Colorspace::YCbCr => (PixelMode::Rgb, PixelFormat::RGB),
     };
-    let pitch = header
-        .width
-        .checked_mul(format.size())
-        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
-    let length = header
-        .height
-        .checked_mul(pitch)
-        .ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    let pitch = header.width.checked_mul(format.size()).ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
+    let length = header.height.checked_mul(pitch).ok_or_else(|| "image dimensions overflow addressable memory".to_owned())?;
     let mut pixels = vec![0; length];
     decoder
-        .decompress(
-            data,
-            turbojpeg::Image {
-                pixels: pixels.as_mut_slice(),
-                width: header.width,
-                pitch,
-                height: header.height,
-                format,
-            },
-        )
+        .decompress(data, turbojpeg::Image { pixels: pixels.as_mut_slice(), width: header.width, pitch, height: header.height, format })
         .map_err(|error| error.to_string())?;
     if format == PixelFormat::CMYK {
         pixels.iter_mut().for_each(|value| *value = 255 - *value);

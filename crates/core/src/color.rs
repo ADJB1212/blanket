@@ -26,11 +26,7 @@ pub fn color_getcolor(py: Python<'_>, rgb: Vec<i64>, mode: &str) -> PyResult<Py<
             if mode == "LA" {
                 return Ok((luminance, alpha).into_pyobject(py)?.into_any().unbind());
             }
-            let value = if mode == "1" {
-                if luminance >= 128 { 255 } else { 0 }
-            } else {
-                luminance
-            };
+            let value = if mode == "1" { if luminance >= 128 { 255 } else { 0 } } else { luminance };
             return Ok(value.into_pyobject(py)?.into_any().unbind());
         }
         "RGB" => rgb[..3].to_vec(),
@@ -41,18 +37,14 @@ pub fn color_getcolor(py: Python<'_>, rgb: Vec<i64>, mode: &str) -> PyResult<Py<
             if black == 1.0 {
                 vec![0, 0, 0, 255]
             } else {
-                let mut result: Vec<i64> = channels
-                    .map(|component| ((1.0 - component - black) / (1.0 - black) * 255.0).round_ties_even() as i64)
-                    .into();
+                let mut result: Vec<i64> =
+                    channels.map(|component| ((1.0 - component - black) / (1.0 - black) * 255.0).round_ties_even() as i64).into();
                 result.push((black * 255.0).round_ties_even() as i64);
                 result
             }
         }
         _ => {
-            return Err(PyValueError::new_err(format!(
-                "unsupported image mode: {}",
-                mode.into_pyobject(py)?.repr()?
-            )));
+            return Err(PyValueError::new_err(format!("unsupported image mode: {}", mode.into_pyobject(py)?.repr()?)));
         }
     };
     Ok(PyTuple::new(py, components)?.into_any().unbind())

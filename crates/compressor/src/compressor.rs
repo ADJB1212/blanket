@@ -78,19 +78,11 @@ impl LosslessImageCompressor {
         // full entropy decode and re-encode of it, and lets the normal save
         // run alongside the candidates. The normal save is job zero, so it
         // wins ties and reports its validation errors first.
-        const JOBS: [JpegCoding; 3] = [
-            JpegCoding::BASELINE,
-            JpegCoding { optimize: true, .. },
-            JpegCoding {
-                optimize: true,
-                progressive: true,
-            },
-        ];
+        const JOBS: [JpegCoding; 3] = [JpegCoding::BASELINE, JpegCoding { optimize: true, .. }, JpegCoding { optimize: true, progressive: true }];
         let jobs = &JOBS[..if self.effort >= 3 { 3 } else { 2 }];
         let work_bytes = image.raw_data()?.len();
-        let output = parallel::best_candidate(jobs, work_bytes, usize::MAX, |&coding, _| {
-            codecs::encode_jpeg_variant(image, options, coding).map(Some)
-        })?;
+        let output =
+            parallel::best_candidate(jobs, work_bytes, usize::MAX, |&coding, _| codecs::encode_jpeg_variant(image, options, coding).map(Some))?;
         Ok(output.expect("the normal save always produces a candidate"))
     }
 
@@ -138,15 +130,7 @@ impl LosslessImageCompressor {
             // Lossless trials follow source trials when encoded sizes tie.
             let mut lossless_priority = priority;
             for effort in (1..=efforts).rev() {
-                let candidate = prepared.encode(
-                    SaveOptions {
-                        lossless: true,
-                        quality: 100,
-                        effort,
-                        ..options
-                    },
-                    false,
-                )?;
+                let candidate = prepared.encode(SaveOptions { lossless: true, quality: 100, effort, ..options }, false)?;
                 let rank = self.effort + effort;
                 if candidate.len() < output.len() || (candidate.len() == output.len() && rank < lossless_priority) {
                     let before = output.len();
@@ -185,32 +169,18 @@ impl LosslessImageCompressor {
             }
             // Decode the baseline at most once, and only if a candidate could
             // win. All workers compare against the same immutable samples.
-            let reference = reference
-                .get_or_init(|| codecs::decode(&baseline, ImageFormat::Jxl))
-                .as_ref()
-                .map_err(codec_error)?;
+            let reference = reference.get_or_init(|| codecs::decode(&baseline, ImageFormat::Jxl)).as_ref().map_err(codec_error)?;
             Ok::<_, PyErr>(equivalent(&candidate, reference, ImageFormat::Jxl)?.then_some(candidate))
         })?;
         let mut output = candidate.unwrap_or(baseline);
         drop(prepared);
         if !options.lossless {
-            let reference = reference
-                .get_or_init(|| codecs::decode(&output, ImageFormat::Jxl))
-                .as_ref()
-                .map_err(codec_error)?;
+            let reference = reference.get_or_init(|| codecs::decode(&output, ImageFormat::Jxl)).as_ref().map_err(codec_error)?;
             let prepared = codecs::PreparedJxl::new(reference)?;
             let jobs: Vec<_> = (1..=self.effort).collect();
             let candidate_threads = threads(jobs.len());
             let candidate = parallel::best_candidate(&jobs, work_bytes, output.len(), |&effort, limit| {
-                let candidate = prepared.encode_with_threads(
-                    SaveOptions {
-                        effort,
-                        lossless: true,
-                        quality: 100,
-                        ..options
-                    },
-                    candidate_threads,
-                )?;
+                let candidate = prepared.encode_with_threads(SaveOptions { effort, lossless: true, quality: 100, ..options }, candidate_threads)?;
                 if candidate.len() >= limit.get() {
                     return Ok(None);
                 }
@@ -328,11 +298,7 @@ impl LosslessImageCompressor {
             } else {
                 (png::ColorType::GrayscaleAlpha, pixels::select(pixels, channels, true, 0))
             };
-            candidates.push(PngCandidate {
-                color,
-                pixels: Cow::Owned(reduced),
-                ..
-            });
+            candidates.push(PngCandidate { color, pixels: Cow::Owned(reduced), .. });
         }
         let mut key: Option<&[u8]> = None;
         if image.mode == PixelMode::Rgba && !opaque {
@@ -355,11 +321,7 @@ impl LosslessImageCompressor {
         let depths: &[usize] = if grayscale { &[1, 2, 4, 8] } else { &[8] };
         // Exact gray depths are nested: every 1-bit value also fits 2/4/8,
         // and every 2-bit value fits 4/8. Validate only the minimum once.
-        let minimum_depth = depths
-            .iter()
-            .copied()
-            .find(|&bits| pixels::fits_depth(&gray, bits))
-            .expect("8-bit samples always fit");
+        let minimum_depth = depths.iter().copied().find(|&bits| pixels::fits_depth(&gray, bits)).expect("8-bit samples always fit");
         for &bits in depths {
             if bits == 8 && image.mode == PixelMode::L {
                 // The unchanged source representation is already a candidate.
@@ -482,11 +444,7 @@ impl LosslessImageCompressor {
             // First-occurrence ordering already has these indices. Borrow it
             // instead of allocating and applying an identity LUT to the image.
             let fuse_mapping = order_index != 0 && self.effort < 8 && bits < 8;
-            let mut remapped = if order_index == 0 || fuse_mapping {
-                None
-            } else {
-                Some(pixels::remap(&indices, &mapping))
-            };
+            let mut remapped = if order_index == 0 || fuse_mapping { None } else { Some(pixels::remap(&indices, &mapping)) };
             // Wider indices can produce more compressible filter residuals.
             // Keep this extra search at high effort, retaining packed trials.
             for depth in [1, 2, 4, 8] {
@@ -600,10 +558,7 @@ struct ColorCounts {
 
 impl ColorCounts {
     fn new() -> Self {
-        Self {
-            lookup: ColorLookup::default(),
-            entries: Vec::with_capacity(256),
-        }
+        Self { lookup: ColorLookup::default(), entries: Vec::with_capacity(256) }
     }
 
     fn add(&mut self, key: u32, count: usize, first: usize) -> Option<usize> {
@@ -677,12 +632,7 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
     };
     let mut entries = counts.entries;
     entries.sort_unstable_by_key(|&(_, _, first)| first);
-    Some(
-        entries
-            .into_iter()
-            .map(|(_, count, first)| (&pixels[first * channels..(first + 1) * channels], count))
-            .collect(),
-    )
+    Some(entries.into_iter().map(|(_, count, first)| (&pixels[first * channels..(first + 1) * channels], count)).collect())
 }
 
 /// One exact pixel representation of the image, ready to encode.
@@ -714,19 +664,12 @@ impl PngCandidate<'_> {
 
     #[cfg(test)]
     fn plain<'a>(color: png::ColorType, depth: png::BitDepth, pixels: &'a [u8]) -> PngCandidate<'a> {
-        PngCandidate {
-            color,
-            depth,
-            pixels: Cow::Borrowed(pixels),
-            ..
-        }
+        PngCandidate { color, depth, pixels: Cow::Borrowed(pixels), .. }
     }
 
     #[cfg(test)]
     fn encode(&self, image: &Image, filter: png::Filter, level: u8) -> PyResult<Vec<u8>> {
-        Ok(self
-            .encode_bounded(image, filter, level, &CandidateLimit::new(usize::MAX))?
-            .expect("unbounded PNG"))
+        Ok(self.encode_bounded(image, filter, level, &CandidateLimit::new(usize::MAX))?.expect("unbounded PNG"))
     }
 
     /// Encode unless the output reaches `limit`, which concurrent winners may
@@ -835,10 +778,8 @@ fn keep_equivalent(output: &mut Vec<u8>, candidate: Vec<u8>, reference: &Image, 
 
 fn equivalent(candidate: &[u8], reference: &Image, format: ImageFormat) -> PyResult<bool> {
     let decoded = codecs::decode(candidate, format).map_err(codec_error)?;
-    Ok(
-        (decoded.width, decoded.height, decoded.mode, decoded.bit_depth) == (reference.width, reference.height, reference.mode, reference.bit_depth)
-            && pixels::equal(decoded.raw_data()?, reference.raw_data()?),
-    )
+    Ok((decoded.width, decoded.height, decoded.mode, decoded.bit_depth) == (reference.width, reference.height, reference.mode, reference.bit_depth)
+        && pixels::equal(decoded.raw_data()?, reference.raw_data()?))
 }
 
 fn keep_equivalent_ranked(
@@ -894,18 +835,7 @@ impl<'a> PreparedSampleCodec<'a> {
     }
 
     fn encode(&mut self, options: SaveOptions, baseline: bool) -> PyResult<Vec<u8>> {
-        const PRESETS: [&str; 10] = [
-            "ultrafast",
-            "superfast",
-            "veryfast",
-            "faster",
-            "fast",
-            "medium",
-            "slow",
-            "slower",
-            "veryslow",
-            "placebo",
-        ];
+        const PRESETS: [&str; 10] = ["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow", "placebo"];
         match self {
             Self::Jxl(prepared) => {
                 if baseline {
@@ -932,25 +862,16 @@ mod tests {
         let parallel = rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap();
         for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
             for depth in [8, 10, 12, 16] {
-                let samples: Vec<u16> = (0..257 * 129 * mode.channels())
-                    .map(|i| ((i * 71 + i / 13) % (1 << depth)) as u16)
-                    .collect();
+                let samples: Vec<u16> = (0..257 * 129 * mode.channels()).map(|i| ((i * 71 + i / 13) % (1 << depth)) as u16).collect();
                 let image = if depth == 8 {
                     Image::from_pixels(257, 129, mode, samples.into_iter().map(|v| v as u8).collect(), None).unwrap()
                 } else {
                     Image::from_samples(257, 129, mode, samples, depth, None).unwrap()
                 };
                 for lossless in [false, true] {
-                    let options = SaveOptions {
-                        quality: 71,
-                        lossless,
-                        effort: 1,
-                        ..
-                    };
+                    let options = SaveOptions { quality: 71, lossless, effort: 1, .. };
                     let expected = serial.install(|| compressor.encode(&image, ImageFormat::Jxl, options)).unwrap();
-                    let actual = parallel
-                        .install(|| compressor.optimize_jxl_parallel(&image, options, image.raw_data().unwrap().len() * 4))
-                        .unwrap();
+                    let actual = parallel.install(|| compressor.optimize_jxl_parallel(&image, options, image.raw_data().unwrap().len() * 4)).unwrap();
                     assert_eq!(actual, expected, "mode={mode:?}, depth={depth}, lossless={lossless}");
                 }
             }
@@ -963,21 +884,14 @@ mod tests {
         for format in [ImageFormat::Jxl, ImageFormat::Heif] {
             for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
                 for depth in [8, 12] {
-                    let samples: Vec<u16> = (0..17 * 19 * mode.channels())
-                        .map(|i| ((i * 71 + i / 13) % (1 << depth)) as u16)
-                        .collect();
+                    let samples: Vec<u16> = (0..17 * 19 * mode.channels()).map(|i| ((i * 71 + i / 13) % (1 << depth)) as u16).collect();
                     let image = if depth == 8 {
                         Image::from_pixels(17, 19, mode, samples.into_iter().map(|v| v as u8).collect(), None).unwrap()
                     } else {
                         Image::from_samples(17, 19, mode, samples, depth, None).unwrap()
                     };
                     for lossless in [false, true] {
-                        let options = SaveOptions {
-                            quality: 71,
-                            lossless,
-                            effort: 2,
-                            ..
-                        };
+                        let options = SaveOptions { quality: 71, lossless, effort: 2, .. };
                         let mut expected = codecs::encode(&image, format, options).unwrap();
                         let reference = codecs::decode(&expected, format).unwrap();
                         // Fresh preparation per candidate is the old behavior
@@ -986,25 +900,15 @@ mod tests {
                             if format == ImageFormat::Jxl && effort == options.effort {
                                 continue;
                             }
-                            let candidate = PreparedSampleCodec::new(&image, format)
-                                .unwrap()
-                                .encode(SaveOptions { effort, ..options }, false)
-                                .unwrap();
+                            let candidate =
+                                PreparedSampleCodec::new(&image, format).unwrap().encode(SaveOptions { effort, ..options }, false).unwrap();
                             keep_equivalent(&mut expected, candidate, &reference, format).unwrap();
                         }
                         if !lossless {
                             for effort in 1..=compressor.effort {
                                 let candidate = PreparedSampleCodec::new(&reference, format)
                                     .unwrap()
-                                    .encode(
-                                        SaveOptions {
-                                            lossless: true,
-                                            quality: 100,
-                                            effort,
-                                            ..options
-                                        },
-                                        false,
-                                    )
+                                    .encode(SaveOptions { lossless: true, quality: 100, effort, ..options }, false)
                                     .unwrap();
                                 keep_equivalent(&mut expected, candidate, &reference, format).unwrap();
                             }
@@ -1096,9 +1000,7 @@ mod tests {
                 width,
                 height,
                 PixelMode::Rgba,
-                (0..count)
-                    .flat_map(|i| [(i % 5 * 50) as u8, (i % 3 * 100) as u8, 7, if i % 11 == 0 { 0 } else { 255 }])
-                    .collect(),
+                (0..count).flat_map(|i| [(i % 5 * 50) as u8, (i % 3 * 100) as u8, 7, if i % 11 == 0 { 0 } else { 255 }]).collect(),
                 None,
             )
             .unwrap(),
@@ -1106,27 +1008,12 @@ mod tests {
                 width,
                 height,
                 PixelMode::Rgba,
-                (0..count)
-                    .flat_map(|i| {
-                        if i % 9 == 0 {
-                            [3, 3, 3, 0]
-                        } else {
-                            [(i * 31) as u8, (i * 31) as u8, (i * 31) as u8, 255]
-                        }
-                    })
-                    .collect(),
+                (0..count).flat_map(|i| if i % 9 == 0 { [3, 3, 3, 0] } else { [(i * 31) as u8, (i * 31) as u8, (i * 31) as u8, 255] }).collect(),
                 None,
             )
             .unwrap(),
             Image::from_pixels(width, height, PixelMode::L, (0..count).map(|i| (i % 4 * 85) as u8).collect(), None).unwrap(),
-            Image::from_pixels(
-                width,
-                height,
-                PixelMode::Rgb,
-                (0..count).flat_map(|i| [(i * 71) as u8; 3]).collect(),
-                None,
-            )
-            .unwrap(),
+            Image::from_pixels(width, height, PixelMode::Rgb, (0..count).flat_map(|i| [(i * 71) as u8; 3]).collect(), None).unwrap(),
         ];
         for image in &images {
             let pixels = image.pixel_data().unwrap();
@@ -1159,14 +1046,8 @@ mod tests {
                     }
                     for threads in [1, 4] {
                         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
-                        let output = pool
-                            .install(|| compressor.encode(image, ImageFormat::Png, SaveOptions { compress_level, .. }))
-                            .unwrap();
-                        assert_eq!(
-                            output, expected,
-                            "{:?} effort {effort} level {compress_level} threads {threads}",
-                            image.mode
-                        );
+                        let output = pool.install(|| compressor.encode(image, ImageFormat::Png, SaveOptions { compress_level, .. })).unwrap();
+                        assert_eq!(output, expected, "{:?} effort {effort} level {compress_level} threads {threads}", image.mode);
                     }
                     let decoded = codecs::decode(&expected, ImageFormat::Png).unwrap();
                     assert_eq!(decoded.width, image.width);
@@ -1231,11 +1112,8 @@ mod tests {
         assert_eq!(keys.len(), 257);
         for channels in [3, 4] {
             for count in [1, 2, 16, 256, 257] {
-                let source: Vec<u8> = keys[..count]
-                    .iter()
-                    .chain(keys[..count].iter().rev())
-                    .flat_map(|key| key.to_le_bytes()[..channels].repeat(17))
-                    .collect();
+                let source: Vec<u8> =
+                    keys[..count].iter().chain(keys[..count].iter().rev()).flat_map(|key| key.to_le_bytes()[..channels].repeat(17)).collect();
                 let expected = count_colors(&source, channels, 0).map(|counts| {
                     let mut entries: Vec<_> = counts.into_iter().collect();
                     entries.sort_unstable_by_key(|(_, (_, first))| *first);
@@ -1251,11 +1129,7 @@ mod tests {
         let image = Image::from_pixels(1, 1, PixelMode::L, vec![0], None).unwrap();
         for (palette, transparency) in [(&[][..], &[][..]), (&[0, 0, 0][..], &[][..]), (&[0, 0, 0][..], &[0][..])] {
             let candidate = PngCandidate {
-                color: if palette.is_empty() {
-                    png::ColorType::Grayscale
-                } else {
-                    png::ColorType::Indexed
-                },
+                color: if palette.is_empty() { png::ColorType::Grayscale } else { png::ColorType::Indexed },
                 pixels: Cow::Borrowed(&[0]),
                 palette: palette.to_vec(),
                 transparency: transparency.to_vec(),
@@ -1269,10 +1143,7 @@ mod tests {
             assert_eq!(candidate.minimum_size(&image), minimum);
             // Invalid samples prove no encoder is invoked when mandatory
             // chunk bytes alone rule out an improvement.
-            let invalid = [PngCandidate {
-                pixels: Cow::Borrowed(&[]),
-                ..candidate
-            }];
+            let invalid = [PngCandidate { pixels: Cow::Borrowed(&[]), ..candidate }];
             let compressor = LosslessImageCompressor { effort: 10 };
             let output = compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap();
             assert_eq!(output, vec![19; minimum]);
@@ -1286,11 +1157,9 @@ mod tests {
         // Constant images are the most compressible input deflate can see.
         // Tall, narrow images make the row count dwarf the encoded size, so
         // counting each filter byte as an output byte would prune winners.
-        for (mode, color) in [
-            (PixelMode::L, png::ColorType::Grayscale),
-            (PixelMode::Rgb, png::ColorType::Rgb),
-            (PixelMode::Rgba, png::ColorType::Rgba),
-        ] {
+        for (mode, color) in
+            [(PixelMode::L, png::ColorType::Grayscale), (PixelMode::Rgb, png::ColorType::Rgb), (PixelMode::Rgba, png::ColorType::Rgba)]
+        {
             for (width, height) in [(1, 1), (1, 4096), (4096, 1), (300, 200)] {
                 let image = Image::from_pixels(width, height, mode, vec![0; (width * height) as usize * mode.channels()], None).unwrap();
                 let candidate = PngCandidate::plain(color, png::BitDepth::Eight, image.pixel_data().unwrap());
@@ -1299,22 +1168,12 @@ mod tests {
                 assert_eq!(minimum, 57 + 6 + raw.div_ceil(1032));
                 for (level, filter) in compressor.png_jobs(6, false) {
                     let encoded = candidate.encode(&image, filter, level).unwrap();
-                    assert!(
-                        minimum < encoded.len(),
-                        "{mode:?} {width}x{height} level {level} {filter:?}: {minimum} >= {}",
-                        encoded.len()
-                    );
+                    assert!(minimum < encoded.len(), "{mode:?} {width}x{height} level {level} {filter:?}: {minimum} >= {}", encoded.len());
                 }
                 // A baseline at the bound rules the candidate out without
                 // encoding; one byte more must run the encoder on the samples.
-                let invalid = [PngCandidate {
-                    pixels: Cow::Borrowed(&[]),
-                    ..candidate
-                }];
-                assert_eq!(
-                    compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap(),
-                    vec![19; minimum]
-                );
+                let invalid = [PngCandidate { pixels: Cow::Borrowed(&[]), ..candidate }];
+                assert_eq!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap(), vec![19; minimum]);
                 assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1])).is_err());
             }
         }
@@ -1345,47 +1204,24 @@ mod tests {
 
     #[test]
     fn bounded_png_preserves_winners_and_rejects_ties() {
-        for (mode, color) in [
-            (PixelMode::L, png::ColorType::Grayscale),
-            (PixelMode::Rgb, png::ColorType::Rgb),
-            (PixelMode::Rgba, png::ColorType::Rgba),
-        ] {
+        for (mode, color) in
+            [(PixelMode::L, png::ColorType::Grayscale), (PixelMode::Rgb, png::ColorType::Rgb), (PixelMode::Rgba, png::ColorType::Rgba)]
+        {
             let samples = (0..17 * 9 * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
             let image = Image::from_pixels(17, 9, mode, samples, None).unwrap();
             let candidate = PngCandidate::plain(color, png::BitDepth::Eight, image.pixel_data().unwrap());
             for (level, filter) in (LosslessImageCompressor { effort: 10 }).png_jobs(6, false) {
                 let expected = candidate.encode(&image, filter, level).unwrap();
                 for limit in [0, 8, 33, expected.len() - 1, expected.len()] {
-                    assert!(
-                        candidate
-                            .encode_bounded(&image, filter, level, &CandidateLimit::new(limit))
-                            .unwrap()
-                            .is_none()
-                    );
+                    assert!(candidate.encode_bounded(&image, filter, level, &CandidateLimit::new(limit)).unwrap().is_none());
                 }
-                assert_eq!(
-                    candidate
-                        .encode_bounded(&image, filter, level, &CandidateLimit::new(expected.len() + 1))
-                        .unwrap(),
-                    Some(expected)
-                );
+                assert_eq!(candidate.encode_bounded(&image, filter, level, &CandidateLimit::new(expected.len() + 1)).unwrap(), Some(expected));
             }
-            let invalid = PngCandidate {
-                pixels: Cow::Borrowed(&[]),
-                ..candidate
-            };
-            assert!(
-                invalid
-                    .encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(usize::MAX))
-                    .is_err()
-            );
+            let invalid = PngCandidate { pixels: Cow::Borrowed(&[]), ..candidate };
+            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(usize::MAX)).is_err());
             // Dropping the writer after an input error attempts IEND. That
             // cleanup exceeding the limit must not hide the original error.
-            assert!(
-                invalid
-                    .encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(34))
-                    .is_err()
-            );
+            assert!(invalid.encode_bounded(&image, png::Filter::Adaptive, 6, &CandidateLimit::new(34)).is_err());
         }
     }
 
@@ -1419,11 +1255,9 @@ mod tests {
 
     #[test]
     fn skipped_png_candidates_are_identical_to_normal_saves() {
-        for (mode, color) in [
-            (PixelMode::L, png::ColorType::Grayscale),
-            (PixelMode::Rgb, png::ColorType::Rgb),
-            (PixelMode::Rgba, png::ColorType::Rgba),
-        ] {
+        for (mode, color) in
+            [(PixelMode::L, png::ColorType::Grayscale), (PixelMode::Rgb, png::ColorType::Rgb), (PixelMode::Rgba, png::ColorType::Rgba)]
+        {
             for (width, height) in [(1, 1), (17, 9), (257, 129)] {
                 let samples = (0..width * height * mode.channels()).map(|i| (i * 71 + i / 13) as u8).collect();
                 let image = Image::from_pixels(width as u32, height as u32, mode, samples, None).unwrap();
@@ -1465,10 +1299,7 @@ mod tests {
             let entries = palette_entries(&source, 1).unwrap();
             let mut expected: Vec<_> = count_colors(&source, 1, 0).unwrap().into_iter().collect();
             expected.sort_unstable_by_key(|(_, (_, first))| *first);
-            assert_eq!(
-                entries,
-                expected.into_iter().map(|(pixel, (count, _))| (pixel, count)).collect::<Vec<_>>()
-            );
+            assert_eq!(entries, expected.into_iter().map(|(pixel, (count, _))| (pixel, count)).collect::<Vec<_>>());
         }
     }
 
@@ -1483,14 +1314,7 @@ mod tests {
         assert_eq!(serial[255], (&[255, 19, 37, 255][..], 512));
         source.extend_from_slice(&[0, 20, 37, 255]);
         // Overflow only in the last chunk must also reject the whole palette.
-        assert!(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(4)
-                .build()
-                .unwrap()
-                .install(|| palette_entries(&source, 4))
-                .is_none()
-        );
+        assert!(rayon::ThreadPoolBuilder::new().num_threads(4).build().unwrap().install(|| palette_entries(&source, 4)).is_none());
     }
 
     #[test]

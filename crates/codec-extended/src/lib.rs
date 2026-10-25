@@ -66,14 +66,8 @@ pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
                     pixels::swap_red_blue::<4>(src, row);
                 }
             }
-            return Image::from_pixels(
-                width,
-                height,
-                if channels == 3 { PixelMode::Rgb } else { PixelMode::Rgba },
-                pixels,
-                Some("TGA".into()),
-            )
-            .map_err(|e| e.to_string());
+            return Image::from_pixels(width, height, if channels == 3 { PixelMode::Rgb } else { PixelMode::Rgba }, pixels, Some("TGA".into()))
+                .map_err(|e| e.to_string());
         }
     }
     decode_rust_image(data, ImageFormat::Tga, "TGA")
@@ -88,11 +82,7 @@ fn encode_tga(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     output[12..14].copy_from_slice(&width.to_le_bytes());
     output[14..16].copy_from_slice(&height.to_le_bytes());
     output[16] = (channels * 8) as u8;
-    output[17] = if matches!(image.mode, PixelMode::La | PixelMode::Rgba) {
-        0x28
-    } else {
-        0x20
-    };
+    output[17] = if matches!(image.mode, PixelMode::La | PixelMode::Rgba) { 0x28 } else { 0x20 };
     match channels {
         3 => pixels::swap_red_blue::<3>(pixels, &mut output[18..]),
         4 => pixels::swap_red_blue::<4>(pixels, &mut output[18..]),
@@ -121,12 +111,7 @@ pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {
     };
     let samples = image.raw_data()?;
     let header = if pam {
-        format!(
-            "P7\nWIDTH {}\nHEIGHT {}\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n",
-            image.width,
-            image.height,
-            image.mode.channels()
-        )
+        format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n", image.width, image.height, image.mode.channels())
     } else {
         format!("{magic}\n{} {}\n65535\n", image.width, image.height)
     };
@@ -158,9 +143,7 @@ pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<V
     let color = color_type(image.mode);
     match format {
         "TGA" => return encode_tga(image, pixels),
-        "QOI" => image::codecs::qoi::QoiEncoder::new(&mut output)
-            .write_image(pixels, image.width, image.height, color)
-            .map_err(codec_error)?,
+        "QOI" => image::codecs::qoi::QoiEncoder::new(&mut output).write_image(pixels, image.width, image.height, color).map_err(codec_error)?,
         "PPM" | "PAM" => {
             if format == "PPM" && image.mode == PixelMode::One {
                 output.extend_from_slice(format!("P4\n{} {}\n", image.width, image.height).as_bytes());
@@ -178,10 +161,7 @@ pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<V
                     (_, PixelMode::Rgb) => PnmSubtype::Pixmap(SampleEncoding::Binary),
                     _ => return Err(PyOSError::new_err("PPM supports modes 1, L, and RGB; use PAM for alpha")),
                 };
-                PnmEncoder::new(&mut output)
-                    .with_subtype(subtype)
-                    .write_image(pixels, image.width, image.height, color)
-                    .map_err(codec_error)?;
+                PnmEncoder::new(&mut output).with_subtype(subtype).write_image(pixels, image.width, image.height, color).map_err(codec_error)?;
             }
         }
         _ => return Err(PyOSError::new_err(format!("{format} is a read-only format"))),
@@ -190,12 +170,7 @@ pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<V
 }
 
 pub fn ghostscript_available() -> bool {
-    Command::new("gs")
-        .arg("--version")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .is_ok_and(|status| status.success())
+    Command::new("gs").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }
 
 pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
@@ -203,8 +178,7 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
         let header = data.get(..12).ok_or("truncated EPS preview header")?;
         let offset = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
         let length = u32::from_le_bytes(header[8..12].try_into().unwrap()) as usize;
-        data.get(offset..offset.checked_add(length).ok_or("EPS offset overflow")?)
-            .ok_or("truncated EPS payload")?
+        data.get(offset..offset.checked_add(length).ok_or("EPS offset overflow")?).ok_or("truncated EPS payload")?
     } else {
         data
     };
@@ -212,12 +186,7 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
         .split(|&byte| byte == b'\n')
         .find_map(|line| {
             let line = line.strip_prefix(b"%%BoundingBox:")?;
-            let values = std::str::from_utf8(line)
-                .ok()?
-                .split_whitespace()
-                .map(str::parse::<f64>)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?;
+            let values = std::str::from_utf8(line).ok()?.split_whitespace().map(str::parse::<f64>).collect::<Result<Vec<_>, _>>().ok()?;
             (values.len() == 4 && values.iter().all(|v| v.is_finite())).then_some(values)
         })
         .ok_or("EPS requires a numeric BoundingBox")?;
@@ -230,20 +199,9 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
     let input_path = directory.path().join("input.eps");
     let output_path = directory.path().join("output.ppm");
-    std::fs::File::create(&input_path)
-        .and_then(|mut file| file.write_all(data))
-        .map_err(|e| e.to_string())?;
+    std::fs::File::create(&input_path).and_then(|mut file| file.write_all(data)).map_err(|e| e.to_string())?;
     let mut child = Command::new("gs")
-        .args([
-            "-q",
-            "-dSAFER",
-            "-dBATCH",
-            "-dNOPAUSE",
-            "-dFIXEDMEDIA",
-            "-dEPSFitPage",
-            "-sDEVICE=ppmraw",
-            "-r72",
-        ])
+        .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dFIXEDMEDIA", "-dEPSFitPage", "-sDEVICE=ppmraw", "-r72"])
         .arg(format!("-g{}x{}", width as u32, height as u32))
         .arg(format!("-sOutputFile={}", output_path.display()))
         .arg("-f")

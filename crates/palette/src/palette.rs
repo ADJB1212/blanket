@@ -76,9 +76,7 @@ fn index_bytes(py: Python<'_>, colors: &Bound<'_, PyDict>, data: &[u8], channels
 
 #[pyfunction]
 fn palette_ramp(channels: usize, reverse: bool) -> Vec<u16> {
-    (0..256)
-        .flat_map(|value| std::iter::repeat_n(if reverse { 255 - value } else { value }, channels))
-        .collect()
+    (0..256).flat_map(|value| std::iter::repeat_n(if reverse { 255 - value } else { value }, channels)).collect()
 }
 
 #[pyfunction]
@@ -91,9 +89,7 @@ fn palette_linear(white: i64) -> Vec<i128> {
 
 #[pyfunction]
 fn palette_gamma(exp: f64) -> Vec<u16> {
-    (0..256)
-        .map(|value| ((f64::from(value) / 255.0).powf(exp) * 255.0 + 0.5) as u16)
-        .collect()
+    (0..256).map(|value| ((f64::from(value) / 255.0).powf(exp) * 255.0 + 0.5) as u16).collect()
 }
 
 #[pyfunction]
@@ -102,9 +98,7 @@ fn palette_sepia(white: [i64; 3]) -> Vec<i128> {
         let luts = white.map(|channel| kernels::linear_lut(channel as u8));
         return (0..256).flat_map(|i| luts.each_ref().map(|lut| i128::from(lut[i]))).collect();
     }
-    (0..256)
-        .flat_map(|value| white.map(|channel| (i128::from(channel) * value).div_euclid(255)))
-        .collect()
+    (0..256).flat_map(|value| white.map(|channel| (i128::from(channel) * value).div_euclid(255))).collect()
 }
 
 fn linear(middle: f64, position: f64) -> f64 {

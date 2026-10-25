@@ -20,9 +20,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 fn reserved_buffer(len: usize) -> PyResult<Vec<u8>> {
     let mut pixels = Vec::new();
-    pixels
-        .try_reserve_exact(len)
-        .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     Ok(pixels)
 }
 
@@ -47,11 +45,7 @@ enum Operation {
 
 impl Operation {
     fn clip_scaled(value: f32) -> u8 {
-        let temp = if !value.is_finite() || value > i32::MAX as f32 || value < i32::MIN as f32 {
-            i32::MIN
-        } else {
-            value as i32
-        };
+        let temp = if !value.is_finite() || value > i32::MAX as f32 || value < i32::MIN as f32 { i32::MIN } else { value as i32 };
         if temp <= 0 {
             0
         } else if temp >= 255 {
@@ -98,11 +92,7 @@ impl Operation {
             Self::SoftLight => (((255 - x) * x * y / 65536) + x * (255 - (255 - x) * (255 - y) / 255) / 255) as u8,
             Self::HardLight | Self::Overlay => {
                 let selector = if matches!(self, Self::HardLight) { y } else { x };
-                if selector < 128 {
-                    (x * y / 127) as u8
-                } else {
-                    (255 - (255 - x) * (255 - y) / 127) as u8
-                }
+                if selector < 128 { (x * y / 127) as u8 } else { (255 - (255 - x) * (255 - y) / 127) as u8 }
             }
             Self::And => a & b,
             Self::Or => a | b,
@@ -205,11 +195,7 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                 // can be vectorized without a per-sample enum branch.
                 macro_rules! apply {
                     ($f:expr) => {
-                        for ((value, &a), &b) in output_row
-                            .iter_mut()
-                            .zip(&a[a_start..a_start + row])
-                            .zip(&b[b_start..b_start + row])
-                        {
+                        for ((value, &a), &b) in output_row.iter_mut().zip(&a[a_start..a_start + row]).zip(&b[b_start..b_start + row]) {
                             value.write($f(a, b));
                         }
                     };
@@ -251,16 +237,11 @@ fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let mut pixels = reserved_buffer(source.len())?;
     py.detach(|| {
-        chunks_mut_above(
-            &mut pixels.spare_capacity_mut()[..source.len()],
-            CHUNK_PIXELS,
-            16 * 1024 * 1024,
-            |chunk, dst| {
-                for (value, &sample) in dst.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
-                    value.write(255 - sample);
-                }
-            },
-        );
+        chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS, 16 * 1024 * 1024, |chunk, dst| {
+            for (value, &sample) in dst.iter_mut().zip(&source[chunk * CHUNK_PIXELS..]) {
+                value.write(255 - sample);
+            }
+        });
     });
     // The loop initializes exactly source.len() bytes, including the tail.
     unsafe { pixels.set_len(source.len()) };
@@ -296,11 +277,7 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
                         if sy == height {
                             sy = 0;
                         }
-                        let (src, target, count) = if head <= tail {
-                            (sy * row + tail, y * row, head)
-                        } else {
-                            (sy * row, y * row + head, tail)
-                        };
+                        let (src, target, count) = if head <= tail { (sy * row + tail, y * row, head) } else { (sy * row, y * row + head, tail) };
                         // SAFETY: the repair stays inside an initialized destination row.
                         unsafe { std::ptr::copy_nonoverlapping(source[src..].as_ptr(), dst.add(target), count) };
                         sy += 1;

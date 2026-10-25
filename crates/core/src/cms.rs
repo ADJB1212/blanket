@@ -78,12 +78,7 @@ fn _cms_profile_info(data: &[u8]) -> PyResult<(String, String, String, String)> 
     let context = ThreadContext::new();
     let profile = Profile::new_icc_context(&context, data).map_err(error)?;
     let info = |kind| profile.info(kind, Locale::new("en_US")).unwrap_or_default();
-    Ok((
-        info(InfoType::Description),
-        info(InfoType::Manufacturer),
-        info(InfoType::Model),
-        info(InfoType::Copyright),
-    ))
+    Ok((info(InfoType::Description), info(InfoType::Manufacturer), info(InfoType::Model), info(InfoType::Copyright)))
 }
 
 #[pyclass(name = "_CmsTransform", module = "blanket._blanket")]
@@ -132,11 +127,7 @@ impl CmsTransform {
             )
         }
         .map_err(error)?;
-        Ok(Self {
-            transform: Mutex::new((transform, context)),
-            input,
-            output,
-        })
+        Ok(Self { transform: Mutex::new((transform, context)), input, output })
     }
 
     fn apply(&self, py: Python<'_>, image: &Image) -> PyResult<Image> {
@@ -146,11 +137,7 @@ impl CmsTransform {
         let source = image.pixel_data()?;
         let mut pixels = alloc_pixels(image.width as usize * image.height as usize * self.output.channels())?;
         py.detach(|| {
-            self.transform
-                .lock()
-                .map_err(|_| error("color transform lock poisoned"))?
-                .0
-                .transform_pixels(source, &mut pixels);
+            self.transform.lock().map_err(|_| error("color transform lock poisoned"))?.0.transform_pixels(source, &mut pixels);
             Ok::<_, PyErr>(())
         })?;
         if self.output == PixelMode::Rgba {
@@ -187,10 +174,7 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let context = ThreadContext::new();
-            let gray = Profile::new_gray_context(&context, CIExyY::d50(), &ToneCurve::new(1.0))
-                .unwrap()
-                .icc()
-                .unwrap();
+            let gray = Profile::new_gray_context(&context, CIExyY::d50(), &ToneCurve::new(1.0)).unwrap().icc().unwrap();
             let rgb = Profile::new_srgb_context(&context).icc().unwrap();
             let transform = CmsTransform::new(&gray, &rgb, "L", "RGB", 1, 0, None, 3).unwrap();
             let image = Image::from_pixels(3, 1, PixelMode::L, vec![0, 128, 255], None).unwrap();

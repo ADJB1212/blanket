@@ -9,9 +9,7 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
         text.lines()
             .find_map(|line| {
                 let mut words = line.split_whitespace();
-                (words.next() == Some("#define") && words.next().is_some_and(|v| v.ends_with(suffix)))
-                    .then(|| words.next()?.parse().ok())
-                    .flatten()
+                (words.next() == Some("#define") && words.next().is_some_and(|v| v.ends_with(suffix))).then(|| words.next()?.parse().ok()).flatten()
             })
             .ok_or_else(|| format!("missing XBM {suffix}"))
     };
@@ -22,12 +20,9 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
     let stride = if short { w.div_ceil(16) * 2 } else { w.div_ceil(8) };
     let mut raw = Vec::new();
     for token in body.split(',').map(str::trim).filter(|v| !v.is_empty()) {
-        let value = if let Some(v) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) {
-            u16::from_str_radix(v, 16)
-        } else {
-            token.parse()
-        }
-        .map_err(|_| "invalid XBM pixel")?;
+        let value =
+            if let Some(v) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) { u16::from_str_radix(v, 16) } else { token.parse() }
+                .map_err(|_| "invalid XBM pixel")?;
         if short {
             raw.extend_from_slice(&value.to_le_bytes());
         } else {
@@ -51,11 +46,7 @@ pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     if im.mode != PixelMode::One {
         return Err("XBM requires mode 1".into());
     }
-    let mut out = format!(
-        "#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n",
-        im.width, im.height
-    )
-    .into_bytes();
+    let mut out = format!("#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n", im.width, im.height).into_bytes();
     let packed = blanket_core::raster::pack_bilevel(pixels, im.width as usize, im.height as usize);
     out.reserve(packed.len() * 5 + im.height as usize + 3);
     let hex = b"0123456789abcdef";
@@ -138,12 +129,7 @@ fn color(value: &str) -> Result<[u8; 4], String> {
 pub(super) fn decode_xpm(data: &[u8]) -> Result<Image, String> {
     let values = strings(data)?;
     let header = std::str::from_utf8(values.first().ok_or("missing XPM header")?).map_err(|_| "invalid XPM header")?;
-    let nums = header
-        .split_whitespace()
-        .take(4)
-        .map(str::parse::<u32>)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|_| "invalid XPM header")?;
+    let nums = header.split_whitespace().take(4).map(str::parse::<u32>).collect::<Result<Vec<_>, _>>().map_err(|_| "invalid XPM header")?;
     if nums.len() != 4 {
         return Err("invalid XPM header".into());
     }
@@ -160,10 +146,7 @@ pub(super) fn decode_xpm(data: &[u8]) -> Result<Image, String> {
         let desc = std::str::from_utf8(&entry[cpp..]).map_err(|_| "invalid XPM color")?;
         let words = desc.split_whitespace().collect::<Vec<_>>();
         let start = words.iter().position(|&v| v == "c").ok_or("missing XPM color")? + 1;
-        let end = words[start..]
-            .iter()
-            .position(|v| matches!(*v, "s" | "m" | "g" | "g4"))
-            .map_or(words.len(), |i| start + i);
+        let end = words[start..].iter().position(|v| matches!(*v, "s" | "m" | "g" | "g4")).map_or(words.len(), |i| start + i);
         let rgba = color(&words[start..end].join(" "))?;
         alpha |= rgba[3] != 255;
         if palette.insert(key, rgba).is_some() {
@@ -206,18 +189,9 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
         indices.push(index);
     }
     let cpp = format!("{:x}", colors.len() - 1).len();
-    let mut out = format!(
-        "/* XPM */\nstatic char *im[] = {{\n\"{} {} {} {cpp}\",\n",
-        im.width,
-        im.height,
-        colors.len()
-    );
+    let mut out = format!("/* XPM */\nstatic char *im[] = {{\n\"{} {} {} {cpp}\",\n", im.width, im.height, colors.len());
     for (i, p) in colors.iter().enumerate() {
-        let c = if p[3] == 0 {
-            "None".into()
-        } else {
-            format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2])
-        };
+        let c = if p[3] == 0 { "None".into() } else { format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2]) };
         out.push_str(&format!("\"{i:0cpp$x} c {c}\",\n"));
     }
     for row in indices.chunks_exact(im.width as usize) {

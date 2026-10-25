@@ -23,17 +23,12 @@ fn pack(bits: impl ExactSizeIterator<Item = bool>) -> Vec<u8> {
 
 fn phash(pixels: &[u8], size: usize, side: usize) -> Vec<u8> {
     let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / pixels.len() as f64;
-    let cosines: Vec<f64> = (0..size)
-        .flat_map(|k| (0..side).map(move |x| (std::f64::consts::PI * k as f64 * (2 * x + 1) as f64 / (2 * side) as f64).cos()))
-        .collect();
+    let cosines: Vec<f64> =
+        (0..size).flat_map(|k| (0..side).map(move |x| (std::f64::consts::PI * k as f64 * (2 * x + 1) as f64 / (2 * side) as f64).cos())).collect();
     let mut rows = vec![0.0; side * size];
     for (y, row) in pixels.chunks_exact(side).enumerate() {
         for k in 0..size {
-            rows[y * size + k] = row
-                .iter()
-                .zip(&cosines[k * side..(k + 1) * side])
-                .map(|(&v, &c)| (f64::from(v) - mean) * c)
-                .sum();
+            rows[y * size + k] = row.iter().zip(&cosines[k * side..(k + 1) * side]).map(|(&v, &c)| (f64::from(v) - mean) * c).sum();
         }
     }
     let mut coefficients = vec![0.0; size * size];
@@ -60,11 +55,7 @@ fn median(values: &mut [f64]) -> f64 {
     let middle = values.len() / 2;
     let even = values.len().is_multiple_of(2);
     let (lower, median, _) = values.select_nth_unstable_by(middle, f64::total_cmp);
-    if even {
-        (*lower.iter().max_by(|a, b| a.total_cmp(b)).unwrap() + *median) / 2.0
-    } else {
-        *median
-    }
+    if even { (*lower.iter().max_by(|a, b| a.total_cmp(b)).unwrap() + *median) / 2.0 } else { *median }
 }
 
 #[pyfunction]
@@ -106,23 +97,12 @@ mod tests {
     fn selected_median_matches_sorted_coefficients() {
         for size in 2..=64 {
             for repeated in [false, true] {
-                let mut values: Vec<f64> = (0..size * size)
-                    .map(|i| {
-                        if repeated {
-                            (i % 3) as f64
-                        } else {
-                            ((i * 7919 % 4093) as f64 - 2046.0) / 7.0
-                        }
-                    })
-                    .collect();
+                let mut values: Vec<f64> =
+                    (0..size * size).map(|i| if repeated { (i % 3) as f64 } else { ((i * 7919 % 4093) as f64 - 2046.0) / 7.0 }).collect();
                 let mut sorted = values.clone();
                 sorted.sort_unstable_by(f64::total_cmp);
                 let middle = sorted.len() / 2;
-                let expected = if sorted.len().is_multiple_of(2) {
-                    (sorted[middle - 1] + sorted[middle]) / 2.0
-                } else {
-                    sorted[middle]
-                };
+                let expected = if sorted.len().is_multiple_of(2) { (sorted[middle - 1] + sorted[middle]) / 2.0 } else { sorted[middle] };
                 assert_eq!(median(&mut values), expected);
             }
         }

@@ -29,11 +29,7 @@ impl Drop for JxlStreamDecoder {
 }
 
 fn check(status: JxlDecoderStatus) -> Result<(), String> {
-    if status == JxlDecoderStatus::Success {
-        Ok(())
-    } else {
-        Err("JPEG XL streaming decoder error".into())
-    }
+    if status == JxlDecoderStatus::Success { Ok(()) } else { Err("JPEG XL streaming decoder error".into()) }
 }
 
 impl JxlStreamDecoder {
@@ -46,12 +42,7 @@ impl JxlStreamDecoder {
             decoder,
             input: Vec::new(),
             pixels: Vec::new(),
-            format: JxlPixelFormat {
-                num_channels: 3,
-                data_type: JxlDataType::Uint8,
-                endianness: JxlEndianness::Little,
-                align: 0,
-            },
+            format: JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Little, align: 0 },
             width: 0,
             height: 0,
             mode: PixelMode::Rgb,
@@ -124,11 +115,7 @@ impl JxlStreamDecoder {
                         (3, false) => PixelMode::Rgb,
                         _ => return Err("unsupported JPEG XL channel layout".into()),
                     };
-                    self.depth = if info.bits_per_sample > 8 && info.exponent_bits_per_sample == 0 {
-                        16
-                    } else {
-                        8
-                    };
+                    self.depth = if info.bits_per_sample > 8 && info.exponent_bits_per_sample == 0 { 16 } else { 8 };
                     self.format.num_channels = self.mode.channels() as u32;
                     self.format.data_type = if self.depth == 16 { JxlDataType::Uint16 } else { JxlDataType::Uint8 };
                 },
@@ -136,12 +123,7 @@ impl JxlStreamDecoder {
                     let mut size = 0;
                     check(JxlDecoderImageOutBufferSize(self.decoder, &raw const self.format, &raw mut size))?;
                     self.pixels = vec![0; size];
-                    check(JxlDecoderSetImageOutBuffer(
-                        self.decoder,
-                        &raw const self.format,
-                        self.pixels.as_mut_ptr().cast(),
-                        size,
-                    ))?;
+                    check(JxlDecoderSetImageOutBuffer(self.decoder, &raw const self.format, self.pixels.as_mut_ptr().cast(), size))?;
                 },
                 JxlDecoderStatus::FrameProgression => unsafe {
                     check(JxlDecoderFlushImage(self.decoder))?;
@@ -198,32 +180,19 @@ mod tests {
             assert_eq!(JxlEncoderSetColorEncoding(encoder.0, color.as_ptr()), JxlEncoderStatus::Success);
             let settings = JxlEncoderFrameSettingsCreate(encoder.0, ptr::null());
             assert!(!settings.is_null());
-            for (option, value) in [
-                (JxlEncoderFrameSettingId::Effort, 3),
-                (JxlEncoderFrameSettingId::ProgressiveAc, 1),
-                (JxlEncoderFrameSettingId::ProgressiveDc, 1),
-            ] {
+            for (option, value) in
+                [(JxlEncoderFrameSettingId::Effort, 3), (JxlEncoderFrameSettingId::ProgressiveAc, 1), (JxlEncoderFrameSettingId::ProgressiveDc, 1)]
+            {
                 assert_eq!(JxlEncoderFrameSettingsSetOption(settings, option, value), JxlEncoderStatus::Success);
             }
             assert_eq!(JxlEncoderSetFrameDistance(settings, 1.0), JxlEncoderStatus::Success);
             let pixels: Vec<u8> = (0..257 * 193 * 3).map(|i| (i * 71 + i / 7) as u8).collect();
-            let format = JxlPixelFormat {
-                num_channels: 3,
-                data_type: JxlDataType::Uint8,
-                endianness: JxlEndianness::Native,
-                align: 0,
-            };
-            assert_eq!(
-                JxlEncoderAddImageFrame(settings, &raw const format, pixels.as_ptr().cast(), pixels.len()),
-                JxlEncoderStatus::Success
-            );
+            let format = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Native, align: 0 };
+            assert_eq!(JxlEncoderAddImageFrame(settings, &raw const format, pixels.as_ptr().cast(), pixels.len()), JxlEncoderStatus::Success);
             JxlEncoderCloseInput(encoder.0);
             let mut next = data.as_mut_ptr();
             let mut available = data.len();
-            assert_eq!(
-                JxlEncoderProcessOutput(encoder.0, &raw mut next, &raw mut available),
-                JxlEncoderStatus::Success
-            );
+            assert_eq!(JxlEncoderProcessOutput(encoder.0, &raw mut next, &raw mut available), JxlEncoderStatus::Success);
             data.truncate(data.len() - available);
         }
         let mut decoder = JxlStreamDecoder::new().unwrap();

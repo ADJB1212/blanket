@@ -201,15 +201,7 @@ fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -
         chunks_mut(&mut pixels, stride * band_rows, |band, rows| {
             let mut queue = VecDeque::new();
             for column in 0..stride {
-                extrema_line(
-                    &horizontal[column..],
-                    &mut rows[column..],
-                    stride,
-                    band * band_rows,
-                    radius,
-                    maximum,
-                    &mut queue,
-                );
+                extrema_line(&horizontal[column..], &mut rows[column..], stride, band * band_rows, radius, maximum, &mut queue);
             }
         });
         Ok(pixels)
@@ -230,10 +222,7 @@ fn extrema_line(source: &[u8], output: &mut [u8], step: usize, first: usize, rad
         let right = (center + radius).min(length - 1);
         while next <= right {
             let value = source[next * step];
-            while queue
-                .back()
-                .is_some_and(|&(_, previous)| if maximum { previous <= value } else { previous >= value })
-            {
+            while queue.back().is_some_and(|&(_, previous)| if maximum { previous <= value } else { previous >= value }) {
                 queue.pop_back();
             }
             queue.push_back((next, value));
@@ -282,11 +271,7 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
                         return 1;
                     }
                     1 + if yy == 0 { radius.saturating_sub(y) as u64 } else { 0 }
-                        + if yy == height - 1 {
-                            (y + radius).saturating_sub(height - 1) as u64
-                        } else {
-                            0
-                        }
+                        + if yy == height - 1 { (y + radius).saturating_sub(height - 1) as u64 } else { 0 }
                 };
                 for channel in 0..channels {
                     let mut histogram = [0_u64; 256];
@@ -381,11 +366,7 @@ fn rank_columns(source: &[u8], output: &mut [u8], width: usize, channels: usize,
         for y in first.saturating_sub(radius)..=(first + radius).min(height - 1) {
             let weight = 1
                 + if y == 0 { radius.saturating_sub(first) as u64 } else { 0 }
-                + if y == height - 1 {
-                    (first + radius).saturating_sub(height - 1) as u64
-                } else {
-                    0
-                };
+                + if y == height - 1 { (first + radius).saturating_sub(height - 1) as u64 } else { 0 };
             for (x, column) in columns.iter_mut().enumerate() {
                 let value = usize::from(source[y * stride + x * channels + channel]);
                 column[value] += weight;
@@ -536,15 +517,8 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
 }
 
 fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
-    let radii = if gaussian {
-        (gaussian_radius(radii.0), gaussian_radius(radii.1))
-    } else {
-        radii
-    };
-    if <[f32; 2]>::from(radii)
-        .iter()
-        .any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32)
-    {
+    let radii = if gaussian { (gaussian_radius(radii.0), gaussian_radius(radii.1)) } else { radii };
+    if <[f32; 2]>::from(radii).iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
     }
     Ok(radii)
@@ -611,9 +585,7 @@ fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, thre
                 blur_radii((radius, radius), true)?;
             }
             let mut pixels = Vec::new();
-            pixels
-                .try_reserve_exact(source.len())
-                .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+            pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
             pixels.extend_from_slice(source);
             return Ok(pixels);
         }
@@ -661,12 +633,8 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
     if table.len() != channels * size.0 * size.1 * size.2 {
         return Err(PyValueError::new_err("table has wrong number of elements"));
     }
-    let prepared: Vec<i32> = py.detach(|| {
-        table
-            .into_iter()
-            .map(|v| ((v * LUT_SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
-            .collect()
-    });
+    let prepared: Vec<i32> =
+        py.detach(|| table.into_iter().map(|v| ((v * LUT_SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX))).collect());
     let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * f64::from(1 << LUT_POSITION_BITS)) as usize);
     let strides = [channels, channels * size.0, channels * size.0 * size.1];
     let positions: [[(usize, i32); 256]; 3] = std::array::from_fn(|c| {
@@ -726,12 +694,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         // another full-buffer write. This matters once the band exceeds cache.
         return Image::from_pixels(width, height, mode, py.detach(|| sources[0].to_vec()), None);
     }
-    let mut pixels = alloc_pixels(
-        sources[0]
-            .len()
-            .checked_mul(bands.len())
-            .ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?,
-    )?;
+    let mut pixels = alloc_pixels(sources[0].len().checked_mul(bands.len()).ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?)?;
     py.detach(|| match mode {
         PixelMode::One | PixelMode::L => pixels.copy_from_slice(sources[0]),
         PixelMode::La | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
@@ -851,11 +814,8 @@ mod tests {
                 for offset in [0, 1, 7, 15] {
                     let source: Vec<u8> = (0..offset + width * height * C).map(|i| (i * 37 + 113) as u8).collect();
                     let source = &source[offset..];
-                    for weights in [
-                        (0..K * K).map(|i| (i as f32 - 4.5) / 7.0).collect::<Vec<_>>(),
-                        vec![f32::INFINITY; K * K],
-                        vec![f32::NAN; K * K],
-                    ] {
+                    for weights in [(0..K * K).map(|i| (i as f32 - 4.5) / 7.0).collect::<Vec<_>>(), vec![f32::INFINITY; K * K], vec![f32::NAN; K * K]]
+                    {
                         let mut expected = source.to_vec();
                         let radius = K / 2;
                         for y in radius..height - radius {

@@ -33,11 +33,7 @@ fn matches_key_chunk(source: &[u8], key: [u8; 3]) -> bool {
         }
         offset += 64;
     }
-    source[offset..]
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|p| (p[3] == 0 && p[..3] == key) || (p[3] == 255 && p[..3] != key))
+    source[offset..].as_chunks::<4>().0.iter().all(|p| (p[3] == 0 && p[..3] == key) || (p[3] == 255 && p[..3] != key))
 }
 
 pub(crate) fn properties(source: &[u8], channels: usize) -> (bool, bool) {
@@ -52,10 +48,7 @@ pub(crate) fn properties(source: &[u8], channels: usize) -> (bool, bool) {
         if !prefix.0 && (!prefix.1 || channels == 3) {
             return prefix;
         }
-        source
-            .par_chunks(chunk)
-            .map(|src| properties_chunk(src, channels))
-            .reduce(|| (true, true), |a, b| (a.0 && b.0, a.1 && b.1))
+        source.par_chunks(chunk).map(|src| properties_chunk(src, channels)).reduce(|| (true, true), |a, b| (a.0 && b.0, a.1 && b.1))
     } else {
         properties_chunk(source, channels)
     }
@@ -94,16 +87,11 @@ fn properties_chunk(source: &[u8], channels: usize) -> (bool, bool) {
 pub(crate) fn select(source: &[u8], channels: usize, alpha: bool, shift: u8) -> Vec<u8> {
     let target_channels = if alpha { 2 } else { 1 };
     let mut output = vec![0; source.len() / channels * target_channels];
-    chunks_mut_above(
-        &mut output,
-        CHUNK_PIXELS * target_channels,
-        MEMORY_PARALLEL_BYTES / channels * target_channels,
-        |i, dst| {
-            let start = i * CHUNK_PIXELS * channels;
-            let src = &source[start..start + dst.len() / target_channels * channels];
-            select_chunk(src, dst, channels, alpha, shift);
-        },
-    );
+    chunks_mut_above(&mut output, CHUNK_PIXELS * target_channels, MEMORY_PARALLEL_BYTES / channels * target_channels, |i, dst| {
+        let start = i * CHUNK_PIXELS * channels;
+        let src = &source[start..start + dst.len() / target_channels * channels];
+        select_chunk(src, dst, channels, alpha, shift);
+    });
     output
 }
 
@@ -129,10 +117,7 @@ fn select_chunk(source: &[u8], output: &mut [u8], channels: usize, alpha: bool, 
         }
         done += 16;
     }
-    for (src, dst) in source[done * channels..]
-        .chunks_exact(channels)
-        .zip(output[done * target_channels..].chunks_exact_mut(target_channels))
-    {
+    for (src, dst) in source[done * channels..].chunks_exact(channels).zip(output[done * target_channels..].chunks_exact_mut(target_channels)) {
         dst[0] = src[0] >> shift;
         if alpha {
             dst[1] = src[3];
@@ -145,11 +130,7 @@ pub(crate) fn fits_depth(gray: &[u8], bits: usize) -> bool {
         return true;
     }
     let check = |src: &[u8]| fits_depth_chunk(src, bits);
-    if should_parallel(gray.len(), CHUNK_PIXELS, MEMORY_PARALLEL_BYTES) {
-        gray.par_chunks(CHUNK_PIXELS).all(check)
-    } else {
-        check(gray)
-    }
+    if should_parallel(gray.len(), CHUNK_PIXELS, MEMORY_PARALLEL_BYTES) { gray.par_chunks(CHUNK_PIXELS).all(check) } else { check(gray) }
 }
 
 fn fits_depth_chunk(source: &[u8], bits: usize) -> bool {
@@ -224,16 +205,10 @@ fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTran
         }
     };
     if should_parallel(samples.len(), rows_per_chunk * width, MEMORY_PARALLEL_BYTES) {
-        output
-            .par_chunks_mut(rows_per_chunk * row_bytes)
-            .enumerate()
-            .for_each_init(Vec::new, |scratch, (i, dst)| fill(i, dst, scratch));
+        output.par_chunks_mut(rows_per_chunk * row_bytes).enumerate().for_each_init(Vec::new, |scratch, (i, dst)| fill(i, dst, scratch));
     } else {
         let mut scratch = Vec::new();
-        output
-            .chunks_mut(rows_per_chunk * row_bytes)
-            .enumerate()
-            .for_each(|(i, dst)| fill(i, dst, &mut scratch));
+        output.chunks_mut(rows_per_chunk * row_bytes).enumerate().for_each(|(i, dst)| fill(i, dst, &mut scratch));
     }
     output
 }
@@ -279,10 +254,7 @@ pub(crate) fn equal(left: &[u8], right: &[u8]) -> bool {
         return left == right;
     }
     left[..EQUALITY_PREFIX_BYTES] == right[..EQUALITY_PREFIX_BYTES]
-        && left
-            .par_chunks(EQUALITY_CHUNK_BYTES)
-            .zip(right.par_chunks(EQUALITY_CHUNK_BYTES))
-            .all(|(a, b)| a == b)
+        && left.par_chunks(EQUALITY_CHUNK_BYTES).zip(right.par_chunks(EQUALITY_CHUNK_BYTES)).all(|(a, b)| a == b)
 }
 
 #[cfg(test)]
@@ -299,16 +271,10 @@ mod tests {
                 let expected_opaque = channels != 4 || src.as_chunks::<4>().0.iter().all(|p| p[3] == 255);
                 assert_eq!(properties(src, channels), (expected_gray, expected_opaque));
                 for shift in [0, 4, 6, 7] {
-                    assert_eq!(
-                        select(src, channels, false, shift),
-                        src.chunks_exact(channels).map(|p| p[0] >> shift).collect::<Vec<_>>()
-                    );
+                    assert_eq!(select(src, channels, false, shift), src.chunks_exact(channels).map(|p| p[0] >> shift).collect::<Vec<_>>());
                 }
                 if channels == 4 {
-                    assert_eq!(
-                        select(src, channels, true, 0),
-                        src.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[3]]).collect::<Vec<_>>()
-                    );
+                    assert_eq!(select(src, channels, true, 0), src.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[3]]).collect::<Vec<_>>());
                 }
             }
         }
@@ -365,14 +331,8 @@ mod tests {
             let mapping = std::array::from_fn(|i| (255 - i) as u8 & mask);
             for width in [1, 7, 17, 65, 257, 65_537] {
                 let source: Vec<_> = (0..width * 3).map(|i| (i * 71 + i / 7) as u8).collect();
-                assert_eq!(
-                    pack_mapped_rows(&source, width, bits, &mapping),
-                    pack_rows(&remap(&source, &mapping), width, bits)
-                );
-                assert_eq!(
-                    pack_gray_rows(&source, width, bits),
-                    pack_rows(&select(&source, 1, false, (8 - bits) as u8), width, bits)
-                );
+                assert_eq!(pack_mapped_rows(&source, width, bits, &mapping), pack_rows(&remap(&source, &mapping), width, bits));
+                assert_eq!(pack_gray_rows(&source, width, bits), pack_rows(&select(&source, 1, false, (8 - bits) as u8), width, bits));
             }
         }
     }

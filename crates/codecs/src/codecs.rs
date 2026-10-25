@@ -178,10 +178,7 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
             .filter_map(|name| ImageFormat::parse(name).ok())
             .any(|candidate| candidate == format || (candidate == ImageFormat::Pam && format == ImageFormat::Ppm && data.starts_with(b"P7")));
         if !allowed {
-            return Err(UnidentifiedImageError::new_err(format!(
-                "image format {} is not in formats",
-                format.as_str()
-            )));
+            return Err(UnidentifiedImageError::new_err(format!("image format {} is not in formats", format.as_str())));
         }
     }
 
@@ -203,11 +200,7 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>)
             _ => decode(data, format).map(Sequence::single),
         })
         .map_err(UnidentifiedImageError::new_err)?;
-    let (images, metadata) = sequence
-        .frames
-        .into_iter()
-        .map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend)))
-        .unzip();
+    let (images, metadata) = sequence.frames.into_iter().map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend))).unzip();
     Ok((images, metadata, sequence.loop_count, sequence.default_image))
 }
 
@@ -266,32 +259,18 @@ pub fn _encode_sequence(
         frames: images
             .iter()
             .enumerate()
-            .map(|(i, image)| Frame {
-                image: &**image,
-                duration: Some(durations[i]),
-                disposal: disposals[i],
-                blend: blends[i],
-            })
+            .map(|(i, image)| Frame { image: &**image, duration: Some(durations[i]), disposal: disposals[i], blend: blends[i] })
             .collect(),
         loop_count,
         default_image,
     };
-    let options = SaveOptions {
-        quality,
-        compress_level,
-        lossless,
-        ..Default::default()
-    };
+    let options = SaveOptions { quality, compress_level, lossless, ..Default::default() };
     let encoded = py.detach(|| match format {
         ImageFormat::Gif => blanket_codec_gif::encode_sequence(&sequence),
         ImageFormat::Webp => blanket_codec_webp::encode_sequence(&sequence, options),
         ImageFormat::Png => blanket_codec_png::encode_sequence(&sequence, options),
         ImageFormat::Pdf => {
-            let pages = sequence
-                .frames
-                .iter()
-                .map(|frame| Ok((frame.image, frame.image.pixel_data()?)))
-                .collect::<PyResult<Vec<_>>>()?;
+            let pages = sequence.frames.iter().map(|frame| Ok((frame.image, frame.image.pixel_data()?))).collect::<PyResult<Vec<_>>>()?;
             blanket_codec_pdf::encode_pages(&pages)
         }
         _ => Err(PyValueError::new_err("unsupported multi-frame output format")),
@@ -348,11 +327,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
             (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?),
             _ => {}
         }
-        return Err(PyOSError::new_err(format!(
-            "cannot write mode {} as {}",
-            image.mode.as_str(),
-            format.as_str()
-        )));
+        return Err(PyOSError::new_err(format!("cannot write mode {} as {}", image.mode.as_str(), format.as_str())));
     }
     if image.mode == PixelMode::F {
         if format != ImageFormat::Tiff {
@@ -413,18 +388,11 @@ fn ftyp_has_brand(data: &[u8], matches_brand: impl Fn(&[u8]) -> bool) -> bool {
     if size < 16 || size > data.len() || !size.is_multiple_of(4) {
         return false;
     }
-    std::iter::once(&data[8..12])
-        .chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice))
-        .any(matches_brand)
+    std::iter::once(&data[8..12]).chain(data[16..size].as_chunks::<4>().0.iter().map(<[u8; 4]>::as_slice)).any(matches_brand)
 }
 
 fn is_heif(data: &[u8]) -> bool {
-    ftyp_has_brand(data, |brand| {
-        matches!(
-            brand,
-            b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"
-        )
-    })
+    ftyp_has_brand(data, |brand| matches!(brand, b"heic" | b"heix" | b"hevc" | b"hevx" | b"heim" | b"heis" | b"hevm" | b"hevs" | b"mif1" | b"msf1"))
 }
 
 fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -448,11 +416,7 @@ mod tests {
     use super::*;
     #[test]
     fn detects_avif_brands_before_generic_heif() {
-        for data in [
-            b"\0\0\0\x14ftypavif\0\0\0\0mif1".as_slice(),
-            b"\0\0\0\x14ftypmif1\0\0\0\0avif",
-            b"\0\0\0\x10ftypavis\0\0\0\0",
-        ] {
+        for data in [b"\0\0\0\x14ftypavif\0\0\0\0mif1".as_slice(), b"\0\0\0\x14ftypmif1\0\0\0\0avif", b"\0\0\0\x10ftypavis\0\0\0\0"] {
             assert_eq!(ImageFormat::detect(data), Some(ImageFormat::Avif));
         }
         assert_eq!(ImageFormat::detect(b"\0\0\0\x20ftypavif\0\0\0\0"), None);

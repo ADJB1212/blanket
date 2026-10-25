@@ -58,12 +58,7 @@ mod tests {
                     let source: Vec<_> = (0..length + offset + 1).map(|i| (i * 37) as u8).collect();
                     let mut output = vec![0xa5; length + 2];
                     swap_red_blue::<C>(&source[offset..offset + length], &mut output[1..length + 1]);
-                    for (src, dst) in source[offset..offset + length]
-                        .as_chunks::<C>()
-                        .0
-                        .iter()
-                        .zip(output[1..length + 1].as_chunks::<C>().0)
-                    {
+                    for (src, dst) in source[offset..offset + length].as_chunks::<C>().0.iter().zip(output[1..length + 1].as_chunks::<C>().0) {
                         let mut expected = *src;
                         expected.swap(0, 2);
                         assert_eq!(dst, &expected);

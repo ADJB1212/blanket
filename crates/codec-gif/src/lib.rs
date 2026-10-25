@@ -12,17 +12,12 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     options.check_frame_consistency(true);
-    options.set_memory_limit(gif::MemoryLimit::Bytes(
-        std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap(),
-    ));
+    options.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap()));
     let mut decoder = options.read_info(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
     blanket_codec_common::validate_dimensions(width, height)?;
-    let background = decoder
-        .bg_color()
-        .and_then(|i| decoder.global_palette()?.get(i * 3..i * 3 + 3))
-        .map(|p| [p[0], p[1], p[2], 255])
-        .unwrap_or([0; 4]);
+    let background =
+        decoder.bg_color().and_then(|i| decoder.global_palette()?.get(i * 3..i * 3 + 3)).map(|p| [p[0], p[1], p[2], 255]).unwrap_or([0; 4]);
     let palette = decoder.global_palette().map(<[u8]>::to_vec);
     let mut canvas = blanket_core::raster::alloc_pixels(width as usize * height as usize * 4).map_err(|e| e.to_string())?;
     let mut sequence = Sequence::default();
@@ -30,12 +25,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut previous = Vec::new();
     while let Some(frame) = decoder.read_next_frame().map_err(|e| e.to_string())? {
         validate_frame_budget(&mut total, width, height)?;
-        let (x, y, w, h) = (
-            u32::from(frame.left),
-            u32::from(frame.top),
-            u32::from(frame.width),
-            u32::from(frame.height),
-        );
+        let (x, y, w, h) = (u32::from(frame.left), u32::from(frame.top), u32::from(frame.width), u32::from(frame.height));
         if x + w > width || y + h > height {
             return Err("GIF frame outside canvas".into());
         }
@@ -113,13 +103,7 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
     {
         let mut encoder = gif::Encoder::new(&mut output, first.width as u16, first.height as u16, &[]).map_err(codec_error)?;
         if let Some(count) = sequence.loop_count {
-            encoder
-                .set_repeat(if count == 0 {
-                    gif::Repeat::Infinite
-                } else {
-                    gif::Repeat::Finite(count as u16)
-                })
-                .map_err(codec_error)?;
+            encoder.set_repeat(if count == 0 { gif::Repeat::Infinite } else { gif::Repeat::Finite(count as u16) }).map_err(codec_error)?;
         }
         let mut pixels = Vec::new();
         for frame in &sequence.frames {
@@ -153,9 +137,7 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     } else {
         (pixels, color_type(image.mode))
     };
-    image::codecs::gif::GifEncoder::new(&mut output)
-        .encode(pixels, image.width, image.height, color)
-        .map_err(codec_error)?;
+    image::codecs::gif::GifEncoder::new(&mut output).encode(pixels, image.width, image.height, color).map_err(codec_error)?;
 
     Ok(output)
 }

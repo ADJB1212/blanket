@@ -69,11 +69,7 @@ mod tests {
                     let mut output = vec![87; length + 32];
                     horizontal_max(source, radius, &mut output[offset..offset + length]);
                     for x in 0..length {
-                        let expected = source[x.saturating_sub(2 * radius).min(width)..(x + 1).min(width)]
-                            .iter()
-                            .copied()
-                            .max()
-                            .unwrap_or(0);
+                        let expected = source[x.saturating_sub(2 * radius).min(width)..(x + 1).min(width)].iter().copied().max().unwrap_or(0);
                         assert_eq!(output[offset + x], expected, "width {width}, radius {radius}, x {x}");
                     }
                     assert!(output[..offset].iter().all(|&value| value == 87));

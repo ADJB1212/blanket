@@ -30,11 +30,7 @@ impl StreamingDecoder {
 
     #[getter]
     fn image(&self) -> PyResult<Option<Image>> {
-        self.decoder
-            .as_ref()
-            .ok_or_else(|| PyValueError::new_err("closed decoder"))?
-            .image()
-            .map_err(PyOSError::new_err)
+        self.decoder.as_ref().ok_or_else(|| PyValueError::new_err("closed decoder"))?.image().map_err(PyOSError::new_err)
     }
 
     fn close(&mut self) -> PyResult<Image> {
@@ -42,9 +38,6 @@ impl StreamingDecoder {
         if !decoder.complete {
             return Err(PyOSError::new_err("truncated image stream"));
         }
-        decoder
-            .image()
-            .map_err(PyOSError::new_err)?
-            .ok_or_else(|| PyOSError::new_err("image stream has no pixels"))
+        decoder.image().map_err(PyOSError::new_err)?.ok_or_else(|| PyOSError::new_err("image stream has no pixels"))
     }
 }
