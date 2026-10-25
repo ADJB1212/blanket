@@ -113,21 +113,33 @@ class Path:
         distance = float(distance)
         if not self._points:
             return 0
-        remaining = iter(self._points)
-        points = [next(remaining)]
-        for x, y in remaining:
-            if abs(x - points[-1][0]) + abs(y - points[-1][1]) >= distance:
-                points.append((x, y))
-        removed = len(self) - len(points)
-        self._points[:] = points
+        points = self._points
+        kept = 1
+        for i in range(1, len(points)):
+            point = points[i]
+            x, y = point
+            if abs(x - points[kept - 1][0]) + abs(y - points[kept - 1][1]) >= distance:
+                points[kept] = point
+                kept += 1
+        removed = len(points) - kept
+        del points[kept:]
         return removed
 
     def getbbox(self) -> tuple[float, float, float, float]:
         """Return (left, top, right, bottom), or four zeros for an empty path."""
         if not self._points:
             return 0.0, 0.0, 0.0, 0.0
-        xs, ys = zip(*self._points, strict=True)
-        return min(xs), min(ys), max(xs), max(ys)
+        left, top = right, bottom = self._points[0]
+        for x, y in self._points:
+            if x < left:  # noqa: PLR1730
+                left = x
+            if x > right:  # noqa: PLR1730
+                right = x
+            if y < top:  # noqa: PLR1730
+                top = y
+            if y > bottom:  # noqa: PLR1730
+                bottom = y
+        return left, top, right, bottom
 
     def map(self, function: Callable[[float, float], tuple[float, float]]) -> None:
         """Replace each vertex with function(x, y), updating the path in place."""

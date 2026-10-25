@@ -50,7 +50,9 @@ fn phash(pixels: &[u8], size: usize, side: usize) -> Vec<u8> {
             *value = 0.0;
         }
     }
-    let median = median(&mut coefficients.clone());
+    let scratch = &mut rows[..coefficients.len()];
+    scratch.copy_from_slice(&coefficients);
+    let median = median(scratch);
     pack(coefficients.iter().map(|&value| value > median))
 }
 

@@ -17,9 +17,9 @@ def bit_value(bits: np.ndarray) -> int:
 
 
 @pytest.mark.parametrize("size", [2, 3, 8, 9, 16, 64])
+@pytest.mark.parametrize("factor", [1, 2])
 @pytest.mark.parametrize("algorithm", ["average", "difference", "perceptual"])
-def test_hashes_match_independent_reference(size: int, algorithm: str) -> None:
-    factor = 2
+def test_hashes_match_independent_reference(size: int, algorithm: str, factor: int) -> None:
     width, height = (size + 1, size) if algorithm == "difference" else (size * factor, size * factor) if algorithm == "perceptual" else (size, size)
     pixels = np.random.default_rng(42).integers(0, 256, (height, width), dtype=np.uint8)
     image = Image.frombytes("L", (width, height), pixels.tobytes())

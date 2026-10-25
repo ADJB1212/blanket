@@ -661,11 +661,23 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
     if table.len() != channels * size.0 * size.1 * size.2 {
         return Err(PyValueError::new_err("table has wrong number of elements"));
     }
-    let prepared: Vec<i32> = table
-        .into_iter()
-        .map(|v| ((v * LUT_SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
-        .collect();
+    let prepared: Vec<i32> = py.detach(|| {
+        table
+            .into_iter()
+            .map(|v| ((v * LUT_SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)))
+            .collect()
+    });
     let scales = dimensions.map(|s| ((s - 1) as f64 / 255.0 * f64::from(1 << LUT_POSITION_BITS)) as usize);
+    let strides = [channels, channels * size.0, channels * size.0 * size.1];
+    let positions: [[(usize, i32); 256]; 3] = std::array::from_fn(|c| {
+        std::array::from_fn(|value| {
+            let position = value * scales[c];
+            (
+                (position >> LUT_POSITION_BITS) * strides[c],
+                ((position & ((1 << LUT_POSITION_BITS) - 1)) >> (LUT_POSITION_BITS - LUT_BLEND_BITS)) as i32,
+            )
+        })
+    });
     let len = (image.width as usize)
         .checked_mul(image.height as usize)
         .and_then(|n| n.checked_mul(output_channels))
@@ -675,16 +687,9 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
         chunks_mut(&mut pixels, CHUNK_PIXELS * output_channels, |chunk, dst| {
             for (i, pixel) in dst.chunks_exact_mut(output_channels).enumerate() {
                 let input = &source[(chunk * CHUNK_PIXELS + i) * input_channels..];
-                let positions = [
-                    usize::from(input[0]) * scales[0],
-                    usize::from(input[1]) * scales[1],
-                    usize::from(input[2]) * scales[2],
-                ];
-                let shifts = positions.map(|p| ((p & ((1 << LUT_POSITION_BITS) - 1)) >> (LUT_POSITION_BITS - LUT_BLEND_BITS)) as i32);
-                let index = channels
-                    * ((positions[0] >> LUT_POSITION_BITS)
-                        + (positions[1] >> LUT_POSITION_BITS) * size.0
-                        + (positions[2] >> LUT_POSITION_BITS) * size.0 * size.1);
+                let coordinates = std::array::from_fn::<_, 3, _>(|c| positions[c][usize::from(input[c])]);
+                let shifts = coordinates.map(|(_, shift)| shift);
+                let index = coordinates.iter().map(|&(offset, _)| offset).sum::<usize>();
                 let blend = |a: i32, b: i32, shift: i32| (a * (LUT_BLEND_SCALE - shift) + b * shift) >> LUT_BLEND_BITS;
                 for (channel, value) in pixel.iter_mut().enumerate().take(channels) {
                     let mut planes = [0; 2];

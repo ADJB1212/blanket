@@ -230,9 +230,13 @@ fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image) ->
     if (background.width, background.height) != (overlay.width, overlay.height) {
         return Err(PyValueError::new_err("images do not match"));
     }
-    let mut pixels = background.pixel_data()?.to_vec();
+    let background_pixels = background.pixel_data()?;
     let source = overlay.pixel_data()?;
-    py.detach(|| composite_pixels(&mut pixels, source));
+    let pixels = py.detach(|| {
+        let mut pixels = background_pixels.to_vec();
+        composite_pixels(&mut pixels, source);
+        pixels
+    });
     Image::from_pixels(background.width, background.height, PixelMode::Rgba, pixels, None)
 }
 

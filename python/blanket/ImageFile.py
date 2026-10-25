@@ -54,6 +54,10 @@ class Parser:
             raise ValueError("closed image parser")
         view = memoryview(data).cast("B")
         try:
+            if self._decoder is not None and isinstance(data, bytes):
+                if data:
+                    self._decoder.feed(data)
+                return
             if self._decoder is None:
                 count = min(12 - len(self._prefix), len(view))
                 self._prefix.extend(view[:count])
@@ -134,7 +138,7 @@ class PngWriter:
         """
         if self._writer is None:
             raise ValueError("closed PNG writer")
-        self._writer.write(memoryview(data).tobytes())
+        self._writer.write(data if isinstance(data, bytes) else memoryview(data).tobytes())
 
     def close(self) -> None:
         """Finish PNG output and close owned files; reject missing rows."""

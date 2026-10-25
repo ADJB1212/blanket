@@ -27,6 +27,7 @@ def test_parser_chunk_boundaries_match_eager(mode: str, chunk_size: int) -> None
     parser.feed(b"")
     for start in range(0, len(data), chunk_size):
         parser.feed(data[start : start + chunk_size])
+        parser.feed(b"")
     result = parser.close()
     expected = Image.open(BytesIO(data))
     assert (result.mode, result.size, result.bit_depth, result.format) == (expected.mode, expected.size, expected.bit_depth, "JXL")
@@ -100,7 +101,8 @@ def test_jxl_container_signature_and_payload_boundaries(chunk_size: int) -> None
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("compress_level", [0, 6, 9])
-def test_png_rows_match_pillow_and_eager(mode: str, compress_level: int) -> None:
+@pytest.mark.parametrize("buffer_type", [bytes, bytearray, memoryview])
+def test_png_rows_match_pillow_and_eager(mode: str, compress_level: int, buffer_type: type) -> None:
     size = (33, 19)
     channels = len(Image.new(mode, (1, 1)).getbands())
     stride = (size[0] + 7) // 8 if mode == "1" else size[0] * channels
@@ -110,7 +112,7 @@ def test_png_rows_match_pillow_and_eager(mode: str, compress_level: int) -> None
     with ImageFile.PngWriter(output, mode, size, compress_level=compress_level) as writer:
         assert output.getvalue().startswith(b"\x89PNG\r\n\x1a\n")
         for i in range(0, len(raw), stride):
-            writer.write(bytearray(raw[i : i + stride]))
+            writer.write(buffer_type(raw[i : i + stride]))
     assert not output.closed
     result = Image.open(BytesIO(output.getvalue()))
     assert (result.mode, result.size, result.bit_depth) == (expected.mode, size, 8)

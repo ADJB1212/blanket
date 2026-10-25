@@ -295,6 +295,20 @@ def test_parallel_lut(channels: int) -> None:
     compare("RGBA", (321, 289), actual, expected)
 
 
+@pytest.mark.parametrize("channels", [3, 4])
+def test_lut_coordinate_tables_cover_every_sample(channels: int) -> None:
+    raw = bytes(component for value in range(256) for component in (value, (value * 37) % 256, 255 - value, value))
+
+    def callback(r: float, g: float, b: float) -> tuple[float, ...]:
+        return (r * g, b * r, g * b) + ((1 - r,) if channels == 4 else ())
+
+    source = Image.frombytes("RGBA", (256, 1), raw)
+    reference = PillowImage.frombytes("RGBA", (256, 1), raw)
+    actual = source.filter(ImageFilter.Color3DLUT.generate((2, 33, 65), callback, channels))
+    expected = reference.filter(PillowFilter.Color3DLUT.generate((2, 33, 65), callback, channels))
+    assert actual.tobytes() == expected.tobytes()
+
+
 def test_kernel_coefficients_remain_mutable() -> None:
     coefficients = [0.0] * 9
     actual = ImageFilter.Kernel((3, 3), coefficients, 1)

@@ -42,10 +42,10 @@ fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> 
         return Err(PyValueError::new_err("images do not match"));
     }
     if std::ptr::eq(first, second) || factor == 0.0 {
-        return copy(first, first_pixels);
+        return py.detach(|| copy(first, first_pixels));
     }
     if factor == 1.0 {
-        return copy(second, second_pixels);
+        return py.detach(|| copy(second, second_pixels));
     }
 
     let mut pixels = alloc_pixels(first_pixels.len())?;
@@ -109,7 +109,7 @@ fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     }
     let source = image.pixel_data()?;
     if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
-        return copy(image, source);
+        return py.detach(|| copy(image, source));
     }
 
     let mut pixels = alloc_pixels(source.len())?;
@@ -152,12 +152,14 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
-        let mean = if source.is_empty() {
-            0
-        } else {
-            (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8
-        };
-        let gray = Image::from_pixels(image.width, image.height, PixelMode::L, vec![mean; source.len()], None)?;
+        let mean = py.detach(|| {
+            if source.is_empty() {
+                0
+            } else {
+                (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8
+            }
+        });
+        let gray = py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, vec![mean; source.len()], None))?;
         return gray.convert(py, image.mode.as_str(), None);
     }
     let source = image.pixel_data()?;
@@ -254,8 +256,14 @@ fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 #[pyfunction]
 fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let mut pixels = alloc_pixels(source.len())?;
-    pixels.copy_from_slice(source);
+    let mut pixels = py.detach(|| -> PyResult<Vec<u8>> {
+        let mut pixels = Vec::new();
+        pixels
+            .try_reserve_exact(source.len())
+            .map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+        pixels.extend_from_slice(source);
+        Ok(pixels)
+    })?;
     if image.width < 3 || image.height < 3 {
         return output(image, pixels);
     }

@@ -37,6 +37,31 @@ def test_compact_matches_pillow(distance: float) -> None:
     assert ImagePath.Path([]).compact(distance) == 0
 
 
+def test_large_path_compaction_preserves_vertices_and_bounds() -> None:
+    points = [(float(i // 3), float(-(i // 3))) for i in range(30000)]
+    path = ImagePath.Path(points)
+    vertices = path.tolist()
+    assert path.getbbox() == (0, -9999, 9999, 0)
+    assert path.compact(1) == 20000
+    assert path.tolist() == points[::3]
+    assert all(actual is original for actual, original in zip(path, vertices[::3], strict=True))
+    assert path.getbbox() == (0, -9999, 9999, 0)
+
+
+@pytest.mark.parametrize("first_nan", [False, True])
+def test_bounds_preserve_nonfinite_comparison_order(first_nan: bool) -> None:
+    import math
+
+    points = [(float("nan"), float("nan")), (-float("inf"), -3), (4, float("inf"))]
+    if not first_nan:
+        points.reverse()
+    path = ImagePath.Path(points)
+    xs, ys = zip(*points, strict=True)
+    expected = min(xs), min(ys), max(xs), max(ys)
+    for actual, value in zip(path.getbbox(), expected, strict=True):
+        assert math.isnan(actual) if math.isnan(value) else actual == value
+
+
 @pytest.mark.parametrize("key", [slice(None), slice(1, 3), slice(-2, None), slice(3, 1), slice(0, 0, 2)])
 def test_slice_mutation_is_independent(key: slice) -> None:
     path = ImagePath.Path([(1, 2), (3, 4), (5, 6)])
