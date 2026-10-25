@@ -794,8 +794,6 @@ class Image:
             rgb = bytearray(data)
             del rgb[3::4]
             return list(rgb)
-        if len(data) % 3:
-            return [v for i in range(0, len(data), 3) for v in (*data[i : i + 3], 255)]
         rgba = bytearray(b"\xff" * (len(data) // 3 * 4))
         for channel in range(3):
             rgba[channel::4] = data[channel::3]

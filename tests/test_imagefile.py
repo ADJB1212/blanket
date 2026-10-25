@@ -21,6 +21,18 @@ def encoded(mode: str) -> bytes:
     return output.getvalue()
 
 
+@pytest.mark.parametrize("container", [False, True])
+def test_jxl_rejects_oversized_header_before_pixel_decoding(container: bool) -> None:
+    # Header declares 16000 x 12000 pixels, with no frame data.
+    data = bytes.fromhex("ff0afc7601fef90022")
+    if container:
+        data = b"\0\0\0\x0cJXL \r\n\x87\n\0\0\0\x14ftypjxl \0\0\0\0jxl " + (len(data) + 8).to_bytes(4, "big") + b"jxlc" + data
+    with pytest.raises(UnidentifiedImageError, match=r"192000000 pixels.*exceeds Blanket limit"):
+        Image.open(BytesIO(data))
+    with pytest.raises(OSError, match=r"192000000 pixels.*exceeds Blanket limit"):
+        ImageFile.Parser().feed(data)
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("chunk_size", [1, 2, 7, 64, 65536])
 def test_parser_chunk_boundaries_match_eager(mode: str, chunk_size: int) -> None:

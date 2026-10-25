@@ -354,10 +354,7 @@ def sepia(white: str = "#fff0c0") -> ImagePalette:
         ```
     """
     channels = _rgb(white)
-    if all(-(1 << 45) <= channel <= 1 << 45 for channel in channels):
-        return ImagePalette("RGB", palette_sepia(channels[:3]))
-    bands = [make_linear_lut(0, channel) for channel in channels]
-    return ImagePalette("RGB", [bands[channel][value] for value in range(256) for channel in range(3)])
+    return ImagePalette("RGB", palette_sepia(channels[:3]))
 
 
 def wedge(mode: str = "RGB") -> ImagePalette:

@@ -178,6 +178,36 @@ def test_scaled_putdata(scale: float, offset: float) -> None:
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+@pytest.mark.parametrize(("size", "length"), [((0, 1), 0), ((1, 1), 0), ((1, 1), 1), ((3, 1), 1)])
+def test_putdata_rejects_iterators_exceeding_reported_length(mode: str, size: tuple[int, int], length: int) -> None:
+    class Values:
+        def __len__(self):
+            return length
+
+        def __iter__(self):
+            return iter([7] * (length + 1))
+
+    image = Image.new(mode, size, 99)
+    with pytest.raises(TypeError, match="too many data entries"):
+        image.putdata(Values())
+    assert image.getdata() == [7] * length + [99] * (size[0] - length)
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
+def test_putdata_short_iterator_preserves_remaining_pixels(mode: str) -> None:
+    class Values:
+        def __len__(self):
+            return 2
+
+        def __iter__(self):
+            return iter([7])
+
+    image = Image.new(mode, (3, 1), 99)
+    image.putdata(Values(), scale=2, offset=1)
+    assert image.getdata() == [15, 99, 99]
+
+
 @pytest.mark.parametrize("container", [list, tuple])
 @pytest.mark.parametrize(("scale", "offset"), [(1, 0), (0.75, 20)])
 @pytest.mark.parametrize("mode", ["1", "L", "P"])

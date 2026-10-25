@@ -316,6 +316,12 @@ def test_load_bitmap_font(tmp_path: Path, suffix: str, cache_pixels: int, crop_c
     atlas.save(path.with_suffix(suffix))
     font = ImageFont.load(path)
     reference = PILFont.load(path)
+    with pytest.raises(ValueError, match="left-to-right"):
+        font.getlength("A", direction="rtl")
+    with monkeypatch.context() as context:
+        context.setattr(ImageFont, "_MAX_MASK_PIXELS", 1)
+        with pytest.raises(ValueError, match="too large"):
+            font.getmask("A")
     assert font.getlength("A A") == reference.getlength("A A")
     assert font.getbbox("A A") == reference.getbbox("A A")
     assert bytes(font.getmask("A A")) == bytes(reference.getmask("A A"))
@@ -346,6 +352,24 @@ def test_corrupt_bitmap_font(tmp_path: Path) -> None:
         path.write_bytes(data)
         with pytest.raises(OSError):
             ImageFont.load(path)
+
+
+@pytest.mark.parametrize("atlas", [None, b"P4\n1 1\n\0"])
+def test_bitmap_font_rejects_missing_atlas_and_invalid_glyphs(tmp_path: Path, atlas: bytes | None) -> None:
+    path = tmp_path / "invalid.pil"
+    path.write_bytes(b"PILfont\nDATA\n" + struct.pack(">10h", 1, 0, 0, 0, 2, 2, 0, 0, 2, 2) * 256)
+    if atlas is not None:
+        path.with_suffix(".pbm").write_bytes(atlas)
+    with pytest.raises(OSError, match=r"atlas not found|glyph bounds"):
+        ImageFont.load(path)
+
+
+@pytest.mark.parametrize("data", [b"P1\n", b"P4\n", b"P4\n1 1 1\n", b"P4\na b\n", b"P4\n0 1\n", b"P4\n1 1\n"])
+def test_invalid_pbm_font_atlas(tmp_path: Path, data: bytes) -> None:
+    path = tmp_path / "invalid.pbm"
+    path.write_bytes(data)
+    with pytest.raises(OSError, match="PBM"):
+        ImageFont._load_pbm(path)
 
 
 @pytest.mark.parametrize("bounds", [(0, 0, 3, 2), (-1, -1, 2, 1), (1, 2, 4, 4)])

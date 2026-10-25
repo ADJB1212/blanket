@@ -793,6 +793,9 @@ impl Image {
         }
         if self.mode == PixelMode::F {
             for (i, item) in data.try_iter()?.enumerate() {
+                if i >= length {
+                    return Err(PyTypeError::new_err("too many data entries"));
+                }
                 let value = (item?.extract::<f64>()? * scale + offset) as f32;
                 self.pixels.as_mut().unwrap()[i * 4..i * 4 + 4].copy_from_slice(&value.to_le_bytes());
             }
@@ -801,6 +804,9 @@ impl Image {
         if self.mode.is_integer() {
             let stride = self.mode.sample_bytes();
             for (i, item) in data.try_iter()?.enumerate() {
+                if i >= length {
+                    return Err(PyTypeError::new_err("too many data entries"));
+                }
                 let value = (item?.extract::<f64>()? * scale + offset) as i64;
                 let bytes = integer_bytes(self.mode, value);
                 self.pixels.as_mut().unwrap()[i * stride..(i + 1) * stride].copy_from_slice(&bytes[..stride]);

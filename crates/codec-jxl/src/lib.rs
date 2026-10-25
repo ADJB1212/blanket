@@ -4,6 +4,7 @@ pub mod stream;
 
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
+use jpegxl_rs::decode::{Event, Events};
 use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderSpeed};
 use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
@@ -45,10 +46,17 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     // per CPU even for small images with only a few independently coded groups.
     let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| {
         let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
-        let decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
+        let mut decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
+        {
+            let mut session = decoder.session(Events::BASIC_INFO).map_err(|error| error.to_string())?;
+            let mut input = data;
+            match session.process(&mut input).map_err(|error| error.to_string())? {
+                Event::BasicInfo(info) => validate_dimensions(info.xsize, info.ysize)?,
+                _ => return Err("incomplete JPEG XL header".into()),
+            }
+        }
         decoder.decode(data).map_err(|error| error.to_string())
     })?;
-    validate_dimensions(info.width, info.height)?;
 
     let pixels = match pixels {
         jpegxl_rs::decode::Pixels::Uint8(pixels) => pixels,
@@ -406,6 +414,15 @@ fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn oversized_header_is_rejected_without_frame_data() {
+        let header = [0xff, 0x0a, 0xfc, 0x76, 0x01, 0xfe, 0xf9, 0x00, 0x22];
+        assert!(decode_jxl(&header[..8]).err().unwrap().contains("incomplete JPEG XL header"));
+        let error = decode_jxl(&header).err().unwrap();
+        assert!(error.contains("192000000 pixels"));
+        assert!(error.contains("exceeds Blanket limit"));
+    }
 
     #[test]
     fn compressed_metadata_boxes_and_profile_are_read_without_pixel_output() {

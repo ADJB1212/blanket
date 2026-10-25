@@ -14,6 +14,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+def test_gimp_palette_rejects_long_lines(tmp_path: Path) -> None:
+    path = tmp_path / "invalid.gpl"
+    path.write_bytes(b"GIMP Palette\n" + b"1" * 101 + b"\n")
+    with pytest.raises(OSError):
+        ImagePalette.load(path)
+
+
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:
     assert (actual.mode, actual.rawmode, actual.dirty) == (expected.mode, expected.rawmode, expected.dirty)
     assert type(actual.palette) is type(expected.palette)

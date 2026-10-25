@@ -116,6 +116,8 @@ jobs:
           echo "BUILD_FEATURES=no-vendored-webp,use-system-lcms2" >> "$GITHUB_ENV"
       - name: Run Clippy
         run: cargo clippy --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES
+      - name: Run Rust Tests
+        run: cargo test --all-targets --workspace --profile dev --locked --features $BUILD_FEATURES -q
       - name: Force rebuild crates that use homebrew dylibs
         if: runner.os == 'macOS'
         run: |
@@ -127,8 +129,8 @@ jobs:
       - name: Install project and test dependencies
         run: |
           uv python install 3.14
-          uv sync --no-install-project --only-group test --managed-python
           uv tool install maturin
+          uv sync --no-install-project --only-group test --managed-python
           maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER -Z threads=4
       - name: Test Python API
         run: uv run pytest

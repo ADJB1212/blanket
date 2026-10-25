@@ -6,6 +6,34 @@ from PIL import ImageColor as PillowColor
 from blanket import Image, ImageColor, ImageDraw, ImageOps
 
 
+@pytest.mark.parametrize(("rgb", "expected"), [((2, 2, 2), (1, 1, 1)), ((-1, -1, -1), (0, 0, 0)), ((1.001, 0, 0), (1, 0, 0))])
+def test_gamut_mapping_extreme_lightness_and_small_excursions(rgb, expected) -> None:
+    from blanket._css_color import _gamut_map
+
+    assert _gamut_map(rgb) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("rgb", [(float("inf"), 0, 0), (float("nan"), 0, 0)])
+def test_gamut_mapping_rejects_nonfinite_conversion(rgb) -> None:
+    from blanket._css_color import _gamut_map
+
+    with pytest.raises(ValueError, match="overflow"):
+        _gamut_map(rgb)
+
+
+def test_gamut_mapping_converges_at_chroma_tolerance() -> None:
+    assert ImageColor.getrgb("color(srgb 2.194630862304452 -0.9097089088587733 -1.816498245207691)") == (251, 180, 0)
+
+
+@pytest.mark.parametrize("color", ["unknown(1 2 3)", "color(srgb 1.1 0.1 0.1)", "color(srgb 0.1 1.1 0.1)", "color(srgb 0.1 0.1 1.1)"])
+def test_color_function_dispatch_and_out_of_gamut_primaries(color: str) -> None:
+    if color.startswith("unknown"):
+        with pytest.raises(ValueError):
+            ImageColor.getrgb(color)
+    else:
+        assert all(0 <= value <= 255 for value in ImageColor.getrgb(color))
+
+
 def test_getrgb_named_hex_and_functional_colors() -> None:
     assert ImageColor.getrgb("ReBeccapurple") == (102, 51, 153)
     assert ImageColor.getrgb("#1234") == (17, 34, 51, 68)

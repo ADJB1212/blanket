@@ -7,6 +7,58 @@ from blanket import Image, ImageDraw
 
 
 @pytest.mark.parametrize(
+    "operation",
+    [
+        lambda draw: draw.line((0, 0, 1, 1), joint="miter"),
+        lambda draw: draw.ellipse((0, 0, 1, 1, 2, 2)),
+        lambda draw: draw.regular_polygon((1, 1, 1), 2),
+        lambda draw: draw.rounded_rectangle((0, 0, 1, 1), radius=-1),
+        lambda draw: draw.rounded_rectangle((0, 0, 1, 1), corners=(True,)),
+        lambda draw: draw.text((0, 0), "a", stroke_width=-1),
+        lambda draw: draw.text((0, 0), "a", embedded_color=True),
+        lambda draw: draw.multiline_text((0, 0), "a", direction="ttb"),
+        lambda draw: draw.multiline_text((0, 0), "a", anchor="lt"),
+        lambda draw: draw.multiline_text((0, 0), "a", spacing=float("inf")),
+        lambda draw: draw.textbbox((0, 0), "a", stroke_width=-1),
+    ],
+)
+def test_drawing_rejects_invalid_options(operation) -> None:
+    with pytest.raises((ValueError, NotImplementedError)):
+        operation(ImageDraw.Draw(Image.new("L", (4, 4))))
+
+
+def test_drawing_rejects_foreign_image_and_string_integer_ink() -> None:
+    with pytest.raises(TypeError, match="Blanket Image"):
+        ImageDraw.Draw(object())
+    with pytest.raises(ValueError, match="numeric ink"):
+        ImageDraw.Draw(Image.new("I", (1, 1))).point((0, 0), "red")
+
+
+def test_drawing_degenerate_curves_and_antialiased_rectangles() -> None:
+    image = Image.new("L", (8, 8))
+    draw = ImageDraw.Draw(image, antialias=True)
+    draw.pieslice((0, 0, 0, 0), 0, 0, fill=255)
+    assert not any(image.tobytes())
+    draw.rectangle((1, 1, 6, 6), fill=255)
+    assert image.getpixel((3, 3)) == 255
+    assert draw.textbbox((0, 0), "a\nb") == draw.multiline_textbbox((0, 0), "a\nb")
+    draw.text((0, 0), "a\nb", fill=255)
+
+
+def test_font_without_getmask2() -> None:
+    class Font:
+        def getmask(self, text, mode, **kwargs):
+            return PILImage.new("L", (1, 1), 255).im
+
+        def getbbox(self, text, **kwargs):
+            return (0, 0, 1, 1)
+
+    image = Image.new("L", (2, 2))
+    ImageDraw.Draw(image).text((0, 0), "a", font=Font(), fill=255)
+    assert image.getpixel((0, 0)) == 255
+
+
+@pytest.mark.parametrize(
     ("mode", "ink"),
     [
         ("1", 1),
