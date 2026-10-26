@@ -2,3 +2,4 @@
 
 pub mod enhance;
 pub mod hdr;
+mod high_depth;

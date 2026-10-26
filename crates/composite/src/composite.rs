@@ -17,8 +17,28 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>) -> PyResult<Image> {
+#[pyo3(signature = (mode, size, color, bit_depth=8))]
+fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_depth: u8) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
+    if bit_depth != 8 {
+        if !matches!(mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba)
+            || !matches!(bit_depth, 10 | 12 | 16)
+            || color.len() != mode.channels() * 2
+        {
+            return Err(PyValueError::new_err("invalid high-depth fill"));
+        }
+        let len = (size.0 as usize)
+            .checked_mul(size.1 as usize)
+            .and_then(|n| n.checked_mul(color.len()))
+            .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+        let mut pixels = blanket_core::raster::alloc_pixels(len)?;
+        py.detach(|| {
+            for pixel in pixels.chunks_exact_mut(color.len()) {
+                pixel.copy_from_slice(&color);
+            }
+        });
+        return Image::from_sample_bytes(size.0, size.1, mode, pixels, bit_depth, None);
+    }
     if color.len() != mode.channels() * mode.sample_bytes() {
         return Err(PyValueError::new_err("wrong number of color channels"));
     }
@@ -80,7 +100,7 @@ fn paste_mask<'a>(mask: Option<&'a Image>, source: &Image) -> PyResult<Option<(&
     .transpose()
 }
 
-fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: usize, src_width: u32, src_height: u32) -> (i64, i64, i64, i64) {
+pub(crate) fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: usize, src_width: u32, src_height: u32) -> (i64, i64, i64, i64) {
     let left = position.0.clamp(0, dst_width as i64);
     let top = position.1.clamp(0, dst_height as i64);
     let right = position.0.saturating_add(i64::from(src_width)).clamp(0, dst_width as i64);
@@ -91,6 +111,9 @@ fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: usize, src_w
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::paste(image, source, position, mask, fill));
+    }
     if image.mode.is_wide_scalar() {
         return paste_integer(py, image, source, position, mask);
     }
@@ -224,6 +247,9 @@ fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image) ->
     if (background.width, background.height) != (overlay.width, overlay.height) {
         return Err(PyValueError::new_err("images do not match"));
     }
+    if blanket_core::samples::supported(background) {
+        return py.detach(|| crate::high_depth::composite(background, overlay));
+    }
     let background_pixels = background.pixel_data()?;
     let source = overlay.pixel_data()?;
     let pixels = py.detach(|| {
@@ -241,6 +267,11 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
     }
     if (image.width, image.height) != (overlay.width, overlay.height) {
         return Err(PyValueError::new_err("images do not match"));
+    }
+    if blanket_core::samples::supported(image) {
+        let result = py.detach(|| crate::high_depth::composite(image, overlay))?;
+        image.pixels = result.pixels;
+        return Ok(());
     }
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
@@ -311,6 +342,9 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     if alpha.mode != PixelMode::L || alpha.palette.is_some() || (alpha.width, alpha.height) != (image.width, image.height) {
         return Err(PyValueError::new_err("illegal image mode or size for alpha"));
+    }
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::putalpha(image, alpha));
     }
     let source = image.pixel_data()?;
     let alpha = alpha.pixel_data()?;

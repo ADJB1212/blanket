@@ -221,10 +221,9 @@ def test_invalid_masks_and_closed_images() -> None:
 
 
 @pytest.mark.parametrize("bit_depth", [10, 12, 16])
-def test_high_depth_requires_explicit_conversion(bit_depth: int) -> None:
+def test_high_depth_retains_sample_values(bit_depth: int) -> None:
     image = Image.frombytes("L", (1, 1), b"\x00\x01", bit_depth=bit_depth)
-    with pytest.raises(ValueError, match="8-bit"):
-        ImageStat.Stat(image)
+    assert ImageStat.Stat(image).mean == [256.0]
 
 
 def test_native_reductions_validate_band_lengths() -> None:

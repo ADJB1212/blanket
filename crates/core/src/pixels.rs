@@ -87,10 +87,10 @@ pub fn store<const C: usize>(output: &mut [u8], values: [Bytes; C]) {
 }
 
 #[inline]
-fn load_rgb(source: &[u8]) -> [Bytes; 3] {
-    let a = Bytes::from_slice(&source[..16]);
-    let b = Bytes::from_slice(&source[16..32]);
-    let c = Bytes::from_slice(&source[32..48]);
+fn load_rgb<T: std::simd::SimdElement>(source: &[T]) -> [Simd<T, 16>; 3] {
+    let a = Simd::<T, 16>::from_slice(&source[..16]);
+    let b = Simd::<T, 16>::from_slice(&source[16..32]);
+    let c = Simd::<T, 16>::from_slice(&source[32..48]);
     let t0 = simd_swizzle!(a, b, [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30, 0, 0, 0, 0, 0]);
     let t1 = simd_swizzle!(a, b, [1, 4, 7, 10, 13, 16, 19, 22, 25, 28, 31, 0, 0, 0, 0, 0]);
     let t2 = simd_swizzle!(a, b, [2, 5, 8, 11, 14, 17, 20, 23, 26, 29, 0, 0, 0, 0, 0, 0]);
@@ -102,7 +102,7 @@ fn load_rgb(source: &[u8]) -> [Bytes; 3] {
 }
 
 #[inline]
-fn store_rgb(output: &mut [u8], values: [Bytes; 3]) {
+fn store_rgb<T: std::simd::SimdElement>(output: &mut [T], values: [Simd<T, 16>; 3]) {
     let [a, b, c] = values;
     let t = simd_swizzle!(a, b, [0, 16, 0, 1, 17, 0, 2, 18, 0, 3, 19, 0, 4, 20, 0, 5]);
     simd_swizzle!(t, c, [0, 1, 16, 3, 4, 17, 6, 7, 18, 9, 10, 19, 12, 13, 20, 15]).copy_to_slice(&mut output[0..16]);
@@ -110,6 +110,74 @@ fn store_rgb(output: &mut [u8], values: [Bytes; 3]) {
     simd_swizzle!(t, c, [0, 21, 2, 3, 22, 5, 6, 23, 8, 9, 24, 11, 12, 25, 14, 15]).copy_to_slice(&mut output[16..32]);
     let t = simd_swizzle!(a, b, [0, 11, 27, 0, 12, 28, 0, 13, 29, 0, 14, 30, 0, 15, 31, 0]);
     simd_swizzle!(t, c, [26, 1, 2, 27, 4, 5, 28, 7, 8, 29, 10, 11, 30, 13, 14, 31]).copy_to_slice(&mut output[32..48]);
+}
+
+pub type Samples = Simd<u16, 16>;
+
+#[cfg(test)]
+mod sample_tests {
+    use super::*;
+
+    fn packed_roundtrip<const C: usize>() {
+        let source: Vec<_> = (0..16 * C + 1).map(|i| (i * 719 + 65503) as u16).collect();
+        let channels = load_samples::<C>(&source[1..]);
+        for c in 0..C {
+            assert_eq!(channels[c].to_array(), std::array::from_fn(|i| source[1 + i * C + c]));
+        }
+        let mut output = vec![173; 16 * C + 2];
+        store_samples(&mut output[1..1 + 16 * C], channels);
+        assert_eq!(&output[1..1 + 16 * C], &source[1..]);
+        assert_eq!((output[0], output[16 * C + 1]), (173, 173));
+    }
+
+    #[test]
+    fn sample_channels_preserve_unaligned_values_and_guards() {
+        packed_roundtrip::<1>();
+        packed_roundtrip::<3>();
+        packed_roundtrip::<4>();
+    }
+}
+
+#[inline]
+pub fn load_samples<const C: usize>(source: &[u16]) -> [Samples; C] {
+    assert!(source.len() >= 16 * C);
+    let mut result = [Samples::splat(0); C];
+    match C {
+        1 => result[0] = Samples::from_slice(source),
+        3 => result.copy_from_slice(&load_rgb(source)),
+        4 => {
+            let (a, b) = Samples::from_slice(source).deinterleave(Samples::from_slice(&source[16..]));
+            let (c, d) = Samples::from_slice(&source[32..]).deinterleave(Samples::from_slice(&source[48..]));
+            let (r, blue) = a.deinterleave(c);
+            let (g, alpha) = b.deinterleave(d);
+            result.copy_from_slice(&[r, g, blue, alpha]);
+        }
+        _ => return std::array::from_fn(|c| Samples::gather_or_default(source, Simd::from_array(std::array::from_fn(|i| i * C + c)))),
+    }
+    result
+}
+
+#[inline]
+pub fn store_samples<const C: usize>(output: &mut [u16], values: [Samples; C]) {
+    assert!(output.len() >= 16 * C);
+    match C {
+        1 => values[0].copy_to_slice(&mut output[..16]),
+        3 => store_rgb(output, [values[0], values[1], values[2]]),
+        4 => {
+            let (a, c) = values[0].interleave(values[2]);
+            let (b, d) = values[1].interleave(values[3]);
+            let (ab, ba) = a.interleave(b);
+            let (cd, dc) = c.interleave(d);
+            for (chunk, value) in output[..64].as_chunks_mut::<16>().0.iter_mut().zip([ab, ba, cd, dc]) {
+                value.copy_to_slice(chunk);
+            }
+        }
+        _ => {
+            for (c, value) in values.into_iter().enumerate() {
+                value.scatter(output, Simd::from_array(std::array::from_fn(|i| i * C + c)));
+            }
+        }
+    }
 }
 
 #[inline]

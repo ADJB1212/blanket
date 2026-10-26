@@ -2,6 +2,10 @@
 
 Convolution, rank, and blur filters operate on 8-bit images, including `1`,
 `LA`, `PA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
+They also support 10/12/16-bit `L`/`RGB`/`RGBA` and `I;16` variants without
+reducing precision. Kernel offsets and unsharp thresholds use sample units;
+rounding and border rules follow the corresponding 8-bit filters. Color3DLUT
+normalizes high-depth RGB/RGBA inputs and retains their depth on output.
 """
 
 from __future__ import annotations

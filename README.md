@@ -229,8 +229,15 @@ image.convert("RGB", bit_depth=8).save("preview.jpg")
 ```
 
 `image.bit_depth` reports sample precision. Copying, conversion, pixel access,
-splitting, cropping, transposition, and resizing preserve high-bit-depth
-samples. Most other processing operations require conversion to 8 bits.
+splitting/merging, cropping, transposition, resizing, filters, enhancements,
+blending, masked paste, alpha compositing, and statistics preserve high-bit-depth
+samples. Processing supports 10/12/16-bit `L`/`RGB`/`RGBA` and the `I;16`
+variants; alpha compositing requires RGBA. Kernel offsets, unsharp thresholds,
+and numeric fill/alpha values use the input sample range. Compositing masks may be 8-bit or
+match the image depth. `ImageStat` computes full-range sample statistics,
+including alpha, with `2 ** bit_depth` histogram bins per band; histogram-list
+input retains 256 bins per band. ImageOps and ImageChops channel arithmetic
+still require 8-bit conversion where documented.
 See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/)
 for storage and format-specific behavior.
 
@@ -358,7 +365,7 @@ compression can still change RGB values during RGB/YUV conversion.
   Pixel operations and copies apply to the current frame. Animated GIF frames
   use composited RGBA canvases rather than Pillow's palette mode transitions.
 - **High bit depth:** sample retention is supported for selected operations
-  and formats; HDR tone mapping and HEIF HDR metadata retention are not.
+  and formats. ICC transforms require 8-bit images; HEIF HDR metadata is not retained.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
   installed. High-bit-depth images must first be converted to 8 bits.
 

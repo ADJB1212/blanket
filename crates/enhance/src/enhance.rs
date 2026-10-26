@@ -34,11 +34,14 @@ fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
 /// Pillow's core blend uses a single-precision alpha and truncates toward zero.
 #[pyfunction]
 fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
-    let first_pixels = first.pixel_data()?;
-    let second_pixels = second.pixel_data()?;
-    if first.mode != second.mode || first.width != second.width || first.height != second.height {
+    if first.mode != second.mode || first.width != second.width || first.height != second.height || first.bit_depth != second.bit_depth {
         return Err(PyValueError::new_err("images do not match"));
     }
+    if blanket_core::samples::supported(first) {
+        return crate::high_depth::blend(py, first, second, factor);
+    }
+    let first_pixels = first.pixel_data()?;
+    let second_pixels = second.pixel_data()?;
     if std::ptr::eq(first, second) || factor == 0.0 {
         return py.detach(|| copy(first, first_pixels));
     }
@@ -97,6 +100,9 @@ fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f3
 
 #[pyfunction]
 fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return crate::high_depth::degenerate(py, image, "color");
+    }
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         return image.convert(py, "L", None)?.convert(py, image.mode.as_str(), None);
     }
@@ -142,6 +148,9 @@ fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
 
 #[pyfunction]
 fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return crate::high_depth::degenerate(py, image, "contrast");
+    }
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
@@ -207,6 +216,9 @@ fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
 
 #[pyfunction]
 fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return crate::high_depth::degenerate(py, image, "brightness");
+    }
     let mut pixels = alloc_pixels(
         (image.width as usize)
             .checked_mul(image.height as usize)
@@ -229,6 +241,9 @@ fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 
 #[pyfunction]
 fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return crate::high_depth::degenerate(py, image, "sharpness");
+    }
     let source = image.pixel_data()?;
     let mut pixels = py.detach(|| -> PyResult<Vec<u8>> {
         let mut pixels = Vec::new();

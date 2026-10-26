@@ -42,9 +42,10 @@ def _parse_rgb(color: str) -> tuple[int, ...]:
     raise ValueError(f"unknown color specifier: {color!r}")
 
 
-def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[int]:
+def color_pixel(color: str | int | tuple[int, ...] | None, mode: str, bit_depth: int = 8) -> list[int]:
     """Normalize fill values to the native interleaved channel representation."""
     channels = 3 if mode == "YCbCr" else len(mode)
+    maximum = (1 << bit_depth) - 1
     if color is None:
         return [0] * channels
     if isinstance(color, str):
@@ -55,17 +56,22 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
                 color = (color, rgb[3] if len(rgb) == 4 else 255)
         else:
             color = rgb[:3] + ((rgb[3] if len(rgb) == 4 else 255,) if mode == "RGBA" else ())
+        if bit_depth != 8:
+            if isinstance(color, int):
+                color = (color * maximum + 127) // 255
+            else:
+                color = tuple((v * maximum + 127) // 255 for v in color)
     if isinstance(color, int):
         if mode in ("1", "L"):
-            return [max(0, min(255, color))]
-        return [(color >> (8 * i)) & 255 for i in range(channels)]
+            return [max(0, min(maximum, color))]
+        return [(color >> (bit_depth * i)) & maximum for i in range(channels)]
     if not isinstance(color, tuple):
         raise TypeError("color must be int or tuple")
     if mode in ("1", "L"):
         if len(color) != 1:
             raise TypeError("color must be int or single-element tuple")
     elif (len(color) == 1 and mode == "LA") or (len(color) == 3 and mode in ("RGBA", "CMYK")):
-        color = (*color, 255)
+        color = (*color, maximum)
     elif mode in ("RGB", "YCbCr") and len(color) == 4:
         color = color[:3]
     elif len(color) != channels:
@@ -74,4 +80,4 @@ def color_pixel(color: str | int | tuple[int, ...] | None, mode: str) -> list[in
         raise TypeError("color components must be integers")
     if mode == "1":
         return [max(0, min(255, color[0]))]
-    return [max(0, min(255, v)) for v in color]
+    return [max(0, min(maximum, v)) for v in color]

@@ -28,6 +28,12 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 
 #[pyfunction]
 fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, offset: f32, kernel: Vec<f32>) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        if size.0 != size.1 || !matches!(size.0, 3 | 5) || kernel.len() != (size.0 * size.1) as usize {
+            return Err(PyValueError::new_err("bad kernel size"));
+        }
+        return py.detach(|| crate::high_depth::kernel(image, size.0 as usize, scale, offset, &kernel));
+    }
     let source = image.pixel_data()?;
     if i64::from(size.0) * i64::from(size.1) != kernel.len() as i64 {
         return Err(PyValueError::new_err("bad kernel size"));
@@ -105,7 +111,7 @@ fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], wi
     });
 }
 
-fn kernel_add_simd(value: Simd<f32, 16>, weight: Simd<f32, 16>, sum: Simd<f32, 16>) -> Simd<f32, 16> {
+pub(crate) fn kernel_add_simd(value: Simd<f32, 16>, weight: Simd<f32, 16>, sum: Simd<f32, 16>) -> Simd<f32, 16> {
     #[cfg(target_arch = "aarch64")]
     {
         value.mul_add(weight, sum)
@@ -118,7 +124,7 @@ fn kernel_add_simd(value: Simd<f32, 16>, weight: Simd<f32, 16>, sum: Simd<f32, 1
 
 // Pillow's AArch64 C builds contract each row's multiply/add expressions.
 // Keep the same operand order; it matters at half-integer output boundaries.
-fn kernel_add(value: f32, weight: f32, sum: f32) -> f32 {
+pub(crate) fn kernel_add(value: f32, weight: f32, sum: f32) -> f32 {
     #[cfg(target_arch = "aarch64")]
     {
         value.mul_add(weight, sum)
@@ -141,6 +147,9 @@ fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<
     if rank < 0 || i64::from(rank) >= count {
         return Err(PyValueError::new_err("bad rank value"));
     }
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::neighborhood(image, (size / 2) as usize, Some(rank as u64)));
+    }
     match (size, rank) {
         (3, 0) => return small_rank::<3, 0>(py, image),
         (3, 4) => return small_rank::<3, 4>(py, image),
@@ -157,6 +166,9 @@ fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<
 
 #[pyfunction]
 fn filter_mode(py: Python<'_>, image: &Image, size: i32) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::neighborhood(image, (size / 2).max(0) as usize, None));
+    }
     neighborhood(py, image, (size / 2).max(0) as usize, None)
 }
 
@@ -439,9 +451,9 @@ fn gaussian_radius(radius: f32) -> f32 {
 }
 
 // Fractional box-filter weights use 24 bits and round at half a unit.
-const BOX_WEIGHT_BITS: u32 = 24;
-const BOX_WEIGHT_SCALE: u32 = 1 << BOX_WEIGHT_BITS;
-const BOX_WEIGHT_ROUND: u64 = 1 << (BOX_WEIGHT_BITS - 1);
+pub(crate) const BOX_WEIGHT_BITS: u32 = 24;
+pub(crate) const BOX_WEIGHT_SCALE: u32 = 1 << BOX_WEIGHT_BITS;
+pub(crate) const BOX_WEIGHT_ROUND: u64 = 1 << (BOX_WEIGHT_BITS - 1);
 
 fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize, radius: f32) {
     let integer = radius as usize;
@@ -518,7 +530,7 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     });
 }
 
-fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
+pub(crate) fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
     let radii = if gaussian { (gaussian_radius(radii.0), gaussian_radius(radii.1)) } else { radii };
     if <[f32; 2]>::from(radii).iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
@@ -573,6 +585,9 @@ fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyRe
 
 #[pyfunction]
 fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::blur(image, radii, gaussian));
+    }
     let source = image.pixel_data()?;
     let pixels = py.detach(|| blur(image, source, radii, gaussian))?;
     output(image, pixels)
@@ -580,6 +595,9 @@ fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool)
 
 #[pyfunction]
 fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::unsharp(image, radius, percent, threshold));
+    }
     let source = image.pixel_data()?;
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
         if percent == 0 || threshold >= 255 || radius == 0.0 {
@@ -617,6 +635,9 @@ const LUT_BLEND_SCALE: i32 = 1 << LUT_BLEND_BITS;
 
 #[pyfunction]
 fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: (usize, usize, usize), table: Vec<f32>) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| crate::high_depth::lut(image, mode, channels, size, &table));
+    }
     let source = image.pixel_data()?;
     let target = PixelMode::parse(mode)?;
     let input_channels = image.mode.channels();
@@ -687,8 +708,13 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         return Err(PyValueError::new_err("wrong number of bands"));
     }
     let (width, height) = (bands[0].width, bands[0].height);
-    if bands.iter().any(|b| b.mode != PixelMode::L || b.width != width || b.height != height) {
+    if bands.iter().any(|b| b.mode != PixelMode::L || b.width != width || b.height != height || b.bit_depth != bands[0].bit_depth) {
         return Err(PyValueError::new_err("images do not match"));
+    }
+    if blanket_core::samples::supported(&bands[0]) {
+        let sources = bands.iter().map(|b| blanket_core::samples::read(b)).collect::<PyResult<Vec<_>>>()?;
+        let values = py.detach(|| (0..sources[0].len()).flat_map(|i| sources.iter().map(move |band| band[i])).collect());
+        return Image::from_samples(width, height, mode, values, bands[0].bit_depth, None);
     }
     let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
     if matches!(mode, PixelMode::One | PixelMode::L) {

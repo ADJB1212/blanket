@@ -1,7 +1,9 @@
 """Pillow-compatible image enhancement classes backed by native kernels.
 
 Color, Contrast, Brightness, and Sharpness operate on 8-bit images, including
-`1`, `LA`, `PA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
+`1`, `LA`, `PA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`, as well as 10/12/16-bit
+`L`/`RGB`/`RGBA` and the `I;16` variants. High-depth outputs retain their
+sample range and storage mode. Finite enhancement factors preserve RGBA alpha.
 """
 
 from __future__ import annotations

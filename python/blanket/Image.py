@@ -1099,7 +1099,7 @@ class Image:
         if not hasattr(filter, "filter"):
             raise TypeError("filter argument should be ImageFilter.Filter instance or class")
         neighborhood_filter = isinstance(filter, (RankFilter, ModeFilter)) and getattr(filter.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
-        if self.mode == "L" or isinstance(filter, MultibandFilter) or neighborhood_filter:
+        if self.mode in ("L", "I;16", "I;16L", "I;16B") or isinstance(filter, MultibandFilter) or neighborhood_filter:
             result = Image(filter.filter(self._native))
             result.info.update(self._metadata_info())
             return result
@@ -1110,6 +1110,10 @@ class Image:
 
     def paste(self, im: Image | str | int | tuple[int, ...], box: Image | tuple[int, ...] | None = None, mask: Image | None = None) -> None:
         """Paste pixels or a color, optionally interpolating through an L/RGBA mask.
+
+        High-depth images retain sample precision. Masks can be 8-bit or match
+        the image depth. Numeric fills use sample units; CSS colors scale to
+        the sample range. Source images must have the same sample depth.
 
         Args:
             im: Source image or fill color.
@@ -1145,11 +1149,17 @@ class Image:
             im.load()
             if im.size != size:
                 raise ValueError("images do not match")
-            source = im if im.mode == self.mode else im.convert(self.mode)
+            depth = self.bit_depth if self.bit_depth > 8 and self.mode in ("L", "RGB", "RGBA") else None
+            source = im if im.mode == self.mode else im.convert(self.mode, bit_depth=depth)
         else:
             if self.mode == "P" and isinstance(im, (str, tuple)) and not (isinstance(im, tuple) and len(im) == 1):
                 raise TypeError("color must be int or single-element tuple")
-            source = new(self.mode, size, im)
+            if self.bit_depth > 8 and self.mode in ("L", "RGB", "RGBA"):
+                color = color_pixel(im, self.mode, self.bit_depth)
+                raw = b"".join(value.to_bytes(2, "little") for value in color)
+                source = Image(image_new(self.mode, size, raw, self.bit_depth))
+            else:
+                source = new(self.mode, size, im)
         # Snapshot aliases before acquiring the native mutable destination borrow.
         source = source.copy() if source._native is self._native else source
         if mask is not None and mask._native is self._native:
@@ -1198,7 +1208,7 @@ class Image:
         Only RGB and RGBA are accepted. LA and PA images are not supported.
 
         Args:
-            alpha: L image matching the image size, or a constant alpha value from 0 through 255.
+            alpha: L image matching the image size, or a constant in the image's sample range. High-depth images accept matching-depth or scaled 8-bit alpha images.
 
         Examples:
             ```python
@@ -1211,7 +1221,13 @@ class Image:
 
         if self.mode not in ("RGB", "RGBA"):
             raise ValueError("putalpha requires RGB or RGBA; LA and PA modes are not supported")
-        band = alpha if isinstance(alpha, Image) else new("L", self.size, index(alpha))
+        if isinstance(alpha, Image):
+            band = alpha
+        elif self.bit_depth > 8:
+            value = max(0, min((1 << self.bit_depth) - 1, index(alpha)))
+            band = Image(image_new("L", self.size, value.to_bytes(2, "little"), self.bit_depth))
+        else:
+            band = new("L", self.size, index(alpha))
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
         image_putalpha(self._native, band._native)
@@ -1972,7 +1988,7 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
 
 
 def blend(im1: Image, im2: Image, alpha: float) -> Image:
-    """Interpolate equal-sized 8-bit images, clipping extrapolated values.
+    """Interpolate equal-sized images of matching depth, clipping extrapolated values.
 
     Indexed `P` images are unsupported.
 
@@ -2026,7 +2042,10 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
 
 
 def alpha_composite(im1: Image, im2: Image) -> Image:
-    """Return im2 composited over im1; both must be equal-sized 8-bit RGBA.
+    """Return im2 composited over im1; both must be equal-sized RGBA of matching depth.
+
+    High-depth inputs use straight-alpha source-over with nearest-integer
+    rounding and retain their sample depth.
 
     Args:
         im1: First image; both inputs must have the same mode and dimensions.

@@ -307,8 +307,12 @@ with new processing semantics exposed explicitly.
 
 #### Precision and Color
 
-- [ ] **High-bit-depth processing coverage** — extend filters, enhancement,
-      compositing, and statistics to 16-bit samples without an 8-bit conversion
+- [x] **High-bit-depth processing coverage** — filters (including 3D LUTs),
+      enhancement, blending, masked paste, alpha compositing, and full-range
+      statistics retain 10/12/16-bit samples without an 8-bit conversion;
+      unsigned `I;16` variants retain their storage mode and byte order.
+      Portable SIMD covers sample packing, enhancement, convolution, small
+      ranks, blur, unsharp masking, LUTs, compositing, and statistical moments
 - [ ] **Floating-point color images** — support RGB/RGBA float storage and
       processing with defined handling of negative values, NaNs, and infinities
 - [ ] **Linear-light processing** — opt-in resizing and compositing in linear

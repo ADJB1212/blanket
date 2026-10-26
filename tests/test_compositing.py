@@ -145,11 +145,12 @@ def test_validation_and_closed_images():
             operation()
 
 
-def test_high_depth_rejected():
+def test_high_depth_compositing():
     image = Image.frombytes("RGBA", (1, 1), bytes(8), bit_depth=16)
-    for operation in [lambda: image.paste(Image.new("RGBA", (1, 1))), lambda: image.putalpha(255), lambda: Image.alpha_composite(image, image)]:
-        with pytest.raises(ValueError, match="8-bit"):
-            operation()
+    with pytest.raises(ValueError, match="match"):
+        image.paste(Image.new("RGBA", (1, 1)))
+    image.putalpha(65535)
+    assert Image.alpha_composite(image, image).getpixel((0, 0)) == (0, 0, 0, 65535)
 
 
 @pytest.mark.parametrize(("mode", "color"), [("L", (42,)), ("RGB", (20, 30, 40)), ("RGBA", (20, 30, 40)), ("RGBA", (20, 30, 40, 50)), ("P", (3,)), ("P", (20, 30, 40))])
