@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
 from .PngImagePlugin import PngInfo, iTXt
 
@@ -158,11 +159,18 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 break
             if kind == b"IEND":
                 break
-            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP"):
+            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP", *HDR_KEYS):
+                pos += length + 12
+                continue
+            if kind in HDR_KEYS and length != {b"cICP": 4, b"mDCV": 24, b"cLLI": 8}[kind]:
                 pos += length + 12
                 continue
             payload = data[pos + 8 : pos + 8 + length]
-            if kind == b"eXIf":
+            if kind in HDR_KEYS:
+                value = decode_chunk(kind, payload)
+                if value is not None:
+                    info[HDR_KEYS[kind]] = value
+            elif kind == b"eXIf":
                 if length + 6 <= remaining:
                     info["exif"] = b"Exif\0\0" + payload
                     remaining -= length + 6
@@ -312,7 +320,9 @@ def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maxim
 def save_metadata(image: object, format: str, options: dict[str, object]) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
     """Remove metadata options and resolve source defaults before encoding."""
     supported = format in ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
-    keys = {"exif", "xmp", "icc_profile", "pnginfo"} & options.keys()
+    keys = {"exif", "xmp", "icc_profile", "pnginfo", *HDR_KEYS.values()} & options.keys()
+    if format != "PNG" and not keys.isdisjoint(HDR_KEYS.values()):
+        raise TypeError("HDR metadata saving is supported only for PNG")
     if keys and not supported:
         raise TypeError(f"metadata saving is not supported for {format}")
     if "pnginfo" in keys and format != "PNG":
@@ -341,4 +351,19 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
             if isinstance(key, str) and isinstance(value, str) and key not in ("XML:com.adobe.xmp", "Raw profile type exif"):
                 text.add_text(key, value)
         chunks = text.chunks
+    if format == "PNG":
+        seen = set()
+        for kind, payload, after_idat in chunks:
+            if kind in HDR_KEYS:
+                if kind in seen or after_idat or decode_chunk(kind, payload) is None:
+                    raise ValueError("invalid, duplicate, or misplaced HDR PNG chunk")
+                seen.add(kind)
+        for kind, key in HDR_KEYS.items():
+            value = options.pop(key) if key in options else image.info.get(key)
+            if value is not None:
+                if any(chunk[0] == kind for chunk in chunks):
+                    raise ValueError(f"duplicate {key} metadata in pnginfo")
+                chunks.append((kind, encode_chunk(key, value), False))
+        if any(kind == b"mDCV" for kind, _, _ in chunks) and not any(kind == b"cICP" for kind, _, _ in chunks):
+            raise ValueError("mastering_display requires cicp metadata")
     return values[0], values[1], values[2], chunks

@@ -293,8 +293,9 @@ Rust backend for performance and functionality Pillow doesn't offer.
       perceptual palette optimization
 - [ ] **Raw photo support** — decode camera raw formats (CR2, NEF, ARW, DNG)
       via `rawler` or `libraw` bindings
-- [ ] **HDR pipeline** — tone mapping operators (Reinhard, ACES, filmic),
-      HDR10/PQ/HLG metadata handling
+- [x] **HDR pipeline** — `ImageHdr.tone_map` with Reinhard, ACES, and filmic
+      operators, PQ/HLG transfer decoding, BT.2020-to-sRGB rendering, and
+      PNG/APNG HDR10/PQ/HLG metadata (`cICP`, `mDCV`, `cLLI`) handling
 - [ ] **WebAssembly target** — compile to Wasm for browser-side image processing
 
 ### Future Ideas

@@ -230,9 +230,53 @@ image.convert("RGB", bit_depth=8).save("preview.jpg")
 
 `image.bit_depth` reports sample precision. Copying, conversion, pixel access,
 splitting, cropping, transposition, and resizing preserve high-bit-depth
-samples. Other processing operations require conversion to 8 bits.
+samples. Most other processing operations require conversion to 8 bits.
 See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/)
 for storage and format-specific behavior.
+
+### Render HDR images
+
+```python
+from blanket import Image, ImageHdr
+
+with Image.open("hdr.png") as image:
+    ImageHdr.tone_map(image, "aces", exposure=-0.5).save("preview.png")
+```
+
+`ImageHdr.tone_map` offers `reinhard`, `aces` (Narkowicz fit), and `filmic`
+(Hable, white point 11.2) curves. It accepts L, LA, RGB, RGBA, F, and I;16
+images, including 10/12/16-bit samples. Integer samples are normalized to
+their depth; linear F samples use 1.0 as reference white. The operators work
+per channel in linear light and produce sRGB-encoded 8-bit or 16-bit SDR
+pixels (LA supports 8-bit output). Alpha is preserved with depth scaling.
+Negative/NaN colors become black; positive infinity becomes white.
+
+Transfer decoding supports `linear`, `srgb`, `pq`, and `hlg`. PQ uses
+absolute luminance, normalized by `reference_white` (203 nits by default).
+HLG applies the BT.2100 display OOTF using `peak_luminance` (1000 nits by
+default, supported range 400 to 10000). `exposure` adjusts linear light in
+stops. Primaries may be `srgb` or `bt2020`; BT.2020 is converted to linear
+sRGB, with negative out-of-gamut channels clipped before the curves. No ICC
+transform is applied. Transfer and primaries default to cICP when present,
+otherwise linear and sRGB; unsupported cICP values require explicit overrides.
+Rendering removes stale HDR, ICC, and gamma metadata and tags output as sRGB.
+
+PNG/APNG reads and saves HDR metadata in `image.info`, with matching save
+keyword overrides (`None` removes a field):
+
+- `cicp`: `(primaries, transfer, matrix, full_range)` integer code points;
+  BT.2020/PQ is `(9, 16, 0, 1)`, BT.2020/HLG is `(9, 18, 0, 1)`.
+  PNG requires identity matrix coefficients and full range.
+- `mastering_display`: `(rx, ry, gx, gy, bx, by, wx, wy, max_nits, min_nits)`;
+  requires `cicp`. Chromaticities are encoded in steps of 0.00002 and
+  luminance in steps of 0.0001 nit.
+- `content_light_level`: `(max_cll_nits, max_fall_nits)`, in steps of 0.0001 nit.
+
+These use the standard PNG `cICP`, `mDCV`, and `cLLI` chunks. Malformed optional
+metadata is ignored on read and rejected on save. Metadata describes pixels;
+tagging an image does not change its transfer function or create HDR samples.
+HDR metadata embedding in other containers is not supported by this API;
+pass transfer and primaries explicitly when rendering those images.
 
 ## Supported formats
 
