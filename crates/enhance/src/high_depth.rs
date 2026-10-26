@@ -8,7 +8,7 @@ use blanket_core::{Image, PixelMode, samples};
 use pyo3::prelude::*;
 
 pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyResult<Image> {
-    let source = samples::read(image)?;
+    let source = samples::view(image)?;
     let channels = image.mode.channels();
     let color_channels = if image.mode == PixelMode::Rgba { 3 } else { channels };
     let luma = |pixel: &[u16]| -> u16 {
@@ -23,7 +23,7 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
         }
     };
     let values = py.detach(|| {
-        let mut values = source.clone();
+        let mut values = source.to_vec();
         let end = source.len() / (channels * 16) * channels * 16;
         let mean = if operation != "contrast" || source.is_empty() {
             0
@@ -75,8 +75,8 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
 }
 
 pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
-    let a = samples::read(first)?;
-    let b = samples::read(second)?;
+    let a = samples::view(first)?;
+    let b = samples::view(second)?;
     if std::ptr::eq(first, second) || factor == 0.0 {
         return samples::output(first, &a);
     }

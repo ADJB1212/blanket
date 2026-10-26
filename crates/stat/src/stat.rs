@@ -27,7 +27,7 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
     if !samples::supported(image) {
         return Err(PyValueError::new_err("unsigned high-depth image required"));
     }
-    let source = samples::read(image)?;
+    let source = image.raw_data()?;
     let mask = mask
         .map(|mask| {
             if mask.mode != PixelMode::L || mask.bit_depth != 8 || (mask.width, mask.height) != (image.width, image.height) {
@@ -40,11 +40,12 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
     let bins = usize::from(samples::maximum(image)) + 1;
     Ok(py.detach(|| {
         let mut histogram = vec![0; bins * channels];
-        for (i, pixel) in source.chunks_exact(channels).enumerate() {
+        for (i, pixel) in source.chunks_exact(channels * 2).enumerate() {
             if mask.is_some_and(|mask| mask[i] == 0) {
                 continue;
             }
-            for (c, &value) in pixel.iter().enumerate() {
+            for (c, &bytes) in pixel.as_chunks::<2>().0.iter().enumerate() {
+                let value = if image.mode == PixelMode::I16B { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
                 histogram[c * bins + usize::from(value)] += 1;
             }
         }

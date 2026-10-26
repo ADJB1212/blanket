@@ -70,17 +70,18 @@ def test_mode_filter_clips_edges_and_keeps_original_for_low_counts(mode, depth):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-def test_kernel_uses_sample_offsets_saturation_and_unchanged_borders(mode, depth):
+@pytest.mark.parametrize("scale", [1, 4])
+def test_kernel_uses_sample_offsets_saturation_and_unchanged_borders(mode, depth, scale):
     image = make_image(mode, depth)
     values = samples(image)
     channels = len(image.getbands())
-    result = image.filter(ImageFilter.Kernel((3, 3), [0, 0, 0, 0, 2, 0, 0, 0, 0], scale=1, offset=-17))
+    result = image.filter(ImageFilter.Kernel((3, 3), [0, 0, 0, 0, 2, 0, 0, 0, 0], scale=scale, offset=-17))
     expected = values.copy()
     for y in range(1, image.height - 1):
         for x in range(1, image.width - 1):
             for c in range(channels):
                 i = (y * image.width + x) * channels + c
-                expected[i] = min((1 << depth) - 1, max(0, values[i] * 2 - 17))
+                expected[i] = min((1 << depth) - 1, max(0, int(values[i] * 2 / scale - 17 + 0.5)))
     assert samples(result) == expected
     flipped = image.filter(ImageFilter.Kernel((3, 3), [1, 0, 0, 0, 0, 0, 0, 0, 0], scale=1))
     assert flipped.getpixel((1, 1)) == image.getpixel((0, 2))
@@ -142,14 +143,17 @@ def test_enhancements_retain_precision_and_alpha(mode, depth, name):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-def test_statistics_use_full_sample_values_and_mask(mode, depth):
+@pytest.mark.parametrize("masked", [False, True])
+def test_statistics_use_full_sample_values_and_mask(mode, depth, masked):
     image = make_image(mode, depth)
-    mask = Image.frombytes("L", image.size, bytes(i % 3 for i in range(image.width * image.height)))
+    mask = Image.frombytes("L", image.size, bytes(i % 3 for i in range(image.width * image.height))) if masked else None
     original = samples(image)
     channels = len(image.getbands())
     statistics = ImageStat.Stat(image, mask)
     for c in range(channels):
-        values = [v for i, v in enumerate(original[c::channels]) if i % 3]
+        values = [v for i, v in enumerate(original[c::channels]) if not masked or i % 3]
+        counts = Counter(values)
+        assert statistics.h[c * (1 << depth) : (c + 1) * (1 << depth)] == [counts[v] for v in range(1 << depth)]
         mean = sum(values) / len(values)
         assert statistics.count[c] == len(values)
         assert statistics.extrema[c] == (min(values), max(values))

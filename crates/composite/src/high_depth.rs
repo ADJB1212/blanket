@@ -16,7 +16,7 @@ fn matching(first: &Image, second: &Image) -> PyResult<()> {
 
 pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     matching(image, source)?;
-    let source_values = samples::read(source)?;
+    let source_values = samples::view(source)?;
     let mut values = samples::read(image)?;
     let mask_values = mask
         .map(|mask| {
@@ -27,7 +27,11 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
             {
                 return Err(PyValueError::new_err("bad transparency mask"));
             }
-            let values = if mask.bit_depth == 8 { mask.pixel_data()?.iter().map(|&v| u16::from(v)).collect() } else { samples::read(mask)? };
+            let values = if mask.bit_depth == 8 {
+                std::borrow::Cow::Owned(mask.pixel_data()?.iter().map(|&v| u16::from(v)).collect::<Vec<_>>())
+            } else {
+                samples::view(mask)?
+            };
             Ok((values, mask.mode.channels(), (1_u64 << mask.bit_depth) - 1))
         })
         .transpose()?;
@@ -75,19 +79,29 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
 }
 
 fn paste_row<const C: usize>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usize, maximum: u32, fill: bool) -> usize {
+    match maximum {
+        255 => paste_row_max::<C, 255>(dst, src, mask, mc, fill),
+        1023 => paste_row_max::<C, 1023>(dst, src, mask, mc, fill),
+        4095 => paste_row_max::<C, 4095>(dst, src, mask, mc, fill),
+        65535 => paste_row_max::<C, 65535>(dst, src, mask, mc, fill),
+        _ => unreachable!("validated mask depth"),
+    }
+}
+
+fn paste_row_max<const C: usize, const MAXIMUM: u32>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usize, fill: bool) -> usize {
     let end = dst.len() / C / 16 * 16;
     for i in (0..end).step_by(16) {
         let original = load_samples::<C>(&dst[i * C..]);
         let source = load_samples::<C>(&src[i * C..]);
-        let alpha = Samples::gather_or_default(mask, Simd::from_array(std::array::from_fn(|lane| (i + lane + 1) * mc - 1))).cast::<u32>();
+        let alpha = if mc == 1 { Samples::from_slice(&mask[i..]) } else { load_samples::<4>(&mask[i * 4..])[3] }.cast::<u32>();
         let replace = if C == 4 && mc == 1 && fill {
             original[3].simd_eq(Samples::splat(0)).cast::<i32>() & alpha.simd_ne(Simd::splat(0))
         } else {
             std::simd::Mask::splat(false)
         };
         let result: [Samples; C] = std::array::from_fn(|c| {
-            let a = if c < 3 { replace.select(Simd::splat(maximum), alpha) } else { alpha };
-            ((original[c].cast::<u32>() * (Simd::splat(maximum) - a) + source[c].cast::<u32>() * a + Simd::splat(maximum / 2)) / Simd::splat(maximum))
+            let a = if c < 3 { replace.select(Simd::splat(MAXIMUM), alpha) } else { alpha };
+            ((original[c].cast::<u32>() * (Simd::splat(MAXIMUM) - a) + source[c].cast::<u32>() * a + Simd::splat(MAXIMUM / 2)) / Simd::splat(MAXIMUM))
                 .cast()
         });
         store_samples(&mut dst[i * C..], result);
@@ -98,7 +112,7 @@ fn paste_row<const C: usize>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usi
 pub(crate) fn composite(background: &Image, overlay: &Image) -> PyResult<Image> {
     matching(background, overlay)?;
     let mut values = samples::read(background)?;
-    let source = samples::read(overlay)?;
+    let source = samples::view(overlay)?;
     let maximum = u64::from(samples::maximum(background));
     composite_samples(&mut values, &source, maximum);
     samples::output(background, &values)
@@ -141,12 +155,12 @@ pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
     if alpha.bit_depth != 8 && alpha.bit_depth != image.bit_depth {
         return Err(PyValueError::new_err("images do not match"));
     }
-    let source = samples::read(image)?;
+    let source = samples::view(image)?;
     let maximum = u32::from(samples::maximum(image));
     let alpha_values = if alpha.bit_depth == 8 {
-        alpha.pixel_data()?.iter().map(|&a| ((u32::from(a) * maximum + 127) / 255) as u16).collect()
+        std::borrow::Cow::Owned(alpha.pixel_data()?.iter().map(|&a| ((u32::from(a) * maximum + 127) / 255) as u16).collect::<Vec<_>>())
     } else {
-        samples::read(alpha)?
+        samples::view(alpha)?
     };
     let mut values = vec![0; alpha_values.len() * 4];
     match image.mode.channels() {
@@ -197,6 +211,25 @@ mod tests {
         }
         assert_eq!(&output[1 + end * C..], &original[1 + end * C..]);
         assert_eq!(output[0], 173);
+    }
+
+    #[test]
+    fn masked_paste_preserves_rounding_for_every_alpha() {
+        for maximum in [255_u32, 1023, 4095, 65535] {
+            let count = maximum as usize + 1;
+            let mask: Vec<_> = (0..count).map(|value| value as u16).collect();
+            for (source, destination) in [(0, 65535), (65535, 0), (32767, 65535)] {
+                let source = vec![source; count];
+                let mut output = vec![destination; count];
+                assert_eq!(paste_row::<1>(&mut output, &source, &mask, 1, maximum, false), count);
+                for (i, &value) in output.iter().enumerate() {
+                    let expected =
+                        (u64::from(destination) * (u64::from(maximum) - i as u64) + u64::from(source[i]) * i as u64 + u64::from(maximum / 2))
+                            / u64::from(maximum);
+                    assert_eq!(value, expected as u16);
+                }
+            }
+        }
     }
 
     #[test]

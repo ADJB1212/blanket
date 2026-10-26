@@ -118,6 +118,28 @@ pub type Samples = Simd<u16, 16>;
 mod sample_tests {
     use super::*;
 
+    #[test]
+    fn merging_samples_preserves_channel_order_unaligned_blocks_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in 0..=65 {
+                for offset in 0..4 {
+                    let bands: [Vec<u16>; C] = std::array::from_fn(|c| (0..count + offset).map(|i| (i * 719 + c * 313 + 65503) as u16).collect());
+                    let mut output = vec![[173; C]; count + 2];
+                    let end = merge_samples(std::array::from_fn(|c| &bands[c][offset..]), &mut output[1..count + 1]);
+                    assert_eq!(end, count / 16 * 16);
+                    for i in 0..end {
+                        assert_eq!(output[i + 1], std::array::from_fn(|c| bands[c][offset + i]));
+                    }
+                    assert_eq!(output[0], [173; C]);
+                    assert!(output[end + 1..].iter().all(|pixel| *pixel == [173; C]));
+                }
+            }
+        }
+        check::<1>();
+        check::<3>();
+        check::<4>();
+    }
+
     fn packed_roundtrip<const C: usize>() {
         let source: Vec<_> = (0..16 * C + 1).map(|i| (i * 719 + 65503) as u16).collect();
         let channels = load_samples::<C>(&source[1..]);
@@ -235,6 +257,14 @@ pub fn merge<const C: usize>(bands: [&[u8]; C], dst: &mut [[u8; C]]) -> usize {
     let end = dst.len() / 16 * 16;
     for i in (0..end).step_by(16) {
         store(dst[i..i + 16].as_flattened_mut(), bands.map(|b| Bytes::from_slice(&b[i..i + 16])));
+    }
+    end
+}
+
+pub fn merge_samples<const C: usize>(bands: [&[u16]; C], dst: &mut [[u16; C]]) -> usize {
+    let end = dst.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        store_samples(dst[i..i + 16].as_flattened_mut(), bands.map(|band| Samples::from_slice(&band[i..i + 16])));
     }
     end
 }

@@ -429,10 +429,17 @@ fn integer_bytes(mode: PixelMode, value: i64) -> [u8; 4] {
 
 /// Allocate a zeroed pixel buffer of `len` bytes, returning a memory error on failure.
 pub fn alloc_pixels(len: usize) -> PyResult<Vec<u8>> {
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    pixels.resize(len, 0);
-    Ok(pixels)
+    if len == 0 {
+        return Ok(Vec::new());
+    }
+    let layout = std::alloc::Layout::array::<u8>(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    // The nonzero layout matches Vec<u8>; all bytes are initialized to zero.
+    let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
+    if pointer.is_null() {
+        return Err(PyMemoryError::new_err("cannot allocate image"));
+    }
+    // Transfer the global allocation with its exact size and alignment.
+    Ok(unsafe { Vec::from_raw_parts(pointer, len, len) })
 }
 
 #[pyclass(name = "_Image", module = "blanket._blanket")]
@@ -503,10 +510,7 @@ impl Image {
     }
 
     pub fn from_samples(width: u32, height: u32, mode: PixelMode, samples: Vec<u16>, bit_depth: u8, format: Option<String>) -> PyResult<Self> {
-        let mut pixels = vec![0; samples.len() * 2];
-        for (dst, value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(samples) {
-            *dst = value.to_le_bytes();
-        }
+        let pixels = crate::samples::encode(&samples, false)?;
         Self::from_sample_bytes(width, height, mode, pixels, bit_depth, format)
     }
 
@@ -1786,6 +1790,20 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn zeroed_pixel_allocations_support_vec_mutation_and_growth() {
+        for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 1024 * 1024] {
+            let mut pixels = super::alloc_pixels(len).unwrap();
+            assert_eq!(pixels.len(), len);
+            assert!(pixels.iter().all(|&value| value == 0));
+            pixels.fill(173);
+            pixels.push(91);
+            assert_eq!(pixels[len], 91);
+            assert!(pixels[..len].iter().all(|&value| value == 173));
+        }
+        assert!(super::alloc_pixels(usize::MAX).is_err());
+    }
+
     use super::*;
 
     #[test]
