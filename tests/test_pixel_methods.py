@@ -223,6 +223,9 @@ def test_putdata_integer_conversion(container: type, scale: float, offset: float
     assert actual.tobytes() == expected.tobytes()
     with pytest.raises(OverflowError):
         actual.putdata([2**10000])
+    actual.putdata([-1, True, False], scale, offset)
+    expected.putdata([-1, True, False], scale, offset)
+    assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

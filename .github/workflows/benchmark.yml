@@ -107,6 +107,7 @@ jobs:
     runs-on: ubuntu-26.04
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64
+      options: --cap-add=SYS_NICE
     defaults:
       run:
         shell: bash
@@ -211,8 +212,8 @@ jobs:
       - name: Install project and benchmark dependencies
         run: |
           uv sync --no-install-project --only-group test --python /opt/python/cp314-cp314/bin/python
-          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=mold -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
+          maturin build --release --out dist --features default -i python3.14 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=x86-64-v2
       - name: Run benchmarks
         run: |
           uv pip install --python .venv/bin/python --compile-bytecode dist/*.whl
-          .venv/bin/python scripts/benchmark.py --all -v --no-baseline -w 2 -i 10 --sizes web 4K
+          .venv/bin/python scripts/benchmark.py --all -v --no-baseline -w 3 -i 50 --sizes web photo
