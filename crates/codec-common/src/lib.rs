@@ -7,28 +7,30 @@ use zerocopy::IntoBytes;
 
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
+#[expect(unevaluated_default_field_value)]
 pub struct Frame<I = Image> {
     pub image: I,
-    pub duration: Option<f64>,
-    pub disposal: u8,
-    pub blend: u8,
+    pub duration: Option<f64> = None,
+    pub disposal: u8 = 0,
+    pub blend: u8 = 0,
 }
 
+#[expect(unevaluated_default_field_value)]
 pub struct Sequence<I = Image> {
-    pub frames: Vec<Frame<I>>,
-    pub loop_count: Option<u32>,
-    pub default_image: bool,
+    pub frames: Vec<Frame<I>> = Vec::new(),
+    pub loop_count: Option<u32> = None,
+    pub default_image: bool = false,
 }
 
 impl<I> Default for Sequence<I> {
     fn default() -> Self {
-        Self { frames: Vec::new(), loop_count: None, default_image: false }
+        Self { .. }
     }
 }
 
 impl Sequence {
     pub fn single(image: Image) -> Self {
-        Self { frames: vec![Frame { image, duration: None, disposal: 0, blend: 0 }], ..Self::default() }
+        Self { frames: vec![Frame { image, .. }], .. }
     }
 }
 
@@ -73,6 +75,26 @@ pub fn u16_bytes(samples: &[u16]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_and_sequence_defaults_do_not_require_default_images() {
+        struct Raster;
+
+        let frame = Frame { image: Raster, .. };
+        assert_eq!(frame.duration, None);
+        assert_eq!(frame.disposal, 0);
+        assert_eq!(frame.blend, 0);
+
+        for sequence in [Sequence::<Raster> { .. }, Sequence::<Raster>::default()] {
+            assert!(sequence.frames.is_empty());
+            assert_eq!(sequence.loop_count, None);
+            assert!(!sequence.default_image);
+        }
+        let sequence = Sequence { frames: vec![frame], loop_count: Some(3), default_image: true };
+        assert_eq!(sequence.frames.len(), 1);
+        assert_eq!(sequence.loop_count, Some(3));
+        assert!(sequence.default_image);
+    }
 
     #[test]
     fn frame_budget_checks_cumulative_pixels_and_overflow() {

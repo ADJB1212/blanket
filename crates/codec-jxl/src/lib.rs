@@ -1,3 +1,5 @@
+#![feature(default_field_values)]
+
 use std::borrow::Cow;
 
 pub mod stream;

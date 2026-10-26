@@ -23,27 +23,7 @@ fn bands(histogram: &[u64]) -> PyResult<&[[u64; 256]]> {
 }
 
 fn list_count(histogram: &Bound<'_, PyList>, index: usize) -> PyResult<u64> {
-    let py = histogram.py();
-    // The critical section keeps a borrowed list item alive during conversion
-    // on free-threaded Python too; it is a no-op when the GIL is enabled.
-    // GetItem checks bounds even if an earlier __index__ call mutated the list.
-    pyo3::sync::critical_section::with_critical_section(histogram.as_any(), || unsafe {
-        let item = pyo3::ffi::PyList_GetItem(histogram.as_ptr(), index as pyo3::ffi::Py_ssize_t);
-        if item.is_null() {
-            return Err(PyErr::fetch(py));
-        }
-        let value = pyo3::ffi::PyLong_AsUnsignedLongLong(item);
-        if value == u64::MAX && !pyo3::ffi::PyErr_Occurred().is_null() {
-            let item = Bound::<PyAny>::from_borrowed_ptr(py, item);
-            let error = PyErr::fetch(py);
-            if error.is_instance_of::<pyo3::exceptions::PyTypeError>(py) {
-                // Preserve integer-like objects with __index__ on the slow path.
-                return item.extract();
-            }
-            return Err(error);
-        }
-        Ok(value)
-    })
+    histogram.get_item(index)?.extract()
 }
 
 #[pyfunction]

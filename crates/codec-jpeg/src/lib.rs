@@ -120,15 +120,13 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
 }
 
 fn invert_samples(pixels: &[u8]) -> Vec<u8> {
-    let mut output = Vec::with_capacity(pixels.len());
-    blanket_core::parallel::chunks_mut_above(&mut output.spare_capacity_mut()[..pixels.len()], 256 * 1024, 4 * 1024 * 1024, |i, dst| {
-        for (value, &sample) in dst.iter_mut().zip(&pixels[i * 256 * 1024..]) {
-            value.write(255 - sample);
-        }
-    });
-    // Every reserved byte is written by the disjoint chunks above.
-    unsafe { output.set_len(pixels.len()) };
-    output
+    use rayon::prelude::*;
+
+    if blanket_core::parallel::should_parallel(pixels.len(), 256 * 1024, 4 * 1024 * 1024) {
+        pixels.par_iter().with_min_len(256 * 1024).map(|&sample| 255 - sample).collect()
+    } else {
+        pixels.iter().map(|&sample| 255 - sample).collect()
+    }
 }
 
 /// Planar Y plus 2x2 chroma averaged like libjpeg's h2v2 downsampler, with
@@ -197,4 +195,19 @@ fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>
         }
     }
     (y, cb, cr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inversion_preserves_length_and_matches_scalar_across_parallel_threshold() {
+        for len in [0, 1, 15, 16, 17, (4 << 20) - 1, (4 << 20) + 3] {
+            let source: Vec<u8> = (0..len).map(|i| (i * 73 + i / 7) as u8).collect();
+            let output = invert_samples(&source);
+            assert_eq!(output.len(), len);
+            assert!(output.iter().zip(&source).all(|(&value, &sample)| value == 255 - sample));
+        }
+    }
 }

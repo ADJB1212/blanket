@@ -78,9 +78,7 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let src = source_row(band * 32 + i);
             assert_eq!(src.len(), row.len());
-            // SAFETY: source and destination are separate allocations.
-            // Each worker initializes only its disjoint destination rows.
-            unsafe { std::ptr::copy_nonoverlapping(src.as_ptr(), row.as_mut_ptr().cast::<u8>(), row.len()) };
+            row.write_copy_of_slice(src);
         }
     });
     // SAFETY: every byte in the reserved image was initialized above. If a

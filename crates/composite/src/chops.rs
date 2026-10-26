@@ -159,13 +159,12 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     let length = row * height as usize;
     if matches!(operation, Operation::And | Operation::Or | Operation::Xor) && first.width == second.width {
         let mut pixels = reserved_buffer(length)?;
+        pixels.resize(length, 0);
         py.detach(|| {
-            chunks_mut_above(&mut pixels.spare_capacity_mut()[..length], 256 * 1024, 512 * 1024, |chunk, dst| {
+            chunks_mut_above(&mut pixels, 256 * 1024, 512 * 1024, |chunk, dst| {
                 let start = chunk * 256 * 1024;
                 let a = &a[start..start + dst.len()];
                 let b = &b[start..start + dst.len()];
-                // SAFETY: u8 has no invalid bit patterns; every byte is written below.
-                let dst = unsafe { &mut *(std::ptr::from_mut(dst) as *mut [u8]) };
                 match operation {
                     Operation::And => bitwise_chunk::<0>(a, b, dst),
                     Operation::Or => bitwise_chunk::<1>(a, b, dst),
@@ -174,8 +173,6 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
                 }
             });
         });
-        // Every output byte is written by the disjoint chunks above.
-        unsafe { pixels.set_len(length) };
         return Image::from_pixels(width, height, first.mode, pixels, None);
     }
     let mut pixels = reserved_buffer(length)?;
@@ -265,12 +262,8 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
             if head.min(tail) <= row / 8 && source.len() < 4 << 20 {
                 // Rotate the flat buffer, then repair the narrow wrap at each row.
                 let shift = (shift_y * row + if head <= tail { head } else { source.len() - tail }) % source.len();
-                let dst = pixels.as_mut_ptr();
-                // SAFETY: the two copies initialize the entire reserved allocation.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(source[source.len() - shift..].as_ptr(), dst, shift);
-                    std::ptr::copy_nonoverlapping(source.as_ptr(), dst.add(shift), source.len() - shift);
-                }
+                pixels.extend_from_slice(&source[source.len() - shift..]);
+                pixels.extend_from_slice(&source[..source.len() - shift]);
                 let mut sy = height - shift_y;
                 if head != 0 {
                     for y in 0..height {
@@ -278,8 +271,7 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
                             sy = 0;
                         }
                         let (src, target, count) = if head <= tail { (sy * row + tail, y * row, head) } else { (sy * row, y * row + head, tail) };
-                        // SAFETY: the repair stays inside an initialized destination row.
-                        unsafe { std::ptr::copy_nonoverlapping(source[src..].as_ptr(), dst.add(target), count) };
+                        pixels[target..target + count].copy_from_slice(&source[src..src + count]);
                         sy += 1;
                     }
                 }
@@ -288,20 +280,17 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
                     let mut sy = (band * 32 + height - shift_y) % height;
                     for dst in rows.chunks_exact_mut(row) {
                         let src = &source[sy * row..(sy + 1) * row];
-                        // SAFETY: the two copies initialize a disjoint, complete row.
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(src[tail..].as_ptr(), dst.as_mut_ptr().cast::<u8>(), head);
-                            std::ptr::copy_nonoverlapping(src.as_ptr(), dst.as_mut_ptr().cast::<u8>().add(head), tail);
-                        }
+                        dst[..head].write_copy_of_slice(&src[tail..]);
+                        dst[head..].write_copy_of_slice(&src[..tail]);
                         sy += 1;
                         if sy == height {
                             sy = 0;
                         }
                     }
                 });
+                // SAFETY: every reserved byte was initialized by the row copies.
+                unsafe { pixels.set_len(source.len()) };
             }
-            // SAFETY: every reserved byte was initialized by the row copies.
-            unsafe { pixels.set_len(source.len()) };
         });
     }
     Ok(Image {
@@ -318,6 +307,31 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bitwise_chunks_match_scalar_with_unaligned_buffers_tails_and_guards() {
+        for offset in 0..8 {
+            for len in 0..=33 {
+                let a: Vec<u8> = (0..offset + len).map(|i| (i * 37) as u8).collect();
+                let b: Vec<u8> = (0..offset + len + 1).map(|i| (i * 53) as u8).collect();
+                for operation in [Operation::And, Operation::Or, Operation::Xor] {
+                    let mut expected = vec![0xa5; offset + len + 8];
+                    for i in 0..len {
+                        expected[offset + i] = operation.apply(a[offset + i], b[offset + i + 1], 1.0, 0);
+                    }
+                    let mut output = vec![0xa5; expected.len()];
+                    let dst = &mut output[offset..offset + len];
+                    match operation {
+                        Operation::And => bitwise_chunk::<0>(&a[offset..], &b[offset + 1..], dst),
+                        Operation::Or => bitwise_chunk::<1>(&a[offset..], &b[offset + 1..], dst),
+                        Operation::Xor => bitwise_chunk::<2>(&a[offset..], &b[offset + 1..], dst),
+                        _ => unreachable!(),
+                    }
+                    assert_eq!(output, expected, "offset={offset}, len={len}");
+                }
+            }
+        }
+    }
 
     fn blend_chunk(operation: Operation, a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
         match operation {

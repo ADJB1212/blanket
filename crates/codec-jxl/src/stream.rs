@@ -9,16 +9,16 @@ use jpegxl_sys::metadata::codestream_header::JxlBasicInfo;
 
 pub struct JxlStreamDecoder {
     decoder: *mut JxlDecoder,
-    input: Vec<u8>,
-    pixels: Vec<u8>,
-    format: JxlPixelFormat,
-    width: u32,
-    height: u32,
-    mode: PixelMode,
-    depth: u8,
-    available: bool,
-    failed: bool,
-    pub complete: bool,
+    input: Vec<u8> = Vec::new(),
+    pixels: Vec<u8> = Vec::new(),
+    format: JxlPixelFormat = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Little, align: 0 },
+    width: u32 = 0,
+    height: u32 = 0,
+    mode: PixelMode = PixelMode::Rgb,
+    depth: u8 = 8,
+    available: bool = false,
+    failed: bool = false,
+    pub complete: bool = false,
 }
 
 impl Drop for JxlStreamDecoder {
@@ -38,19 +38,7 @@ impl JxlStreamDecoder {
         if decoder.is_null() {
             return Err("cannot allocate JPEG XL decoder".into());
         }
-        let stream = Self {
-            decoder,
-            input: Vec::new(),
-            pixels: Vec::new(),
-            format: JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Little, align: 0 },
-            width: 0,
-            height: 0,
-            mode: PixelMode::Rgb,
-            depth: 8,
-            available: false,
-            failed: false,
-            complete: false,
-        };
+        let stream = Self { decoder, .. };
         unsafe {
             check(JxlDecoderSubscribeEvents(
                 decoder,

@@ -6,10 +6,11 @@ __lazy_modules__ = {"os"}
 
 import math
 from collections.abc import Iterable
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import os
+    from typing import BinaryIO
 
 from ._blanket import _encode_sequence, _write_metadata
 from ._exif import save_metadata

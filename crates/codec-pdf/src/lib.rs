@@ -27,14 +27,10 @@ impl Stream<'_> {
 }
 
 fn append_rgba_channels<const C: usize>(output: &mut Vec<u8>, pixels: &[[u8; 4]], first: usize) {
-    let start = output.len();
-    let length = pixels.len() * C;
-    output.reserve(length);
-    for (dst, pixel) in output.spare_capacity_mut()[..length].as_chunks_mut::<C>().0.iter_mut().zip(pixels) {
-        *dst = std::array::from_fn(|c| std::mem::MaybeUninit::new(pixel[first + c]));
+    output.reserve(pixels.len() * C);
+    for pixel in pixels {
+        output.extend_from_slice(&pixel[first..first + C]);
     }
-    // SAFETY: each reserved byte was initialized by the pixel loop above.
-    unsafe { output.set_len(start + length) };
 }
 
 // PDF 1.4 image XObjects with an optional grayscale soft mask. Raw streams

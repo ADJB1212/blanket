@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"zlib"}
+__lazy_modules__ = {"collections.abc", "zlib"}
 
 import contextlib
 import re

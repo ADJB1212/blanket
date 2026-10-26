@@ -1,7 +1,7 @@
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 use rustc_hash::FxHashMap;
 
 use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
@@ -110,42 +110,25 @@ type ColorCounts = [(u64, usize, usize); COLOR_TABLE_SIZE];
 fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8], tuple: bool) -> PyResult<Bound<'py, PyAny>> {
     let values: [_; 256] = std::array::from_fn(|v| (v as u8).into_pyobject(py).unwrap());
     let mut cache: [Option<([u8; C], Bound<'py, PyAny>)>; PIXEL_CACHE_SIZE] = std::array::from_fn(|_| None);
-    let count = data.len() / C;
-    // SAFETY: fresh containers stay private until every slot is initialized.
-    // Bound owns each allocation so errors release partially filled containers.
-    unsafe {
-        let result = Bound::from_owned_ptr_or_err(py, if tuple { pyo3::ffi::PyTuple_New(count as _) } else { pyo3::ffi::PyList_New(count as _) })?;
-        for (i, pixel) in data.as_chunks::<C>().0.iter().enumerate() {
+    let items = data
+        .as_chunks::<C>()
+        .0
+        .iter()
+        .map(|pixel| {
             let mut key = [0; 4];
             key[..C].copy_from_slice(pixel);
             let slot = (u32::from_le_bytes(key).wrapping_mul(PIXEL_HASH_MULTIPLIER) >> (u32::BITS - PIXEL_CACHE_BITS)) as usize;
             let item = if let Some((_, item)) = cache[slot].as_ref().filter(|(key, _)| key == pixel) {
                 item.clone()
             } else {
-                let value = |c: usize| values[pixel[c] as usize].as_ptr();
-                let item = Bound::from_owned_ptr_or_err(
-                    py,
-                    match C {
-                        2 => pyo3::ffi::PyTuple_Pack(2, value(0), value(1)),
-                        3 => pyo3::ffi::PyTuple_Pack(3, value(0), value(1), value(2)),
-                        4 => pyo3::ffi::PyTuple_Pack(4, value(0), value(1), value(2), value(3)),
-                        _ => unreachable!(),
-                    },
-                )?;
+                let item = PyTuple::new(py, pixel.iter().map(|&value| &values[value as usize]))?.into_any();
                 cache[slot] = Some((*pixel, item.clone()));
                 item
             };
-            let status = if tuple {
-                pyo3::ffi::PyTuple_SetItem(result.as_ptr(), i as _, item.into_ptr())
-            } else {
-                pyo3::ffi::PyList_SetItem(result.as_ptr(), i as _, item.into_ptr())
-            };
-            if status != 0 {
-                return Err(PyErr::fetch(py));
-            }
-        }
-        Ok(result)
-    }
+            Ok(item)
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    if tuple { Ok(PyTuple::new(py, items)?.into_any()) } else { Ok(PyList::new(py, items)?.into_any()) }
 }
 
 fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
@@ -309,18 +292,7 @@ fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length
     let mut output = pixels.as_chunks_mut::<C>().0.iter_mut();
     let mut write = |value: &Bound<'_, PyAny>| -> PyResult<()> {
         let pixel = if C == 1 {
-            let number = if value.is_exact_instance_of::<PyInt>() {
-                // Avoid allocating a temporary float for each integer sample.
-                let number = unsafe { pyo3::ffi::PyLong_AsDouble(value.as_ptr()) };
-                if number == -1.0
-                    && let Some(error) = PyErr::take(value.py())
-                {
-                    return Err(error);
-                }
-                number
-            } else {
-                value.extract::<f64>()?
-            };
+            let number = value.extract::<f64>()?;
             [(number * scale + offset).clamp(0.0, 255.0) as u8, 0, 0, 0]
         } else {
             parse_pixel(value, C)?
@@ -934,9 +906,7 @@ impl Image {
         let chunk = 256 * 1024;
         py.detach(|| {
             crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
-                // Disjoint output partitions initialize the entire reserved buffer.
-                // Source and destination are separate allocations of equal length.
-                unsafe { std::ptr::copy_nonoverlapping(source[i * chunk..].as_ptr(), dst.as_mut_ptr().cast::<u8>(), dst.len()) };
+                dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
             });
         });
         // Every byte is initialized above, including any partial final partition.

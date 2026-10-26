@@ -191,6 +191,20 @@ def test_lazy_band_indices_preserve_construction_count() -> None:
     assert stat.bands == [0, 1, 2, 7]
 
 
+@pytest.mark.parametrize("property_name", ["count", "extrema"])
+def test_histogram_conversion_handles_reentrant_list_mutation(property_name: str) -> None:
+    class Count:
+        def __index__(self) -> int:
+            histogram.clear()
+            return 7
+
+    histogram = [Count()] + [0] * 255
+    stat = ImageStat.Stat(histogram)
+    with pytest.raises(IndexError):
+        getattr(stat, property_name)
+    assert histogram == []
+
+
 def test_invalid_masks_and_closed_images() -> None:
     image = Image.new("RGBA", (3, 2))
     with pytest.raises(ValueError, match="mask"):

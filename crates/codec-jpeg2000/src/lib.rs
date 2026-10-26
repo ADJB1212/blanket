@@ -1,3 +1,5 @@
+#![feature(default_field_values)]
+
 use std::ffi::{CStr, c_void};
 use std::ptr;
 
@@ -31,10 +33,10 @@ impl Drop for Handles {
 }
 
 struct Buffer<'a> {
-    input: &'a [u8],
-    output: Vec<u8>,
-    position: usize,
-    writing: bool,
+    input: &'a [u8] = &[],
+    output: Vec<u8> = Vec::new(),
+    position: usize = 0,
+    writing: bool = false,
 }
 
 unsafe extern "C" fn read(buffer: *mut c_void, count: usize, context: *mut c_void) -> usize {
@@ -137,7 +139,7 @@ pub fn backend_version() -> String {
 
 pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
     let format = if data.starts_with(&[0xff, 0x4f]) { CODEC_FORMAT::OPJ_CODEC_J2K } else { CODEC_FORMAT::OPJ_CODEC_JP2 };
-    let mut buffer = Buffer { input: data, output: Vec::new(), position: 0, writing: false };
+    let mut buffer = Buffer { input: data, .. };
     let mut handles = Handles::new(format, &mut buffer)?;
     // SAFETY: OpenJPEG initializes parameters and owns all image/component allocations.
     // Header dimensions and component layouts are validated before reading sample buffers.
@@ -220,7 +222,7 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
     {
         return Err(PyOSError::new_err("JPEG 2000 requires a nonempty grayscale or RGB image"));
     }
-    let mut buffer = Buffer { input: &[], output: Vec::new(), position: 0, writing: true };
+    let mut buffer = Buffer { writing: true, .. };
     let mut handles = Handles::new(CODEC_FORMAT::OPJ_CODEC_JP2, &mut buffer).map_err(codec_error)?;
     let channels = image.mode.channels();
     let depth = u32::from(image.bit_depth);
@@ -279,7 +281,7 @@ mod tests {
 
     #[test]
     fn input_callbacks_bound_reads_and_preserve_failed_seek_position() {
-        let mut buffer = Buffer { input: &[1, 2, 3], output: Vec::new(), position: 0, writing: false };
+        let mut buffer = Buffer { input: &[1, 2, 3], .. };
         let context = ptr::from_mut(&mut buffer).cast();
         let mut output = [0xcc_u8; 8];
         // SAFETY: All buffers and the context remain live and match the requested sizes.
@@ -298,7 +300,7 @@ mod tests {
 
     #[test]
     fn output_callbacks_support_header_rewrites_and_zero_filled_holes() {
-        let mut buffer = Buffer { input: &[], output: Vec::new(), position: 0, writing: true };
+        let mut buffer = Buffer { writing: true, .. };
         let context = ptr::from_mut(&mut buffer).cast();
         let mut input = [1_u8, 2, 3];
         // SAFETY: The callback only reads the provided input and writes its live context.

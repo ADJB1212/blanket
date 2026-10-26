@@ -10,6 +10,16 @@ from blanket import Image, ImageChops
 BINARY = ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"]
 
 
+@pytest.mark.parametrize("name", ["logical_and", "logical_or", "logical_xor"])
+@pytest.mark.parametrize("size", [(0, 3), (1, 1), (17, 9), (1025, 1027)])
+def test_logical_operations_match_pillow_across_chunks(name: str, size: tuple[int, int]) -> None:
+    raw = bytes((i * 37 + i // 11) % 256 for i in range(((size[0] + 7) // 8) * size[1]))
+    other = bytes(value ^ 0x71 for value in raw)
+    first, pil_first = Image.frombytes("1", size, raw), PILImage.frombytes("1", size, raw)
+    second, pil_second = Image.frombytes("1", size, other), PILImage.frombytes("1", size, other)
+    same(getattr(ImageChops, name)(first, second), getattr(PILChops, name)(pil_first, pil_second))
+
+
 @pytest.mark.parametrize("name", ["difference", "lighter", "darker", "add_modulo", "subtract_modulo", "invert"])
 @pytest.mark.parametrize("size", [(1025, 1027), (2049, 2051)])
 def test_memory_operations_large_parallel_tail(name: str, size: tuple[int, int]) -> None:
