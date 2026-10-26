@@ -1,4 +1,4 @@
-"""Progressive JPEG XL input and incremental PNG row output.
+"""Progressive JPEG and JPEG XL input and incremental PNG row output.
 
 Streaming consumes encoded chunks without retaining the encoded file. Decoders
 still allocate a full raster and codec working memory. PNG output requires only
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 
 class Parser:
-    """Feed JPEG XL chunks and close to obtain the decoded image.
+    """Feed JPEG or JPEG XL chunks and close to obtain the decoded image.
 
     The image property returns an independent snapshot once a progressive pass
     is available. Container metadata is not retained. Instances
@@ -30,7 +30,7 @@ class Parser:
     """
 
     def __init__(self) -> None:
-        """Create an empty parser ready to receive JPEG XL chunks."""
+        """Create an empty parser ready to receive JPEG or JPEG XL chunks."""
         self._prefix = bytearray()
         self._decoder: StreamingDecoder | None = None
         self._closed = False
@@ -48,7 +48,7 @@ class Parser:
         """Consume the next input chunk, raising OSError for malformed data.
 
         Args:
-            data: The next bytes of a JPEG XL image, in file order.
+            data: The next bytes of a JPEG or JPEG XL image, in file order.
         """
         if self._closed:
             raise ValueError("closed image parser")
@@ -66,11 +66,11 @@ class Parser:
                 if prefix.startswith(b"\xff\x0a") or prefix == b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a":
                     self._decoder = StreamingDecoder("JXL")
                 elif prefix.startswith(b"\xff\xd8"):
-                    raise UnidentifiedImageError("streaming decode supports JXL")
+                    self._decoder = StreamingDecoder("JPEG")
                 elif len(prefix) < 12:
                     return
                 else:
-                    raise UnidentifiedImageError("streaming decode supports JXL")
+                    raise UnidentifiedImageError("streaming decode supports JXL and JPEG")
                 self._decoder.feed(prefix)
                 self._prefix.clear()
             if view:

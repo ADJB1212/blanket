@@ -87,19 +87,138 @@ def test_parser_rejects_unsupported_and_corrupt_input() -> None:
         parser.feed(b"\xff\x0a" + b"\xff" * 128)
 
 
-@pytest.mark.parametrize("chunk_size", [1, 7, 65536])
-def test_parser_rejects_jpeg_and_preserves_eager_decode(chunk_size: int) -> None:
+def jpeg_encoded(mode: str = "RGB", *, progressive: bool = True, **options: object) -> bytes:
     output = BytesIO()
-    source = Image.new("RGB", (3, 2), "red")
-    source.save(output, "JPEG")
-    data = output.getvalue()
+    channels = {"L": 1, "RGB": 3, "CMYK": 4}[mode]
+    source = PillowImage.frombytes(mode, (33, 19), random.Random(81).randbytes(33 * 19 * channels))
+    source.save(output, "JPEG", progressive=progressive, **options)
+    return output.getvalue()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "CMYK"])
+@pytest.mark.parametrize("progressive", [False, True])
+@pytest.mark.parametrize("chunk_size", [1, 2, 7, 64, 65536])
+def test_jpeg_chunks_match_eager_and_pillow(mode: str, progressive: bool, chunk_size: int) -> None:
+    data = jpeg_encoded(mode, progressive=progressive)
     parser = ImageFile.Parser()
-    with pytest.raises(UnidentifiedImageError, match="supports JXL"):
-        for i in range(0, len(data), chunk_size):
-            parser.feed(data[i : i + chunk_size])
+    assert parser.image is None
+    parser.feed(b"")
+    for i in range(0, len(data), chunk_size):
+        parser.feed(data[i : i + chunk_size])
+    result = parser.close()
+    assert (result.mode, result.size, result.bit_depth, result.format) == (mode, (33, 19), 8, "JPEG")
+    assert result.tobytes() == Image.open(BytesIO(data)).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+    assert parser.image is result
+    assert parser.close() is result
     with pytest.raises(ValueError, match="closed"):
         parser.feed(b"")
-    assert Image.open(BytesIO(data)).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+
+
+@pytest.mark.parametrize("options", [{"subsampling": 0}, {"subsampling": 1}, {"subsampling": 2}, {"keep_rgb": True}, {"restart_marker_blocks": 1}, {"restart_marker_rows": 1}])
+@pytest.mark.parametrize("progressive", [False, True])
+@pytest.mark.parametrize("buffer_type", [bytearray, memoryview])
+def test_jpeg_sampling_restarts_and_color_interpretation(options: dict[str, object], progressive: bool, buffer_type: type) -> None:
+    data = jpeg_encoded(progressive=progressive, **options)
+    parser = ImageFile.Parser()
+    for i in range(0, len(data), 13):
+        parser.feed(buffer_type(data[i : i + 13]))
+    assert parser.close().tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+
+
+def test_jpeg_progressive_previews_are_independent_and_refine() -> None:
+    data = jpeg_encoded()
+    parser = ImageFile.Parser()
+    preview = None
+    raw = None
+    for value in data:
+        parser.feed(bytes([value]))
+        if preview is None:
+            preview = parser.image
+            if preview is not None:
+                raw = preview.tobytes()
+                snapshot = parser.image
+                assert snapshot is not preview
+                snapshot.putpixel((0, 0), (1, 2, 3))
+                assert parser.image.tobytes() == raw
+    assert preview is not None
+    final = parser.close()
+    assert preview.tobytes() == raw
+    assert final.tobytes() != raw
+    assert final.tobytes() == Image.open(BytesIO(data)).tobytes()
+
+
+@pytest.mark.parametrize("cut", [0, 1, 12, -2, -1])
+def test_jpeg_truncation_releases_parser(cut: int) -> None:
+    parser = ImageFile.Parser()
+    parser.feed(jpeg_encoded()[:cut])
+    with pytest.raises(OSError, match=r"incomplete|truncated"):
+        parser.close()
+    assert parser.image is None
+    with pytest.raises(ValueError, match="closed"):
+        parser.close()
+
+
+def test_jpeg_discards_metadata_and_ignores_trailing_bytes() -> None:
+    data = jpeg_encoded(exif=b"Exif\0\0abcdef", icc_profile=b"profile" * 20000)
+    parser = ImageFile.Parser()
+    for i in range(0, len(data), 127):
+        parser.feed(data[i : i + 127])
+    parser.feed(b"trailing data" * 10000)
+    result = parser.close()
+    assert result.info == {}
+    assert result.tobytes() == Image.open(BytesIO(data)).tobytes()
+
+
+@pytest.mark.parametrize("progressive", [False, True])
+def test_jpeg_grayscale_sampling_factors(progressive: bool) -> None:
+    data = bytearray(jpeg_encoded("L", progressive=progressive))
+    start = data.index(b"\xff\xc2" if progressive else b"\xff\xc0")
+    data[start + 11] = 0x22
+    parser = ImageFile.Parser()
+    for value in data:
+        parser.feed(bytes([value]))
+    assert parser.close().tobytes() == Image.open(BytesIO(data)).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+
+
+@pytest.mark.parametrize("progressive", [False, True])
+def test_jpeg_wide_quantization_tables(progressive: bool) -> None:
+    data = jpeg_encoded(progressive=progressive, qtables=[list(range(256, 320))])
+    parser = ImageFile.Parser()
+    for i in range(0, len(data), 7):
+        parser.feed(data[i : i + 7])
+    assert parser.close().tobytes() == Image.open(BytesIO(data)).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+
+
+def test_jpeg_rejects_oversized_header_before_pixel_allocation() -> None:
+    data = bytearray(jpeg_encoded())
+    start = data.index(b"\xff\xc2")
+    data[start + 5 : start + 9] = (16000).to_bytes(2, "big") + (12000).to_bytes(2, "big")
+    parser = ImageFile.Parser()
+    with pytest.raises(OSError, match=r"192000000 pixels.*exceeds Blanket limit"):
+        parser.feed(data)
+    with pytest.raises(ValueError, match="closed"):
+        parser.feed(b"")
+
+
+def test_jpeg_rejects_corrupt_later_scan_and_entropy() -> None:
+    data = jpeg_encoded()
+    start = data.index(b"\xff\xda", data.index(b"\xff\xda") + 2)
+    parser = ImageFile.Parser()
+    parser.feed(data[:start])
+    assert parser.image is not None
+    broken = bytearray(data[start:])
+    length = int.from_bytes(broken[2:4], "big")
+    broken[2 + length - 1] = 0xFF
+    with pytest.raises(OSError, match="approximation"):
+        parser.feed(broken)
+    assert parser.image is None
+    with pytest.raises(ValueError, match="closed"):
+        parser.close()
+
+    start = data.index(b"\xff\xda")
+    end = start + 2 + int.from_bytes(data[start + 2 : start + 4], "big")
+    with pytest.raises(OSError, match="entropy"):
+        ImageFile.Parser().feed(data[:end] + b"\xff\xd9")
 
 
 @pytest.mark.parametrize("chunk_size", [1, 7, 17, 4096])

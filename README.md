@@ -136,7 +136,7 @@ with Image.open("input.png") as image:
 
 ### Stream image input and output
 
-Feed JPEG XL chunks to `ImageFile.Parser`. Its `image` property returns
+Feed JPEG or JPEG XL chunks to `ImageFile.Parser`. Its `image` property returns
 an independent preview when a progressive pass is available; `close()`
 requires a complete image. Decoding retains a full raster and codec working
 memory, while consumed encoded input is discarded.

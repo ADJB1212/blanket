@@ -1,5 +1,8 @@
 #![feature(default_field_values, portable_simd)]
 
+mod entropy;
+pub mod stream;
+
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};

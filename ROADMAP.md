@@ -276,13 +276,13 @@ Rust backend for performance and functionality Pillow doesn't offer.
       larger rank and morphology windows retain histogram and sliding-window paths
 - [x] **Streaming decode/encode** — progressive JXL input through
       `ImageFile.Parser` and incremental PNG row output through `ImageFile.PngWriter`
+- [x] **Progressive JPEG streaming decode** — consume 8-bit Huffman JPEG chunks
+      with bounded encoded input storage and independent previews after completed scans
 - [x] **Image hashing** — `ImageHash.average_hash`, `dhash`, and `phash` with
       configurable sizes, hexadecimal serialization, and Hamming distance
 
 ### Planned
 
-- [ ] **Progressive JPEG streaming decode** — consume JPEG chunks with bounded
-      encoded input storage and progressive previews
 - [ ] **Batch processing API** — process multiple images in parallel with
       shared pipeline configuration
 - [ ] **GPU acceleration** — optional compute shader backend for large-image
