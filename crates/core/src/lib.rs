@@ -1,4 +1,5 @@
 #![feature(default_field_values, portable_simd)]
+pub mod cache;
 pub mod cms;
 pub mod color;
 pub mod parallel;

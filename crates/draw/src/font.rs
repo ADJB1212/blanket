@@ -1,6 +1,10 @@
 //! Outline font shaping and coverage masks without FreeType.
 
+use std::num::NonZeroUsize;
+use std::sync::{Arc, Mutex};
+
 use ab_glyph::{Font, FontVec, Glyph, GlyphId, Outline, OutlinedGlyph, PxScale, ScaleFont, point};
+use blanket_core::cache::ByteLru;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -19,6 +23,19 @@ const MAX_STROKE_WIDTH: usize = 1024;
 type Bounds = (i32, i32, i32, i32);
 type MaskResult = (f32, Bounds, Py<PyBytes>);
 
+#[derive(Hash, PartialEq, Eq)]
+struct ShapeKey {
+    text: String,
+    direction: Option<String>,
+    features: Vec<String>,
+    language: Option<String>,
+}
+
+struct ShapedGlyph {
+    id: GlyphId,
+    position: rustybuzz::GlyphPosition,
+}
+
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<NativeFont>()?;
     module.add_function(wrap_pyfunction!(_font_stroke, module)?)?;
@@ -29,6 +46,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 struct NativeFont {
     font: FontVec,
     index: u32,
+    outlines: Mutex<ByteLru<GlyphId, Arc<Option<Outline>>>>,
+    shapes: Mutex<ByteLru<ShapeKey, Arc<Vec<ShapedGlyph>>>>,
 }
 
 #[pymethods]
@@ -39,7 +58,12 @@ impl NativeFont {
         if rustybuzz::Face::from_slice(font.font_data(), index).is_none() {
             return Err(PyOSError::new_err("invalid font face"));
         }
-        Ok(Self { font, index })
+        Ok(Self {
+            font,
+            index,
+            outlines: Mutex::new(ByteLru::new(NonZeroUsize::new(2048).unwrap(), 4 * 1024 * 1024)),
+            shapes: Mutex::new(ByteLru::new(NonZeroUsize::new(256).unwrap(), 2 * 1024 * 1024)),
+        })
     }
 
     fn metrics(&self, size: f32) -> PyResult<(f32, f32)> {
@@ -67,82 +91,48 @@ impl NativeFont {
         if !start.0.is_finite() || !start.1.is_finite() || start.0.abs() > 1.0 || start.1.abs() > 1.0 {
             return Err(PyValueError::new_err("start must contain fractional pixel offsets"));
         }
-        let features: Vec<Feature> =
+        let parsed_features: Vec<Feature> =
             features.iter().map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid OpenType feature"))).collect::<PyResult<_>>()?;
-        let language = language.map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid language tag"))).transpose()?;
+        let parsed_language = language.map(|value| value.parse().map_err(|_| PyValueError::new_err("invalid language tag"))).transpose()?;
+        let key = ShapeKey { text: text.to_owned(), direction: direction.map(str::to_owned), features, language: language.map(str::to_owned) };
         let (advance, bounds, data) = py.detach(|| {
-            let face = rustybuzz::Face::from_slice(self.font.font_data(), self.index).unwrap();
-            let factor = size / face.units_per_em() as f32;
-            let scale = PxScale::from(size * self.font.height_unscaled() / face.units_per_em() as f32);
+            let units_per_em = self.font.units_per_em().unwrap();
+            let factor = size / units_per_em;
+            let scale = PxScale::from(size * self.font.height_unscaled() / units_per_em);
             let scale_factor = self.font.as_scaled(scale).scale_factor();
             let vertical = direction == Some("ttb");
-            let base_level = direction.and_then(|value| match value {
-                "ltr" => Some(Level::ltr()),
-                "rtl" => Some(Level::rtl()),
-                _ => None,
-            });
-            let bidi = BidiInfo::new(text, base_level);
-            let mut segments = Vec::new();
-            if vertical {
-                segments.extend(script_runs(text).into_iter().map(|range| (range, Direction::TopToBottom)));
-            } else {
-                for paragraph in &bidi.paragraphs {
-                    let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
-                    for range in runs {
-                        let rtl = levels[range.start].is_rtl();
-                        let mut scripts = script_runs(&text[range.clone()]);
-                        if rtl {
-                            scripts.reverse();
-                        }
-                        segments.extend(scripts.into_iter().map(|script| {
-                            (range.start + script.start..range.start + script.end, if rtl { Direction::RightToLeft } else { Direction::LeftToRight })
-                        }));
-                    }
-                }
-            }
+            let shaped = self.shape(key, &parsed_features, parsed_language);
             let mut pen = point(0.0, 0.0);
             let mut glyphs = Vec::new();
-            let mut glyph_outlines: FxHashMap<GlyphId, Option<Outline>> = FxHashMap::default();
+            let mut glyph_outlines: FxHashMap<GlyphId, Arc<Option<Outline>>> = FxHashMap::default();
             let mut ink: Option<Bounds> = None;
-            let mut buffer = UnicodeBuffer::new();
-            for (range, direction) in segments {
-                buffer.push_str(&text[range]);
-                buffer.set_direction(direction);
-                if let Some(language) = language.clone() {
-                    buffer.set_language(language);
-                }
-                buffer.guess_segment_properties();
-                let shaped = rustybuzz::shape(&face, &features, buffer);
-                for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
-                    let glyph = Glyph {
-                        id: GlyphId(info.glyph_id as u16),
-                        scale,
-                        position: point(pen.x + position.x_offset as f32 * factor + start.0, pen.y - position.y_offset as f32 * factor + start.1),
-                    };
-                    if !advance_only && let Some(outline) = glyph_outlines.entry(glyph.id).or_insert_with(|| self.font.outline(glyph.id)) {
-                        let rect = outline.px_bounds(scale_factor, glyph.position);
-                        if [rect.min.x, rect.min.y, rect.max.x, rect.max.y]
-                            .iter()
-                            .any(|value| !value.is_finite() || value.abs() > MAX_OUTLINE_COORDINATE)
-                        {
-                            return Err(PyValueError::new_err("glyph bounds are too large"));
-                        }
-                        let bounds = (rect.min.x as i32, rect.min.y as i32, rect.max.x as i32, rect.max.y as i32);
-                        ink = Some(match ink {
-                            None => bounds,
-                            Some(old) => (old.0.min(bounds.0), old.1.min(bounds.1), old.2.max(bounds.2), old.3.max(bounds.3)),
-                        });
-                        if render {
-                            glyphs.push(glyph);
-                        }
+            for info in shaped.iter() {
+                let position = &info.position;
+                let glyph = Glyph {
+                    id: info.id,
+                    scale,
+                    position: point(pen.x + position.x_offset as f32 * factor + start.0, pen.y - position.y_offset as f32 * factor + start.1),
+                };
+                if !advance_only && let Some(outline) = glyph_outlines.entry(glyph.id).or_insert_with(|| self.outline(glyph.id)).as_ref() {
+                    let rect = outline.px_bounds(scale_factor, glyph.position);
+                    if [rect.min.x, rect.min.y, rect.max.x, rect.max.y].iter().any(|value| !value.is_finite() || value.abs() > MAX_OUTLINE_COORDINATE)
+                    {
+                        return Err(PyValueError::new_err("glyph bounds are too large"));
                     }
-                    pen.x += position.x_advance as f32 * factor;
-                    pen.y -= position.y_advance as f32 * factor;
-                    if !pen.x.is_finite() || !pen.y.is_finite() || pen.x.abs().max(pen.y.abs()) > MAX_OUTLINE_COORDINATE {
-                        return Err(PyValueError::new_err("text layout is too large"));
+                    let bounds = (rect.min.x as i32, rect.min.y as i32, rect.max.x as i32, rect.max.y as i32);
+                    ink = Some(match ink {
+                        None => bounds,
+                        Some(old) => (old.0.min(bounds.0), old.1.min(bounds.1), old.2.max(bounds.2), old.3.max(bounds.3)),
+                    });
+                    if render {
+                        glyphs.push(glyph);
                     }
                 }
-                buffer = shaped.clear();
+                pen.x += position.x_advance as f32 * factor;
+                pen.y -= position.y_advance as f32 * factor;
+                if !pen.x.is_finite() || !pen.y.is_finite() || pen.x.abs().max(pen.y.abs()) > MAX_OUTLINE_COORDINATE {
+                    return Err(PyValueError::new_err("text layout is too large"));
+                }
             }
             let advance = if vertical { pen.y } else { pen.x };
             let mut bounds = ink.unwrap_or((0, 0, 0, 0));
@@ -157,7 +147,7 @@ impl NativeFont {
             if render {
                 let width = (bounds.2 - bounds.0) as usize;
                 for glyph in glyphs {
-                    let raw_outline = glyph_outlines[&glyph.id].as_ref().unwrap().clone();
+                    let raw_outline = glyph_outlines[&glyph.id].as_ref().as_ref().unwrap().clone();
                     let outline = OutlinedGlyph::new(glyph, raw_outline, scale_factor);
                     let rect = outline.px_bounds();
                     let x = (rect.min.x as i32 - bounds.0) as usize;
@@ -176,6 +166,80 @@ impl NativeFont {
 }
 
 impl NativeFont {
+    fn outline(&self, id: GlyphId) -> Arc<Option<Outline>> {
+        let cached = self.outlines.lock().unwrap_or_else(|error| error.into_inner()).get(&id).cloned();
+        if let Some(outline) = cached {
+            return outline;
+        }
+        let outline = Arc::new(self.font.outline(id));
+        let bytes = size_of::<Option<Outline>>()
+            + outline.as_ref().as_ref().map_or(0, |outline| outline.curves.capacity() * size_of::<ab_glyph::OutlineCurve>());
+        self.outlines.lock().unwrap_or_else(|error| error.into_inner()).insert(id, Arc::clone(&outline), bytes);
+        outline
+    }
+
+    fn shape(&self, key: ShapeKey, features: &[Feature], language: Option<rustybuzz::Language>) -> Arc<Vec<ShapedGlyph>> {
+        let cached = self.shapes.lock().unwrap_or_else(|error| error.into_inner()).get(&key).cloned();
+        if let Some(shape) = cached {
+            return shape;
+        }
+        let base_level = match key.direction.as_deref() {
+            Some("ltr") => Some(Level::ltr()),
+            Some("rtl") => Some(Level::rtl()),
+            _ => None,
+        };
+        let bidi = BidiInfo::new(&key.text, base_level);
+        let mut segments = Vec::new();
+        if key.direction.as_deref() == Some("ttb") {
+            segments.extend(script_runs(&key.text).into_iter().map(|range| (range, Direction::TopToBottom)));
+        } else {
+            for paragraph in &bidi.paragraphs {
+                let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
+                for range in runs {
+                    let rtl = levels[range.start].is_rtl();
+                    let mut scripts = script_runs(&key.text[range.clone()]);
+                    if rtl {
+                        scripts.reverse();
+                    }
+                    segments.extend(scripts.into_iter().map(|script| {
+                        (range.start + script.start..range.start + script.end, if rtl { Direction::RightToLeft } else { Direction::LeftToRight })
+                    }));
+                }
+            }
+        }
+        let face = rustybuzz::Face::from_slice(self.font.font_data(), self.index).unwrap();
+        let mut buffer = UnicodeBuffer::new();
+        let mut glyphs = Vec::new();
+        for (range, direction) in segments {
+            buffer.push_str(&key.text[range]);
+            buffer.set_direction(direction);
+            if let Some(language) = language.clone() {
+                buffer.set_language(language);
+            }
+            buffer.guess_segment_properties();
+            let shaped = rustybuzz::shape(&face, features, buffer);
+            glyphs.extend(
+                shaped
+                    .glyph_infos()
+                    .iter()
+                    .zip(shaped.glyph_positions())
+                    .map(|(info, position)| ShapedGlyph { id: GlyphId(info.glyph_id as u16), position: *position }),
+            );
+            buffer = shaped.clear();
+        }
+        let bytes = size_of::<ShapeKey>()
+            + key.text.capacity()
+            + key.direction.as_ref().map_or(0, String::capacity)
+            + key.language.as_ref().map_or(0, String::capacity)
+            + key.features.capacity() * size_of::<String>()
+            + key.features.iter().map(String::capacity).sum::<usize>()
+            + size_of::<Vec<ShapedGlyph>>()
+            + glyphs.capacity() * size_of::<ShapedGlyph>();
+        let glyphs = Arc::new(glyphs);
+        self.shapes.lock().unwrap_or_else(|error| error.into_inner()).insert(key, Arc::clone(&glyphs), bytes);
+        glyphs
+    }
+
     fn validate_size(&self, size: f32) -> PyResult<()> {
         if !size.is_finite() || size <= 0.0 || size > MAX_FONT_SIZE {
             return Err(PyValueError::new_err("font size must be finite, positive, and at most 1000000"));

@@ -111,6 +111,25 @@ def test_otf_cff_loading() -> None:
     assert font.getlength("Hello") > 0
 
 
+def test_cached_outline_layout_matches_fresh_fonts(font_data: bytes) -> None:
+    from blanket._blanket import NativeFont
+
+    shared = NativeFont(font_data, 0)
+    for text in ("AVfi ", "AאבV", "سلام", "क\u0301", "", "\U0010ffff"):
+        for direction in (None, "ltr", "rtl", "ttb"):
+            for features in ([], ["-kern"], ["-liga"], ["kern", "-kern"], ["-kern", "kern"]):
+                for size, start, language in ((20, (0, 0), None), (31, (0.5, 0.75), "ar"), (20, (0, 0), None)):
+                    fresh = NativeFont(font_data, 0)
+                    for render, advance_only in ((False, True), (False, False), (True, False)):
+                        args = (text, size, direction, features, language, render, start, advance_only)
+                        assert shared.layout(*args) == fresh.layout(*args)
+
+    expected = shared.layout("AVfi", 20, None, [], None, True, (0.25, 0.5))
+    for i in range(300):
+        shared.layout(f"AVfi{i}", 20, None, [], None, False, (0, 0))
+    assert shared.layout("AVfi", 20, None, [], None, True, (0.25, 0.5)) == expected
+
+
 def test_font_collection_face_selection(font_data: bytes) -> None:
     offset = 20
     face = bytearray(font_data)

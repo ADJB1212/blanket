@@ -1,6 +1,9 @@
 //! Pixel primitives used by the Python ImageOps API.
 use std::borrow::Cow;
+use std::num::NonZeroUsize;
+use std::sync::{Arc, LazyLock, Mutex};
 
+use blanket_core::cache::ByteLru;
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
@@ -694,7 +697,25 @@ impl ResampleWeights {
     }
 }
 
-fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> ResampleWeights {
+type WeightKey = (u32, u32, u64, u64, u8);
+static WEIGHTS: LazyLock<Mutex<ByteLru<WeightKey, Arc<ResampleWeights>>>> =
+    LazyLock::new(|| Mutex::new(ByteLru::new(NonZeroUsize::new(128).unwrap(), 16 * 1024 * 1024)));
+
+fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Arc<ResampleWeights> {
+    let key = (input, output, start.to_bits(), end.to_bits(), method);
+    let cached = WEIGHTS.lock().unwrap_or_else(|error| error.into_inner()).get(&key).cloned();
+    if let Some(weights) = cached {
+        return weights;
+    }
+    let weights = Arc::new(compute_weights(input, output, start, end, method));
+    let bytes = weights.bounds.capacity() * size_of::<(usize, std::ops::Range<usize>)>()
+        + weights.coefficients.capacity() * size_of::<i32>()
+        + size_of::<ResampleWeights>();
+    WEIGHTS.lock().unwrap_or_else(|error| error.into_inner()).insert(key, Arc::clone(&weights), bytes);
+    weights
+}
+
+fn compute_weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> ResampleWeights {
     let scale = f64::from(end as f32 - start as f32) / f64::from(output);
     let filter_scale = scale.max(1.0);
     let support = match method {
@@ -1862,6 +1883,22 @@ fn ops_warp(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn cached_weights_reuse_tables_and_preserve_exact_coefficients() {
+        for method in 1..=5 {
+            for (input, output, start, end) in [(67, 11, 0.0, 67.0), (67, 101, 2.3, 59.2), (49, 7, 1.7, 43.8)] {
+                let actual = super::weights(input, output, start, end, method);
+                let cached = super::weights(input, output, start, end, method);
+                assert!(std::sync::Arc::ptr_eq(&actual, &cached));
+                let expected = super::compute_weights(input, output, start, end, method);
+                assert_eq!(actual.bounds, expected.bounds);
+                assert_eq!(actual.coefficients, expected.coefficients);
+                let changed = super::weights(input, output, start + 0.125, end, method);
+                assert!(!std::sync::Arc::ptr_eq(&actual, &changed));
+            }
+        }
+    }
+
     use super::*;
 
     #[test]
