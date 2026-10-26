@@ -85,6 +85,33 @@ converts to 8-bit grayscale, discards alpha, and resizes with Lanczos. Apply
 Perceptual hashes are approximate visual fingerprints; choose a distance
 threshold for your data and confirm duplicates separately.
 
+### Transform JPEGs without recompression
+
+```python
+from pathlib import Path
+from blanket import Image, JpegImagePlugin
+
+data = Path("photo.jpg").read_bytes()
+rotated = JpegImagePlugin.transform(data, Image.Transpose.ROTATE_90)
+Path("rotated.jpg").write_bytes(rotated)
+```
+
+This transforms quantized JPEG coefficients without decoding pixels or adding
+JPEG generation loss. Rotations follow `Image.Transpose` conventions. Pass
+`crop=(left, top, right, bottom)` to crop in source coordinates before rotating
+or flipping. The crop origin must align to the JPEG's MCU grid; right and bottom
+edges need not align. Invalid boxes are rejected. Transforms that cannot move
+partial edge blocks perfectly raise `OSError`; `trim=True` explicitly permits
+discarding those blocks.
+
+Metadata defaults to `metadata="strip"`, removing EXIF, XMP, ICC profiles, and
+comments. `metadata="preserve"` retains ancillary metadata. Libjpeg may update
+EXIF pixel dimensions, but EXIF orientation is not applied or reset, and other
+dimensions, density, and embedded thumbnails may become stale. Color
+interpretation markers remain.
+The result is encoded JPEG bytes; IDCT rounding and chroma upsampling can cause
+small decoded-pixel differences despite lossless coefficient transforms.
+
 ### Convert between formats
 
 ```python

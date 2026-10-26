@@ -6,6 +6,55 @@ use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use turbojpeg::{Colorspace, Compressor, Decompressor, PixelFormat, Subsamp};
 
+pub fn transform_jpeg(
+    data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,
+) -> PyResult<Vec<u8>> {
+    use turbojpeg::{Transform, TransformCrop, TransformOp, Transformer};
+
+    let op = match method {
+        None => TransformOp::None,
+        Some(0) => TransformOp::Hflip,
+        Some(1) => TransformOp::Vflip,
+        Some(2) => TransformOp::Rot270,
+        Some(3) => TransformOp::Rot180,
+        Some(4) => TransformOp::Rot90,
+        Some(5) => TransformOp::Transpose,
+        Some(6) => TransformOp::Transverse,
+        _ => return Err(PyValueError::new_err("invalid JPEG transform method")),
+    };
+    let header = Decompressor::new().map_err(codec_error)?.read_header(data).map_err(codec_error)?;
+    validate_dimensions(u32::try_from(header.width).map_err(codec_error)?, u32::try_from(header.height).map_err(codec_error)?)
+        .map_err(codec_error)?;
+    let mut transformer = Transformer::new().map_err(codec_error)?;
+    let mut transform = Transform::op(op);
+    transform.perfect = !trim;
+    transform.trim = trim;
+    transform.copy_none = !preserve_metadata;
+    transform.progressive = header.is_progressive;
+    transform.arithmetic = header.is_arithmetic;
+    let cropped;
+    let input = if let Some((left, top, right, bottom)) = crop {
+        if left >= right || top >= bottom || right > header.width || bottom > header.height {
+            return Err(PyValueError::new_err("crop must be a nonempty box inside the JPEG"));
+        }
+        let (mcu_width, mcu_height) = (header.subsamp.mcu_width(), header.subsamp.mcu_height());
+        if !left.is_multiple_of(mcu_width) || !top.is_multiple_of(mcu_height) {
+            return Err(PyValueError::new_err(format!("crop origin must align to JPEG MCU boundaries ({mcu_width} x {mcu_height})")));
+        }
+        let mut crop_transform = transform.clone();
+        crop_transform.op = TransformOp::None;
+        crop_transform.crop = Some(TransformCrop { x: left, y: top, width: Some(right - left), height: Some(bottom - top) });
+        cropped = transformer.transform_to_vec(&crop_transform, data).map_err(codec_error)?;
+        if method.is_none() {
+            return Ok(cropped);
+        }
+        cropped.as_slice()
+    } else {
+        data
+    };
+    transformer.transform_to_vec(&transform, input).map_err(codec_error)
+}
+
 pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
     let mut decoder = Decompressor::new().map_err(|error| error.to_string())?;
     let header = decoder.read_header(data).map_err(|error| error.to_string())?;

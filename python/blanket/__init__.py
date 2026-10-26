@@ -19,6 +19,7 @@ from . import (
     ImagePath,
     ImageSequence,
     ImageStat,
+    JpegImagePlugin,
     PngImagePlugin,
     features,
 )
@@ -43,6 +44,7 @@ __all__ = [
     "ImagePath",
     "ImageSequence",
     "ImageStat",
+    "JpegImagePlugin",
     "PngImagePlugin",
     "UnidentifiedImageError",
     "__version__",

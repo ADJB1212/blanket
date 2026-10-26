@@ -355,7 +355,7 @@ with new processing semantics exposed explicitly.
 
 - [ ] **Buffer views and array exchange** — opt-in zero-copy access for compatible
       layouts, with explicit ownership, lifetime, mutability, and stride rules
-- [ ] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
+- [x] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
       aligned cropping of encoded JPEGs with explicit metadata handling
 
 #### Codec Controls and Inspection
