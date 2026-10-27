@@ -28,27 +28,39 @@ impl Decoder {
         unsafe { CStr::from_ptr(raw::tj3GetErrorStr(self.0)) }.to_string_lossy().into_owned()
     }
 
-    pub(super) fn decode(&mut self, data: &[u8]) -> Result<Image, String> {
+    pub(super) fn header(&mut self, data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
         // SAFETY: the decoder is live and input remains borrowed through decoding.
         if unsafe { raw::tj3DecompressHeader(self.0, data.as_ptr(), data.len() as raw::size_t) } != 0 {
             return Err(self.error());
         }
         // SAFETY: the successful header call initialized these parameters.
-        let (width, height, color) = unsafe {
+        let (width, height, color, depth) = unsafe {
             (
                 raw::tj3Get(self.0, raw::TJPARAM_TJPARAM_JPEGWIDTH as i32),
                 raw::tj3Get(self.0, raw::TJPARAM_TJPARAM_JPEGHEIGHT as i32),
                 raw::tj3Get(self.0, raw::TJPARAM_TJPARAM_COLORSPACE as i32),
+                raw::tj3Get(self.0, raw::TJPARAM_TJPARAM_PRECISION as i32),
             )
         };
         let width = u32::try_from(width).map_err(|e| e.to_string())?;
         let height = u32::try_from(height).map_err(|e| e.to_string())?;
-        validate_dimensions(width, height)?;
-        let (mode, format) = match color as u32 {
-            raw::TJCS_TJCS_GRAY => (PixelMode::L, raw::TJPF_TJPF_GRAY),
-            raw::TJCS_TJCS_CMYK | raw::TJCS_TJCS_YCCK => (PixelMode::Cmyk, raw::TJPF_TJPF_CMYK),
-            raw::TJCS_TJCS_RGB | raw::TJCS_TJCS_YCbCr => (PixelMode::Rgb, raw::TJPF_TJPF_RGB),
+        let mode = match color as u32 {
+            raw::TJCS_TJCS_GRAY => "L",
+            raw::TJCS_TJCS_CMYK | raw::TJCS_TJCS_YCCK => "CMYK",
+            raw::TJCS_TJCS_RGB | raw::TJCS_TJCS_YCbCr => "RGB",
             _ => return Err("unsupported JPEG colorspace".into()),
+        };
+        blanket_codec_common::ImageHeader::new(width, height, mode, depth.try_into().map_err(|_| "invalid JPEG precision")?)
+    }
+
+    pub(super) fn decode(&mut self, data: &[u8]) -> Result<Image, String> {
+        let header = self.header(data)?;
+        let (width, height) = (header.width, header.height);
+        validate_dimensions(width, height)?;
+        let (mode, format) = match header.mode {
+            "L" => (PixelMode::L, raw::TJPF_TJPF_GRAY),
+            "CMYK" => (PixelMode::Cmyk, raw::TJPF_TJPF_CMYK),
+            _ => (PixelMode::Rgb, raw::TJPF_TJPF_RGB),
         };
         let pitch = (width as usize).checked_mul(mode.channels()).ok_or("JPEG row size overflow")?;
         let length = pitch.checked_mul(height as usize).ok_or("JPEG buffer size overflow")?;

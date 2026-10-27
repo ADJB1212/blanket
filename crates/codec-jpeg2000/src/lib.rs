@@ -137,6 +137,44 @@ pub fn backend_version() -> String {
     unsafe { format!("OpenJPEG {}", CStr::from_ptr(opj_version()).to_string_lossy()) }
 }
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let format = if data.starts_with(&[0xff, 0x4f]) { CODEC_FORMAT::OPJ_CODEC_J2K } else { CODEC_FORMAT::OPJ_CODEC_JP2 };
+    let mut buffer = Buffer { input: data, .. };
+    let mut handles = Handles::new(format, &mut buffer)?;
+    // SAFETY: The handles own the initialized decoder and header. No pixel decode is requested.
+    unsafe {
+        let mut parameters = std::mem::zeroed();
+        opj_set_default_decoder_parameters(&raw mut parameters);
+        if opj_setup_decoder(handles.codec, &raw mut parameters) == 0
+            || opj_read_header(handles.stream, handles.codec, &raw mut handles.image) == 0
+            || handles.image.is_null()
+        {
+            return Err("invalid JPEG 2000 header".into());
+        }
+        let header = &*handles.image;
+        if header.comps.is_null() || !(1..=4).contains(&header.numcomps) {
+            return Err("unsupported JPEG 2000 component layout".into());
+        }
+        let components = std::slice::from_raw_parts(header.comps, header.numcomps as usize);
+        let depth = components[0].prec;
+        if !(1..=16).contains(&depth) || components.iter().any(|c| c.prec != depth || c.sgnd != 0) {
+            return Err("unsupported JPEG 2000 sample precision".into());
+        }
+        let mode = match header.numcomps {
+            1 => "L",
+            2 => "LA",
+            3 => "RGB",
+            _ => "RGBA",
+        };
+        blanket_codec_common::ImageHeader::new(
+            header.x1.checked_sub(header.x0).ok_or("invalid JPEG 2000 width")?,
+            header.y1.checked_sub(header.y0).ok_or("invalid JPEG 2000 height")?,
+            mode,
+            depth as u8,
+        )
+    }
+}
+
 pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
     let format = if data.starts_with(&[0xff, 0x4f]) { CODEC_FORMAT::OPJ_CODEC_J2K } else { CODEC_FORMAT::OPJ_CODEC_JP2 };
     let mut buffer = Buffer { input: data, .. };

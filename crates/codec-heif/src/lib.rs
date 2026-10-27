@@ -19,6 +19,18 @@ pub fn backend_info() -> (bool, bool, String) {
     (decode, encode, format!("{major}.{minor}.{patch}"))
 }
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let _lib = &*HEIF_LIBRARY;
+    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
+    let handle = context.primary_image_handle().map_err(|e| e.to_string())?;
+    blanket_codec_common::ImageHeader::new(
+        handle.width(),
+        handle.height(),
+        if handle.has_alpha_channel() { "RGBA" } else { "RGB" },
+        handle.luma_bits_per_pixel(),
+    )
+}
+
 pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
     use libheif_rs::{ColorSpace, DecodingOptions, HeifContext, RgbChroma};
     let lib = &*HEIF_LIBRARY;

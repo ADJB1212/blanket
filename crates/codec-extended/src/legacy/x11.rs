@@ -3,7 +3,7 @@ use rustc_hash::FxHashMap;
 
 use super::{dimensions, image};
 
-pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
+pub(super) fn inspect_xbm(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
     let text = std::str::from_utf8(data).map_err(|_| "invalid XBM text")?;
     let define = |suffix: &str| -> Result<u32, String> {
         text.lines()
@@ -13,7 +13,13 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
             })
             .ok_or_else(|| format!("missing XBM {suffix}"))
     };
-    let (w, h) = dimensions(define("_width")?, define("_height")?)?;
+    blanket_codec_common::ImageHeader::new(define("_width")?, define("_height")?, "1", 1)
+}
+
+pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
+    let header = inspect_xbm(data)?;
+    let (w, h) = dimensions(header.width, header.height)?;
+    let text = std::str::from_utf8(data).map_err(|_| "invalid XBM text")?;
     let (header, body) = text.split_once('{').ok_or("missing XBM pixels")?;
     let body = body.split_once('}').ok_or("truncated XBM pixels")?.0;
     let short = header.split_whitespace().any(|v| v == "short");
@@ -79,6 +85,10 @@ pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 fn strings(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+    strings_until(data, usize::MAX)
+}
+
+fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
     let mut result = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -108,8 +118,26 @@ fn strings(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
         }
         pos += 1;
         result.push(value);
+        if result.len() == limit {
+            break;
+        }
     }
     Ok(result)
+}
+
+pub(super) fn inspect_xpm(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let values = strings_until(data, 1)?;
+    let header = values.first().ok_or("missing XPM header")?;
+    let nums = std::str::from_utf8(header)
+        .map_err(|_| "invalid XPM header")?
+        .split_whitespace()
+        .map(str::parse::<u32>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| "invalid XPM header")?;
+    if nums.len() < 4 || nums[2] == 0 || nums[3] == 0 || nums[3] > 64 {
+        return Err("invalid XPM header".into());
+    }
+    blanket_codec_common::ImageHeader::new(nums[0], nums[1], "P", 8)
 }
 
 fn color(value: &str) -> Result<[u8; 4], String> {

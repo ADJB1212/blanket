@@ -46,7 +46,7 @@ fn samples(w: usize, h: usize, data: &[u8], bits: i32, big: bool, flip: bool, fo
     Ok(im)
 }
 
-pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
+fn fits_header(data: &[u8]) -> Result<(u32, u32, i32, usize), String> {
     let mut headers = FxHashMap::default();
     let mut pos = 0;
     loop {
@@ -73,10 +73,29 @@ pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
     }
     let width = number("NAXIS1")?;
     let height = if axes == 1 { 1 } else { number("NAXIS2")? };
-    let (w, h) = dimensions(width.try_into().map_err(|_| "invalid FITS width")?, height.try_into().map_err(|_| "invalid FITS height")?)?;
+    let w = width.try_into().map_err(|_| "invalid FITS width")?;
+    let h = height.try_into().map_err(|_| "invalid FITS height")?;
     let start = pos.next_multiple_of(2880);
+    Ok((w, h, number("BITPIX")?, start))
+}
+
+pub(super) fn inspect_fits(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let (w, h, bits, _) = fits_header(data)?;
+    let mode = match bits {
+        8 => "L",
+        16 => "I;16",
+        32 => "I",
+        -32 | -64 => "F",
+        _ => return Err("unsupported FITS sample type".into()),
+    };
+    blanket_codec_common::ImageHeader::new(w, h, mode, bits.unsigned_abs() as u8)
+}
+
+pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
+    let (w, h, bits, start) = fits_header(data)?;
+    let (w, h) = dimensions(w, h)?;
     let source = bytes(data, start, data.len().saturating_sub(start))?;
-    samples(w, h, source, number("BITPIX")?, true, true, "FITS")
+    samples(w, h, source, bits, true, true, "FITS")
 }
 
 pub(super) fn spider_header(data: &[u8]) -> Option<(bool, usize, u32, u32)> {

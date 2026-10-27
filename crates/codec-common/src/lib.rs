@@ -7,6 +7,23 @@ use zerocopy::IntoBytes;
 
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
+#[derive(Debug, PartialEq, Eq)]
+pub struct ImageHeader {
+    pub width: u32,
+    pub height: u32,
+    pub mode: &'static str,
+    pub bit_depth: u8,
+}
+
+impl ImageHeader {
+    pub fn new(width: u32, height: u32, mode: &'static str, bit_depth: u8) -> Result<Self, String> {
+        if width == 0 || height == 0 {
+            return Err("empty image header".into());
+        }
+        Ok(Self { width, height, mode, bit_depth })
+    }
+}
+
 #[expect(unevaluated_default_field_value)]
 pub struct Frame<I = Image> {
     pub image: I,

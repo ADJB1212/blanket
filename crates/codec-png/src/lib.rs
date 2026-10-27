@@ -13,6 +13,20 @@ use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
+    let header = decoder.read_header_info().map_err(|e| e.to_string())?;
+    let mode = match header.color_type {
+        png::ColorType::Grayscale if header.bit_depth == png::BitDepth::One => "1",
+        png::ColorType::Grayscale => "L",
+        png::ColorType::GrayscaleAlpha => "LA",
+        png::ColorType::Indexed => "P",
+        png::ColorType::Rgb => "RGB",
+        png::ColorType::Rgba => "RGBA",
+    };
+    blanket_codec_common::ImageHeader::new(header.width, header.height, mode, header.bit_depth as u8)
+}
+
 fn decoder(data: &[u8]) -> png::Decoder<Cursor<&[u8]>> {
     let mut decoder = png::Decoder::new(Cursor::new(data));
     // Public metadata parsing retains these chunks independently of the raster.

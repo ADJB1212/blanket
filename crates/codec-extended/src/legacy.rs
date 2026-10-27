@@ -62,6 +62,66 @@ pub fn detect(data: &[u8]) -> Option<&'static str> {
     }
 }
 
+pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageHeader, String> {
+    use blanket_codec_common::ImageHeader;
+    let (width, height, mode, depth) = match format {
+        "PCX" => {
+            bytes(data, 0, 128)?;
+            let w = i32::from(word(data, 8, false)?) - i32::from(word(data, 4, false)?) + 1;
+            let h = i32::from(word(data, 10, false)?) - i32::from(word(data, 6, false)?) + 1;
+            let (mode, depth) = match (data[3], data[65]) {
+                (1, 1) => ("1", 1),
+                (1, 2..=4) => ("P", 1),
+                (8, 1) => ("P", 8),
+                (8, 3) => ("RGB", 8),
+                _ => return Err("unsupported PCX layout".into()),
+            };
+            (w.try_into().map_err(|_| "invalid PCX width")?, h.try_into().map_err(|_| "invalid PCX height")?, mode, depth)
+        }
+        "SGI" => {
+            bytes(data, 0, 512)?;
+            let mode = match word(data, 10, true)? {
+                1 => "L",
+                3 => "RGB",
+                4 => "RGBA",
+                _ => return Err("unsupported SGI channels".into()),
+            };
+            if !matches!(data[3], 1 | 2) {
+                return Err("unsupported SGI depth".into());
+            }
+            (u32::from(word(data, 6, true)?), u32::from(word(data, 8, true)?), mode, data[3] * 8)
+        }
+        "MSP" => {
+            bytes(data, 0, 32)?;
+            (u32::from(word(data, 4, false)?), u32::from(word(data, 6, false)?), "1", 1)
+        }
+        "SUN" => {
+            bytes(data, 0, 32)?;
+            let (mode, depth) = match long(data, 12, true)? {
+                1 => ("1", 1),
+                4 => ("P", 4),
+                8 => (if long(data, 28, true)? > 0 { "P" } else { "L" }, 8),
+                24 | 32 => ("RGB", 8),
+                _ => return Err("unsupported Sun depth".into()),
+            };
+            (long(data, 4, true)?, long(data, 8, true)?, mode, depth)
+        }
+        "PIXAR" => {
+            bytes(data, 0, 1024)?;
+            (u32::from(word(data, 418, false)?), u32::from(word(data, 416, false)?), "RGB", 8)
+        }
+        "SPIDER" => {
+            let (_, _, w, h) = scientific::spider_header(data).ok_or("invalid SPIDER header")?;
+            (w, h, "F", 32)
+        }
+        "FITS" => return scientific::inspect_fits(data),
+        "XBM" => return x11::inspect_xbm(data),
+        "XPM" => return x11::inspect_xpm(data),
+        _ => return Err(format!("{format} is a write-only format")),
+    };
+    ImageHeader::new(width, height, mode, depth)
+}
+
 pub fn decode(data: &[u8], format: &str) -> Result<Image, String> {
     match format {
         "PCX" => decode_pcx(data),

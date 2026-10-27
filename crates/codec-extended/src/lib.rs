@@ -91,6 +91,23 @@ fn encode_tga(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     Ok(output)
 }
 
+pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageHeader, String> {
+    let rust_format = match format {
+        "PPM" | "PAM" => ImageFormat::Pnm,
+        "TGA" => ImageFormat::Tga,
+        "DDS" => ImageFormat::Dds,
+        "QOI" => ImageFormat::Qoi,
+        "EPS" => return inspect_eps(data),
+        _ => return legacy::inspect(data, format),
+    };
+    let mut header = blanket_codec_image::inspect_rust_image(data, rust_format)?;
+    if format == "PPM" && matches!(data.get(1), Some(b'1' | b'4')) {
+        header.mode = "1";
+        header.bit_depth = 1;
+    }
+    Ok(header)
+}
+
 pub fn decode_dds(data: &[u8]) -> Result<Image, String> {
     decode_rust_image(data, ImageFormat::Dds, "DDS")
 }
@@ -173,7 +190,7 @@ pub fn ghostscript_available() -> bool {
     Command::new("gs").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }
 
-pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
+fn eps_header(data: &[u8]) -> Result<(&[u8], u32, u32), String> {
     let data = if data.starts_with(b"\xc5\xd0\xd3\xc6") {
         let header = data.get(..12).ok_or("truncated EPS preview header")?;
         let offset = u32::from_le_bytes(header[4..8].try_into().unwrap()) as usize;
@@ -195,14 +212,24 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
     if width < 1.0 || height < 1.0 || width > u32::MAX as f64 || height > u32::MAX as f64 {
         return Err("invalid EPS BoundingBox".into());
     }
-    validate_dimensions(width as u32, height as u32)?;
+    Ok((data, width as u32, height as u32))
+}
+
+fn inspect_eps(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let (_, width, height) = eps_header(data)?;
+    blanket_codec_common::ImageHeader::new(width, height, "RGB", 8)
+}
+
+pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
+    let (data, width, height) = eps_header(data)?;
+    validate_dimensions(width, height)?;
     let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
     let input_path = directory.path().join("input.eps");
     let output_path = directory.path().join("output.ppm");
     std::fs::File::create(&input_path).and_then(|mut file| file.write_all(data)).map_err(|e| e.to_string())?;
     let mut child = Command::new("gs")
         .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dFIXEDMEDIA", "-dEPSFitPage", "-sDEVICE=ppmraw", "-r72"])
-        .arg(format!("-g{}x{}", width as u32, height as u32))
+        .arg(format!("-g{width}x{height}"))
         .arg(format!("-sOutputFile={}", output_path.display()))
         .arg("-f")
         .arg(input_path)

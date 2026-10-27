@@ -9,6 +9,35 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    use tiff::tags::Tag;
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    let bits = decoder.get_tag_u16_vec(Tag::BitsPerSample).unwrap_or_else(|_| vec![1]);
+    let depth = *bits.first().ok_or("missing TIFF sample depth")?;
+    if bits.iter().any(|&b| b != depth) {
+        return Err("mixed TIFF sample depths".into());
+    }
+    let channels = decoder.get_tag_u32(Tag::SamplesPerPixel).unwrap_or(1);
+    let photo = decoder.get_tag_u32(Tag::PhotometricInterpretation).map_err(|e| e.to_string())?;
+    let sample_format = decoder.get_tag_u16_vec(Tag::SampleFormat).unwrap_or_else(|_| vec![1]);
+    let sample_format = *sample_format.first().ok_or("missing TIFF sample format")?;
+    let mode = match (photo, channels, depth, sample_format) {
+        (0 | 1, 1, 1, _) => "1",
+        (0 | 1, 1, 32 | 64, 3) => "F",
+        (0 | 1, 1, 32, _) => "I",
+        (0 | 1, 1, _, _) => "L",
+        (0 | 1, 2, _, _) => "LA",
+        (2 | 6, 3, _, _) => "RGB",
+        (2, 4, _, _) => "RGBA",
+        (3, 1, _, _) => "P",
+        (5, 4, _, _) => "CMYK",
+        (8 | 9, 3, _, _) => "LAB",
+        _ => return Err("unsupported TIFF header layout".into()),
+    };
+    blanket_codec_common::ImageHeader::new(width, height, mode, depth.try_into().map_err(|_| "invalid TIFF depth")?)
+}
+
 fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
         return Ok(None);

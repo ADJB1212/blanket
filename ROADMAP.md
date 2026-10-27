@@ -360,8 +360,9 @@ with new processing semantics exposed explicitly.
 
 #### Codec Controls and Inspection
 
-- [ ] **Header-only inspection** — report dimensions, mode, sample depth, and
-      available container metadata without allocating decoded image rasters
+- [x] **Header-only inspection** — `Image.inspect` reports dimensions, mode,
+      sample depth, and available container metadata without allocating decoded
+      image rasters
 - [ ] **Decode-time thumbnails** — request reduced-resolution decoding where
       supported, making `draft` useful before full raster allocation
 - [ ] **Encoding capability queries** — report supported modes, sample depths,

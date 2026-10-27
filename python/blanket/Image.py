@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from enum import IntEnum
 from operator import index
 from pathlib import Path
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
 from ._blanket import (
     _encode,
     _Image,
+    _inspect,
     _open_sequence,
     enhance_blend,
     filter_merge,
@@ -2061,6 +2063,84 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
     result = Image(image_alpha_composite(im1._native, im2._native))
     result.info.update(im1._metadata_info())
     return result
+
+
+@dataclass(frozen=True)
+class ImageHeader:
+    """Image description and container metadata without a decoded raster.
+
+    Mode uses the backend's header color conventions (some expose RGB/RGBA
+    for converted or indexed storage). bit_depth reports header precision.
+    Indexed PNG/GIF/XPM use P; packed PNG samples retain their encoded depth.
+    For containers, describes the primary image, first TIFF page, GIF canvas,
+    or largest ICO entry. Metadata uses the same keys as Image.info where
+    available; frame timing and controls are not collected.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        header = Image.inspect("photo.png")
+        print(header.size, header.mode, header.bit_depth)
+        ```
+    """
+
+    format: str
+    size: tuple[int, int]
+    mode: str
+    bit_depth: int
+    info: dict[object, object]
+
+    @property
+    def width(self) -> int:
+        """Image width in pixels."""
+        return self.size[0]
+
+    @property
+    def height(self) -> int:
+        """Image height in pixels."""
+        return self.size[1]
+
+
+def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, formats: list[str] | tuple[str, ...] | None = None) -> ImageHeader:
+    """Read image headers and available metadata without decoding pixels.
+
+    Accepts paths and binary streams, with an optional format allowlist.
+    Reads the encoded file into memory and restores seekable stream positions.
+    Pixel data and later frames are not validated. Decoded-pixel limits do not
+    apply; codec header/metadata limits still apply. This does not make an
+    otherwise unsupported image decodable with open().
+
+    Args:
+        fp: Image filename, path-like object, or binary stream.
+        formats: Optional allowlist of format names to inspect.
+
+    Examples:
+        ```python
+        from io import BytesIO
+        from blanket import Image
+
+        stream = BytesIO()
+        Image.new("RGB", (8, 6)).save(stream, "PNG")
+        header = Image.inspect(stream)
+        print(header.size, header.mode, header.bit_depth)
+        ```
+    """
+    if formats is not None and not isinstance(formats, (list, tuple)):
+        raise TypeError("formats must be a list or tuple")
+    position = None
+    if hasattr(fp, "read"):
+        with contextlib.suppress(AttributeError, OSError):
+            position = fp.tell()
+    try:
+        data = _read_bytes(fp)
+    finally:
+        if position is not None:
+            with contextlib.suppress(AttributeError, OSError):
+                cast("BinaryIO", fp).seek(position)
+    format, size, mode, bit_depth = _inspect(data, formats)
+    info = read_metadata(data, "HEIF" if format == "AVIF" else format)
+    return ImageHeader(format, size, mode, bit_depth, info)
 
 
 def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None) -> Image:

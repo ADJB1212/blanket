@@ -34,6 +34,8 @@ with Image.open("photo.jpg") as image:
   using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.
 - **Image hashing.** Find visually similar images using native aHash, dHash,
   and pHash kernels, with no NumPy or SciPy runtime dependency.
+- **Header inspection.** Use `Image.inspect(path_or_stream)` to read dimensions,
+  mode, sample depth, and available metadata without allocating decoded rasters.
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
   PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
@@ -160,6 +162,24 @@ state instead of a full raster or encoded output. It supports bilevel, grayscale
 RGB, and alpha, with 10/12/16-bit samples for L/RGB/RGBA. Streaming does not
 retain container metadata or support animation. See the
 [ImageFile reference](https://adjb1212.github.io/blanket-docs/ImageFile/) for details.
+
+### Inspect an image without decoding pixels
+
+```python
+from blanket import Image
+
+header = Image.inspect("photo.jpg")
+print(header.format, header.size, header.mode, header.bit_depth)
+print(header.info.get("exif"))
+```
+
+Inspection reads the encoded file into memory and restores seekable stream
+positions. It describes the primary image, first TIFF page, GIF canvas, or
+largest ICO entry. Header modes and depths can differ from decoded images
+(for example, indexed PNG reports `P` and its packed sample depth). It reads
+available metadata using the same keys as `Image.info`, without collecting
+frame controls or validating compressed pixels and later frames. Codec header
+and metadata limits apply; decoded-pixel limits apply when opening the image.
 
 ### Optimize a save without additional loss
 

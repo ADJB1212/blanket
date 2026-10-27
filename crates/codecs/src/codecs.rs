@@ -184,6 +184,40 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
     Ok(format)
 }
 
+type Inspection = (String, (u32, u32), String, u8);
+
+#[pyfunction]
+pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Inspection> {
+    let format = input_format(data, formats)?;
+    let header = py
+        .detach(|| match format {
+            ImageFormat::Png => blanket_codec_png::inspect(data),
+            ImageFormat::Jpeg => blanket_codec_jpeg::inspect(data),
+            ImageFormat::Jxl => blanket_codec_jxl::inspect(data),
+            ImageFormat::Tiff => blanket_codec_tiff::inspect(data),
+            ImageFormat::Webp => blanket_codec_webp::inspect(data),
+            ImageFormat::Heif | ImageFormat::Avif => blanket_codec_heif::inspect(data),
+            ImageFormat::Jpeg2000 => blanket_codec_jpeg2000::inspect(data),
+            ImageFormat::Bmp => blanket_codec_bmp_ico::inspect_bmp(data),
+            ImageFormat::Ico => blanket_codec_bmp_ico::inspect_ico(data),
+            ImageFormat::Gif => {
+                let header = data.get(..13).ok_or_else(|| "truncated GIF header".to_owned());
+                header.and_then(|h| {
+                    blanket_codec_common::ImageHeader::new(
+                        u32::from(u16::from_le_bytes([h[6], h[7]])),
+                        u32::from(u16::from_le_bytes([h[8], h[9]])),
+                        "P",
+                        8,
+                    )
+                })
+            }
+            _ => blanket_codec_extended::inspect(data, format.as_str()),
+        })
+        .map_err(UnidentifiedImageError::new_err)?;
+    let name = if format == ImageFormat::Ppm && data.starts_with(b"P7") { "PAM" } else { format.as_str() };
+    Ok((name.into(), (header.width, header.height), header.mode.into(), header.bit_depth))
+}
+
 type OpenSequence = (Vec<Image>, Vec<(Option<f64>, u8, u8)>, Option<u32>, bool);
 
 #[pyfunction]

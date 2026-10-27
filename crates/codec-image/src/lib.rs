@@ -4,6 +4,25 @@ use blanket_codec_common::validate_dimensions;
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageFormat as RustFormat};
 
+pub fn inspect_rust_image(data: &[u8], format: RustFormat) -> Result<blanket_codec_common::ImageHeader, String> {
+    let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions();
+    let (mode, depth) = match decoder.color_type() {
+        ColorType::L8 => ("L", 8),
+        ColorType::La8 => ("LA", 8),
+        ColorType::Rgb8 => ("RGB", 8),
+        ColorType::Rgba8 => ("RGBA", 8),
+        ColorType::L16 => ("L", 16),
+        ColorType::La16 => ("LA", 16),
+        ColorType::Rgb16 => ("RGB", 16),
+        ColorType::Rgba16 => ("RGBA", 16),
+        ColorType::Rgb32F => ("RGB", 32),
+        ColorType::Rgba32F => ("RGBA", 32),
+        _ => return Err("unsupported header color type".into()),
+    };
+    blanket_codec_common::ImageHeader::new(width, height, mode, depth)
+}
+
 pub fn color_type(mode: PixelMode) -> ExtendedColorType {
     match mode {
         PixelMode::One | PixelMode::L => ExtendedColorType::L8,

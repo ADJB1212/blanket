@@ -50,6 +50,33 @@ pub enum JxlThreads {
     Fixed(usize),
 }
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let mut decoder = decoder_builder().build().map_err(|e| e.to_string())?;
+    let mut session = decoder.session(Events::BASIC_INFO).map_err(|e| e.to_string())?;
+    let mut input = data;
+    loop {
+        match session.process(&mut input).map_err(|e| e.to_string())? {
+            Event::BasicInfo(info) => {
+                let mode = match (info.num_color_channels, info.alpha_bits > 0) {
+                    (1, false) => "L",
+                    (1, true) => "LA",
+                    (3, false) => "RGB",
+                    (3, true) => "RGBA",
+                    _ => return Err("unsupported JPEG XL channel layout".into()),
+                };
+                return blanket_codec_common::ImageHeader::new(
+                    info.xsize,
+                    info.ysize,
+                    mode,
+                    info.bits_per_sample.try_into().map_err(|_| "invalid JPEG XL depth")?,
+                );
+            }
+            Event::NeedMoreInput | Event::Success => return Err("incomplete JPEG XL header".into()),
+            _ => (),
+        }
+    }
+}
+
 pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness};
 

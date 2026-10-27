@@ -17,6 +17,10 @@ thread_local! {
     static JPEG_DECODER: RefCell<Option<decode::Decoder>> = const { RefCell::new(None) };
 }
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    decode::Decoder::new()?.header(data)
+}
+
 fn with_codec<T, R, E>(cache: &RefCell<Option<T>>, create: impl FnOnce() -> Result<T, E>, run: impl FnOnce(&mut T) -> Result<R, E>) -> Result<R, E> {
     let mut cached = cache.borrow_mut();
     if cached.is_none() {

@@ -7,7 +7,38 @@ use pyo3::prelude::*;
 
 const PNG_SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
 
-pub fn decode_ico(data: &[u8]) -> Result<Image, String> {
+pub fn inspect_bmp(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    blanket_codec_image::inspect_rust_image(data, RustFormat::Bmp)
+}
+
+pub fn inspect_ico(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let (entry, payload) = ico_entry(data)?;
+    if payload.starts_with(PNG_SIGNATURE) {
+        let header = blanket_codec_png::inspect(payload)?;
+        let dimension = |v: u8| if v == 0 { 256 } else { u32::from(v) };
+        if (header.width, header.height) != (dimension(entry[0]), dimension(entry[1])) {
+            return Err("ICO directory and PNG dimensions differ".into());
+        }
+        Ok(header)
+    } else {
+        let dib = payload.get(..40).ok_or("truncated ICO bitmap header")?;
+        let width = if entry[0] == 0 { 256 } else { u32::from(entry[0]) };
+        let height = if entry[1] == 0 { 256 } else { u32::from(entry[1]) };
+        let size = u32::from_le_bytes(dib[..4].try_into().unwrap()) as usize;
+        if size < 40
+            || size > payload.len()
+            || i32::from_le_bytes(dib[4..8].try_into().unwrap()) != width as i32
+            || i32::from_le_bytes(dib[8..12].try_into().unwrap()) != (height * 2) as i32
+            || u16::from_le_bytes([dib[12], dib[13]]) != 1
+            || !matches!(u16::from_le_bytes([dib[14], dib[15]]), 1 | 4 | 8 | 16 | 24 | 32)
+        {
+            return Err("invalid ICO bitmap header".into());
+        }
+        blanket_codec_common::ImageHeader::new(width, height, "RGBA", 8)
+    }
+}
+
+fn ico_entry(data: &[u8]) -> Result<(&[u8; 16], &[u8]), String> {
     let count = data.get(4..6).ok_or("truncated ICO header")?;
     let count = usize::from(u16::from_le_bytes([count[0], count[1]]));
     let directory = data.get(6..6 + count * 16).ok_or("truncated ICO directory")?;
@@ -22,6 +53,12 @@ pub fn decode_ico(data: &[u8]) -> Result<Image, String> {
     let offset = u32::from_le_bytes(entry[12..16].try_into().unwrap()) as usize;
     let end = offset.checked_add(length).ok_or("ICO payload overflow")?;
     let payload = data.get(offset..end).ok_or("truncated ICO payload")?;
+    Ok((entry, payload))
+}
+
+pub fn decode_ico(data: &[u8]) -> Result<Image, String> {
+    let (entry, payload) = ico_entry(data)?;
+    let dimension = |v: u8| if v == 0 { 256_u32 } else { u32::from(v) };
     if payload.starts_with(PNG_SIGNATURE) {
         let mut image = blanket_codec_png::decode_png(payload)?;
         image.format = Some("ICO".into());

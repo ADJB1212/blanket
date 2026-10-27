@@ -7,6 +7,11 @@ use image::ImageFormat as RustFormat;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+    let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
+    blanket_codec_common::ImageHeader::new(info.width, info.height, if info.has_alpha { "RGBA" } else { "RGB" }, 8)
+}
+
 pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     let features = webpx::ImageInfo::from_webp(data).map_err(|error| error.to_string())?;
     validate_dimensions(features.width, features.height)?;
