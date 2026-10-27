@@ -2,6 +2,7 @@
 pub mod cache;
 pub mod cms;
 pub mod color;
+pub mod float;
 pub mod parallel;
 pub mod pixels;
 pub mod raster;

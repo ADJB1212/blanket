@@ -35,9 +35,18 @@ def test_fromarray_supports_strided_arrays() -> None:
 
 def test_fromarray_rejects_unsupported_arrays() -> None:
     with pytest.raises(TypeError, match="cannot handle this data type"):
-        Image.fromarray(np.zeros((3, 5, 3), dtype=np.float32))
+        Image.fromarray(np.zeros((3, 5, 3), dtype=np.float16))
     with pytest.raises(TypeError, match="cannot handle this data type"):
         Image.fromarray(np.zeros((3, 5, 2), dtype=np.uint8))
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("channels,mode", [(3, "RGB;F"), (4, "RGBA;F")])
+def test_fromarray_supports_float_color(dtype: object, channels: int, mode: str) -> None:
+    values = np.arange(3 * 5 * channels, dtype=dtype).reshape(3, 5, channels) / 4
+    image = Image.fromarray(values)
+    assert (image.mode, image.size, image.bit_depth) == (mode, (5, 3), 32)
+    assert image.tobytes() == values.astype("<f4").tobytes()
 
 
 def test_path_format_inference(tmp_path: object) -> None:

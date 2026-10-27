@@ -53,6 +53,8 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_d
         match mode {
             PixelMode::One | PixelMode::L => spare.fill(std::mem::MaybeUninit::new(color[0])),
             PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
+            PixelMode::RgbF => fill_pixels::<12>(spare, &color),
+            PixelMode::RgbaF => fill_pixels::<16>(spare, &color),
             PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => fill_pixels::<3>(spare, &color),
             PixelMode::Rgba | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
@@ -60,8 +62,8 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_d
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
     });
-    if mode == PixelMode::F {
-        Image::from_float_bytes(size.0, size.1, pixels)
+    if mode.is_float() {
+        Image::from_color_float_bytes(size.0, size.1, mode, pixels)
     } else if mode.is_integer() {
         Image::from_integer_bytes(size.0, size.1, mode, pixels)
     } else {
@@ -172,7 +174,7 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
     }
     let source_pixels = source.raw_data()?;
     let mask_pixels = paste_mask(mask, source)?;
-    let stride = image.mode.sample_bytes();
+    let stride = image.raw_bytes_per_pixel();
     let width = image.width as i64;
     let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
     py.detach(|| {
@@ -207,11 +209,13 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
                 if alpha == 255 {
                     pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
                 } else if alpha != 0 {
-                    if image.mode == PixelMode::F {
-                        let old = f32::from_le_bytes(pixels[dst..dst + 4].try_into().unwrap());
-                        let new = f32::from_le_bytes(source_pixels[src..src + 4].try_into().unwrap());
-                        let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
-                        pixels[dst..dst + 4].copy_from_slice(&mixed.to_le_bytes());
+                    if image.mode.is_float() {
+                        for c in (0..stride).step_by(4) {
+                            let old = f32::from_le_bytes(pixels[dst + c..dst + c + 4].try_into().unwrap());
+                            let new = f32::from_le_bytes(source_pixels[src + c..src + c + 4].try_into().unwrap());
+                            let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
+                            pixels[dst + c..dst + c + 4].copy_from_slice(&mixed.to_le_bytes());
+                        }
                         continue;
                     }
                     for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {

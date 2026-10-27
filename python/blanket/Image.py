@@ -1,12 +1,12 @@
 """Pillow-shaped image constructors and the Image type, backed by Blanket's Rust extension.
 
 Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
-`YCbCr`, `LAB`, integer `I`/`I;16` variants, and floating-point `F`.
+`YCbCr`, `LAB`, integer `I`/`I;16` variants, and float `F`/`RGB;F`/`RGBA;F`.
 """
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "collections.abc"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc"}
 
 import contextlib
 import math
@@ -18,6 +18,7 @@ import sys
 import tempfile
 from dataclasses import dataclass
 from enum import IntEnum
+from io import BytesIO
 from operator import index
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Protocol, Self, cast
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
     from .ImagePalette import ImagePalette
 
 from ._blanket import (
+    _decode_region,
     _encode,
     _Image,
     _inspect,
@@ -44,6 +46,8 @@ from ._blanket import (
     image_putalpha,
     ops_affine,
     ops_canvas,
+    ops_color_composite,
+    ops_color_resize,
     ops_entropy,
     ops_histogram,
     ops_lut,
@@ -104,6 +108,8 @@ _EXTENSIONS = {
     ".jpx": "JPEG2000",
 }
 _BANDS = {
+    "RGB;F": ("R", "G", "B"),
+    "RGBA;F": ("R", "G", "B", "A"),
     "1": ("1",),
     "L": ("L",),
     "I": ("I",),
@@ -1168,13 +1174,15 @@ class Image:
             mask = mask.copy()
         image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
 
-    def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0)) -> None:
+    def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0), *, linear_light: bool = False, transfer: str = "srgb") -> None:
         """Composite an RGBA source region onto this image in place.
 
         Args:
             im: RGBA source image.
             dest: Destination `(x, y)` position.
             source: Source `(x, y)` origin or `(left, top, right, bottom)` region.
+            linear_light: Decode the selected transfer before source-over blending.
+            transfer: "srgb" or "linear"; applies when linear_light is true.
 
         Examples:
             ```python
@@ -1197,6 +1205,10 @@ class Image:
         region = source + im.size if len(source) == 2 else source
         overlay = im if region == (0, 0, *im.size) else im.crop(region)
         box = (*dest, dest[0] + overlay.width, dest[1] + overlay.height)
+        if linear_light or self.mode == "RGBA;F":
+            background = self.crop(box)
+            self.paste(alpha_composite(background, overlay, linear_light=linear_light, transfer=transfer), box)
+            return
         if box == (0, 0, *self.size):
             overlay = overlay.copy() if overlay._native is self._native else overlay
             image_alpha_composite_inplace(self._native, overlay._native)
@@ -1321,7 +1333,7 @@ class Image:
                 raise ValueError("bad transparency mask")
         return ops_histogram(self._native, None if mask is None else mask._native)
 
-    def getextrema(self) -> tuple[int | float, int | float] | tuple[tuple[int, int], ...] | None:
+    def getextrema(self) -> tuple[int | float, int | float] | tuple[tuple[int | float, int | float], ...] | None:
         """Return the minimum and maximum sample value of each band.
 
         Examples:
@@ -1332,6 +1344,8 @@ class Image:
             extrema = image.getextrema()
             ```
         """
+        if self.mode in ("RGB;F", "RGBA;F"):
+            return tuple(cast("tuple[float, float]", self.getchannel(c).getextrema()) for c in self.getbands()) if self.width * self.height else None
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B"):
             return self._native.getextrema_scalar()
         ranges = self._native.getextrema()
@@ -1626,12 +1640,22 @@ class Image:
             left, upper, right, lower = box
             if type(left) is not int or type(upper) is not int or type(right) is not int or type(lower) is not int:
                 left, upper, right, lower = round(left), round(upper), round(right), round(lower)
-            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (4 if self.mode == "F" else len(self._bands)))
+            native = ops_canvas(self._native, (right - left, lower - upper), (-left, -upper), [0] * (len(self._bands) * (4 if self.mode in ("F", "RGB;F", "RGBA;F") else 1)))
         result = Image(native)
         result.info.update(self._metadata_info())
         return result
 
-    def resize(self, size: tuple[int, int], resample: int | None = None, box: tuple[float, float, float, float] | None = None, reducing_gap: float | None = None) -> Image:
+    def resize(
+        self,
+        size: tuple[int, int],
+        resample: int | None = None,
+        box: tuple[float, float, float, float] | None = None,
+        reducing_gap: float | None = None,
+        *,
+        linear_light: bool = False,
+        transfer: str = "srgb",
+        premultiply_alpha: bool = True,
+    ) -> Image:
         """Return a resized copy, using BICUBIC unless a filter is specified.
 
         ``box`` selects a source rectangle within the image. ``reducing_gap``
@@ -1642,6 +1666,9 @@ class Image:
             resample: Filter from `Image.Resampling`; None selects BICUBIC, or NEAREST for indexed images.
             box: Optional floating-point source rectangle.
             reducing_gap: Optional pre-reduction optimization threshold; must be at least 1.0.
+            linear_light: Decode the selected transfer before filtering RGB/RGBA.
+            transfer: "srgb" or "linear"; applies when linear_light is true.
+            premultiply_alpha: Filter premultiplied color; applies to float or linear-light resizing.
 
         Examples:
             ```python
@@ -1671,6 +1698,12 @@ class Image:
             raise ValueError("invalid resize box")
         self.load()
         native = self._native
+        if transfer not in ("srgb", "linear"):
+            raise ValueError("transfer must be 'srgb' or 'linear'")
+        if linear_light or self.mode in ("RGB;F", "RGBA;F"):
+            result = Image(ops_color_resize(native, size, method, box, linear_light and transfer == "srgb", premultiply_alpha))
+            result.info.update(self._metadata_info())
+            return result
         if size == self.size and box == (0, 0, self.width, self.height):
             native = ops_transpose(native, 1)
         else:
@@ -1948,6 +1981,12 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     if mode == "F":
         value = 0.0 if color is None else float(color)
         return Image(image_new(mode, dimensions, struct.pack("<f", value)))
+    if mode in ("RGB;F", "RGBA;F"):
+        channels = 3 if mode == "RGB;F" else 4
+        values = (0.0,) * channels if color is None else color if isinstance(color, tuple) else (float(color),) * channels
+        if len(values) != channels:
+            raise ValueError("wrong number of color components")
+        return Image(image_new(mode, dimensions, struct.pack("<" + "f" * channels, *values)))
     native_mode = "L" if mode == "P" else mode
     if mode == "HSV" and isinstance(color, str):
         color = frombytes("RGB", (1, 1), bytes(color_pixel(color, "RGB"))).convert("HSV").getpixel((0, 0))
@@ -2040,7 +2079,7 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
     return result
 
 
-def alpha_composite(im1: Image, im2: Image) -> Image:
+def alpha_composite(im1: Image, im2: Image, *, linear_light: bool = False, transfer: str = "srgb") -> Image:
     """Return im2 composited over im1; both must be equal-sized RGBA of matching depth.
 
     High-depth inputs use straight-alpha source-over with nearest-integer
@@ -2049,6 +2088,8 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
     Args:
         im1: First image; both inputs must have the same mode and dimensions.
         im2: Second image.
+        linear_light: Decode the selected transfer before source-over blending.
+        transfer: "srgb" or "linear"; applies when linear_light is true.
 
     Examples:
         ```python
@@ -2060,7 +2101,12 @@ def alpha_composite(im1: Image, im2: Image) -> Image:
         ```
     """
 
-    result = Image(image_alpha_composite(im1._native, im2._native))
+    if transfer not in ("srgb", "linear"):
+        raise ValueError("transfer must be 'srgb' or 'linear'")
+    if linear_light or im1.mode == "RGBA;F":
+        result = Image(ops_color_composite(im1._native, im2._native, linear_light and transfer == "srgb"))
+    else:
+        result = Image(image_alpha_composite(im1._native, im2._native))
     result.info.update(im1._metadata_info())
     return result
 
@@ -2194,6 +2240,42 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     image._frames = decoded if len(decoded) > 1 else None
     image._info = decoded[0]._info
     return image
+
+
+def open_region(
+    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, box: tuple[int, int, int, int], *, fallback: str = "error", formats: list[str] | tuple[str, ...] | None = None
+) -> Image:
+    """Decode a nonempty region of the first image/page.
+
+    TIFF unsigned 8/16-bit chunky L/RGB/straight RGBA reads only intersecting
+    strips or tiles. Other layouts require fallback="full", which eagerly
+    opens the source and crops frame zero. The default rejects fallback.
+    Encoded input is read in full; normal source dimension limits still apply.
+    """
+    if fallback not in ("error", "full"):
+        raise ValueError("fallback must be 'error' or 'full'")
+    if formats is not None and not isinstance(formats, (list, tuple)):
+        raise TypeError("formats must be a list or tuple")
+    box = tuple(index(v) for v in box)
+    if len(box) != 4:
+        raise ValueError("box must contain four integers")
+    data = _read_bytes(fp)
+    header = inspect(BytesIO(data), formats)
+    left, top, right, bottom = box
+    if not (0 <= left < right <= header.size[0] and 0 <= top < bottom <= header.size[1]):
+        raise ValueError("region must be a nonempty rectangle inside the image")
+    native = _decode_region(data, box, formats)
+    if native is None:
+        if fallback == "error":
+            raise NotImplementedError("region decoding unavailable; use fallback='full'")
+        with open(BytesIO(data), formats=formats) as source:
+            result = source.crop(box)
+    else:
+        result = Image(native)
+        result.info.update(read_metadata(data, result.format))
+    result.info["decode_region"] = box
+    result.info["decode_fallback"] = native is None
+    return result
 
 
 def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int = 8) -> Image:

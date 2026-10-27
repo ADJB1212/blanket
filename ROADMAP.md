@@ -313,15 +313,17 @@ with new processing semantics exposed explicitly.
       unsigned `I;16` variants retain their storage mode and byte order.
       Portable SIMD covers sample packing, enhancement, convolution, small
       ranks, blur, unsharp masking, LUTs, compositing, and statistical moments
-- [ ] **Floating-point color images** — support RGB/RGBA float storage and
-      processing with defined handling of negative values, NaNs, and infinities
-- [ ] **Linear-light processing** — opt-in resizing and compositing in linear
-      light, with explicit alpha premultiplication and transfer functions
+- [x] **Floating-point color images** — `RGB;F`/`RGBA;F` float32 storage,
+      array exchange, conversion, crop/transpose, resize, paste, source-over,
+      and TIFF I/O, with defined negative and nonfinite sample handling
+- [x] **Linear-light processing** — opt-in resizing and source-over compositing
+      with sRGB/linear transfer selection and explicit resize alpha premultiplication
 
 #### Large Images and Resource Control
 
-- [ ] **Region and tile decoding** — decode requested regions where codecs
-      support it, with explicit fallback behavior for full-image decoders
+- [x] **Region and tile decoding** — `Image.open_region` reads intersecting
+      TIFF strips/tiles for unsigned 8/16-bit chunky L/RGB/straight RGBA;
+      other layouts/codecs require explicit `fallback="full"`
 - [ ] **Lazy frame access** — opt-in on-demand animation and TIFF page decoding
       with bounded caching and documented seeking and frame-edit behavior
 - [ ] **Processing budgets** — configurable memory, decoded-pixel, frame-count,

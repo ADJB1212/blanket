@@ -9,6 +9,66 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
+pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option<Image>, String> {
+    use tiff::tags::Tag;
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    validate_dimensions(width, height)?;
+    let (left, top, right, bottom) = bounds;
+    if left >= right || top >= bottom || right > width || bottom > height {
+        return Err("region must be a nonempty rectangle inside the image".into());
+    }
+    if decoder.get_tag_u32(Tag::PlanarConfiguration).unwrap_or(1) != 1
+        || decoder.get_tag_u32(Tag::PhotometricInterpretation).is_ok_and(|v| !matches!(v, 1 | 2))
+        || decoder.get_tag_u16_vec(Tag::SampleFormat).is_ok_and(|v| v.iter().any(|&f| f != 1))
+        || decoder.get_tag_u16_vec(Tag::ExtraSamples).is_ok_and(|v| v.contains(&1))
+    {
+        return Ok(None);
+    }
+    let (mode, depth) = match decoder.colortype().map_err(|e| e.to_string())? {
+        tiff::ColorType::Gray(d @ (8 | 16)) => (PixelMode::L, d),
+        tiff::ColorType::RGB(d @ (8 | 16)) => (PixelMode::Rgb, d),
+        tiff::ColorType::RGBA(d @ (8 | 16)) => (PixelMode::Rgba, d),
+        _ => return Ok(None),
+    };
+    let (cw, ch) = decoder.chunk_dimensions();
+    if cw == 0 || ch == 0 {
+        return Err("invalid TIFF chunk dimensions".into());
+    }
+    let across = width.div_ceil(cw);
+    let stride = mode.channels() * (depth as usize / 8);
+    let ow = (right - left) as usize;
+    let mut pixels = blanket_core::raster::alloc_pixels(ow * (bottom - top) as usize * stride).map_err(|e| e.to_string())?;
+    for cy in top / ch..=(bottom - 1) / ch {
+        for cx in left / cw..=(right - 1) / cw {
+            let index = cy * across + cx;
+            let bytes = match decoder.read_chunk(index).map_err(|e| e.to_string())? {
+                tiff::decoder::DecodingResult::U8(v) => v,
+                tiff::decoder::DecodingResult::U16(v) => v.into_iter().flat_map(u16::to_le_bytes).collect(),
+                _ => return Err("unexpected TIFF sample type".into()),
+            };
+            let (w, h) = decoder.chunk_data_dimensions(index);
+            if bytes.len() != w as usize * h as usize * stride {
+                return Err("invalid TIFF chunk sample count".into());
+            }
+            let x0 = left.max(cx * cw);
+            let x1 = right.min(cx * cw + w);
+            for y in top.max(cy * ch)..bottom.min(cy * ch + h) {
+                let src = ((y - cy * ch) as usize * w as usize + (x0 - cx * cw) as usize) * stride;
+                let dst = ((y - top) as usize * ow + (x0 - left) as usize) * stride;
+                let len = (x1 - x0) as usize * stride;
+                pixels[dst..dst + len].copy_from_slice(&bytes[src..src + len]);
+            }
+        }
+    }
+    let result = if depth == 8 {
+        Image::from_pixels(right - left, bottom - top, mode, pixels, Some("TIFF".into()))
+    } else {
+        Image::from_sample_bytes(right - left, bottom - top, mode, pixels, depth, Some("TIFF".into()))
+    };
+    result.map(Some).map_err(|e| e.to_string())
+}
+
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
     use tiff::tags::Tag;
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
@@ -25,6 +85,8 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     let mode = match (photo, channels, depth, sample_format) {
         (0 | 1, 1, 1, _) => "1",
         (0 | 1, 1, 32 | 64, 3) => "F",
+        (2, 3, 32, 3) => "RGB;F",
+        (2, 4, 32, 3) => "RGBA;F",
         (0 | 1, 1, 32, _) => "I",
         (0 | 1, 1, _, _) => "L",
         (0 | 1, 2, _, _) => "LA",
@@ -75,16 +137,19 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
     {
         return Ok(Some(image));
     }
-    if decoder.colortype().ok() != Some(tiff::ColorType::Gray(32)) {
-        return Ok(None);
-    }
+    let mode = match decoder.colortype().ok() {
+        Some(tiff::ColorType::Gray(32)) => PixelMode::F,
+        Some(tiff::ColorType::RGB(32)) => PixelMode::RgbF,
+        Some(tiff::ColorType::RGBA(32)) => PixelMode::RgbaF,
+        _ => return Ok(None),
+    };
     let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
     validate_dimensions(width, height)?;
     let tiff::decoder::DecodingResult::F32(values) = decoder.read_image().map_err(|error| error.to_string())? else {
         return Ok(None);
     };
-    let mut image =
-        Image::from_float_bytes(width, height, values.into_iter().flat_map(f32::to_le_bytes).collect()).map_err(|error| error.to_string())?;
+    let mut image = Image::from_color_float_bytes(width, height, mode, values.into_iter().flat_map(f32::to_le_bytes).collect())
+        .map_err(|error| error.to_string())?;
     image.format = Some("TIFF".to_owned());
     Ok(Some(image))
 }
@@ -263,6 +328,8 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     let (samples, bits, photometric) = match image.mode {
         PixelMode::L => (1_u16, 8_u16, 1_u16),
         PixelMode::F => (1, 32, 1),
+        PixelMode::RgbF => (3, 32, 2),
+        PixelMode::RgbaF => (4, 32, 2),
         PixelMode::Rgb => (3, 8, 2),
         PixelMode::Rgba => (4, 8, 2),
         PixelMode::Cmyk => (4, 8, 5),
@@ -284,10 +351,10 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         (279, 4, 1, length),
         (284, 3, 1, 1),
     ];
-    if image.mode == PixelMode::Rgba {
+    if matches!(image.mode, PixelMode::Rgba | PixelMode::RgbaF) {
         entries.push((338, 3, 1, 2));
     }
-    if image.mode == PixelMode::F {
+    if image.mode.is_float() {
         entries.push((339, 3, 1, 3));
     }
     let size = ifd_offset + 2 + entries.len() * 12 + 4;
@@ -386,16 +453,7 @@ pub fn encode_float_tiff(image: &Image) -> PyResult<Vec<u8>> {
     if image.width == 0 || image.height == 0 {
         return Err(PyValueError::new_err("cannot encode an empty image"));
     }
-    if cfg!(target_endian = "little") {
-        return encode_raw_tiff(image, image.raw_data()?);
-    }
-    let samples: Vec<f32> = image.raw_data()?.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
-    let mut output = Cursor::new(Vec::new());
-    tiff::encoder::TiffEncoder::new(&mut output)
-        .map_err(codec_error)?
-        .write_image::<tiff::encoder::colortype::Gray32Float>(image.width, image.height, &samples)
-        .map_err(codec_error)?;
-    return Ok(output.into_inner());
+    encode_raw_tiff(image, image.raw_data()?)
 }
 
 pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
@@ -453,9 +511,14 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
     };
     {
         let mut encoder = TiffEncoder::new(&mut output).map_err(codec_error)?.with_compression(compression);
-        if image.mode == PixelMode::F {
+        if image.mode.is_float() {
             let values = image.raw_data()?.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>();
-            encoder.write_image::<colortype::Gray32Float>(image.width, image.height, &values).map_err(codec_error)?;
+            match image.mode {
+                PixelMode::F => encoder.write_image::<colortype::Gray32Float>(image.width, image.height, &values),
+                PixelMode::RgbF => encoder.write_image::<colortype::RGB32Float>(image.width, image.height, &values),
+                _ => encoder.write_image::<colortype::RGBA32Float>(image.width, image.height, &values),
+            }
+            .map_err(codec_error)?;
         } else if image.bit_depth > 8 {
             let values = blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth);
             match image.mode {

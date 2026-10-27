@@ -21,6 +21,8 @@ type BoxF = (f64, f64, f64, f64);
 type Mesh = Vec<(BoxI, [f64; 8])>;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(ops_color_resize, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_color_composite, module)?)?;
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
@@ -45,6 +47,38 @@ fn buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
     Ok(result)
 }
 
+#[pyfunction]
+fn ops_color_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool) -> PyResult<Image> {
+    let prepared = py.detach(|| blanket_core::float::prepare(image, srgb, premultiply))?;
+    let resized = ops_resize(py, &prepared, size, method, bounds, None)?;
+    py.detach(|| blanket_core::float::finish(&resized, image, srgb, premultiply))
+}
+
+#[pyfunction]
+fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
+    if background.width != foreground.width
+        || background.height != foreground.height
+        || background.mode != foreground.mode
+        || background.bit_depth != foreground.bit_depth
+        || !matches!(background.mode, PixelMode::Rgba | PixelMode::RgbaF)
+    {
+        return Err(PyValueError::new_err("compositing requires matching RGBA images"));
+    }
+    py.detach(|| {
+        let back = blanket_core::float::prepare(background, srgb, true)?;
+        let front = blanket_core::float::prepare(foreground, srgb, true)?;
+        let mut values = blanket_core::float::values(&back)?;
+        let source = blanket_core::float::values(&front)?;
+        for (b, f) in values.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks::<4>().0) {
+            for c in 0..4 {
+                b[c] = f[c] + b[c] * (1.0 - f[3]);
+            }
+        }
+        let result = Image::from_color_float_bytes(back.width, back.height, back.mode, values.into_iter().flat_map(f32::to_le_bytes).collect())?;
+        blanket_core::float::finish(&result, background, srgb, true)
+    })
+}
+
 fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
     let len = (size.0 as usize)
         .checked_mul(size.1 as usize)
@@ -56,8 +90,8 @@ fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
 }
 
 fn output(image: &Image, size: (u32, u32), pixels: Vec<u8>) -> PyResult<Image> {
-    if image.mode == PixelMode::F {
-        return Image::from_float_bytes(size.0, size.1, pixels);
+    if image.mode.is_float() {
+        return Image::from_color_float_bytes(size.0, size.1, image.mode, pixels);
     }
     if image.mode.is_integer() {
         return Image::from_integer_bytes(size.0, size.1, image.mode, pixels);
@@ -91,6 +125,9 @@ fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, source_r
 
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
+    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+        return (0..image.mode.channels()).map(|c| image.getchannel(py, c)).collect();
+    }
     if image.mode.is_wide_scalar() {
         return image.copy(py).map(|copy| vec![copy]);
     }
@@ -426,10 +463,10 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 #[pyfunction]
 fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<u8>) -> PyResult<Image> {
     let source = image.raw_data()?;
-    if fill.len() != image.mode.channels() * if image.mode == PixelMode::F { 4 } else { 1 } {
+    if fill.len() != image.mode.channels() * if image.mode.is_float() { 4 } else { 1 } {
         return Err(PyValueError::new_err("invalid fill color"));
     }
-    let fill = if image.mode == PixelMode::F {
+    let fill = if image.mode.is_float() {
         fill
     } else if image.mode.is_integer() {
         match image.mode {
@@ -532,6 +569,8 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
         py.detach(|| match c {
             2 => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
             4 => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            12 => transpose::<12>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            16 => transpose::<16>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
             _ => unreachable!(),
         });
         return output(image, size, pixels);
@@ -818,6 +857,9 @@ fn unpremultiply_image(mode: PixelMode, pixels: &mut [u8]) {
 /// Integer box reduction used by resize's reducing_gap optimization.
 #[pyfunction]
 fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32)) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+        return Err(PyValueError::new_err("use resize for float color images"));
+    }
     let (fx, fy) = factor;
     let (left, top, right, bottom) = bounds;
     if fx == 0 || fy == 0 || left > right || top > bottom || right > image.width || bottom > image.height {
@@ -1053,6 +1095,21 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         || b[3] < b[1]
     {
         return Err(PyValueError::new_err("invalid resize box"));
+    }
+    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+        let bands = (0..image.mode.channels())
+            .map(|c| {
+                let band = image.getchannel(py, c)?;
+                ops_resize(py, &band, size, method, bounds, reducing_gap)
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let mut pixels = buffer(size, image.raw_bytes_per_pixel())?;
+        for (i, p) in pixels.chunks_exact_mut(image.raw_bytes_per_pixel()).enumerate() {
+            for (c, band) in bands.iter().enumerate() {
+                p[c * 4..c * 4 + 4].copy_from_slice(&band.raw_data()?[i * 4..i * 4 + 4]);
+            }
+        }
+        return output(image, size, pixels);
     }
     if image.mode.is_wide_scalar() {
         return py.detach(|| resize_integer(image, size, b, method));
@@ -1684,6 +1741,9 @@ fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &Neares
 pub fn ops_affine(
     py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, mut fill: Vec<u8>, color_string: bool,
 ) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+        return Err(PyValueError::new_err("affine transforms do not support float color images"));
+    }
     if image.mode == PixelMode::F {
         if ![0, 2, 3].contains(&method) || !matrix.iter().all(|v| v.is_finite()) || fill.len() != 4 {
             return Err(PyValueError::new_err("invalid affine transform"));
@@ -1871,6 +1931,9 @@ fn ops_mesh(py: Python<'_>, image: &Image, mesh: Mesh, method: u8) -> PyResult<I
 fn ops_warp(
     py: Python<'_>, image: &Image, size: (u32, u32), mesh: Mesh, filters: (u8, bool), mut fill: Option<Vec<u8>>, color_string: bool,
 ) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+        return Err(PyValueError::new_err("warps do not support float color images"));
+    }
     let (method, perspective) = filters;
     if image.mode == PixelMode::F {
         if ![0, 2, 3].contains(&method) || fill.as_ref().is_some_and(|v| v.len() != 4) || mesh.iter().any(|(_, q)| q.iter().any(|v| !v.is_finite())) {

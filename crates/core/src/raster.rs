@@ -336,6 +336,8 @@ pub enum PixelMode {
     L,
     I,
     F,
+    RgbF,
+    RgbaF,
     I16,
     I16L,
     I16B,
@@ -356,6 +358,8 @@ impl PixelMode {
             "L" => Ok(Self::L),
             "I" => Ok(Self::I),
             "F" => Ok(Self::F),
+            "RGB;F" => Ok(Self::RgbF),
+            "RGBA;F" => Ok(Self::RgbaF),
             "I;16" => Ok(Self::I16),
             "I;16L" => Ok(Self::I16L),
             "I;16B" => Ok(Self::I16B),
@@ -377,6 +381,8 @@ impl PixelMode {
             Self::L => "L",
             Self::I => "I",
             Self::F => "F",
+            Self::RgbF => "RGB;F",
+            Self::RgbaF => "RGBA;F",
             Self::I16 => "I;16",
             Self::I16L => "I;16L",
             Self::I16B => "I;16B",
@@ -395,14 +401,14 @@ impl PixelMode {
         match self {
             Self::One | Self::L | Self::I | Self::F | Self::I16 | Self::I16L | Self::I16B => 1,
             Self::La | Self::Pa => 2,
-            Self::Rgb | Self::Hsv | Self::YCbCr | Self::Lab => 3,
-            Self::Rgba | Self::Cmyk => 4,
+            Self::Rgb | Self::RgbF | Self::Hsv | Self::YCbCr | Self::Lab => 3,
+            Self::Rgba | Self::RgbaF | Self::Cmyk => 4,
         }
     }
 
     pub const fn sample_bytes(self) -> usize {
         match self {
-            Self::I | Self::F => 4,
+            Self::I | Self::F | Self::RgbF | Self::RgbaF => 4,
             Self::I16 | Self::I16L | Self::I16B => 2,
             _ => 1,
         }
@@ -413,7 +419,11 @@ impl PixelMode {
     }
 
     pub const fn is_wide_scalar(self) -> bool {
-        self.is_integer() || matches!(self, Self::F)
+        self.is_integer() || self.is_float()
+    }
+
+    pub const fn is_float(self) -> bool {
+        matches!(self, Self::F | Self::RgbF | Self::RgbaF)
     }
 }
 
@@ -498,12 +508,15 @@ impl Image {
     }
 
     pub fn from_float_bytes(width: u32, height: u32, pixels: Vec<u8>) -> PyResult<Self> {
-        let expected =
-            expected_len(width, height, PixelMode::F)?.checked_mul(4).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
-        if pixels.len() != expected {
+        Self::from_color_float_bytes(width, height, PixelMode::F, pixels)
+    }
+
+    pub fn from_color_float_bytes(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>) -> PyResult<Self> {
+        let expected = expected_len(width, height, mode)?.checked_mul(4).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+        if !mode.is_float() || pixels.len() != expected {
             return Err(PyValueError::new_err("wrong amount of image data"));
         }
-        Ok(Self { width, height, mode: PixelMode::F, pixels: Some(pixels), bit_depth: 32, .. })
+        Ok(Self { width, height, mode, pixels: Some(pixels), bit_depth: 32, .. })
     }
 
     pub fn raw_data(&self) -> PyResult<&[u8]> {
@@ -557,7 +570,7 @@ impl Image {
 #[pymethods]
 impl Image {
     pub fn getextrema_scalar(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
-        if !self.mode.is_wide_scalar() {
+        if !self.mode.is_wide_scalar() || self.mode.channels() != 1 {
             return Err(PyValueError::new_err("scalar extrema require a wide scalar mode"));
         }
         let data = self.raw_data()?;
@@ -618,6 +631,14 @@ impl Image {
     }
 
     pub fn getchannel(&self, py: Python<'_>, channel: usize) -> PyResult<Self> {
+        if self.mode.is_float() && self.mode.channels() > 1 {
+            if channel >= self.mode.channels() {
+                return Err(PyValueError::new_err("band index out of range"));
+            }
+            let pixels =
+                self.raw_data()?.chunks_exact(self.raw_bytes_per_pixel()).flat_map(|p| p[channel * 4..channel * 4 + 4].iter().copied()).collect();
+            return Self::from_float_bytes(self.width, self.height, pixels);
+        }
         if self.mode.is_wide_scalar() {
             return if channel == 0 { self.copy(py) } else { Err(PyValueError::new_err("band index out of range")) };
         }
@@ -718,7 +739,7 @@ impl Image {
             }
             return Ok(Some(PyList::new(py, counts.into_iter().enumerate().filter(|&(_, n)| n != 0).map(|(v, n)| (n, v)))?.unbind()));
         }
-        if maxcolors <= 256 {
+        if maxcolors <= 256 && stride <= 8 {
             // A bounded open-addressed table avoids hashing a byte slice and
             // allocating a map entry for each distinct small pixel value.
             let counts = py.detach(|| match stride {
@@ -755,6 +776,17 @@ impl Image {
         if x < 0 || y < 0 || x >= i64::from(self.width) || y >= i64::from(self.height) {
             return Err(PyIndexError::new_err("image index out of range"));
         }
+        if self.mode.is_float() && self.mode.channels() > 1 {
+            let values: Vec<f32> = value.extract()?;
+            if values.len() != self.mode.channels() {
+                return Err(PyValueError::new_err("wrong number of color components"));
+            }
+            let start = (y as usize * self.width as usize + x as usize) * self.raw_bytes_per_pixel();
+            for (i, v) in values.iter().enumerate() {
+                self.pixels.as_mut().unwrap()[start + i * 4..start + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            }
+            return Ok(());
+        }
         if self.mode == PixelMode::F {
             let start = (y as usize * self.width as usize + x as usize) * 4;
             self.pixels.as_mut().unwrap()[start..start + 4].copy_from_slice(&(value.extract::<f64>()? as f32).to_le_bytes());
@@ -779,6 +811,18 @@ impl Image {
         let length = data.len()?;
         if length > self.width as usize * self.height as usize {
             return Err(PyTypeError::new_err("too many data entries"));
+        }
+        if self.mode.is_float() && self.mode.channels() > 1 {
+            for (i, item) in data.try_iter()?.enumerate() {
+                if i >= length {
+                    return Err(PyTypeError::new_err("too many data entries"));
+                }
+                let values: Vec<f64> = item?.extract()?;
+                let values = values.into_iter().map(|v| v * scale + offset).collect::<Vec<_>>();
+                let value = PyTuple::new(data.py(), values)?;
+                self.putpixel(((i % self.width as usize) as i64, (i / self.width as usize) as i64), value.as_any())?;
+            }
+            return Ok(());
         }
         if self.mode == PixelMode::F {
             for (i, item) in data.try_iter()?.enumerate() {
@@ -846,12 +890,16 @@ impl Image {
             }
             let row_bytes = self.width as usize * stride;
             let occupied = |pixel: &[u8]| {
-                let values = if alpha_only && matches!(self.mode, PixelMode::Rgba | PixelMode::La | PixelMode::Pa) {
+                let values = if alpha_only && matches!(self.mode, PixelMode::Rgba | PixelMode::RgbaF | PixelMode::La | PixelMode::Pa) {
                     &pixel[(channels - 1) * sample_bytes..]
                 } else {
                     pixel
                 };
-                values.iter().any(|&v| v != 0)
+                if matches!(self.mode, PixelMode::RgbF | PixelMode::RgbaF) {
+                    values.as_chunks::<4>().0.iter().any(|bytes| float_value(bytes) != 0.0)
+                } else {
+                    values.iter().any(|&v| v != 0)
+                }
             };
             let mut rows = pixels.chunks_exact(row_bytes);
             let top = rows.position(|row| row.chunks_exact(stride).any(occupied))?;
@@ -949,6 +997,9 @@ impl Image {
         }
         let channels = self.mode.channels();
         let offset = (y as usize * self.width as usize + x as usize) * channels;
+        if self.mode.is_float() && channels > 1 {
+            return Ok(PyTuple::new(py, (0..channels).map(|c| float_value(&pixels[(offset + c) * 4..(offset + c + 1) * 4])))?.into_any().unbind());
+        }
         if self.mode == PixelMode::F {
             return Ok(float_value(&pixels[offset * 4..offset * 4 + 4]).into_pyobject(py)?.into_any().unbind());
         }
@@ -1011,6 +1062,9 @@ impl Image {
             return self.copy(py);
         }
         let destination = PixelMode::parse(mode)?;
+        if matches!(self.mode, PixelMode::RgbF | PixelMode::RgbaF) || matches!(destination, PixelMode::RgbF | PixelMode::RgbaF) {
+            return crate::float::convert(self, destination, bit_depth);
+        }
         if self.mode == PixelMode::Lab && destination != PixelMode::Lab {
             let source = self.pixel_data()?;
             let pixels = py.detach(|| convert_lab(source, false))?;
@@ -1278,11 +1332,11 @@ impl Image {
 #[pyfunction(signature = (mode, size, data, bit_depth=8))]
 pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
-    if mode == PixelMode::F {
+    if mode.is_float() {
         if bit_depth != 8 && bit_depth != 32 {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
-        return Image::from_float_bytes(size.0, size.1, data.to_vec());
+        return Image::from_color_float_bytes(size.0, size.1, mode, data.to_vec());
     }
     if mode.is_integer() {
         if bit_depth != 8 && bit_depth != (mode.sample_bytes() << 3) as u8 {
@@ -1340,8 +1394,8 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     let maximum_dimensions = match mode {
         PixelMode::One | PixelMode::L | PixelMode::I | PixelMode::F | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B => 2,
         PixelMode::La | PixelMode::Pa => 3,
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => 3,
-        PixelMode::Rgba | PixelMode::Cmyk => 4,
+        PixelMode::Rgb | PixelMode::RgbF | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => 3,
+        PixelMode::Rgba | PixelMode::RgbaF | PixelMode::Cmyk => 4,
     };
     if shape.len() > maximum_dimensions {
         return Err(PyValueError::new_err(format!("too many dimensions: {} > {maximum_dimensions}", shape.len())));
@@ -1357,7 +1411,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     let width = u32::try_from(width).map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
     let height = u32::try_from(height).map_err(|_| PyValueError::new_err("image dimensions are too large"))?;
 
-    if mode == PixelMode::F {
+    if mode.is_float() {
         if bit_depth.is_some_and(|depth| depth != 32) {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
@@ -1373,7 +1427,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
                 }
                 _ => return Err(PyTypeError::new_err("float mode requires float32 or float64 array")),
             };
-            Image::from_float_bytes(width, height, pixels)
+            Image::from_color_float_bytes(width, height, mode, pixels)
         });
     }
     if mode.is_integer() {
@@ -1421,6 +1475,13 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
 }
 
 fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
+    if matches!(typestr, "<f4" | "=f4" | ">f4" | "<f8" | "=f8" | ">f8") {
+        match shape {
+            [_, _, 3] => return Ok(PixelMode::RgbF),
+            [_, _, 4] => return Ok(PixelMode::RgbaF),
+            _ => {}
+        }
+    }
     if matches!(shape, [_] | [_, _]) {
         match typestr {
             "<i4" | "=i4" => return Ok(PixelMode::I),

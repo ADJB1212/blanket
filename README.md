@@ -70,6 +70,55 @@ for information on building from source.
 
 ## Examples
 
+### Float color and linear light
+
+`RGB;F` and `RGBA;F` store interleaved little-endian float32 samples. Float32
+and float64 color arrays infer these modes; float64 inputs narrow to float32.
+Color conversion to/from unsigned RGB/RGBA normalizes by the sample maximum.
+Converting back clamps to [0, 1], rounds to nearest, maps NaN to zero, and
+maps infinities to the corresponding endpoint. Storage preserves negative
+values, NaNs, and infinities. Arithmetic follows IEEE floating-point rules;
+negative colors and values above one remain unclipped in float outputs.
+
+Float color supports pixel access, channel extraction, extrema (ignoring NaNs),
+copy, crop, transpose, resize, paste, source-over compositing, and TIFF I/O
+(raw, LZW, Deflate). Other operations retain their existing mode restrictions.
+Float alpha is straight, normalized to [0, 1] during resize/compositing, with
+NaN alpha treated as zero. Premultiplication zeros color at zero alpha;
+unpremultiplication returns zero color at zero alpha.
+
+```python
+linear_thumbnail = image.resize((256, 256), linear_light=True)
+combined = Image.alpha_composite(background, overlay, linear_light=True)
+```
+
+These options support RGB/RGBA at 8/10/12/16 bits and float color. Set
+`transfer="srgb"` (default) to decode sRGB before processing and encode it
+afterward, or `transfer="linear"` for samples already in linear light.
+The sRGB transfer extends symmetrically to negative samples. Alpha never
+passes through the transfer function. Resize premultiplies alpha by default;
+`premultiply_alpha=False` explicitly filters straight color and alpha instead.
+Float resize and float compositing also support the ordinary sample domain
+with `linear_light=False`. Filter overshoot remains in float color, while
+alpha is clamped. These options do not interpret ICC profiles or HDR metadata.
+
+### Decode a region
+
+```python
+region = Image.open_region("large.tiff", (100, 200, 612, 712))
+region = Image.open_region("photo.png", (0, 0, 128, 128), fallback="full")
+```
+
+Region decoding reads only intersecting strips or tiles of the first TIFF page
+for unsigned 8/16-bit chunky L, RGB, and straight RGBA. Requests must be nonempty
+and inside the source bounds. Other codecs/layouts raise `NotImplementedError`
+unless `fallback="full"` explicitly permits eager decoding followed by cropping.
+`info["decode_fallback"]` reports whether fallback occurred. Encoded input is
+still read into memory, and source dimension limits apply. Unrequested TIFF
+chunks and later pages are not decoded or validated. A single large strip may
+require decoding the whole first page. Fallback uses normal eager frame decoding
+and its cumulative limits.
+
 ### Compare image fingerprints
 
 ```python

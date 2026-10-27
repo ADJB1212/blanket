@@ -187,6 +187,12 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
 type Inspection = (String, (u32, u32), String, u8);
 
 #[pyfunction]
+pub fn _decode_region(py: Python<'_>, data: &[u8], bounds: (u32, u32, u32, u32), formats: Option<Vec<String>>) -> PyResult<Option<Image>> {
+    let format = input_format(data, formats)?;
+    if format == ImageFormat::Tiff { py.detach(|| blanket_codec_tiff::decode_region(data, bounds)).map_err(PyOSError::new_err) } else { Ok(None) }
+}
+
+#[pyfunction]
 pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Inspection> {
     let format = input_format(data, formats)?;
     let header = py
@@ -362,7 +368,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
         }
         return Err(PyOSError::new_err(format!("cannot write mode {} as {}", image.mode.as_str(), format.as_str())));
     }
-    if image.mode == PixelMode::F {
+    if image.mode.is_float() {
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode F as {}", format.as_str())));
         }
