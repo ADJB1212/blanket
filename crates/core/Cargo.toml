@@ -32,5 +32,9 @@ criterion.workspace = true
 name = "conversion"
 harness = false
 
+[[bench]]
+name = "pixels"
+harness = false
+
 [lints]
 workspace = true

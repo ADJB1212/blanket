@@ -110,35 +110,43 @@ fn smooth(source: &[u16], output: &mut [u16], width: usize, height: usize, chann
         return;
     }
     let stride = width * channels;
-    for y in 1..height - 1 {
-        let first = y * stride + channels;
-        let last = (y + 1) * stride - channels;
-        let end = first + (last - first) / 16 * 16;
-        for i in (first..end).step_by(16) {
-            let original = Samples::from_slice(&source[i..]);
-            let mut sum = original.cast::<u32>() * Simd::splat(4);
-            for row in [i - stride, i, i + stride] {
-                for start in [row - channels, row, row + channels] {
-                    sum += Samples::from_slice(&source[start..]).cast::<u32>();
-                }
-            }
-            let value = ((sum + Simd::splat(6)) / Simd::splat(13)).cast::<u16>();
-            let alpha = std::simd::Mask::<i16, 16>::from_array(std::array::from_fn(|lane| channels == 4 && (i + lane) % 4 == 3));
-            alpha.select(original, value).copy_to_slice(&mut output[i..i + 16]);
-        }
-        for i in end..last {
-            if channels == 4 && i % 4 == 3 {
+    blanket_core::parallel::chunks_mut_above(output, stride * 32, 256 * 1024, |band, rows| {
+        for (row_index, row) in rows.chunks_exact_mut(stride).enumerate() {
+            let y = band * 32 + row_index;
+            if y == 0 || y + 1 == height {
                 continue;
             }
-            let mut sum = u32::from(source[i]) * 4;
-            for row in [i - stride, i, i + stride] {
-                for start in [row - channels, row, row + channels] {
-                    sum += u32::from(source[start]);
+            let first = channels;
+            let last = stride - channels;
+            let end = first + (last - first) / 16 * 16;
+            for x in (first..end).step_by(16) {
+                let i = y * stride + x;
+                let original = Samples::from_slice(&source[i..]);
+                let mut sum = original.cast::<u32>() * Simd::splat(4);
+                for row in [i - stride, i, i + stride] {
+                    for start in [row - channels, row, row + channels] {
+                        sum += Samples::from_slice(&source[start..]).cast::<u32>();
+                    }
                 }
+                let value = ((sum + Simd::splat(6)) / Simd::splat(13)).cast::<u16>();
+                let alpha = std::simd::Mask::<i16, 16>::from_array(std::array::from_fn(|lane| channels == 4 && (i + lane) % 4 == 3));
+                alpha.select(original, value).copy_to_slice(&mut row[x..x + 16]);
             }
-            output[i] = ((sum + 6) / 13) as u16;
+            for x in end..last {
+                let i = y * stride + x;
+                if channels == 4 && i % 4 == 3 {
+                    continue;
+                }
+                let mut sum = u32::from(source[i]) * 4;
+                for row in [i - stride, i, i + stride] {
+                    for start in [row - channels, row, row + channels] {
+                        sum += u32::from(source[start]);
+                    }
+                }
+                row[x] = ((sum + 6) / 13) as u16;
+            }
         }
-    }
+    });
 }
 
 fn blend_samples(a: &[u16], b: &[u16], output: &mut [u8], factor: f32, maximum: u16, big_endian: bool) {
@@ -210,6 +218,43 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn smooth_preserves_parallel_bands_borders_alpha_and_guards() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                let (width, height) = (517, 263);
+                for channels in [1, 3, 4] {
+                    let count = width * height * channels;
+                    let storage: Vec<_> = (0..count + 1).map(|i| (i * 719 + 257) as u16).collect();
+                    let source = &storage[1..];
+                    let mut output = vec![173; count + 2];
+                    output[1..count + 1].copy_from_slice(source);
+                    smooth(source, &mut output[1..count + 1], width, height, channels);
+                    for y in 0..height {
+                        for x in 0..width {
+                            for channel in 0..channels {
+                                let i = (y * width + x) * channels + channel;
+                                let expected = if x == 0 || x + 1 == width || y == 0 || y + 1 == height || channels == 4 && channel == 3 {
+                                    source[i]
+                                } else {
+                                    let mut sum = u32::from(source[i]) * 4;
+                                    for yy in y - 1..=y + 1 {
+                                        for xx in x - 1..=x + 1 {
+                                            sum += u32::from(source[(yy * width + xx) * channels + channel]);
+                                        }
+                                    }
+                                    ((sum + 6) / 13) as u16
+                                };
+                                assert_eq!(output[i + 1], expected);
+                            }
+                        }
+                    }
+                    assert_eq!((output[0], output[count + 1]), (173, 173));
+                }
+            });
         }
     }
 

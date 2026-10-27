@@ -561,8 +561,8 @@ fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Ima
 }
 
 pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
-    if C == 3 && orientation == 8 {
-        rotate_rgb_90(source, output, w, h);
+    if C == 3 && orientation >= 5 {
+        transpose_rgb(source, output, w, h, orientation);
         return;
     }
     let source = source.as_chunks::<C>().0;
@@ -612,31 +612,46 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
     });
 }
 
-fn rotate_rgb_90(source: &[u8], output: &mut [u8], w: usize, h: usize) {
+fn transpose_rgb(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+    let reverse_rows = orientation == 7 || orientation == 8;
+    let reverse_columns = orientation == 6 || orientation == 7;
     chunks_mut_above(output, h * 3 * 32, MIN_PARALLEL_BYTES, |band, rows| {
         for (group, rows) in rows.chunks_mut(h * 3 * 4).enumerate() {
             let count = rows.len() / (h * 3);
             let y = band * 32 + group * 4;
             if count == 4 {
-                let sx = w - y - 4;
+                let sx = if reverse_rows { w - y - 4 } else { y };
                 let end = h / 4 * 4;
                 for x in (0..end).step_by(4) {
-                    let input = std::array::from_fn(|i| &source[((x + i) * w + sx) * 3..][..12]);
+                    let input = std::array::from_fn(|i| {
+                        let sy = if reverse_columns { h - 1 - x - i } else { x + i };
+                        &source[(sy * w + sx) * 3..][..12]
+                    });
                     let columns = crate::ops_simd::transpose_rgb_four(input);
-                    for (row, column) in rows.chunks_exact_mut(h * 3).zip(columns.iter().rev()) {
-                        row[x * 3..x * 3 + 12].copy_from_slice(column);
+                    if reverse_rows {
+                        for (row, column) in rows.chunks_exact_mut(h * 3).zip(columns.iter().rev()) {
+                            row[x * 3..x * 3 + 12].copy_from_slice(column);
+                        }
+                    } else {
+                        for (row, column) in rows.chunks_exact_mut(h * 3).zip(&columns) {
+                            row[x * 3..x * 3 + 12].copy_from_slice(column);
+                        }
                     }
                 }
                 for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
                     for x in end..h {
-                        let src = (x * w + w - 1 - y - i) * 3;
+                        let sx = if reverse_rows { w - 1 - y - i } else { y + i };
+                        let sy = if reverse_columns { h - 1 - x } else { x };
+                        let src = (sy * w + sx) * 3;
                         row[x * 3..x * 3 + 3].copy_from_slice(&source[src..src + 3]);
                     }
                 }
             } else {
                 for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
                     for (x, dst) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
-                        let src = (x * w + w - 1 - y - i) * 3;
+                        let sx = if reverse_rows { w - 1 - y - i } else { y + i };
+                        let sy = if reverse_columns { h - 1 - x } else { x };
+                        let src = (sy * w + sx) * 3;
                         dst.copy_from_slice(&source[src..src + 3]);
                     }
                 }
@@ -1555,6 +1570,12 @@ fn sample(source: &[u8], image: &Image, x: f64, y: f64, method: u8, dst: &mut [u
     let (x, y) = (x - 0.5, y - 0.5);
     let (ix, iy) = (x.floor() as i64, y.floor() as i64);
     let (tx, ty) = (x - x.floor(), y - y.floor());
+    match c {
+        2 => return crate::ops_simd::sample_color::<2>(source, dst, (w, h), (ix, iy), (tx, ty), method),
+        3 => return crate::ops_simd::sample_color::<3>(source, dst, (w, h), (ix, iy), (tx, ty), method),
+        4 => return crate::ops_simd::sample_color::<4>(source, dst, (w, h), (ix, iy), (tx, ty), method),
+        _ => (),
+    }
     for (ch, out) in dst.iter_mut().enumerate() {
         let get = |dx: i64, dy: i64| {
             f64::from(source[((iy + dy).clamp(0, h as i64 - 1) as usize * w + (ix + dx).clamp(0, w as i64 - 1) as usize) * c + ch])
@@ -1660,7 +1681,7 @@ fn warp_nearest_row<const C: usize>(source: &[u8], row: &mut [u8], warp: &Neares
 
 /// Reverse affine mapping, sharing the mesh interpolation and alpha kernels.
 #[pyfunction(signature = (image, size, matrix, method, fill, color_string=false))]
-fn ops_affine(
+pub fn ops_affine(
     py: Python<'_>, image: &Image, size: (u32, u32), matrix: [f64; 6], method: u8, mut fill: Vec<u8>, color_string: bool,
 ) -> PyResult<Image> {
     if image.mode == PixelMode::F {
@@ -2156,6 +2177,31 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn rgb_transpose_preserves_parallel_bands_and_partial_tiles() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                let (width, height) = (517, 263);
+                let count = width * height * 3;
+                let source: Vec<_> = (0..count + 1).map(|i| (i * 137 + i / 7) as u8).collect();
+                for orientation in 5..=8 {
+                    let mut output = vec![173; count + 2];
+                    transpose::<3>(&source[1..], &mut output[1..count + 1], width, height, orientation);
+                    for y in 0..width {
+                        for x in 0..height {
+                            let sx = if orientation == 7 || orientation == 8 { width - 1 - y } else { y };
+                            let sy = if orientation == 6 || orientation == 7 { height - 1 - x } else { x };
+                            let start = 1 + (sy * width + sx) * 3;
+                            let dest = 1 + (y * height + x) * 3;
+                            assert_eq!(&output[dest..dest + 3], &source[start..start + 3]);
+                        }
+                    }
+                    assert_eq!((output[0], output[count + 1]), (173, 173));
+                }
+            });
         }
     }
 

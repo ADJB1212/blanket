@@ -2,8 +2,8 @@ use std::hint::black_box;
 
 use blanket_bench_support::{SIZES, codec_fixtures, measure_codec};
 use blanket_codec_common::SaveOptions;
-use blanket_codec_png::{decode_png, encode_png, encode_wide_png};
-use blanket_core::PixelMode;
+use blanket_codec_png::{decode_png, encode_one_png, encode_png, encode_wide_png};
+use blanket_core::{Image, PixelMode};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 
 fn codecs(c: &mut Criterion) {
@@ -53,5 +53,13 @@ fn metadata_decode(c: &mut Criterion) {
     }
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = codecs, metadata_decode }
+fn bilevel(c: &mut Criterion) {
+    for (width, height) in [(800, 600), (801, 600)] {
+        let pixels = (0..width * height).map(|i| if (i * 37 + i / 7) % 3 == 0 { 0 } else { 255 }).collect();
+        let image = Image::from_pixels(width, height, PixelMode::One, pixels, None).unwrap();
+        measure_codec(c, "png-bilevel", &image, "patterned", |image| encode_one_png(image, 1).unwrap(), |data| decode_png(data).unwrap());
+    }
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = codecs, metadata_decode, bilevel }
 criterion_main!(benches);

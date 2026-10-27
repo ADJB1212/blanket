@@ -55,6 +55,7 @@ docs = [
     "mkdocs>=1.5.0,<2",
     "mkdocs-material>=9.8",
     "mkdocstrings[python]>=1.0.8,<2",
+    "ruff>=0.17.2",
 ]
 
 [tool.maturin]
@@ -66,7 +67,7 @@ strip = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=line", "--strict-markers", "--strict-config", "--assert=plain", "-n=logical"]
-console_output_style = "none"
+console_output_style = "classic"
 xfail_strict = true
 
 [tool.ruff]

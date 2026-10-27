@@ -108,7 +108,7 @@ fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f3
 }
 
 #[pyfunction]
-fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
+pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "color");
     }
@@ -156,7 +156,7 @@ fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
 }
 
 #[pyfunction]
-fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
+pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "contrast");
     }
@@ -203,11 +203,16 @@ fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
 }
 
 fn byte_sum(source: &[u8]) -> u64 {
-    if should_parallel(source.len(), 1, MIN_PARALLEL_BYTES) {
-        source.par_iter().map(|&value| u64::from(value)).sum()
-    } else {
-        source.iter().map(|&value| u64::from(value)).sum()
-    }
+    const CHUNK: usize = 16 * 1024;
+    let sum = |source: &[u8]| {
+        let (blocks, tail) = source.as_chunks::<64>();
+        let mut sum = Simd::<u16, 64>::splat(0);
+        for block in blocks {
+            sum += Simd::<u8, 64>::from_array(*block).cast::<u16>();
+        }
+        u64::from(sum.cast::<u32>().reduce_sum()) + tail.iter().map(|&value| u64::from(value)).sum::<u64>()
+    };
+    if should_parallel(source.len(), CHUNK, 4 * 1024 * 1024) { source.par_chunks(CHUNK).map(sum).sum() } else { source.chunks(CHUNK).map(sum).sum() }
 }
 
 fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
@@ -224,7 +229,7 @@ fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
 }
 
 #[pyfunction]
-fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
+pub fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "brightness");
     }
@@ -249,7 +254,7 @@ fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
 }
 
 #[pyfunction]
-fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
+pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "sharpness");
     }
@@ -403,6 +408,21 @@ mod tests {
                     assert!(output[offset + count..].iter().all(|&v| v == 93));
                 }
             }
+        }
+    }
+
+    #[test]
+    fn byte_sum_preserves_unaligned_tails_chunk_limits_and_parallel_totals() {
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                for count in [0, 1, 15, 16, 17, 63, 64, 65, CHUNK_PIXELS - 1, CHUNK_PIXELS, CHUNK_PIXELS + 1, 4 * 1024 * 1024 + 17] {
+                    for fill in [None, Some(0), Some(255)] {
+                        let source: Vec<_> = (0..count + 1).map(|i| fill.unwrap_or((i * 137 + i / 7) as u8)).collect();
+                        let expected: u64 = source[1..].iter().map(|&value| u64::from(value)).sum();
+                        assert_eq!(byte_sum(&source[1..]), expected);
+                    }
+                }
+            });
         }
     }
 

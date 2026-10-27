@@ -43,6 +43,77 @@ def test_legacy_interoperability(format: str, mode: str, size: tuple[int, int]) 
             Image.open(stream, formats=["PNG"])
 
 
+@pytest.mark.parametrize("width", [1, 31, 32, 33, 63, 64, 65, 129])
+@pytest.mark.parametrize("mode", ["L", "P", "RGB"])
+@pytest.mark.parametrize("encoded", [False, True])
+def test_pcx_literal_spans_and_runs(width: int, mode: str, encoded: bool) -> None:
+    planes = 3 if mode == "RGB" else 1
+    stride = (width + 1) // 2 * 2
+    palette = bytes(value for i in range(256) for value in (i, 255 - i, i // 2)) if mode == "P" else bytes(value for i in range(256) for value in (i, i, i))
+    header = bytearray(128)
+    header[:4] = bytes((10, 5, int(encoded), 8))
+    struct.pack_into("<4H", header, 4, 0, 0, width - 1, 2)
+    header[65] = planes
+    struct.pack_into("<H", header, 66, stride)
+    output = bytearray(header)
+    expected = bytearray()
+    for y in range(3):
+        bands = [bytes((x + c * 31) % 192 if y == 0 else 220 if y == 1 else 7 for x in range(width)) for c in range(planes)]
+        expected.extend(band[x] for x in range(width) for band in bands)
+        row = b"".join(band + b"\xff" * (stride - width) for band in bands)
+        if not encoded:
+            output.extend(row)
+            continue
+        pos = 0
+        while pos < len(row):
+            count = 1
+            while count < 63 and pos + count < len(row) and row[pos + count] == row[pos]:
+                count += 1
+            output.extend(bytes((0xC0 | count, row[pos])) if count > 1 or row[pos] >= 192 else row[pos : pos + 1])
+            pos += count
+    if planes == 1:
+        output.extend(b"\x0c" + palette)
+    actual = Image.open(BytesIO(output))
+    assert (actual.mode, actual.size) == (mode, (width, 3))
+    assert actual.tobytes() == expected
+    if encoded:
+        pillow = PillowImage.open(BytesIO(output))
+        assert actual.convert("RGB").tobytes() == pillow.convert("RGB").tobytes()
+
+
+@pytest.mark.parametrize("payload", [b"", b"\xc0\x01", b"\xc3\x01", b"\xc1", b"\x01", b"\x01\xc1"])
+def test_pcx_rejects_invalid_runs_and_truncated_literals(payload: bytes) -> None:
+    header = bytearray(128)
+    header[:4] = b"\x0a\x05\x01\x08"
+    header[8] = 1
+    header[65] = 1
+    header[66] = 2
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(header + payload))
+
+
+@pytest.mark.parametrize("short", [False, True])
+@pytest.mark.parametrize("style", ["lower", "upper", "decimal", "wide", "plus"])
+def test_xbm_literals_and_padded_rows(short: bool, style: str) -> None:
+    values = [0x81, 0x42, 0xFF, 0x18, 0x7E, 0x01] if not short else [0x4281, 0xFFFF, 0x7E18, 0xFF01]
+    template = {"lower": "0x{:02x}", "upper": "0X{:02X}", "decimal": "{}", "wide": "0x{:04x}", "plus": "0x+{:x}"}[style]
+    tokens = [template.format(value) for value in values]
+    declaration = "short" if short else "char"
+    data = f"#define im_width 17\n#define im_height 2\nstatic {declaration} im_bits[] = {{\n" + " ,\t\n".join(tokens) + ",\n};\n"
+    actual = Image.open(BytesIO(data.encode()))
+    packed = b"".join(value.to_bytes(2 if short else 1, "little") for value in values)
+    stride = 4 if short else 3
+    expected = bytes(255 if packed[y * stride + x // 8] & (1 << (x % 8)) else 0 for y in range(2) for x in range(17))
+    assert actual.convert("L").tobytes() == expected
+
+
+@pytest.mark.parametrize("body", ["0xgg", "0x0g", "0x100", "65536", "0x", "", "0x01,0xgg"])
+def test_xbm_rejects_invalid_literals(body: str) -> None:
+    data = f"#define im_width 8\n#define im_height 1\nstatic char im_bits[] = {{{body}}};\n"
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(data.encode()))
+
+
 @pytest.mark.parametrize("big", [False, True])
 def test_spider_float_and_first_stack_image(big: bool) -> None:
     for stack in (False, True):

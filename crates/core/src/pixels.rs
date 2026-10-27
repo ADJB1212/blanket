@@ -16,8 +16,14 @@ pub(crate) fn load_u16<const BIG_ENDIAN: bool>(source: &[u8]) -> Simd<u16, 16> {
 }
 
 pub fn pack_bilevel<const INVERT: bool>(source: &[u8], output: &mut [u8]) {
+    let wide_end = source.len() / 64 * 64;
+    for i in (0..wide_end).step_by(64) {
+        let nonzero = Simd::<u8, 64>::from_slice(&source[i..]).simd_ne(Simd::splat(0));
+        let bits = if INVERT { !nonzero } else { nonzero }.to_bitmask();
+        output[i / 8..i / 8 + 8].copy_from_slice(&bits.reverse_bits().to_be_bytes());
+    }
     let end = source.len() / 16 * 16;
-    for i in (0..end).step_by(16) {
+    for i in (wide_end..end).step_by(16) {
         let nonzero = Bytes::from_slice(&source[i..]).simd_ne(Bytes::splat(0));
         let bits = if INVERT { !nonzero } else { nonzero }.to_bitmask() as u16;
         output[i / 8] = (bits as u8).reverse_bits();
@@ -443,9 +449,24 @@ mod tests {
     }
 
     #[test]
+    fn bilevel_packing_preserves_each_bit_in_wide_masks() {
+        for bit in 0..64 {
+            let mut source = [0; 64];
+            source[bit] = 173;
+            let mut output = [0; 8];
+            pack_bilevel::<false>(&source, &mut output);
+            let mut expected = [0; 8];
+            expected[bit / 8] = 128 >> (bit % 8);
+            assert_eq!(output, expected);
+            pack_bilevel::<true>(&source, &mut output);
+            assert_eq!(output, expected.map(|value| !value));
+        }
+    }
+
+    #[test]
     fn bilevel_packing_preserves_polarity_padding_unaligned_slices_and_guards() {
         fn check<const INVERT: bool>() {
-            for count in 0..=129 {
+            for count in 0..=257 {
                 for offset in 0..16 {
                     for fill in [None, Some(0), Some(1), Some(255)] {
                         let source: Vec<_> = (0..offset + count).map(|i| fill.unwrap_or((i * 37) as u8)).collect();

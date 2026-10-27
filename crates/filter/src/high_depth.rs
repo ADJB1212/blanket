@@ -297,6 +297,19 @@ fn box_vertical(source: &[u16], output: &mut [u16], stride: usize, radius: f32) 
     let weight = (super::filter::BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u32;
     let far_weight = super::filter::BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight)) / 2;
     let scale = 1.0 / f64::from(super::filter::BOX_WEIGHT_SCALE);
+    if integer <= 2 {
+        blanket_core::parallel::chunks_mut_above(output, stride * 16, 256 * 1024, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+                let y = band * 16 + i;
+                match integer {
+                    0 => box_sample_column::<0>(source, row, y, weight, far_weight),
+                    1 => box_sample_column::<1>(source, row, y, weight, far_weight),
+                    _ => box_sample_column::<2>(source, row, y, weight, far_weight),
+                }
+            }
+        });
+        return;
+    }
     let band_rows = 64.max(integer.min(height));
     blanket_core::parallel::chunks_mut_above(output, stride * band_rows, 256 * 1024, |band, rows| {
         let first = band * band_rows;
@@ -324,6 +337,37 @@ fn box_vertical(source: &[u16], output: &mut [u16], stride: usize, radius: f32) 
             }
         }
     });
+}
+
+fn box_sample_column<const R: usize>(source: &[u16], output: &mut [u16], y: usize, weight: u32, far_weight: u32) {
+    let stride = output.len();
+    let height = source.len() / stride;
+    let row = |tap: usize| {
+        let start = (y + tap).saturating_sub(R + 1).min(height - 1) * stride;
+        &source[start..start + stride]
+    };
+    let upper = row(0);
+    let lower = row(2 * R + 2);
+    let scale = 1.0 / f64::from(super::filter::BOX_WEIGHT_SCALE);
+    let end = stride / 16 * 16;
+    for x in (0..end).step_by(16) {
+        let mut sum = Simd::<u32, 16>::splat(0);
+        for tap in 1..=2 * R + 1 {
+            sum += Samples::from_slice(&row(tap)[x..]).cast::<u32>();
+        }
+        let ends = Samples::from_slice(&upper[x..]).cast::<u32>() + Samples::from_slice(&lower[x..]).cast::<u32>();
+        // These integer products fit exactly in f64.
+        let value = sum.cast::<f64>() * Simd::splat(f64::from(weight))
+            + ends.cast::<f64>() * Simd::splat(f64::from(far_weight))
+            + Simd::splat(super::filter::BOX_WEIGHT_ROUND as f64);
+        (value * Simd::splat(scale)).cast::<u64>().cast::<u16>().copy_to_slice(&mut output[x..x + 16]);
+    }
+    for x in end..stride {
+        let sum: u64 = (1..=2 * R + 1).map(|tap| u64::from(row(tap)[x])).sum();
+        let ends = u64::from(upper[x]) + u64::from(lower[x]);
+        output[x] =
+            ((sum * u64::from(weight) + ends * u64::from(far_weight) + super::filter::BOX_WEIGHT_ROUND) >> super::filter::BOX_WEIGHT_BITS) as u16;
+    }
 }
 
 fn blurred(image: &Image, mut values: Vec<u16>, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u16>> {
@@ -516,27 +560,30 @@ mod tests {
         let count = width * height * channels;
         let backing: Vec<_> = (0..count + 1).map(|i| (i * 719 + 257) as u16).collect();
         let source = &backing[1..];
-        let radius = 1.5;
-        let weight = (super::super::filter::BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
-        let far = u64::from(super::super::filter::BOX_WEIGHT_SCALE.wrapping_sub(3 * weight as u32) / 2);
-        for vertical in [false, true] {
-            let mut output = vec![173; count + 2];
-            box_pass(source, &mut output[1..count + 1], width, height, channels, radius, vertical);
-            for y in 0..height {
-                for x in 0..width {
-                    for c in 0..channels {
-                        let sample = |delta: isize| {
-                            let xx = if vertical { x } else { x.saturating_add_signed(delta).min(width - 1) };
-                            let yy = if vertical { y.saturating_add_signed(delta).min(height - 1) } else { y };
-                            u64::from(source[(yy * width + xx) * channels + c])
-                        };
-                        let sum = sample(-1) + sample(0) + sample(1);
-                        let expected = ((sum * weight + (sample(-2) + sample(2)) * far + (1 << 23)) >> 24) as u16;
-                        assert_eq!(output[1 + (y * width + x) * channels + c], expected);
+        for radius in [0.25, 1.5, 2.75] {
+            let integer = radius as usize;
+            let weight = (super::super::filter::BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
+            let far = u64::from(super::super::filter::BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1) * weight as u32) / 2);
+            for vertical in [false, true] {
+                let mut output = vec![173; count + 2];
+                box_pass(source, &mut output[1..count + 1], width, height, channels, radius, vertical);
+                for y in 0..height {
+                    for x in 0..width {
+                        for c in 0..channels {
+                            let sample = |delta: isize| {
+                                let xx = if vertical { x } else { x.saturating_add_signed(delta).min(width - 1) };
+                                let yy = if vertical { y.saturating_add_signed(delta).min(height - 1) } else { y };
+                                u64::from(source[(yy * width + xx) * channels + c])
+                            };
+                            let sum: u64 = (-(integer as isize)..=integer as isize).map(sample).sum();
+                            let ends = sample(-(integer as isize) - 1) + sample(integer as isize + 1);
+                            let expected = ((sum * weight + ends * far + (1 << 23)) >> 24) as u16;
+                            assert_eq!(output[1 + (y * width + x) * channels + c], expected);
+                        }
                     }
                 }
+                assert_eq!((output[0], output[count + 1]), (173, 173));
             }
-            assert_eq!((output[0], output[count + 1]), (173, 173));
         }
     }
 

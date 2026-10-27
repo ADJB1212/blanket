@@ -712,16 +712,17 @@ class Image:
             ```
         """
         self._native.load()
-        raw = self.info.get("exif")
-        if raw is None and isinstance(self.info.get("Raw profile type exif"), str):
-            value = self.info["Raw profile type exif"]
+        info = self._info
+        raw = info.get("exif")
+        if raw is None and isinstance(info.get("Raw profile type exif"), str):
+            value = info["Raw profile type exif"]
             raw = bytes.fromhex("".join(value.split("\n")[3:]) if "\n" in value else value)
         if self._exif is None or raw != self._exif_source:
             self._exif = Exif()
             if isinstance(raw, bytes):
                 self._exif.load(raw)
             if 274 not in self._exif:
-                xmp = self.info.get("xmp", self.info.get("XML:com.adobe.xmp", ""))
+                xmp = info.get("xmp", info.get("XML:com.adobe.xmp", ""))
                 if isinstance(xmp, bytes):
                     xmp = xmp.decode("utf-8", "replace")
                 if isinstance(xmp, str) and (match := ORIENTATION_RE.search(xmp)):

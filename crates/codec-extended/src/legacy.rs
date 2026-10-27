@@ -115,22 +115,29 @@ fn decode_pcx(data: &[u8]) -> Result<Image, String> {
     let mut packed = Vec::with_capacity(if bits == 1 && planes == 1 { w.div_ceil(8) * h } else { 0 });
     for y in 0..h {
         let mut written = 0;
+        if data[2] == 0 {
+            let source = bytes(data, pos, row.len())?;
+            row.copy_from_slice(source);
+            pos += row.len();
+            written = row.len();
+        }
         while written < row.len() {
-            let v = bytes(data, pos, 1)?[0];
-            pos += 1;
-            if data[2] == 1 && v & 0xc0 == 0xc0 {
-                let value = bytes(data, pos, 1)?[0];
-                pos += 1;
-                let count = usize::from(v & 63);
-                if count == 0 || written + count > row.len() {
-                    return Err("invalid PCX run".into());
-                }
-                row[written..written + count].fill(value);
-                written += count;
-            } else {
-                row[written] = v;
-                written += 1;
+            let source = data.get(pos..).ok_or("truncated image data")?;
+            let length = crate::pixels::pcx_literals(&source[..source.len().min(row.len() - written)]);
+            row[written..written + length].copy_from_slice(&source[..length]);
+            written += length;
+            pos += length;
+            if written == row.len() {
+                break;
             }
+            let run = bytes(data, pos, 2)?;
+            let count = usize::from(run[0] & 63);
+            if count == 0 || written + count > row.len() {
+                return Err("invalid PCX run".into());
+            }
+            row[written..written + count].fill(run[1]);
+            written += count;
+            pos += 2;
         }
         if bits == 1 && planes == 1 {
             packed.extend_from_slice(&row[..w.div_ceil(8)]);

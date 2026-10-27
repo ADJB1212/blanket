@@ -7,6 +7,43 @@ use blanket_core::pixels::{self, Bytes, load, store};
 
 use crate::ops::{RESAMPLE_BITS, RESAMPLE_ROUND};
 
+#[inline]
+pub(crate) fn sample_color<const C: usize>(
+    source: &[u8], output: &mut [u8], size: (usize, usize), position: (i64, i64), fraction: (f64, f64), method: u8,
+) {
+    let x = |dx: i64| (position.0 + dx).clamp(0, size.0 as i64 - 1) as usize * C;
+    let y = |dy: i64| (position.1 + dy).clamp(0, size.1 as i64 - 1) as usize * size.0 * C;
+    let get = |x: usize, y: usize| -> [u8; C] { source[x + y..x + y + C].try_into().unwrap() };
+    let interpolate = |a: f64, b: f64, t: f64| {
+        if cfg!(target_arch = "aarch64") { (b - a).mul_add(t, a) } else { a + (b - a) * t }
+    };
+    let cubic = |v: [f64; 4], t: f64| {
+        let a = -v[0] + v[1] - v[2] + v[3];
+        let b = 2.0 * v[0] - 2.0 * v[1] + v[2] - v[3];
+        let c = -v[0] + v[2];
+        ((a * t + b) * t + c) * t + v[1]
+    };
+    if method == 2 {
+        let [x0, x1] = [0, 1].map(x);
+        let [y0, y1] = [0, 1].map(y);
+        let [a, b, c, d] = [get(x0, y0), get(x1, y0), get(x0, y1), get(x1, y1)];
+        for channel in 0..C {
+            let top = interpolate(f64::from(a[channel]), f64::from(b[channel]), fraction.0);
+            let bottom = interpolate(f64::from(c[channel]), f64::from(d[channel]), fraction.0);
+            output[channel] = interpolate(top, bottom, fraction.1).clamp(0.0, 255.0) as u8;
+        }
+    } else {
+        let xs = [-1, 0, 1, 2].map(x);
+        let rows: [[f64; C]; 4] = [-1, 0, 1, 2].map(y).map(|y| {
+            let pixels = xs.map(|x| get(x, y));
+            std::array::from_fn(|channel| cubic(pixels.map(|pixel| f64::from(pixel[channel])), fraction.0))
+        });
+        for channel in 0..C {
+            output[channel] = cubic(rows.map(|row| row[channel]), fraction.1).clamp(0.0, 255.0) as u8;
+        }
+    }
+}
+
 pub(crate) fn constant_pixel<const C: usize>(source: &[u8]) -> Option<[u8; C]> {
     let pixels = source.as_chunks::<C>().0;
     let first = *pixels.first()?;
@@ -219,12 +256,16 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
 
 pub(crate) fn horizontal_half<const C: usize>(source: &[u8], output: &mut [u8], weights: &[i32]) {
     let mut sums = [Simd::<i32, 16>::splat(RESAMPLE_ROUND); C];
-    for (tap, &weight) in weights.iter().enumerate() {
+    for (pair, weights) in weights.chunks(2).enumerate() {
+        let tap = pair * 2;
         let first = load::<C>(&source[tap * C..]);
         let second = load::<C>(&source[(tap + 16) * C..]);
         for c in 0..C {
-            let (even, _) = first[c].deinterleave(second[c]);
-            sums[c] += even.cast::<i32>() * Simd::splat(weight);
+            let (even, odd) = first[c].deinterleave(second[c]);
+            sums[c] += even.cast::<i32>() * Simd::splat(weights[0]);
+            if let Some(&weight) = weights.get(1) {
+                sums[c] += odd.cast::<i32>() * Simd::splat(weight);
+            }
         }
     }
     store::<C>(output, sums.map(|sum| (sum >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>()));
@@ -341,6 +382,54 @@ pub(crate) fn reduce_two_l(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn color_sampling_matches_scalar_edges_rounding_and_guards() {
+        fn check<const C: usize>() {
+            let interpolate = |a: f64, b: f64, t: f64| {
+                if cfg!(target_arch = "aarch64") { (b - a).mul_add(t, a) } else { a + (b - a) * t }
+            };
+            let cubic = |v: [f64; 4], t: f64| {
+                let a = -v[0] + v[1] - v[2] + v[3];
+                let b = 2.0 * v[0] - 2.0 * v[1] + v[2] - v[3];
+                let c = -v[0] + v[2];
+                ((a * t + b) * t + c) * t + v[1]
+            };
+            for (width, height) in [(1, 1), (1, 7), (7, 1), (5, 3)] {
+                let backing: Vec<_> = (0..width * height * C + 1).map(|i| (i * 137 + i / 7 * 53) as u8).collect();
+                let source = &backing[1..];
+                for y in -1..height as i64 {
+                    for x in -1..width as i64 {
+                        for tx in [0.0, 0.1, 0.5, 0.9999999999999999] {
+                            for ty in [0.0, 0.3, 0.5, 0.9999999999999999] {
+                                for method in [2, 3] {
+                                    let mut output = vec![173; C + 2];
+                                    sample_color::<C>(source, &mut output[1..C + 1], (width, height), (x, y), (tx, ty), method);
+                                    for (channel, &actual) in output[1..C + 1].iter().enumerate() {
+                                        let get = |dx: i64, dy: i64| {
+                                            let xx = (x + dx).clamp(0, width as i64 - 1) as usize;
+                                            let yy = (y + dy).clamp(0, height as i64 - 1) as usize;
+                                            f64::from(source[(yy * width + xx) * C + channel])
+                                        };
+                                        let expected = if method == 2 {
+                                            interpolate(interpolate(get(0, 0), get(1, 0), tx), interpolate(get(0, 1), get(1, 1), tx), ty)
+                                        } else {
+                                            cubic([-1, 0, 1, 2].map(|dy| cubic([-1, 0, 1, 2].map(|dx| get(dx, dy)), tx)), ty)
+                                        };
+                                        assert_eq!(actual, expected.clamp(0.0, 255.0) as u8);
+                                    }
+                                    assert_eq!((output[0], output[C + 1]), (173, 173));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
     #[test]
     fn constant_pixels_check_every_channel_lane_unaligned_tail_and_guard() {
         fn check<const C: usize>() {
@@ -488,9 +577,16 @@ mod tests {
     #[test]
     fn horizontal_half_matches_scalar_with_unaligned_buffers_and_guards() {
         fn check<const C: usize>() {
-            for weights in
-                [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..], &[200_000; 12][..]]
-            {
+            for weights in [
+                &[][..],
+                &[1 << 22][..],
+                &[-(1 << 22)][..],
+                &[2 << 22][..],
+                &[-400_000, 2_000_000, 3_000_000, -405_696][..],
+                &[200_000; 3][..],
+                &[200_000; 11][..],
+                &[200_000; 12][..],
+            ] {
                 for white in [false, true] {
                     let source: Vec<u8> = (0..1 + (31 + weights.len()) * C).map(|i| if white { 255 } else { (i * 137) as u8 }).collect();
                     let mut actual = vec![93; 16 * C + 2];

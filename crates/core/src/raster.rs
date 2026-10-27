@@ -48,26 +48,29 @@ pub fn unpack_bilevel_inverted(data: &[u8], width: usize, height: usize) -> Vec<
 }
 
 fn unpack_bilevel_bytes<const INVERT: bool>(data: &[u8], width: usize, height: usize) -> Vec<u8> {
-    let mut pixels = vec![0; width * height];
+    let len = width * height;
+    let mut pixels = Vec::with_capacity(len);
     if width == 0 {
         return pixels;
     }
     let row_bytes = width.div_ceil(8);
     let rows_per_chunk = (BILEVEL_CHUNK_BYTES / width).max(1);
-    crate::parallel::chunks_mut_above(&mut pixels, rows_per_chunk * width, UNPACK_PARALLEL_BYTES, |chunk, rows| {
+    crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], rows_per_chunk * width, UNPACK_PARALLEL_BYTES, |chunk, rows| {
         for (row_index, row) in rows.chunks_mut(width).enumerate() {
             let y = chunk * rows_per_chunk + row_index;
             let packed = &data[y * row_bytes..(y + 1) * row_bytes];
             let (groups, tail) = row.as_chunks_mut::<8>();
             for (byte, dst) in packed.iter().zip(groups) {
                 let value = BILEVEL_BYTES[*byte as usize];
-                dst.copy_from_slice(&(if INVERT { !value } else { value }).to_le_bytes());
+                dst.write_copy_of_slice(&(if INVERT { !value } else { value }).to_le_bytes());
             }
             for (x, dst) in tail.iter_mut().enumerate() {
-                *dst = if (packed[width >> 3] & (128 >> x) != 0) != INVERT { 255 } else { 0 };
+                dst.write(if (packed[width >> 3] & (128 >> x) != 0) != INVERT { 255 } else { 0 });
             }
         }
     });
+    // Every reserved byte, including partial rows, was initialized above.
+    unsafe { pixels.set_len(len) };
     pixels
 }
 
@@ -1773,7 +1776,7 @@ mod tests {
     fn bilevel_rows_preserve_partial_bytes_and_parallel_partitions() {
         for threads in [1, 4] {
             rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
-                for width in [0_usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 800, 1023, 4097] {
+                for width in [0_usize, 1, 7, 8, 9, 15, 16, 17, 63, 64, 65, 127, 128, 129, 255, 256, 257, 800, 1023, 4097] {
                     for height in [0, 1, 3, 129, 1025] {
                         let row_bytes = width.div_ceil(8);
                         let packed: Vec<_> = (0..row_bytes * height).map(|i| (i * 37 + 0x95) as u8).collect();

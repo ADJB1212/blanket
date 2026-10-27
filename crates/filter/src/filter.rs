@@ -513,6 +513,19 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     let integer = radius as usize;
     let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u32;
     let far_weight = BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight)) / 2;
+    if integer <= 2 {
+        chunks_mut(pixels, stride * 16, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+                let y = band * 16 + i;
+                match integer {
+                    0 => crate::filter_simd::box_column::<0>(source, row, y, weight, far_weight),
+                    1 => crate::filter_simd::box_column::<1>(source, row, y, weight, far_weight),
+                    _ => crate::filter_simd::box_column::<2>(source, row, y, weight, far_weight),
+                }
+            }
+        });
+        return;
+    }
     // Each band maintains one sum per byte column, allowing contiguous loads
     // and vectorization across columns without transposing the image.
     // Grow bands with the radius so rebuilding their initial sums stays
@@ -1035,6 +1048,28 @@ mod tests {
         check_box_passes::<2>();
         check_box_passes::<3>();
         check_box_passes::<4>();
+    }
+
+    #[test]
+    fn small_vertical_blur_preserves_parallel_bands_and_guards() {
+        for channels in 1..=4 {
+            let (width, height) = (257, 263);
+            let stride = width * channels;
+            let len = stride * height;
+            let storage: Vec<_> = (0..len + 1).map(|i| (i * 71 + i / 7 * 113) as u8).collect();
+            let source = &storage[1..];
+            for radius in [0.25, 1.5, 2.75] {
+                let mut output = vec![173; len + 2];
+                box_vertical(source, &mut output[1..len + 1], stride, radius);
+                for x in 0..stride {
+                    let column: Vec<_> = (0..height).map(|y| source[y * stride + x]).collect();
+                    for (y, expected) in reference_box_line(&column, radius).into_iter().enumerate() {
+                        assert_eq!(output[1 + y * stride + x], expected);
+                    }
+                }
+                assert_eq!((output[0], output[len + 1]), (173, 173));
+            }
+        }
     }
 
     #[test]

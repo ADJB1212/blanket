@@ -6,6 +6,31 @@ use crate::filter::{BOX_WEIGHT_BITS, BOX_WEIGHT_ROUND, box_value};
 
 type Bytes = Simd<u8, 16>;
 
+pub(crate) fn box_column<const R: usize>(source: &[u8], output: &mut [u8], y: usize, weight: u32, far_weight: u32) {
+    let stride = output.len();
+    let height = source.len() / stride;
+    let row = |tap: usize| {
+        let start = (y + tap).saturating_sub(R + 1).min(height - 1) * stride;
+        &source[start..start + stride]
+    };
+    let upper = row(0);
+    let lower = row(2 * R + 2);
+    let end = stride / 16 * 16;
+    for x in (0..end).step_by(16) {
+        let mut sum = Simd::<u16, 16>::splat(0);
+        for tap in 1..=2 * R + 1 {
+            sum += Bytes::from_slice(&row(tap)[x..]).cast::<u16>();
+        }
+        let ends = Bytes::from_slice(&upper[x..]).cast::<u16>() + Bytes::from_slice(&lower[x..]).cast::<u16>();
+        let value = sum.cast::<u32>() * Simd::splat(weight) + ends.cast::<u32>() * Simd::splat(far_weight) + Simd::splat(BOX_WEIGHT_ROUND as u32);
+        (value >> BOX_WEIGHT_BITS).cast::<u8>().copy_to_slice(&mut output[x..x + 16]);
+    }
+    for x in end..stride {
+        let sum = (1..=2 * R + 1).map(|tap| u32::from(row(tap)[x])).sum();
+        output[x] = box_value(sum, u32::from(upper[x]) + u32::from(lower[x]), weight, far_weight);
+    }
+}
+
 pub(crate) fn box_row<const C: usize, const R: usize>(source: &[u8], output: &mut [u8], weight: u32, far_weight: u32) {
     let width = source.len() / C;
     let first = ((R + 1) * C).min(source.len());

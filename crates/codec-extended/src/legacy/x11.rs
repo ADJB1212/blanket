@@ -18,8 +18,25 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
     let body = body.split_once('}').ok_or("truncated XBM pixels")?.0;
     let short = header.split_whitespace().any(|v| v == "short");
     let stride = if short { w.div_ceil(16) * 2 } else { w.div_ceil(8) };
-    let mut raw = Vec::new();
-    for token in body.split(',').map(str::trim).filter(|v| !v.is_empty()) {
+    let mut raw = Vec::with_capacity(stride * h);
+    for token in body.as_bytes().split(|&v| v == b',') {
+        let token = token.trim_ascii();
+        if !short && let [b'0', b'x' | b'X', hi, lo] = *token {
+            let hex = |v: u8| match v {
+                b'0'..=b'9' => Some(v - b'0'),
+                b'a'..=b'f' => Some(v - b'a' + 10),
+                b'A'..=b'F' => Some(v - b'A' + 10),
+                _ => None,
+            };
+            if let (Some(hi), Some(lo)) = (hex(hi), hex(lo)) {
+                raw.push((hi << 4) | lo);
+                continue;
+            }
+        }
+        let token = std::str::from_utf8(token).map_err(|_| "invalid XBM text")?.trim();
+        if token.is_empty() {
+            continue;
+        }
         let value =
             if let Some(v) = token.strip_prefix("0x").or_else(|| token.strip_prefix("0X")) { u16::from_str_radix(v, 16) } else { token.parse() }
                 .map_err(|_| "invalid XBM pixel")?;

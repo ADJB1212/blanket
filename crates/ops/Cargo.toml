@@ -28,5 +28,9 @@ harness = false
 name = "histogram"
 harness = false
 
+[[bench]]
+name = "transform"
+harness = false
+
 [lints]
 workspace = true

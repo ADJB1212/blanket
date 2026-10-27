@@ -1,4 +1,19 @@
+use std::simd::Simd;
+use std::simd::cmp::SimdPartialOrd;
+
 use blanket_core::pixels::{load, store};
+
+pub(super) fn pcx_literals(source: &[u8]) -> usize {
+    let mut offset = 0;
+    for chunk in source.as_chunks::<32>().0 {
+        let runs = Simd::from_array(*chunk).simd_ge(Simd::splat(0xc0));
+        if let Some(index) = runs.first_set() {
+            return offset + index;
+        }
+        offset += 32;
+    }
+    offset + source[offset..].iter().position(|&v| v >= 0xc0).unwrap_or(source.len() - offset)
+}
 
 pub(super) fn extract_channel<const C: usize>(source: &[u8], output: &mut [u8], channel: usize) {
     let end = output.len() / 16 * 16;
@@ -26,6 +41,23 @@ pub(super) fn swap_red_blue<const C: usize>(source: &[u8], output: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pcx_literal_spans_handle_unaligned_vectors_and_tails() {
+        for length in 0..=97 {
+            for offset in 0..=3 {
+                let mut source = vec![0x7f; length + offset];
+                assert_eq!(pcx_literals(&source[offset..]), length);
+                for position in 0..length {
+                    for marker in [0xc0, 0xc1, 0xff] {
+                        source[offset + position] = marker;
+                        assert_eq!(pcx_literals(&source[offset..]), position);
+                    }
+                    source[offset + position] = 0xbf;
+                }
+            }
+        }
+    }
 
     #[test]
     fn channel_extraction_preserves_unaligned_tails_and_guards() {

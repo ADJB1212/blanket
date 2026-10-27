@@ -237,6 +237,31 @@ def test_exif_edits_copy_and_orientation(mode: str) -> None:
         image.getexif()
 
 
+@pytest.mark.parametrize("profile", [False, True])
+def test_exif_cache_tracks_metadata_replacement(profile: bool) -> None:
+    image = Image.new("RGB", (1, 1))
+    key = "Raw profile type exif" if profile else "exif"
+    first = image.getexif()
+    assert image.getexif() is first
+    raw = exif_tags().tobytes()
+    image.info[key] = raw.hex() if profile else raw
+    cached = image.getexif()
+    assert cached is not first
+    assert image.getexif() is cached
+    cached[305] = "edited"
+    assert image.getexif()[305] == "edited"
+    replacement = Image.Exif()
+    replacement[305] = "replacement"
+    raw = replacement.tobytes()
+    image.info[key] = raw.hex() if profile else raw
+    assert image.getexif()[305] == "replacement"
+    del image.info[key]
+    assert not image.getexif()
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.getexif()
+
+
 def test_jpeg_multisegment_icc_and_size_limits() -> None:
     image = Image.new("RGB", (2, 2))
     profile = bytes(range(256)) * 700
