@@ -240,7 +240,7 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
 }
 
 #[pyfunction]
-fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image) -> PyResult<Image> {
+pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image) -> PyResult<Image> {
     if background.mode != PixelMode::Rgba || overlay.mode != PixelMode::Rgba || background.palette.is_some() || overlay.palette.is_some() {
         return Err(PyValueError::new_err("image has wrong mode"));
     }

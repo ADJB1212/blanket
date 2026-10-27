@@ -33,7 +33,7 @@ fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
 
 /// Pillow's core blend uses a single-precision alpha and truncates toward zero.
 #[pyfunction]
-fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
+pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
     if first.mode != second.mode || first.width != second.width || first.height != second.height || first.bit_depth != second.bit_depth {
         return Err(PyValueError::new_err("images do not match"));
     }

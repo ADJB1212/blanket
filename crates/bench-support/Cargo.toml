@@ -1,0 +1,18 @@
+[package]
+name = "blanket-bench-support"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+criterion.workspace = true
+pyo3 = { workspace = true, features = ["auto-initialize"] }
+
+[lib]
+bench = false
+doctest = false
+
+[lints]
+workspace = true

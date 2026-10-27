@@ -365,7 +365,7 @@ fn ops_colorize(py: Python<'_>, image: &Image, tables: Vec<u8>) -> PyResult<Imag
 }
 
 #[pyfunction(signature = (image, mask=None))]
-fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<Vec<u64>> {
+pub fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<Vec<u64>> {
     let source = image.pixel_data()?;
     let mask = validate_mask(mask, image)?;
     Ok(py.detach(|| match image.mode {
@@ -1013,7 +1013,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
 }
 
 #[pyfunction(signature = (image, size, method, bounds, reducing_gap=None))]
-fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>) -> PyResult<Image> {
+pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>) -> PyResult<Image> {
     let source = image.raw_data()?;
     if method > 5 {
         return Err(PyValueError::new_err("unknown resampling filter"));

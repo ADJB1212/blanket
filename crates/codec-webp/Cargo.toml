@@ -33,5 +33,13 @@ pkg-config = "0.3"
 [lib]
 doctest = false
 
+[dev-dependencies]
+blanket-bench-support.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "codec"
+harness = false
+
 [lints]
 workspace = true

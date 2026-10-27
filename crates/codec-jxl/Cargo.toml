@@ -24,5 +24,21 @@ jxl-vendored = ["jpegxl-rs/vendored"]
 [lib]
 doctest = false
 
+[dev-dependencies]
+blanket-bench-support.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "settings"
+harness = false
+
+[[bench]]
+name = "streaming"
+harness = false
+
 [lints]
 workspace = true

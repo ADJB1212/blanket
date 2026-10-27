@@ -24,5 +24,13 @@ use-system-lcms2 = ["lcms2-sys/dynamic"]
 [lib]
 doctest = false
 
+[dev-dependencies]
+blanket-bench-support.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "conversion"
+harness = false
+
 [lints]
 workspace = true

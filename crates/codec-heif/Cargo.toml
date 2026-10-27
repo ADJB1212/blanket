@@ -21,5 +21,13 @@ embedded-libheif = ["libheif-rs/embedded-libheif"]
 [lib]
 doctest = false
 
+[dev-dependencies]
+blanket-bench-support.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "codec"
+harness = false
+
 [lints]
 workspace = true

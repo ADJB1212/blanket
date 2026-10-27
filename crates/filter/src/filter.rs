@@ -584,7 +584,7 @@ fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyRe
 }
 
 #[pyfunction]
-fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::blur(image, radii, gaussian));
     }

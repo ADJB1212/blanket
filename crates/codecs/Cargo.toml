@@ -36,5 +36,14 @@ no-vendored-webp = ["blanket-codec-webp/no-vendored-webp"]
 [lib]
 doctest = false
 
+[dev-dependencies]
+blanket-bench-support.workspace = true
+criterion.workspace = true
+tempfile = { version = "3", default-features = false }
+
+[[bench]]
+name = "io"
+harness = false
+
 [lints]
 workspace = true

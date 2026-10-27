@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/bench-support",
     "crates/core",
     "crates/codecs",
     "crates/codec-common",
@@ -37,6 +38,8 @@ rust-version = "1.98"
 edition = "2024"
 
 [workspace.dependencies]
+blanket-bench-support = { path = "crates/bench-support" }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "plotters", "html_reports"] }
 blanket-codec-common = { path = "crates/codec-common" }
 blanket-codec-extended = { path = "crates/codec-extended" }
 blanket-codec-image = { path = "crates/codec-image" }
@@ -76,6 +79,14 @@ debug = "line-directives-only"
 split-debuginfo = "unpacked"
 lto = "off"
 codegen-units = 256
+
+[profile.bench]
+opt-level = 3
+debug = false
+lto = "fat"
+strip = true
+codegen-units = 1
+incremental = true
 
 [workspace.lints.rust]
 warnings = { level = "deny", priority = -1 }
