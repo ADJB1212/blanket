@@ -1397,6 +1397,47 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
     let narrow = horizontal.iter().all(|(_, coefficients)| {
         coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + i64::from(RESAMPLE_ROUND) <= i64::from(i32::MAX)
     });
+    if narrow && width == horizontal.bounds.len() * 2 {
+        let blocks: Vec<_> = (0..horizontal.bounds.len() / 16)
+            .map(|block| {
+                let x = block * 16;
+                let (start, coefficients) = horizontal.get(x);
+                (start + 31 + coefficients.len() <= width
+                    && (1..16).all(|i| {
+                        let (next, weights) = horizontal.get(x + i);
+                        next == start + i * 2 && weights == coefficients
+                    }))
+                .then_some((start, coefficients))
+            })
+            .collect();
+        if blocks.iter().any(Option::is_some) {
+            chunks_mut(output, row_bytes * 16, |band, rows| {
+                for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                    let y = first_row + band * 16 + i;
+                    let src = &source[y * input_stride..(y + 1) * input_stride];
+                    for (block, out) in dst.chunks_mut(16 * C).enumerate() {
+                        if let Some(&(start, coefficients)) = blocks.get(block).and_then(Option::as_ref) {
+                            crate::ops_simd::horizontal_half::<C>(&src[start * C..], out, coefficients);
+                        } else {
+                            for (i, pixel) in out.as_chunks_mut::<C>().0.iter_mut().enumerate() {
+                                let (start, coefficients) = horizontal.get(block * 16 + i);
+                                let mut sums = [RESAMPLE_ROUND; C];
+                                for (input, &weight) in src[start * C..].as_chunks::<C>().0.iter().zip(coefficients) {
+                                    for c in 0..C {
+                                        sums[c] += i32::from(input[c]) * weight;
+                                    }
+                                }
+                                for c in 0..C {
+                                    pixel[c] = (sums[c] >> RESAMPLE_BITS).clamp(0, 255) as u8;
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+            return;
+        }
+    }
     let batch_rows = narrow && (matches!(C, 2 | 3) || horizontal.iter().all(|(_, coefficients)| coefficients.len() <= 8));
     if batch_rows && output.len() >= row_bytes * 4 {
         resample_horizontal_batched::<C>(source, output, width, first_row, horizontal);

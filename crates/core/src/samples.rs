@@ -81,6 +81,10 @@ pub(crate) fn encode(values: &[u16], big_endian: bool) -> PyResult<Vec<u8>> {
 
 pub fn output(image: &Image, values: &[u16]) -> PyResult<Image> {
     let pixels = encode(values, image.mode == PixelMode::I16B)?;
+    output_bytes(image, pixels)
+}
+
+pub fn output_bytes(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
     if image.mode.is_wide_scalar() {
         Image::from_integer_bytes(image.width, image.height, image.mode, pixels)
     } else {

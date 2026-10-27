@@ -46,6 +46,7 @@ test = [
     "pillow-jxl-plugin>=1.3.8",
     "pillow-heif>=1.7",
     "pytest>=9,<10",
+    "pytest-xdist>=3.8.0",
     "rich>=15",
     "ruff>=0.17.2",
     "ty>=0.0.92",
@@ -64,7 +65,7 @@ strip = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=line", "--strict-markers", "--strict-config", "--assert=plain"]
+addopts = ["--color=no", "--code-highlight=no", "--no-header", "--tb=line", "--strict-markers", "--strict-config", "--assert=plain", "-n=logical"]
 console_output_style = "none"
 xfail_strict = true
 

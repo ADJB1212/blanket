@@ -9,7 +9,7 @@ cargo bench -p blanket-codec-jxl --bench codec
 
 Defaults favor quick iteration: 20 samples, 100 ms warm-up, a 300 ms
 measurement target, and 10,000 bootstrap resamples per case. The default matrix
-uses 512x512, 8-bit RGB (RGBA for alpha compositing), with patterned inputs for
+uses 800x600, 8-bit RGB (RGBA for alpha compositing), with patterned inputs for
 codecs and file I/O. Processing kernels retain their random input pixels.
 Slow operations can exceed the measurement target to collect all samples.
 These short measurements have more noise than the full configuration.
@@ -55,10 +55,10 @@ Benchmarks live in the owning crate's `benches/` directory. Select a crate with
 The dev-only `blanket-bench-support` crate shares fixtures and timing helpers;
 it depends on the core and Criterion, without pulling in other codec backends.
 
-The full matrix uses 512x512 and 2048x1536. Codec cases exercise L/RGB/RGBA for PNG,
+The full matrix uses 800x600 and 1920x1080. Codec cases exercise L/RGB/RGBA for PNG,
 JXL, and WebP; JPEG uses L/RGB, and other formats use RGB. AVIF and HEIF stop
-at 512x512 to keep their slower encoders practical. PNG, JXL, and JPEG 2000
-also cover L/RGB/RGBA at 10/12/16 bits on patterned 512x512 images.
+at 800x600 to keep their slower encoders practical. PNG, JXL, and JPEG 2000
+also cover L/RGB/RGBA at 10/12/16 bits on patterned 800x600 images.
 
 JXL's main codec cases use effort 3 and quality 85 or lossless encoding. The
 `jxl-float` cases decode floating-point RGB input to the normal 8-bit display

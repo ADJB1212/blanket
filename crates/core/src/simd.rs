@@ -4,7 +4,7 @@ use std::simd::{Simd, ToBytes};
 
 use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
-use crate::pixels::{Bytes, load, load_u16, store};
+use crate::pixels::{Bytes, load, load_sample_bytes, load_u16, store, store_sample_bytes};
 use crate::raster::PixelMode;
 
 pub(crate) fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
@@ -115,22 +115,8 @@ fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source:
         let end = count / 16 * 16;
         for i in (0..end).step_by(16) {
             let input = &src[i * S * source_bytes..];
-            let p: [Simd<u32, 16>; S] = if source_bytes == 1 {
-                load::<S>(input).map(|v| v.cast())
-            } else {
-                match S {
-                    1 => std::array::from_fn(|_| load_u16::<false>(input).cast()),
-                    3 => {
-                        let bytes = load::<6>(input);
-                        std::array::from_fn(|c| bytes[c * 2].cast::<u32>() | (bytes[c * 2 + 1].cast::<u32>() << 8))
-                    }
-                    4 => {
-                        let bytes = load::<8>(input);
-                        std::array::from_fn(|c| bytes[c * 2].cast::<u32>() | (bytes[c * 2 + 1].cast::<u32>() << 8))
-                    }
-                    _ => unreachable!(),
-                }
-            };
+            let p: [Simd<u32, 16>; S] =
+                if source_bytes == 1 { load::<S>(input).map(|v| v.cast()) } else { load_sample_bytes::<S>(input).map(|v| v.cast()) };
             let values: [Simd<u32, 16>; D] = std::array::from_fn(|c| {
                 let v = if D == 1 {
                     // The maximum rounded sum fits u32, including 16-bit white.
@@ -147,12 +133,7 @@ fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source:
             if target_bytes == 1 {
                 store(out, values.map(|v| v.cast::<u8>()));
             } else {
-                match D {
-                    1 => values[0].cast::<u16>().to_le_bytes().copy_to_slice(&mut out[..32]),
-                    3 => store::<6>(out, std::array::from_fn(|c| (values[c / 2] >> ((c % 2) * 8) as u32).cast())),
-                    4 => store::<8>(out, std::array::from_fn(|c| (values[c / 2] >> ((c % 2) * 8) as u32).cast())),
-                    _ => unreachable!(),
-                }
+                store_sample_bytes(out, values.map(|v| v.cast::<u16>()));
             }
         }
         for (input, output) in

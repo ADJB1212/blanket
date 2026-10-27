@@ -84,3 +84,18 @@ def test_enhance_returns_fresh_image_with_pillow_metadata(name: str) -> None:
     same(actual, expected)
     assert actual is not blanket
     assert actual.info == expected.info
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK"])
+@pytest.mark.parametrize("size", [(0, 0), (17, 1), (16385, 1), (521, 509)])
+def test_blend_initializes_output_across_vector_and_parallel_boundaries(mode: str, size: tuple[int, int]) -> None:
+    first, reference = pair(mode, size)
+    raw = first.tobytes()
+    reversed_raw = raw[::-1]
+    second = Image.frombytes(mode, size, reversed_raw)
+    second_reference = PILImage.frombytes(mode, size, reversed_raw)
+    actual = Image.blend(first, second, 0.5)
+    assert actual.tobytes() == PILImage.blend(reference, second_reference, 0.5).tobytes()
+    assert (actual.mode, actual.size, actual.bit_depth) == (mode, size, 8)
+    assert first.tobytes() == raw
+    assert second.tobytes() == reversed_raw

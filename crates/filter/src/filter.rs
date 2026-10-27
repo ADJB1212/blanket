@@ -455,33 +455,53 @@ pub(crate) const BOX_WEIGHT_BITS: u32 = 24;
 pub(crate) const BOX_WEIGHT_SCALE: u32 = 1 << BOX_WEIGHT_BITS;
 pub(crate) const BOX_WEIGHT_ROUND: u64 = 1 << (BOX_WEIGHT_BITS - 1);
 
+#[inline]
+pub(crate) fn box_value(sum: u32, ends: u32, weight: u32, far_weight: u32) -> u8 {
+    // Only bits 24..32 reach the output; wrapping u32 retains them.
+    (sum.wrapping_mul(weight).wrapping_add(ends.wrapping_mul(far_weight)).wrapping_add(BOX_WEIGHT_ROUND as u32) >> BOX_WEIGHT_BITS) as u8
+}
+
 fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize, radius: f32) {
     let integer = radius as usize;
-    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
-    let far_weight = u64::from(BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u32;
+    let far_weight = BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight)) / 2;
     let stride = width * C;
+    if integer <= 2 {
+        chunks_mut(pixels, stride * 16, |band, rows| {
+            for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+                let input = &source[(band * 16 + i) * stride..][..stride];
+                match integer {
+                    0 => crate::filter_simd::box_row::<C, 0>(input, row, weight, far_weight),
+                    1 => crate::filter_simd::box_row::<C, 1>(input, row, weight, far_weight),
+                    _ => crate::filter_simd::box_row::<C, 2>(input, row, weight, far_weight),
+                }
+            }
+        });
+        return;
+    }
     let source = source.as_chunks::<C>().0;
     chunks_mut(pixels, stride * 16, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let input = &source[(band * 16 + i) * width..][..width];
             let row = row.as_chunks_mut::<C>().0;
-            let mut sums = input[0].map(|value| u64::from(value) * (integer as u64 + 1));
+            let mut sums = input[0].map(|value| u32::from(value).wrapping_mul(integer as u32 + 1));
             for pixel in &input[1..=integer.min(width - 1)] {
                 for channel in 0..C {
-                    sums[channel] += u64::from(pixel[channel]);
+                    sums[channel] = sums[channel].wrapping_add(u32::from(pixel[channel]));
                 }
             }
             for channel in 0..C {
-                sums[channel] += u64::from(input[width - 1][channel]) * integer.saturating_sub(width - 1) as u64;
+                let repeat = u32::from(input[width - 1][channel]).wrapping_mul(integer.saturating_sub(width - 1) as u32);
+                sums[channel] = sums[channel].wrapping_add(repeat);
             }
             for (x, pixel) in row.iter_mut().enumerate() {
                 let left = x.saturating_sub(integer + 1);
                 let right = (x + integer + 1).min(width - 1);
                 let leaving = x.saturating_sub(integer);
                 for channel in 0..C {
-                    let ends = u64::from(input[left][channel]) + u64::from(input[right][channel]);
-                    pixel[channel] = ((sums[channel] * weight + ends * far_weight + BOX_WEIGHT_ROUND) >> BOX_WEIGHT_BITS) as u8;
-                    sums[channel] = sums[channel] - u64::from(input[leaving][channel]) + u64::from(input[right][channel]);
+                    let ends = u32::from(input[left][channel]) + u32::from(input[right][channel]);
+                    pixel[channel] = box_value(sums[channel], ends, weight, far_weight);
+                    sums[channel] = sums[channel].wrapping_sub(u32::from(input[leaving][channel])).wrapping_add(u32::from(input[right][channel]));
                 }
             }
         }
@@ -491,8 +511,8 @@ fn box_horizontal<const C: usize>(source: &[u8], pixels: &mut [u8], width: usize
 fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     let height = source.len() / stride;
     let integer = radius as usize;
-    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
-    let far_weight = u64::from(BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+    let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u32;
+    let far_weight = BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight)) / 2;
     // Each band maintains one sum per byte column, allowing contiguous loads
     // and vectorization across columns without transposing the image.
     // Grow bands with the radius so rebuilding their initial sums stays
@@ -502,16 +522,16 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
         let first = band * band_rows;
         let top = first.saturating_sub(integer);
         let bottom = (first + integer).min(height - 1);
-        let mut sums = vec![0_u64; stride];
+        let mut sums = vec![0_u32; stride];
         for row in source[top * stride..(bottom + 1) * stride].chunks_exact(stride) {
             for (sum, &value) in sums.iter_mut().zip(row) {
-                *sum += u64::from(value);
+                *sum = sum.wrapping_add(u32::from(value));
             }
         }
-        let upper_repeat = integer.saturating_sub(first) as u64;
-        let lower_repeat = (first + integer).saturating_sub(height - 1) as u64;
+        let upper_repeat = integer.saturating_sub(first) as u32;
+        let lower_repeat = (first + integer).saturating_sub(height - 1) as u32;
         for ((sum, &upper), &lower) in sums.iter_mut().zip(&source[..stride]).zip(&source[(height - 1) * stride..]) {
-            *sum += u64::from(upper) * upper_repeat + u64::from(lower) * lower_repeat;
+            *sum = sum.wrapping_add(u32::from(upper).wrapping_mul(upper_repeat)).wrapping_add(u32::from(lower).wrapping_mul(lower_repeat));
         }
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let y = first + i;
@@ -522,9 +542,9 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
             let lower = &source[right..right + stride];
             let leaving = &source[leaving..leaving + stride];
             for ((((dst, sum), &upper), &lower), &leaving) in row.iter_mut().zip(&mut sums).zip(upper).zip(lower).zip(leaving) {
-                let ends = u64::from(upper) + u64::from(lower);
-                *dst = ((*sum * weight + ends * far_weight + BOX_WEIGHT_ROUND) >> BOX_WEIGHT_BITS) as u8;
-                *sum = *sum - u64::from(leaving) + u64::from(lower);
+                let ends = u32::from(upper) + u32::from(lower);
+                *dst = box_value(*sum, ends, weight, far_weight);
+                *sum = sum.wrapping_sub(u32::from(leaving)).wrapping_add(u32::from(lower));
             }
         }
     });
@@ -954,6 +974,67 @@ mod tests {
         let row = blurred::<1>(&[0, 90, 0], 3, 1, (1.0, 0.0), false).unwrap();
         assert_eq!(column, row);
         assert_eq!(column, [30; 3]);
+    }
+
+    fn reference_box_line(input: &[u8], radius: f32) -> Vec<u8> {
+        let integer = radius as usize;
+        let weight = (BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u64;
+        let far_weight = u64::from(BOX_WEIGHT_SCALE.wrapping_sub((2 * integer as u32 + 1).wrapping_mul(weight as u32)) / 2);
+        (0..input.len())
+            .map(|x| {
+                let start = x.saturating_sub(integer);
+                let end = (x + integer).min(input.len() - 1);
+                let sum = input[start..=end].iter().map(|&v| u64::from(v)).sum::<u64>()
+                    + u64::from(input[0]) * integer.saturating_sub(x) as u64
+                    + u64::from(input[input.len() - 1]) * (x + integer).saturating_sub(input.len() - 1) as u64;
+                let ends = u64::from(input[x.saturating_sub(integer + 1)]) + u64::from(input[(x + integer + 1).min(input.len() - 1)]);
+                ((sum * weight + ends * far_weight + BOX_WEIGHT_ROUND) >> BOX_WEIGHT_BITS) as u8
+            })
+            .collect()
+    }
+
+    fn check_box_passes<const C: usize>() {
+        for width in [1, 2, 7, 15, 16, 17, 31, 33, 65] {
+            for height in [1, 3, 17, 65] {
+                let len = width * height * C;
+                for white in [false, true] {
+                    let storage: Vec<u8> = (0..len + 3).map(|i| if white { 255 } else { (i * 71 + i / 7 * 113) as u8 }).collect();
+                    let source = &storage[3..];
+                    for radius in [0.0, 0.1, 0.5, 1.0, 1.25, 2.9, 16.0, 100.5, 8_500_000.0, 2_000_000_000.0] {
+                        let mut horizontal = vec![93; len + 5];
+                        let mut vertical = horizontal.clone();
+                        box_horizontal::<C>(source, &mut horizontal[1..len + 1], width, radius);
+                        box_vertical(source, &mut vertical[1..len + 1], width * C, radius);
+                        for result in [&horizontal, &vertical] {
+                            assert_eq!(result[0], 93);
+                            assert_eq!(&result[len + 1..], &[93; 4]);
+                        }
+                        for y in 0..height {
+                            for c in 0..C {
+                                let input: Vec<u8> = (0..width).map(|x| source[(y * width + x) * C + c]).collect();
+                                for (x, expected) in reference_box_line(&input, radius).into_iter().enumerate() {
+                                    assert_eq!(horizontal[1 + (y * width + x) * C + c], expected);
+                                }
+                            }
+                        }
+                        for x in 0..width * C {
+                            let input: Vec<u8> = (0..height).map(|y| source[y * width * C + x]).collect();
+                            for (y, expected) in reference_box_line(&input, radius).into_iter().enumerate() {
+                                assert_eq!(vertical[1 + y * width * C + x], expected);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn box_passes_match_wide_reference_with_large_radii_and_guards() {
+        check_box_passes::<1>();
+        check_box_passes::<2>();
+        check_box_passes::<3>();
+        check_box_passes::<4>();
     }
 
     #[test]

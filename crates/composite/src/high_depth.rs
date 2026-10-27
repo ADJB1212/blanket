@@ -1,8 +1,8 @@
-use std::simd::cmp::{SimdOrd, SimdPartialEq};
-use std::simd::num::SimdUint;
-use std::simd::{Select, Simd};
+use std::simd::cmp::SimdPartialEq;
+use std::simd::num::{SimdFloat, SimdUint};
+use std::simd::{Select, Simd, StdFloat};
 
-use blanket_core::pixels::{Samples, load_samples, store_samples};
+use blanket_core::pixels::{Samples, load_samples, store_sample_bytes, store_samples};
 use blanket_core::{Image, PixelMode, samples};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -111,43 +111,60 @@ fn paste_row_max<const C: usize, const MAXIMUM: u32>(dst: &mut [u16], src: &[u16
 
 pub(crate) fn composite(background: &Image, overlay: &Image) -> PyResult<Image> {
     matching(background, overlay)?;
-    let mut values = samples::read(background)?;
+    let values = samples::view(background)?;
     let source = samples::view(overlay)?;
     let maximum = u64::from(samples::maximum(background));
-    composite_samples(&mut values, &source, maximum);
-    samples::output(background, &values)
+    let mut pixels = blanket_core::raster::alloc_pixels(values.len() * 2)?;
+    composite_samples(&values, &source, &mut pixels, maximum);
+    samples::output_bytes(background, pixels)
 }
 
-fn composite_samples(values: &mut [u16], source: &[u16], maximum: u64) {
-    let end = values.len() / 64 * 64;
+fn composite_samples(background: &[u16], source: &[u16], output: &mut [u8], maximum: u64) {
+    const CHUNK: usize = 16 * 1024 * 8;
+    blanket_core::parallel::chunks_mut_above(output, CHUNK, 256 * 1024, |chunk, dst| {
+        let start = chunk * CHUNK / 2;
+        let count = dst.len() / 2;
+        composite_chunk(&background[start..start + count], &source[start..start + count], dst, maximum);
+    });
+}
+
+fn composite_chunk(background: &[u16], source: &[u16], output: &mut [u8], maximum: u64) {
+    let end = background.len() / 64 * 64;
     for i in (0..end).step_by(64) {
-        let dst = load_samples::<4>(&values[i..]);
+        let dst = load_samples::<4>(&background[i..]);
         let src = load_samples::<4>(&source[i..]);
-        let a = src[3].cast::<u64>();
-        let b = dst[3].cast::<u64>() * (Simd::splat(maximum) - a);
-        let alpha = a * Simd::splat(maximum) + b;
-        let denominator = alpha.simd_max(Simd::splat(1));
+        let a = src[3].cast::<f64>();
+        let b = dst[3].cast::<f64>() * (Simd::splat(maximum as f64) - a);
+        let alpha = a * Simd::splat(maximum as f64) + b;
+        let denominator = alpha.simd_max(Simd::splat(1.0));
+        // Numerators fit 48 bits; f64 division cannot cross sample boundaries.
         let result: [Samples; 4] = std::array::from_fn(|c| {
             let value = if c == 3 {
-                (alpha + Simd::splat(maximum / 2)) / Simd::splat(maximum)
+                (alpha + Simd::splat((maximum / 2) as f64)) / Simd::splat(maximum as f64)
             } else {
-                (src[c].cast::<u64>() * a * Simd::splat(maximum) + dst[c].cast::<u64>() * b + denominator / Simd::splat(2)) / denominator
+                (src[c].cast::<f64>() * a * Simd::splat(maximum as f64) + dst[c].cast::<f64>() * b + (denominator * Simd::splat(0.5)).floor())
+                    / denominator
             };
             src[3].simd_eq(Samples::splat(0)).select(dst[c], value.cast())
         });
-        store_samples(&mut values[i..], result);
+        store_sample_bytes(&mut output[i * 2..], result);
     }
-    for (dst, src) in values[end..].as_chunks_mut::<4>().0.iter_mut().zip(source[end..].as_chunks::<4>().0) {
+    for ((original, src), output) in
+        background[end..].as_chunks::<4>().0.iter().zip(source[end..].as_chunks::<4>().0).zip(output[end * 2..].as_chunks_mut::<8>().0)
+    {
+        let mut dst = *original;
         let a = u64::from(src[3]);
-        if a == 0 {
-            continue;
+        if a != 0 {
+            let b = u64::from(dst[3]) * (maximum - a);
+            let alpha = a * maximum + b;
+            for c in 0..3 {
+                dst[c] = ((u64::from(src[c]) * a * maximum + u64::from(dst[c]) * b + alpha / 2) / alpha) as u16;
+            }
+            dst[3] = ((alpha + maximum / 2) / maximum) as u16;
         }
-        let b = u64::from(dst[3]) * (maximum - a);
-        let alpha = a * maximum + b;
-        for c in 0..3 {
-            dst[c] = ((u64::from(src[c]) * a * maximum + u64::from(dst[c]) * b + alpha / 2) / alpha) as u16;
+        for (dst, value) in output.as_chunks_mut::<2>().0.iter_mut().zip(dst) {
+            *dst = value.to_le_bytes();
         }
-        dst[3] = ((alpha + maximum / 2) / maximum) as u16;
     }
 }
 
@@ -248,6 +265,37 @@ mod tests {
     }
 
     #[test]
+    fn source_over_matches_integer_reference_for_every_source_alpha() {
+        for maximum in [1023_u64, 4095, 65535] {
+            for destination_alpha in [0, 1, 2, maximum / 2, maximum - 1, maximum] {
+                let count = maximum as usize + 1;
+                let mut original = vec![0; count * 4];
+                let mut source = original.clone();
+                for (i, (dst, src)) in original.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks_mut::<4>().0).enumerate() {
+                    *dst = [maximum as u16, 0, ((i * 719) as u64 % (maximum + 1)) as u16, destination_alpha as u16];
+                    *src = [0, maximum as u16, ((i * 313 + 619) as u64 % (maximum + 1)) as u16, i as u16];
+                }
+                let mut pixels = vec![0; count * 8];
+                composite_samples(&original, &source, &mut pixels, maximum);
+                let output: Vec<_> = pixels.as_chunks::<2>().0.iter().map(|&bytes| u16::from_le_bytes(bytes)).collect();
+                for ((actual, dst), src) in output.as_chunks::<4>().0.iter().zip(original.as_chunks::<4>().0).zip(source.as_chunks::<4>().0) {
+                    let a = u64::from(src[3]);
+                    if a == 0 {
+                        assert_eq!(actual, dst);
+                        continue;
+                    }
+                    let b = destination_alpha * (maximum - a);
+                    let alpha = a * maximum + b;
+                    for c in 0..3 {
+                        assert_eq!(actual[c], ((u64::from(src[c]) * a * maximum + u64::from(dst[c]) * b + alpha / 2) / alpha) as u16);
+                    }
+                    assert_eq!(actual[3], ((alpha + maximum / 2) / maximum) as u16);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn source_over_preserves_alpha_extremes_tails_and_guards() {
         for maximum in [1023_u64, 4095, 65535] {
             for count in [0, 1, 15, 16, 17, 31, 32, 33, 65] {
@@ -277,8 +325,11 @@ mod tests {
                     }
                     dst[3] = ((alpha + maximum / 2) / maximum) as u16;
                 }
-                composite_samples(&mut output[1..count * 4 + 1], &source[1..], maximum);
-                assert_eq!(output, expected);
+                let mut pixels = vec![173; count * 8 + 2];
+                composite_samples(&output[1..count * 4 + 1], &source[1..], &mut pixels[1..count * 8 + 1], maximum);
+                let actual: Vec<_> = pixels[1..count * 8 + 1].as_chunks::<2>().0.iter().map(|&bytes| u16::from_le_bytes(bytes)).collect();
+                assert_eq!(actual, expected[1..count * 4 + 1]);
+                assert_eq!((pixels[0], pixels[count * 8 + 1]), (173, 173));
             }
         }
     }

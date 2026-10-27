@@ -4,7 +4,7 @@ use std::time::Duration;
 use blanket_core::{Image, PixelMode};
 use criterion::{Criterion, Throughput};
 
-pub const SIZES: [(u32, u32); 2] = [(512, 512), (2048, 1536)];
+pub const SIZES: [(u32, u32); 2] = [(800, 600), (1920, 1080)];
 
 pub fn full_matrix() -> bool {
     std::env::var_os("BLANKET_BENCH_FULL").is_some_and(|value| value == "1")
@@ -82,7 +82,7 @@ pub fn codec_fixtures(modes: &[PixelMode], wide: bool, sizes: &[(u32, u32)], mut
     if wide && full_matrix() {
         for depth in [10, 12, 16] {
             for &mode in modes {
-                bench(&fixture(512, 512, mode, depth, 12345, false), "patterned");
+                bench(&fixture(SIZES[0].0, SIZES[0].1, mode, depth, 12345, false), "patterned");
             }
         }
     }
@@ -111,7 +111,7 @@ mod tests {
 
     #[test]
     fn quick_matrix_keeps_one_size_depth_and_rgb_mode() {
-        assert_eq!(select(&SIZES, false), &[(512, 512)]);
+        assert_eq!(select(&SIZES, false), &[(800, 600)]);
         assert_eq!(select(&[8, 16], false), &[8]);
         assert_eq!(select_modes(&[PixelMode::L, PixelMode::Rgb, PixelMode::Rgba], false), &[PixelMode::Rgb]);
         assert_eq!(select_modes(&[PixelMode::Rgba], false), &[PixelMode::Rgba]);
@@ -120,7 +120,7 @@ mod tests {
 
     #[test]
     fn full_matrix_preserves_all_inputs() {
-        assert_eq!(select(&SIZES, true), &SIZES);
+        assert_eq!(select(&SIZES, true), &[(800, 600), (1920, 1080)]);
         assert_eq!(select(&[8, 16], true), &[8, 16]);
         let modes = [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba];
         assert_eq!(select_modes(&modes, true), &modes);

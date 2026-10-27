@@ -49,24 +49,30 @@ pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32)
         return py.detach(|| copy(second, second_pixels));
     }
 
-    let mut pixels = alloc_pixels(first_pixels.len())?;
+    let len = first_pixels.len();
+    let mut pixels = Vec::new();
+    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
     py.detach(|| {
-        chunks_mut(&mut pixels, CHUNK_PIXELS * first.mode.channels(), |i, dst| {
+        chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK_PIXELS * first.mode.channels(), MIN_PARALLEL_BYTES, |i, dst| {
             let start = i * CHUNK_PIXELS * first.mode.channels();
-            blend_bytes(&first_pixels[start..start + dst.len()], &second_pixels[start..start + dst.len()], dst, factor);
+            blend_bytes_uninit(&first_pixels[start..start + dst.len()], &second_pixels[start..start + dst.len()], dst, factor);
         });
+        // Every reserved byte is written by the SIMD kernel or its scalar tail.
+        unsafe { pixels.set_len(len) };
     });
     output(first, pixels)
 }
 
-fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
+fn blend_bytes_uninit(first: &[u8], second: &[u8], output: &mut [std::mem::MaybeUninit<u8>], factor: f32) {
     use std::simd::Simd;
     #[cfg(not(target_arch = "aarch64"))]
     use std::simd::cmp::SimdOrd;
     #[cfg(not(target_arch = "aarch64"))]
     use std::simd::num::SimdInt;
     use std::simd::num::{SimdFloat, SimdUint};
-    let done = first.len().min(second.len()).min(output.len()) / 16 * 16;
+    assert_eq!(first.len(), output.len());
+    assert_eq!(second.len(), output.len());
+    let done = output.len() / 16 * 16;
     for i in (0..done).step_by(16) {
         let a = Simd::<u8, 16>::from_slice(&first[i..i + 16]).cast::<f32>();
         let b = Simd::<u8, 16>::from_slice(&second[i..i + 16]).cast::<f32>();
@@ -87,11 +93,14 @@ fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
             .cast::<i16>()
             .simd_clamp(Simd::splat(0), Simd::splat(255))
             .cast::<u8>();
-        blended.copy_to_slice(&mut output[i..i + 16]);
+        output[i..i + 16].write_copy_of_slice(&blended.to_array());
     }
-    blend_bytes_scalar(&first[done..], &second[done..], &mut output[done..], factor);
+    for ((&a, &b), dst) in first[done..].iter().zip(&second[done..]).zip(&mut output[done..]) {
+        dst.write((f32::from(a) + factor * (f32::from(b) - f32::from(a))) as u8);
+    }
 }
 
+#[cfg(test)]
 fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
     for ((&a, &b), dst) in first.iter().zip(second).zip(output) {
         *dst = (f32::from(a) + factor * (f32::from(b) - f32::from(a))) as u8;
@@ -317,6 +326,15 @@ fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], widt
 mod tests {
     use super::*;
 
+    fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
+        let mut storage: Vec<_> = output.iter().copied().map(std::mem::MaybeUninit::new).collect();
+        blend_bytes_uninit(first, second, &mut storage, factor);
+        for (dst, value) in output.iter_mut().zip(storage) {
+            // The kernel initializes every output byte.
+            *dst = unsafe { value.assume_init() };
+        }
+    }
+
     #[test]
     fn blend_truncates_and_clips_like_pillow() {
         let first = [100, 200, 10];
@@ -368,8 +386,10 @@ mod tests {
                 let first: Vec<u8> = (0..count + offset).map(|i| (i * 37) as u8).collect();
                 let second: Vec<u8> = (0..count + offset).map(|i| (i * 53 + 17) as u8).collect();
                 for factor in [0.35_f32, -1.5, 2.5, f32::MAX, f32::NAN, f32::INFINITY] {
-                    let mut output = vec![93; offset + count + 16];
-                    blend_bytes(&first[offset..], &second[offset..], &mut output[offset..offset + count], factor);
+                    let mut storage = vec![std::mem::MaybeUninit::new(93); offset + count + 16];
+                    blend_bytes_uninit(&first[offset..], &second[offset..], &mut storage[offset..offset + count], factor);
+                    // Guards are initialized above; the kernel writes the image bytes.
+                    let output: Vec<_> = storage.into_iter().map(|value| unsafe { value.assume_init() }).collect();
                     for i in 0..count {
                         let a = f32::from(first[offset + i]);
                         let b = f32::from(second[offset + i]);

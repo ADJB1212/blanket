@@ -1,5 +1,5 @@
-use std::simd::cmp::{SimdOrd, SimdPartialEq};
-use std::simd::num::SimdUint;
+use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
+use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd};
 
 use blanket_core::pixels::{Bytes, load, store};
@@ -299,7 +299,12 @@ fn composite_pixels(pixels: &mut [u8], source: &[u8]) {
             let source_alpha = src[3].cast::<u32>();
             let alpha = source_alpha * Simd::splat(255) + dst[3].cast::<u32>() * (Simd::splat(255) - source_alpha);
             // Inactive lanes can have zero combined alpha.
-            let coefficient = source_alpha * Simd::splat(255 * 255 * 128) / alpha.simd_max(Simd::splat(1));
+            let numerator = source_alpha * Simd::splat(255 * 255 * 128);
+            let denominator = alpha.simd_max(Simd::splat(1));
+            // The float quotient is within one integer; correct it exactly.
+            let estimate = (numerator.cast::<f32>() / denominator.cast::<f32>()).cast::<u32>();
+            let estimate = estimate - (estimate * denominator).simd_gt(numerator).select(Simd::splat(1), Simd::splat(0));
+            let coefficient = estimate + (numerator - estimate * denominator).simd_ge(denominator).select(Simd::splat(1), Simd::splat(0));
             let output = std::array::from_fn::<_, 4, _>(|c| {
                 let value = if c == 3 {
                     let value = alpha + Simd::splat(128);

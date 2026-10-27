@@ -192,16 +192,29 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
         return 0;
     }
     assert!(weights.is_empty() || source.len() >= (weights.len() - 1).saturating_mul(stride).saturating_add(output.len()));
-    let end = output.len() / 8 * 8;
-    for x in (0..end).step_by(8) {
-        let mut acc = Simd::<i32, 8>::splat(RESAMPLE_ROUND);
+    let end = output.len() / 16 * 16;
+    for x in (0..end).step_by(16) {
+        let mut acc = Simd::<i32, 16>::splat(RESAMPLE_ROUND);
         for (i, &weight) in weights.iter().enumerate() {
-            let values = Simd::<u8, 8>::from_slice(&source[i * stride + x..i * stride + x + 8]);
+            let values = Bytes::from_slice(&source[i * stride + x..i * stride + x + 16]);
             acc += values.cast::<i32>() * Simd::splat(weight);
         }
-        (acc >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>().copy_to_slice(&mut output[x..x + 8]);
+        (acc >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>().copy_to_slice(&mut output[x..x + 16]);
     }
     end
+}
+
+pub(crate) fn horizontal_half<const C: usize>(source: &[u8], output: &mut [u8], weights: &[i32]) {
+    let mut sums = [Simd::<i32, 16>::splat(RESAMPLE_ROUND); C];
+    for (tap, &weight) in weights.iter().enumerate() {
+        let first = load::<C>(&source[tap * C..]);
+        let second = load::<C>(&source[(tap + 16) * C..]);
+        for c in 0..C {
+            let (even, _) = first[c].deinterleave(second[c]);
+            sums[c] += even.cast::<i32>() * Simd::splat(weight);
+        }
+    }
+    store::<C>(output, sums.map(|sum| (sum >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>()));
 }
 
 #[inline]
@@ -423,6 +436,35 @@ mod tests {
     }
 
     #[test]
+    fn horizontal_half_matches_scalar_with_unaligned_buffers_and_guards() {
+        fn check<const C: usize>() {
+            for weights in
+                [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..], &[200_000; 12][..]]
+            {
+                for white in [false, true] {
+                    let source: Vec<u8> = (0..1 + (31 + weights.len()) * C).map(|i| if white { 255 } else { (i * 137) as u8 }).collect();
+                    let mut actual = vec![93; 16 * C + 2];
+                    horizontal_half::<C>(&source[1..], &mut actual[1..16 * C + 1], weights);
+                    for x in 0..16 {
+                        for c in 0..C {
+                            let sum = weights.iter().enumerate().fold(i64::from(RESAMPLE_ROUND), |sum, (tap, &weight)| {
+                                sum + i64::from(source[1 + (x * 2 + tap) * C + c]) * i64::from(weight)
+                            });
+                            assert_eq!(actual[1 + x * C + c], (sum >> RESAMPLE_BITS).clamp(0, 255) as u8);
+                        }
+                    }
+                    assert_eq!(actual[0], 93);
+                    assert_eq!(actual[16 * C + 1], 93);
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
+    #[test]
     fn horizontal_batches_match_scalar_signed_rounding_and_saturation() {
         fn check<const C: usize>() {
             for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
@@ -546,7 +588,7 @@ mod tests {
         let source: Vec<u8> = (0..4 * 31).map(|i| (i * 67) as u8).collect();
         let mut actual = vec![0; 31];
         let count = vertical(&source, &mut actual, 31, &weights);
-        assert_eq!(count, 24);
+        assert_eq!(count, 16);
         for x in 0..count {
             let sum = weights.iter().enumerate().fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[i * 31 + x]) * i64::from(w));
             assert_eq!(actual[x], (sum >> 22).clamp(0, 255) as u8);
@@ -562,7 +604,7 @@ mod tests {
                 let source: Vec<u8> = (0..1 + weights.len() * stride).map(|i| (i * 67) as u8).collect();
                 let mut actual = vec![123; width + 2];
                 let count = vertical(&source[1..], &mut actual[1..1 + width], stride, weights);
-                assert_eq!(count, width / 8 * 8);
+                assert_eq!(count, width / 16 * 16);
                 for x in 0..count {
                     let sum = weights.iter().enumerate().fold(1_i64 << 21, |sum, (i, &w)| sum + i64::from(source[1 + i * stride + x]) * i64::from(w));
                     assert_eq!(actual[1 + x], (sum >> 22).clamp(0, 255) as u8);

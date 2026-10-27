@@ -1,6 +1,6 @@
 use std::simd::cmp::SimdOrd;
 use std::simd::num::{SimdFloat, SimdUint};
-use std::simd::{Select, Simd};
+use std::simd::{Select, Simd, ToBytes};
 
 use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use blanket_core::pixels::{Samples, load_samples, store_samples};
@@ -84,9 +84,9 @@ pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) 
         return samples::output(second, &b);
     }
     let maximum = samples::maximum(first);
-    let mut values = vec![0; a.len()];
-    py.detach(|| blend_samples(&a, &b, &mut values, factor, maximum));
-    samples::output(first, &values)
+    let mut pixels = blanket_core::raster::alloc_pixels(a.len() * 2)?;
+    py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.mode == PixelMode::I16B));
+    samples::output_bytes(first, pixels)
 }
 
 fn luminance<const C: usize>(pixel: [Samples; C]) -> Samples {
@@ -141,8 +141,22 @@ fn smooth(source: &[u16], output: &mut [u16], width: usize, height: usize, chann
     }
 }
 
-fn blend_samples(a: &[u16], b: &[u16], output: &mut [u16], factor: f32, maximum: u16) {
-    let end = output.len() / 16 * 16;
+fn blend_samples(a: &[u16], b: &[u16], output: &mut [u8], factor: f32, maximum: u16, big_endian: bool) {
+    const CHUNK: usize = 128 * 1024;
+    blanket_core::parallel::chunks_mut_above(output, CHUNK, 1024 * 1024, |chunk, dst| {
+        let start = chunk * CHUNK / 2;
+        let a = &a[start..][..dst.len() / 2];
+        let b = &b[start..][..dst.len() / 2];
+        if big_endian {
+            blend_chunk::<true>(a, b, dst, factor, maximum);
+        } else {
+            blend_chunk::<false>(a, b, dst, factor, maximum);
+        }
+    });
+}
+
+fn blend_chunk<const BIG_ENDIAN: bool>(a: &[u16], b: &[u16], output: &mut [u8], factor: f32, maximum: u16) {
+    let end = output.len() / 32 * 16;
     for i in (0..end).step_by(16) {
         let a = Samples::from_slice(&a[i..]).cast::<f32>();
         let b = Samples::from_slice(&b[i..]).cast::<f32>();
@@ -153,15 +167,18 @@ fn blend_samples(a: &[u16], b: &[u16], output: &mut [u16], factor: f32, maximum:
         };
         #[cfg(not(target_arch = "aarch64"))]
         let value = a + Simd::splat(factor) * (b - a);
-        value.cast::<u16>().simd_min(Samples::splat(maximum)).copy_to_slice(&mut output[i..i + 16]);
+        let value = value.cast::<u16>().simd_min(Samples::splat(maximum));
+        let bytes = if BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() };
+        bytes.copy_to_slice(&mut output[i * 2..i * 2 + 32]);
     }
-    for ((&a, &b), dst) in a[end..].iter().zip(&b[end..]).zip(&mut output[end..]) {
+    for ((&a, &b), dst) in a[end..].iter().zip(&b[end..]).zip(output[end * 2..].as_chunks_mut::<2>().0) {
         let (a, b) = (f32::from(a), f32::from(b));
         #[cfg(target_arch = "aarch64")]
         let value = factor.mul_add(b - a, a);
         #[cfg(not(target_arch = "aarch64"))]
         let value = a + factor * (b - a);
-        *dst = value.clamp(0.0, f32::from(maximum)) as u16;
+        let value = value.clamp(0.0, f32::from(maximum)) as u16;
+        *dst = if BIG_ENDIAN { value.to_be_bytes() } else { value.to_le_bytes() };
     }
 }
 
@@ -171,22 +188,26 @@ mod tests {
 
     #[test]
     fn blend_preserves_scalar_rounding_nonfinite_values_tails_and_guards() {
-        for count in [0, 1, 15, 16, 17, 31, 32, 33, 65] {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33, 65, 524289] {
             for maximum in [1023, 4095, 65535] {
                 let a: Vec<_> = (0..count + 1).map(|i| ((i * 719) % (usize::from(maximum) + 1)) as u16).collect();
                 let b: Vec<_> = a.iter().rev().copied().collect();
                 for factor in [-2.0, 0.0, 0.1, 0.5, 1.0, 1.75, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
-                    let mut output = vec![173; count + 2];
-                    blend_samples(&a[1..], &b[1..], &mut output[1..count + 1], factor, maximum);
-                    for i in 0..count {
-                        let (a, b) = (f32::from(a[i + 1]), f32::from(b[i + 1]));
-                        #[cfg(target_arch = "aarch64")]
-                        let expected = factor.mul_add(b - a, a);
-                        #[cfg(not(target_arch = "aarch64"))]
-                        let expected = a + factor * (b - a);
-                        assert_eq!(output[i + 1], expected.clamp(0.0, f32::from(maximum)) as u16);
+                    for big_endian in [false, true] {
+                        let mut output = vec![173; count * 2 + 2];
+                        blend_samples(&a[1..], &b[1..], &mut output[1..count * 2 + 1], factor, maximum, big_endian);
+                        for i in 0..count {
+                            let (a, b) = (f32::from(a[i + 1]), f32::from(b[i + 1]));
+                            #[cfg(target_arch = "aarch64")]
+                            let expected = factor.mul_add(b - a, a);
+                            #[cfg(not(target_arch = "aarch64"))]
+                            let expected = a + factor * (b - a);
+                            let bytes = [output[i * 2 + 1], output[i * 2 + 2]];
+                            let actual = if big_endian { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
+                            assert_eq!(actual, expected.clamp(0.0, f32::from(maximum)) as u16);
+                        }
+                        assert_eq!((output[0], output[count * 2 + 1]), (173, 173));
                     }
-                    assert_eq!((output[0], output[count + 1]), (173, 173));
                 }
             }
         }

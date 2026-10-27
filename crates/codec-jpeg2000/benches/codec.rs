@@ -9,7 +9,7 @@ fn codecs(c: &mut Criterion) {
     });
     for depth in [10, 12, 16].into_iter().filter(|_| blanket_bench_support::full_matrix()) {
         for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
-            let image = blanket_bench_support::fixture(512, 512, mode, depth, 12345, false);
+            let image = blanket_bench_support::fixture(SIZES[0].0, SIZES[0].1, mode, depth, 12345, false);
             measure_codec(
                 c,
                 "jpeg2000-lossless",
