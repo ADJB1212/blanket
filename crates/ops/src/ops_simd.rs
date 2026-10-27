@@ -1,11 +1,24 @@
 //! Portable SIMD kernels with scalar tails.
 use std::simd::Simd;
-use std::simd::cmp::SimdOrd;
+use std::simd::cmp::{SimdOrd, SimdPartialEq};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use blanket_core::pixels::{self, Bytes, load, store};
 
 use crate::ops::{RESAMPLE_BITS, RESAMPLE_ROUND};
+
+pub(crate) fn constant_pixel<const C: usize>(source: &[u8]) -> Option<[u8; C]> {
+    let pixels = source.as_chunks::<C>().0;
+    let first = *pixels.first()?;
+    let (blocks, tail) = pixels.as_chunks::<16>();
+    for block in blocks {
+        let values = load::<C>(block.as_flattened());
+        if (0..C).any(|c| values[c].simd_ne(Bytes::splat(first[c])).any()) {
+            return None;
+        }
+    }
+    tail.iter().all(|pixel| *pixel == first).then_some(first)
+}
 
 pub(crate) fn box_half<const C: usize>(upper: &[u8], lower: &[u8], output: &mut [u8]) {
     let end = output.len() / (16 * C) * (16 * C);
@@ -244,6 +257,16 @@ pub(crate) fn vertical_wide(source: &[f64], output: &mut [f64], stride: usize, w
 }
 
 #[inline]
+pub(crate) fn horizontal_wide_four(source: [&[u8]; 4], weights: &[i32]) -> [f64; 4] {
+    let mut sum = Simd::<f64, 4>::splat(0.0);
+    for (i, &weight) in weights.iter().enumerate() {
+        let values = Simd::<u16, 4>::from_array(source.map(|row| u16::from_le_bytes([row[i * 2], row[i * 2 + 1]]))).cast::<f64>();
+        sum += values * Simd::splat(f64::from(weight)) / Simd::splat(f64::from(crate::ops::RESAMPLE_SCALE));
+    }
+    sum.to_array()
+}
+
+#[inline]
 pub(crate) fn horizontal_wide<const C: usize>(source: &[u8], weights: &[i32], maximum: f64) -> [f64; C] {
     let mut sum = Simd::<f64, 4>::splat(0.0);
     for (i, &weight) in weights.iter().enumerate() {
@@ -318,6 +341,33 @@ pub(crate) fn reduce_two_l(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usi
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn constant_pixels_check_every_channel_lane_unaligned_tail_and_guard() {
+        fn check<const C: usize>() {
+            let pixel: [u8; C] = std::array::from_fn(|c| (c * 71 + 3) as u8);
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 65537] {
+                let mut source = vec![91];
+                source.extend(std::iter::repeat_n(pixel, count).flatten());
+                source.push(93);
+                assert_eq!(constant_pixel::<C>(&source[1..source.len() - 1]), (count != 0).then_some(pixel));
+                for i in (0..count.min(33)).chain((count > 33).then(|| count - 1)) {
+                    for c in 0..C {
+                        let index = 1 + i * C + c;
+                        source[index] ^= 1;
+                        assert!(constant_pixel::<C>(&source[1..source.len() - 1]).is_none() || count == 1);
+                        source[index] ^= 1;
+                    }
+                }
+                assert_eq!(source[0], 91);
+                assert_eq!(source[source.len() - 1], 93);
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
     #[test]
     fn box_half_preserves_pass_rounding_unaligned_tails_and_guards() {
         fn check<const C: usize>() {
@@ -506,6 +556,42 @@ mod tests {
                 }
                 assert_eq!(output[0], 91.0);
                 assert!(output[done + 1..].iter().all(|&v| v == 91.0));
+            }
+        }
+    }
+
+    #[test]
+    fn wide_grayscale_batches_preserve_unaligned_samples_and_accumulation_order() {
+        for depth in [10, 12, 16] {
+            let maximum = (1_u32 << depth) - 1;
+            for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
+                let sources = std::array::from_fn::<_, 4, _>(|row| {
+                    let mut bytes = vec![91];
+                    bytes.extend((0..weights.len()).flat_map(|i| {
+                        let value = match (i + row) % 4 {
+                            0 => 0,
+                            1 => maximum,
+                            _ => (i * 719 + row * 137) as u32 & maximum,
+                        };
+                        (value as u16).to_le_bytes()
+                    }));
+                    bytes.push(93);
+                    bytes
+                });
+                let actual = horizontal_wide_four(sources.each_ref().map(|v| &v[1..v.len() - 1]), weights);
+                for row in 0..4 {
+                    let expected: f64 = weights
+                        .iter()
+                        .enumerate()
+                        .map(|(i, &weight)| {
+                            let value = u16::from_le_bytes([sources[row][i * 2 + 1], sources[row][i * 2 + 2]]);
+                            f64::from(value) * f64::from(weight) / f64::from(crate::ops::RESAMPLE_SCALE)
+                        })
+                        .sum();
+                    assert_eq!(actual[row], expected);
+                    assert_eq!(sources[row][0], 91);
+                    assert_eq!(sources[row][sources[row].len() - 1], 93);
+                }
             }
         }
     }

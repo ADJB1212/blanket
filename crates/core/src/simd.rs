@@ -104,9 +104,26 @@ pub fn convert_samples(source: &[u8], from: PixelMode, to: PixelMode, source_dep
 }
 
 fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source: &[u8], target_depth: u8) -> Vec<u8> {
+    match target_depth {
+        8 => convert_samples_to::<S, D, MAX, 255>(source),
+        10 => convert_samples_to::<S, D, MAX, 1023>(source),
+        12 => convert_samples_to::<S, D, MAX, 4095>(source),
+        16 => convert_samples_to::<S, D, MAX, 65535>(source),
+        _ => unreachable!("validated sample depth"),
+    }
+}
+
+fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARGET_MAX: u32>(source: &[u8]) -> Vec<u8> {
     let source_bytes = if MAX == 255 { 1 } else { 2 };
-    let target_bytes = if target_depth == 8 { 1 } else { 2 };
-    let target_max = (1_u32 << target_depth) - 1;
+    let target_bytes = if TARGET_MAX == 255 { 1 } else { 2 };
+    if target_bytes == 2
+        && D != 1
+        && (MAX == TARGET_MAX || MAX == 255 && TARGET_MAX == 65535)
+        && source.len() / (S * source_bytes) * D * target_bytes < 4 << 20
+    {
+        return convert_sample_layout::<S, D, MAX, TARGET_MAX>(source);
+    }
+    let target_max = TARGET_MAX;
     let mut output = vec![0; source.len() / (S * source_bytes) * D * target_bytes];
     const CHUNK: usize = CHUNK_PIXELS;
     chunks_mut(&mut output, CHUNK * D * target_bytes, |chunk, dst| {
@@ -127,7 +144,7 @@ fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source:
                 } else {
                     p[if S == 1 { 0 } else { c }]
                 };
-                if target_max == MAX { v } else { (v * Simd::splat(target_max) + Simd::splat(MAX / 2)) / Simd::splat(MAX) }
+                rescale_block::<MAX, TARGET_MAX>(v)
             });
             let out = &mut dst[i * D * target_bytes..];
             if target_bytes == 1 {
@@ -161,13 +178,71 @@ fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source:
     output
 }
 
+fn convert_sample_layout<const S: usize, const D: usize, const MAX: u32, const TARGET_MAX: u32>(source: &[u8]) -> Vec<u8> {
+    let stride = if MAX == 255 { 1 } else { 2 };
+    let count = source.len() / (S * 16 * stride);
+    let (blocks, tail) = source.split_at(count * S * 16 * stride);
+    let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
+    output.extend(blocks.chunks_exact(S * 16 * stride).map(|block| {
+        let input = if MAX == 255 { load::<S>(block).map(|v| v.cast::<u16>() * Simd::splat(257)) } else { load_sample_bytes::<S>(block) };
+        let values = std::array::from_fn(|c| if c == 3 { Simd::splat(TARGET_MAX as u16) } else { input[if S == 1 { 0 } else { c }] });
+        let mut pixels = [[0; 32]; D];
+        store_sample_bytes::<D>(pixels.as_flattened_mut(), values);
+        pixels
+    }));
+    let mut output = output.into_flattened().into_flattened();
+    for pixel in tail.chunks_exact(S * stride) {
+        for c in 0..D {
+            if c == 3 {
+                output.extend_from_slice(&(TARGET_MAX as u16).to_le_bytes());
+            } else {
+                let c = if S == 1 { 0 } else { c };
+                if stride == 1 {
+                    output.extend_from_slice(&(u16::from(pixel[c]) * 257).to_le_bytes());
+                } else {
+                    output.extend_from_slice(&pixel[c * 2..c * 2 + 2]);
+                }
+            }
+        }
+    }
+    output
+}
+
+#[inline]
+fn rescale_block<const SOURCE_MAX: u32, const TARGET_MAX: u32>(values: Simd<u32, 16>) -> Simd<u32, 16> {
+    if SOURCE_MAX == TARGET_MAX {
+        values
+    } else if SOURCE_MAX == 255 && TARGET_MAX == 65535 {
+        values * Simd::splat(257)
+    } else if SOURCE_MAX == 65535 && TARGET_MAX == 255 {
+        // Rounded division by 257 over the complete 16-bit sample range.
+        let rounded = values + Simd::splat(128);
+        (rounded - (rounded >> 8)) >> 8
+    } else {
+        (values * Simd::splat(TARGET_MAX) + Simd::splat(SOURCE_MAX / 2)) / Simd::splat(SOURCE_MAX)
+    }
+}
+
 fn rescale_samples_chunk<const SOURCE_MAX: u32>(src: &[u8], dst: &mut [u8], target_max: u32, target_bytes: usize) {
+    debug_assert_eq!(target_bytes, if target_max == 255 { 1 } else { 2 });
+    match target_max {
+        255 => rescale_samples_chunk_to::<SOURCE_MAX, 255>(src, dst),
+        1023 => rescale_samples_chunk_to::<SOURCE_MAX, 1023>(src, dst),
+        4095 => rescale_samples_chunk_to::<SOURCE_MAX, 4095>(src, dst),
+        65535 => rescale_samples_chunk_to::<SOURCE_MAX, 65535>(src, dst),
+        _ => unreachable!("validated sample depth"),
+    }
+}
+
+fn rescale_samples_chunk_to<const SOURCE_MAX: u32, const TARGET_MAX: u32>(src: &[u8], dst: &mut [u8]) {
+    let target_max = TARGET_MAX;
+    let target_bytes = if TARGET_MAX == 255 { 1 } else { 2 };
     let source_bytes = if SOURCE_MAX == u32::from(u8::MAX) { 1 } else { 2 };
     let end = dst.len() / target_bytes / 16 * 16;
     for i in (0..end).step_by(16) {
         let input = &src[i * source_bytes..];
         let values = if source_bytes == 1 { Bytes::from_slice(input).cast::<u32>() } else { load_u16::<false>(input).cast::<u32>() };
-        let values = (values * Simd::splat(target_max) + Simd::splat(SOURCE_MAX / 2)) / Simd::splat(SOURCE_MAX);
+        let values = rescale_block::<SOURCE_MAX, TARGET_MAX>(values);
         if target_bytes == 1 {
             values.cast::<u8>().copy_to_slice(&mut dst[i..i + 16]);
         } else {
@@ -906,6 +981,42 @@ mod tests {
                         }
                         assert!(source[..offset].iter().all(|&v| v == 93));
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn wide_layout_preserves_samples_across_allocation_threshold() {
+        for (from, to) in [(PixelMode::L, PixelMode::Rgb), (PixelMode::Rgb, PixelMode::Rgba), (PixelMode::Rgba, PixelMode::Rgb)] {
+            let boundary = (4 << 20) / (to.channels() * 2);
+            for depth in [8, 10, 12, 16] {
+                let target_depth = if depth == 8 { 16 } else { depth };
+                let stride = if depth == 8 { 1 } else { 2 };
+                let maximum = (1_u32 << depth) - 1;
+                for count in [15, 16, 17, boundary - 1, boundary, boundary + 1] {
+                    let mut source = vec![93];
+                    source.extend(
+                        (0..count * from.channels()).flat_map(|i| (((i as u32 * 719) & maximum) as u16).to_le_bytes().into_iter().take(stride)),
+                    );
+                    source.push(97);
+                    let output = convert_samples(&source[1..source.len() - 1], from, to, depth, target_depth);
+                    assert_eq!(output.len(), count * to.channels() * 2);
+                    for (input, output) in
+                        source[1..source.len() - 1].chunks_exact(from.channels() * stride).zip(output.chunks_exact(to.channels() * 2))
+                    {
+                        for (c, bytes) in output.as_chunks::<2>().0.iter().enumerate() {
+                            let expected = if c == 3 {
+                                ((1_u32 << target_depth) - 1) as u16
+                            } else {
+                                let c = if from == PixelMode::L { 0 } else { c };
+                                if stride == 1 { u16::from(input[c]) * 257 } else { u16::from_le_bytes([input[c * 2], input[c * 2 + 1]]) }
+                            };
+                            assert_eq!(u16::from_le_bytes(*bytes), expected);
+                        }
+                    }
+                    assert_eq!(source[0], 93);
+                    assert_eq!(source[source.len() - 1], 97);
                 }
             }
         }

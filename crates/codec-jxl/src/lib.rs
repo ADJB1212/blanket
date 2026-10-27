@@ -134,10 +134,10 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
         return Err(PyValueError::new_err("unsupported mode for JPEG XL"));
     }
     jxl_encoder_speed(options.effort)?;
-    with_jxl_runner(threads, |runner| encode::encode(image, pixels, options, runner))
+    with_jxl_runner(threads, image, |runner| encode::encode(image, pixels, options, runner))
 }
 
-fn with_jxl_runner<T>(threads: JxlThreads, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
+fn with_jxl_runner<T>(threads: JxlThreads, image: &Image, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
     match threads {
         // Do not even initialize a thread-local pool for single-threaded
         // Rayon candidates. Besides allocating unused state, pool creation
@@ -154,6 +154,13 @@ fn with_jxl_runner<T>(threads: JxlThreads, encode: impl FnOnce(Option<&dyn Paral
         JxlThreads::Pool => JXL_ENCODE_RUNNER.with(|runner| {
             let runner = runner.get_or_init(|| ResizableRunner::new(None));
             let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+            let (width, height) = (u64::from(image.width), u64::from(image.height));
+            // Include partial groups without adding workers for tiny images.
+            if width * height >= 256 * 256 {
+                runner.set_num_threads(width.next_multiple_of(256), height.next_multiple_of(256));
+            } else {
+                runner.set_num_threads(width, height);
+            }
             encode(Some(runner))
         }),
     }
@@ -190,9 +197,6 @@ fn encode_native(
         JxlSamples::Wide(raw) => (raw.as_ptr().cast(), std::mem::size_of_val(raw), JxlDataType::Uint16),
     };
     let format = JxlPixelFormat { num_channels: image.mode.channels() as u32, data_type, endianness: JxlEndianness::Native, align: 0 };
-    if let Some(runner) = runner {
-        runner.callback_basic_info(&info);
-    }
     // SAFETY: the encoder and all input buffers stay alive through processing.
     unsafe {
         if let Some(runner) = runner {
@@ -404,6 +408,26 @@ fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoding_partial_groups_preserves_bytes_across_pool_resizing() {
+        for (width, height) in [(257, 257), (17, 19), (513, 129)] {
+            for depth in [8, 16] {
+                let samples: Vec<_> = (0..width * height * 3).map(|i| (i * 137 + i / 7) as u16).collect();
+                let image = if depth == 8 {
+                    Image::from_pixels(width as u32, height as u32, PixelMode::Rgb, samples.iter().map(|&v| v as u8).collect(), None).unwrap()
+                } else {
+                    Image::from_samples(width as u32, height as u32, PixelMode::Rgb, samples, depth, None).unwrap()
+                };
+                let prepared = PreparedJxl::new(&image).unwrap();
+                for lossless in [false, true] {
+                    let options = SaveOptions { quality: 85, effort: 3, lossless, ..Default::default() };
+                    let reference = prepared.encode_with_threads(options, JxlThreads::Fixed(1)).unwrap();
+                    assert_eq!(prepared.encode(options).unwrap(), reference);
+                }
+            }
+        }
+    }
 
     #[test]
     fn cached_encoding_matches_fresh_encoder_after_settings_and_profile_errors() {

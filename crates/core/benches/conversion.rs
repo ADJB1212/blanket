@@ -6,10 +6,11 @@ use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use pyo3::Python;
 
 fn conversion(c: &mut Criterion) {
+    let depths: &[u8] = if blanket_bench_support::full_matrix() { &[8, 10, 12, 16] } else { &[8, 16] };
     Python::attach(|py| {
         for (width, height) in sizes().iter().copied() {
             for &mode in blanket_bench_support::modes(&[PixelMode::L, PixelMode::Rgb, PixelMode::Rgba]) {
-                for &depth in blanket_bench_support::depths() {
+                for &depth in depths {
                     let image = fixture(width, height, mode, depth, 12345, true);
                     let mut group = c.benchmark_group(format!("conversion/{}-{depth}/{width}x{height}", mode.as_str()));
                     group.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));

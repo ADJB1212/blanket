@@ -3,12 +3,15 @@ use std::ptr;
 
 use blanket_codec_common::validate_dimensions;
 use blanket_core::{Image, PixelMode};
+use jpegxl_rs::parallel::ParallelRunner;
+use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
 use jpegxl_sys::common::types::{JxlBool, JxlDataType, JxlEndianness, JxlPixelFormat};
 use jpegxl_sys::decode::*;
 use jpegxl_sys::metadata::codestream_header::JxlBasicInfo;
 
 pub struct JxlStreamDecoder {
     decoder: *mut JxlDecoder,
+    runner: ResizableRunner<'static>,
     input: Vec<u8> = Vec::new(),
     pixels: Vec<u8> = Vec::new(),
     format: JxlPixelFormat = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Little, align: 0 },
@@ -34,12 +37,14 @@ fn check(status: JxlDecoderStatus) -> Result<(), String> {
 
 impl JxlStreamDecoder {
     pub fn new() -> Result<Self, String> {
+        let runner = ResizableRunner::new(None).ok_or("cannot allocate JPEG XL thread pool")?;
         let decoder = unsafe { JxlDecoderCreate(ptr::null()) };
         if decoder.is_null() {
             return Err("cannot allocate JPEG XL decoder".into());
         }
-        let stream = Self { decoder, .. };
+        let stream = Self { decoder, runner, .. };
         unsafe {
+            check(JxlDecoderSetParallelRunner(decoder, stream.runner.runner(), stream.runner.as_opaque_ptr()))?;
             check(JxlDecoderSubscribeEvents(
                 decoder,
                 JxlDecoderStatus::BasicInfo as i32 | JxlDecoderStatus::FullImage as i32 | JxlDecoderStatus::FrameProgression as i32,
@@ -92,6 +97,7 @@ impl JxlStreamDecoder {
                     check(JxlDecoderGetBasicInfo(self.decoder, info.as_mut_ptr()))?;
                     let info = info.assume_init();
                     validate_dimensions(info.xsize, info.ysize)?;
+                    self.runner.callback_basic_info(&info);
                     if info.have_animation == JxlBool::True {
                         return Err("streaming JPEG XL animation is not supported".into());
                     }
@@ -161,7 +167,7 @@ mod tests {
             JxlEncoderInitBasicInfo(info.as_mut_ptr());
             let mut info = info.assume_init();
             info.xsize = 257;
-            info.ysize = 193;
+            info.ysize = 257;
             assert_eq!(JxlEncoderSetBasicInfo(encoder.0, &raw const info), JxlEncoderStatus::Success);
             let mut color = MaybeUninit::<JxlColorEncoding>::uninit();
             JxlColorEncodingSetToSRGB(color.as_mut_ptr(), JxlBool::False);
@@ -174,7 +180,7 @@ mod tests {
                 assert_eq!(JxlEncoderFrameSettingsSetOption(settings, option, value), JxlEncoderStatus::Success);
             }
             assert_eq!(JxlEncoderSetFrameDistance(settings, 1.0), JxlEncoderStatus::Success);
-            let pixels: Vec<u8> = (0..257 * 193 * 3).map(|i| (i * 71 + i / 7) as u8).collect();
+            let pixels: Vec<u8> = (0..257 * 257 * 3).map(|i| (i * 71 + i / 7) as u8).collect();
             let format = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Native, align: 0 };
             assert_eq!(JxlEncoderAddImageFrame(settings, &raw const format, pixels.as_ptr().cast(), pixels.len()), JxlEncoderStatus::Success);
             JxlEncoderCloseInput(encoder.0);
@@ -196,6 +202,36 @@ mod tests {
         assert!(preview.is_some());
         let result = decoder.image().unwrap().unwrap();
         assert_eq!(result.pixel_data().unwrap(), crate::decode_jxl(&data).unwrap().pixel_data().unwrap());
+    }
+
+    #[test]
+    fn parallel_streams_match_eager_for_modes_and_depths() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [8, 16] {
+                let samples: Vec<_> = (0..257 * 257 * mode.channels()).map(|i| (i * 137 + i / 7) as u16).collect();
+                let image = if depth == 8 {
+                    Image::from_pixels(257, 257, mode, samples.iter().map(|&v| v as u8).collect(), None).unwrap()
+                } else {
+                    Image::from_samples(257, 257, mode, samples, depth, None).unwrap()
+                };
+                let options = blanket_codec_common::SaveOptions { lossless: true, effort: 1, ..Default::default() };
+                let data = crate::PreparedJxl::new(&image).unwrap().encode(options).unwrap();
+                let expected = crate::decode_jxl(&data).unwrap();
+                let mut first = JxlStreamDecoder::new().unwrap();
+                let mut second = JxlStreamDecoder::new().unwrap();
+                for chunk in data.chunks(1024) {
+                    first.feed(chunk).unwrap();
+                    second.feed(chunk).unwrap();
+                }
+                for decoder in [first, second] {
+                    assert!(decoder.complete);
+                    let actual = decoder.image().unwrap().unwrap();
+                    assert_eq!(actual.mode, mode);
+                    assert_eq!(actual.bit_depth, depth);
+                    assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
+                }
+            }
+        }
     }
 
     #[test]

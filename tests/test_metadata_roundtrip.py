@@ -64,6 +64,17 @@ def test_metadata_preserved_and_editable(format: str, profile: bytes, tmp_path) 
         assert pillow.info["icc_profile"] == profile
 
 
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP"])
+def test_metadata_text_does_not_override_container_detection(format: str) -> None:
+    image = Image.new("RGB", (17, 19), (30, 70, 100))
+    expected = Image.open(BytesIO(encode(image, format)))
+    xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">_width _height</x:xmpmeta>'
+    actual = Image.open(BytesIO(encode(image, format, xmp=xmp)))
+    assert (actual.format, actual.size, actual.mode) == (format, expected.size, expected.mode)
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.info["xmp"] == xmp
+
+
 @pytest.mark.parametrize("endian", ["<", ">"])
 def test_exif_mapping_nested_ifds_and_thumbnail(endian: str) -> None:
     exif = exif_tags()

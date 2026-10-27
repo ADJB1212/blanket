@@ -124,9 +124,6 @@ impl ImageFormat {
     }
 
     fn detect(data: &[u8]) -> Option<Self> {
-        if let Some(format) = blanket_codec_extended::legacy::detect(data) {
-            return Self::parse(format).ok();
-        }
         if data.starts_with(b"qoif") {
             Some(Self::Qoi)
         } else if data.starts_with(b"DDS ") {
@@ -157,6 +154,8 @@ impl ImageFormat {
             Some(Self::Avif)
         } else if is_heif(data) {
             Some(Self::Heif)
+        } else if let Some(format) = blanket_codec_extended::legacy::detect(data) {
+            Self::parse(format).ok()
         } else if is_tga(data) {
             Some(Self::Tga)
         } else {
@@ -414,6 +413,21 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn binary_signatures_precede_legacy_text_hints_in_metadata() {
+        let image = Image::from_pixels(17, 19, PixelMode::Rgb, vec![137; 17 * 19 * 3], None).unwrap();
+        let xmp = b"<description>_width _height</description>";
+        for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Jxl, ImageFormat::Tiff, ImageFormat::Webp] {
+            let data = encode(&image, format, SaveOptions { effort: 1, ..Default::default() }).unwrap();
+            let encoded = crate::metadata::encode_metadata(data, format.as_str(), &[], xmp, &[], &[]).unwrap();
+            assert_eq!(ImageFormat::detect(&encoded), Some(format));
+        }
+        assert_eq!(
+            ImageFormat::detect(b"#define example_width 1\n#define example_height 1\nstatic char example_bits[] = {0};"),
+            Some(ImageFormat::Xbm)
+        );
+    }
+
     #[test]
     fn detects_avif_brands_before_generic_heif() {
         for data in [b"\0\0\0\x14ftypavif\0\0\0\0mif1".as_slice(), b"\0\0\0\x14ftypmif1\0\0\0\0avif", b"\0\0\0\x10ftypavis\0\0\0\0"] {

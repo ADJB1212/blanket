@@ -5,7 +5,7 @@ use blanket_bench_support::{fixture, sizes};
 use blanket_codecs::codecs::{ImageFormat, SaveOptions, encode};
 use blanket_codecs::open_bytes;
 use blanket_core::PixelMode;
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use pyo3::Python;
 use pyo3::types::{PyBytes, PyBytesMethods};
 
@@ -91,5 +91,61 @@ fn metadata_io(c: &mut Criterion) {
     });
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = file_io, metadata_io }
+fn metadata_attachment(c: &mut Criterion) {
+    let exif = b"Exif\0\0II*\0\x08\0\0\0\0\0\0\0\0\0";
+    let xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">benchmark</x:xmpmeta>";
+    for &(width, height) in sizes() {
+        let image = fixture(width, height, PixelMode::Rgb, 8, 12345, false);
+        for (name, format) in [
+            ("png-level-0", ImageFormat::Png),
+            ("jpeg", ImageFormat::Jpeg),
+            ("jxl", ImageFormat::Jxl),
+            ("webp", ImageFormat::Webp),
+            ("tiff", ImageFormat::Tiff),
+        ] {
+            let options = SaveOptions { quality: 85, effort: 3, compress_level: 0, ..SaveOptions::default() };
+            let encoded = encode(&image, format, options).unwrap();
+            let input = || {
+                let mut data = Vec::with_capacity(encoded.capacity());
+                data.extend_from_slice(&encoded);
+                data
+            };
+            let mut group = c.benchmark_group(format!("metadata-attach/{name}/{width}x{height}"));
+            group.throughput(Throughput::Bytes(encoded.len() as u64));
+            group.bench_function("exif-xmp", |b| {
+                b.iter_batched(
+                    input,
+                    |data| blanket_codecs::metadata::encode_metadata(black_box(data), format.as_str(), exif, xmp, &[], &[]).unwrap(),
+                    BatchSize::LargeInput,
+                );
+            });
+            if format == ImageFormat::Png {
+                let chunks = vec![(b"tEXt".to_vec(), b"benchmark\0after image data".to_vec(), true)];
+                group.bench_function("after-idat", |b| {
+                    b.iter_batched(
+                        input,
+                        |data| blanket_codecs::metadata::encode_metadata(black_box(data), "PNG", &[], &[], &[], &chunks).unwrap(),
+                        BatchSize::LargeInput,
+                    );
+                });
+            }
+            group.finish();
+        }
+    }
+}
+
+fn small_images(c: &mut Criterion) {
+    Python::attach(|py| {
+        let image = fixture(32, 32, PixelMode::Rgb, 8, 12345, false);
+        let mut group = c.benchmark_group("io-small/RGB-8/32x32");
+        group.throughput(Throughput::Elements(32 * 32));
+        for (name, format) in [("png", ImageFormat::Png), ("jpeg", ImageFormat::Jpeg), ("jxl", ImageFormat::Jxl), ("webp", ImageFormat::Webp)] {
+            let encoded = encode(&image, format, SaveOptions { quality: 85, effort: 3, ..Default::default() }).unwrap();
+            group.bench_function(name, |b| b.iter(|| open_bytes(py, black_box(&encoded), None).unwrap()));
+        }
+        group.finish();
+    });
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = file_io, metadata_io, metadata_attachment, small_images }
 criterion_main!(benches);

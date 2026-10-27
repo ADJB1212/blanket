@@ -403,7 +403,7 @@ operation-specific restrictions, palette support, and interoperability examples.
 
 Native Rust benchmarks live in each crate's `benches/` directory. Run
 `cargo bench -p blanket-ops --bench resize` for resize benchmarks or
-`cargo bench -p blanket-codec-jxl --bench codec` for JPEG XL. See the
+`cargo bench -p blanket-codec-jxl --features jxl-vendored --bench codec` for JPEG XL. See the
 [native benchmark guide](crates/BENCHMARKS.md) for all targets, file I/O,
 streaming decoding, filters, and baseline comparisons.
 Defaults use a short run on 512x512 images; set `BLANKET_BENCH_FULL=1` for

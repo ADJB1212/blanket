@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Write;
 use std::simd::{Simd, simd_swizzle};
 
@@ -77,8 +78,40 @@ fn jxl_box(output: &mut Vec<u8>, kind: &[u8], payload: &[u8]) -> PyResult<()> {
 }
 
 fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8], chunks: &[PngChunk]) -> PyResult<Vec<u8>> {
+    write_metadata_buffer(Cow::Borrowed(data), format, exif, xmp, icc, chunks)
+}
+
+fn insert_metadata(data: Cow<'_, [u8]>, before: usize, after: usize, prefix: &[u8], suffix: &[u8]) -> Vec<u8> {
+    let copy = |data: &[u8]| {
+        let mut output = Vec::with_capacity(data.len() + prefix.len() + suffix.len());
+        output.extend_from_slice(&data[..before]);
+        output.extend_from_slice(prefix);
+        output.extend_from_slice(&data[before..after]);
+        output.extend_from_slice(suffix);
+        output.extend_from_slice(&data[after..]);
+        output
+    };
+    match data {
+        Cow::Borrowed(data) => copy(data),
+        Cow::Owned(mut output) => {
+            if !prefix.is_empty() && output.capacity() - output.len() < prefix.len() + suffix.len() {
+                return copy(&output);
+            }
+            output.reserve(prefix.len() + suffix.len());
+            if !suffix.is_empty() {
+                drop(output.splice(after..after, suffix.iter().copied()));
+            }
+            if !prefix.is_empty() {
+                drop(output.splice(before..before, prefix.iter().copied()));
+            }
+            output
+        }
+    }
+}
+
+fn write_metadata_buffer(data: Cow<'_, [u8]>, format: &str, exif: &[u8], xmp: &[u8], icc: &[u8], chunks: &[PngChunk]) -> PyResult<Vec<u8>> {
     if exif.is_empty() && xmp.is_empty() && icc.is_empty() && chunks.is_empty() {
-        return Ok(data.to_vec());
+        return Ok(data.into_owned());
     }
     if (format == "JPEG" && !data.starts_with(b"\xff\xd8"))
         || (format == "PNG" && (data.len() < 45 || !data.starts_with(b"\x89PNG\r\n\x1a\n")))
@@ -135,13 +168,8 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
                 }
                 png_chunk(if *after_idat { &mut after } else { &mut metadata }, kind, payload)?;
             }
-            let mut output = Vec::with_capacity(data.len() + metadata.len() + after.len());
-            output.extend_from_slice(&data[..33]);
-            output.extend_from_slice(&metadata);
-            output.extend_from_slice(&data[33..data.len() - 12]);
-            output.extend_from_slice(&after);
-            output.extend_from_slice(&data[data.len() - 12..]);
-            Ok(output)
+            let end = data.len() - 12;
+            Ok(insert_metadata(data, 33, end, &metadata, &after))
         }
         "WEBP" => {
             let mut flags = 0;
@@ -169,7 +197,7 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
             let mut header = if let Some(header) = extended {
                 header
             } else {
-                let (width, height, alpha) = webp_dimensions(data)?;
+                let (width, height, alpha) = webp_dimensions(&data)?;
                 let mut header = vec![if alpha { 0x10 } else { 0 }, 0, 0, 0];
                 header.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
                 header.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
@@ -220,11 +248,11 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
             if container {
                 output.extend_from_slice(&data[32..]);
             } else {
-                jxl_box(&mut output, b"jxlc", data)?;
+                jxl_box(&mut output, b"jxlc", &data)?;
             }
             Ok(output)
         }
-        "HEIF" => Ok(data.to_vec()),
+        "HEIF" => Ok(data.into_owned()),
         "TIFF" => write_tiff(data, tiff, xmp, icc),
         _ => Err(PyValueError::new_err(format!("metadata saving is not supported for {format}"))),
     }
@@ -234,7 +262,7 @@ pub fn encode_metadata(data: Vec<u8>, format: &str, exif: &[u8], xmp: &[u8], icc
     if format == "HEIF" || (exif.is_empty() && xmp.is_empty() && icc.is_empty() && chunks.is_empty()) {
         return Ok(data);
     }
-    write_metadata(&data, format, exif, xmp, icc, chunks)
+    write_metadata_buffer(Cow::Owned(data), format, exif, xmp, icc, chunks)
 }
 
 fn webp_dimensions(data: &[u8]) -> PyResult<(u32, u32, bool)> {
@@ -398,12 +426,22 @@ fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<[u8; 12]>, following: u32, l
     Ok(offset)
 }
 
-fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<u8>> {
-    let source = Tiff::new(data)?;
+fn write_tiff(data: Cow<'_, [u8]>, exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<u8>> {
+    let source = Tiff::new(&data)?;
     let little = source.little;
     let (base, _) = source.entries(source.number(4, 4)? as usize)?;
-    let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + icc.len() + 128);
-    output.extend_from_slice(data);
+    let extra = exif.len() + xmp.len() + icc.len() + 128;
+    let mut output = match data {
+        Cow::Owned(mut data) => {
+            data.reserve(extra);
+            data
+        }
+        Cow::Borrowed(data) => {
+            let mut output = Vec::with_capacity(data.len() + extra);
+            output.extend_from_slice(data);
+            output
+        }
+    };
     let (mut entries, following) = if exif.is_empty() {
         (Vec::new(), 0)
     } else {
@@ -415,7 +453,7 @@ fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<
     }
     for (tag, _, _, pos) in base {
         entries.retain(|entry| &entry[..2] != if little { tag.to_le_bytes() } else { tag.to_be_bytes() }.as_slice());
-        entries.push(data[pos - 8..pos + 4].try_into().expect("validated TIFF entry"));
+        entries.push(output[pos - 8..pos + 4].try_into().expect("validated TIFF entry"));
     }
     for (tag, raw) in [(700u16, xmp), (34675, icc)] {
         if !raw.is_empty() {
@@ -433,6 +471,67 @@ fn write_tiff(data: &[u8], exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn owned_metadata_matches_borrowed_output_and_preserves_decoded_pixels() {
+        use blanket_core::{Image, PixelMode};
+
+        use crate::codecs::{ImageFormat, SaveOptions, decode, encode};
+
+        let image = Image::from_pixels(17, 19, PixelMode::Rgb, (0..17 * 19 * 3).map(|i| (i * 137 + i / 7) as u8).collect(), None).unwrap();
+        let exif = b"Exif\0\0II*\0\x08\0\0\0\0\0\0\0\0\0";
+        let xmp = b"<description>_width _height</description>";
+        for format in [ImageFormat::Png, ImageFormat::Jpeg, ImageFormat::Jxl, ImageFormat::Tiff, ImageFormat::Webp] {
+            let data = encode(&image, format, SaveOptions { effort: 1, quality: 85, ..Default::default() }).unwrap();
+            let mut sources = vec![data];
+            if format == ImageFormat::Jxl {
+                sources.push(write_metadata(&sources[0], "JXL", &[], b"existing metadata", &[], &[]).unwrap());
+            }
+            for data in sources {
+                let expected = write_metadata(&data, format.as_str(), exif, xmp, &[], &[]).unwrap();
+                let original = decode(&data, format).unwrap();
+                for spare in [0, 4096] {
+                    let mut input = Vec::with_capacity(data.len() + spare);
+                    input.extend_from_slice(&data);
+                    let actual = encode_metadata(input, format.as_str(), exif, xmp, &[], &[]).unwrap();
+                    assert_eq!(actual, expected, "{format:?}, spare={spare}");
+                    let decoded = decode(&actual, format).unwrap();
+                    assert_eq!(decoded.mode, original.mode);
+                    assert_eq!(decoded.size(), original.size());
+                    assert_eq!(decoded.raw_data().unwrap(), original.raw_data().unwrap());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn owned_png_metadata_preserves_chunk_order_crc_and_image_data() {
+        use blanket_core::{Image, PixelMode};
+
+        use crate::codecs::{ImageFormat, SaveOptions, decode, encode};
+
+        let image = Image::from_pixels(17, 19, PixelMode::L, vec![137; 17 * 19], None).unwrap();
+        let data = encode(&image, ImageFormat::Png, SaveOptions::default()).unwrap();
+        for before in [false, true] {
+            for after in [false, true] {
+                let mut chunks = Vec::new();
+                if before {
+                    chunks.push((b"tEXt".to_vec(), b"before\0header".to_vec(), false));
+                }
+                if after {
+                    chunks.push((b"tEXt".to_vec(), b"after\0image".to_vec(), true));
+                }
+                let expected = write_metadata(&data, "PNG", &[], &[], &[], &chunks).unwrap();
+                for spare in [0, 4096] {
+                    let mut input = Vec::with_capacity(data.len() + spare);
+                    input.extend_from_slice(&data);
+                    let actual = encode_metadata(input, "PNG", &[], &[], &[], &chunks).unwrap();
+                    assert_eq!(actual, expected);
+                    assert_eq!(decode(&actual, ImageFormat::Png).unwrap().raw_data().unwrap(), image.raw_data().unwrap());
+                }
+            }
+        }
+    }
 
     #[test]
     fn tiff_byte_swaps_preserve_bits_tails_and_guards() {
@@ -481,12 +580,14 @@ mod tests {
     fn metadata_rejects_truncated_containers_and_critical_png_chunks() {
         for format in ["JPEG", "PNG", "WEBP", "TIFF"] {
             assert!(write_metadata(&[], format, b"Exif\0\0", &[], &[], &[]).is_err());
+            assert!(encode_metadata(Vec::new(), format, b"Exif\0\0", &[], &[], &[]).is_err());
         }
         let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
         png.resize(45, 0);
         for kind in [b"IDAT", b"acTL", b"eXIf", b"bad!"] {
             let chunks = vec![(kind.to_vec(), Vec::new(), false)];
             assert!(write_metadata(&png, "PNG", &[], &[], &[], &chunks).is_err());
+            assert!(encode_metadata(png.clone(), "PNG", &[], &[], &[], &chunks).is_err());
         }
     }
 
@@ -497,7 +598,7 @@ mod tests {
         let source = Tiff::new(&tiff).unwrap();
         assert!(copy_ifd(&source, 8, &mut Vec::new(), true, 0).is_err());
         for length in 0..14 {
-            assert!(write_tiff(&tiff[..length], &[], &[], b"profile").is_err());
+            assert!(write_tiff(Cow::Borrowed(&tiff[..length]), &[], &[], b"profile").is_err());
         }
     }
 }

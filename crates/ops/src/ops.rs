@@ -384,6 +384,12 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         // Hoist the mask decision out of the per-pixel loop.
         match mask {
             None => {
+                if let Some(pixel) = crate::ops_simd::constant_pixel::<C>(bytes) {
+                    for c in 0..C {
+                        bins[c * 256 + usize::from(pixel[c])] = pixels.len() as u64;
+                    }
+                    return bins;
+                }
                 for pixel in pixels {
                     for c in 0..C {
                         bins[c * 256 + usize::from(pixel[c])] += 1;
@@ -1253,7 +1259,18 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
     temp.resize(length, 0.0);
     let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
     chunks_mut_above(&mut temp, stride * 8, MIN_PARALLEL_BYTES, |band, rows| {
-        for (y, row) in rows.chunks_exact_mut(stride).enumerate() {
+        let four = if C == 1 { rows.len() / (stride * 4) * 4 } else { 0 };
+        for group in 0..four / 4 {
+            let y = first + band * 8 + group * 4;
+            let source = std::array::from_fn::<_, 4, _>(|i| &bytes[(y + i) * image.width as usize * 2..][..image.width as usize * 2]);
+            for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                let values = crate::ops_simd::horizontal_wide_four(source.map(|row| &row[start * 2..]), coefficients);
+                for (i, value) in values.into_iter().enumerate() {
+                    rows[(group * 4 + i) * stride + x] = value;
+                }
+            }
+        }
+        for (y, row) in rows.chunks_exact_mut(stride).enumerate().skip(four) {
             let y = band * 8 + y;
             for (x, (start, coefficients)) in horizontal.iter().enumerate() {
                 if C > 1 {
@@ -1313,6 +1330,10 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
     let double_rgb = C == 3 && xs.len() == width as usize * 2 && xs.iter().enumerate().all(|(x, &sx)| sx == x / 2);
+    let map = (C == 3 && !half_width && !double_rgb && row_bytes >= 16 && ys.len() >= 4).then(|| {
+        let columns: Vec<_> = xs.iter().flat_map(|&x| (0..C).map(move |c| Some(x * C + c))).collect();
+        crate::ops_simd::NearestL::new(&columns, width as usize * C).expect("validated resize coordinates")
+    });
     let source = source.as_chunks::<C>().0;
     chunks_mut_above(output, row_bytes << 4, 1024 << 10, |band, rows| {
         for i in 0..rows.len() / row_bytes {
@@ -1329,6 +1350,8 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
             } else if half_width {
                 // Contiguous pairs expose the common 2:1 gather to SIMD.
                 crate::ops_simd::nearest_half::<C>(src.as_flattened(), dst.as_flattened_mut());
+            } else if let Some(map) = &map {
+                map.sample(src.as_flattened(), dst.as_flattened_mut());
             } else {
                 for (dst, &sx) in dst.iter_mut().zip(xs) {
                     *dst = src[sx];
@@ -1979,6 +2002,67 @@ fn ops_warp(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn histogram_matches_scalar_for_masks_repeated_bins_and_chunk_tails() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 2, 3, 15, 16, 17, 65535, 65536, 65537, 262145] {
+                for repeated in [false, true] {
+                    let mut source = vec![93];
+                    source.extend((0..count * C).map(|i| if repeated { 71 } else { (i * 137 + i / C) as u8 }));
+                    source.push(97);
+                    let pixels = &source[1..source.len() - 1];
+                    let mask: Vec<_> = (0..count).map(|i| if i % 3 == 0 { 0 } else { 255 }).collect();
+                    for mask in [None, Some(mask.as_slice())] {
+                        let mut expected = vec![0_u64; C << 8];
+                        for (i, pixel) in pixels.as_chunks::<C>().0.iter().enumerate() {
+                            if mask.is_none_or(|mask| mask[i] != 0) {
+                                for c in 0..C {
+                                    expected[c * 256 + usize::from(pixel[c])] += 1;
+                                }
+                            }
+                        }
+                        assert_eq!(histogram::<C>(pixels, mask), expected);
+                    }
+                    assert_eq!(source[0], 93);
+                    assert_eq!(source[source.len() - 1], 97);
+                }
+            }
+        }
+        for threads in [1, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {
+                check::<1>();
+                check::<2>();
+                check::<3>();
+                check::<4>();
+            });
+        }
+    }
+
+    #[test]
+    fn nearest_rgb_mapping_preserves_pixels_repeated_rows_tails_and_guards() {
+        for (width, height, target, rows) in [(5, 7, 17, 19), (33, 7, 65, 19), (97, 7, 33, 19), (769, 7, 1153, 513)] {
+            let mut source = vec![93];
+            source.extend((0..width * height * 3).map(|i| (i * 137 + i / 3) as u8));
+            source.push(97);
+            for reverse in [false, true] {
+                let xs: Vec<_> = (0..target).map(|x| if reverse { width - 1 - x * width / target } else { x * width / target }).collect();
+                let ys: Vec<_> = (0..rows).map(|y| y / 3 % height).collect();
+                let mut output = vec![91; target * rows * 3 + 2];
+                resize_nearest::<3>(&source[1..source.len() - 1], &mut output[1..target * rows * 3 + 1], width as u32, &xs, &ys);
+                for (y, row) in output[1..output.len() - 1].chunks_exact(target * 3).enumerate() {
+                    for (x, pixel) in row.as_chunks::<3>().0.iter().enumerate() {
+                        let start = 1 + (ys[y] * width + xs[x]) * 3;
+                        assert_eq!(pixel, &source[start..start + 3]);
+                    }
+                }
+                assert_eq!(output[0], 91);
+                assert_eq!(output[output.len() - 1], 91);
+            }
+            assert_eq!(source[0], 93);
+            assert_eq!(source[source.len() - 1], 97);
+        }
+    }
+
     #[test]
     fn cached_weights_reuse_tables_and_preserve_exact_coefficients() {
         for method in 1..=5 {
