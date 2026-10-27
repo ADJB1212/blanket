@@ -553,7 +553,7 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     debug_assert_ne!(from, to, "caller should short-circuit identity conversion");
 
     match (from, to) {
-        (PixelMode::Rgba, PixelMode::Rgb) => convert_layout::<4, 3>(source),
+        (PixelMode::Rgba, PixelMode::Rgb) => rgba_to_rgb(source),
         (PixelMode::Rgb, PixelMode::Rgba) => convert_layout::<3, 4>(source),
         (PixelMode::L, PixelMode::Rgb) => convert_layout::<1, 3>(source),
         (PixelMode::L, PixelMode::Rgba) => convert_layout::<1, 4>(source),
@@ -708,7 +708,7 @@ pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
 }
 
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
-    if S == 1 && C == 3 && source.len() * 3 < 2 << 20 {
+    if S == 1 && C == 3 {
         return gray_to_rgb::<1>(source);
     }
     if C == 4 {
@@ -751,18 +751,51 @@ fn gray_to_rgb<const S: usize>(source: &[u8]) -> Vec<u8> {
 }
 
 fn color_to_gray<const SOURCE_CHANNELS: usize>(source: &[u8]) -> Vec<u8> {
-    map_blocks::<SOURCE_CHANNELS, 1>(
-        source,
-        2 << 20,
-        |p| {
-            let sum = p[0].cast::<u32>() * Simd::splat(LUMA_RED)
-                + p[1].cast::<u32>() * Simd::splat(LUMA_GREEN)
-                + p[2].cast::<u32>() * Simd::splat(LUMA_BLUE)
-                + Simd::splat(LUMA_ROUND);
-            [(sum >> LUMA_BITS).cast::<u8>()]
-        },
-        |p| [pillow_luma(p[0], p[1], p[2])],
-    )
+    if source.len() / SOURCE_CHANNELS < 2 << 20 {
+        let count = source.len() / SOURCE_CHANNELS / 16;
+        let (blocks, tail) = source.split_at(count * SOURCE_CHANNELS * 16);
+        let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
+        output.extend(blocks.chunks_exact(SOURCE_CHANNELS * 16).map(|block| {
+            let p = load::<SOURCE_CHANNELS>(block);
+            luma_block(p[0], p[1], p[2]).to_array()
+        }));
+        let mut output = output.into_flattened();
+        output.extend(tail.as_chunks::<SOURCE_CHANNELS>().0.iter().map(|p| pillow_luma(p[0], p[1], p[2])));
+        return output;
+    }
+    map_blocks::<SOURCE_CHANNELS, 1>(source, 2 << 20, |p| [luma_block(p[0], p[1], p[2])], |p| [pillow_luma(p[0], p[1], p[2])])
+}
+
+#[inline]
+fn luma_block(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
+    let (r, g, b) = (r.cast::<u16>(), g.cast::<u16>(), b.cast::<u16>());
+    // Split the exact coefficients at bit 8; both sums and the carry fit u16.
+    let high = r * Simd::splat(76) + g * Simd::splat(150) + b * Simd::splat(29);
+    let low = r * Simd::splat(139) + g * Simd::splat(70) + b * Simd::splat(47);
+    ((high + (low >> 8) + Simd::splat(128)) >> 8).cast()
+}
+
+#[inline]
+fn rgba_to_rgb_block(source: &[u8]) -> [u8; 48] {
+    use std::simd::simd_swizzle;
+    let a = Bytes::from_slice(source);
+    let b = Bytes::from_slice(&source[16..]);
+    let c = Bytes::from_slice(&source[32..]);
+    let d = Bytes::from_slice(&source[48..]);
+    let mut output = [0; 48];
+    simd_swizzle!(a, b, [0, 1, 2, 4, 5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20]).copy_to_slice(&mut output[..16]);
+    simd_swizzle!(b, c, [5, 6, 8, 9, 10, 12, 13, 14, 16, 17, 18, 20, 21, 22, 24, 25]).copy_to_slice(&mut output[16..32]);
+    simd_swizzle!(c, d, [10, 12, 13, 14, 16, 17, 18, 20, 21, 22, 24, 25, 26, 28, 29, 30]).copy_to_slice(&mut output[32..]);
+    output
+}
+
+fn rgba_to_rgb(source: &[u8]) -> Vec<u8> {
+    let (blocks, tail) = source.as_chunks::<64>();
+    let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+    output.extend(blocks.iter().map(|block| rgba_to_rgb_block(block)));
+    let mut output = output.into_flattened();
+    output.extend(tail.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]));
+    output
 }
 
 #[inline(always)]
@@ -810,6 +843,32 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn narrow_luminance_matches_every_rgb_color() {
+        for r in 0..=255 {
+            for g in 0..=255 {
+                for start in (0..256).step_by(16) {
+                    let blue = std::array::from_fn(|i| (start + i) as u8);
+                    let actual = luma_block(Bytes::splat(r), Bytes::splat(g), Bytes::from_array(blue)).to_array();
+                    assert_eq!(actual, blue.map(|b| pillow_luma(r, g, b)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn rgba_shuffle_preserves_large_buffers_and_tail() {
+        for count in [699050, 699051, 720897] {
+            let mut source = vec![93];
+            source.extend((0..count * 4).map(|i| (i * 719 + 137) as u8));
+            source.push(97);
+            let expected: Vec<_> = source[1..count * 4 + 1].as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+            assert_eq!(rgba_to_rgb(&source[1..count * 4 + 1]), expected);
+            assert_eq!(source[0], 93);
+            assert_eq!(source[count * 4 + 1], 97);
+        }
+    }
 
     #[test]
     fn sample_mode_conversion_matches_scalar_for_all_depths_and_tails() {
@@ -1035,6 +1094,8 @@ mod tests {
                 let gray = &source[offset..offset + count];
                 let rgb = &source[offset..offset + count * 3];
                 let rgba = &source[offset..];
+                let expected: Vec<_> = rgba.as_chunks::<4>().0.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
+                assert_eq!(convert(rgba, PixelMode::Rgba, PixelMode::Rgb), expected);
                 assert_eq!(convert(rgb, PixelMode::Rgb, PixelMode::L), scalar_luminance_rgb(rgb));
                 assert_eq!(convert(rgba, PixelMode::Rgba, PixelMode::L), scalar_luminance_rgba(rgba));
                 for band in 0..3 {
