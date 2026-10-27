@@ -3,20 +3,20 @@
 `blanket-codecs` preserves the public dispatch API and compressor helper
 re-exports. Format implementations compile in separate crates:
 
-| Crate suffix | Formats |
-| --- | --- |
-| `png` | PNG |
-| `jpeg` | JPEG |
-| `jxl` | JPEG XL |
-| `tiff` | TIFF |
-| `webp` | WebP |
-| `heif` | HEIC/HEIF |
-| `avif` | AVIF |
-| `bmp-ico` | BMP and ICO |
-| `gif` | GIF |
-| `pdf` | PDF output |
-| `extended` | Netpbm, TGA, DDS, EPS, QOI |
-| `jpeg2000` | JPEG 2000 (built-in OpenJPEG) |
+| Crate suffix | Formats                       |
+| ------------ | ----------------------------- |
+| `png`        | PNG                           |
+| `jpeg`       | JPEG                          |
+| `jxl`        | JPEG XL                       |
+| `tiff`       | TIFF                          |
+| `webp`       | WebP                          |
+| `heif`       | HEIC/HEIF                     |
+| `avif`       | AVIF                          |
+| `bmp-ico`    | BMP and ICO                   |
+| `gif`        | GIF                           |
+| `pdf`        | PDF output                    |
+| `extended`   | Netpbm, TGA, DDS, EPS, QOI    |
+| `jpeg2000`   | JPEG 2000 (built-in OpenJPEG) |
 
 All names use the `blanket-codec-` prefix. `blanket-codec-common` holds save
 options, dimension limits, and error conversion without codec dependencies.

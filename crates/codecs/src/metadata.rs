@@ -7,6 +7,39 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
+mod rewrite;
+pub use rewrite::_rewrite_metadata;
+
+#[pyfunction]
+pub fn _container_previews<'py>(py: Python<'py>, data: &[u8], format: &str) -> PyResult<Vec<(String, Bound<'py, PyBytes>)>> {
+    let values = py.detach(|| -> PyResult<Vec<(String, Vec<u8>)>> {
+        let mut result = Vec::new();
+        if matches!(format, "HEIF" | "AVIF") {
+            for image in blanket_codec_heif::previews(data).map_err(codec_error)? {
+                let pixels = image.raw_data()?;
+                let encoded = if image.bit_depth > 8 {
+                    blanket_codec_png::encode_wide_png(&image, pixels, blanket_codec_common::SaveOptions::default())?
+                } else {
+                    blanket_codec_png::encode_png(&image, pixels, 6)?
+                };
+                result.push(("PNG".into(), encoded));
+            }
+        } else if format == "EPS" && data.starts_with(b"\xc5\xd0\xd3\xc6") {
+            let header = data.get(..30).ok_or_else(|| codec_error("truncated EPS preview header"))?;
+            for (offset, name) in [(12, "WMF"), (20, "TIFF")] {
+                let start = u32::from_le_bytes(header[offset..offset + 4].try_into().expect("four bytes")) as usize;
+                let length = u32::from_le_bytes(header[offset + 4..offset + 8].try_into().expect("four bytes")) as usize;
+                if length > 0 {
+                    let end = start.checked_add(length).ok_or_else(|| codec_error("EPS preview offset overflow"))?;
+                    result.push((name.into(), data.get(start..end).ok_or_else(|| codec_error("truncated EPS preview"))?.to_vec()));
+                }
+            }
+        }
+        Ok(result)
+    })?;
+    Ok(values.into_iter().map(|(format, data)| (format, PyBytes::new(py, &data))).collect())
+}
+
 pub type PngChunk = (Vec<u8>, Vec<u8>, bool);
 type TiffEntry = (u16, u16, u32, usize);
 

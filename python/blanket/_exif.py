@@ -8,7 +8,7 @@ import contextlib
 import re
 import struct
 import zlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -319,6 +319,12 @@ def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maxim
 
 def save_metadata(image: object, format: str, options: dict[str, object]) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
     """Remove metadata options and resolve source defaults before encoding."""
+    policy = options.pop("metadata_policy", None)
+    if policy is not None:
+        from ._metadata_policy import MetadataPolicy
+
+        if not isinstance(policy, MetadataPolicy):
+            raise TypeError("metadata_policy must be a MetadataPolicy or None")
     supported = format in ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
     keys = {"exif", "xmp", "icc_profile", "pnginfo", *HDR_KEYS.values()} & options.keys()
     if format != "PNG" and not keys.isdisjoint(HDR_KEYS.values()):
@@ -366,4 +372,26 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
                 chunks.append((kind, encode_chunk(key, value), False))
         if any(kind == b"mDCV" for kind, _, _ in chunks) and not any(kind == b"cICP" for kind, _, _ in chunks):
             raise ValueError("mastering_display requires cicp metadata")
+    if policy is not None:
+        info = policy.apply(dict(zip(("exif", "xmp", "icc_profile"), values, strict=True)))
+        values = [cast("bytes", info.get(key, b"")) for key in ("exif", "xmp", "icc_profile")]
+        filtered = []
+        for kind, payload, after_idat in chunks:
+            if kind not in (b"tEXt", b"zTXt", b"iTXt"):
+                filtered.append((kind, payload, after_idat))
+                continue
+            text_info: dict[object, object] = {}
+            _png_metadata(text_info, kind, payload)
+            retained = policy.apply(text_info)
+            if "Raw profile type exif" in retained:
+                retained.pop("Raw profile type exif")
+            text = PngInfo()
+            raw_xmp = retained.get("xmp")
+            if isinstance(raw_xmp, bytes) and raw_xmp:
+                text.add_itxt("XML:com.adobe.xmp", raw_xmp)
+            for key, value in retained.items():
+                if isinstance(key, str) and isinstance(value, str) and key != "XML:com.adobe.xmp":
+                    text.add_text(key, value)
+            filtered.extend((kind, raw, after_idat) for kind, raw, _ in text.chunks)
+        chunks = filtered
     return values[0], values[1], values[2], chunks

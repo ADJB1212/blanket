@@ -36,6 +36,9 @@ with Image.open("photo.jpg") as image:
   and pHash kernels, with no NumPy or SciPy runtime dependency.
 - **Header inspection.** Use `Image.inspect(path_or_stream)` to read dimensions,
   mode, sample depth, and available metadata without allocating decoded rasters.
+- **Metadata workflows.** Edit supported containers without recompressing pixels,
+  apply retention policies, normalize resolution, and extract previews with
+  `ImageMetadata`. See the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
   PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported

@@ -376,14 +376,14 @@ with new processing semantics exposed explicitly.
 
 #### Metadata Workflows
 
-- [ ] **Metadata-only rewrites** — edit supported container metadata without
-      decoding and re-encoding image pixels
-- [ ] **Metadata policies** — select which EXIF, XMP, text, and location fields
-      to retain or remove, with separate control over color profiles
-- [ ] **Resolution and physical units** — normalize DPI and pixel-aspect metadata
-      across formats with explicit conflict and unit-conversion rules
-- [ ] **Embedded preview access** — extract EXIF thumbnails and container
-      previews without requiring users to parse their binary representations
+- [x] **Metadata-only rewrites** — `ImageMetadata.rewrite` edits JPEG, PNG/APNG,
+      WebP, and JPEG XL metadata while retaining compressed image data
+- [x] **Metadata policies** — `MetadataPolicy` selects EXIF, XMP, PNG text, and
+      known location fields, with independent ICC profile control
+- [x] **Resolution and physical units** — `ImageMetadata.get_resolution`
+      normalizes DPI and pixel aspect with explicit units and conflict rules
+- [x] **Embedded preview access** — `ImageMetadata.get_previews` extracts EXIF
+      thumbnails, HEIF/AVIF thumbnails, and binary EPS previews
 
 #### Drawing and Compositing Extensions
 

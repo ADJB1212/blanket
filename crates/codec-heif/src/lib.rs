@@ -32,10 +32,32 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
 }
 
 pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
-    use libheif_rs::{ColorSpace, DecodingOptions, HeifContext, RgbChroma};
-    let lib = &*HEIF_LIBRARY;
+    use libheif_rs::HeifContext;
+    let _lib = &*HEIF_LIBRARY;
     let context = HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
     let handle = context.primary_image_handle().map_err(|e| e.to_string())?;
+    decode_handle(&handle)
+}
+
+pub fn previews(data: &[u8]) -> Result<Vec<Image>, String> {
+    let _library = &*HEIF_LIBRARY;
+    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
+    let primary = context.primary_image_handle().map_err(|e| e.to_string())?;
+    let mut ids = vec![0; primary.number_of_thumbnails()];
+    let count = primary.thumbnail_ids(&mut ids);
+    let mut total = 0;
+    let mut result = Vec::new();
+    for id in ids.into_iter().take(count) {
+        let handle = primary.thumbnail(id).map_err(|e| e.to_string())?;
+        blanket_codec_common::validate_frame_budget(&mut total, handle.width(), handle.height())?;
+        result.push(decode_handle(&handle)?);
+    }
+    Ok(result)
+}
+
+fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, String> {
+    use libheif_rs::{ColorSpace, DecodingOptions, RgbChroma};
+    let lib = &*HEIF_LIBRARY;
     validate_dimensions(handle.width(), handle.height())?;
     let depth = handle.luma_bits_per_pixel();
     if !matches!(depth, 8 | 10 | 12 | 16) {
@@ -57,7 +79,7 @@ pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
         1
     };
     options.set_num_codec_threads(threads as u32);
-    let decoded = lib.decode(&handle, ColorSpace::Rgb(chroma), Some(options)).map_err(|e| e.to_string())?;
+    let decoded = lib.decode(handle, ColorSpace::Rgb(chroma), Some(options)).map_err(|e| e.to_string())?;
     validate_dimensions(decoded.width(), decoded.height())?;
     let mode = if alpha { PixelMode::Rgba } else { PixelMode::Rgb };
     let plane = decoded.planes().interleaved.ok_or("missing HEIF pixel plane")?;
@@ -210,6 +232,32 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_previews_decode_only_thumbnail_handles_and_retain_precision() {
+        if !backend_info().1 {
+            return;
+        }
+        for depth in [8, 10, 12] {
+            let image = if depth == 8 {
+                Image::from_pixels(128, 96, PixelMode::Rgb, vec![85; 128 * 96 * 3], None).unwrap()
+            } else {
+                Image::from_samples(128, 96, PixelMode::Rgb, vec![(1 << depth) / 3; 128 * 96 * 3], depth, None).unwrap()
+            };
+            let mut prepared = PreparedHeif::new(&image).unwrap();
+            let mut context = libheif_rs::HeifContext::new().unwrap();
+            let primary = context.encode_image(&prepared.native, &mut prepared.encoder, None).unwrap();
+            let thumbnail = context.encode_thumbnail(&prepared.native, &primary, 32, &mut prepared.encoder, None).unwrap().unwrap();
+            let size = (thumbnail.width(), thumbnail.height());
+            let data = context.write_to_bytes().unwrap();
+            let images = previews(&data).unwrap();
+            assert_eq!(images.len(), 1);
+            assert_eq!((images[0].width, images[0].height), size);
+            assert_eq!(images[0].bit_depth, depth);
+            assert_ne!(size, (128, 96));
+        }
+    }
+
     #[test]
     fn reused_heif_planes_match_fresh_planes_across_presets_and_quality() {
         for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
