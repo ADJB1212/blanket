@@ -8,11 +8,12 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new()))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
+    attach_metadata: bool, metadata_chunks: Vec<blanket_codecs::metadata::PngChunk>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
@@ -26,6 +27,13 @@ pub(crate) fn _encode(
         xmp: metadata_xmp.unwrap_or_default(),
     };
     let encoded = encode_image(py, image, format, options, compressor)?;
+    let encoded = if attach_metadata {
+        py.detach(|| {
+            blanket_codecs::metadata::encode_metadata(encoded, format.as_str(), options.exif, options.xmp, options.icc_profile, &metadata_chunks)
+        })?
+    } else {
+        encoded
+    };
     if let Some(output) = output {
         let path = if output.is_instance_of::<PyBytes>() {
             py.import("os")?.call_method1("fsdecode", (&output,))?.extract::<PathBuf>()?

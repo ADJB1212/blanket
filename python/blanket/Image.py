@@ -31,7 +31,6 @@ from ._blanket import (
     _encode,
     _Image,
     _open_sequence,
-    _write_metadata,
     enhance_blend,
     filter_merge,
     fromarray as _native_fromarray,
@@ -1854,24 +1853,21 @@ class Image:
         metadata = save_metadata(self, output_format, options)
         values = _save_options(output_format, options)
         has_metadata = any(metadata)
-        output = None if hasattr(fp, "write") or has_metadata else os.fspath(fp)
+        output = None if hasattr(fp, "write") else os.fspath(fp)
         encoded = _encode(
             self._native,
             output_format,
             **values,
             compressor=None if compressor is None else compressor._native,
             output=output,
-            icc_profile=metadata[2] if output_format in ("JXL", "HEIF") else None,
-            metadata_exif=metadata[0] if output_format == "HEIF" else None,
-            metadata_xmp=metadata[1] if output_format == "HEIF" else None,
+            icc_profile=metadata[2],
+            metadata_exif=metadata[0],
+            metadata_xmp=metadata[1],
+            attach_metadata=has_metadata,
+            metadata_chunks=metadata[3],
         )
-        if has_metadata:
-            encoded = _write_metadata(encoded, output_format, *metadata)
         if hasattr(fp, "write"):
             write_all(cast("BinaryIO", fp), encoded)
-        elif has_metadata:
-            with Path(os.fsdecode(os.fspath(fp))).open("wb") as stream:
-                stream.write(encoded)
         return None
 
     def __enter__(self) -> Self:

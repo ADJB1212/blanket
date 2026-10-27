@@ -204,6 +204,50 @@ pub(crate) fn vertical(source: &[u8], output: &mut [u8], stride: usize, weights:
     end
 }
 
+#[inline]
+pub(crate) fn horizontal_four<const C: usize>(source: [&[[u8; C]]; 4], weights: &[i32]) -> [[u8; C]; 4] {
+    let mut sums = [Simd::<i32, 4>::splat(RESAMPLE_ROUND); C];
+    for (i, &weight) in weights.iter().enumerate() {
+        for c in 0..C {
+            let values = Simd::<i32, 4>::from_array(std::array::from_fn(|row| i32::from(source[row][i][c])));
+            sums[c] += values * Simd::splat(weight);
+        }
+    }
+    let values = sums.map(|sum| (sum >> RESAMPLE_BITS as i32).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>().to_array());
+    std::array::from_fn(|row| std::array::from_fn(|c| values[c][row]))
+}
+
+pub(crate) fn vertical_wide(source: &[f64], output: &mut [f64], stride: usize, weights: &[i32], maximum: f64) -> usize {
+    let end = output.len() / 4 * 4;
+    for x in (0..end).step_by(4) {
+        let mut sum = Simd::<f64, 4>::splat(0.0);
+        for (i, &weight) in weights.iter().enumerate() {
+            let values = Simd::<f64, 4>::from_slice(&source[i * stride + x..]);
+            sum += values * Simd::splat(f64::from(weight)) / Simd::splat(f64::from(crate::ops::RESAMPLE_SCALE));
+        }
+        sum.simd_clamp(Simd::splat(0.0), Simd::splat(maximum)).copy_to_slice(&mut output[x..x + 4]);
+    }
+    end
+}
+
+#[inline]
+pub(crate) fn horizontal_wide<const C: usize>(source: &[u8], weights: &[i32], maximum: f64) -> [f64; C] {
+    let mut sum = Simd::<f64, 4>::splat(0.0);
+    for (i, &weight) in weights.iter().enumerate() {
+        let pixel = &source[i * C * 2..][..C * 2];
+        let samples =
+            Simd::<u16, 4>::from_array(std::array::from_fn(|c| if c < C { u16::from_le_bytes([pixel[c * 2], pixel[c * 2 + 1]]) } else { 0 }));
+        let mut values = samples.cast::<f64>();
+        if C == 4 {
+            let alpha = values[3];
+            values = values * Simd::splat(alpha) / Simd::splat(maximum);
+            values.as_mut_array()[3] = alpha;
+        }
+        sum += values * Simd::splat(f64::from(weight)) / Simd::splat(f64::from(crate::ops::RESAMPLE_SCALE));
+    }
+    std::array::from_fn(|c| sum[c])
+}
+
 pub(crate) fn nearest_half<const C: usize>(source: &[u8], output: &mut [u8]) {
     assert_eq!(source.len(), output.len() * 2);
     let done = output.len() / C / 16 * 16 * C;
@@ -372,6 +416,87 @@ mod tests {
         }
         check::<1>();
         check::<2>();
+        check::<3>();
+        check::<4>();
+        check::<6>();
+        check::<8>();
+    }
+
+    #[test]
+    fn horizontal_batches_match_scalar_signed_rounding_and_saturation() {
+        fn check<const C: usize>() {
+            for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
+                let data: [Vec<u8>; 4] = std::array::from_fn(|row| (0..1 + weights.len() * C).map(|i| (i * 137 + row * 37) as u8).collect());
+                let source = data.each_ref().map(|row| row[1..].as_chunks::<C>().0);
+                let actual = horizontal_four::<C>(source, weights);
+                for row in 0..4 {
+                    for c in 0..C {
+                        let sum = weights
+                            .iter()
+                            .enumerate()
+                            .fold(i64::from(RESAMPLE_ROUND), |sum, (i, &weight)| sum + i64::from(source[row][i][c]) * i64::from(weight));
+                        assert_eq!(actual[row][c], (sum >> RESAMPLE_BITS).clamp(0, 255) as u8);
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
+    #[test]
+    fn vertical_wide_matches_scalar_order_at_unaligned_boundaries() {
+        for count in [0, 1, 3, 4, 5, 7, 8, 9, 31, 32, 33] {
+            for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
+                let stride = count + 3;
+                let data: Vec<_> = (0..1 + stride * weights.len()).map(|i| (i * 137 % 65536) as f64 + 0.125).collect();
+                let source = &data[1..];
+                let mut output = vec![91.0; count + 2];
+                let done = vertical_wide(source, &mut output[1..count + 1], stride, weights, 4095.0);
+                for i in 0..done {
+                    let expected = weights
+                        .iter()
+                        .enumerate()
+                        .fold(0.0, |sum, (y, &weight)| sum + source[y * stride + i] * f64::from(weight) / f64::from(crate::ops::RESAMPLE_SCALE));
+                    assert_eq!(output[i + 1], expected.clamp(0.0, 4095.0));
+                }
+                assert_eq!(output[0], 91.0);
+                assert!(output[done + 1..].iter().all(|&v| v == 91.0));
+            }
+        }
+    }
+
+    #[test]
+    fn horizontal_wide_preserves_alpha_precision_and_scalar_order() {
+        fn check<const C: usize>() {
+            for depth in [10, 12, 16] {
+                let maximum = (1_u32 << depth) - 1;
+                for weights in [&[][..], &[1 << 22][..], &[-(1 << 22)][..], &[2 << 22][..], &[-400_000, 2_000_000, 3_000_000, -405_696][..]] {
+                    for alpha in [0, 1, maximum / 2, maximum] {
+                        let samples: Vec<_> = (0..weights.len() * C)
+                            .map(|i| if C == 4 && i % C == 3 { alpha as u16 } else { (i as u32 * 719 % (maximum + 1)) as u16 })
+                            .collect();
+                        let mut bytes = vec![91];
+                        bytes.extend(samples.iter().flat_map(|v| v.to_le_bytes()));
+                        let actual = horizontal_wide::<C>(&bytes[1..], weights, f64::from(maximum));
+                        for c in 0..C {
+                            let expected = weights
+                                .iter()
+                                .enumerate()
+                                .map(|(i, &weight)| {
+                                    let value = f64::from(samples[i * C + c]);
+                                    let value = if C == 4 && c < 3 { value * f64::from(samples[i * C + 3]) / f64::from(maximum) } else { value };
+                                    value * f64::from(weight) / f64::from(crate::ops::RESAMPLE_SCALE)
+                                })
+                                .sum::<f64>();
+                            assert_eq!(actual[c], expected);
+                        }
+                    }
+                }
+            }
+        }
         check::<3>();
         check::<4>();
     }

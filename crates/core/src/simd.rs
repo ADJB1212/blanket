@@ -48,6 +48,19 @@ pub fn samples_to_be16(source: &[u8], output: &mut [u8], depth: u8) {
     }
 }
 
+pub fn samples_from_be16(samples: &mut [u8], depth: u8) {
+    crate::parallel::chunks_mut_above(samples, 128 * 1024, 4 * 1024 * 1024, |_, bytes| {
+        let (groups, tail) = bytes.as_chunks_mut::<32>();
+        for group in groups {
+            let values = load_u16::<true>(group) >> u16::from(16 - depth);
+            values.to_le_bytes().copy_to_slice(group);
+        }
+        for sample in tail.as_chunks_mut::<2>().0 {
+            *sample = (u16::from_be_bytes(*sample) >> (16 - depth)).to_le_bytes();
+        }
+    });
+}
+
 pub fn rescale_samples(source: &[u8], source_depth: u8, target_depth: u8) -> Vec<u8> {
     fn convert<const SOURCE_MAX: u32>(source: &[u8], target_depth: u8) -> Vec<u8> {
         let source_bytes = if SOURCE_MAX == u32::from(u8::MAX) { 1 } else { 2 };
@@ -699,6 +712,23 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_sample_conversion_keeps_unaligned_tails_and_guards() {
+        for depth in [10, 12, 16] {
+            for count in [0, 1, 15, 16, 17, 65535, 65536, 65537, 2_097_153] {
+                let mut data = vec![91];
+                data.extend((0..count).flat_map(|i| (i as u16).wrapping_mul(137).to_be_bytes()));
+                data.push(93);
+                samples_from_be16(&mut data[1..count * 2 + 1], depth);
+                assert_eq!(data[0], 91);
+                assert_eq!(data[count * 2 + 1], 93);
+                for (i, sample) in data[1..count * 2 + 1].as_chunks::<2>().0.iter().enumerate() {
+                    assert_eq!(u16::from_le_bytes(*sample), (i as u16).wrapping_mul(137) >> (16 - depth));
+                }
+            }
+        }
+    }
 
     #[test]
     fn wide_conversion_preserves_rounding_endianness_and_partition_boundaries() {

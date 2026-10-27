@@ -16,7 +16,9 @@ fn jxl_settings(c: &mut Criterion) {
                 for lossless in [false, true] {
                     let options = SaveOptions { quality: 85, effort, lossless, ..SaveOptions::default() };
                     let coding = if lossless { "lossless" } else { "lossy-q85" };
-                    for (name, threads) in [("single", JxlThreads::Fixed(1)), ("pool", JxlThreads::Pool)] {
+                    for (name, threads) in
+                        [("single", JxlThreads::Fixed(1)), ("two", JxlThreads::Fixed(2)), ("four", JxlThreads::Fixed(4)), ("pool", JxlThreads::Pool)]
+                    {
                         group.bench_with_input(BenchmarkId::new(format!("{coding}-e{effort}"), name), &threads, |b, &threads| {
                             b.iter(|| PreparedJxl::new(black_box(&image)).unwrap().encode_with_threads(black_box(options), threads).unwrap());
                         });

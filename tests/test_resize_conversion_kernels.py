@@ -8,6 +8,20 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK"])
+@pytest.mark.parametrize("height", [1, 3, 4, 5, 15, 16, 17])
+@pytest.mark.parametrize("method", [1, 2, 3, 4, 5])
+def test_filtered_resize_row_batches_and_fractional_boxes(mode: str, height: int, method: int) -> None:
+    size = (39, height)
+    raw = random.Random(83).randbytes(size[0] * size[1] * len(mode))
+    actual = Image.frombytes(mode, size, raw)
+    expected = PillowImage.frombytes(mode, size, raw)
+    for target in [(17, height), (67, height), (13, 7)]:
+        for box in [None, (0.25, 0.0, 38.5, float(height))]:
+            assert actual.resize(target, method, box=box).tobytes() == expected.resize(target, method, box=box).tobytes()
+    assert actual.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(37, 29), (38, 26), (803, 607)])
 @pytest.mark.parametrize("target", [(19, 13), (91, 79), (7, 5)])

@@ -39,13 +39,13 @@ Benchmarks live in the owning crate's `benches/` directory. Select a crate with
 | Crate                    | Targets                          | Workloads                                                                                                                |
 | ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
 | `blanket-core`           | `conversion`                     | L/RGB/RGBA conversions at 8/16 bits.                                                                                     |
-| `blanket-ops`            | `resize`, `histogram`            | Nearest/bilinear/Lanczos downsampling; 8-bit histograms.                                                                 |
+| `blanket-ops`            | `resize`, `histogram`            | Nearest/bilinear/Lanczos downsampling, upscaling, and fractional crops; 8-bit histograms.                                  |
 | `blanket-filter`         | `blur`                           | Gaussian blur at 8/16 bits.                                                                                              |
 | `blanket-enhance`        | `blend`                          | Blending at 8/16 bits.                                                                                                   |
 | `blanket-composite`      | `alpha_composite`                | RGBA alpha compositing at 8/16 bits.                                                                                     |
-| `blanket-codec-png`      | `codec`                          | PNG levels 1/6, encoding and decoding.                                                                                   |
-| `blanket-codec-jpeg`     | `codec`, `streaming`             | JPEG quality 85; baseline/progressive chunked decoding.                                                                  |
-| `blanket-codec-jxl`      | `codec`, `settings`, `streaming` | JXL lossy/lossless encoding and decoding; efforts and thread counts; chunked decoding.                                   |
+| `blanket-codec-png`      | `codec`                          | PNG levels 1/6, encoding and decoding; compressed text and ICC decode overhead.                                           |
+| `blanket-codec-jpeg`     | `codec`, `streaming`             | JPEG quality 85; small-image context reuse; baseline/progressive chunked decoding.                                       |
+| `blanket-codec-jxl`      | `codec`, `settings`, `streaming` | JXL lossy/lossless encoding and decoding; float-to-8-bit decoding; efforts and thread counts; chunked decoding.           |
 | `blanket-codec-webp`     | `codec`                          | WebP lossy/lossless encoding and decoding.                                                                               |
 | `blanket-codec-jpeg2000` | `codec`                          | Lossless JPEG 2000 encoding and decoding.                                                                                |
 | `blanket-codec-avif`     | `codec`                          | AVIF quality 85, effort 3.                                                                                               |
@@ -61,11 +61,20 @@ at 512x512 to keep their slower encoders practical. PNG, JXL, and JPEG 2000
 also cover L/RGB/RGBA at 10/12/16 bits on patterned 512x512 images.
 
 JXL's main codec cases use effort 3 and quality 85 or lossless encoding. The
-`jxl-settings` group compares efforts 1/3/7, lossy/lossless encoding, and one
-thread versus libjxl's resizable worker pool, at 8/16 bits on medium and large
+`jxl-float` cases decode floating-point RGB input to the normal 8-bit display
+output at each selected size, with encoding outside the measurement. The
+`jxl-settings` group compares efforts 1/3/7, lossy/lossless encoding, and one,
+two, or four threads versus libjxl's resizable worker pool, at 8/16 bits on medium and large
 RGB images. These measurements include sample preparation on each encode.
 WebP uses quality 85 for lossy encoding and its normal lossless settings.
 AVIF uses quality 85 and effort 3; HEIF uses quality 85 and its normal preset.
+
+The `jpeg-context` and `jxl-context` groups compare 32x32 and 64x64 operations
+against fresh codec instances with the original settings. The `png-text` and
+`png-icc` cases isolate native raster decoding with 1 MiB of compressed metadata;
+public `Image.open` still parses that metadata separately. The `io-metadata`
+group compares native metadata attachment and file writing against the prior
+Python-bytes pipeline. Its PNG case uses level 0 to expose buffer-copy costs.
 
 In the full matrix, codec and file workloads use both a compressible gradient/checker pattern and
 deterministic random pixels. These synthetic fixtures bracket compressibility;

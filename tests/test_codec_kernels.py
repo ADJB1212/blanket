@@ -37,6 +37,17 @@ def png_chunks(width: int, height: int, depth: int, color: int, pixels: list[tup
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + b"".join(chunk(kind, data) for kind, data in extra) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
 
 
+def test_png_raster_decode_preserves_separately_parsed_compressed_metadata() -> None:
+    profile = b"profile data" * 65536
+    text = b"image description" * 1024
+    pixels = [(i * 17 % 256, i * 37 % 256, i * 53 % 256) for i in range(15)]
+    payload = png_chunks(5, 3, 8, 2, pixels, False, [(b"iCCP", b"profile\0\0" + zlib.compress(profile)), (b"zTXt", b"description\0\0" + zlib.compress(text))])
+    decoded = Image.open(BytesIO(payload))
+    assert decoded.tobytes() == bytes(value for pixel in pixels for value in pixel)
+    assert decoded.info["icc_profile"] == profile
+    assert decoded.info["description"] == text.decode("latin-1")
+
+
 @pytest.mark.parametrize(("color", "depth"), [(0, depth) for depth in (1, 2, 4, 8, 16)] + [(3, depth) for depth in (1, 2, 4, 8)] + [(color, depth) for color in (2, 4, 6) for depth in (8, 16)])
 @pytest.mark.parametrize("interlaced", [False, True])
 @pytest.mark.parametrize("transparent", [False, True])

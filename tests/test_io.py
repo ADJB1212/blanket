@@ -68,6 +68,27 @@ def test_file_save_encoding_failure_preserves_existing_file(tmp_path: Path) -> N
     assert path.read_bytes() == b"original"
 
 
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL"])
+@pytest.mark.parametrize("path_type", [str, os.fsencode])
+def test_metadata_file_save_matches_stream_and_preserves_file_on_error(tmp_path: Path, format: str, path_type: Callable[[Path], str | bytes]) -> None:
+    source = Image.new("RGB", (17, 9), (31, 73, 127))
+    exif = Image.Exif()
+    exif[305] = "Blanket metadata writer"
+    options = {"exif": exif, "xmp": b"test packet"}
+    stream = BytesIO()
+    source.save(stream, format, **options)
+    path = tmp_path / "image"
+    source.save(path_type(path), format, **options)
+    assert path.read_bytes() == stream.getvalue()
+    decoded = Image.open(path)
+    assert decoded.getexif()[305] == exif[305]
+    assert decoded.info["xmp"] == options["xmp"]
+    if format == "JPEG":
+        with pytest.raises(ValueError, match="exceeds"):
+            source.save(path_type(path), format, xmp=b"x" * 65536)
+        assert path.read_bytes() == stream.getvalue()
+
+
 @pytest.mark.parametrize("path_type", [str, os.fsencode])
 def test_file_save_errors_include_filename(tmp_path: Path, path_type: Callable[[Path], str | bytes]) -> None:
     path = path_type(tmp_path / "missing" / "image.png")

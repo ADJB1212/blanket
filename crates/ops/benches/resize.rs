@@ -15,19 +15,15 @@ fn resize(c: &mut Criterion) {
                     let mut group = c.benchmark_group(format!("resize/{}-{depth}/{width}x{height}", mode.as_str()));
                     group.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
                     for (name, method) in [("nearest", 0), ("bilinear", 2), ("lanczos", 1)] {
-                        group.bench_with_input(BenchmarkId::new("resize-half", name), &method, |b, &method| {
-                            b.iter(|| {
-                                ops_resize(
-                                    py,
-                                    black_box(&image),
-                                    (width / 2, height / 2),
-                                    black_box(method),
-                                    (0.0, 0.0, f64::from(width), f64::from(height)),
-                                    None,
-                                )
-                                .unwrap()
+                        for (case, target, bounds) in [
+                            ("resize-half", (width / 2, height / 2), (0.0, 0.0, f64::from(width), f64::from(height))),
+                            ("resize-upscale", (width * 3 / 2, height * 3 / 2), (0.0, 0.0, f64::from(width), f64::from(height))),
+                            ("resize-crop", (width / 2, height / 2), (1.25, 2.5, f64::from(width) - 0.75, f64::from(height) - 1.5)),
+                        ] {
+                            group.bench_with_input(BenchmarkId::new(case, name), &method, |b, &method| {
+                                b.iter(|| ops_resize(py, black_box(&image), black_box(target), black_box(method), black_box(bounds), None).unwrap());
                             });
-                        });
+                        }
                     }
                     group.finish();
                 }

@@ -15,6 +15,8 @@ blanket-codec-common.workspace = true
 blanket-codec-image.workspace = true
 image = { version = "0.25", default-features = false, features = ["png"] }
 png.workspace = true
+rayon.workspace = true
+flate2.workspace = true
 
 [lib]
 doctest = false

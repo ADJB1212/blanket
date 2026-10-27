@@ -1,13 +1,33 @@
 #![feature(default_field_values, portable_simd)]
 
+mod decode;
 mod entropy;
 pub mod stream;
+
+use std::cell::RefCell;
 
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use turbojpeg::{Colorspace, Compressor, Decompressor, PixelFormat, Subsamp};
+
+thread_local! {
+    static JPEG_ENCODER: RefCell<Option<Compressor>> = const { RefCell::new(None) };
+    static JPEG_DECODER: RefCell<Option<decode::Decoder>> = const { RefCell::new(None) };
+}
+
+fn with_codec<T, R, E>(cache: &RefCell<Option<T>>, create: impl FnOnce() -> Result<T, E>, run: impl FnOnce(&mut T) -> Result<R, E>) -> Result<R, E> {
+    let mut cached = cache.borrow_mut();
+    if cached.is_none() {
+        *cached = Some(create()?);
+    }
+    let result = run(cached.as_mut().expect("codec initialized above"));
+    if result.is_err() {
+        *cached = None;
+    }
+    result
+}
 
 pub fn transform_jpeg(
     data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,
@@ -59,7 +79,11 @@ pub fn transform_jpeg(
 }
 
 pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
-    let mut decoder = Decompressor::new().map_err(|error| error.to_string())?;
+    JPEG_DECODER.with(|cache| with_codec(cache, decode::Decoder::new, |decoder| decoder.decode(data)))
+}
+
+#[cfg(test)]
+fn decode_jpeg_with(decoder: &mut Decompressor, data: &[u8]) -> Result<Image, String> {
     let header = decoder.read_header(data).map_err(|error| error.to_string())?;
     let width = u32::try_from(header.width).map_err(|error| error.to_string())?;
     let height = u32::try_from(header.height).map_err(|error| error.to_string())?;
@@ -112,6 +136,12 @@ pub fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCodi
 }
 
 fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
+    JPEG_ENCODER.with(|cache| {
+        with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, quality, coding))
+    })
+}
+
+fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
     if image.mode == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
@@ -124,15 +154,17 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
         _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
     };
-    let mut encoder = Compressor::new().map_err(codec_error)?;
     encoder.set_quality(i32::from(quality)).map_err(codec_error)?;
     encoder.set_subsamp(subsampling).map_err(codec_error)?;
-    if coding.optimize {
-        encoder.set_optimize(true).map_err(codec_error)?;
-    }
-    if coding.progressive {
-        encoder.set_progressive(true).map_err(codec_error)?;
-    }
+    encoder.set_optimize(coding.optimize).map_err(codec_error)?;
+    encoder.set_progressive(coding.progressive).map_err(codec_error)?;
+    encoder
+        .set_colorspace(match image.mode {
+            PixelMode::L => Colorspace::Gray,
+            PixelMode::Cmyk => Colorspace::CMYK,
+            _ => Colorspace::YCbCr,
+        })
+        .map_err(codec_error)?;
     if image.mode == PixelMode::YCbCr {
         let (width, height) = (image.width as usize, image.height as usize);
         let planes = ycbcr_planes(pixels, width, height);
@@ -252,6 +284,32 @@ fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reused_codecs_match_fresh_codecs_after_mode_quality_and_error_changes() {
+        for mode in [PixelMode::Cmyk, PixelMode::Rgb, PixelMode::L, PixelMode::YCbCr, PixelMode::Rgb] {
+            for size in [(1, 1), (17, 9), (257, 65)] {
+                let pixels = (0..size.0 * size.1 * mode.channels() as u32).map(|i| (i * 137 + i / 7) as u8).collect();
+                let image = Image::from_pixels(size.0, size.1, mode, pixels, None).unwrap();
+                for quality in [25, 100, 85] {
+                    for coding in [JpegCoding { progressive: true, optimize: true }, JpegCoding::BASELINE] {
+                        let actual = encode_jpeg_coded(&image, image.pixel_data().unwrap(), quality, coding).unwrap();
+                        let expected =
+                            encode_jpeg_with(&mut Compressor::new().unwrap(), &image, image.pixel_data().unwrap(), quality, coding).unwrap();
+                        assert_eq!(actual, expected);
+                        let expected = decode_jpeg_with(&mut Decompressor::new().unwrap(), &actual).unwrap();
+                        let decoded = decode_jpeg(&actual).unwrap();
+                        assert_eq!(decoded.size(), expected.size());
+                        assert_eq!(decoded.mode, expected.mode);
+                        assert_eq!(decoded.raw_data().unwrap(), expected.raw_data().unwrap());
+                        assert!(decode_jpeg(&actual[..actual.len() / 2]).is_err());
+                        assert_eq!(decode_jpeg(&actual).unwrap().raw_data().unwrap(), expected.raw_data().unwrap());
+                    }
+                }
+                assert!(encode_jpeg(&image, image.pixel_data().unwrap(), 0).is_err());
+            }
+        }
+    }
 
     #[test]
     fn inversion_preserves_length_and_matches_scalar_across_parallel_threshold() {

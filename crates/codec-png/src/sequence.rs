@@ -70,7 +70,7 @@ impl CanvasSample for u16 {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
-    let mut decoder = png::Decoder::new(Cursor::new(data));
+    let mut decoder = super::decoder(data);
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|e| e.to_string())?;
     let Some(animation) = reader.info().animation_control else {

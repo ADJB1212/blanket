@@ -53,6 +53,13 @@ pub fn load<const C: usize>(source: &[u8]) -> [Bytes; C] {
                 (result[c], result[c + 3]) = a[c].deinterleave(b[c]);
             }
         }
+        8 => {
+            let a = load::<4>(source);
+            let b = load::<4>(&source[64..]);
+            for c in 0..4 {
+                (result[c], result[c + 4]) = a[c].deinterleave(b[c]);
+            }
+        }
         _ => return std::array::from_fn(|c| Bytes::gather_or_default(source, Simd::from_array(std::array::from_fn(|i| i * C + c)))),
     }
     result
@@ -77,6 +84,16 @@ pub fn store<const C: usize>(output: &mut [u8], values: [Bytes; C]) {
             for (chunk, value) in output[..64].as_chunks_mut::<16>().0.iter_mut().zip([ab, ba, cd, dc]) {
                 value.copy_to_slice(chunk);
             }
+        }
+        6 => {
+            let pairs = std::array::from_fn::<_, 3, _>(|c| values[c].interleave(values[c + 3]));
+            store_rgb(&mut output[..48], pairs.map(|pair| pair.0));
+            store_rgb(&mut output[48..], pairs.map(|pair| pair.1));
+        }
+        8 => {
+            let pairs = std::array::from_fn::<_, 4, _>(|c| values[c].interleave(values[c + 4]));
+            store::<4>(&mut output[..64], pairs.map(|pair| pair.0));
+            store::<4>(&mut output[64..], pairs.map(|pair| pair.1));
         }
         _ => {
             for (c, value) in values.into_iter().enumerate() {
@@ -393,6 +410,7 @@ mod tests {
         check::<3>();
         check::<4>();
         check::<6>();
+        check::<8>();
     }
 
     #[test]

@@ -6,7 +6,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
-type PngChunk = (Vec<u8>, Vec<u8>, bool);
+pub type PngChunk = (Vec<u8>, Vec<u8>, bool);
 type TiffEntry = (u16, u16, u32, usize);
 
 #[pyfunction]
@@ -228,6 +228,13 @@ fn write_metadata(data: &[u8], format: &str, exif: &[u8], xmp: &[u8], icc: &[u8]
         "TIFF" => write_tiff(data, tiff, xmp, icc),
         _ => Err(PyValueError::new_err(format!("metadata saving is not supported for {format}"))),
     }
+}
+
+pub fn encode_metadata(data: Vec<u8>, format: &str, exif: &[u8], xmp: &[u8], icc: &[u8], chunks: &[PngChunk]) -> PyResult<Vec<u8>> {
+    if format == "HEIF" || (exif.is_empty() && xmp.is_empty() && icc.is_empty() && chunks.is_empty()) {
+        return Ok(data);
+    }
+    write_metadata(&data, format, exif, xmp, icc, chunks)
 }
 
 fn webp_dimensions(data: &[u8]) -> PyResult<(u32, u32, bool)> {

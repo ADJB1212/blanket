@@ -1214,7 +1214,16 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
 // Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
 // for every output pixel. Repeated source rows only need one gather per band.
 fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
-    let channels = image.mode.channels();
+    match image.mode.channels() {
+        1 => resize_wide_channels::<1>(image, size, bounds, method),
+        3 => resize_wide_channels::<3>(image, size, bounds, method),
+        4 => resize_wide_channels::<4>(image, size, bounds, method),
+        _ => unreachable!("validated wide mode"),
+    }
+}
+
+fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+    let channels = C;
     let bytes = image.raw_data()?;
     let mut pixels = buffer(size, channels << 1)?;
     if image.width == 0 || image.height == 0 {
@@ -1247,6 +1256,12 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
         for (y, row) in rows.chunks_exact_mut(stride).enumerate() {
             let y = band * 8 + y;
             for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                if C > 1 {
+                    let offset = ((y + first) * image.width as usize + start) * C * 2;
+                    let values = crate::ops_simd::horizontal_wide::<C>(&bytes[offset..], coefficients, maximum);
+                    row[x * C..][..C].copy_from_slice(&values);
+                    continue;
+                }
                 for channel in 0..channels {
                     let value = coefficients
                         .iter()
@@ -1264,20 +1279,21 @@ fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) ->
         }
     });
     chunks_mut(&mut pixels, stride * 2 * 8, |band, rows| {
+        let mut values = vec![0.0; stride];
         for (y, row) in rows.chunks_exact_mut(stride * 2).enumerate() {
             let (start, coefficients) = vertical.get(band * 8 + y);
+            let source = &temp[(start - first) * stride..];
+            let done = crate::ops_simd::vertical_wide(source, &mut values, stride, coefficients, maximum);
+            for (x, value) in values.iter_mut().enumerate().skip(done) {
+                *value = coefficients
+                    .iter()
+                    .enumerate()
+                    .map(|(i, &weight)| source[i * stride + x] * f64::from(weight) / f64::from(RESAMPLE_SCALE))
+                    .sum::<f64>()
+                    .clamp(0.0, maximum);
+            }
             for x in 0..size.0 as usize {
-                let mut values = [0.0; 4];
-                for (channel, value) in values.iter_mut().enumerate().take(channels) {
-                    *value = coefficients
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &weight)| {
-                            temp[(start - first + i) * stride + x * channels + channel] * f64::from(weight) / f64::from(RESAMPLE_SCALE)
-                        })
-                        .sum::<f64>()
-                        .clamp(0.0, maximum);
-                }
+                let values = &values[x * channels..][..channels];
                 for channel in 0..channels {
                     let value = if channels == 4 && channel < 3 {
                         if values[3] > 0.0 { values[channel] * maximum / values[3] } else { 0.0 }
@@ -1381,6 +1397,11 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
     let narrow = horizontal.iter().all(|(_, coefficients)| {
         coefficients.iter().map(|&w| i64::from(w).abs()).sum::<i64>() * 255 + i64::from(RESAMPLE_ROUND) <= i64::from(i32::MAX)
     });
+    let batch_rows = narrow && (matches!(C, 2 | 3) || horizontal.iter().all(|(_, coefficients)| coefficients.len() <= 8));
+    if batch_rows && output.len() >= row_bytes * 4 {
+        resample_horizontal_batched::<C>(source, output, width, first_row, horizontal);
+        return;
+    }
     chunks_mut(output, row_bytes << 4, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y = first_row + band * 16 + i;
@@ -1404,6 +1425,40 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
                             .fold(i64::from(RESAMPLE_ROUND), |sum, (i, &w)| sum + i64::from(src[start + i][c]) * i64::from(w));
                         dst[c] = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
                     }
+                }
+            }
+        }
+    });
+}
+
+fn resample_horizontal_batched<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {
+    let row_bytes = horizontal.bounds.len() * C;
+    let input_stride = width * C;
+    chunks_mut(output, row_bytes * 16, |band, rows| {
+        let four = rows.len() / (row_bytes * 4) * 4;
+        for group in 0..four / 4 {
+            let y = first_row + band * 16 + group * 4;
+            let src = std::array::from_fn::<_, 4, _>(|row| source[(y + row) * input_stride..(y + row + 1) * input_stride].as_chunks::<C>().0);
+            for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                let values = crate::ops_simd::horizontal_four::<C>(src.map(|row| &row[start..start + coefficients.len()]), coefficients);
+                for (row, value) in values.iter().enumerate() {
+                    let start = (group * 4 + row) * row_bytes + x * C;
+                    rows[start..start + C].copy_from_slice(value);
+                }
+            }
+        }
+        for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate().skip(four) {
+            let y = first_row + band * 16 + i;
+            let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
+            for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
+                let mut sums = [RESAMPLE_ROUND; C];
+                for (pixel, &weight) in src[start..start + coefficients.len()].iter().zip(coefficients) {
+                    for c in 0..C {
+                        sums[c] += i32::from(pixel[c]) * weight;
+                    }
+                }
+                for c in 0..C {
+                    dst[c] = (sums[c] >> RESAMPLE_BITS).clamp(0, 255) as u8;
                 }
             }
         }

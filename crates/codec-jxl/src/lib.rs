@@ -2,16 +2,21 @@
 
 use std::borrow::Cow;
 
+mod encode;
 pub mod stream;
 
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
-use jpegxl_rs::decode::{Event, Events};
-use jpegxl_rs::encode::{ColorEncoding, EncoderFrame, EncoderSpeed};
+use jpegxl_rs::decode::{Event, Events, PixelFormat};
+use jpegxl_rs::decoder_builder;
+use jpegxl_rs::encode::EncoderSpeed;
+#[cfg(test)]
+use jpegxl_rs::encode::{ColorEncoding, EncoderFrame};
+#[cfg(test)]
+use jpegxl_rs::encoder_builder;
 use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
 use jpegxl_rs::parallel::threads_runner::ThreadsRunner;
-use jpegxl_rs::{decoder_builder, encoder_builder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 #[cfg(target_endian = "little")]
@@ -46,52 +51,64 @@ pub enum JxlThreads {
 }
 
 pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
-    // Size the pool after reading basic info instead of starting one worker
-    // per CPU even for small images with only a few independently coded groups.
-    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| {
+    use jpegxl_sys::common::types::{JxlDataType, JxlEndianness};
+
+    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| -> Result<_, String> {
         let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
         let mut decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
-        {
-            let mut session = decoder.session(Events::BASIC_INFO).map_err(|error| error.to_string())?;
-            let mut input = data;
+        let mut session = decoder.session(Events::FULL_IMAGE).map_err(|error| error.to_string())?;
+        let mut input = data;
+        let mut info = None;
+        let mut pixels = None;
+        let mut data_type = None;
+        loop {
             match session.process(&mut input).map_err(|error| error.to_string())? {
-                Event::BasicInfo(info) => validate_dimensions(info.xsize, info.ysize)?,
-                _ => return Err("incomplete JPEG XL header".into()),
+                Event::BasicInfo(header) => {
+                    validate_dimensions(header.xsize, header.ysize)?;
+                    // Ask libjxl for the display conversion during the first decode.
+                    if header.exponent_bits_per_sample != 0 {
+                        data_type = Some(JxlDataType::Uint8);
+                    }
+                    info = Some(header);
+                }
+                Event::NeedImageOutBuffer => {
+                    let format = PixelFormat { endianness: JxlEndianness::Little, ..PixelFormat::default() };
+                    session.alloc_image_buffer(format, data_type).map_err(|error| error.to_string())?;
+                }
+                Event::FullImage(image) => pixels = image,
+                Event::Success => break,
+                Event::NeedMoreInput => {
+                    return Err(if info.is_none() { "incomplete JPEG XL header" } else { "incomplete JPEG XL image" }.into());
+                }
+                _ => (),
             }
         }
-        decoder.decode(data).map_err(|error| error.to_string())
+        Ok((info.ok_or("incomplete JPEG XL header")?, pixels.ok_or("no JPEG XL image decoded")?))
     })?;
 
-    let pixels = match pixels {
-        jpegxl_rs::decode::Pixels::Uint8(pixels) => pixels,
-        jpegxl_rs::decode::Pixels::Uint16(pixels) => {
-            let (mode, samples) = match (info.num_color_channels, info.has_alpha_channel) {
-                (1, false) => (PixelMode::L, pixels),
-                (3, false) => (PixelMode::Rgb, pixels),
-                (3, true) => (PixelMode::Rgba, pixels),
-                (1, true) => (PixelMode::Rgba, pixels.as_chunks::<2>().0.iter().flat_map(|v| [v[0], v[0], v[0], v[1]]).collect()),
-                _ => return Err("unsupported JPEG XL channel layout".into()),
-            };
-            return Image::from_samples(info.width, info.height, mode, samples, 16, Some("JXL".into())).map_err(|e| e.to_string());
+    let wide = pixels.format.data_type == JxlDataType::Uint16;
+    let (mode, pixels) = match (info.num_color_channels, info.alpha_bits > 0) {
+        (1, true) if wide => {
+            let mut rgba = Vec::with_capacity(pixels.data.len() * 2);
+            for &[l0, l1, a0, a1] in pixels.data.as_chunks::<4>().0 {
+                rgba.extend_from_slice(&[l0, l1, l0, l1, l0, l1, a0, a1]);
+            }
+            (PixelMode::Rgba, rgba)
         }
-        // Retain the existing display conversion for floating-point inputs.
-        _ => JXL_DECODE_RUNNER.with(|runner| {
-            let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
-            let decoder = decoder_builder().parallel_runner(runner).build().map_err(|e| e.to_string())?;
-            decoder.decode_with::<u8>(data).map(|(_, pixels)| pixels).map_err(|e| e.to_string())
-        })?,
-    };
-
-    let (mode, pixels) = match (info.num_color_channels, info.has_alpha_channel) {
-        (1, false) => (PixelMode::L, pixels),
-        (3, false) => (PixelMode::Rgb, pixels),
-        (1, true) => (PixelMode::Rgba, luma_alpha_to_rgba(&pixels)),
-        (3, true) => (PixelMode::Rgba, pixels),
+        (1, false) => (PixelMode::L, pixels.data),
+        (3, false) => (PixelMode::Rgb, pixels.data),
+        (1, true) => (PixelMode::Rgba, luma_alpha_to_rgba(&pixels.data)),
+        (3, true) => (PixelMode::Rgba, pixels.data),
         (channels, has_alpha) => {
             return Err(format!("unsupported JPEG XL channel layout: {channels} color channels, alpha={has_alpha}"));
         }
     };
-    Image::from_pixels(info.width, info.height, mode, pixels, Some("JXL".to_owned())).map_err(|error| error.to_string())
+    if wide {
+        Image::from_sample_bytes(info.xsize, info.ysize, mode, pixels, 16, Some("JXL".into()))
+    } else {
+        Image::from_pixels(info.xsize, info.ysize, mode, pixels, Some("JXL".into()))
+    }
+    .map_err(|error| error.to_string())
 }
 
 fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
@@ -113,49 +130,14 @@ enum JxlSamples<'a> {
 }
 
 fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
-    if !options.icc_profile.is_empty() {
-        return with_jxl_runner(image, threads, |runner| encode_profiled(image, pixels, options, runner));
+    if !matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("unsupported mode for JPEG XL"));
     }
-    let (color_encoding, has_alpha) = match image.mode {
-        PixelMode::L => (ColorEncoding::SrgbLuma, false),
-        PixelMode::Rgb => (ColorEncoding::Srgb, false),
-        PixelMode::Rgba => (ColorEncoding::Srgb, true),
-        _ => return Err(PyValueError::new_err("unsupported mode for JPEG XL")),
-    };
-    let speed = jxl_encoder_speed(options.effort)?;
-    let input_bytes = match &pixels {
-        JxlSamples::Byte(samples) => samples.len(),
-        JxlSamples::Wide(samples) => std::mem::size_of_val(*samples),
-    };
-    let encode = |runner: Option<&dyn ParallelRunner>| {
-        let builder = encoder_builder()
-            // jpegxl-rs otherwise zero-fills 512 KiB even for tiny candidates.
-            // It grows this buffer when needed and shrinks it after encoding.
-            .init_buffer_size(input_bytes.saturating_add(1024).clamp(4096, 512 * 1024))
-            .has_alpha(has_alpha)
-            .lossless(options.lossless)
-            .speed(speed)
-            .decoding_speed(0)
-            .use_container(false)
-            .jpeg_quality(f32::from(options.quality))
-            .uses_original_profile(options.lossless || options.quality == 100)
-            .color_encoding(color_encoding);
-        let mut encoder = if let Some(runner) = runner { builder.parallel_runner(runner).build() } else { builder.build() }.map_err(codec_error)?;
-        match pixels {
-            JxlSamples::Byte(pixels) => {
-                let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-                encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)
-            }
-            JxlSamples::Wide(pixels) => {
-                let frame = EncoderFrame::new(pixels).num_channels(image.mode.channels() as u32);
-                encoder.encode_frame(&frame, image.width, image.height).map_err(codec_error)
-            }
-        }
-    };
-    with_jxl_runner(image, threads, encode)
+    jxl_encoder_speed(options.effort)?;
+    with_jxl_runner(threads, |runner| encode::encode(image, pixels, options, runner))
 }
 
-fn with_jxl_runner<T>(image: &Image, threads: JxlThreads, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
+fn with_jxl_runner<T>(threads: JxlThreads, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
     match threads {
         // Do not even initialize a thread-local pool for single-threaded
         // Rayon candidates. Besides allocating unused state, pool creation
@@ -172,30 +154,19 @@ fn with_jxl_runner<T>(image: &Image, threads: JxlThreads, encode: impl FnOnce(Op
         JxlThreads::Pool => JXL_ENCODE_RUNNER.with(|runner| {
             let runner = runner.get_or_init(|| ResizableRunner::new(None));
             let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
-            runner.set_num_threads(image.width.into(), image.height.into());
             encode(Some(runner))
         }),
     }
 }
 
-fn encode_profiled(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, runner: Option<&dyn ParallelRunner>) -> PyResult<Vec<u8>> {
+fn encode_native(
+    encoder: &encode::Encoder, image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, runner: Option<&dyn ParallelRunner>,
+) -> PyResult<Vec<u8>> {
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness, JxlPixelFormat};
     use jpegxl_sys::encoder::encode::*;
 
-    struct Encoder(*mut JxlEncoder);
-    impl Drop for Encoder {
-        fn drop(&mut self) {
-            // SAFETY: this guard exclusively owns a non-null encoder.
-            unsafe { JxlEncoderDestroy(self.0) };
-        }
-    }
     fn check(status: JxlEncoderStatus) -> PyResult<()> {
         if status == JxlEncoderStatus::Success { Ok(()) } else { Err(codec_error("JPEG XL profile encoding failed")) }
-    }
-    // SAFETY: null selects libjxl's default allocator.
-    let encoder = Encoder(unsafe { JxlEncoderCreate(std::ptr::null()) });
-    if encoder.0.is_null() {
-        return Err(codec_error("cannot allocate JPEG XL encoder"));
     }
     let mut info = std::mem::MaybeUninit::uninit();
     // SAFETY: libjxl initializes the entire basic-info struct.
@@ -209,7 +180,7 @@ fn encode_profiled(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, 
         JxlSamples::Wide(_) => 16,
     };
     info.num_color_channels = if image.mode == PixelMode::L { 1 } else { 3 };
-    info.uses_original_profile = true.into();
+    info.uses_original_profile = (options.lossless || options.quality == 100 || !options.icc_profile.is_empty()).into();
     if image.mode == PixelMode::Rgba {
         info.num_extra_channels = 1;
         info.alpha_bits = info.bits_per_sample;
@@ -219,13 +190,22 @@ fn encode_profiled(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, 
         JxlSamples::Wide(raw) => (raw.as_ptr().cast(), std::mem::size_of_val(raw), JxlDataType::Uint16),
     };
     let format = JxlPixelFormat { num_channels: image.mode.channels() as u32, data_type, endianness: JxlEndianness::Native, align: 0 };
+    if let Some(runner) = runner {
+        runner.callback_basic_info(&info);
+    }
     // SAFETY: the encoder and all input buffers stay alive through processing.
     unsafe {
         if let Some(runner) = runner {
             check(JxlEncoderSetParallelRunner(encoder.0, runner.runner(), runner.as_opaque_ptr()))?;
         }
         check(JxlEncoderSetBasicInfo(encoder.0, &raw const info))?;
-        check(JxlEncoderSetICCProfile(encoder.0, options.icc_profile.as_ptr(), options.icc_profile.len()))?;
+        if options.icc_profile.is_empty() {
+            let mut color = std::mem::MaybeUninit::uninit();
+            JxlColorEncodingSetToSRGB(color.as_mut_ptr(), (image.mode == PixelMode::L).into());
+            check(JxlEncoderSetColorEncoding(encoder.0, color.as_ptr()))?;
+        } else {
+            check(JxlEncoderSetICCProfile(encoder.0, options.icc_profile.as_ptr(), options.icc_profile.len()))?;
+        }
         let settings = JxlEncoderFrameSettingsCreate(encoder.0, std::ptr::null());
         if settings.is_null() {
             return Err(codec_error("cannot allocate JPEG XL settings"));
@@ -233,23 +213,32 @@ fn encode_profiled(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, 
         check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::Effort, options.effort.into()))?;
         check(JxlEncoderSetFrameLossless(settings, options.lossless.into()))?;
         check(JxlEncoderSetFrameDistance(settings, JxlEncoderDistanceFromQuality(options.quality.into())))?;
+        check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::DecodingSpeed, 0))?;
         check(JxlEncoderAddImageFrame(settings, &raw const format, raw, length))?;
         JxlEncoderCloseInput(encoder.0);
     }
-    let mut output = vec![0; 4096];
-    let mut written = 0;
+    let mut output = Vec::<u8>::with_capacity(length.saturating_add(1024).clamp(4096, 512 * 1024));
     loop {
-        let mut next = output[written..].as_mut_ptr();
-        let mut available = output.len() - written;
-        // SAFETY: next/available describe a valid writable slice for this call.
+        let written = output.len();
+        let spare = output.spare_capacity_mut();
+        let capacity = spare.len();
+        let mut next = spare.as_mut_ptr().cast::<u8>();
+        let mut available = capacity;
+        // SAFETY: next/available describe allocated spare capacity. Only bytes
+        // reported written by successful processing are exposed through Vec's len.
         let status = unsafe { JxlEncoderProcessOutput(encoder.0, &raw mut next, &raw mut available) };
-        written = output.len() - available;
+        if matches!(status, JxlEncoderStatus::Success | JxlEncoderStatus::NeedMoreOutput) {
+            // SAFETY: libjxl initialized capacity - available additional bytes.
+            unsafe { output.set_len(written + capacity - available) };
+        }
         match status {
             JxlEncoderStatus::Success => {
-                output.truncate(written);
+                if output.capacity() > output.len().saturating_mul(4).max(4096) {
+                    output.shrink_to_fit();
+                }
                 return Ok(output);
             }
-            JxlEncoderStatus::NeedMoreOutput => output.resize(output.len() * 2, 0),
+            JxlEncoderStatus::NeedMoreOutput => output.reserve(output.capacity()),
             _ => return Err(codec_error("JPEG XL profile encoding failed")),
         }
     }
@@ -415,6 +404,89 @@ fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cached_encoding_matches_fresh_encoder_after_settings_and_profile_errors() {
+        for mode in [PixelMode::L, PixelMode::Rgba, PixelMode::Rgb] {
+            let pixels: Vec<_> = (0..67 * 19 * mode.channels()).map(|i| (i * 137 + i / 7) as u8).collect();
+            let image = Image::from_pixels(67, 19, mode, pixels, None).unwrap();
+            let pixels = image.pixel_data().unwrap();
+            for lossless in [true, false] {
+                for quality in [85, 100] {
+                    let options = SaveOptions { quality, effort: 3, lossless, ..SaveOptions::default() };
+                    let prepared = PreparedJxl::new(&image).unwrap();
+                    let actual = prepared.encode_with_threads(options, JxlThreads::Fixed(1)).unwrap();
+                    let mut reference = encoder_builder()
+                        .has_alpha(mode == PixelMode::Rgba)
+                        .lossless(lossless)
+                        .speed(EncoderSpeed::Falcon)
+                        .decoding_speed(0)
+                        .use_container(false)
+                        .jpeg_quality(f32::from(quality))
+                        .uses_original_profile(lossless || quality == 100)
+                        .color_encoding(if mode == PixelMode::L { ColorEncoding::SrgbLuma } else { ColorEncoding::Srgb })
+                        .build()
+                        .unwrap();
+                    let expected = reference.encode_frame(&EncoderFrame::new(pixels).num_channels(mode.channels() as u32), 67, 19).unwrap();
+                    assert_eq!(actual, expected);
+                    assert!(prepared.encode_with_threads(SaveOptions { icc_profile: b"invalid profile", ..options }, JxlThreads::Fixed(1)).is_err());
+                    assert_eq!(prepared.encode_with_threads(options, JxlThreads::Fixed(1)).unwrap(), expected);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn eager_decode_matches_typed_output_for_all_channel_layouts() {
+        for channels in 1..=4 {
+            for depth in [8, 16, 32] {
+                let gray = channels <= 2;
+                let alpha = channels == 2 || channels == 4;
+                let mut encoder = encoder_builder()
+                    .has_alpha(alpha)
+                    .color_encoding(if gray { ColorEncoding::SrgbLuma } else { ColorEncoding::Srgb })
+                    .build()
+                    .unwrap();
+                let samples: Vec<_> = (0..17 * 9 * channels).map(|i| (i * 137 + i / 7) as u16).collect();
+                let encoded = match depth {
+                    8 => {
+                        let samples: Vec<_> = samples.iter().map(|&v| v as u8).collect();
+                        encoder.encode_frame(&EncoderFrame::new(&samples).num_channels(channels as u32), 17, 9).unwrap()
+                    }
+                    16 => encoder.encode_frame(&EncoderFrame::new(&samples).num_channels(channels as u32), 17, 9).unwrap(),
+                    _ => {
+                        let samples: Vec<_> = samples.iter().map(|&v| f32::from(v) / 16384.0).collect();
+                        encoder.encode_frame(&EncoderFrame::new(&samples).num_channels(channels as u32), 17, 9).unwrap()
+                    }
+                };
+                let reference = decoder_builder().build().unwrap();
+                let expected = if depth == 16 {
+                    let (_, samples) = reference.decode_with::<u16>(&encoded).unwrap();
+                    let samples = if channels == 2 { samples.as_chunks::<2>().0.iter().flat_map(|&[l, a]| [l, l, l, a]).collect() } else { samples };
+                    samples.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>()
+                } else {
+                    let (_, samples) = reference.decode_with::<u8>(&encoded).unwrap();
+                    if channels == 2 { luma_alpha_to_rgba(&samples) } else { samples }
+                };
+                let actual = decode_jxl(&encoded).unwrap();
+                assert_eq!(actual.size(), (17, 9));
+                assert_eq!(
+                    actual.mode,
+                    if alpha {
+                        PixelMode::Rgba
+                    } else if gray {
+                        PixelMode::L
+                    } else {
+                        PixelMode::Rgb
+                    }
+                );
+                assert_eq!(actual.bit_depth, if depth == 16 { 16 } else { 8 });
+                assert_eq!(actual.raw_data().unwrap(), expected, "{channels}/{depth}");
+                assert!(decode_jxl(&encoded[..encoded.len() / 2]).is_err());
+                assert_eq!(decode_jxl(&encoded).unwrap().raw_data().unwrap(), expected);
+            }
+        }
+    }
 
     #[test]
     fn oversized_header_is_rejected_without_frame_data() {

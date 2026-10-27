@@ -7,6 +7,7 @@ use blanket_codecs::open_bytes;
 use blanket_core::PixelMode;
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use pyo3::Python;
+use pyo3::types::{PyBytes, PyBytesMethods};
 
 fn file_io(c: &mut Criterion) {
     let directory = tempfile::tempdir().unwrap();
@@ -52,5 +53,43 @@ fn file_io(c: &mut Criterion) {
     });
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = file_io }
+fn metadata_io(c: &mut Criterion) {
+    let directory = tempfile::tempdir().unwrap();
+    let output = directory.path().join("metadata");
+    let exif = b"Exif\0\0II*\0\x08\0\0\0\0\0\0\0\0\0";
+    let xmp = b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\">benchmark</x:xmpmeta>";
+    Python::attach(|py| {
+        for &(width, height) in sizes() {
+            let image = fixture(width, height, PixelMode::Rgb, 8, 12345, false);
+            for (name, format) in [("png-level-0", ImageFormat::Png), ("jpeg", ImageFormat::Jpeg), ("jxl", ImageFormat::Jxl)] {
+                let options = SaveOptions { quality: 85, effort: 3, compress_level: 0, ..SaveOptions::default() };
+                let mut group = c.benchmark_group(format!("io-metadata/{name}/{width}x{height}"));
+                group.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
+                group.bench_function("native-write", |b| {
+                    b.iter(|| {
+                        py.detach(|| {
+                            let bytes = encode(black_box(&image), format, options).unwrap();
+                            let bytes = blanket_codecs::metadata::encode_metadata(bytes, format.as_str(), exif, xmp, &[], &[]).unwrap();
+                            fs::write(black_box(&output), bytes).unwrap();
+                        });
+                    })
+                });
+                group.bench_function("python-bytes-reference", |b| {
+                    b.iter(|| {
+                        let encoded = {
+                            let bytes = py.detach(|| encode(black_box(&image), format, options)).unwrap();
+                            PyBytes::new(py, &bytes)
+                        };
+                        let encoded =
+                            blanket_codecs::metadata::_write_metadata(py, encoded.as_bytes(), format.as_str(), exif, xmp, &[], Vec::new()).unwrap();
+                        fs::write(black_box(&output), encoded.as_bytes()).unwrap();
+                    })
+                });
+                group.finish();
+            }
+        }
+    });
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = file_io, metadata_io }
 criterion_main!(benches);

@@ -1,5 +1,8 @@
+#![feature(portable_simd)]
+
 use std::io::{Cursor, Write};
 
+mod encode;
 pub mod stream;
 
 use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
@@ -9,6 +12,14 @@ use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+
+fn decoder(data: &[u8]) -> png::Decoder<Cursor<&[u8]>> {
+    let mut decoder = png::Decoder::new(Cursor::new(data));
+    // Public metadata parsing retains these chunks independently of the raster.
+    decoder.set_ignore_text_chunk(true);
+    decoder.set_ignore_iccp_chunk(true);
+    decoder
+}
 
 pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
@@ -48,7 +59,7 @@ fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
     if data.get(24..29).is_none_or(|header| header[0] != 1 || header[1] != 0 || header[4] != 0) {
         return Ok(None);
     }
-    let mut decoder = png::Decoder::new(Cursor::new(data));
+    let mut decoder = decoder(data);
     decoder.set_transformations(png::Transformations::IDENTITY);
     let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
     if reader.info().trns.is_some() {
@@ -63,6 +74,9 @@ fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
 }
 
 pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
+    if compress_level != 0 {
+        return encode::encode(image, pixels, compress_level);
+    }
     let mut output = Vec::new();
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
@@ -94,7 +108,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
     if let Some(image) = decode_bilevel_png(data)? {
         return Ok(image);
     }
-    let mut decoder = png::Decoder::new(Cursor::new(data));
+    let mut decoder = decoder(data);
     let header = decoder.read_header_info().map_err(|error| error.to_string())?;
     validate_dimensions(header.width, header.height)?;
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
@@ -131,9 +145,7 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> R
             }
             pixels = rgba;
         } else {
-            for sample in pixels.as_chunks_mut::<2>().0 {
-                *sample = (u16::from_be_bytes(*sample) >> (16 - depth)).to_le_bytes();
-            }
+            blanket_core::simd::samples_from_be16(&mut pixels, depth);
         }
         return Image::from_sample_bytes(frame.width, frame.height, mode, pixels, depth, Some("PNG".into())).map_err(|error| error.to_string());
     }
@@ -160,7 +172,7 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
         });
         let mut writer = encoder.write_header().map_err(codec_error)?;
         writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()]).map_err(codec_error)?;
-        let mut stream = writer.stream_writer().map_err(codec_error)?;
+        let mut stream = writer.stream_writer_with_size(128 * 1024).map_err(codec_error)?;
         let stride = image.width as usize * image.mode.channels() * 2;
         let mut samples = vec![0; stride];
         for row in pixels.chunks_exact(stride) {

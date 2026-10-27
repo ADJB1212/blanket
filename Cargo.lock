@@ -383,9 +383,11 @@ dependencies = [
  "blanket-codec-image",
  "blanket-core",
  "criterion",
+ "flate2",
  "image",
  "png",
  "pyo3",
+ "rayon",
 ]
 
 [[package]]
