@@ -103,7 +103,7 @@ jobs:
 
   benchmark:
     needs: [prepare, libheif, libwebp, libjxl, lcms2]
-    timeout-minutes: 60
+    timeout-minutes: 120
     runs-on: ubuntu-26.04
     container:
       image: quay.io/pypa/manylinux_2_28_x86_64
@@ -216,4 +216,4 @@ jobs:
       - name: Run benchmarks
         run: |
           uv pip install --python .venv/bin/python --compile-bytecode dist/*.whl
-          .venv/bin/python scripts/benchmark.py --all -v --no-baseline -w 3 -i 50 --sizes web photo
+          .venv/bin/python scripts/benchmark.py --all -v --no-baseline -w 2 -i 10 --sizes web 4K

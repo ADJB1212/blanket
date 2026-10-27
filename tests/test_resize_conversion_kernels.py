@@ -1,11 +1,44 @@
 from __future__ import annotations
 
 import random
+import struct
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image
+
+
+@pytest.mark.parametrize("source", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("target", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("source_depth", [8, 10, 12, 16])
+@pytest.mark.parametrize("target_depth", [8, 10, 12, 16])
+def test_conversion_depth_and_mode_rounding(source: str, target: str, source_depth: int, target_depth: int) -> None:
+    maximum = (1 << source_depth) - 1
+    target_max = (1 << target_depth) - 1
+    rng = random.Random(73)
+    samples = [rng.randrange(maximum + 1) for _ in range(33 * len(source))]
+    samples[: len(source)] = [maximum] * len(source)
+    samples[len(source) : 2 * len(source)] = [0] * len(source)
+    raw = bytes(samples) if source_depth == 8 else struct.pack(f"<{len(samples)}H", *samples)
+    image = Image.frombytes(source, (33, 1), raw, bit_depth=source_depth)
+    expected = []
+    for i in range(0, len(samples), len(source)):
+        pixel = samples[i : i + len(source)]
+        if target == source:
+            values = pixel
+        elif target == "L":
+            values = [(pixel[0] * 19595 + pixel[1] * 38470 + pixel[2] * 7471 + 32768) >> 16]
+        else:
+            values = pixel[:3] if source != "L" else pixel * 3
+            if target == "RGBA":
+                values.append(maximum)
+        expected.extend((value * target_max + maximum // 2) // maximum for value in values)
+    encoded = bytes(expected) if target_depth == 8 else struct.pack(f"<{len(expected)}H", *expected)
+    actual = image.convert(target, bit_depth=target_depth)
+    assert (actual.mode, actual.bit_depth, actual.size) == (target, target_depth, (33, 1))
+    assert actual.tobytes() == encoded
+    assert image.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK"])

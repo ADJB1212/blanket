@@ -1208,55 +1208,7 @@ impl Image {
                     Self::from_sample_bytes(self.width, self.height, destination, output, depth, None)
                 };
             }
-            let source_max = (1_u32 << self.bit_depth) - 1;
-            let target_max = (1_u32 << depth) - 1;
-            let source_stride = self.mode.channels() * if self.bit_depth == 8 { 1 } else { 2 };
-            let sample_bytes = if depth == 8 { 1 } else { 2 };
-            let target_stride = destination.channels() * sample_bytes;
-            let mut output = vec![0; expected_len(self.width, self.height, destination)? * sample_bytes];
-            py.detach(|| {
-                crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * target_stride, |band, chunk| {
-                    let start = band * crate::parallel::CHUNK_PIXELS * source_stride;
-                    for (i, pixel) in chunk.chunks_exact_mut(target_stride).enumerate() {
-                        let offset = start + i * source_stride;
-                        let sample = |channel: usize| {
-                            if self.bit_depth == 8 {
-                                u16::from(bytes[offset + channel])
-                            } else {
-                                u16::from_le_bytes([bytes[offset + channel * 2], bytes[offset + channel * 2 + 1]])
-                            }
-                        };
-                        let (r, g, b, a) = match self.mode {
-                            PixelMode::L => (sample(0), sample(0), sample(0), source_max as u16),
-                            PixelMode::Rgb => (sample(0), sample(1), sample(2), source_max as u16),
-                            PixelMode::Rgba => (sample(0), sample(1), sample(2), sample(3)),
-                            _ => unreachable!("high-bit-depth mode validated above"),
-                        };
-                        let values = if destination == PixelMode::L {
-                            [
-                                ((u64::from(r) * u64::from(LUMA_RED)
-                                    + u64::from(g) * u64::from(LUMA_GREEN)
-                                    + u64::from(b) * u64::from(LUMA_BLUE)
-                                    + u64::from(LUMA_ROUND))
-                                    >> LUMA_BITS) as u16,
-                                0,
-                                0,
-                                0,
-                            ]
-                        } else {
-                            [r, g, b, a]
-                        };
-                        for (channel, dst) in pixel.chunks_exact_mut(sample_bytes).enumerate() {
-                            let value = ((u32::from(values[channel]) * target_max + source_max / 2) / source_max) as u16;
-                            if depth == 8 {
-                                dst[0] = value as u8;
-                            } else {
-                                dst.copy_from_slice(&value.to_le_bytes());
-                            }
-                        }
-                    }
-                });
-            });
+            let output = py.detach(|| crate::simd::convert_samples(bytes, self.mode, destination, self.bit_depth, depth));
             return if depth == 8 {
                 Self::from_pixels(self.width, self.height, destination, output, None)
             } else {

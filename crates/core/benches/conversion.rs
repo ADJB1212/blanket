@@ -13,10 +13,19 @@ fn conversion(c: &mut Criterion) {
                     let image = fixture(width, height, mode, depth, 12345, true);
                     let mut group = c.benchmark_group(format!("conversion/{}-{depth}/{width}x{height}", mode.as_str()));
                     group.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
-                    let target = if mode == PixelMode::L { "RGB" } else { "L" };
-                    group.bench_function(format!("convert-{target}"), |b| {
-                        b.iter(|| black_box(&image).convert(py, black_box(target), Some(depth)).unwrap());
-                    });
+                    for target in ["L", "RGB", "RGBA"] {
+                        if target != mode.as_str() {
+                            group.bench_function(format!("convert-{target}"), |b| {
+                                b.iter(|| black_box(&image).convert(py, black_box(target), Some(depth)).unwrap());
+                            });
+                        }
+                        if blanket_bench_support::full_matrix() {
+                            let target_depth = if depth == 8 { 16 } else { 8 };
+                            group.bench_function(format!("convert-{target}-{target_depth}"), |b| {
+                                b.iter(|| black_box(&image).convert(py, black_box(target), Some(target_depth)).unwrap());
+                            });
+                        }
+                    }
                     group.finish();
                 }
             }
