@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
 from . import Image
-from ._blanket import _Image, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
+from ._blanket import _Image, chops_invert, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
 from ._color import color_pixel
 from ._exif import transpose_metadata
 
@@ -486,7 +486,7 @@ def grayscale(image: Image.Image) -> Image.Image:
 
 
 def invert(image: Image.Image) -> Image.Image:
-    """Replace each channel value with 255 minus that value.
+    """Subtract each channel value from the sample depth's maximum.
 
     Args:
         image: Input image.
@@ -499,6 +499,9 @@ def invert(image: Image.Image) -> Image.Image:
         result = ImageOps.invert(image)
         ```
     """
+    if image.bit_depth in (10, 12, 16) and image.mode in ("L", "RGB"):
+        image.load()
+        return _result(image, chops_invert(image._native))
     return _lut(image, list(range(255, -1, -1)))
 
 

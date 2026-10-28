@@ -152,14 +152,12 @@ def test_palette_indices_and_palette_copy(name: str) -> None:
 
 
 @pytest.mark.parametrize("bit_depth", [10, 12, 16])
-def test_high_depth_offset_preserves_samples_and_arithmetic_rejects(bit_depth: int) -> None:
+def test_high_depth_offset_and_arithmetic_preserve_depth(bit_depth: int) -> None:
     samples = [0, 256, (1 << bit_depth) - 1, 17, 1000, 88]
     image = Image.frombytes("L", (3, 2), b"".join(v.to_bytes(2, "little") for v in samples), bit_depth=bit_depth)
     result = ImageChops.offset(image, 1, -1)
     assert result.bit_depth == bit_depth
     assert result.tobytes() == b"".join(samples[i].to_bytes(2, "little") for i in [5, 3, 4, 2, 0, 1])
     for name in BINARY:
-        with pytest.raises(ValueError, match="8-bit"):
-            getattr(ImageChops, name)(image, image)
-    with pytest.raises(ValueError, match="8-bit"):
-        ImageChops.invert(image)
+        assert getattr(ImageChops, name)(image, image).bit_depth == bit_depth
+    assert ImageChops.invert(image).bit_depth == bit_depth

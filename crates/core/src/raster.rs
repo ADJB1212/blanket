@@ -291,6 +291,21 @@ fn count_colors_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<
     Some(table)
 }
 
+fn put_sample_pixel(pixels: &mut [u8], value: &Bound<'_, PyAny>, channels: usize, maximum: u16, scale: f64, offset: f64) -> PyResult<()> {
+    let mut samples = [0_u16; 4];
+    if channels > 1 && value.len()? != channels {
+        return Err(PyValueError::new_err("wrong number of color components"));
+    }
+    for (c, sample) in samples[..channels].iter_mut().enumerate() {
+        let number = if channels == 1 { value.extract::<f64>()? } else { value.get_item(c)?.extract::<f64>()? };
+        *sample = (number * scale + offset).clamp(0.0, f64::from(maximum)) as u16;
+    }
+    for (dst, sample) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(samples) {
+        *dst = sample.to_le_bytes();
+    }
+    Ok(())
+}
+
 fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length: usize, scale: f64, offset: f64) -> PyResult<()> {
     let mut output = pixels.as_chunks_mut::<C>().0.iter_mut();
     let mut write = |value: &Bound<'_, PyAny>| -> PyResult<()> {
@@ -798,6 +813,12 @@ impl Image {
             self.pixels.as_mut().unwrap()[offset..offset + self.mode.sample_bytes()].copy_from_slice(&bytes[..self.mode.sample_bytes()]);
             return Ok(());
         }
+        if crate::samples::supported(self) {
+            let channels = self.mode.channels();
+            let maximum = crate::samples::maximum(self);
+            let start = (y as usize * self.width as usize + x as usize) * channels * 2;
+            return put_sample_pixel(&mut self.pixels.as_mut().unwrap()[start..start + channels * 2], value, channels, maximum, 1.0, 0.0);
+        }
         self.pixel_data()?;
         let channels = self.mode.channels();
         let pixel = if self.mode == PixelMode::One { [value.extract::<i64>()?.clamp(0, 255) as u8, 0, 0, 0] } else { parse_pixel(value, channels)? };
@@ -811,6 +832,16 @@ impl Image {
         let length = data.len()?;
         if length > self.width as usize * self.height as usize {
             return Err(PyTypeError::new_err("too many data entries"));
+        }
+        if crate::samples::supported(self) && !self.mode.is_integer() {
+            let channels = self.mode.channels();
+            let maximum = crate::samples::maximum(self);
+            let pixels = self.pixels.as_mut().unwrap();
+            for i in 0..length {
+                let start = i * channels * 2;
+                put_sample_pixel(&mut pixels[start..start + channels * 2], &data.get_item(i)?, channels, maximum, scale, offset)?;
+            }
+            return Ok(());
         }
         if self.mode.is_float() && self.mode.channels() > 1 {
             for (i, item) in data.try_iter()?.enumerate() {

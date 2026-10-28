@@ -10,7 +10,7 @@ from io import BytesIO
 import pytest
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
-from blanket import Image, ImageEnhance, ImageFilter, ImageStat
+from blanket import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 FORMATS = [(mode, depth) for mode in ("L", "RGB", "RGBA") for depth in (10, 12, 16)] + [(mode, 16) for mode in ("I;16", "I;16L", "I;16B")]
 
@@ -28,6 +28,82 @@ def make_image(mode, depth, size=(7, 5), values=None):
 def samples(image):
     raw = image.tobytes()
     return list(struct.unpack(f"{'>' if image.mode == 'I;16B' else '<'}{len(raw) // 2}H", raw))
+
+
+@pytest.mark.parametrize(("mode", "depth"), FORMATS)
+def test_sample_pixel_writes(mode, depth):
+    image = make_image(mode, depth)
+    channels = len(image.getbands())
+    maximum = (1 << depth) - 1
+    value = tuple(maximum - c for c in range(channels)) if channels > 1 else maximum
+    image.putpixel((-1, -1), value)
+    assert image.getpixel((image.width - 1, image.height - 1)) == value
+    if mode in ("L", "RGB", "RGBA"):
+        original = samples(image)
+        value = tuple(1000 + c for c in range(channels)) if channels > 1 else 1000
+        image.putdata([value], scale=2, offset=-1)
+        assert samples(image)[:channels] == [min(maximum, (1000 + c) * 2 - 1) for c in range(channels)]
+        assert samples(image)[channels:] == original[channels:]
+        image.putpixel((0, 0), tuple([-3] * channels) if channels > 1 else -3)
+        assert samples(image)[:channels] == [0] * channels
+        if channels > 1:
+            before = image.tobytes()
+            with pytest.raises((TypeError, ValueError)):
+                image.putpixel((0, 0), (10,))
+            assert image.tobytes() == before
+    with pytest.raises(IndexError):
+        image.putpixel((image.width, 0), value)
+
+
+@pytest.mark.parametrize(("mode", "depth"), FORMATS)
+@pytest.mark.parametrize("operation", ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"])
+def test_sample_chops_arithmetic(mode, depth, operation):
+    maximum = (1 << depth) - 1
+    channels = {"RGB": 3, "RGBA": 4}.get(mode, 1)
+    a = [0, 1, maximum // 2, maximum // 2 + 1, maximum - 1, maximum] * (6 * channels)
+    b = [maximum, maximum // 2 + 1, maximum // 2, 1, maximum, 0] * (6 * channels)
+    first = make_image(mode, depth, (9, 4), a)
+    second = make_image(mode, depth, (6, 6), b)
+    first.info["test"] = "metadata"
+
+    def reference(x, y):
+        if operation == "difference":
+            return abs(x - y)
+        if operation == "multiply":
+            return x * y // maximum
+        if operation == "screen":
+            return maximum - (maximum - x) * (maximum - y) // maximum
+        if operation == "lighter":
+            return max(x, y)
+        if operation == "darker":
+            return min(x, y)
+        if operation == "add":
+            return min(maximum, x + y)
+        if operation == "subtract":
+            return max(0, x - y)
+        if operation == "add_modulo":
+            return (x + y) & maximum
+        if operation == "subtract_modulo":
+            return (x - y) & maximum
+        if operation == "soft_light":
+            return (maximum - x) * x * y // (maximum + 1) ** 2 + x * (maximum - (maximum - x) * (maximum - y) // maximum) // maximum
+        selector = y if operation == "hard_light" else x
+        return x * y // (maximum // 2) if selector < (maximum + 1) // 2 else maximum - (maximum - x) * (maximum - y) // (maximum // 2)
+
+    result = getattr(ImageChops, operation)(first, second)
+    expected = [reference(a[(y * 9 + x) * channels + c], b[(y * 6 + x) * channels + c]) for y in range(4) for x in range(6) for c in range(channels)]
+    assert (result.size, result.mode, result.bit_depth, result.info) == ((6, 4), mode, depth, first.info)
+    assert samples(result) == expected
+    assert samples(first) == a
+    assert samples(ImageChops.invert(first)) == [maximum - v for v in a]
+    if mode in ("L", "RGB"):
+        assert samples(ImageOps.invert(first)) == [maximum - v for v in a]
+    assert samples(ImageChops.add(first, first, scale=2, offset=-1)) == [max(0, v - 1) for v in a]
+
+
+def test_sample_chops_rejects_mismatched_depths():
+    with pytest.raises(ValueError, match="do not match"):
+        ImageChops.add(make_image("RGB", 10), make_image("RGB", 12))
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)

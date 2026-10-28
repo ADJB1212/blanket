@@ -1,12 +1,12 @@
 //! Channel arithmetic and wraparound translation for `ImageChops`.
 
 use std::mem::MaybeUninit;
-use std::simd::cmp::SimdPartialOrd;
-use std::simd::num::SimdUint;
-use std::simd::{Select, Simd};
+use std::simd::cmp::{SimdOrd, SimdPartialOrd};
+use std::simd::num::{SimdFloat, SimdInt, SimdUint};
+use std::simd::{Select, Simd, ToBytes};
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut_above};
-use blanket_core::pixels::Bytes;
+use blanket_core::pixels::{Bytes, Samples};
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -44,6 +44,64 @@ enum Operation {
 }
 
 impl Operation {
+    fn sample_vector<const M: u64>(self, a: Samples, b: Samples, scale: f32, offset: i32) -> Samples {
+        let x = a.cast::<u64>();
+        let y = b.cast::<u64>();
+        let m = Simd::splat(M);
+        match self {
+            Self::Difference => a.simd_max(b) - a.simd_min(b),
+            Self::Lighter => a.simd_max(b),
+            Self::Darker => a.simd_min(b),
+            Self::Multiply => (x * y / m).cast(),
+            Self::Screen => (m - (m - x) * (m - y) / m).cast(),
+            Self::Add | Self::Subtract => {
+                let a = a.cast::<i32>();
+                let b = b.cast::<i32>();
+                let sum = if matches!(self, Self::Add) { a + b } else { a - b };
+                let value = sum.cast::<f32>() / Simd::splat(scale) + Simd::splat(offset as f32);
+                value.is_finite().select(value.simd_clamp(Simd::splat(0.0), Simd::splat(M as f32)), Simd::splat(0.0)).cast()
+            }
+            Self::AddModulo => (a + b) & Samples::splat(M as u16),
+            Self::SubtractModulo => (a - b) & Samples::splat(M as u16),
+            Self::SoftLight => (((m - x) * x * y / Simd::splat((M + 1).pow(2))) + x * (m - (m - x) * (m - y) / m) / m).cast(),
+            Self::HardLight | Self::Overlay => {
+                let selector = if matches!(self, Self::HardLight) { y } else { x };
+                let low = selector.simd_lt(Simd::splat(M.div_ceil(2)));
+                let value = low.select(x, m - x) * low.select(y, m - y) / Simd::splat(M / 2);
+                low.select(value, m - value).cast()
+            }
+            Self::And => a & b,
+            Self::Or => a | b,
+            Self::Xor => a ^ b,
+        }
+    }
+
+    fn apply_sample(self, a: u16, b: u16, maximum: u16, scale: f32, offset: i32) -> u16 {
+        let (x, y, m) = (u64::from(a), u64::from(b), u64::from(maximum));
+        match self {
+            Self::Difference => a.abs_diff(b),
+            Self::Multiply => (x * y / m) as u16,
+            Self::Screen => (m - (m - x) * (m - y) / m) as u16,
+            Self::Lighter => a.max(b),
+            Self::Darker => a.min(b),
+            Self::Add | Self::Subtract => {
+                let value = if matches!(self, Self::Add) { i32::from(a) + i32::from(b) } else { i32::from(a) - i32::from(b) };
+                let value = value as f32 / scale + offset as f32;
+                if value.is_finite() { value.clamp(0.0, f32::from(maximum)) as u16 } else { 0 }
+            }
+            Self::AddModulo => a.wrapping_add(b) & maximum,
+            Self::SubtractModulo => a.wrapping_sub(b) & maximum,
+            Self::SoftLight => (((m - x) * x * y / (m + 1).pow(2)) + x * (m - (m - x) * (m - y) / m) / m) as u16,
+            Self::HardLight | Self::Overlay => {
+                let selector = if matches!(self, Self::HardLight) { y } else { x };
+                if selector < m.div_ceil(2) { (x * y / (m / 2)) as u16 } else { (m - (m - x) * (m - y) / (m / 2)) as u16 }
+            }
+            Self::And => a & b,
+            Self::Or => a | b,
+            Self::Xor => a ^ b,
+        }
+    }
+
     fn clip_scaled(value: f32) -> u8 {
         let temp = if !value.is_finite() || value > i32::MAX as f32 || value < i32::MIN as f32 { i32::MIN } else { value as i32 };
         if temp <= 0 {
@@ -144,8 +202,11 @@ fn bitwise_chunk<const OP: u8>(a: &[u8], b: &[u8], output: &mut [u8]) {
 
 #[pyfunction]
 #[pyo3(signature = (first, second, operation, scale=1.0, offset=0))]
-fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, scale: f32, offset: i32) -> PyResult<Image> {
+pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, scale: f32, offset: i32) -> PyResult<Image> {
     let operation = Operation::parse(operation)?;
+    if blanket_core::samples::supported(first) || blanket_core::samples::supported(second) {
+        return py.detach(|| binary_samples(first, second, operation, scale, offset));
+    }
     let a = first.pixel_data()?;
     let b = second.pixel_data()?;
     if first.mode != second.mode {
@@ -229,8 +290,76 @@ fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &str, 
     Ok(result)
 }
 
+fn sample_row<const M: u64>(a: &[u16], b: &[u16], output: &mut [u8], operation: Operation, parameters: (f32, i32), big_endian: bool) {
+    let (scale, offset) = parameters;
+    let end = a.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let value = operation.sample_vector::<M>(Samples::from_slice(&a[i..]), Samples::from_slice(&b[i..]), scale, offset);
+        let bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+        bytes.copy_to_slice(&mut output[i * 2..i * 2 + 32]);
+    }
+    for ((dst, &a), &b) in output[end * 2..].as_chunks_mut::<2>().0.iter_mut().zip(&a[end..]).zip(&b[end..]) {
+        let value = operation.apply_sample(a, b, M as u16, scale, offset);
+        *dst = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+    }
+}
+
+fn binary_samples(first: &Image, second: &Image, operation: Operation, scale: f32, offset: i32) -> PyResult<Image> {
+    if first.mode != second.mode || first.bit_depth != second.bit_depth {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    let a = blanket_core::samples::view(first)?;
+    let b = blanket_core::samples::view(second)?;
+    let (width, height) = (first.width.min(second.width), first.height.min(second.height));
+    let channels = first.mode.channels();
+    let row = width as usize * channels;
+    let maximum = blanket_core::samples::maximum(first);
+    let mut pixels = blanket_core::raster::alloc_pixels(row * height as usize * 2)?;
+    if row != 0 {
+        chunks_mut_above(&mut pixels, row * 2 * 16, 256 * 1024, |band, rows| {
+            for (i, dst) in rows.chunks_exact_mut(row * 2).enumerate() {
+                let y = band * 16 + i;
+                let a = &a[y * first.width as usize * channels..][..row];
+                let b = &b[y * second.width as usize * channels..][..row];
+                match maximum {
+                    1023 => sample_row::<1023>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
+                    4095 => sample_row::<4095>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
+                    65535 => sample_row::<65535>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
+                    _ => unreachable!(),
+                }
+            }
+        });
+    }
+    if first.mode.is_wide_scalar() {
+        Image::from_integer_bytes(width, height, first.mode, pixels)
+    } else {
+        Image::from_sample_bytes(width, height, first.mode, pixels, first.bit_depth, None)
+    }
+}
+
 #[pyfunction]
-fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
+pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if blanket_core::samples::supported(image) {
+        return py.detach(|| {
+            let source = blanket_core::samples::view(image)?;
+            let maximum = blanket_core::samples::maximum(image);
+            let mut pixels = blanket_core::raster::alloc_pixels(source.len() * 2)?;
+            chunks_mut_above(&mut pixels, CHUNK_PIXELS * 2, 256 * 1024, |chunk, dst| {
+                let source = &source[chunk * CHUNK_PIXELS..][..dst.len() / 2];
+                let end = source.len() / 16 * 16;
+                for i in (0..end).step_by(16) {
+                    let value = Samples::splat(maximum) - Samples::from_slice(&source[i..]);
+                    let bytes = if image.mode == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
+                    bytes.copy_to_slice(&mut dst[i * 2..i * 2 + 32]);
+                }
+                for (dst, &sample) in dst[end * 2..].as_chunks_mut::<2>().0.iter_mut().zip(&source[end..]) {
+                    let value = maximum - sample;
+                    *dst = if image.mode == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
+                }
+            });
+            blanket_core::samples::output_bytes(image, pixels)
+        });
+    }
     let source = image.pixel_data()?;
     let mut pixels = reserved_buffer(source.len())?;
     py.detach(|| {
@@ -307,6 +436,75 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_vectors_match_scalar_with_tails_and_guards() {
+        fn check<const M: u64>() {
+            for operation in [
+                Operation::Difference,
+                Operation::Multiply,
+                Operation::Screen,
+                Operation::Lighter,
+                Operation::Darker,
+                Operation::Add,
+                Operation::Subtract,
+                Operation::AddModulo,
+                Operation::SubtractModulo,
+                Operation::SoftLight,
+                Operation::HardLight,
+                Operation::Overlay,
+                Operation::And,
+                Operation::Or,
+                Operation::Xor,
+            ] {
+                for length in [0, 1, 15, 16, 17, 31, 32, 33, 257] {
+                    let a: Vec<u16> = (0..length + 1).map(|i| ([0, M, M / 2, M / 2 + 1, (i * 7919) as u64 & M][i % 5]) as u16).collect();
+                    let b: Vec<u16> = (0..length + 1).map(|i| ((i * 171 + 65535) as u64 & M) as u16).collect();
+                    for parameters in [(1.0, 0), (2.3, -17), (0.0, 1), (f32::NAN, 0), (f32::INFINITY, 12), (-1.0, i32::MAX)] {
+                        for big in [false, true] {
+                            let mut output = vec![173; length * 2 + 2];
+                            sample_row::<M>(&a[1..], &b[1..], &mut output[1..length * 2 + 1], operation, parameters, big);
+                            for (i, bytes) in output[1..length * 2 + 1].as_chunks::<2>().0.iter().enumerate() {
+                                let actual = if big { u16::from_be_bytes(*bytes) } else { u16::from_le_bytes(*bytes) };
+                                assert_eq!(actual, operation.apply_sample(a[i + 1], b[i + 1], M as u16, parameters.0, parameters.1));
+                            }
+                            assert_eq!((output[0], output[length * 2 + 1]), (173, 173));
+                        }
+                    }
+                }
+            }
+        }
+        check::<1023>();
+        check::<4095>();
+        check::<65535>();
+    }
+
+    #[test]
+    fn sample_arithmetic_matches_byte_formulas() {
+        for operation in [
+            Operation::Difference,
+            Operation::Multiply,
+            Operation::Screen,
+            Operation::Lighter,
+            Operation::Darker,
+            Operation::Add,
+            Operation::Subtract,
+            Operation::AddModulo,
+            Operation::SubtractModulo,
+            Operation::SoftLight,
+            Operation::HardLight,
+            Operation::Overlay,
+            Operation::And,
+            Operation::Or,
+            Operation::Xor,
+        ] {
+            for a in 0..=255_u16 {
+                for b in 0..=255_u16 {
+                    assert_eq!(operation.apply_sample(a, b, 255, 1.0, 0), u16::from(operation.apply(a as u8, b as u8, 1.0, 0)));
+                }
+            }
+        }
+    }
 
     #[test]
     fn bitwise_chunks_match_scalar_with_unaligned_buffers_tails_and_guards() {

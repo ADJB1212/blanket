@@ -4,6 +4,10 @@ Arithmetic supports matching 8-bit `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
 `YCbCr`, `LAB`, and indexed `P`/`PA` images. All channels, including alpha,
 participate. Binary arithmetic crops to the top-left overlap. Logical
 operations accept bilevel mode `1` images.
+
+Unsigned 10/12/16-bit L/RGB/RGBA and 16-bit scalar arithmetic retains sample
+precision. Normalized operations use the depth's maximum instead of 255;
+modulo operations wrap at that maximum plus one. Alpha participates.
 """
 
 from __future__ import annotations
