@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"contextlib", "collections.abc"}
+__lazy_modules__ = {"contextlib", "collections.abc", "array", "blanket._palette"}
 
 import math
 from array import array
 from contextlib import nullcontext
-from typing import IO, TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import IO
 
 from ._blanket import ops_histogram, palette_colors, palette_decode, palette_gamma, palette_linear, palette_ramp, palette_sepia
 from ._color import _rgb

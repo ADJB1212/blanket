@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"operator", "builtins", "collections.abc"}
+__lazy_modules__ = {"operator", "builtins", "collections.abc", "types"}
 
 import builtins
 from functools import lru_cache

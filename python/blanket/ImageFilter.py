@@ -10,7 +10,7 @@ normalizes high-depth RGB/RGBA inputs and retains their depth on output.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "functools", "operator"}
+__lazy_modules__ = {"collections.abc", "functools", "operator", "blanket._blanket"}
 
 from abc import ABC, abstractmethod
 from functools import reduce
@@ -21,7 +21,9 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from typing import Any
 
-from ._blanket import _Image, filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
+    from ._blanket import _Image
+
+from ._blanket import filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
 
 
 class Filter(ABC):

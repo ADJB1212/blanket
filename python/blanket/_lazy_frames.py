@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"itertools", "blanket.Image"}
+
 from itertools import islice
 from typing import TYPE_CHECKING
 

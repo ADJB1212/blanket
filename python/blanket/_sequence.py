@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os"}
+__lazy_modules__ = {"os", "collections.abc"}
 
 import math
 from collections.abc import Iterable

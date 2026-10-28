@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"contextlib", "os", "io", "pathlib", "collections.abc"}
+
 import contextlib
 import math
 import os
@@ -9,7 +11,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import BinaryIO, Literal, cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from typing import BinaryIO, Literal
 
 from . import Image
 from ._blanket import _container_previews, _inspect, _rewrite_metadata

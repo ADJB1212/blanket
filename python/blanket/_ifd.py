@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import struct
-from collections.abc import Iterator, Mapping, MutableMapping
-from typing import BinaryIO, Self
+from collections.abc import Mapping, MutableMapping
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+    from typing import BinaryIO, Self
 
 _FORMATS = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 11: "f", 12: "d", 13: "I"}
 _SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}

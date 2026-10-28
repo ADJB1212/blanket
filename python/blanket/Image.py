@@ -6,7 +6,7 @@ Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "contextlib", "pathlib", "blanket._lazy_frames", "blanket.ImagePalette"}
 
 import contextlib
 import math
@@ -21,13 +21,15 @@ from enum import IntEnum
 from io import BytesIO
 from operator import index
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO, Protocol, Self, cast
+from typing import TYPE_CHECKING, Protocol, cast
 
 from .errors import UnsupportedCodecError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
+    from typing import BinaryIO, Self
 
+    from ._blanket import _Image
     from ._lazy_frames import LazyFrames
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
@@ -35,7 +37,6 @@ if TYPE_CHECKING:
 from ._blanket import (
     _decode_region,
     _encode,
-    _Image,
     _index_sequence,
     _inspect,
     _open_sequence,

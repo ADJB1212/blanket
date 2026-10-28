@@ -2,8 +2,13 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"errno"}
+
 import errno
-from typing import BinaryIO
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import BinaryIO
 
 
 def write_all(stream: BinaryIO, data: bytes) -> None:

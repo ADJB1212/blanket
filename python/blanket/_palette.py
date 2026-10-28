@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import re
-from typing import BinaryIO
+from typing import TYPE_CHECKING
 
 from ._blanket import palette_gradient
+
+if TYPE_CHECKING:
+    from typing import BinaryIO
 
 _GIMP_COMMENT = re.compile(rb"\w+:|#")
 

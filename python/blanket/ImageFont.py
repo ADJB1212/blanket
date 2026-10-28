@@ -6,7 +6,7 @@ Glyph availability depends on the selected font; system fallback is not used.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc"}
+__lazy_modules__ = {"collections.abc", "os", "pathlib", "struct"}
 
 import os
 import struct
@@ -14,7 +14,7 @@ from enum import IntEnum
 from math import ceil, floor, isfinite
 from operator import index as integer_index
 from pathlib import Path
-from typing import TYPE_CHECKING, BinaryIO
+from typing import TYPE_CHECKING
 
 from . import Image
 from ._blanket import NativeFont, _font_stroke
@@ -22,6 +22,7 @@ from ._draw_font import BitmapFont, BitmapMask
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import BinaryIO
 
 __all__ = ["MAX_STRING_LENGTH", "ImageFont", "Layout", "TrueTypeFont", "load", "load_default", "truetype"]
 

@@ -7,17 +7,20 @@ lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc"}
+__lazy_modules__ = {"collections.abc", "struct", "itertools"}
 
 import struct
 from itertools import accumulate, pairwise
-from typing import TYPE_CHECKING, Literal, Protocol, overload
+from typing import TYPE_CHECKING, Protocol, overload
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import Literal
+
+    from ._blanket import _Image
 
 from . import Image
-from ._blanket import _Image, chops_invert, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
+from ._blanket import chops_invert, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
 from ._color import color_pixel
 from ._exif import transpose_metadata
 

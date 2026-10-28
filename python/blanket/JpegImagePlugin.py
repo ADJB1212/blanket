@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import TYPE_CHECKING
 
 from . import Image
 from ._blanket import _transform_jpeg
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 __all__ = ["transform"]
 

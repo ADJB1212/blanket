@@ -5,9 +5,12 @@ from __future__ import annotations
 import math
 import struct
 from dataclasses import dataclass
-from typing import Literal
+from typing import TYPE_CHECKING
 
 from ._ifd import Exif
+
+if TYPE_CHECKING:
+    from typing import Literal
 
 
 @dataclass(frozen=True)
