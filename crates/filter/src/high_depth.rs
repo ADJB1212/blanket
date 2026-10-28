@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::simd::cmp::{SimdOrd, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd};
@@ -55,6 +55,10 @@ pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> P
     let source = samples::view(image)?;
     let mut values = source.to_vec();
     let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
+    if radius > 2 && rank.is_some_and(|rank| rank == 0 || rank == (radius as u64 * 2 + 1).pow(2) - 1) {
+        extrema(&source, &mut values, width, height, channels, radius, rank != Some(0));
+        return samples::output(image, &values);
+    }
     if let Some(rank) = rank
         && (radius == 1 || radius == 2 && (rank == 0 || rank == 24))
     {
@@ -65,15 +69,82 @@ pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> P
     samples::output(image, &values)
 }
 
+fn extrema(source: &[u16], output: &mut [u16], width: usize, height: usize, channels: usize, radius: usize, maximum: bool) {
+    if source.is_empty() {
+        return;
+    }
+    let stride = width * channels;
+    let mut horizontal = vec![0; source.len()];
+    blanket_core::parallel::chunks_mut_above(&mut horizontal, stride * 16, 256 * 1024, |band, rows| {
+        let mut queue = VecDeque::new();
+        for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
+            let input = &source[(band * 16 + i) * stride..][..stride];
+            for channel in 0..channels {
+                super::filter::extrema_line(&input[channel..], &mut row[channel..], channels, 0, radius, maximum, &mut queue);
+            }
+        }
+    });
+    let band_rows = 64.max(radius.min(height));
+    blanket_core::parallel::chunks_mut_above(output, stride * band_rows, 256 * 1024, |band, rows| {
+        let mut queue = VecDeque::new();
+        for column in 0..stride {
+            super::filter::extrema_line(&horizontal[column..], &mut rows[column..], stride, band * band_rows, radius, maximum, &mut queue);
+        }
+    });
+}
+
+struct RankCounts {
+    tree: Vec<u64>,
+}
+
+impl RankCounts {
+    fn update(&mut self, value: u16, weight: u64, add: bool) {
+        let mut index = usize::from(value) + 1;
+        while index < self.tree.len() {
+            if add {
+                self.tree[index] += weight;
+            } else {
+                self.tree[index] -= weight;
+            }
+            index += index.isolate_lowest_one();
+        }
+    }
+
+    fn select(&self, mut rank: u64) -> u16 {
+        let mut index = 0;
+        let mut step = 1 << 15;
+        while step != 0 {
+            let next = index + step;
+            if self.tree[next] <= rank {
+                rank -= self.tree[next];
+                index = next;
+            }
+            step >>= 1;
+        }
+        index as u16
+    }
+}
+
 fn sliding_neighborhood(source: &[u16], values: &mut [u16], width: usize, height: usize, channels: usize, radius: usize, rank: Option<u64>) {
     if width == 0 || height == 0 {
         return;
     }
+    blanket_core::parallel::chunks_mut_above(values, width * channels * 16, 256 * 1024, |band, rows| {
+        sliding_neighborhood_rows(source, rows, (width, height, channels), radius, rank, band * 16);
+    });
+}
+
+fn sliding_neighborhood_rows(source: &[u16], values: &mut [u16], dimensions: (usize, usize, usize), radius: usize, rank: Option<u64>, first: usize) {
+    let (width, height, channels) = dimensions;
     let mut histogram = BTreeMap::<u16, u64>::new();
-    for y in 0..height {
+    // Amortize the fixed-size count tree over sufficiently large windows and rows.
+    let mut counts = RankCounts { tree: if rank.is_some() && radius >= 4 && width >= 64 { vec![0; 65537] } else { Vec::new() } };
+    let maximum_rank = (radius as u64 * 2 + 1).pow(2) - 1;
+    for y in first..first + values.len() / (width * channels) {
         for c in 0..channels {
             histogram.clear();
-            let column = |histogram: &mut BTreeMap<u16, u64>, xx: usize, wx: u64, add: bool| {
+            counts.tree.fill(0);
+            let column = |histogram: &mut BTreeMap<u16, u64>, counts: &mut RankCounts, xx: usize, wx: u64, add: bool| {
                 for yy in y.saturating_sub(radius)..=(y + radius).min(height - 1) {
                     let wy = if rank.is_none() {
                         1
@@ -83,7 +154,9 @@ fn sliding_neighborhood(source: &[u16], values: &mut [u16], width: usize, height
                     };
                     let value = source[(yy * width + xx) * channels + c];
                     let weight = wx * wy as u64;
-                    if add {
+                    if !counts.tree.is_empty() {
+                        counts.update(value, weight, add);
+                    } else if add {
                         *histogram.entry(value).or_default() += weight;
                     } else {
                         let count = histogram.get_mut(&value).unwrap();
@@ -100,11 +173,17 @@ fn sliding_neighborhood(source: &[u16], values: &mut [u16], width: usize, height
                 } else {
                     1
                 };
-                column(&mut histogram, xx, weight as u64, true);
+                column(&mut histogram, &mut counts, xx, weight as u64, true);
             }
             for x in 0..width {
-                let dst = &mut values[(y * width + x) * channels + c];
-                if let Some(mut rank) = rank {
+                let dst = &mut values[((y - first) * width + x) * channels + c];
+                if !counts.tree.is_empty() {
+                    *dst = counts.select(rank.unwrap());
+                } else if rank == Some(0) {
+                    *dst = *histogram.first_key_value().unwrap().0;
+                } else if rank == Some(maximum_rank) {
+                    *dst = *histogram.last_key_value().unwrap().0;
+                } else if let Some(mut rank) = rank {
                     for (&value, &count) in &histogram {
                         if rank < count {
                             *dst = value;
@@ -123,10 +202,10 @@ fn sliding_neighborhood(source: &[u16], values: &mut [u16], width: usize, height
                 }
                 if x + 1 < width {
                     if rank.is_some() || x >= radius {
-                        column(&mut histogram, x.saturating_sub(radius), 1, false);
+                        column(&mut histogram, &mut counts, x.saturating_sub(radius), 1, false);
                     }
                     if rank.is_some() || x + radius + 1 < width {
-                        column(&mut histogram, (x + radius + 1).min(width - 1), 1, true);
+                        column(&mut histogram, &mut counts, (x + radius + 1).min(width - 1), 1, true);
                     }
                 }
             }
@@ -394,6 +473,10 @@ pub(crate) fn blur(image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult
 }
 
 pub(crate) fn unsharp(image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
+    if percent == 0 || threshold >= i32::from(samples::maximum(image)) || radius == 0.0 {
+        super::filter::blur_radii((radius, radius), true)?;
+        return samples::output_bytes(image, image.raw_data()?.to_vec());
+    }
     let source = samples::view(image)?;
     let mut values = blurred(image, source.to_vec(), (radius, radius), true)?;
     sharpen(&source, &mut values, percent, threshold, samples::maximum(image));
@@ -513,6 +596,76 @@ mod tests {
     use super::*;
 
     #[test]
+    fn extrema_matches_windows_across_parallel_bands() {
+        let (width, height, channels) = (257, 257, 4);
+        let source: Vec<u16> = (0..width * height * channels).map(|i| (i * 719 + i / 7) as u16).collect();
+        for radius in [3, 9, 80] {
+            for maximum in [false, true] {
+                let mut output = vec![173; source.len() + 2];
+                extrema(&source, &mut output[1..source.len() + 1], width, height, channels, radius, maximum);
+                for y in [0_usize, 1, 63, 64, 79, 80, 127, 128, 255, 256] {
+                    for x in [0_usize, 1, 63, 128, 255, 256] {
+                        for c in 0..channels {
+                            let mut expected = if maximum { 0 } else { u16::MAX };
+                            for yy in y.saturating_sub(radius)..=(y + radius).min(height - 1) {
+                                for xx in x.saturating_sub(radius)..=(x + radius).min(width - 1) {
+                                    let value = source[(yy * width + xx) * channels + c];
+                                    expected = if maximum { expected.max(value) } else { expected.min(value) };
+                                }
+                            }
+                            assert_eq!(output[1 + (y * width + x) * channels + c], expected);
+                        }
+                    }
+                }
+                assert_eq!((output[0], output[source.len() + 1]), (173, 173));
+            }
+        }
+    }
+
+    #[test]
+    fn rank_counts_preserve_weighted_order_and_removals() {
+        let mut counts = RankCounts { tree: vec![0; 65537] };
+        for (value, weight) in [(0, 3), (1, 2), (32767, 7), (32768, 1), (65535, 9)] {
+            counts.update(value, weight, true);
+        }
+        let expected =
+            [0, 0, 0, 1, 1, 32767, 32767, 32767, 32767, 32767, 32767, 32767, 32768, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535, 65535];
+        for (rank, value) in expected.into_iter().enumerate() {
+            assert_eq!(counts.select(rank as u64), value);
+        }
+        counts.update(32767, 7, false);
+        assert_eq!(counts.select(5), 32768);
+        assert_eq!(counts.select(6), 65535);
+    }
+
+    #[test]
+    fn parallel_ranks_match_sorted_windows() {
+        let (width, height, channels) = (257, 257, 4);
+        let source: Vec<u16> = (0..width * height * channels).map(|i| (i * 7919) as u16).collect();
+        for rank in [1, 40, 79] {
+            let mut output = vec![173; source.len() + 2];
+            sliding_neighborhood(&source, &mut output[1..source.len() + 1], width, height, channels, 4, Some(rank));
+            for y in [0_usize, 15, 16, 127, 128, 255, 256] {
+                for x in [0_usize, 63, 128, 256] {
+                    for c in 0..channels {
+                        let mut window = Vec::new();
+                        for yy in 0..9 {
+                            for xx in 0..9 {
+                                let row = (y + yy).saturating_sub(4).min(height - 1);
+                                let col = (x + xx).saturating_sub(4).min(width - 1);
+                                window.push(source[(row * width + col) * channels + c]);
+                            }
+                        }
+                        window.sort_unstable();
+                        assert_eq!(output[1 + (y * width + x) * channels + c], window[rank as usize]);
+                    }
+                }
+            }
+            assert_eq!((output[0], output[source.len() + 1]), (173, 173));
+        }
+    }
+
+    #[test]
     fn box_blur_matches_scalar_for_unaligned_slices_radii_and_guards() {
         for (width, height) in [(1, 1), (7, 3), (15, 17), (16, 16), (17, 19), (33, 5), (19, 131)] {
             for channels in [1, 3, 4] {
@@ -589,7 +742,7 @@ mod tests {
 
     #[test]
     fn sliding_neighborhood_matches_rebuilt_windows() {
-        for (width, height) in [(0, 0), (1, 1), (1, 7), (7, 1), (9, 6)] {
+        for (width, height) in [(0, 0), (1, 1), (1, 7), (7, 1), (9, 6), (33, 17), (65, 3)] {
             for channels in [1, 3, 4] {
                 for repeated in [false, true] {
                     let source: Vec<u16> = (0..width * height * channels)

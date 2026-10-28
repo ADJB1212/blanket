@@ -136,7 +136,7 @@ pub(crate) fn kernel_add(value: f32, weight: f32, sum: f32) -> f32 {
 }
 
 #[pyfunction]
-fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<Image> {
+pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<Image> {
     if size < 1 || size % 2 == 0 {
         return Err(PyValueError::new_err("bad filter size"));
     }
@@ -221,7 +221,9 @@ fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -
     output(image, pixels)
 }
 
-fn extrema_line(source: &[u8], output: &mut [u8], step: usize, first: usize, radius: usize, maximum: bool, queue: &mut VecDeque<(usize, u8)>) {
+pub(crate) fn extrema_line<T: Copy + Ord>(
+    source: &[T], output: &mut [T], step: usize, first: usize, radius: usize, maximum: bool, queue: &mut VecDeque<(usize, T)>,
+) {
     queue.clear();
     let length = source.len().div_ceil(step);
     let mut next = first.saturating_sub(radius);
@@ -627,7 +629,7 @@ pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: b
 }
 
 #[pyfunction]
-fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
+pub fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::unsharp(image, radius, percent, threshold));
     }

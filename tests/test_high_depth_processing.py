@@ -31,7 +31,7 @@ def samples(image):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize(("window", "rank"), [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 80)])
+@pytest.mark.parametrize(("window", "rank"), [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 0), (9, 80)])
 def test_rank_filters_use_samples_and_extend_edges(mode, depth, window, rank):
     image = make_image(mode, depth)
     image.info["test"] = "metadata"
@@ -107,6 +107,18 @@ def test_blur_and_unsharp_sample_reference(mode, depth):
     expected = [min((1 << depth) - 1, max(0, a + math.trunc((a - b) * 150 / 100))) if abs(a - b) > 17 else a for a, b in zip(values, blurred, strict=True)]
     assert samples(image.filter(ImageFilter.UnsharpMask(1.5, 150, 17))) == expected
     assert image.filter(ImageFilter.BoxBlur(0)).tobytes() == image.tobytes()
+
+
+@pytest.mark.parametrize(("mode", "depth"), FORMATS)
+@pytest.mark.parametrize(("radius", "percent", "threshold"), [(20, 0, -1), (20, 150, 65535), (0, 150, -1)])
+def test_unsharp_identity_preserves_samples(mode, depth, radius, percent, threshold):
+    image = make_image(mode, depth)
+    image.info["test"] = "metadata"
+    result = image.filter(ImageFilter.UnsharpMask(radius, percent, threshold))
+    assert (result.mode, result.bit_depth, result.info) == (mode, depth, image.info)
+    assert result.tobytes() == image.tobytes()
+    result.close()
+    assert samples(image)[0] == 257
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
