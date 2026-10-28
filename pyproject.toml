@@ -52,8 +52,7 @@ test = [
     "ty>=0.0.92",
 ]
 docs = [
-    "mkdocs>=1.5.0,<2",
-    "mkdocs-material>=9.8",
+    "zensical>=0.0.73",
     "mkdocstrings[python]>=1.0.8,<2",
     "ruff>=0.17.2",
 ]
