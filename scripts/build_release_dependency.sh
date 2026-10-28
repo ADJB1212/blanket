@@ -69,6 +69,10 @@ if [[ -n "${BLANKET_SOURCE_ROOT:-}" ]]; then
 	cp -R "$BLANKET_SOURCE_ROOT/$name" "$source_dir"
 else
 	git clone --branch "$version" "${clone_flags[@]}" "$repository" "$source_dir"
+	if [[ "$name" == libjxl ]]; then
+		git -C "$source_dir/third_party/brotli" fetch --depth 1 origin tag v1.2.1
+		git -C "$source_dir/third_party/brotli" checkout --detach v1.2.1
+	fi
 	printf '%s\n' "$repository" "$version" >"$source_dir/SOURCE.txt"
 	git -C "$source_dir" rev-parse HEAD >>"$source_dir/SOURCE.txt"
 	git -C "$source_dir" submodule status --recursive >>"$source_dir/SOURCE.txt"
