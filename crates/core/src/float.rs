@@ -1,6 +1,6 @@
 use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdUint};
-use std::simd::{Select, Simd, StdFloat, simd_swizzle};
+use std::simd::{Select, Simd, StdFloat, ToBytes, simd_swizzle};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -66,55 +66,41 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
     if (float && depth != 32) || (!float && !matches!(depth, 8 | 10 | 12 | 16)) {
         return Err(PyValueError::new_err("invalid color sample depth"));
     }
-    let source = values(image)?;
-    let mut bytes = Vec::new();
-    let maximum = ((1_u32 << depth.min(16)) - 1) as f32;
-    if !float && image.mode.channels() == mode.channels() {
-        bytes = quantize(&source, depth);
+    let mut source = values(image)?;
+    if image.mode.channels() != mode.channels() {
+        let mut mapped = vec![0.0; source.len() / image.mode.channels() * mode.channels()];
+        if mode.channels() == 4 {
+            crate::pixels::float_color_layout::<3, 4>(&source, &mut mapped);
+        } else {
+            crate::pixels::float_color_layout::<4, 3>(&source, &mut mapped);
+        }
+        source = mapped;
+    }
+    if !float {
+        let bytes = quantize(&source, depth);
         return if depth == 8 {
             Image::from_pixels(image.width, image.height, mode, bytes, None)
         } else {
             Image::from_sample_bytes(image.width, image.height, mode, bytes, depth, None)
         };
     }
-    for p in source.chunks_exact(image.mode.channels()) {
-        for c in 0..mode.channels() {
-            let v = p.get(c).copied().unwrap_or(1.0);
-            if float {
-                bytes.extend_from_slice(&v.to_le_bytes());
-            } else {
-                let v = (v.clamp(0.0, 1.0) * maximum).round() as u16;
-                if depth == 8 {
-                    bytes.push(v as u8);
-                } else {
-                    bytes.extend_from_slice(&v.to_le_bytes());
-                }
-            }
-        }
-    }
-    if float {
-        Image::from_color_float_bytes(image.width, image.height, mode, bytes)
-    } else if depth == 8 {
-        Image::from_pixels(image.width, image.height, mode, bytes, None)
-    } else {
-        Image::from_sample_bytes(image.width, image.height, mode, bytes, depth, None)
-    }
+    let bytes = source.into_iter().flat_map(f32::to_le_bytes).collect();
+    Image::from_color_float_bytes(image.width, image.height, mode, bytes)
 }
 
-fn quantize(source: &[f32], depth: u8) -> Vec<u8> {
+pub fn quantize(source: &[f32], depth: u8) -> Vec<u8> {
+    assert!(matches!(depth, 8 | 10 | 12 | 16));
     let maximum = ((1_u32 << depth) - 1) as f32;
     let stride = if depth == 8 { 1 } else { 2 };
     let mut output = vec![0; source.len() * stride];
     let end = source.len() / 16 * 16;
     for i in (0..end).step_by(16) {
         let values = Simd::<f32, 16>::from_slice(&source[i..]);
-        let samples = (values.simd_clamp(Simd::splat(0.0), Simd::splat(1.0)) * Simd::splat(maximum)).round().cast::<u16>().to_array();
-        for (c, sample) in samples.into_iter().enumerate() {
-            if stride == 1 {
-                output[i + c] = sample as u8;
-            } else {
-                output[(i + c) * 2..(i + c + 1) * 2].copy_from_slice(&sample.to_le_bytes());
-            }
+        let samples = (values.simd_clamp(Simd::splat(0.0), Simd::splat(1.0)) * Simd::splat(maximum)).round().cast::<u16>();
+        if stride == 1 {
+            samples.cast::<u8>().copy_to_slice(&mut output[i..i + 16]);
+        } else {
+            samples.to_le_bytes().copy_to_slice(&mut output[i * 2..(i + 16) * 2]);
         }
     }
     for (i, &v) in source.iter().enumerate().skip(end) {

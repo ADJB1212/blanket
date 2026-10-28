@@ -27,10 +27,9 @@ impl Stream<'_> {
 }
 
 fn append_rgba_channels<const C: usize>(output: &mut Vec<u8>, pixels: &[[u8; 4]], first: usize) {
-    output.reserve(pixels.len() * C);
-    for pixel in pixels {
-        output.extend_from_slice(&pixel[first..first + C]);
-    }
+    let start = output.len();
+    output.resize(start + pixels.len() * C, 0);
+    blanket_core::pixels::rgba_channels::<C>(pixels.as_flattened(), &mut output[start..], first);
 }
 
 // PDF 1.4 image XObjects with an optional grayscale soft mask. Raw streams

@@ -134,40 +134,22 @@ fn compute_weights(input: u32, output: u32, start: f64, end: f64, method: u8) ->
 
 fn premultiply(pixels: &mut [u8]) {
     chunks_mut(pixels, CHUNK_PIXELS << 2, |_, chunk| {
-        for p in chunk.as_chunks_mut::<4>().0 {
-            for c in 0..3 {
-                let v = u32::from(p[c]) * u32::from(p[3]) + 128;
-                p[c] = (((v >> 8) + v) >> 8) as u8;
-            }
-        }
+        blanket_core::pixels::alpha_scale::<4, false>(chunk);
     });
 }
 
 fn unpremultiply(pixels: &mut [u8]) {
     chunks_mut(pixels, CHUNK_PIXELS << 2, |_, chunk| {
-        for p in chunk.as_chunks_mut::<4>().0 {
-            if p[3] != 0 && p[3] != 255 {
-                for c in 0..3 {
-                    p[c] = (u32::from(p[c]) * 255 / u32::from(p[3])).min(255) as u8;
-                }
-            }
-        }
+        blanket_core::pixels::alpha_scale::<4, true>(chunk);
     });
 }
 
 fn premultiply_la(pixels: &mut [u8]) {
-    for pixel in pixels.as_chunks_mut::<2>().0 {
-        let value = u32::from(pixel[0]) * u32::from(pixel[1]) + 128;
-        pixel[0] = (((value >> 8) + value) >> 8) as u8;
-    }
+    blanket_core::pixels::alpha_scale::<2, false>(pixels);
 }
 
 fn unpremultiply_la(pixels: &mut [u8]) {
-    for pixel in pixels.as_chunks_mut::<2>().0 {
-        if pixel[1] != 0 && pixel[1] != 255 {
-            pixel[0] = (u32::from(pixel[0]) * 255 / u32::from(pixel[1])).min(255) as u8;
-        }
-    }
+    blanket_core::pixels::alpha_scale::<2, true>(pixels);
 }
 
 fn premultiply_image(mode: PixelMode, pixels: &mut [u8]) {

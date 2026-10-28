@@ -145,6 +145,10 @@ fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8], blend: bool) {
         if alpha == 0 {
             return;
         }
+        if C == 3 {
+            blanket_core::pixels::blend_solid_rgb(pixels, [ink[0], ink[1], ink[2]], ink[3]);
+            return;
+        }
         for pixel in pixels.as_chunks_mut::<C>().0 {
             for c in 0..C {
                 pixel[c] = ((u32::from(pixel[c]) * (255 - alpha) + u32::from(ink[c]) * alpha + 127) / 255) as u8;
@@ -415,6 +419,19 @@ fn draw_mask(
                 mask_row(mask, size, (left, y), stroke, &mut row, &mut queue);
                 &row
             };
+            if image.bit_depth == 8 && matches!(image.mode, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+                let channels = image.mode.channels();
+                let start = ((position.1 + y) as usize * image.width as usize + (position.0 + left) as usize) * channels;
+                let dst = &mut image.pixels.as_mut().unwrap()[start..start + coverage.len() * channels];
+                match channels {
+                    1 => blanket_core::pixels::paint_mask::<1>(dst, coverage, &ink, blend),
+                    2 => blanket_core::pixels::paint_mask::<2>(dst, coverage, &ink, blend),
+                    3 => blanket_core::pixels::paint_mask::<3>(dst, coverage, &ink, blend),
+                    4 => blanket_core::pixels::paint_mask::<4>(dst, coverage, &ink, blend),
+                    _ => unreachable!(),
+                }
+                continue;
+            }
             for (x, &coverage) in (left..right).zip(coverage) {
                 if image.mode == PixelMode::Rgba && coverage != 0 {
                     let offset = ((position.1 + y) as usize * image.width as usize + (position.0 + x) as usize) * 4;

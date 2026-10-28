@@ -77,11 +77,12 @@ pub(crate) fn transform<'a>(
         let target = &mut output[row * output_stride..row * output_stride + target_row];
         if let Some(channels) = layout.bgr_channels {
             let (input_channels, output_channels) = if encode { (mode.channels(), channels) } else { (channels, mode.channels()) };
-            for (src, dst) in source.chunks_exact(input_channels).zip(target.chunks_exact_mut(output_channels)) {
-                dst[..3].copy_from_slice(&[src[2], src[1], src[0]]);
-                if output_channels == 4 {
-                    dst[3] = if input_channels == 4 { src[3] } else { 0 };
-                }
+            match (input_channels, output_channels) {
+                (3, 3) => crate::pixels::swap_red_blue::<3, 3>(source, target),
+                (3, 4) => crate::pixels::swap_red_blue::<3, 4>(source, target),
+                (4, 3) => crate::pixels::swap_red_blue::<4, 3>(source, target),
+                (4, 4) => crate::pixels::swap_red_blue::<4, 4>(source, target),
+                _ => unreachable!(),
             }
         } else {
             target.copy_from_slice(source);

@@ -80,11 +80,11 @@ fn list_count(histogram: &Bound<'_, PyList>, index: usize) -> PyResult<u64> {
 fn stat_count(histogram: &Bound<'_, PyList>, bins: usize) -> PyResult<Vec<u128>> {
     if bins != 256 {
         let values = histogram.extract::<Vec<u64>>()?;
-        return Ok(sample_bands(&values, bins)?.map(|band| band.iter().map(|&n| u128::from(n)).sum()).collect());
+        return Ok(sample_bands(&values, bins)?.map(blanket_core::pixels::histogram_count).collect());
     }
     if !histogram.is_exact_instance_of::<PyList>() {
         let values = histogram.extract::<Vec<u64>>()?;
-        return Ok(bands(&values)?.iter().map(|band| band.iter().map(|&n| u128::from(n)).sum()).collect());
+        return Ok(bands(&values)?.iter().map(|band| blanket_core::pixels::histogram_count(band)).collect());
     }
     if !histogram.len().is_multiple_of(256) {
         return Err(PyValueError::new_err("histogram must contain 256 bins per band"));
@@ -107,17 +107,17 @@ fn stat_extrema<'py>(histogram: &Bound<'py, PyList>, bins: usize) -> PyResult<Bo
         let values = histogram.extract::<Vec<u64>>()?;
         return PyList::new(
             histogram.py(),
-            sample_bands(&values, bins)?
-                .map(|band| (band.iter().position(|&n| n != 0).unwrap_or(bins - 1), band.iter().rposition(|&n| n != 0).unwrap_or(0))),
+            sample_bands(&values, bins)?.map(|band| blanket_core::pixels::histogram_bounds(band).unwrap_or((bins - 1, 0))),
         );
     }
     if !histogram.is_exact_instance_of::<PyList>() {
         let values = histogram.extract::<Vec<u64>>()?;
         return PyList::new(
             histogram.py(),
-            bands(&values)?
-                .iter()
-                .map(|band| (band.iter().position(|&n| n != 0).unwrap_or(255) as u8, band.iter().rposition(|&n| n != 0).unwrap_or(0) as u8)),
+            bands(&values)?.iter().map(|band| {
+                let (a, b) = blanket_core::pixels::histogram_bounds(band).unwrap_or((255, 0));
+                (a as u8, b as u8)
+            }),
         );
     }
     if !histogram.len().is_multiple_of(256) {
@@ -130,9 +130,8 @@ fn stat_extrema<'py>(histogram: &Bound<'py, PyList>, bins: usize) -> PyResult<Bo
         for (bin, count) in counts.iter_mut().enumerate() {
             *count = list_count(histogram, i * 256 + bin)?;
         }
-        let minimum = counts.iter().position(|&n| n != 0).unwrap_or(255) as u8;
-        let maximum = counts.iter().rposition(|&n| n != 0).unwrap_or(0) as u8;
-        result.append((minimum, maximum))?;
+        let (minimum, maximum) = blanket_core::pixels::histogram_bounds(&counts).unwrap_or((255, 0));
+        result.append((minimum as u8, maximum as u8))?;
     }
     Ok(result)
 }

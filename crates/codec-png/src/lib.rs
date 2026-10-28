@@ -153,10 +153,8 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> R
             .filter(|bits| bits.len() == mode.channels() && matches!(bits[0], 10 | 12) && bits.iter().all(|&b| b == bits[0]))
             .map_or(16, |bits| bits[0]);
         if frame.color_type == png::ColorType::GrayscaleAlpha {
-            let mut rgba = Vec::with_capacity(pixels.len() * 2);
-            for &[l0, l1, a0, a1] in pixels.as_chunks::<4>().0 {
-                rgba.extend_from_slice(&[l1, l0, l1, l0, l1, l0, a1, a0]);
-            }
+            let mut rgba = vec![0; pixels.len() * 2];
+            blanket_core::pixels::expand_luma_alpha::<true, true>(&pixels, &mut rgba);
             pixels = rgba;
         } else {
             blanket_core::simd::samples_from_be16(&mut pixels, depth);

@@ -145,8 +145,10 @@ impl CmsTransform {
             Ok::<_, PyErr>(())
         })?;
         if self.output == PixelMode::Rgba {
-            for (i, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                pixel[3] = if self.input == PixelMode::Rgba { source[i * 4 + 3] } else { 255 };
+            if self.input == PixelMode::Rgba {
+                blanket_core::pixels::restore_alpha::<true>(&mut pixels, source);
+            } else {
+                blanket_core::pixels::restore_alpha::<false>(&mut pixels, source);
             }
         }
         Image::from_pixels(image.width, image.height, self.output, pixels, None)

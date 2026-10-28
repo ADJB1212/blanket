@@ -27,5 +27,31 @@ fn bilevel(c: &mut Criterion) {
     }
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = pixels, bilevel }
+fn swaps(c: &mut Criterion) {
+    fn run<const I: usize, const O: usize>(c: &mut Criterion) {
+        for count in [17, 4096, 480_000] {
+            let source: Vec<u8> = (0..count * I).map(|i| (i * 71) as u8).collect();
+            let mut output = vec![0; count * O];
+            let mut group = c.benchmark_group(format!("swap/{I}-{O}/{count}"));
+            group.bench_function("scalar", |b| {
+                b.iter(|| {
+                    for (src, dst) in black_box(&source).as_chunks::<I>().0.iter().zip(black_box(&mut output).as_chunks_mut::<O>().0) {
+                        dst[..3].copy_from_slice(&[src[2], src[1], src[0]]);
+                        if O == 4 {
+                            dst[3] = if I == 4 { src[3] } else { 0 };
+                        }
+                    }
+                })
+            });
+            group.bench_function("simd", |b| b.iter(|| pixels::swap_red_blue::<I, O>(black_box(&source), black_box(&mut output))));
+            group.finish();
+        }
+    }
+    run::<3, 3>(c);
+    run::<4, 4>(c);
+    run::<3, 4>(c);
+    run::<4, 3>(c);
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = pixels, bilevel, swaps }
 criterion_main!(benches);

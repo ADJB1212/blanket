@@ -116,10 +116,8 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     let wide = pixels.format.data_type == JxlDataType::Uint16;
     let (mode, pixels) = match (info.num_color_channels, info.alpha_bits > 0) {
         (1, true) if wide => {
-            let mut rgba = Vec::with_capacity(pixels.data.len() * 2);
-            for &[l0, l1, a0, a1] in pixels.data.as_chunks::<4>().0 {
-                rgba.extend_from_slice(&[l0, l1, l0, l1, l0, l1, a0, a1]);
-            }
+            let mut rgba = vec![0; pixels.data.len() * 2];
+            blanket_core::pixels::expand_luma_alpha::<true, false>(&pixels.data, &mut rgba);
             (PixelMode::Rgba, rgba)
         }
         (1, false) => (PixelMode::L, pixels.data),
@@ -139,10 +137,8 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
 }
 
 fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
-    let mut rgba = Vec::with_capacity(luma_alpha.len().saturating_mul(2));
-    for &[luma, alpha] in luma_alpha.as_chunks::<2>().0 {
-        rgba.extend_from_slice(&[luma, luma, luma, alpha]);
-    }
+    let mut rgba = vec![0; luma_alpha.len() * 2];
+    blanket_core::pixels::expand_luma_alpha::<false, false>(luma_alpha, &mut rgba);
     rgba
 }
 

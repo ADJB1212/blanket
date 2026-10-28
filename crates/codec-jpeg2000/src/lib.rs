@@ -232,22 +232,32 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
             _ => PixelMode::Rgba,
         };
         let maximum = (1_i32 << depth) - 1;
+        let pack = |wide: bool, output: &mut [u8]| {
+            macro_rules! convert {
+                ($wide:literal) => {
+                    match channels {
+                        1 => blanket_core::pixels::pack_i32_planes::<1, $wide>([planes[0]], maximum, output),
+                        2 => blanket_core::pixels::pack_i32_planes::<2, $wide>([planes[0], planes[1]], maximum, output),
+                        3 => blanket_core::pixels::pack_i32_planes::<3, $wide>([planes[0], planes[1], planes[2]], maximum, output),
+                        4 => blanket_core::pixels::pack_i32_planes::<4, $wide>([planes[0], planes[1], planes[2], planes[3]], maximum, output),
+                        _ => unreachable!(),
+                    }
+                };
+            }
+            if wide {
+                convert!(true);
+            } else {
+                convert!(false);
+            }
+        };
         if depth <= 8 {
-            let pixels =
-                (0..count).flat_map(|i| planes.iter().map(move |plane| ((plane[i].clamp(0, maximum) * 255 + maximum / 2) / maximum) as u8)).collect();
+            let mut pixels = vec![0; count * channels];
+            pack(false, &mut pixels);
             Image::from_pixels(width, height, mode, pixels, Some("JPEG2000".into())).map_err(|e| e.to_string())
         } else {
-            let mut samples = Vec::with_capacity(count * if channels == 2 { 4 } else { channels });
-            for (i, _) in planes[0].iter().enumerate() {
-                let value =
-                    |channel: usize| ((i64::from(planes[channel][i].clamp(0, maximum)) * 65535 + i64::from(maximum / 2)) / i64::from(maximum)) as u16;
-                if channels == 2 {
-                    samples.extend_from_slice(&[value(0), value(0), value(0), value(1)]);
-                } else {
-                    samples.extend((0..channels).map(value));
-                }
-            }
-            Image::from_samples(width, height, if channels == 2 { PixelMode::Rgba } else { mode }, samples, 16, Some("JPEG2000".into()))
+            let mut samples = vec![0; count * if channels == 2 { 4 } else { channels } * 2];
+            pack(true, &mut samples);
+            Image::from_sample_bytes(width, height, if channels == 2 { PixelMode::Rgba } else { mode }, samples, 16, Some("JPEG2000".into()))
                 .map_err(|e| e.to_string())
         }
     }
@@ -286,10 +296,22 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
                 return Err(PyOSError::new_err("could not allocate JPEG 2000 samples"));
             }
             plane.alpha = u16::from(channel == channels - 1 && matches!(channels, 2 | 4));
-            for (i, sample) in std::slice::from_raw_parts_mut(plane.data, image.width as usize * image.height as usize).iter_mut().enumerate() {
-                let index = i * channels + channel;
-                *sample =
-                    if depth > 8 { i32::from(u16::from_le_bytes([pixels[index * 2], pixels[index * 2 + 1]])) } else { i32::from(pixels[index]) };
+            let output = std::slice::from_raw_parts_mut(plane.data, image.width as usize * image.height as usize);
+            macro_rules! extract {
+                ($wide:literal) => {
+                    match channels {
+                        1 => blanket_core::pixels::extract_i32_channel::<1, $wide>(pixels, output, channel),
+                        2 => blanket_core::pixels::extract_i32_channel::<2, $wide>(pixels, output, channel),
+                        3 => blanket_core::pixels::extract_i32_channel::<3, $wide>(pixels, output, channel),
+                        4 => blanket_core::pixels::extract_i32_channel::<4, $wide>(pixels, output, channel),
+                        _ => unreachable!(),
+                    }
+                };
+            }
+            if depth > 8 {
+                extract!(true);
+            } else {
+                extract!(false);
             }
         }
         let mut parameters = std::mem::zeroed();

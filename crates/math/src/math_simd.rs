@@ -45,8 +45,7 @@ impl<'a> IntegerInput<'a> {
 
 #[inline(always)]
 pub(super) fn apply_integer(output: &mut [[u8; 4]], a: IntegerInput<'_>, b: IntegerInput<'_>, op: Operation, reverse: bool) {
-    let end =
-        if matches!(op, Operation::Div | Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift) { 0 } else { output.len() / 4 * 4 };
+    let end = if matches!(op, Operation::Pow) { 0 } else { output.len() / 4 * 4 };
     for i in (0..end).step_by(4) {
         let (a, b) = if reverse { (b.vector(i), a.vector(i)) } else { (a.vector(i), b.vector(i)) };
         output[i..i + 4].copy_from_slice(&integer(op, a, b).to_array().map(i32::to_le_bytes));
@@ -95,7 +94,7 @@ pub(super) fn apply_float(
 #[inline]
 pub(super) fn apply(output: &mut [[u8; 4]], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, op: Operation, float: bool) -> usize {
     assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
-    if matches!(op, Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift) || (!float && matches!(op, Operation::Div)) {
+    if matches!(op, Operation::Pow) || (float && matches!(op, Operation::Mod)) {
         return 0;
     }
     let len = output.len() / 4 * 4;
@@ -130,6 +129,14 @@ fn integer(op: Operation, a: i32x4, b: i32x4) -> i32x4 {
         Operation::And => a & b,
         Operation::Or => a | b,
         Operation::Xor => a ^ b,
+        Operation::Lshift => a << (b & i32x4::splat(31)),
+        Operation::Rshift => a >> (b & i32x4::splat(31)),
+        Operation::Div | Operation::Mod => {
+            let divisor = b.simd_eq(zero).select(one, b);
+            // i32 quotient gaps exceed f64 rounding error, including near integers.
+            let quotient = (a.cast::<f64>() / divisor.cast::<f64>()).cast::<i64>().cast::<i32>();
+            b.simd_eq(zero).select(zero, if matches!(op, Operation::Div) { quotient } else { a - quotient * b })
+        }
         Operation::Min => a.simd_min(b),
         Operation::Max => a.simd_max(b),
         Operation::Eq => a.simd_eq(b).select(one, zero),
@@ -168,6 +175,74 @@ fn float_operation(op: Operation, a: f32x4, b: f32x4) -> f32x4 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integer_division_matches_wrapping_scalar_across_bit_ranges() {
+        let mut state = 0x12345678_u32;
+        for shift in 0..32 {
+            let mut left = Vec::new();
+            let mut right = Vec::new();
+            for i in 0..4099 {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                left.push((state as i32).to_le_bytes());
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                let divisor = if i % 17 == 0 {
+                    0
+                } else if i % 19 == 0 {
+                    -1
+                } else {
+                    (state as i32) >> shift
+                };
+                right.push(divisor.to_le_bytes());
+            }
+            for op in [Operation::Div, Operation::Mod] {
+                let mut output = vec![[0; 4]; left.len()];
+                apply_integer(&mut output, IntegerInput::Wide(&left), IntegerInput::Wide(&right), op, false);
+                for ((actual, a), b) in output.iter().zip(&left).zip(&right) {
+                    assert_eq!(*actual, op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes());
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "native timing; run alone after compilation"]
+    fn benchmark_integer_ops() {
+        use std::hint::black_box;
+        use std::time::Instant;
+        let a: Vec<_> = (0..480_000_i32).map(|i| i.wrapping_mul(7919).to_le_bytes()).collect();
+        let b: Vec<_> = (0..480_000_i32).map(|i| i.wrapping_mul(37).to_le_bytes()).collect();
+        let mut output = vec![[0; 4]; a.len()];
+        for op in [Operation::Lshift, Operation::Rshift, Operation::Div, Operation::Mod] {
+            for vector in [false, true] {
+                let start = Instant::now();
+                for _ in 0..1000 {
+                    let a = black_box(&a);
+                    let b = black_box(&b);
+                    let dst = black_box(&mut output);
+                    if vector {
+                        apply_integer(dst, IntegerInput::Wide(a), IntegerInput::Wide(b), op, false);
+                    } else {
+                        for ((dst, a), b) in dst.iter_mut().zip(a).zip(b) {
+                            *dst = op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes();
+                        }
+                    }
+                }
+                let name = match op {
+                    Operation::Lshift => "lshift",
+                    Operation::Rshift => "rshift",
+                    Operation::Div => "div",
+                    Operation::Mod => "mod",
+                    _ => unreachable!(),
+                };
+                eprintln!("op={name}, vector={vector}, us={:.3}", start.elapsed().as_secs_f64() * 1000.0);
+            }
+        }
+    }
 
     #[test]
     fn integer_inputs_preserve_unaligned_samples_tails_and_guards() {
@@ -262,8 +337,7 @@ mod tests {
                         }
                         let mut output = vec![0xa5; offset + len * 4 + 16];
                         let done = apply(output[offset..offset + len * 4].as_chunks_mut::<4>().0, a, (!op.unary()).then_some(b), op, float);
-                        let fallback = matches!(op, Operation::Mod | Operation::Pow | Operation::Lshift | Operation::Rshift)
-                            || (!float && matches!(op, Operation::Div));
+                        let fallback = matches!(op, Operation::Pow) || (float && matches!(op, Operation::Mod));
                         assert_eq!(done, if fallback { 0 } else { len / 4 * 4 });
                         assert!(output[..offset].iter().all(|&byte| byte == 0xa5));
                         assert!(output[offset + done * 4..].iter().all(|&byte| byte == 0xa5));
