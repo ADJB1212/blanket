@@ -8,6 +8,38 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+    decode_frames(data, None)
+}
+
+pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
+    decode_frames(data, Some(target))
+}
+
+pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
+    use blanket_codec_common::{SequenceInfo, validate_frame_budget};
+    let mut options = gif::DecodeOptions::new();
+    options.skip_frame_decoding(true);
+    options.check_frame_consistency(true);
+    let mut decoder = options.read_info(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
+    let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+    let mut total = 0;
+    let mut sequence = SequenceInfo::default();
+    while decoder.next_frame_info().map_err(|e| e.to_string())?.is_some() {
+        validate_frame_budget(&mut total, width, height)?;
+        sequence.count += 1;
+    }
+    sequence.loop_count = match decoder.repeat() {
+        gif::Repeat::Infinite => Some(0),
+        gif::Repeat::Finite(0) => None,
+        gif::Repeat::Finite(n) => Some(u32::from(n)),
+    };
+    if sequence.count == 0 {
+        return Err("GIF contains no frames".into());
+    }
+    Ok(sequence)
+}
+
+fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, String> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
@@ -23,6 +55,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut sequence = Sequence::default();
     let mut total = 0;
     let mut previous = Vec::new();
+    let mut frame_index = 0;
     while let Some(frame) = decoder.read_next_frame().map_err(|e| e.to_string())? {
         validate_frame_budget(&mut total, width, height)?;
         let (x, y, w, h) = (u32::from(frame.left), u32::from(frame.top), u32::from(frame.width), u32::from(frame.height));
@@ -39,7 +72,7 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
         } else {
             background
         };
-        if sequence.frames.is_empty() {
+        if frame_index == 0 {
             for pixel in canvas.as_chunks_mut::<4>().0 {
                 *pixel = clear;
             }
@@ -56,12 +89,18 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
             let dst = ((y as usize + row) * width as usize + x as usize) * 4;
             blanket_core::pixels::paste_nontransparent_rgba(&mut canvas[dst..dst + w as usize * 4], &frame.buffer[src..src + w as usize * 4]);
         }
-        sequence.frames.push(Frame {
-            image: Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|e| e.to_string())?,
-            duration: Some(f64::from(frame.delay) * 10.0),
-            disposal: frame.dispose as u8,
-            blend: 0,
-        });
+        if target.is_none_or(|target| target == frame_index) {
+            sequence.frames.push(Frame {
+                image: Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|e| e.to_string())?,
+                duration: Some(f64::from(frame.delay) * 10.0),
+                disposal: frame.dispose as u8,
+                blend: 0,
+            });
+        }
+        if target == Some(frame_index) {
+            return Ok(sequence);
+        }
+        frame_index += 1;
         if frame.dispose == gif::DisposalMethod::Previous && w != 0 {
             if previous.len() == canvas.len() {
                 std::mem::swap(&mut canvas, &mut previous);

@@ -23,6 +23,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_decode_region, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::_transform_jpeg, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_open_sequence, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_index_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_encode_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(encode::_encode, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_write_metadata, module)?)?;

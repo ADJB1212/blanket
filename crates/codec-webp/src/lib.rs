@@ -50,6 +50,44 @@ pub fn backend_version() -> String {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+    decode_frames(data, None)
+}
+
+pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
+    use blanket_codec_common::{SequenceInfo, validate_frame_budget};
+    let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
+    validate_dimensions(info.width, info.height)?;
+    let (count, loop_count) = if info.has_animation {
+        let input = libwebp_sys::WebPData { bytes: data.as_ptr(), size: data.len() };
+        // SAFETY: Input outlives the demuxer; a nonnull demuxer is deleted after querying it.
+        unsafe {
+            let demuxer = libwebp_sys::WebPDemuxInternal(&raw const input, 0, std::ptr::null_mut(), libwebp_sys::WEBP_DEMUX_ABI_VERSION as i32);
+            if demuxer.is_null() {
+                return Err("invalid WebP animation".into());
+            }
+            let count = libwebp_sys::WebPDemuxGetI(demuxer, libwebp_sys::WebPFormatFeature::WEBP_FF_FRAME_COUNT);
+            let loop_count = libwebp_sys::WebPDemuxGetI(demuxer, libwebp_sys::WebPFormatFeature::WEBP_FF_LOOP_COUNT);
+            libwebp_sys::WebPDemuxDelete(demuxer);
+            (count, Some(loop_count))
+        }
+    } else {
+        (1, None)
+    };
+    let mut total = 0;
+    for _ in 0..count {
+        validate_frame_budget(&mut total, info.width, info.height)?;
+    }
+    if count == 0 {
+        return Err("WebP contains no frames".into());
+    }
+    Ok(SequenceInfo { count: count as usize, loop_count, default_image: false })
+}
+
+pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
+    decode_frames(data, Some(target))
+}
+
+fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, String> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
     if !info.has_animation {
@@ -59,17 +97,24 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut sequence = Sequence { loop_count: Some(decoder.info().loop_count), ..Sequence::default() };
     let mut timestamp = 0;
     let mut total = 0;
+    let mut frame_index = 0;
     while decoder.has_more_frames() {
         validate_frame_budget(&mut total, decoder.info().width, decoder.info().height)?;
         let frame = decoder.next_frame().map_err(|e| e.to_string())?.ok_or("missing WebP frame")?;
         let duration = frame.timestamp_ms.checked_sub(timestamp).filter(|d| *d >= 0).ok_or("invalid WebP timestamp")?;
         timestamp = frame.timestamp_ms;
-        sequence.frames.push(Frame {
-            image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into())).map_err(|e| e.to_string())?,
-            duration: Some(f64::from(duration)),
-            disposal: 0,
-            blend: 0,
-        });
+        if target.is_none_or(|target| target == frame_index) {
+            sequence.frames.push(Frame {
+                image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into())).map_err(|e| e.to_string())?,
+                duration: Some(f64::from(duration)),
+                disposal: 0,
+                blend: 0,
+            });
+        }
+        if target == Some(frame_index) {
+            return Ok(sequence);
+        }
+        frame_index += 1;
     }
     Ok(sequence)
 }

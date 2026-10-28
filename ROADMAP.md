@@ -324,8 +324,9 @@ with new processing semantics exposed explicitly.
 - [x] **Region and tile decoding** — `Image.open_region` reads intersecting
       TIFF strips/tiles for unsigned 8/16-bit chunky L/RGB/straight RGBA;
       other layouts/codecs require explicit `fallback="full"`
-- [ ] **Lazy frame access** — opt-in on-demand animation and TIFF page decoding
-      with bounded caching and documented seeking and frame-edit behavior
+- [x] **Lazy frame access** — `Image.open(..., lazy=True, frame_cache_size=1)`
+      decodes animation frames and TIFF pages on demand with a bounded LRU cache;
+      evicted frame edits are discarded and animation cache misses replay originals
 - [ ] **Processing budgets** — configurable memory, decoded-pixel, frame-count,
       and worker limits for applications handling many images concurrently
 - [ ] **Reusable processing plans** — combine compatible operations to reduce

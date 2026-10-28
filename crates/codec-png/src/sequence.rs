@@ -70,6 +70,37 @@ impl CanvasSample for u16 {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
+    decode_frames(data, None)
+}
+
+pub fn decode_frame(data: &[u8], target: usize) -> Result<Sequence, String> {
+    decode_frames(data, Some(target))
+}
+
+pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
+    use blanket_codec_common::SequenceInfo;
+    let mut reader = super::decoder(data).read_info().map_err(|e| e.to_string())?;
+    let Some(animation) = reader.info().animation_control else {
+        validate_frame_budget(&mut 0, reader.info().width, reader.info().height)?;
+        return Ok(SequenceInfo { count: 1, ..SequenceInfo::default() });
+    };
+    let default_image = reader.info().frame_control.is_none();
+    let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
+    let mut pixels = (reader.info().width as usize)
+        .checked_mul(reader.info().height as usize)
+        .and_then(|pixels| pixels.checked_mul(count.saturating_sub(1) as usize))
+        .ok_or("APNG pixel count overflow")?;
+    validate_frame_budget(&mut pixels, reader.info().width, reader.info().height)?;
+    for _ in 1..count {
+        reader.next_frame_info().map_err(|e| e.to_string())?;
+    }
+    if count == 0 {
+        return Err("APNG contains no frames".into());
+    }
+    Ok(SequenceInfo { count: count as usize, loop_count: Some(animation.num_plays), default_image })
+}
+
+fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, String> {
     let mut decoder = super::decoder(data);
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|e| e.to_string())?;
@@ -80,13 +111,15 @@ pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
         return super::decode_png_reader(reader, false).map(Sequence::single);
     };
     if reader.info().bit_depth == png::BitDepth::Sixteen {
-        decode_animation::<u16>(reader, animation)
+        decode_animation::<u16>(reader, animation, target)
     } else {
-        decode_animation::<u8>(reader, animation)
+        decode_animation::<u8>(reader, animation, target)
     }
 }
 
-fn decode_animation<T: CanvasSample>(mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl) -> Result<Sequence, String> {
+fn decode_animation<T: CanvasSample>(
+    mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl, target: Option<usize>,
+) -> Result<Sequence, String> {
     let (width, height) = (reader.info().width, reader.info().height);
     let default_image = reader.info().frame_control.is_none();
     let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
@@ -152,19 +185,27 @@ fn decode_animation<T: CanvasSample>(mut reader: png::Reader<Cursor<&[u8]>>, ani
                 }
             }
         }
-        let pixels = T::pack(&canvas);
-        let image = if bytes == 2 {
-            Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
-        } else {
-            Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("PNG".into()))
+        if target.is_none_or(|target| target == frame_index as usize) {
+            let pixels = T::pack(&canvas);
+            let image = if bytes == 2 {
+                Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
+            } else {
+                Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("PNG".into()))
+            }
+            .map_err(|e| e.to_string())?;
+            sequence.frames.push(Frame {
+                image,
+                duration: control.map(|c| f64::from(c.delay_num) * 1000.0 / f64::from(if c.delay_den == 0 { 100 } else { c.delay_den })),
+                disposal: control.map_or(0, |c| c.dispose_op as u8),
+                blend: control.map_or(0, |c| c.blend_op as u8),
+            });
         }
-        .map_err(|e| e.to_string())?;
-        sequence.frames.push(Frame {
-            image,
-            duration: control.map(|c| f64::from(c.delay_num) * 1000.0 / f64::from(if c.delay_den == 0 { 100 } else { c.delay_den })),
-            disposal: control.map_or(0, |c| c.dispose_op as u8),
-            blend: control.map_or(0, |c| c.blend_op as u8),
-        });
+        if target == Some(frame_index as usize) {
+            if frame_index + 1 == count {
+                reader.finish().map_err(|e| e.to_string())?;
+            }
+            return Ok(sequence);
+        }
         if default_image && frame_index == 0 {
             canvas.fill([zero; 4]);
         } else if restore_previous {

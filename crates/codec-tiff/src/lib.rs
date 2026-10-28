@@ -390,7 +390,40 @@ pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
-    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+    use blanket_codec_common::{Frame, Sequence};
+    let mut sequence = Sequence::default();
+    visit_pages(data, |page| {
+        sequence.frames.push(Frame { image: decode_tiff(page)?, duration: None, disposal: 0, blend: 0 });
+        Ok(())
+    })?;
+    Ok(sequence)
+}
+
+pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
+    let mut sequence = blanket_codec_common::SequenceInfo::default();
+    visit_pages(data, |_| {
+        sequence.count += 1;
+        Ok(())
+    })?;
+    Ok(sequence)
+}
+
+pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
+    use blanket_codec_common::{Frame, Sequence};
+    let mut sequence = Sequence::default();
+    let mut index = 0;
+    visit_pages(data, |page| {
+        if index == target {
+            sequence.frames.push(Frame { image: decode_tiff(page)?, duration: None, disposal: 0, blend: 0 });
+        }
+        index += 1;
+        Ok(())
+    })?;
+    Ok(sequence)
+}
+
+fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), String>) -> Result<(), String> {
+    use blanket_codec_common::validate_frame_budget;
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
         let bytes = data.get(offset..offset.checked_add(count).ok_or("invalid TIFF offset")?).ok_or("truncated TIFF directory")?;
@@ -406,7 +439,6 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
     let mut offset = read(header, offset_bytes)?;
     let mut seen = std::collections::HashSet::new();
     let mut page_data = Cow::Borrowed(data);
-    let mut sequence = Sequence::default();
     let mut total = 0;
     while offset != 0 {
         if !seen.insert(offset) {
@@ -426,14 +458,13 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, St
         let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(|e| e.to_string())?;
         let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
         validate_frame_budget(&mut total, width, height)?;
-        let image = decode_tiff(&page_data)?;
-        sequence.frames.push(Frame { image, duration: None, disposal: 0, blend: 0 });
+        visit(&page_data)?;
         offset = next_offset;
     }
-    if sequence.frames.is_empty() {
+    if seen.is_empty() {
         return Err("TIFF contains no pages".into());
     }
-    Ok(sequence)
+    Ok(())
 }
 pub fn encode_lab_tiff(image: &Image) -> PyResult<Vec<u8>> {
     if image.width == 0 || image.height == 0 {

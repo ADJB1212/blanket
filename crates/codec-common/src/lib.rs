@@ -137,6 +137,13 @@ impl Sequence {
     }
 }
 
+#[derive(Default)]
+pub struct SequenceInfo {
+    pub count: usize,
+    pub loop_count: Option<u32>,
+    pub default_image: bool,
+}
+
 pub fn validate_frame_budget(total: &mut usize, width: u32, height: u32) -> Result<(), String> {
     validate_dimensions(width, height)?;
     *total = total.checked_add((width as usize) * (height as usize)).ok_or("frame pixel count overflow")?;

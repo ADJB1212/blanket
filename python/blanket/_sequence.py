@@ -50,7 +50,11 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         for source in sources:
             source._native.load()
             source._sync_palette()
-            if source._frames is None:
+            if source._lazy_frames is not None:
+                from .ImageSequence import all_frames
+
+                frames.extend(all_frames(source))
+            elif source._frames is None:
                 frames.append(source)
             else:
                 current = source._frames[source._frame]

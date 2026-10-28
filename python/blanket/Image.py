@@ -28,6 +28,7 @@ from .errors import UnsupportedCodecError
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
+    from ._lazy_frames import LazyFrames
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
@@ -35,6 +36,7 @@ from ._blanket import (
     _decode_region,
     _encode,
     _Image,
+    _index_sequence,
     _inspect,
     _open_sequence,
     enhance_blend,
@@ -313,6 +315,7 @@ class Image:
         self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
         self._frames: list[Image] | None = None
+        self._lazy_frames: LazyFrames | None = None
         self._frame = 0
         self._exif: Exif | None = None
         self._exif_source: object = None
@@ -436,7 +439,7 @@ class Image:
 
     @property
     def n_frames(self) -> int:
-        """Number of eagerly decoded frames or pages.
+        """Number of frames or pages.
 
         Examples:
             ```python
@@ -445,6 +448,8 @@ class Image:
             assert Image.new("RGB", (2, 2)).n_frames == 1
             ```
         """
+        if self._lazy_frames is not None:
+            return self._lazy_frames.count
         return len(self._frames) if self._frames is not None else 1
 
     def tell(self) -> int:
@@ -478,13 +483,13 @@ class Image:
         frame = index(frame)
         if not 0 <= frame < self.n_frames:
             raise EOFError("attempt to seek outside sequence")
-        if self._frames is None or frame == self._frame:
+        if frame == self._frame or (self._frames is None and self._lazy_frames is None):
             return
         self._sync_palette()
-        current = self._frames[self._frame]
+        current = self._lazy_frames.cache[self._frame] if self._lazy_frames is not None else self._frames[self._frame]
         current._native, current.palette, current._info = self._native, self.palette, self._info
         current._exif, current._exif_source = self._exif, self._exif_source
-        selected = self._frames[frame]
+        selected = self._lazy_frames.get(frame) if self._lazy_frames is not None else self._frames[frame]
         self._native, self.palette, self._info = selected._native, selected.palette, selected._info
         self._exif, self._exif_source = selected._exif, selected._exif_source
         self._bands = _BANDS[self._native.mode]
@@ -505,7 +510,7 @@ class Image:
         return self.mode in ("LA", "PA", "RGBA") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> None:
-        """Validate that this eagerly loaded image remains open.
+        """Validate that the current decoded image remains open.
 
         Examples:
             ```python
@@ -551,9 +556,10 @@ class Image:
         return self.im
 
     def verify(self) -> None:
-        """Confirm that the eagerly decoded pixel buffer is available.
+        """Confirm that the current decoded pixel buffer is available.
 
-        File decoding and integrity checks take place in ``Image.open``.
+        Decoding checks take place in ``Image.open`` and lazy ``seek`` calls.
+        Other frames are not decoded or checked by this method.
         This method raises ``ValueError`` if the image has been closed.
 
         Examples:
@@ -641,6 +647,8 @@ class Image:
         if self._frames is not None:
             for frame in self._frames:
                 frame._native.close()
+        if self._lazy_frames is not None:
+            self._lazy_frames.close()
 
     def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
         """Return a new image converted to a supported mode.
@@ -2191,13 +2199,22 @@ def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, 
     return ImageHeader(format, size, mode, bit_depth, info)
 
 
-def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None) -> Image:
-    """Open and eagerly decode a supported image.
+def open(
+    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1
+) -> Image:
+    """Open an image, optionally decoding sequence frames on demand.
 
     Args:
-        fp: Image filename, path-like object, or binary stream. Decoding is eager.
+        fp: Image filename, path-like object, or binary stream.
         mode: Read mode; only `r` is supported.
         formats: Optional allowlist of format names to attempt.
+        lazy: Decode GIF, WebP, PNG/APNG, or TIFF frames on demand. Frame zero
+            is decoded immediately; encoded input is retained until close.
+        frame_cache_size: Maximum cached decoded frames, including the current
+            frame. Positive integer, used only with lazy=True. Edits to pixels,
+            palettes, and metadata survive only while a frame remains cached.
+            Animation cache misses replay original preceding frames; edits do
+            not affect composition of other frames.
 
     Examples:
         ```python
@@ -2217,8 +2234,28 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
         raise ValueError(f"bad mode {mode!r}")
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
+    if not isinstance(lazy, bool):
+        raise TypeError("lazy must be a bool")
+    if isinstance(frame_cache_size, bool):
+        raise TypeError("frame_cache_size must be an integer")
+    frame_cache_size = index(frame_cache_size)
+    if frame_cache_size < 1:
+        raise ValueError("frame_cache_size must be positive")
     data = _read_bytes(fp)
-    frames, controls, loop_count, default_image = _open_sequence(data, formats)
+    if lazy:
+        from ._lazy_frames import LazyFrames
+
+        count, loop_count, default_image = _index_sequence(data, formats)
+        storage = LazyFrames(data, count, frame_cache_size, loop_count, default_image)
+        first = storage.get(0)
+        image = Image(first._native)
+        image._info = first._info
+        image.palette = first.palette
+        image._lazy_frames = storage
+        if not hasattr(fp, "read"):
+            image.filename = os.fspath(fp)
+        return image
+    frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)

@@ -119,6 +119,33 @@ chunks and later pages are not decoded or validated. A single large strip may
 require decoding the whole first page. Fallback uses normal eager frame decoding
 and its cumulative limits.
 
+### Decode frames on demand
+
+```python
+with Image.open("animation.webp", lazy=True, frame_cache_size=2) as image:
+    image.seek(10)
+    frame = image.copy()
+```
+
+Lazy access supports GIF, WebP, PNG/APNG, and TIFF. Opening scans frame headers
+and decodes frame zero; later frames decode on `seek()`. The cache holds at most
+`frame_cache_size` decoded frames, including the current frame (default 1),
+and evicts the least recently selected frame. Pixel, palette, EXIF, and metadata
+edits survive only while their frame stays cached. Use `copy()` to retain an
+independent edited raster. Eager opening remains the default and retains edits
+across every seek.
+
+Animation cache misses replay preceding original frames with bounded canvas
+storage; seeking far ahead can be slow. Edits do not affect other frames'
+composition. TIFF page rasters decode independently. Encoded input stays in
+memory until `close()`; caller streams can be closed after opening. Decoder
+working buffers and temporary rasters are additional to the cache. The existing
+178,956,970-pixel cumulative sequence limit still applies, including uncached
+frames. Header errors fail at open; compressed pixel errors in later frames may
+be deferred until seeking. Failed seeks preserve the current frame and position.
+Iteration and multi-frame saving can evict edits; saving still materializes
+the output frames and is not a bounded-memory streaming operation.
+
 ### Compare image fingerprints
 
 ```python
@@ -484,7 +511,8 @@ compression can still change RGB values during RGB/YUV conversion.
   Explicit `exif`, `xmp`, and `icc_profile` save arguments override source
   metadata; `None` or empty bytes remove it. Profiles are retained without
   applying a color transform.
-- **Multiple frames:** GIF, WebP, APNG, and TIFF decode all frames eagerly.
+- **Multiple frames:** GIF, WebP, APNG, and TIFF decode all frames eagerly by
+  default; `lazy=True` enables on-demand access with a bounded frame cache.
   Use `seek()`, `tell()`, `n_frames`, and `ImageSequence` to navigate them.
   GIF, WebP, APNG, and PDF support `save_all=True, append_images=[...]`.
   Pixel operations and copies apply to the current frame. Animated GIF frames

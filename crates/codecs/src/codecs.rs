@@ -252,17 +252,38 @@ pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> Py
 type OpenSequence = (Vec<Image>, Vec<(Option<f64>, u8, u8)>, Option<u32>, bool);
 
 #[pyfunction]
-pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<OpenSequence> {
+pub fn _index_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<(usize, Option<u32>, bool)> {
+    let format = input_format(data, formats)?;
+    let sequence = py
+        .detach(|| match format {
+            ImageFormat::Gif => blanket_codec_gif::index_sequence(data),
+            ImageFormat::Webp => blanket_codec_webp::index_sequence(data),
+            ImageFormat::Png => blanket_codec_png::index_sequence(data),
+            ImageFormat::Tiff => blanket_codec_tiff::index_sequence(data),
+            _ => Err("lazy frame access is not supported for this format".into()),
+        })
+        .map_err(|message| decode_error(message, Some(format.as_str()), "decode"))?;
+    Ok((sequence.count, sequence.loop_count, sequence.default_image))
+}
+
+#[pyfunction]
+pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, frame: Option<usize>) -> PyResult<OpenSequence> {
     use blanket_codec_common::Sequence;
     let format = input_format(data, formats)?;
     check_backend(format, "decode")?;
     let sequence = py
-        .detach(|| match format {
-            ImageFormat::Gif => blanket_codec_gif::decode_sequence(data),
-            ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
-            ImageFormat::Png => blanket_codec_png::decode_sequence(data),
-            ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
-            _ => decode(data, format).map(Sequence::single),
+        .detach(|| match (format, frame) {
+            (ImageFormat::Gif, Some(frame)) => blanket_codec_gif::decode_frame(data, frame),
+            (ImageFormat::Webp, Some(frame)) => blanket_codec_webp::decode_frame(data, frame),
+            (ImageFormat::Png, Some(frame)) => blanket_codec_png::decode_frame(data, frame),
+            (ImageFormat::Tiff, Some(frame)) => blanket_codec_tiff::decode_frame(data, frame),
+            _ => match format {
+                ImageFormat::Gif => blanket_codec_gif::decode_sequence(data),
+                ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
+                ImageFormat::Png => blanket_codec_png::decode_sequence(data),
+                ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
+                _ => decode(data, format).map(Sequence::single),
+            },
         })
         .map_err(|message| decode_error(message, Some(format.as_str()), "decode"))?;
     let (images, metadata) = sequence.frames.into_iter().map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend))).unzip();
