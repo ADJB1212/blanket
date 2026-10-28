@@ -2,7 +2,9 @@
 members = [
     "crates/bench-support",
     "crates/core",
+    "crates/cms",
     "crates/codecs",
+    "crates/metadata",
     "crates/codec-common",
     "crates/codec-png",
     "crates/codec-image",
@@ -19,6 +21,7 @@ members = [
     "crates/codec-jpeg2000",
     "crates/compressor",
     "crates/ops",
+    "crates/math",
     "crates/composite",
     "crates/enhance",
     "crates/filter",
@@ -41,14 +44,32 @@ edition = "2024"
 blanket-bench-support = { path = "crates/bench-support" }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "plotters", "html_reports"] }
 blanket-codec-common = { path = "crates/codec-common" }
+blanket-codec-avif = { path = "crates/codec-avif" }
+blanket-codec-bmp-ico = { path = "crates/codec-bmp-ico" }
 blanket-codec-extended = { path = "crates/codec-extended" }
+blanket-codec-gif = { path = "crates/codec-gif" }
+blanket-codec-heif = { path = "crates/codec-heif" }
 blanket-codec-image = { path = "crates/codec-image" }
 blanket-codec-jpeg = { path = "crates/codec-jpeg" }
 blanket-codec-jpeg2000 = { path = "crates/codec-jpeg2000" }
+blanket-codec-jxl = { path = "crates/codec-jxl" }
+blanket-codec-pdf = { path = "crates/codec-pdf" }
 blanket-codec-png = { path = "crates/codec-png" }
+blanket-codec-tiff = { path = "crates/codec-tiff" }
+blanket-codec-webp = { path = "crates/codec-webp" }
 blanket-codecs = { path = "crates/codecs" }
+blanket-metadata = { path = "crates/metadata" }
+blanket-math = { path = "crates/math" }
 blanket-core = { path = "crates/core" }
+blanket-cms = { path = "crates/cms" }
+blanket-composite = { path = "crates/composite" }
+blanket-compressor = { path = "crates/compressor" }
+blanket-draw = { path = "crates/draw" }
+blanket-enhance = { path = "crates/enhance" }
+blanket-filter = { path = "crates/filter" }
 blanket-ops = { path = "crates/ops" }
+blanket-palette = { path = "crates/palette" }
+blanket-stat = { path = "crates/stat" }
 rayon = { version = "1", default-features = false }
 pyo3 = { version = "0.30", features = ["nightly"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"] }

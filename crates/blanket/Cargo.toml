@@ -18,22 +18,23 @@ blanket-codec-extended.workspace = true
 blanket-codec-jpeg2000.workspace = true
 pyo3.workspace = true
 blanket-core.workspace = true
+blanket-cms.workspace = true
 blanket-codecs.workspace = true
-blanket-compressor = { path = "../compressor" }
+blanket-compressor.workspace = true
 blanket-ops.workspace = true
-blanket-composite = { path = "../composite" }
-blanket-enhance = { path = "../enhance" }
-blanket-filter = { path = "../filter" }
-blanket-palette = { path = "../palette" }
-blanket-stat = { path = "../stat" }
-blanket-draw = { path = "../draw" }
+blanket-composite.workspace = true
+blanket-enhance.workspace = true
+blanket-filter.workspace = true
+blanket-palette.workspace = true
+blanket-stat.workspace = true
+blanket-draw.workspace = true
 
 [features]
 default = ["no-vendored-webp"]
 jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]
 no-vendored-webp = ["blanket-codecs/no-vendored-webp"]
-use-system-lcms2 = ["blanket-core/use-system-lcms2"]
+use-system-lcms2 = ["blanket-cms/use-system-lcms2"]
 
 [build-dependencies]
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }

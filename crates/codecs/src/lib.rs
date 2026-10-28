@@ -1,7 +1,5 @@
-#![feature(portable_simd)]
-
 pub mod codecs;
-pub mod metadata;
+pub use blanket_metadata as metadata;
 pub mod stream;
 
 pub use blanket_codec_heif::backend_info as heif_backend_info;

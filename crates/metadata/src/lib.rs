@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 use std::borrow::Cow;
 use std::io::Write;
 use std::simd::{Simd, simd_swizzle};
@@ -507,9 +509,8 @@ mod tests {
 
     #[test]
     fn owned_metadata_matches_borrowed_output_and_preserves_decoded_pixels() {
+        use blanket_codecs::codecs::{ImageFormat, SaveOptions, decode, encode};
         use blanket_core::{Image, PixelMode};
-
-        use crate::codecs::{ImageFormat, SaveOptions, decode, encode};
 
         let image = Image::from_pixels(17, 19, PixelMode::Rgb, (0..17 * 19 * 3).map(|i| (i * 137 + i / 7) as u8).collect(), None).unwrap();
         let exif = b"Exif\0\0II*\0\x08\0\0\0\0\0\0\0\0\0";
@@ -518,7 +519,7 @@ mod tests {
             let data = encode(&image, format, SaveOptions { effort: 1, quality: 85, ..Default::default() }).unwrap();
             let mut sources = vec![data];
             if format == ImageFormat::Jxl {
-                sources.push(write_metadata(&sources[0], "JXL", &[], b"existing metadata", &[], &[]).unwrap());
+                sources.push(write_metadata(sources[0].as_slice(), "JXL", &[], b"existing metadata", &[], &[]).unwrap());
             }
             for data in sources {
                 let expected = write_metadata(&data, format.as_str(), exif, xmp, &[], &[]).unwrap();
@@ -539,9 +540,8 @@ mod tests {
 
     #[test]
     fn owned_png_metadata_preserves_chunk_order_crc_and_image_data() {
+        use blanket_codecs::codecs::{ImageFormat, SaveOptions, decode, encode};
         use blanket_core::{Image, PixelMode};
-
-        use crate::codecs::{ImageFormat, SaveOptions, decode, encode};
 
         let image = Image::from_pixels(17, 19, PixelMode::L, vec![137; 17 * 19], None).unwrap();
         let data = encode(&image, ImageFormat::Png, SaveOptions::default()).unwrap();

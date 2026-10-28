@@ -218,6 +218,7 @@ dependencies = [
 name = "blanket"
 version = "0.2.0"
 dependencies = [
+ "blanket-cms",
  "blanket-codec-extended",
  "blanket-codec-jpeg2000",
  "blanket-codecs",
@@ -240,6 +241,15 @@ version = "0.2.0"
 dependencies = [
  "blanket-core",
  "criterion",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-cms"
+version = "0.2.0"
+dependencies = [
+ "blanket-core",
+ "lcms2",
  "pyo3",
 ]
 
@@ -439,9 +449,8 @@ dependencies = [
  "blanket-codec-tiff",
  "blanket-codec-webp",
  "blanket-core",
- "crc32fast",
+ "blanket-metadata",
  "criterion",
- "flate2",
  "pyo3",
  "tempfile",
 ]
@@ -518,11 +527,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "blanket-math"
+version = "0.2.0"
+dependencies = [
+ "blanket-core",
+ "pyo3",
+]
+
+[[package]]
+name = "blanket-metadata"
+version = "0.2.0"
+dependencies = [
+ "blanket-codec-common",
+ "blanket-codec-heif",
+ "blanket-codec-jxl",
+ "blanket-codec-png",
+ "blanket-codecs",
+ "blanket-core",
+ "crc32fast",
+ "flate2",
+ "pyo3",
+]
+
+[[package]]
 name = "blanket-ops"
 version = "0.2.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
+ "blanket-math",
  "criterion",
  "pyo3",
  "rayon",

@@ -1,6 +1,5 @@
 #![feature(default_field_values, portable_simd)]
 pub mod cache;
-pub mod cms;
 pub mod color;
 pub mod float;
 pub mod parallel;
@@ -12,8 +11,3 @@ pub mod simd;
 pyo3::create_exception!(_blanket, UnidentifiedImageError, pyo3::exceptions::PyOSError);
 
 pub use raster::{Image, PixelMode};
-
-pub fn littlecms_version() -> String {
-    let version = lcms2::version();
-    format!("{}.{}", version / 1_000, version % 1_000 / 10)
-}

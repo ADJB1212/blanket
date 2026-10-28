@@ -1,0 +1,28 @@
+[package]
+name = "blanket-metadata"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-codec-common.workspace = true
+blanket-codec-png.workspace = true
+blanket-codec-heif.workspace = true
+blanket-codec-jxl.workspace = true
+pyo3.workspace = true
+crc32fast = { version = "1", default-features = false, features = ["std", "nightly"] }
+flate2.workspace = true
+
+[dev-dependencies]
+blanket-codecs.workspace = true
+blanket-core.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

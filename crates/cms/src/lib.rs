@@ -1,5 +1,6 @@
 use std::sync::Mutex;
 
+use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use lcms2::{
     CIExyY, CIExyYTRIPLE, Flags, InfoType, Intent, Locale, MLU, PixelFormat, Profile, Tag, TagSignature, ThreadContext, ToneCurve, Transform,
 };
@@ -7,7 +8,10 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use crate::raster::{Image, PixelMode, alloc_pixels};
+pub fn littlecms_version() -> String {
+    let version = lcms2::version();
+    format!("{}.{}", version / 1_000, version % 1_000 / 10)
+}
 
 fn error(error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())

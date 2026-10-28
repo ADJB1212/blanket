@@ -14,7 +14,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "avif" => Some(format!("ravif {}; dav1d {}", env!("BLANKET_BACKEND_RAVIF"), env!("BLANKET_BACKEND_DAV1D"))),
         "jxl" => Some(blanket_codecs::jxl_backend_version()),
         "webp" => Some(blanket_codecs::webp_backend_version()),
-        "littlecms2" => Some(blanket_core::littlecms_version()),
+        "littlecms2" => Some(blanket_cms::littlecms_version()),
         "libheif" | "heif" | "heif_decoder" | "heif_encoder" => {
             let (decode, encode, version) = blanket_codecs::heif_backend_info();
             let available = match feature {

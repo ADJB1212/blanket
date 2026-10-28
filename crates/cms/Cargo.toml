@@ -1,0 +1,24 @@
+[package]
+name = "blanket-cms"
+version = { workspace = true }
+authors = { workspace = true }
+edition = { workspace = true }
+rust-version = { workspace = true }
+repository = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+lcms2 = { version = "6", default-features = false }
+pyo3.workspace = true
+
+[features]
+default = []
+use-system-lcms2 = ["blanket-core/use-system-lcms2"]
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

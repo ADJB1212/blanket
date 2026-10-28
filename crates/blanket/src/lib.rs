@@ -14,7 +14,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<Image>()?;
     module.add_class::<blanket_codecs::stream::StreamingDecoder>()?;
     module.add_class::<blanket_codecs::PngStreamWriter>()?;
-    blanket_core::cms::register(module)?;
+    blanket_cms::register(module)?;
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;

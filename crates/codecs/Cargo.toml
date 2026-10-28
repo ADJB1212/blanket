@@ -11,19 +11,18 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 pyo3.workspace = true
-crc32fast = { version = "1", default-features = false, features = ["std", "nightly"] }
-flate2.workspace = true
+blanket-metadata.workspace = true
 blanket-codec-common.workspace = true
 blanket-codec-png.workspace = true
 blanket-codec-jpeg.workspace = true
-blanket-codec-jxl = { path = "../codec-jxl" }
-blanket-codec-heif = { path = "../codec-heif" }
-blanket-codec-pdf = { path = "../codec-pdf" }
-blanket-codec-tiff = { path = "../codec-tiff" }
-blanket-codec-webp = { path = "../codec-webp" }
-blanket-codec-avif = { path = "../codec-avif" }
-blanket-codec-bmp-ico = { path = "../codec-bmp-ico" }
-blanket-codec-gif = { path = "../codec-gif" }
+blanket-codec-jxl.workspace = true
+blanket-codec-heif.workspace = true
+blanket-codec-pdf.workspace = true
+blanket-codec-tiff.workspace = true
+blanket-codec-webp.workspace = true
+blanket-codec-avif.workspace = true
+blanket-codec-bmp-ico.workspace = true
+blanket-codec-gif.workspace = true
 blanket-codec-extended.workspace = true
 blanket-codec-jpeg2000.workspace = true
 

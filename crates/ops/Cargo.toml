@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 blanket-core.workspace = true
+blanket-math.workspace = true
 pyo3.workspace = true
 rayon.workspace = true
 
