@@ -1,9 +1,38 @@
 //! Explicit HDR transfer decoding and SDR rendering.
 
+use std::simd::num::SimdFloat;
+use std::simd::{Select, Simd, StdFloat};
+
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+fn color_map(values: [f64; 4], bt2020: bool, exposure: f64, operator: &str) -> [f64; 4] {
+    let mut v = Simd::from_array(values);
+    if bt2020 {
+        v = Simd::splat(values[0]) * Simd::from_array([1.660491, -0.124550, -0.018151, 0.0])
+            + Simd::splat(values[1]) * Simd::from_array([-0.587641, 1.132900, -0.100579, 0.0])
+            + Simd::splat(values[2]) * Simd::from_array([-0.072850, -0.008350, 1.118730, 0.0]);
+    }
+    let zero = Simd::splat(0.0);
+    let one = Simd::splat(1.0);
+    v = (v * Simd::splat(exposure)).simd_max(zero);
+    let finite = v.is_finite();
+    v = v.simd_min(Simd::splat(1e20));
+    let result = match operator {
+        "reinhard" => v / (one + v),
+        "aces" => ((v * (Simd::splat(2.51) * v + Simd::splat(0.03))) / (v * (Simd::splat(2.43) * v + Simd::splat(0.59)) + Simd::splat(0.14)))
+            .simd_clamp(zero, one),
+        _ => {
+            let film = (v * (Simd::splat(0.15) * v + Simd::splat(0.05)) + Simd::splat(0.004))
+                / (v * (Simd::splat(0.15) * v + Simd::splat(0.5)) + Simd::splat(0.06))
+                - Simd::splat(1.0 / 15.0);
+            (film / Simd::splat(filmic(11.2))).simd_clamp(zero, one)
+        }
+    };
+    finite.select(result, one).to_array()
+}
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(hdr_tone_map, module)?)?;
@@ -85,6 +114,7 @@ fn hdr_tone_map(
     let output_bytes = channels * usize::from(bit_depth / 8);
     let mut output = alloc_pixels(source.len() / input_bytes * output_bytes)?;
     let maximum = if image.mode == PixelMode::F { 1.0 } else { ((1_u64 << image.bit_depth) - 1) as f64 };
+    let exposure_scale = exposure.exp2();
     py.detach(|| {
         chunks_mut(&mut output, CHUNK_PIXELS * output_bytes, |chunk, dst| {
             for (i, pixel) in dst.chunks_exact_mut(output_bytes).enumerate() {
@@ -118,17 +148,20 @@ fn hdr_tone_map(
                         *value = (*value * factor * peak / reference_white).min(1e30);
                     }
                 }
-                if primaries == "bt2020" && colors == 3 {
-                    let [r, g, b, _] = values;
-                    values[..3].copy_from_slice(&[
-                        1.660491 * r - 0.587641 * g - 0.072850 * b,
-                        -0.124550 * r + 1.132900 * g - 0.008350 * b,
-                        -0.018151 * r - 0.100579 * g + 1.118730 * b,
-                    ]);
+                let mapped = if colors == 3 {
+                    color_map(values, primaries == "bt2020", exposure_scale, operator)
+                } else {
+                    [map(values[0] * exposure_scale, operator), 0.0, 0.0, 0.0]
+                };
+                for c in 0..colors {
+                    values[c] = srgb(mapped[c]);
                 }
-                for (c, value) in values.iter().enumerate().take(channels) {
-                    let value = if c < colors { srgb(map(value * exposure.exp2(), operator)) } else { *value };
-                    let sample = (value.clamp(0.0, 1.0) * if bit_depth == 8 { 255.0 } else { 65535.0 }).round() as u16;
+                let samples = (Simd::from_array(values).simd_clamp(Simd::splat(0.0), Simd::splat(1.0))
+                    * Simd::splat(if bit_depth == 8 { 255.0 } else { 65535.0 }))
+                .round()
+                .cast::<u16>()
+                .to_array();
+                for (c, &sample) in samples.iter().enumerate().take(channels) {
                     if bit_depth == 8 {
                         pixel[c] = sample as u8;
                     } else {
@@ -148,6 +181,35 @@ fn hdr_tone_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_vectors_match_scalar() {
+        let samples = [-0.0, 0.0, -1.0, 0.001, 0.25, 1.0, 11.2, 1e30, f64::NAN, f64::INFINITY, f64::NEG_INFINITY];
+        for operator in ["reinhard", "aces", "filmic"] {
+            for bt2020 in [false, true] {
+                for exposure in [0.0, 0.125, 1.0, 4.0, 1e300] {
+                    for i in 0..samples.len() * samples.len() {
+                        let values = [samples[i % samples.len()], samples[i / samples.len()], samples[(i + 3) % samples.len()], 0.5];
+                        let [r, g, b, _] = values;
+                        let expected = if bt2020 {
+                            [
+                                1.660491 * r - 0.587641 * g - 0.072850 * b,
+                                -0.124550 * r + 1.132900 * g - 0.008350 * b,
+                                -0.018151 * r - 0.100579 * g + 1.118730 * b,
+                            ]
+                        } else {
+                            [r, g, b]
+                        }
+                        .map(|v| map(v * exposure, operator));
+                        let actual = color_map(values, bt2020, exposure, operator);
+                        for c in 0..3 {
+                            assert_eq!(actual[c], expected[c]);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn transfer_reference_values() {

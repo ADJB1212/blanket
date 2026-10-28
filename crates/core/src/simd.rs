@@ -420,6 +420,16 @@ fn narrow_integer_l<const N: usize>(values: Simd<i32, N>) -> Simd<u8, N> {
     values.simd_clamp(Simd::splat(0), Simd::splat(65535)).cast::<u16>().simd_min(Simd::splat(255)).cast::<u8>()
 }
 
+fn u16_to_l<const BIG_ENDIAN: bool>(source: &[u8], output: &mut [u8]) {
+    let end = output.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        crate::pixels::load_u16::<BIG_ENDIAN>(&source[i * 2..]).simd_min(Simd::splat(255)).cast::<u8>().copy_to_slice(&mut output[i..i + 16]);
+    }
+    for (pixel, bytes) in output[end..].iter_mut().zip(source[end * 2..].as_chunks::<2>().0) {
+        *pixel = if BIG_ENDIAN { u16::from_be_bytes(*bytes) } else { u16::from_le_bytes(*bytes) }.min(255) as u8;
+    }
+}
+
 pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
     if mode == PixelMode::I && source.len() / 4 < 2 << 20 {
         let (blocks, tail) = source.as_chunks::<256>();
@@ -450,16 +460,8 @@ pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
                     *pixel = i32::from_le_bytes(*bytes).clamp(0, 255) as u8;
                 }
             }
-            PixelMode::I16B => {
-                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
-                    *pixel = u16::from_be_bytes(*bytes).min(255) as u8;
-                }
-            }
-            _ => {
-                for (pixel, bytes) in dst.iter_mut().zip(src.as_chunks::<2>().0) {
-                    *pixel = u16::from_le_bytes(*bytes).min(255) as u8;
-                }
-            }
+            PixelMode::I16B => u16_to_l::<true>(src, dst),
+            _ => u16_to_l::<false>(src, dst),
         }
     });
     output
@@ -898,6 +900,35 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn u16_grayscale_saturation_endianness_and_tails() {
+        for big_endian in [false, true] {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 65536] {
+                for offset in 0..4 {
+                    let mut source = vec![123; offset + count * 2 + 8];
+                    let mut output = vec![123; offset + count + 8];
+                    for i in 0..count {
+                        let value = if count == 65536 { i as u16 } else { [0, 1, 254, 255, 256, 257, 32768, 65535][i % 8] };
+                        let bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+                        source[offset + i * 2..offset + i * 2 + 2].copy_from_slice(&bytes);
+                    }
+                    let input = &source[offset..offset + count * 2];
+                    let target = &mut output[offset..offset + count];
+                    if big_endian {
+                        super::u16_to_l::<true>(input, target);
+                    } else {
+                        super::u16_to_l::<false>(input, target);
+                    }
+                    for (i, bytes) in input.as_chunks::<2>().0.iter().enumerate() {
+                        let value = if big_endian { u16::from_be_bytes(*bytes) } else { u16::from_le_bytes(*bytes) };
+                        assert_eq!(target[i], value.min(255) as u8);
+                    }
+                    assert!(output[..offset].iter().chain(&output[offset + count..]).all(|&v| v == 123));
+                    assert!(source[..offset].iter().chain(&source[offset + count * 2..]).all(|&v| v == 123));
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

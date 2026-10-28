@@ -32,6 +32,22 @@ def encoded(value, depth=8):
 
 
 @pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
+@pytest.mark.parametrize("output_depth", [8, 16])
+def test_color_tone_mapping_matches_scalar(operator, depth, output_depth):
+    maximum = (1 << depth) - 1
+    values = ((np.arange(17 * 3 * 4, dtype=np.uint32) * 7919) % (maximum + 1)).astype("u1" if depth == 8 else "<u2").reshape(3, 17, 4)
+    image = Image.fromarray(values, bit_depth=depth)
+    result = ImageHdr.tone_map(image, operator, primaries="bt2020", exposure=1, bit_depth=output_depth)
+    expected = []
+    for r, g, b, a in values.reshape(-1, 4):
+        r, g, b = float(r) / maximum, float(g) / maximum, float(b) / maximum
+        rgb = (1.660491 * r - 0.587641 * g - 0.072850 * b, -0.124550 * r + 1.132900 * g - 0.008350 * b, -0.018151 * r - 0.100579 * g + 1.118730 * b)
+        expected.append((*tuple(encoded(curve(max(0, v * 2), operator), output_depth) for v in rgb), math.floor(float(a) / maximum * ((1 << output_depth) - 1) + 0.5)))
+    assert result.getdata() == expected
+
+
+@pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])
 @pytest.mark.parametrize("depth", [8, 16])
 def test_float_scene_values_match_reference(operator, depth):
     values = [0, 0.001, 0.25, 1, 4, 11.2, 100]

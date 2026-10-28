@@ -199,34 +199,52 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
             return;
         }
         for y in top..bottom {
-            for x in left..right {
-                let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * stride;
-                let dst = (y as usize * image.width as usize + x as usize) * stride;
-                let alpha = mask_pixels.map_or(255, |(mask, channels)| {
-                    let i = src / stride * channels;
-                    mask[i + channels - 1]
-                });
-                if alpha == 255 {
-                    pixels[dst..dst + stride].copy_from_slice(&source_pixels[src..src + stride]);
-                } else if alpha != 0 {
-                    if image.mode.is_float() {
-                        for c in (0..stride).step_by(4) {
-                            let old = f32::from_le_bytes(pixels[dst + c..dst + c + 4].try_into().unwrap());
-                            let new = f32::from_le_bytes(source_pixels[src + c..src + c + 4].try_into().unwrap());
-                            let mixed = (old * f32::from(255 - alpha) + new * f32::from(alpha)) / 255.0;
-                            pixels[dst + c..dst + c + 4].copy_from_slice(&mixed.to_le_bytes());
-                        }
-                        continue;
-                    }
-                    for (destination, &source) in pixels[dst..dst + stride].iter_mut().zip(&source_pixels[src..src + stride]) {
-                        let a = u32::from(alpha);
-                        *destination = ((u32::from(*destination) * (255 - a) + u32::from(source) * a + 127) / 255) as u8;
-                    }
+            let count = (right - left) as usize;
+            let source_pixel = (y - position.1) as usize * source.width as usize + (left - position.0) as usize;
+            let destination = (y as usize * image.width as usize + left as usize) * stride;
+            let (mask, mc) = mask_pixels.unwrap();
+            let mask = &mask[source_pixel * mc..(source_pixel + count) * mc];
+            let src = &source_pixels[source_pixel * stride..(source_pixel + count) * stride];
+            let dst = &mut pixels[destination..destination + count * stride];
+            if image.mode.is_float() {
+                paste_float(dst, src, mask, stride / 4, mc);
+            } else {
+                match (stride, mc) {
+                    (2, 1) => paste_masked::<2, 1>(dst, src, mask, false),
+                    (2, 4) => paste_masked::<2, 4>(dst, src, mask, false),
+                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, false),
+                    (4, 4) => paste_masked::<4, 4>(dst, src, mask, false),
+                    _ => unreachable!(),
                 }
             }
         }
     });
     Ok(())
+}
+
+fn paste_float(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_channels: usize) {
+    let samples = dst.len() / 4;
+    let end = samples / 8 * 8;
+    for i in (0..end).step_by(8) {
+        let old = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from_le_bytes(dst[(i + c) * 4..(i + c + 1) * 4].try_into().unwrap())));
+        let new = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from_le_bytes(src[(i + c) * 4..(i + c + 1) * 4].try_into().unwrap())));
+        let a = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from(mask[(i + c) / channels * mask_channels + mask_channels - 1])));
+        let mixed = (old * (Simd::splat(255.0) - a) + new * a) / Simd::splat(255.0);
+        let result = a.simd_eq(Simd::splat(0.0)).select(old, a.simd_eq(Simd::splat(255.0)).select(new, mixed));
+        for (c, v) in result.to_array().iter().enumerate() {
+            dst[(i + c) * 4..(i + c + 1) * 4].copy_from_slice(&v.to_le_bytes());
+        }
+    }
+    for i in end..samples {
+        let a = mask[i / channels * mask_channels + mask_channels - 1];
+        if a == 255 {
+            dst[i * 4..i * 4 + 4].copy_from_slice(&src[i * 4..i * 4 + 4]);
+        } else if a != 0 {
+            let old = f32::from_le_bytes(dst[i * 4..i * 4 + 4].try_into().unwrap());
+            let new = f32::from_le_bytes(src[i * 4..i * 4 + 4].try_into().unwrap());
+            dst[i * 4..i * 4 + 4].copy_from_slice(&((old * f32::from(255 - a) + new * f32::from(a)) / 255.0).to_le_bytes());
+        }
+    }
 }
 
 fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) {
@@ -383,6 +401,54 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn float_paste_matches_scalar_with_guards() {
+        let values = [-0.0_f32, 0.0, -2.0, 0.5, 1e30, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        for channels in [1, 3, 4] {
+            for mc in [1, 4] {
+                for count in 0..35 {
+                    for offset in 0..4 {
+                        let length = count * channels * 4;
+                        let mut destination = vec![123; offset + length + 8];
+                        let mut source = vec![123; offset + length + 8];
+                        let mask: Vec<_> = (0..count * mc + offset).map(|i| [0, 1, 127, 128, 254, 255][i % 6]).collect();
+                        for i in 0..count * channels {
+                            destination[offset + i * 4..offset + i * 4 + 4].copy_from_slice(&values[i % 8].to_le_bytes());
+                            source[offset + i * 4..offset + i * 4 + 4].copy_from_slice(&values[(i + 3) % 8].to_le_bytes());
+                        }
+                        let mut expected = destination.clone();
+                        for i in 0..count * channels {
+                            let a = mask[offset + i / channels * mc + mc - 1];
+                            let begin = offset + i * 4;
+                            if a == 255 {
+                                expected[begin..begin + 4].copy_from_slice(&source[begin..begin + 4]);
+                            } else if a != 0 {
+                                let old = f32::from_le_bytes(expected[begin..begin + 4].try_into().unwrap());
+                                let new = f32::from_le_bytes(source[begin..begin + 4].try_into().unwrap());
+                                expected[begin..begin + 4].copy_from_slice(&((old * f32::from(255 - a) + new * f32::from(a)) / 255.0).to_le_bytes());
+                            }
+                        }
+                        super::paste_float(
+                            &mut destination[offset..offset + length],
+                            &source[offset..offset + length],
+                            &mask[offset..],
+                            channels,
+                            mc,
+                        );
+                        for i in 0..count * channels {
+                            let begin = offset + i * 4;
+                            let a = f32::from_le_bytes(destination[begin..begin + 4].try_into().unwrap());
+                            let b = f32::from_le_bytes(expected[begin..begin + 4].try_into().unwrap());
+                            let mask_value = mask[offset + i / channels * mc + mc - 1];
+                            assert!(a.to_bits() == b.to_bits() || !matches!(mask_value, 0 | 255) && a.is_nan() && b.is_nan());
+                        }
+                        assert_eq!(&destination[..offset], &expected[..offset]);
+                        assert_eq!(&destination[offset + length..], &expected[offset + length..]);
+                    }
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

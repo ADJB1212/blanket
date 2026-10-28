@@ -1461,26 +1461,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
     parser.add_argument("--json", type=Path, dest="json_path")
     parser.add_argument("--save-baseline", type=Path, nargs="?", const=RESULTS_DIRECTORY / "baseline.json", help="replace the baseline (optional path; default: .benchmarks/baseline.json)")
-    parser.add_argument("--compare", action="store_true", help="compare against .benchmarks/baseline.json")
+    parser.add_argument("--compare", nargs="?", choices=("latest", "baseline"), const="latest", help="compare against the latest run (default) or baseline")
     parser.add_argument("--no-baseline", action="store_true", help="disable baseline saving/comparison and run history (explicit --json output still works)")
     parser.add_argument("--threshold", type=float, default=4.0, help="minimum absolute time change percentage to highlight (default: 4)")
     arguments = parser.parse_args()
     if arguments.no_baseline and (arguments.compare or arguments.save_baseline is not None):
         parser.error("--no-baseline cannot be combined with --compare or --save-baseline")
     default_baseline = RESULTS_DIRECTORY / "baseline.json"
-    arguments.compare_path = default_baseline if arguments.compare else None
+    arguments.compare_path = RESULTS_DIRECTORY / f"{arguments.compare}.json" if arguments.compare else None
     if not arguments.no_baseline and not arguments.compare and arguments.save_baseline is None and not default_baseline.exists():
         arguments.save_baseline = default_baseline
     if not math.isfinite(arguments.threshold) or arguments.threshold < 0:
         parser.error("--threshold must be finite and nonnegative")
-    if arguments.compare and any(path and path.resolve() == default_baseline.resolve() for path in (arguments.save_baseline, arguments.json_path)):
+    if arguments.compare and any(path and path.resolve() == arguments.compare_path.resolve() for path in (arguments.save_baseline, arguments.json_path)):
         parser.error("output paths must not overwrite the comparison baseline")
     if arguments.save_baseline and arguments.json_path and arguments.save_baseline.resolve() == arguments.json_path.resolve():
         parser.error("--save-baseline and --json require different paths")
     arguments.baseline = None
     if arguments.compare:
         try:
-            arguments.baseline = load_baseline(default_baseline)
+            arguments.baseline = load_baseline(arguments.compare_path)
         except (OSError, ValueError) as error:
             parser.error(f"cannot read baseline: {error}")
     if arguments.iterations < 1:
@@ -1637,6 +1637,9 @@ def main() -> None:
         commit = (metadata["commit"] or "unknown")[:12]
         run_path = RESULTS_DIRECTORY / f"run-{timestamp}-{commit}.json"
         run_path.write_text(json.dumps({"schema_version": 1, "metadata": metadata, "baseline": str(args.compare_path.resolve()) if args.compare else None, "results": all_results}, indent=2) + "\n")
+        latest_path = RESULTS_DIRECTORY / "latest.json"
+        latest_path.unlink(missing_ok=True)
+        latest_path.symlink_to(run_path.name)
         print(f"Run saved: {run_path}") if NO_RICH else console.print(f"Run saved: {run_path}", markup=False)
     if args.json_path is not None:
         output_results = slower_results(all_results) if args.slower_only else all_results

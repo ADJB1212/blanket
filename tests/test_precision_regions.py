@@ -10,6 +10,22 @@ from PIL import Image as Pillow
 from blanket import Image, UnidentifiedImageError
 
 
+@pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
+def test_float_masked_paste_clips_rows(mode: str, channels: int, mask_mode: str) -> None:
+    destination = Image.new(mode, (19, 3), 2.0)
+    source = Image.new(mode, (21, 4), -1.0)
+    mask = Image.new(mask_mode, source.size)
+    alphas = [0, 1, 127, 128, 254, 255]
+    mask.putdata([alphas[i % 6] if mask_mode == "L" else (17, 33, 55, alphas[i % 6]) for i in range(84)])
+    destination.paste(source, (-2, -1), mask)
+    for y in range(3):
+        for x in range(19):
+            a = alphas[((y + 1) * 21 + x + 2) % 6]
+            expected = (2.0 * (255 - a) - a) / 255
+            assert destination.getpixel((x, y)) == pytest.approx(expected if channels == 1 else (expected,) * channels, abs=1e-7)
+
+
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
 def test_float_color_storage(mode: str, channels: int) -> None:
     values = (-2.0, float("nan"), float("inf"), 0.5)[:channels]

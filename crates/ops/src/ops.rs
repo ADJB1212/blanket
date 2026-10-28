@@ -69,11 +69,7 @@ fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, s
         let front = blanket_core::float::prepare(foreground, srgb, true)?;
         let mut values = blanket_core::float::values(&back)?;
         let source = blanket_core::float::values(&front)?;
-        for (b, f) in values.as_chunks_mut::<4>().0.iter_mut().zip(source.as_chunks::<4>().0) {
-            for c in 0..4 {
-                b[c] = f[c] + b[c] * (1.0 - f[3]);
-            }
-        }
+        blanket_core::float::composite(&mut values, &source);
         let result = Image::from_color_float_bytes(back.width, back.height, back.mode, values.into_iter().flat_map(f32::to_le_bytes).collect())?;
         blanket_core::float::finish(&result, background, srgb, true)
     })
@@ -1254,7 +1250,18 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
         let mut rows = vec![0.0; (last + tail.len() - first) * size.0 as usize];
         let row_width = size.0 as usize;
         blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
-            for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate() {
+            let vector_rows = if image.mode == PixelMode::F { chunk.len() / row_width / 4 * 4 } else { 0 };
+            for row in (0..vector_rows).step_by(4) {
+                let sy = first + band * 16 + row;
+                for (x, (start, coefficients)) in horizontal.iter().enumerate() {
+                    let source_rows = std::array::from_fn(|r| &source[((sy + r) * image.width as usize + start) * 4..]);
+                    let values = crate::ops_simd::horizontal_float_four(source_rows, coefficients);
+                    for r in 0..4 {
+                        chunk[(row + r) * row_width + x] = values[r];
+                    }
+                }
+            }
+            for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate().skip(vector_rows) {
                 let sy = first + band * 16 + row;
                 for (x, (start, coefficients)) in horizontal.iter().enumerate() {
                     dst[x] = coefficients
@@ -1268,6 +1275,10 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
         blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 << 10, |band, chunk| {
             for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
                 let (start, coefficients) = vertical.get(band * 16 + row);
+                if image.mode == PixelMode::F {
+                    crate::ops_simd::vertical_float(&rows[(start - first) * row_width..], dst, row_width, coefficients);
+                    continue;
+                }
                 for x in 0..row_width {
                     let sample: f64 = coefficients
                         .iter()

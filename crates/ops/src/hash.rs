@@ -1,5 +1,7 @@
 //! Perceptual hashes of small, grayscale thumbnails.
 
+use std::simd::Simd;
+
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -22,18 +24,39 @@ fn pack(bits: impl ExactSizeIterator<Item = bool>) -> Vec<u8> {
 }
 
 fn phash(pixels: &[u8], size: usize, side: usize) -> Vec<u8> {
+    phash_impl::<true>(pixels, size, side)
+}
+
+fn phash_impl<const VECTOR: bool>(pixels: &[u8], size: usize, side: usize) -> Vec<u8> {
     let mean = pixels.iter().map(|&v| f64::from(v)).sum::<f64>() / pixels.len() as f64;
     let cosines: Vec<f64> =
         (0..size).flat_map(|k| (0..side).map(move |x| (std::f64::consts::PI * k as f64 * (2 * x + 1) as f64 / (2 * side) as f64).cos())).collect();
     let mut rows = vec![0.0; side * size];
     for (y, row) in pixels.chunks_exact(side).enumerate() {
-        for k in 0..size {
+        let end = if VECTOR { size / 4 * 4 } else { 0 };
+        for k in (0..end).step_by(4) {
+            let mut sum = Simd::<f64, 4>::splat(0.0);
+            for (x, &v) in row.iter().enumerate() {
+                let c = Simd::from_array(std::array::from_fn(|lane| cosines[(k + lane) * side + x]));
+                sum += Simd::splat(f64::from(v) - mean) * c;
+            }
+            sum.copy_to_slice(&mut rows[y * size + k..y * size + k + 4]);
+        }
+        for k in end..size {
             rows[y * size + k] = row.iter().zip(&cosines[k * side..(k + 1) * side]).map(|(&v, &c)| (f64::from(v) - mean) * c).sum();
         }
     }
     let mut coefficients = vec![0.0; size * size];
     for ky in 0..size {
-        for kx in 0..size {
+        let end = if VECTOR { size / 4 * 4 } else { 0 };
+        for kx in (0..end).step_by(4) {
+            let mut sum = Simd::<f64, 4>::splat(0.0);
+            for y in 0..side {
+                sum += Simd::from_slice(&rows[y * size + kx..]) * Simd::splat(cosines[ky * side + y]);
+            }
+            sum.copy_to_slice(&mut coefficients[ky * size + kx..ky * size + kx + 4]);
+        }
+        for kx in end..size {
             coefficients[ky * size + kx] = (0..side).map(|y| rows[y * size + kx] * cosines[ky * side + y]).sum();
         }
     }
@@ -92,6 +115,35 @@ fn hash_pixels(pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vector_phash_matches_scalar() {
+        for size in [2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 63, 64] {
+            for side in [size, size * 2 + 1] {
+                for offset in 0..4 {
+                    for pattern in 0..3 {
+                        let mut pixels = vec![123; offset + side * side + 8];
+                        for (i, v) in pixels[offset..offset + side * side].iter_mut().enumerate() {
+                            *v = match pattern {
+                                0 => (i * 7919 + i / side * 17) as u8,
+                                1 => {
+                                    if i % 2 == 0 {
+                                        0
+                                    } else {
+                                        255
+                                    }
+                                }
+                                _ => 127,
+                            };
+                        }
+                        let input = &pixels[offset..offset + side * side];
+                        assert_eq!(phash_impl::<true>(input, size, side), phash_impl::<false>(input, size, side));
+                        assert!(pixels[..offset].iter().chain(&pixels[offset + side * side..]).all(|&v| v == 123));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn selected_median_matches_sorted_coefficients() {
