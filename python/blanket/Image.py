@@ -288,6 +288,33 @@ class ImageTransformHandler:
         raise NotImplementedError
 
 
+class PixelAccess:
+    """Read and write pixels in the raster selected by Image.load()."""
+
+    def __init__(self, native: _Image) -> None:
+        self._native = native
+
+    @staticmethod
+    def _coordinates(xy: tuple[int, int]) -> tuple[int, int]:
+        if not isinstance(xy, tuple) or len(xy) != 2:
+            raise TypeError("argument must be sequence of length 2")
+        x, y = (int(v) if isinstance(v, float) else index(v) for v in xy)
+        return x, y
+
+    def __getitem__(self, xy: tuple[int, int]) -> int | float | tuple[int | float, ...]:
+        return self._native.getpixel(self._coordinates(xy))
+
+    def __setitem__(self, xy: tuple[int, int], value: float | tuple[int | float, ...]) -> None:
+        coordinates = self._coordinates(xy)
+        if isinstance(value, tuple) and len(value) == 1:
+            mode = self._native.mode
+            if mode in ("1", "L", "I", "I;16", "I;16L", "I;16B"):
+                value = value[0]
+            elif mode in ("LA", "PA"):
+                value = (value[0], 0)
+        self._native.putpixel(coordinates, value)
+
+
 class Image:
     """An image whose pixels and supported operations live in Rust.
 
@@ -510,19 +537,55 @@ class Image:
         """
         return self.mode in ("LA", "PA", "RGBA") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
-    def load(self) -> None:
-        """Validate that the current decoded image remains open.
+    def load(self) -> PixelAccess:
+        """Return a pixel accessor for the current raster.
+
+        Access pixels with ``pixels[x, y]``; negative coordinates count from
+        the right or bottom. The accessor stays bound to this raster across
+        frame navigation and raises ValueError once its raster is closed.
 
         Examples:
             ```python
             from blanket import Image
 
             image = Image.new("RGB", (8, 8), (40, 100, 180))
-            image.load()
+            pixels = image.load()
+            pixels[0, 0] = (255, 0, 0)
             ```
         """
         self._native.load()
         self._sync_palette()
+        return PixelAccess(self._native)
+
+    @property
+    def __array_interface__(self) -> dict[str, object]:
+        """Expose a read-only pixel snapshot without requiring NumPy.
+
+        Arrays have shape ``(height, width)`` for single-band images and
+        ``(height, width, channels)`` otherwise. Palette modes expose indices,
+        mode 1 exposes booleans, and LAB retains its raw signed-chroma bytes.
+        Unsigned high-depth samples retain their unscaled values in uint16.
+        """
+        mode = self.mode
+        if mode == "1":
+            data = self._native.convert("L").tobytes()
+            typestr = "|b1"
+        else:
+            data = self.tobytes()
+            if mode in ("F", "RGB;F", "RGBA;F"):
+                typestr = "<f4"
+            elif mode == "I":
+                typestr = "<i4"
+            elif mode == "I;16B":
+                typestr = ">u2"
+            elif self.bit_depth > 8:
+                typestr = "<u2"
+            else:
+                typestr = "|u1"
+        shape = (self.height, self.width)
+        if len(self._bands) > 1:
+            shape += (len(self._bands),)
+        return {"version": 3, "data": data, "shape": shape, "typestr": typestr}
 
     @property
     def im(self) -> _Image:

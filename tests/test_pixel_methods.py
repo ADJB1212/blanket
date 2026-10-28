@@ -1,12 +1,118 @@
 from __future__ import annotations
 
 from collections import Counter
+from io import BytesIO
 from typing import SupportsIndex, overload
 
 import pytest
 from PIL import Image as PIL
 
 from blanket import Image
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
+def test_load_returns_mutable_pixel_access(mode):
+    expected = PIL.new(mode, (3, 2))
+    actual = Image.frombytes(mode, expected.size, expected.tobytes())
+    pixels, reference = actual.load(), expected.load()
+    channels = len(expected.getbands())
+    value = 1.25 if mode == "F" else -123456 if mode == "I" else 60000 if mode.startswith("I;16") else 93 if channels == 1 else tuple(range(31, 31 + channels))
+    for xy in [(0, 0), (-1, -1), (-3, -2), (1.9, 0.2)]:
+        assert pixels[xy] == reference[xy]
+        pixels[xy] = value
+        reference[xy] = value
+        assert pixels[xy] == reference[xy]
+        assert actual.tobytes() == expected.tobytes()
+    actual.putpixel((0, 0), value)
+    assert pixels[0, 0] == actual.getpixel((0, 0))
+    assert actual.load()[0, 0] == pixels[0, 0]
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "I", "I;16B"])
+def test_pixel_access_single_component_tuple(mode):
+    actual, expected = Image.new(mode, (1, 1)), PIL.new(mode, (1, 1))
+    pixels, reference = actual.load(), expected.load()
+    pixels[0, 0] = (7,)
+    reference[0, 0] = (7,)
+    assert pixels[0, 0] == reference[0, 0]
+
+
+@pytest.mark.parametrize(
+    "xy,error",
+    [
+        ((3, 0), IndexError),
+        ((0, 2), IndexError),
+        ((-4, 0), IndexError),
+        ((0, -3), IndexError),
+        ((0,), TypeError),
+        ((0, 0, 0), TypeError),
+        ([0, 0], TypeError),
+        ("ab", TypeError),
+        (("0", 0), TypeError),
+    ],
+)
+def test_pixel_access_invalid_coordinates(xy, error):
+    actual, expected = Image.new("L", (3, 2)), PIL.new("L", (3, 2))
+    for pixels in (actual.load(), expected.load()):
+        with pytest.raises(error):
+            pixels[xy]
+        with pytest.raises(error):
+            pixels[xy] = 7
+    assert actual.tobytes() == expected.tobytes()
+
+
+def test_pixel_access_index_protocol():
+    class Coordinate:
+        def __index__(self):
+            return -1
+
+    image = Image.new("L", (2, 2))
+    pixels = image.load()
+    pixels[Coordinate(), Coordinate()] = 42
+    assert pixels[Coordinate(), Coordinate()] == image.getpixel((1, 1)) == 42
+
+
+@pytest.mark.parametrize(
+    "mode,depth,value",
+    [("L", 10, 1023), ("RGB", 12, (0, 2048, 4095)), ("RGB", 16, (0, 32768, 65535)), ("RGBA", 16, (1, 2, 3, 65535)), ("RGB;F", 32, (-1.5, 2.0, 3.0)), ("RGBA;F", 32, (-1.5, 2.0, 3.0, 0.5))],
+)
+def test_pixel_access_retains_sample_precision(mode, depth, value):
+    channels = len(value) if isinstance(value, tuple) else 1
+    image = Image.frombytes(mode, (2, 2), bytes(4 * channels * (4 if depth == 32 else 2)), bit_depth=depth)
+    pixels = image.load()
+    pixels[-1, -1] = value
+    assert pixels[1, 1] == image.getpixel((1, 1)) == value
+
+
+def test_pixel_access_lifetime_and_closed_image():
+    pixels = Image.new("L", (1, 1), 7).load()
+    assert pixels[0, 0] == 7
+    image = Image.new("L", (1, 1))
+    pixels = image.load()
+    image.close()
+    for operation in (image.load, lambda: pixels[0, 0], lambda: pixels.__setitem__((0, 0), 7)):
+        with pytest.raises(ValueError, match="closed"):
+            operation()
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_pixel_access_stays_bound_to_selected_frame(lazy):
+    stream = BytesIO()
+    PIL.new("L", (2, 2), 10).save(stream, "TIFF", save_all=True, append_images=[PIL.new("L", (3, 1), 20)])
+    image = Image.open(stream, lazy=lazy, frame_cache_size=2)
+    first = image.load()
+    image.seek(1)
+    second = image.load()
+    first[0, 0] = 30
+    second[0, 0] = 40
+    assert first[0, 0] == 30
+    assert image.getpixel((0, 0)) == 40
+    image.seek(0)
+    assert image.load()[0, 0] == 30
+    image.close()
+    for pixels in (first, second):
+        with pytest.raises(ValueError, match="closed"):
+            pixels[0, 0]
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
