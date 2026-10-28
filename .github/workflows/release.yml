@@ -195,7 +195,7 @@ jobs:
             ~/.cargo/git
             target
           key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock') }}
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "latest"
           enable-cache: "false"
@@ -350,7 +350,7 @@ jobs:
 
           xcodebuild -version
           xcrun --sdk macosx --show-sdk-path
-      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "latest"
           enable-cache: "false"

@@ -18,6 +18,7 @@ __all__ = ["ImageHash", "average_hash", "dhash", "hex_to_hash", "phash"]
 
 
 def _size(hash_size: int) -> int:
+    """Validate hash side length between 2 and 64."""
     if isinstance(hash_size, bool) or not isinstance(hash_size, int):
         raise TypeError("hash_size must be an integer")
     if not 2 <= hash_size <= 64:
@@ -39,6 +40,7 @@ class ImageHash:
     hash_size: int = 8
 
     def __post_init__(self) -> None:
+        """Validate hash size and integer bit capacity."""
         _size(self.hash_size)
         if isinstance(self.value, bool) or not isinstance(self.value, int):
             raise TypeError("value must be an integer")
@@ -79,6 +81,7 @@ def hex_to_hash(hexstr: str, hash_size: int | None = None) -> ImageHash:
 
 
 def _hash(image: Image.Image, hash_size: int, side: int, algorithm: str) -> ImageHash:
+    """Compute an image hash with the given algorithm and dimensions."""
     if not isinstance(image, Image.Image):
         raise TypeError("image must be a Blanket Image")
     if image.width == 0 or image.height == 0:

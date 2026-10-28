@@ -16,6 +16,7 @@ class CodecError(OSError):
     """A codec failure, with an optional format and operation name."""
 
     def __init__(self, message: str, *, format: str | None = None, operation: str | None = None) -> None:
+        """Initialize a codec error with an optional format and operation identifier."""
         super().__init__(message)
         self.format = format
         self.operation = operation

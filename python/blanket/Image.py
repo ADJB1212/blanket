@@ -1594,6 +1594,7 @@ class Image:
         color = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
 
         def coordinates(values: Sequence[object], count: int) -> tuple[float, ...]:
+            """Validate and convert the expected number of finite float coordinates."""
             values = tuple(float(v) for v in values[:count])
             if len(values) != count or not all(math.isfinite(v) for v in values):
                 raise ValueError(f"transform requires {count} finite coordinates")

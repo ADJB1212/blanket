@@ -23,12 +23,16 @@ _INTEGER_MODES = frozenset(("1", "L", "I"))
 
 
 class _Operand:
+    """Wrapper around an Image providing arithmetic and logical operator overloads."""
+
     __slots__ = ("im",)
 
     def __init__(self, image: Image.Image) -> None:
+        """Wrap an image for pixel arithmetic expressions."""
         self.im = image
 
     def _coerce(self, value: _Operand | float) -> Image.Image:
+        """Coerce an operand or scalar into an image matching the target mode."""
         if isinstance(value, _Operand):
             if value.im.mode in ("1", "L", "I", "F"):
                 return value.im
@@ -37,6 +41,7 @@ class _Operand:
         return Image.new(mode, self.im.size, value)
 
     def _apply(self, operation: str, left: _Operand | float, right: _Operand | float | None = None, *, integer_output: bool = False) -> _Operand:
+        """Apply a native math operation to operands or scalars."""
         operand, value, reverse = (left, right, False) if isinstance(left, _Operand) else (right, left, True)
         if isinstance(operand, _Operand) and operand.im.mode == "F" and isinstance(value, (int, float)):
             operand.im.load()
@@ -56,104 +61,137 @@ class _Operand:
         return _Operand(Image.Image(math_apply(operation, first._native, None if second is None else second._native, integer_output)))
 
     def __bool__(self) -> bool:
+        """Return True if any pixel in the operand is nonzero."""
         return self.im.getbbox() is not None
 
     def __pos__(self) -> _Operand:
+        """Return the positive operand unchanged."""
         return self
 
     def __neg__(self) -> _Operand:
+        """Return the negated operand."""
         return self._apply("neg", self)
 
     def __abs__(self) -> _Operand:
+        """Return the absolute value of the operand."""
         return self._apply("abs", self)
 
     def __invert__(self) -> _Operand:
+        """Return the bitwise inverted operand."""
         return self._apply("invert", self)
 
     def __add__(self, other: _Operand | float) -> _Operand:
+        """Add another operand or scalar."""
         return self._apply("add", self, other)
 
     def __radd__(self, other: float) -> _Operand:
+        """Add to a scalar."""
         return self._apply("add", other, self)
 
     def __sub__(self, other: _Operand | float) -> _Operand:
+        """Subtract another operand or scalar."""
         return self._apply("sub", self, other)
 
     def __rsub__(self, other: float) -> _Operand:
+        """Subtract from a scalar."""
         return self._apply("sub", other, self)
 
     def __mul__(self, other: _Operand | float) -> _Operand:
+        """Multiply by another operand or scalar."""
         return self._apply("mul", self, other)
 
     def __rmul__(self, other: float) -> _Operand:
+        """Multiply a scalar."""
         return self._apply("mul", other, self)
 
     def __truediv__(self, other: _Operand | float) -> _Operand:
+        """Divide by another operand or scalar."""
         return self._apply("div", self, other)
 
     def __rtruediv__(self, other: float) -> _Operand:
+        """Divide a scalar by this operand."""
         return self._apply("div", other, self)
 
     def __mod__(self, other: _Operand | float) -> _Operand:
+        """Compute modulo with another operand or scalar."""
         return self._apply("mod", self, other)
 
     def __rmod__(self, other: float) -> _Operand:
+        """Compute modulo of a scalar by this operand."""
         return self._apply("mod", other, self)
 
     def __pow__(self, other: _Operand | float) -> _Operand:
+        """Raise to the power of another operand or scalar."""
         return self._apply("pow", self, other)
 
     def __rpow__(self, other: float) -> _Operand:
+        """Raise a scalar to the power of this operand."""
         return self._apply("pow", other, self)
 
     def __and__(self, other: _Operand | float) -> _Operand:
+        """Compute bitwise AND with another operand or scalar."""
         return self._apply("and", self, other)
 
     def __rand__(self, other: float) -> _Operand:
+        """Compute bitwise AND with a scalar."""
         return self._apply("and", other, self)
 
     def __or__(self, other: _Operand | float) -> _Operand:
+        """Compute bitwise OR with another operand or scalar."""
         return self._apply("or", self, other)
 
     def __ror__(self, other: float) -> _Operand:
+        """Compute bitwise OR with a scalar."""
         return self._apply("or", other, self)
 
     def __xor__(self, other: _Operand | float) -> _Operand:
+        """Compute bitwise XOR with another operand or scalar."""
         return self._apply("xor", self, other)
 
     def __rxor__(self, other: float) -> _Operand:
+        """Compute bitwise XOR with a scalar."""
         return self._apply("xor", other, self)
 
     def __lshift__(self, other: _Operand | float) -> _Operand:
+        """Shift bits left by another operand or scalar."""
         return self._apply("lshift", self, other)
 
     def __rshift__(self, other: _Operand | float) -> _Operand:
+        """Shift bits right by another operand or scalar."""
         return self._apply("rshift", self, other)
 
     def __eq__(self, other: object) -> _Operand:  # ty: ignore[invalid-method-override]
+        """Test equality with another operand or value."""
         return self._apply("eq", self, other)
 
     def __ne__(self, other: object) -> _Operand:  # ty: ignore[invalid-method-override]
+        """Test inequality with another operand or value."""
         return self._apply("ne", self, other)
 
     def __lt__(self, other: _Operand | float) -> _Operand:
+        """Test less-than comparison."""
         return self._apply("lt", self, other)
 
     def __le__(self, other: _Operand | float) -> _Operand:
+        """Test less-than-or-equal comparison."""
         return self._apply("le", self, other)
 
     def __gt__(self, other: _Operand | float) -> _Operand:
+        """Test greater-than comparison."""
         return self._apply("gt", self, other)
 
     def __ge__(self, other: _Operand | float) -> _Operand:
+        """Test greater-than-or-equal comparison."""
         return self._apply("ge", self, other)
 
 
 def _convert(value: _Operand, mode: str) -> _Operand:
+    """Convert an operand image to another mode."""
     return _Operand(value.im.convert(mode))
 
 
 def _context(operands: dict[str, Any]) -> dict[str, Any]:
+    """Build the evaluation environment with operand wrappers and math helpers."""
     context: dict[str, Any] = {
         "int": lambda value: _convert(value, "I"),
         "float": lambda value: _convert(value, "F"),
@@ -168,11 +206,13 @@ def _context(operands: dict[str, Any]) -> dict[str, Any]:
 
 
 def _unwrap(value: object) -> object:
+    """Unwrap an operand to its underlying image or return the raw value."""
     return value.im if isinstance(value, _Operand) else value
 
 
 @lru_cache(maxsize=128)
 def _compile_expression(expression: str) -> CodeType:
+    """Compile a Python expression string into bytecode."""
     return compile(expression, "<ImageMath>", "eval")
 
 
@@ -199,6 +239,7 @@ def unsafe_eval(expression: str, **operands: object) -> object:
     code = _compile_expression(expression)
 
     def validate(compiled: CodeType) -> None:
+        """Ensure compiled bytecode references only allowed names and constants."""
         for name in compiled.co_names:
             if name not in context and name != "abs":
                 raise ValueError(f"'{name}' not allowed")

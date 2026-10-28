@@ -59,12 +59,14 @@ class Path:
 
     @staticmethod
     def _number(value: float) -> float:
+        """Convert a coordinate value to a float, rejecting string and byte inputs."""
         if isinstance(value, (str, bytes, bytearray)):
             raise ValueError("coordinate list must contain numbers")
         return float(value)
 
     @classmethod
     def _pair(cls, value: Sequence[float]) -> tuple[float, float]:
+        """Convert a two-element sequence to a pair of float coordinates."""
         x, y = value
         return cls._number(x), cls._number(y)
 

@@ -15,7 +15,10 @@ if TYPE_CHECKING:
 
 
 class LazyFrames:
+    """Bounded cache and on-demand decoder for sequence frames."""
+
     def __init__(self, data: bytes, count: int, capacity: int, loop: int | None, default_image: bool) -> None:
+        """Store encoded sequence bytes, frame count, cache capacity, and animation controls."""
         self.data = data
         self.count = count
         self.capacity = capacity
@@ -24,6 +27,7 @@ class LazyFrames:
         self.cache: dict[int, Image] = {}
 
     def get(self, frame: int) -> Image:
+        """Decode or retrieve a cached frame by its zero-based index."""
         from .Image import Image
 
         if frame in self.cache:
@@ -52,6 +56,7 @@ class LazyFrames:
         return selected
 
     def close(self) -> None:
+        """Close all cached frame images and release the encoded sequence data."""
         for frame in self.cache.values():
             frame.close()
         self.cache.clear()

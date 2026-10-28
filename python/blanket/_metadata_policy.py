@@ -20,17 +20,20 @@ _EXIF_ALIASES = ("exif", "Raw profile type exif")
 
 
 def _location(name: str) -> bool:
+    """Check whether an XML or metadata field name corresponds to location data."""
     local = name.rsplit("}", 1)[-1].casefold()
     return local.startswith("gps") or local in _LOCATION
 
 
 def _filtered_exif(raw: bytes, policy: MetadataPolicy) -> bytes:
+    """Filter EXIF tags and thumbnails according to the given metadata policy."""
     source = Exif()
     source.load(raw)
     result = Exif()
     result.endian = source.endian
 
     def copy(values: Mapping[int, object], key: int, depth: int = 0) -> dict[int, object]:
+        """Recursively copy permitted tags and nested IFDs up to maximum depth."""
         if depth > 16:
             raise ValueError("EXIF IFD nesting exceeds 16")
         output: dict[int, object] = {}
@@ -55,6 +58,7 @@ def _filtered_exif(raw: bytes, policy: MetadataPolicy) -> bytes:
 
 
 def _filtered_xmp(raw: bytes, policy: MetadataPolicy) -> bytes:
+    """Filter XMP XML elements and attributes according to the given metadata policy."""
     if len(raw) > 16 * 1024 * 1024:
         return b""
     try:
@@ -67,6 +71,7 @@ def _filtered_xmp(raw: bytes, policy: MetadataPolicy) -> bytes:
     structural = {"adobe:ns:meta/", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"}
 
     def keep(name: str) -> bool:
+        """Determine whether an XMP element or attribute name should be retained."""
         if not policy.location and _location(name):
             return False
         namespace = name[1:].split("}", 1)[0] if name.startswith("{") else ""
@@ -111,6 +116,7 @@ class MetadataPolicy:
     text_keys: frozenset[str] | None = None
 
     def __post_init__(self) -> None:
+        """Validate category booleans and field allowlists."""
         for name in ("exif", "xmp", "text", "location", "icc_profile", "previews"):
             if not isinstance(getattr(self, name), bool):
                 raise TypeError(f"{name} must be a bool")

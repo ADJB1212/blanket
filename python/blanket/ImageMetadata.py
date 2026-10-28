@@ -33,13 +33,14 @@ _TEXT_ALIASES = {"XML:com.adobe.xmp", "Raw profile type exif"}
 
 
 class _Unchanged:
-    pass
+    """Sentinel indicating an unchanged metadata category in rewrite()."""
 
 
 _UNCHANGED = _Unchanged()
 
 
 def _read(fp: _File) -> bytes:
+    """Read encoded file bytes, restoring seekable stream positions."""
     position = None
     if hasattr(fp, "read"):
         with contextlib.suppress(AttributeError, OSError):
@@ -53,6 +54,7 @@ def _read(fp: _File) -> bytes:
 
 
 def _load(fp: _File) -> tuple[bytes, str, dict[object, object]]:
+    """Inspect input bytes to determine format and read container metadata."""
     data = _read(fp)
     format, _, _, _ = _inspect(data, None)
     info = read_metadata(data, "HEIF" if format == "AVIF" else format)
@@ -64,6 +66,7 @@ def _load(fp: _File) -> tuple[bytes, str, dict[object, object]]:
 
 
 def _bytes(value: object, name: str) -> bytes:
+    """Validate and convert metadata values to raw bytes."""
     if value is None:
         return b""
     if name == "exif" and isinstance(value, Exif):
@@ -76,6 +79,7 @@ def _bytes(value: object, name: str) -> bytes:
 
 
 def _text(info: Mapping[object, object]) -> list[tuple[bytes, bytes, bool]]:
+    """Convert text metadata mapping to PNG ancillary text chunks."""
     png = PngInfo()
     for key, value in info.items():
         if isinstance(key, str) and isinstance(value, str) and key not in _TEXT_ALIASES:
@@ -84,6 +88,7 @@ def _text(info: Mapping[object, object]) -> list[tuple[bytes, bytes, bool]]:
 
 
 def _dpi(value: object) -> tuple[float, float] | None:
+    """Validate and normalize a pair of positive finite numbers for DPI."""
     if value is None:
         return None
     if not isinstance(value, (tuple, list)) or len(value) != 2:

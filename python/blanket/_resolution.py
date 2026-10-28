@@ -30,6 +30,7 @@ class Resolution:
 
 
 def _value(x: float, y: float, unit: int, source: str, units: dict[int, tuple[str, float | None]]) -> Resolution | None:
+    """Convert raw physical resolution values into a normalized Resolution object."""
     if not math.isfinite(x) or not math.isfinite(y) or x <= 0 or y <= 0 or unit not in units:
         return None
     name, factor = units[unit]
@@ -41,6 +42,7 @@ def _value(x: float, y: float, unit: int, source: str, units: dict[int, tuple[st
 
 
 def parse_resolution(data: bytes, format: str, info: dict[object, object], conflict: Literal["container", "exif", "error"]) -> Resolution:
+    """Parse and reconcile container chunks and EXIF tags to determine resolution."""
     if conflict not in ("container", "exif", "error"):
         raise ValueError("conflict must be 'container', 'exif', or 'error'")
     container = None

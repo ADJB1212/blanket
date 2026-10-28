@@ -55,6 +55,7 @@ class PngInfo:
 
     @staticmethod
     def _keyword(key: str | bytes) -> bytes:
+        """Validate and encode a PNG text chunk keyword into Latin-1 bytes."""
         raw = key.encode("latin-1") if isinstance(key, str) else bytes(key)
         if not 1 <= len(raw) <= 79 or b"\0" in raw:
             raise ValueError("PNG text keyword must contain 1 to 79 non-null Latin-1 bytes")

@@ -301,6 +301,7 @@ class ModeFilter(Filter):
 
 
 def _radii(radius: float | Sequence[float]) -> tuple[float, float]:
+    """Normalize a scalar radius or a two-element sequence to a horizontal and vertical pair."""
     if isinstance(radius, (int, float)):
         return radius, radius
     if len(radius) != 2:
@@ -678,6 +679,7 @@ class Color3DLUT(MultibandFilter):
 
     @staticmethod
     def _check_size(size: int | tuple[int, int, int]) -> tuple[int, int, int]:
+        """Validate 3D LUT dimensions and return a three-element tuple in the range [2, 65]."""
         try:
             x, y, z = size
         except ValueError as error:

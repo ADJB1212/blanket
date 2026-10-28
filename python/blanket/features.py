@@ -199,6 +199,7 @@ _FORMATS = (
 
 
 def _info(feature: str) -> tuple[bool, str | None] | None:
+    """Query native feature availability and version using canonical names or aliases."""
     if not isinstance(feature, str):
         raise TypeError("feature must be a string")
     return _feature_info(_ALIASES.get(feature, feature))
