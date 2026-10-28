@@ -23,6 +23,8 @@ from operator import index
 from pathlib import Path
 from typing import TYPE_CHECKING, BinaryIO, Protocol, Self, cast
 
+from .errors import UnsupportedCodecError
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
 
@@ -1862,20 +1864,20 @@ class Image:
                 return None
         if self.mode == "LAB":
             if output_format != "TIFF":
-                raise OSError(f"cannot write mode LAB as {output_format}")
+                raise UnsupportedCodecError(f"cannot write mode LAB as {output_format}", format=output_format, operation="encode")
             if compressor is not None:
                 raise ValueError("compression optimization is not supported for LAB images")
         if self.mode in ("CMYK", "YCbCr"):
             allowed = ("JPEG", "TIFF", "PDF") if self.mode == "CMYK" else ("JPEG",)
             if output_format not in allowed:
-                raise OSError(f"cannot write mode {self.mode} as {output_format}")
+                raise UnsupportedCodecError(f"cannot write mode {self.mode} as {output_format}", format=output_format, operation="encode")
             if self.mode == "CMYK" and compressor is not None:
                 raise ValueError("compression optimization is not supported for CMYK images")
         if self.mode == "HSV":
-            raise OSError(f"cannot write mode HSV as {output_format}")
+            raise UnsupportedCodecError(f"cannot write mode HSV as {output_format}", format=output_format, operation="encode")
         if self.mode == "F":
             if output_format != "TIFF":
-                raise OSError(f"cannot write mode F as {output_format}")
+                raise UnsupportedCodecError(f"cannot write mode F as {output_format}", format=output_format, operation="encode")
             if compressor is not None:
                 raise ValueError("compression optimization is not supported for F images")
         if self.mode in ("I", "I;16", "I;16L", "I;16B"):
@@ -2343,7 +2345,7 @@ def _output_format(fp: object, requested: str | None) -> str:
         normalized = requested.upper().replace(" ", "")
         normalized = _FORMAT_ALIASES.get(normalized, normalized)
         if normalized not in _SAVE_OPTIONS:
-            raise ValueError(f"unsupported image format {requested!r}")
+            raise UnsupportedCodecError(f"unsupported image format {requested!r}", format=normalized, operation="encode")
         return normalized
     if hasattr(fp, "write"):
         raise ValueError("unknown file extension; specify format")
@@ -2373,7 +2375,7 @@ def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]
         compression = supplied.get("compression", "raw")
         methods = {"raw": 0, "tiff_lzw": 1, "tiff_adobe_deflate": 2, "tiff_deflate": 2, "deflate": 2, "jpeg": 3}
         if not isinstance(compression, str) or compression not in methods:
-            raise ValueError(f"unsupported TIFF compression {compression!r}")
+            raise UnsupportedCodecError(f"unsupported TIFF compression {compression!r}", format=format, operation="encode")
         values["tiff_compression"] = methods[compression]
     return values
 

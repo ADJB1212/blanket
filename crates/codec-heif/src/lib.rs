@@ -130,6 +130,13 @@ impl PreparedHeif {
         if !matches!(image.bit_depth, 8 | 10 | 12) {
             return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
         }
+        if !backend_info().1 {
+            return Err(blanket_codec_common::CodecErrorKind::MissingBackend.into_pyerr(
+                "HEIF encode backend is unavailable".into(),
+                Some("HEIF"),
+                "encode",
+            ));
+        }
         let _library = &*HEIF_LIBRARY;
         let chroma = match (image.bit_depth > 8, image.mode == PixelMode::Rgba) {
             (false, false) => RgbChroma::Rgb,

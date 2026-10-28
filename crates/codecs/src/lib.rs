@@ -1,7 +1,7 @@
 pub mod codecs;
 pub use blanket_metadata as metadata;
 pub mod stream;
-
+pub use blanket_codec_common::{CodecErrorKind, decode_error, encode_error};
 pub use blanket_codec_heif::backend_info as heif_backend_info;
 pub use blanket_codec_jxl::backend_version as jxl_backend_version;
 pub use blanket_codec_png::stream::PngStreamWriter;

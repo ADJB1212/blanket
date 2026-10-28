@@ -5,6 +5,92 @@ use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use zerocopy::IntoBytes;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CodecErrorKind {
+    Unsupported,
+    Corrupt,
+    MissingBackend,
+    ResourceLimit,
+    Other,
+}
+
+impl CodecErrorKind {
+    pub fn into_pyerr(self, message: String, format: Option<&str>, operation: &str) -> PyErr {
+        Python::attach(|py| {
+            let result = (|| -> PyResult<PyErr> {
+                let name = match self {
+                    Self::Unsupported => "UnsupportedCodecError",
+                    Self::Corrupt => "CorruptImageError",
+                    Self::MissingBackend => "MissingBackendError",
+                    Self::ResourceLimit => "CodecResourceLimitError",
+                    Self::Other => "CodecError",
+                };
+                let kwargs = pyo3::types::PyDict::new(py);
+                kwargs.set_item("format", format)?;
+                kwargs.set_item("operation", operation)?;
+                let exception = py.import("blanket.errors")?.getattr(name)?.call((message,), Some(&kwargs))?;
+                Ok(PyErr::from_value(exception))
+            })();
+            result.unwrap_or_else(|error| error)
+        })
+    }
+}
+
+// Adapt diagnostic strings from backends that do not expose typed errors.
+pub fn decode_error(message: String, format: Option<&str>, operation: &str) -> PyErr {
+    diagnostic_kind(&message, CodecErrorKind::Corrupt).into_pyerr(message, format, operation)
+}
+
+pub fn encode_error(error: PyErr, format: &str) -> PyErr {
+    Python::attach(|py| {
+        if let Ok(class) = py.import("blanket.errors").and_then(|module| module.getattr("CodecError"))
+            && error.value(py).is_instance(&class).unwrap_or(false)
+        {
+            return error;
+        }
+        if !error.is_instance_of::<PyOSError>(py) && !error.is_instance_of::<pyo3::exceptions::PyValueError>(py) {
+            return error;
+        }
+        let message = error.value(py).str().map(|s| s.to_string()).unwrap_or_else(|_| error.to_string());
+        let kind = diagnostic_kind(&message, CodecErrorKind::Other);
+        if kind == CodecErrorKind::Other && error.is_instance_of::<pyo3::exceptions::PyValueError>(py) {
+            return error;
+        }
+        let structured = kind.into_pyerr(message, Some(format), "encode");
+        structured.set_cause(py, Some(error));
+        structured
+    })
+}
+
+fn diagnostic_kind(message: &str, fallback: CodecErrorKind) -> CodecErrorKind {
+    let message = message.to_ascii_lowercase();
+    if message.starts_with("eps reading requires ghostscript (gs):") {
+        return CodecErrorKind::MissingBackend;
+    }
+    if message.contains("exceeds blanket limit")
+        || message.contains("overflow addressable memory")
+        || message.contains("frame pixel count overflow")
+        || message.contains("memory limit")
+        || message.contains("limits are exceeded")
+        || message.contains("limit exceeded")
+        || message.contains("exceeds streaming buffer limit")
+    {
+        CodecErrorKind::ResourceLimit
+    } else if message.contains("unsupported")
+        || message.contains("not supported")
+        || message.contains("does not support")
+        || message.contains("cannot write mode")
+        || message.contains("read-only format")
+        || message.contains("write-only format")
+        || message.contains("high-bit-depth saving supports")
+        || message.contains("encoding supports")
+    {
+        CodecErrorKind::Unsupported
+    } else {
+        fallback
+    }
+}
+
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
 #[derive(Debug, PartialEq, Eq)]
@@ -92,6 +178,15 @@ pub fn u16_bytes(samples: &[u16]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn backend_diagnostics_have_stable_categories() {
+        assert_eq!(diagnostic_kind("image size exceeds Blanket limit of pixels", CodecErrorKind::Corrupt), CodecErrorKind::ResourceLimit);
+        assert_eq!(diagnostic_kind("unsupported HEIF bit depth: 9", CodecErrorKind::Corrupt), CodecErrorKind::Unsupported);
+        assert_eq!(diagnostic_kind("truncated PNG data", CodecErrorKind::Corrupt), CodecErrorKind::Corrupt);
+        assert_eq!(diagnostic_kind("invalid chunk offset overflow", CodecErrorKind::Corrupt), CodecErrorKind::Corrupt);
+        assert_eq!(diagnostic_kind("encoder failed", CodecErrorKind::Other), CodecErrorKind::Other);
+    }
 
     #[test]
     fn frame_and_sequence_defaults_do_not_require_default_images() {

@@ -25,9 +25,13 @@ from . import (
     features,
 )
 from ._blanket import UnidentifiedImageError, __version__
+from .errors import CodecError, CodecResourceLimitError, CorruptImageError, MissingBackendError, UnsupportedCodecError
 
 __all__ = [
+    "CodecError",
+    "CodecResourceLimitError",
     "Compressor",
+    "CorruptImageError",
     "Image",
     "ImageChops",
     "ImageCms",
@@ -47,8 +51,10 @@ __all__ = [
     "ImageSequence",
     "ImageStat",
     "JpegImagePlugin",
+    "MissingBackendError",
     "PngImagePlugin",
     "UnidentifiedImageError",
+    "UnsupportedCodecError",
     "__version__",
     "features",
 ]

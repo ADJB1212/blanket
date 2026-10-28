@@ -475,7 +475,11 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
     let mut output = Cursor::new(Vec::new());
     if options.tiff_compression == 3 {
         if image.bit_depth != 8 || !matches!(image.mode, PixelMode::L | PixelMode::Rgb) {
-            return Err(PyValueError::new_err("JPEG TIFF requires 8-bit L or RGB"));
+            return Err(blanket_codec_common::CodecErrorKind::Unsupported.into_pyerr(
+                "JPEG TIFF requires 8-bit L or RGB".into(),
+                Some("TIFF"),
+                "encode",
+            ));
         }
         let jpeg = blanket_codec_jpeg::encode_jpeg(image, image.pixel_data()?, options.quality)?;
         {

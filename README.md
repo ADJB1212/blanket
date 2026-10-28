@@ -405,6 +405,19 @@ TIFF selects them with `compression=`. TIFF JPEG compression requires 8-bit L/RG
 10/12-bit PNG, TIFF, and PNM input uses 16-bit output containers. Animation uses
 RGBA frames; PDF supports multiple pages rather than animation.
 
+Codec failures from `Image.open`, `Image.inspect`, `Image.save`, and streaming
+decoders expose `format` and `operation` (`decode`, `inspect`, or `encode`).
+Catch `blanket.CodecError` for codec failures, or its subclasses
+`UnsupportedCodecError`, `CorruptImageError`, `MissingBackendError`, and
+`CodecResourceLimitError` for unsupported layouts/features, malformed data,
+unavailable runtime backends, and resource limits respectively. These are
+`OSError` subclasses. Corrupt input and resource limits also retain
+`UnidentifiedImageError` compatibility, as do missing backends; unsupported requests also inherit
+`ValueError`. Unknown signatures retain `UnidentifiedImageError`, while file
+access errors and ordinary argument validation retain their usual Python types.
+Backend diagnostics that provide no specific category use `CodecError` for
+encoding and `CorruptImageError` for recognized input that cannot be decoded.
+
 | Format      | Read | Write | Notes                                                                   |
 | ----------- | :--: | :---: | ----------------------------------------------------------------------- |
 | PNG         | Yes  |  Yes  | Lossless; APNG animation, high-bit-depth and indexed output             |

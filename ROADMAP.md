@@ -369,7 +369,7 @@ with new processing semantics exposed explicitly.
       supported, making `draft` useful before full raster allocation
 - [x] **Encoding capability queries** — report supported modes, sample depths,
       compression methods, and animation options for each installed backend
-- [ ] **Structured codec errors** — distinguish unsupported features, corrupt
+- [x] **Structured codec errors** — distinguish unsupported features, corrupt
       input, missing backends, and resource-limit failures for callers
 - [ ] **Additional TIFF layouts** — BigTIFF and tiled output with configurable
       tile sizes, predictors, and explicit compression compatibility checks

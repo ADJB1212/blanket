@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 from ._blanket import _encode_sequence, _write_metadata
 from ._exif import save_metadata
 from ._io import write_all
+from .errors import UnsupportedCodecError
 from .Image import Image, _bounded_int, _save_options
 
 
@@ -27,9 +28,9 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     if not save_all and not {"duration", "loop", "disposal", "blend", "default_image"} & options.keys():
         return False
     if format not in ("GIF", "WEBP", "PNG", "PDF"):
-        raise ValueError(f"multi-frame saving is not supported for {format}")
+        raise UnsupportedCodecError(f"multi-frame saving is not supported for {format}", format=format, operation="encode")
     if compressor is not None:
-        raise ValueError("compression optimization is not supported for multi-frame saves")
+        raise UnsupportedCodecError("compression optimization is not supported for multi-frame saves", format=format, operation="encode")
     allowed = {"GIF": {"duration", "loop", "disposal"}, "WEBP": {"duration", "loop"}, "PNG": {"duration", "loop", "disposal", "blend", "default_image"}, "PDF": set()}[format]
     animation_keys = {"duration", "loop", "disposal", "blend", "default_image"}
     unsupported = options.keys() & (animation_keys - allowed)
@@ -98,7 +99,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     prepared: list[Image] = []
     for frame in frames:
         if frame.mode in ("HSV", "LAB", "F", "YCbCr") or (frame.mode == "CMYK" and format != "PDF"):
-            raise OSError(f"cannot write mode {frame.mode} as {format}")
+            raise UnsupportedCodecError(f"cannot write mode {frame.mode} as {format}", format=format, operation="encode")
         if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B"):
             frame = frame.convert("L", bit_depth=16)
         if format == "PDF":
@@ -106,7 +107,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         else:
             target = "RGBA"
         if frame.bit_depth != 8 and format != "PNG" and frame.mode not in ("I", "I;16", "I;16L", "I;16B"):
-            raise ValueError("high-bit-depth images require explicit conversion for this format")
+            raise UnsupportedCodecError("high-bit-depth images require explicit conversion for this format", format=format, operation="encode")
         prepared.append(frame.convert(target) if frame.mode != target else frame)
     encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"]))
     if any(metadata):

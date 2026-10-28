@@ -26,7 +26,7 @@ pub(crate) fn _encode(
         exif: metadata_exif.unwrap_or_default(),
         xmp: metadata_xmp.unwrap_or_default(),
     };
-    let encoded = encode_image(py, image, format, options, compressor)?;
+    let encoded = encode_image(py, image, format, options, compressor).map_err(|error| blanket_codecs::encode_error(error, format.as_str()))?;
     let encoded = if attach_metadata {
         py.detach(|| {
             blanket_codecs::metadata::encode_metadata(encoded, format.as_str(), options.exif, options.xmp, options.icc_profile, &metadata_chunks)
