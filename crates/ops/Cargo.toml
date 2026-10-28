@@ -9,6 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+blanket-kernels.workspace = true
 blanket-core.workspace = true
 blanket-math.workspace = true
 pyo3.workspace = true
@@ -22,15 +23,7 @@ blanket-bench-support.workspace = true
 criterion.workspace = true
 
 [[bench]]
-name = "resize"
-harness = false
-
-[[bench]]
 name = "histogram"
-harness = false
-
-[[bench]]
-name = "transform"
 harness = false
 
 [lints]

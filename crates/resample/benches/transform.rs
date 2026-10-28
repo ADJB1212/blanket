@@ -2,7 +2,8 @@ use std::hint::black_box;
 
 use blanket_bench_support::{fixture, sizes};
 use blanket_core::PixelMode;
-use blanket_ops::ops::{ops_affine, transpose};
+use blanket_ops::ops::transpose;
+use blanket_resample::ops_affine;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use pyo3::Python;
 

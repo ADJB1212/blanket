@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 blanket-codecs.workspace = true
-blanket-ops.workspace = true
+blanket-kernels.workspace = true
 pyo3.workspace = true
 png.workspace = true
 rayon.workspace = true

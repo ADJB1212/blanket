@@ -9,7 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
-lru = { version = "0.19", default-features = false }
+blanket-kernels.workspace = true
 lcms2 = { version = "6", default-features = false }
 lcms2-sys = { version = "4", default-features = false, features = ["static-fallback", "parallel"] }
 pyo3.workspace = true

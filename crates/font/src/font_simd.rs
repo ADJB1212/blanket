@@ -1,6 +1,6 @@
 use std::simd::cmp::SimdOrd;
 
-use blanket_core::pixels::{load, store};
+use blanket_kernels::pixels::{load, store};
 
 pub(crate) fn max_assign(output: &mut [u8], source: &[u8]) {
     assert_eq!(output.len(), source.len());

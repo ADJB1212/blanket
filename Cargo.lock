@@ -228,8 +228,10 @@ dependencies = [
  "blanket-draw",
  "blanket-enhance",
  "blanket-filter",
+ "blanket-font",
  "blanket-ops",
  "blanket-palette",
+ "blanket-resample",
  "blanket-stat",
  "pyo3",
  "toml",
@@ -471,7 +473,7 @@ version = "0.2.0"
 dependencies = [
  "blanket-codecs",
  "blanket-core",
- "blanket-ops",
+ "blanket-kernels",
  "png",
  "pyo3",
  "rayon",
@@ -483,10 +485,10 @@ name = "blanket-core"
 version = "0.2.0"
 dependencies = [
  "blanket-bench-support",
+ "blanket-kernels",
  "criterion",
  "lcms2",
  "lcms2-sys",
- "lru",
  "pyo3",
  "rayon",
  "rustc-hash",
@@ -496,13 +498,9 @@ dependencies = [
 name = "blanket-draw"
 version = "0.2.0"
 dependencies = [
- "ab_glyph",
  "blanket-core",
  "pyo3",
  "rustc-hash",
- "rustybuzz",
- "unicode-bidi",
- "unicode-script",
 ]
 
 [[package]]
@@ -524,6 +522,28 @@ dependencies = [
  "blanket-core",
  "criterion",
  "pyo3",
+]
+
+[[package]]
+name = "blanket-font"
+version = "0.2.0"
+dependencies = [
+ "ab_glyph",
+ "blanket-kernels",
+ "pyo3",
+ "rustc-hash",
+ "rustybuzz",
+ "unicode-bidi",
+ "unicode-script",
+]
+
+[[package]]
+name = "blanket-kernels"
+version = "0.2.0"
+dependencies = [
+ "lru",
+ "rayon",
+ "rustc-hash",
 ]
 
 [[package]]
@@ -555,6 +575,7 @@ version = "0.2.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
+ "blanket-kernels",
  "blanket-math",
  "criterion",
  "pyo3",
@@ -569,6 +590,19 @@ dependencies = [
  "pyo3",
  "rayon",
  "rustc-hash",
+]
+
+[[package]]
+name = "blanket-resample"
+version = "0.2.0"
+dependencies = [
+ "blanket-bench-support",
+ "blanket-core",
+ "blanket-kernels",
+ "blanket-ops",
+ "criterion",
+ "pyo3",
+ "rayon",
 ]
 
 [[package]]

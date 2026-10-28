@@ -2,7 +2,7 @@
 
 use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
 use blanket_core::raster::{Image, PixelMode};
-use blanket_ops::ops_simd;
+use blanket_kernels::ops as ops_simd;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 

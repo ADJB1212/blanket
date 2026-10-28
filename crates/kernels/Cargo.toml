@@ -1,0 +1,20 @@
+[package]
+name = "blanket-kernels"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+lru = { version = "0.19", default-features = false }
+rayon.workspace = true
+rustc-hash.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

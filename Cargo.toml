@@ -2,6 +2,9 @@
 members = [
     "crates/bench-support",
     "crates/core",
+    "crates/kernels",
+    "crates/resample",
+    "crates/font",
     "crates/cms",
     "crates/codecs",
     "crates/metadata",
@@ -41,6 +44,9 @@ rust-version = "1.98"
 edition = "2024"
 
 [workspace.dependencies]
+blanket-kernels = { path = "crates/kernels" }
+blanket-resample = { path = "crates/resample" }
+blanket-font = { path = "crates/font" }
 blanket-bench-support = { path = "crates/bench-support" }
 criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "plotters", "html_reports"] }
 blanket-codec-common = { path = "crates/codec-common" }

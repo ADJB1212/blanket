@@ -11,3 +11,6 @@ pub mod simd;
 pyo3::create_exception!(_blanket, UnidentifiedImageError, pyo3::exceptions::PyOSError);
 
 pub use raster::{Image, PixelMode};
+
+pub mod buffers;
+pub mod geometry;

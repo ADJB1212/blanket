@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+blanket-font.workspace = true
+blanket-resample.workspace = true
 blanket-codec-extended.workspace = true
 blanket-codec-jpeg2000.workspace = true
 pyo3.workspace = true

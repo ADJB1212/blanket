@@ -149,7 +149,7 @@ fn fits_depth_chunk(source: &[u8], bits: usize) -> bool {
 pub(crate) fn remap(source: &[u8], table: &[u8; 256]) -> Vec<u8> {
     let mut output = vec![0; source.len()];
     chunks_mut_above(&mut output, CHUNK_PIXELS, MEMORY_PARALLEL_BYTES, |i, dst| {
-        blanket_ops::ops_simd::lut::<1>(&source[i * CHUNK_PIXELS..i * CHUNK_PIXELS + dst.len()], dst, table);
+        blanket_kernels::ops::lut::<1>(&source[i * CHUNK_PIXELS..i * CHUNK_PIXELS + dst.len()], dst, table);
     });
     output
 }
@@ -195,7 +195,7 @@ fn pack_rows_impl(samples: &[u8], width: usize, bits: usize, transform: PackTran
             scratch.resize(source.len(), 0);
             match transform {
                 PackTransform::Shift(shift) => select_chunk(source, scratch, 1, false, shift),
-                PackTransform::Map(mapping) => blanket_ops::ops_simd::lut::<1>(source, scratch, mapping),
+                PackTransform::Map(mapping) => blanket_kernels::ops::lut::<1>(source, scratch, mapping),
                 PackTransform::Identity => unreachable!(),
             }
             scratch.as_slice()

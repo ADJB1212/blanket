@@ -4,7 +4,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, Mutex};
 
 use ab_glyph::{Font, FontVec, Glyph, GlyphId, Outline, OutlinedGlyph, PxScale, ScaleFont, point};
-use blanket_core::cache::ByteLru;
+use blanket_kernels::cache::ByteLru;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;

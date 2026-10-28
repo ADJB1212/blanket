@@ -1,0 +1,34 @@
+[package]
+name = "blanket-resample"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+blanket-kernels.workspace = true
+pyo3.workspace = true
+rayon.workspace = true
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+blanket-ops.workspace = true
+blanket-bench-support.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "resize"
+harness = false
+
+[[bench]]
+name = "transform"
+harness = false
+
+[lints]
+workspace = true
