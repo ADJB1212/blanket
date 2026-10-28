@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Protocol, cast
 from .errors import UnsupportedCodecError
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Buffer, Callable, Sequence
     from typing import BinaryIO, Self
 
     from ._blanket import _Image
@@ -1931,6 +1931,30 @@ class Image:
             ```
         """
 
+        if fp is None:
+            raise TypeError("fp must be a path or binary stream")
+        self._save(fp, format, **options)
+
+    def encode(self, format: str, **options: object) -> bytes:
+        """Return encoded image bytes using the same options as save().
+
+        Args:
+            format: Output format name, such as PNG, JPEG, or WEBP.
+            **options: Save options, including metadata, compressors, and sequences.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            data = Image.new("RGB", (8, 6), "red").encode("WEBP", quality=85)
+            ```
+        """
+        if not isinstance(format, str):
+            raise TypeError("format must be a string")
+        return cast("bytes", self._save(None, format, **options))
+
+    def _save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str | None, **options: object) -> bytes | None:
+        """Share validation and encoding between byte, stream, and file outputs."""
         compressor = options.pop("compressor", None)
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
@@ -1938,8 +1962,9 @@ class Image:
         if {"save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image"} & options.keys():
             from ._sequence import save_sequence
 
-            if save_sequence(self, fp, output_format, options, compressor):
-                return None
+            encoded = save_sequence(self, fp, output_format, options, compressor)
+            if encoded is not None:
+                return encoded if fp is None else None
         if self.mode == "LAB":
             if output_format != "TIFF":
                 raise UnsupportedCodecError(f"cannot write mode LAB as {output_format}", format=output_format, operation="encode")
@@ -1961,15 +1986,15 @@ class Image:
         if self.mode in ("I", "I;16", "I;16L", "I;16B"):
             if self.mode == "I":
                 depth = 16 if output_format in ("PNG", "TIFF", "JXL", "JPEG2000", "PPM", "PAM") else 8
-                return self.convert("L", bit_depth=depth).save(fp, output_format, compressor=compressor, **options)
+                return self.convert("L", bit_depth=depth)._save(fp, output_format, compressor=compressor, **options)
             if output_format not in ("PNG", "TIFF", "JXL", "JPEG2000", "PPM", "PAM"):
-                return self.convert("L").save(fp, output_format, compressor=compressor, **options)
-            return self.convert("L", bit_depth=16).save(fp, output_format, compressor=compressor, **options)
+                return self.convert("L")._save(fp, output_format, compressor=compressor, **options)
+            return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         metadata = save_metadata(self, output_format, options)
         values = _save_options(output_format, options)
         has_metadata = any(metadata)
-        output = None if hasattr(fp, "write") else os.fspath(fp)
+        output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
         encoded = _encode(
             self._native,
             output_format,
@@ -1982,6 +2007,8 @@ class Image:
             attach_metadata=has_metadata,
             metadata_chunks=metadata[3],
         )
+        if fp is None:
+            return encoded
         if hasattr(fp, "write"):
             write_all(cast("BinaryIO", fp), encoded)
         return None
@@ -2302,6 +2329,41 @@ def open(
     """
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
+    frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
+    image = _decode(_read_bytes(fp), formats, lazy, frame_cache_size)
+    if not hasattr(fp, "read"):
+        image.filename = os.fspath(fp)
+    return image
+
+
+def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1) -> Image:
+    """Decode encoded bytes without a file or stream.
+
+    Args:
+        data: Bytes or another buffer containing an encoded image.
+        formats: Optional format allowlist, as in open().
+        lazy: Decode sequence frames on demand, as in open().
+        frame_cache_size: Maximum cached frames for lazy decoding.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        data = Image.new("RGB", (8, 6), "red").encode("PNG")
+        image = Image.decode(data)
+        ```
+    """
+    frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
+    if not isinstance(data, bytes):
+        try:
+            data = memoryview(data).tobytes()
+        except TypeError as error:
+            raise TypeError("data must be a bytes-like object") from error
+    return _decode(data, formats, lazy, frame_cache_size)
+
+
+def _decode_options(formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int) -> int:
+    """Validate shared byte and file decoder options."""
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
     if not isinstance(lazy, bool):
@@ -2311,7 +2373,11 @@ def open(
     frame_cache_size = index(frame_cache_size)
     if frame_cache_size < 1:
         raise ValueError("frame_cache_size must be positive")
-    data = _read_bytes(fp)
+    return frame_cache_size
+
+
+def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int) -> Image:
+    """Build images and frame metadata from an immutable encoded buffer."""
     if lazy:
         from ._lazy_frames import LazyFrames
 
@@ -2322,13 +2388,9 @@ def open(
         image._info = first._info
         image.palette = first.palette
         image._lazy_frames = storage
-        if not hasattr(fp, "read"):
-            image.filename = os.fspath(fp)
         return image
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
-    if not hasattr(fp, "read"):
-        image.filename = os.fspath(fp)
 
     metadata = read_tiff_metadata(data, len(frames)) if image.format == "TIFF" else None
     if metadata is None:
@@ -2565,6 +2627,7 @@ __all__ = [
     "Transpose",
     "blend",
     "composite",
+    "decode",
     "fromarray",
     "frombytes",
     "open",

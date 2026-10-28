@@ -19,14 +19,14 @@ from .errors import UnsupportedCodecError
 from .Image import Image, _bounded_int, _save_options
 
 
-def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str, options: dict[str, object], compressor: object) -> bool:
-    """Consume sequence options and save frames, returning False for ordinary saves."""
+def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:
+    """Encode or save frames, returning None for ordinary saves."""
     save_all = options.pop("save_all", False)
     if not isinstance(save_all, bool):
         raise TypeError("save_all must be a bool")
     appended = options.pop("append_images", ())
     if not save_all and not {"duration", "loop", "disposal", "blend", "default_image"} & options.keys():
-        return False
+        return None
     if format not in ("GIF", "WEBP", "PNG", "PDF"):
         raise UnsupportedCodecError(f"multi-frame saving is not supported for {format}", format=format, operation="encode")
     if compressor is not None:
@@ -116,9 +116,11 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"]))
     if any(metadata):
         encoded = _write_metadata(encoded, format, *metadata)
+    if fp is None:
+        return encoded
     if hasattr(fp, "write"):
         write_all(fp, encoded)
     else:
         with open(fp, "wb") as output:
             output.write(encoded)
-    return True
+    return encoded
