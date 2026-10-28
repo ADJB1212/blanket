@@ -367,7 +367,7 @@ with new processing semantics exposed explicitly.
       image rasters
 - [ ] **Decode-time thumbnails** — request reduced-resolution decoding where
       supported, making `draft` useful before full raster allocation
-- [ ] **Encoding capability queries** — report supported modes, sample depths,
+- [x] **Encoding capability queries** — report supported modes, sample depths,
       compression methods, and animation options for each installed backend
 - [ ] **Structured codec errors** — distinguish unsupported features, corrupt
       input, missing backends, and resource-limit failures for callers

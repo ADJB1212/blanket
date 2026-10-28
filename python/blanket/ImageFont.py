@@ -29,7 +29,7 @@ __all__ = ["MAX_STRING_LENGTH", "ImageFont", "Layout", "TrueTypeFont", "load", "
 MAX_STRING_LENGTH: int | None = 1_000_000
 # Bound mask allocation and stroke expansion in both font implementations.
 _MAX_MASK_PIXELS = 100_000_000
-_MAX_GLYPH_CACHE_PIXELS = 1024 * 1024
+_MAX_GLYPH_CACHE_PIXELS = 1024 << 10
 _MAX_STROKE_WIDTH = 1024
 # Match the native font scale limit before passing values to Rust.
 _MAX_FONT_SIZE = 1_000_000

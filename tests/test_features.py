@@ -23,6 +23,72 @@ def test_available_features(feature: str) -> None:
         assert features.version(feature)
 
 
+@pytest.mark.parametrize(
+    "format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "AVIF", "HEIF", "BMP", "GIF", "ICO", "PDF", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "XPM", "MSP", "PALM"]
+)
+def test_encoding_capabilities_can_encode(format: str) -> None:
+    capability = features.encoding_capabilities(format)
+    if capability is None:
+        assert format == "HEIF" and not features.check("heif_encoder")
+        return
+    assert capability.format == format
+    assert capability.compression_methods
+    for mode, depths in capability.mode_depths:
+        for depth in depths:
+            image = Image.new(mode, (32, 32))
+            if depth in (10, 12, 16):
+                image = image.convert(mode, bit_depth=depth)
+            stream = BytesIO()
+            image.save(stream, format)
+            assert stream.getvalue(), (format, mode, depth)
+
+
+def test_encoding_query_validation_and_aliases(monkeypatch: pytest.MonkeyPatch) -> None:
+    for alias, name in (("jpg", "JPEG"), ("tif", "TIFF"), ("jp2", "JPEG2000"), ("heic", "HEIF")):
+        assert features.encoding_capabilities(alias) == features.encoding_capabilities(name)
+    for name in ("DDS", "EPS", "FITS", "SPIDER", "PIXAR", "SUN"):
+        assert features.encoding_capabilities(name) is None
+    with pytest.raises(TypeError):
+        features.encoding_capabilities(None)
+    with pytest.raises(ValueError):
+        features.encoding_capabilities("unknown")
+    monkeypatch.setattr(features, "_feature_info", lambda name: (name != "heif_encoder", None))
+    assert features.encoding_capabilities("HEIF") is None
+
+
+def test_encoding_animation_options() -> None:
+    assert features.encoding_capabilities("PNG").animation_options == ("save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image")
+    assert features.encoding_capabilities("GIF").animation_options == ("save_all", "append_images", "duration", "loop", "disposal")
+    assert features.encoding_capabilities("WEBP").animation_options == ("save_all", "append_images", "duration", "loop")
+    assert features.encoding_capabilities("PDF").multipage
+    assert not features.encoding_capabilities("PDF").animation_options
+
+
+@pytest.mark.parametrize("format", ["PNG", "GIF", "WEBP"])
+def test_reported_animation_depths_can_encode(format: str) -> None:
+    capability = features.encoding_capabilities(format)
+    for mode, depths in capability.animation_mode_depths:
+        for depth in depths:
+            first = Image.new(mode, (8, 8), (40, 80, 120, 255))
+            second = Image.new(mode, (8, 8), (120, 80, 40, 255))
+            if depth > 8:
+                first = first.convert(mode, bit_depth=depth)
+                second = second.convert(mode, bit_depth=depth)
+            stream = BytesIO()
+            first.save(stream, format, save_all=True, append_images=[second], duration=[100, 200], loop=2)
+            reopened = Image.open(BytesIO(stream.getvalue()))
+            assert reopened.n_frames == 2
+            assert reopened.info["loop"] == 2
+
+
+def test_reported_tiff_compression_methods_can_encode() -> None:
+    capability = features.encoding_capabilities("TIFF")
+    for method in capability.compression_methods:
+        stream = BytesIO()
+        Image.new("RGB", (8, 8), (40, 80, 120)).save(stream, "TIFF", compression=method)
+        assert Image.open(BytesIO(stream.getvalue())).size == (8, 8)
+
+
 @pytest.mark.parametrize(("alias", "name"), [("jpeg", "jpg"), ("jpegxl", "jxl"), ("tiff", "libtiff"), ("heic", "heif")])
 def test_aliases(alias: str, name: str) -> None:
     assert features.check(alias) == features.check(name)

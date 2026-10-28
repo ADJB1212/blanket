@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc"}
+__lazy_modules__ = {"xml.etree", "collections.abc"}
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING

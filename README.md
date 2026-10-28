@@ -392,6 +392,19 @@ Use `from blanket import features` to inspect the installed build:
 `features.blanketinfo()` prints backend and format diagnostics. See the
 [features module](https://adjb1212.github.io/blanket-docs/features/) for feature names.
 
+`features.encoding_capabilities("PNG")` returns an immutable
+`EncodingCapabilities` record with `mode_depths` (input modes and significant
+sample depths), `compression_methods`, `animation_options`,
+`animation_mode_depths`, and `multipage`. Names are case insensitive and accept
+format aliases such as `jpg`, `tif`, and `jp2`. Known read-only formats and
+unavailable encoders return `None`; unknown names raise `ValueError`. HEIF
+availability follows the installed HEVC encoder plugin. Queries do not allocate
+or encode images. Integer-mode conversion and palette expansion are excluded
+from the direct encoding mode list. Compression names describe methods; only
+TIFF selects them with `compression=`. TIFF JPEG compression requires 8-bit L/RGB;
+10/12-bit PNG, TIFF, and PNM input uses 16-bit output containers. Animation uses
+RGBA frames; PDF supports multiple pages rather than animation.
+
 | Format      | Read | Write | Notes                                                                   |
 | ----------- | :--: | :---: | ----------------------------------------------------------------------- |
 | PNG         | Yes  |  Yes  | Lossless; APNG animation, high-bit-depth and indexed output             |

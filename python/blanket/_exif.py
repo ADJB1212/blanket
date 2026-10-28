@@ -18,8 +18,8 @@ from ._ifd import Exif
 from .PngImagePlugin import PngInfo, iTXt
 
 # Limit expansion of compressed PNG text while reading metadata.
-_MAX_TEXT_BYTES = 1024 * 1024
-_MAX_PNG_METADATA_BYTES = 64 * _MAX_TEXT_BYTES
+_MAX_TEXT_BYTES = 1024 << 10
+_MAX_PNG_METADATA_BYTES = _MAX_TEXT_BYTES << 6
 # Classic TIFF identifies its header and IFD0 orientation with these values.
 _TIFF_MAGIC = 42
 _ORIENTATION_TAG = 0x112

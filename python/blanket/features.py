@@ -7,6 +7,7 @@ __lazy_modules__ = {"platform", "warnings", "sys"}
 import platform
 import sys
 import warnings
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from ._blanket import _feature_info
@@ -14,7 +15,119 @@ from ._blanket import _feature_info
 if TYPE_CHECKING:
     from typing import TextIO
 
-__all__ = ["blanketinfo", "check", "get_supported", "version"]
+__all__ = ["EncodingCapabilities", "blanketinfo", "check", "encoding_capabilities", "get_supported", "version"]
+
+
+@dataclass(frozen=True)
+class EncodingCapabilities:
+    """Encoding support for one format in the installed build.
+
+    ``mode_depths`` pairs input modes with accepted significant sample depths.
+    These describe direct raster encoding, excluding automatic integer-mode
+    conversion and palette expansion. Depths describe input precision; PNG,
+    TIFF and PNM promote 10/12-bit samples to 16-bit containers. Compression
+    names describe methods, not keyword arguments (only TIFF uses
+    ``compression=``). Animation options are accepted save keyword names.
+    Multi-page PDF is reported separately from animation.
+
+    Dimensions, metadata, and combinations of options can impose further
+    restrictions. In particular TIFF JPEG compression requires 8-bit L/RGB.
+    """
+
+    format: str
+    mode_depths: tuple[tuple[str, tuple[int, ...]], ...]
+    compression_methods: tuple[str, ...]
+    animation_options: tuple[str, ...] = ()
+    multipage: bool = False
+    animation_mode_depths: tuple[tuple[str, tuple[int, ...]], ...] = ()
+
+
+def encoding_capabilities(format: str) -> EncodingCapabilities | None:
+    """Return encoding capabilities, or None for a known unavailable encoder.
+
+    Names are case insensitive and accept feature aliases and format aliases.
+    Unknown names raise ValueError. No images are allocated or encoded.
+
+    Example::
+
+        features.encoding_capabilities("PNG").mode_depths
+    """
+    if not isinstance(format, str):
+        raise TypeError("format must be a string")
+    name = format.lower()
+    name = {"tif": "libtiff", "jp2": "jpg_2000", "j2k": "jpg_2000", "j2c": "jpg_2000", "jpc": "jpg_2000", "targa": "tga", "ps": "eps", "jpeg xl": "jxl"}.get(name, _ALIASES.get(name, name))
+    known = {feature: label for label, feature in _FORMATS}
+    if name not in known:
+        raise ValueError(f"unknown encoding format {format!r}")
+    if name in ("dds", "eps", "fits", "spider", "pixar", "sun"):
+        return None
+    if not check("heif_encoder" if name == "heif" else name):
+        return None
+    wide = (8, 10, 12, 16)
+    modes: dict[str, tuple[int, ...]] = dict.fromkeys(("1", "L", "LA", "RGB", "RGBA"), (8,))
+    methods = {
+        "png": ("deflate",),
+        "jpg": ("jpeg",),
+        "jxl": ("lossless", "lossy"),
+        "libtiff": ("raw", "tiff_lzw", "tiff_adobe_deflate", "jpeg"),
+        "webp": ("lossless", "lossy"),
+        "heif": ("lossless", "lossy"),
+        "avif": ("lossy",),
+        "gif": ("lzw",),
+        "ico": ("deflate",),
+        "bmp": ("raw",),
+        "pdf": ("raw",),
+        "ppm": ("raw",),
+        "pam": ("raw",),
+        "tga": ("raw",),
+        "qoi": ("qoi",),
+        "jpg_2000": ("lossless",),
+        "pcx": ("rle",),
+        "sgi": ("raw",),
+        "xbm": ("raw",),
+        "xpm": ("raw",),
+        "msp": ("raw",),
+        "palm": ("raw",),
+    }[name]
+    if name in ("png", "jxl", "libtiff", "ppm", "pam", "jpg_2000"):
+        modes.update(dict.fromkeys(("L", "RGB", "RGBA"), wide))
+    if name == "heif":
+        modes = dict.fromkeys(("L", "RGB", "RGBA"), (8, 10, 12))
+    elif name == "jpg":
+        modes = dict.fromkeys(("L", "RGB", "CMYK", "YCbCr"), (8,))
+    elif name == "libtiff":
+        modes.pop("LA")
+        modes.update({"CMYK": (8,), "LAB": (8,), "F": (32,), "RGB;F": (32,), "RGBA;F": (32,)})
+    elif name in ("qoi", "ico"):
+        modes = dict.fromkeys(("RGB", "RGBA"), (8,))
+    elif name == "pdf":
+        modes = dict.fromkeys(("L", "RGB", "RGBA", "CMYK"), (8,))
+    elif name == "ppm":
+        modes.pop("LA")
+        modes.pop("RGBA")
+    elif name == "pcx":
+        modes = dict.fromkeys(("1", "L", "RGB"), (8,))
+    elif name in ("sgi", "webp", "avif", "gif"):
+        modes = dict.fromkeys(("L", "RGB", "RGBA"), (8,))
+    elif name in ("xbm", "msp", "palm"):
+        modes = {"1": (8,)}
+        if name == "palm":
+            modes["L"] = (8,)
+    animation = ()
+    if name in ("gif", "webp", "png"):
+        animation = ("save_all", "append_images", "duration", "loop")
+        if name in ("gif", "png"):
+            animation += ("disposal",)
+        if name == "png":
+            animation += ("blend", "default_image")
+    canonical = {"libtiff": "TIFF", "jpg": "JPEG", "jpg_2000": "JPEG2000", "ppm": "PPM", "heif": "HEIF"}.get(name, name.upper())
+    animation_modes = ()
+    if name in ("gif", "webp"):
+        animation_modes = (("RGBA", (8,)),)
+    elif name == "png":
+        animation_modes = (("RGBA", wide),)
+    return EncodingCapabilities(canonical, tuple(modes.items()), methods, animation, name == "pdf", animation_modes)
+
 
 _FEATURES = (
     "pcx",

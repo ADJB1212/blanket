@@ -1099,10 +1099,7 @@ def main() -> None:
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()
-    print(
-        f"behavior verification passed: {checks + imageops_checks + imageenhance_checks + imagepalette_checks + imagefilter_checks} checks "
-        f"({imageops_checks} ImageOps, {imageenhance_checks} ImageEnhance, {imagepalette_checks} ImagePalette, {imagefilter_checks} ImageFilter)"
-    )
+    print(f"behavior verification passed: {checks + imageops_checks + imageenhance_checks + imagepalette_checks + imagefilter_checks} checks")
 
 
 if __name__ == "__main__":
