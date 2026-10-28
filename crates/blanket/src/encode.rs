@@ -8,12 +8,13 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new()))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
-    attach_metadata: bool, metadata_chunks: Vec<blanket_codecs::metadata::PngChunk>,
+    attach_metadata: bool, metadata_chunks: Vec<blanket_codecs::metadata::PngChunk>, jpeg_subsampling: i8, jpeg_optimize: bool,
+    jpeg_progressive: bool,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
@@ -22,6 +23,9 @@ pub(crate) fn _encode(
         lossless,
         effort,
         tiff_compression,
+        jpeg_subsampling,
+        jpeg_optimize,
+        jpeg_progressive,
         icc_profile: icc_profile.unwrap_or_default(),
         exif: metadata_exif.unwrap_or_default(),
         xmp: metadata_xmp.unwrap_or_default(),

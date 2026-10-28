@@ -5,6 +5,7 @@ pub mod float;
 pub mod parallel;
 pub mod pixels;
 pub mod raster;
+mod raw;
 pub mod samples;
 pub mod simd;
 

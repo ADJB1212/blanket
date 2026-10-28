@@ -1335,16 +1335,21 @@ impl Image {
         Self::from_pixels(self.width, self.height, destination, converted, None)
     }
 
-    pub fn tobytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
-        if self.mode == PixelMode::Lab {
-            return Ok(PyBytes::new(py, &lab_raw_bytes(self.raw_data()?)).unbind());
-        }
-        if self.mode == PixelMode::One {
-            let source = self.raw_data()?;
-            let packed = py.detach(|| pack_bilevel(source, self.width as usize, self.height as usize));
-            return Ok(PyBytes::new(py, &packed).unbind());
-        }
-        Ok(PyBytes::new(py, self.raw_data()?).unbind())
+    #[pyo3(signature = (rawmode=None, stride=0, orientation=1))]
+    pub fn tobytes(&self, py: Python<'_>, rawmode: Option<&str>, stride: usize, orientation: i8) -> PyResult<Py<PyBytes>> {
+        let pixels = self.raw_data()?;
+        let packed;
+        let source = if self.mode == PixelMode::Lab {
+            packed = lab_raw_bytes(pixels);
+            packed.as_slice()
+        } else if self.mode == PixelMode::One {
+            packed = py.detach(|| pack_bilevel(pixels, self.width as usize, self.height as usize));
+            packed.as_slice()
+        } else {
+            pixels
+        };
+        let output = py.detach(|| crate::raw::transform(source, self.mode, self.size(), self.bit_depth, rawmode, stride, orientation, true))?;
+        Ok(PyBytes::new(py, &output).unbind())
     }
 
     pub fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -1360,9 +1365,14 @@ impl Image {
     }
 }
 
-#[pyfunction(signature = (mode, size, data, bit_depth=8))]
-pub fn frombytes(py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8) -> PyResult<Image> {
+#[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1))]
+#[allow(clippy::too_many_arguments)]
+pub fn frombytes(
+    py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
+) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
+    let decoded = py.detach(|| crate::raw::transform(data, mode, size, bit_depth, rawmode, stride, orientation, false))?;
+    let data = decoded.as_ref();
     if mode.is_float() {
         if bit_depth != 8 && bit_depth != 32 {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));

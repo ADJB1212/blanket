@@ -164,7 +164,7 @@ _SAVE_OPTIONS = {
     "GIF": frozenset(),
     "ICO": frozenset(),
     "PNG": frozenset({"compress_level"}),
-    "JPEG": frozenset({"quality"}),
+    "JPEG": frozenset({"quality", "subsampling", "progressive", "optimize"}),
     "JXL": frozenset({"quality", "lossless", "effort"}),
     "TIFF": frozenset({"compression", "quality"}),
     "PDF": frozenset(),
@@ -1098,12 +1098,17 @@ class Image:
         result.info.update(self._metadata_info())
         return result
 
-    def tobytes(self) -> bytes:
+    def tobytes(self, encoder_name: str = "raw", *args: object) -> bytes:
         """Return packed pixels.
 
         Mode `1` uses row-packed bits. `I` is little-endian int32, `F` is
         little-endian float32, and `I;16B` is big-endian uint16. Other
         high-depth samples use little-endian uint16.
+
+        Args:
+            encoder_name: Only `raw` is supported.
+            *args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
+                Supports the image mode, 8-bit RGB as BGR/BGRX, and RGBA as BGRA; padding is zero-filled.
 
         Examples:
             ```python
@@ -1113,7 +1118,7 @@ class Image:
             pixels = image.tobytes()
             ```
         """
-        return self._native.tobytes()
+        return self._native.tobytes(*_raw_args(self.mode, encoder_name, args))
 
     def tobitmap(self, name: str = "image") -> bytes:
         """Return a mode ``1`` image as X11 bitmap source bytes.
@@ -2382,13 +2387,36 @@ def open_region(
     return result
 
 
-def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int = 8) -> Image:
+def _raw_args(mode: str, codec_name: str, args: tuple[object, ...]) -> tuple[str, int, int]:
+    """Normalize Pillow-style raw codec arguments."""
+    if codec_name != "raw":
+        raise ValueError("only the raw encoder and decoder are supported")
+    if len(args) == 1 and isinstance(args[0], tuple):
+        args = args[0]
+    if len(args) > 3:
+        raise TypeError("raw codec expects at most three arguments")
+    rawmode = args[0] if args else mode
+    if not isinstance(rawmode, str):
+        raise TypeError("raw mode must be a string")
+    stride = index(args[1]) if len(args) > 1 else 0
+    orientation = index(args[2]) if len(args) > 2 else 1
+    if stride < 0:
+        raise ValueError("stride must be nonnegative")
+    if orientation not in (-1, 1):
+        raise ValueError("orientation must be 1 or -1")
+    return rawmode, stride, orientation
+
+
+def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str = "raw", *args: object, bit_depth: int = 8) -> Image:
     """Create an image from bytes; mode 1 uses row-packed bits.
 
     Args:
         mode: Image mode, including `1` (row-packed bits), indexed, integer, float, and 8-bit color modes.
         size: Output `(width, height)` in pixels.
         data: Contiguous packed pixel buffer. `I` uses little-endian int32, `F` uses little-endian float32, and `I;16B` uses big-endian uint16.
+        decoder_name: Only `raw` is supported.
+        *args: Raw mode, byte stride (0 means packed), and orientation (1 top-down, -1 bottom-up).
+            Supports the image mode at its sample depth, 8-bit BGR/BGRX to RGB, and BGRA to RGBA.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16 for high-bit-depth storage, or 32 for `I` and `F`.
 
     Examples:
@@ -2402,7 +2430,8 @@ def frombytes(mode: str, size: tuple[int, int], data: object, *, bit_depth: int 
         raw = bytes(data)
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
-    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth))
+    rawmode, stride, orientation = _raw_args(mode, decoder_name, args)
+    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation))
     if mode in ("P", "PA"):
         result.putpalette(_GRAY_PALETTE)
     return result
@@ -2473,6 +2502,23 @@ def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
     values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    if format == "JPEG":
+        subsampling = supplied.get("subsampling", -1)
+        if isinstance(subsampling, str):
+            try:
+                subsampling = {"4:4:4": 0, "4:2:2": 1, "4:2:0": 2, "4:1:1": 2}[subsampling]
+            except KeyError as error:
+                raise ValueError("unsupported JPEG subsampling") from error
+        if isinstance(subsampling, bool) or not isinstance(subsampling, int):
+            raise TypeError("subsampling must be an int or sampling ratio")
+        if subsampling not in (-1, 0, 1, 2):
+            raise ValueError("subsampling must be -1, 0, 1, or 2")
+        values["jpeg_subsampling"] = subsampling
+        for name in ("progressive", "optimize"):
+            value = supplied.get(name, False)
+            if not isinstance(value, bool):
+                raise TypeError(f"{name} must be a bool")
+            values[f"jpeg_{name}"] = value
     if format == "TIFF":
         compression = supplied.get("compression", "raw")
         methods = {"raw": 0, "tiff_lzw": 1, "tiff_adobe_deflate": 2, "tiff_deflate": 2, "deflate": 2, "jpeg": 3}

@@ -7,7 +7,7 @@ use blanket_codec_gif::{decode_gif, encode_gif};
 pub use blanket_codec_heif::{PreparedHeif, encode_heif_with_preset};
 use blanket_codec_heif::{decode_heif, encode_heif};
 pub use blanket_codec_jpeg::{JpegCoding, encode_jpeg_variant};
-use blanket_codec_jpeg::{decode_jpeg, encode_jpeg};
+use blanket_codec_jpeg::{decode_jpeg, encode_jpeg_options};
 use blanket_codec_jpeg2000::{decode_jpeg2000, encode_jpeg2000};
 pub use blanket_codec_jxl::{JXL_PARALLEL_MIN_BYTES, JxlThreads, PreparedJxl, jxl_candidate_threads};
 use blanket_codec_jxl::{decode_jxl, encode_jxl};
@@ -420,7 +420,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
     }
     if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
         match (image.mode, format) {
-            (_, ImageFormat::Jpeg) => return encode_jpeg(image, image.pixel_data()?, options.quality),
+            (_, ImageFormat::Jpeg) => return encode_jpeg_options(image, image.pixel_data()?, options),
             (PixelMode::Cmyk, ImageFormat::Tiff) => return encode_raw_tiff(image, image.pixel_data()?),
             (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?),
             _ => {}
@@ -470,7 +470,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
         ImageFormat::Tiff => encode_tiff(image, pixels),
         ImageFormat::Webp => encode_webp(image, pixels, options),
         ImageFormat::Png => encode_png(image, pixels, options.compress_level),
-        ImageFormat::Jpeg => encode_jpeg(image, pixels, options.quality),
+        ImageFormat::Jpeg => encode_jpeg_options(image, pixels, options),
         ImageFormat::Jxl => encode_jxl(image, pixels, options),
     }
 }

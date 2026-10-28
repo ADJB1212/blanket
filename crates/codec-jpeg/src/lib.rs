@@ -125,6 +125,11 @@ pub fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8
     encode_jpeg_coded(image, pixels, quality, JpegCoding::BASELINE)
 }
 
+pub fn encode_jpeg_options(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
+    let coding = JpegCoding { optimize: options.jpeg_optimize, progressive: options.jpeg_progressive };
+    encode_jpeg_configured(image, pixels, options.quality, options.jpeg_subsampling, coding)
+}
+
 /// Encode with the normal save's validation, quality, and subsampling, but
 /// with the given entropy coding. Quantized coefficients do not depend on the
 /// entropy coder, so this equals losslessly transforming the normal save while
@@ -136,24 +141,35 @@ pub fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCodi
             "high-bit-depth saving supports HEIF, PNG, TIFF, or JXL; convert to bit_depth=8 explicitly for this format",
         ));
     }
-    encode_jpeg_coded(image, image.pixel_data()?, options.quality, coding)
+    let coding = JpegCoding { optimize: coding.optimize || options.jpeg_optimize, progressive: coding.progressive || options.jpeg_progressive };
+    encode_jpeg_configured(image, image.pixel_data()?, options.quality, options.jpeg_subsampling, coding)
 }
 
 fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
+    encode_jpeg_configured(image, pixels, quality, -1, coding)
+}
+
+fn encode_jpeg_configured(image: &Image, pixels: &[u8], quality: u8, subsampling: i8, coding: JpegCoding) -> PyResult<Vec<u8>> {
     JPEG_ENCODER.with(|cache| {
-        with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, quality, coding))
+        with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, quality, subsampling, coding))
     })
 }
 
-fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
+fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], quality: u8, subsampling: i8, coding: JpegCoding) -> PyResult<Vec<u8>> {
     if image.mode == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
 
+    let subsampling = match subsampling {
+        -1 | 2 => Subsamp::Sub2x2,
+        0 => Subsamp::None,
+        1 => Subsamp::Sub2x1,
+        _ => return Err(PyValueError::new_err("subsampling must be -1, 0, 1, or 2")),
+    };
     let (format, subsampling) = match image.mode {
         PixelMode::L => (PixelFormat::GRAY, Subsamp::Gray),
         // Match the default used by Pillow/libjpeg for RGB JPEG output.
-        PixelMode::Rgb | PixelMode::YCbCr => (PixelFormat::RGB, Subsamp::Sub2x2),
+        PixelMode::Rgb | PixelMode::YCbCr => (PixelFormat::RGB, subsampling),
         PixelMode::Cmyk => (PixelFormat::CMYK, Subsamp::None),
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
         _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
@@ -171,8 +187,12 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], qual
         .map_err(codec_error)?;
     if image.mode == PixelMode::YCbCr {
         let (width, height) = (image.width as usize, image.height as usize);
-        let planes = ycbcr_planes(pixels, width, height);
-        let chroma = width.div_ceil(2);
+        let planes = match subsampling {
+            Subsamp::Sub2x2 => ycbcr_planes(pixels, width, height),
+            _ => ycbcr_horizontal_planes(pixels, width, height, subsampling == Subsamp::Sub2x1),
+        };
+        let horizontal = if subsampling == Subsamp::None { 1 } else { 2 };
+        let chroma = width.div_ceil(horizontal);
         return encoder
             .compress_yuv_planes_to_vec(&turbojpeg::YuvPlanesImage {
                 y_plane: &planes.0,
@@ -180,10 +200,10 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], qual
                 v_plane: &planes.2,
                 width,
                 height,
-                y_stride: width.next_multiple_of(2),
+                y_stride: width.next_multiple_of(horizontal),
                 u_stride: chroma,
                 v_stride: chroma,
-                subsamp: Subsamp::Sub2x2,
+                subsamp: subsampling,
             })
             .map_err(codec_error);
     }
@@ -215,6 +235,38 @@ fn invert_samples(pixels: &[u8]) -> Vec<u8> {
     } else {
         pixels.iter().map(|&sample| 255 - sample).collect()
     }
+}
+
+fn ycbcr_horizontal_planes(pixels: &[u8], width: usize, height: usize, subsample: bool) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let horizontal = if subsample { 2 } else { 1 };
+    let y_stride = width.next_multiple_of(horizontal);
+    let chroma = width.div_ceil(horizontal);
+    let mut y = vec![0; y_stride * height];
+    let mut cb = vec![0; chroma * height];
+    let mut cr = vec![0; chroma * height];
+    if width == 0 {
+        return (y, cb, cr);
+    }
+    for row in 0..height {
+        let source = &pixels[row * width * 3..(row + 1) * width * 3];
+        for x in 0..y_stride {
+            y[row * y_stride + x] = source[x.min(width - 1) * 3];
+        }
+        for x in 0..chroma {
+            let left = x * horizontal * 3;
+            let right = (x * horizontal + 1).min(width - 1) * 3;
+            let sample = |channel| {
+                if subsample {
+                    ((u16::from(source[left + channel]) + u16::from(source[right + channel]) + (x as u16 & 1)) >> 1) as u8
+                } else {
+                    source[left + channel]
+                }
+            };
+            cb[row * chroma + x] = sample(1);
+            cr[row * chroma + x] = sample(2);
+        }
+    }
+    (y, cb, cr)
 }
 
 /// Planar Y plus 2x2 chroma averaged like libjpeg's h2v2 downsampler, with
@@ -290,6 +342,15 @@ mod tests {
     use super::*;
 
     #[test]
+    fn horizontal_ycbcr_planes_preserve_samples_rounding_and_edges() {
+        let pixels = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+        assert_eq!(ycbcr_horizontal_planes(&pixels, 3, 1, false), (vec![1, 4, 7], vec![2, 5, 8], vec![3, 6, 9]));
+        assert_eq!(ycbcr_horizontal_planes(&pixels, 3, 1, true), (vec![1, 4, 7, 7], vec![3, 8], vec![4, 9]));
+        assert_eq!(ycbcr_horizontal_planes(&pixels[..6], 2, 1, true), (vec![1, 4], vec![3], vec![4]));
+        assert_eq!(ycbcr_horizontal_planes(&[], 0, 1, true), (vec![], vec![], vec![]));
+    }
+
+    #[test]
     fn reused_codecs_match_fresh_codecs_after_mode_quality_and_error_changes() {
         for mode in [PixelMode::Cmyk, PixelMode::Rgb, PixelMode::L, PixelMode::YCbCr, PixelMode::Rgb] {
             for size in [(1, 1), (17, 9), (257, 65)] {
@@ -299,7 +360,7 @@ mod tests {
                     for coding in [JpegCoding { progressive: true, optimize: true }, JpegCoding::BASELINE] {
                         let actual = encode_jpeg_coded(&image, image.pixel_data().unwrap(), quality, coding).unwrap();
                         let expected =
-                            encode_jpeg_with(&mut Compressor::new().unwrap(), &image, image.pixel_data().unwrap(), quality, coding).unwrap();
+                            encode_jpeg_with(&mut Compressor::new().unwrap(), &image, image.pixel_data().unwrap(), quality, -1, coding).unwrap();
                         assert_eq!(actual, expected);
                         let expected = decode_jpeg_with(&mut Decompressor::new().unwrap(), &actual).unwrap();
                         let decoded = decode_jpeg(&actual).unwrap();
