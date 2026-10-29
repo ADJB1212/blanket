@@ -13,6 +13,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/source.rs");
     println!("cargo:rerun-if-changed=src/compat.cuh");
     println!("cargo:rerun-if-changed=../gpu-metal/src/kernels.metal");
+    println!("cargo:rerun-if-changed=../gpu-metal/src/tiles.metal");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=BLANKET_CUDA_ARCHS");
     if std::env::var_os("CARGO_FEATURE_PRECOMPILED").is_none() {

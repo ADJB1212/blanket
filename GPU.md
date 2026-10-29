@@ -48,7 +48,7 @@ CUDA continue to use the shared portable kernels.
 
 ### Processing plans and memory budgets
 
-Native Metal supports reusable, same-size processing plans. Operations use the
+Native Metal and CUDA support reusable, same-size processing plans. Operations use the
 same keyword arguments and numerical contracts as `GpuImage` methods:
 
 ```python
@@ -71,9 +71,10 @@ convolution, box/Gaussian blur, and odd 1x1 through 7x7 rank/min/max/median
 filters. They accept all seven uint8/float32 GPU modes. For unsigned L/RGB/RGBA,
 set `bit_depth=10`, `12`, or `16`; these plans exclude the uint8-only LUT methods
 and quantize after each public operation, including after all Gaussian passes.
-Plans validate their operations during preparation and require matching native
-Metal input size, mode, and sample depth at execution. CUDA and PyTorch tensors
-do not currently support plans. `capabilities()` reports `plan_runtimes` and
+Plans validate their operations during preparation and require matching input
+size, mode, sample depth, runtime, and device at execution. Use `backend="cuda",
+device=0` to prepare a CUDA plan. PyTorch MPS tensors do not currently support
+plans. `capabilities()` reports `plan_runtimes` and
 `plan_operations` separately from eager operations.
 
 Each execution allocates two scratch buffers whose combined size is at most
@@ -82,10 +83,10 @@ filter halos, including fractional box-filter support. No tile pixels pass
 through CPU memory. The budget excludes resident inputs, independent full-size
 outputs, prepared control buffers, Metal driver storage, and caches. It is a
 per-execution bound; concurrent submissions have separate scratch allocations.
-Inputs and outputs must still fit Metal's per-buffer limit. Preparation raises
+Inputs and outputs must still fit the backend's allocation limits. Preparation raises
 `ValueError` if even one pixel and its halos exceed the scratch budget.
 
-`run_batch` accepts at most 1024 images and submits one command buffer, reusing
+`run_batch` accepts at most 1024 images and, on Metal, submits one command buffer, reusing
 the same two scratch buffers across every tile and image. An empty batch returns
 an empty list. Each result has independent pixels and a copy of its input's
 metadata. Adjacent uint8 inversion/LUT steps compose into one exact per-channel
@@ -115,6 +116,28 @@ pipelines. Reconfiguration discards existing cache entries; zero disables a
 cache. In-flight commands and live images/plans retain their own resources
 independently of cache eviction. Cache limits bound retained cache storage,
 not total GPU memory or allocations still needed by submitted commands.
+
+CUDA plans use the same Rust preparation, exact LUT fusion, cumulative halos,
+and per-execution scratch budget as Metal. Pass `backend="cuda", device=0` to
+`configure_cache` and `cache_info` to control each device independently. CUDA
+reuses up to 16 scratch allocations and 64 immutable control entries within
+the configured budgets, including eager-operation parameters, resize
+coefficients, and LUTs. Scratch and cached controls use direct CUDA allocations
+independent of CuPy's global memory pool. Ordinary image outputs continue to use
+CuPy's allocator; the image cache budget applies to plan scratch storage only.
+Cached controls wait for their producer events across streams. Scratch storage
+returns to its cache after all batch results release their execution lease and
+the batch completes. Exported output tensors keep their own allocations alive.
+
+CUDA batches launch individual kernels on the current CuPy stream, retain
+inputs and controls, and share one completion event across their results.
+Plans avoid repeated control uploads and per-operation image/event wrappers;
+they do not use CUDA graph capture or claim a single CUDA command-buffer
+submission. Noncontiguous tensor inputs require an explicit resident packing
+allocation, separate from the scratch budget. CUDA plans currently cap expanded
+tile schedules at 65,536 dispatches; increase the scratch budget or reduce steps
+if preparation exceeds this limit. NVIDIA hardware parity remains subject to
+the CUDA tests running on a supported device.
 
 ### Shared Metal memory
 

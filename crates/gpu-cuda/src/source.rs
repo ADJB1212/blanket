@@ -4,11 +4,16 @@ const PRELUDE: &str = include_str!("compat.cuh");
 
 /// Lower address spaces, vector helpers, and entry points for NVRTC.
 pub fn shader_source() -> String {
-    let mut source = blanket_gpu_metal::SHADERS
+    let mut source = format!("{}\n{}", blanket_gpu_metal::SHADERS, blanket_gpu_metal::TILE_SHADERS)
         .replace("#include <metal_stdlib>", "")
         .replace("using namespace metal;", "")
-        .replace("[[buffer(4)]],", "[[buffer(4)]]")
-        .replace("uint i [[thread_position_in_grid]]) {", ") { uint i = blockIdx.x * blockDim.x + threadIdx.x;");
+        .replace("[[buffer(4)]],", "[[buffer(4)]]");
+    let grid = "uint i [[thread_position_in_grid]]) {";
+    while let Some(index) = source.find(grid) {
+        let prefix = source[..index].trim_end();
+        let start = prefix.strip_suffix(',').map_or(index, str::len);
+        source.replace_range(start..index + grid.len(), ") { uint i = blockIdx.x * blockDim.x + threadIdx.x;");
+    }
     for slot in 0..5 {
         source = source.replace(&format!("[[buffer({slot})]]"), "");
     }
@@ -67,7 +72,9 @@ mod tests {
         assert!(!source.contains("[[buffer("));
         assert!(!source.contains("thread_position_in_grid"));
         assert!(!source.contains("metal_stdlib"));
-        assert_eq!(source.matches("uint i = blockIdx.x").count(), 5);
+        assert_eq!(source.matches("uint i = blockIdx.x").count(), 7);
+        assert!(source.contains("extern \"C\" __global__ void tile_u8"));
+        assert!(source.contains("extern \"C\" __global__ void tile_f32"));
         assert!(source.contains("extern \"C\" __global__ void image_u8"));
         assert!(source.contains("extern \"C\" __global__ void image_f32"));
         assert!(source.contains("CONVERSION_KERNEL(convert_f32_u8"));
@@ -108,6 +115,15 @@ int main() {
         convert_u8_f32(source, floating, source, parameters, controls);
         if (floating[i] != float(source[i])) return 2;
     }
+    uint tile[11] = {4, 1, 1, 4, 1, 1, 0, 2, 0, 2, 1};
+    float tile_output[4] = {-1, -1, -1, -1};
+    for (uint i = 0; i < 3; i++) {
+        blockIdx.x = i;
+        tile_u8(source, output, tile);
+        tile_f32(floating, tile_output, tile);
+    }
+    if (output[0] != 255 || output[1] != 254 || output[2] != 1 || output[3] != 127) return 3;
+    if (tile_output[0] != -1 || tile_output[1] != -1 || tile_output[2] != 1 || tile_output[3] != 127) return 4;
     return 0;
 }
 "

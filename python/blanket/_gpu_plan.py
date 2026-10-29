@@ -1,4 +1,4 @@
-"""Reusable native Metal command batches with bounded working storage."""
+"""Reusable GPU plans with bounded working storage."""
 
 from __future__ import annotations
 
@@ -30,16 +30,28 @@ class _Recorder:
 
 
 class ProcessingPlan:
-    """Prepare same-size unary operations for native Metal images.
+    """Prepare same-size unary operations for native Metal or CUDA images.
 
     Each operation is a (method_name, keyword_arguments) pair. memory_limit
     bounds the two tile scratch buffers; input/output rasters and retained
     controls are separate. Calls preserve every public operation's rounding.
     """
 
-    def __init__(self, size: tuple[int, int], mode: str, operations: Sequence[tuple[str, dict[str, Any]]], *, memory_limit: int = 64 * 1024 * 1024, bit_depth: int | None = None) -> None:
+    def __init__(
+        self,
+        size: tuple[int, int],
+        mode: str,
+        operations: Sequence[tuple[str, dict[str, Any]]],
+        *,
+        memory_limit: int = 64 * 1024 * 1024,
+        bit_depth: int | None = None,
+        backend: str = "metal",
+        device: int = 0,
+    ) -> None:
         from ._gpu_unsigned import GpuUnsignedImage
         from .ImageGpu import _MODES, GpuImage, _require, _validate
+
+        _validate_backend(backend, device)
 
         size = tuple(index(value) for value in size)
         if len(size) != 2:
@@ -64,9 +76,17 @@ class ProcessingPlan:
             if name not in _OPERATIONS or (unsigned and name in ("point", "posterize", "solarize")):
                 raise ValueError(f"unsupported GPU plan operation: {name}")
             template = getattr(template, name)(**arguments)
-        _require()
+        _require(backend, device)
         channels, floating = _MODES[working_mode]
-        self._resource: Any = _blanket.MetalPlan(*size, channels, floating, recorder.steps, memory_limit)
+        self._resource: Any
+        if backend == "cuda":
+            from ._gpu_cuda_plan import CudaPlan
+
+            self._resource = CudaPlan(*size, channels, floating, recorder.steps, memory_limit, device)
+        else:
+            self._resource = _blanket.MetalPlan(*size, channels, floating, recorder.steps, memory_limit)
+        self.runtime = "cuda" if backend == "cuda" else "native"
+        self.device = f"cuda:{device}" if backend == "cuda" else "metal"
         self.size = size
         self.mode = mode
         self.bit_depth = bit_depth
@@ -88,7 +108,7 @@ class ProcessingPlan:
         return self.run_batch([image])[0]
 
     def run_batch(self, images: Sequence[GpuImage | GpuUnsignedImage]) -> list[GpuImage | GpuUnsignedImage]:
-        """Submit up to 1024 images in one ordered Metal command buffer."""
+        """Submit up to 1024 images with shared scratch storage and completion."""
         from ._gpu_unsigned import GpuUnsignedImage
         from .ImageGpu import GpuImage
 
@@ -103,13 +123,13 @@ class ProcessingPlan:
             raster = image._image if isinstance(image, GpuUnsignedImage) else image
             depth = image.bit_depth if isinstance(image, GpuUnsignedImage) else (32 if raster.dtype == "float32" else 8)
             raster._check()
-            if image.runtime != "native" or image.size != self.size or image.mode != self.mode or depth != self.bit_depth:
-                raise ValueError("GPU plan input must match size, mode, sample depth, and native Metal runtime")
+            if image.runtime != self.runtime or image.device != self.device or image.size != self.size or image.mode != self.mode or depth != self.bit_depth:
+                raise ValueError("GPU plan input must match size, mode, sample depth, runtime, and device")
             working.append(raster)
         resources = self._resource.run_batch([image._resource for image in working])
         results: list[GpuImage | GpuUnsignedImage] = []
         for resource, image in zip(resources, working, strict=True):
-            result = GpuImage(resource, self.size, self._working_mode, "native", image.info.copy(), unified_memory=image.unified_memory)
+            result = GpuImage(resource, self.size, self._working_mode, self.runtime, image.info.copy(), unified_memory=image.unified_memory)
             results.append(GpuUnsignedImage(result, self.mode, self.bit_depth) if self.bit_depth in (10, 12, 16) else result)
         return results
 
@@ -118,21 +138,40 @@ class ProcessingPlan:
         self._resource = None
 
 
-def configure_cache(*, image_bytes: int = 128 * 1024 * 1024, control_bytes: int = 16 * 1024 * 1024) -> None:
-    """Set Metal cache budgets and discard previously cached entries."""
+def _validate_backend(backend: str, device: int) -> None:
+    if backend not in ("metal", "cuda") or type(device) is not int or device < 0 or (backend == "metal" and device != 0):
+        raise ValueError("unsupported GPU plan/cache backend or device")
+
+
+def configure_cache(*, image_bytes: int = 128 * 1024 * 1024, control_bytes: int = 16 * 1024 * 1024, backend: str = "metal", device: int = 0) -> None:
+    """Set per-backend cache budgets and discard previously cached entries."""
     from .ImageGpu import _require
 
     image_bytes, control_bytes = index(image_bytes), index(control_bytes)
     if image_bytes < 0 or control_bytes < 0:
         raise ValueError("GPU cache budgets must be nonnegative")
-    _require()
-    _blanket._gpu_configure_cache(image_bytes, control_bytes)
+    _validate_backend(backend, device)
+    _require(backend, device)
+    if backend == "cuda":
+        from ._gpu_cuda import cupy
+        from ._gpu_cuda_plan import cache
+
+        with cupy().cuda.Device(device):
+            cache(device).configure(image_bytes, control_bytes)
+    else:
+        _blanket._gpu_configure_cache(image_bytes, control_bytes)
 
 
-def cache_info() -> dict[str, int]:
-    """Return retained cache bytes and configured limits for native Metal."""
+def cache_info(*, backend: str = "metal", device: int = 0) -> dict[str, int]:
+    """Return retained cache bytes and configured limits for the selected device."""
     from .ImageGpu import _require
 
-    _require()
-    image_bytes, image_limit, control_bytes, control_limit = _blanket._gpu_cache_info()
+    _validate_backend(backend, device)
+    _require(backend, device)
+    if backend == "cuda":
+        from ._gpu_cuda_plan import cache
+
+        image_bytes, image_limit, control_bytes, control_limit = cache(device).info()
+    else:
+        image_bytes, image_limit, control_bytes, control_limit = _blanket._gpu_cache_info()
     return {"image_bytes": image_bytes, "image_limit": image_limit, "control_bytes": control_bytes, "control_limit": control_limit}

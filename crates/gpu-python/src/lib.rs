@@ -46,6 +46,20 @@ fn _gpu_lut_controls(size: [u32; 3], channels: u32, table: Vec<f32>, floating: b
     blanket_gpu::lut_controls(size, channels, &table, floating).map_err(PyValueError::new_err)
 }
 
+type PlanStep = (u32, u32, u32, Vec<f32>);
+type PlanInfo = (usize, [u32; 2], [u32; 2], usize);
+
+#[pyfunction]
+fn _gpu_prepare_plan(
+    width: u32, height: u32, channels: u32, float: bool, steps: Vec<PlanStep>, memory_limit: usize,
+) -> PyResult<(Vec<PlanStep>, PlanInfo)> {
+    let steps = steps.into_iter().map(|(operation, kernel, axis, values)| blanket_gpu::plan::Step { operation, kernel, axis, values }).collect();
+    let plan = blanket_gpu::plan::Plan::new(blanket_gpu::Descriptor { width, height, channels, float }, steps, memory_limit)
+        .map_err(PyValueError::new_err)?;
+    let steps = plan.steps().iter().map(|step| (step.operation, step.kernel, step.axis, step.values.clone())).collect();
+    Ok((steps, (plan.steps().len(), plan.tile(), plan.halo(), plan.scratch_bytes())))
+}
+
 #[cfg(target_os = "macos")]
 mod native {
     use std::sync::OnceLock;
@@ -418,6 +432,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("_gpu_cuda_fatbin", PyBytes::new(module.py(), blanket_gpu_cuda::FATBIN))?;
     module.add_function(wrap_pyfunction!(_gpu_unsigned_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_weights, module)?)?;
+    module.add_function(wrap_pyfunction!(_gpu_prepare_plan, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_blur_parameters, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_lut_controls, module)?)?;
     module.add("_gpu_shader_source", blanket_gpu_metal::SHADERS)?;

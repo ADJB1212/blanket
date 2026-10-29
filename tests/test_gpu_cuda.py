@@ -130,7 +130,9 @@ def test_precompiled_module_loads_without_source_compilation(monkeypatch):
     cuda_runtime.library.cache_clear()
     try:
         resolve = cuda_runtime.library(0)
-        assert len(names) == 8
+        assert len(names) == 10
+        assert resolve("tile_u8")() == "tile_u8"
+        assert resolve("tile_f32")() == "tile_f32"
         assert resolve("image_f32")() == "image_f32"
         assert resolve("convert_u8_f32")() == "convert_u8_f32"
         assert all(not path.exists() for path in paths)

@@ -53,7 +53,7 @@ def library(device: int) -> Callable[[str], Callable[..., None]]:
                 path.write_bytes(_blanket._gpu_cuda_fatbin)
                 module = cp.RawModule(path=str(path))
                 # Resolve all entry points before removing the temporary file.
-                names = ("image_u8", "image_f32", "reduce_u8", "reduce_f32", "convert_u8_u8", "convert_u8_f32", "convert_f32_u8", "convert_f32_f32")
+                names = ("image_u8", "image_f32", "reduce_u8", "reduce_f32", "convert_u8_u8", "convert_u8_f32", "convert_f32_u8", "convert_f32_f32", "tile_u8", "tile_f32")
                 kernels = {name: module.get_function(name) for name in names}
         except Exception as error:
             raise RuntimeError(f"CUDA kernel loading failed on device {device}; check NVIDIA driver and GPU architecture compatibility: {error}") from error
@@ -63,15 +63,16 @@ def library(device: int) -> Callable[[str], Callable[..., None]]:
 class CudaImage:
     """Own an array and retain all asynchronous inputs until completion."""
 
-    def __init__(self, array: object, *, owners: tuple[object, ...] = ()) -> None:
+    def __init__(self, array: object, *, owners: tuple[object, ...] = (), completion: object | None = None) -> None:
         cp = cupy()
         self.array: Any = array
         self.device = int(self.array.device.id)
         self.owners = owners
         with cp.cuda.Device(self.device):
             self.stream: Any = cp.cuda.get_current_stream()
-            self.event: Any = cp.cuda.Event()
-            self.event.record(self.stream)
+            self.event: Any = cp.cuda.Event() if completion is None else completion
+            if completion is None:
+                self.event.record(self.stream)
 
     def __del__(self) -> None:
         # Keep owners alive while the last handle waits for its submitted work.
@@ -125,8 +126,12 @@ class CudaImage:
                 source = cp.ascontiguousarray(self.array)
                 rhs = cp.ascontiguousarray(other.array)
                 output = cp.empty((parameters[4], parameters[3], channels), dtype=cp.float32 if floating else cp.uint8)
-                controls = cp.asarray(parameters, dtype=cp.uint32)
-                weights = cp.asarray(values, dtype=cp.float32)
+                from ._gpu_cuda_plan import cache
+
+                state = cache(self.device)
+                parameter_owner = state.control(parameters, "uint32")
+                weight_owner = state.control(values, "float32")
+                controls, weights = parameter_owner.array, weight_owner.array
                 op = parameters[5]
                 kernel_name = "image_f32" if floating else "image_u8"
                 if op == 14:
@@ -140,7 +145,7 @@ class CudaImage:
                 threads = 128
                 count = parameters[3] * parameters[4] * channels
                 kernel(((count + threads - 1) // threads,), (threads,), (source, output, rhs, controls, weights), stream=stream)
-                return CudaImage(output, owners=(self, other, source, rhs, controls, weights, kernel))
+                return CudaImage(output, owners=(self, other, source, rhs, parameter_owner, weight_owner, kernel))
             except Exception as error:
                 # Failed launches must finish before temporary input owners disappear.
                 stream.synchronize()

@@ -537,8 +537,11 @@ Uint8, float32, and unsigned 10/12/16-bit plans retain public operation rounding
 float arithmetic and unsigned quantization boundaries are not fused. Input/output
 rasters and prepared controls are separate from the scratch budget. Plans cover
 brightness, inversion, channel LUTs, convolution, box/Gaussian blur, and rank
-filters; capabilities report this subset. CUDA and PyTorch execution retain their
-existing eager/async APIs and do not yet implement processing plans. See GPU.md
+filters; capabilities report this subset. CUDA also implements these plans,
+per-device scratch/control caches, resident tiling, and stream-ordered batches
+with shared completion events. CUDA launches individual kernels without graph
+capture; NVIDIA hardware validation remains pending. PyTorch MPS execution
+retains its eager/async APIs. See GPU.md
 for cache limits, ownership, completion, and error contracts.
 
 ### GPU Phase 4 — Broader Interoperability and Backends

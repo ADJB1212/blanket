@@ -107,8 +107,8 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
         "modes": tuple(_MODES),
         "operations": _OPERATIONS,
         "compiled_operations": _OPERATIONS if compiled else (),
-        "plan_runtimes": ("native",) if backend == "metal" and hasattr(_blanket, "MetalPlan") else (),
-        "plan_operations": tuple(sorted(_PLAN_OPERATIONS)) if backend == "metal" and hasattr(_blanket, "MetalPlan") else (),
+        "plan_runtimes": (("native",) if hasattr(_blanket, "MetalPlan") else ()) if backend == "metal" else (("cuda",) if compiled else ()),
+        "plan_operations": tuple(sorted(_PLAN_OPERATIONS)) if (backend == "metal" and hasattr(_blanket, "MetalPlan")) or (backend == "cuda" and compiled) else (),
         "unsigned_modes": ("L", "RGB", "RGBA"),
         "unsigned_depths": (10, 12, 16),
         "unsigned_operations": (
