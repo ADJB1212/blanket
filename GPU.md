@@ -46,6 +46,76 @@ kernels handle copy, blend, brightness, and invert; RGBA resize and box-blur
 passes share coordinate calculations across all four channels. PyTorch MPS and
 CUDA continue to use the shared portable kernels.
 
+### Processing plans and memory budgets
+
+Native Metal supports reusable, same-size processing plans. Operations use the
+same keyword arguments and numerical contracts as `GpuImage` methods:
+
+```python
+plan = ImageGpu.ProcessingPlan(
+    gpu.size, gpu.mode,
+    [("brightness", {"factor": 1.2}),
+     ("gaussian_blur", {"radius": 2.0}),
+     ("invert", {})],
+    memory_limit=8 * 1024 * 1024,
+)
+result = plan.run(gpu)
+results = plan.run_batch([gpu, gpu])
+print(plan.info())
+plan.close()
+result.synchronize()
+```
+
+Plans support brightness, inversion, `point`, solarize, posterize, 3x3/5x5
+convolution, box/Gaussian blur, and odd 1x1 through 7x7 rank/min/max/median
+filters. They accept all seven uint8/float32 GPU modes. For unsigned L/RGB/RGBA,
+set `bit_depth=10`, `12`, or `16`; these plans exclude the uint8-only LUT methods
+and quantize after each public operation, including after all Gaussian passes.
+Plans validate their operations during preparation and require matching native
+Metal input size, mode, and sample depth at execution. CUDA and PyTorch tensors
+do not currently support plans. `capabilities()` reports `plan_runtimes` and
+`plan_operations` separately from eager operations.
+
+Each execution allocates two scratch buffers whose combined size is at most
+`memory_limit` (64 MiB by default). Larger images use GPU tiles with cumulative
+filter halos, including fractional box-filter support. No tile pixels pass
+through CPU memory. The budget excludes resident inputs, independent full-size
+outputs, prepared control buffers, Metal driver storage, and caches. It is a
+per-execution bound; concurrent submissions have separate scratch allocations.
+Inputs and outputs must still fit Metal's per-buffer limit. Preparation raises
+`ValueError` if even one pixel and its halos exceed the scratch budget.
+
+`run_batch` accepts at most 1024 images and submits one command buffer, reusing
+the same two scratch buffers across every tile and image. An empty batch returns
+an empty list. Each result has independent pixels and a copy of its input's
+metadata. Adjacent uint8 inversion/LUT steps compose into one exact per-channel
+LUT. Floating-point arithmetic and unsigned quantization boundaries remain
+separate, preserving rounding, saturation, alpha behavior, and evaluation order.
+Plans support up to 1024 expanded kernel steps and can run concurrently.
+
+Plan submissions return without a completion wait. Image `synchronize`,
+`record_event`, and explicit CPU exports provide the usual completion/error
+handling. Closing a plan or input does not invalidate submitted results. A
+submitted batch cannot be cancelled; failures before submission produce no
+results, and Metal execution failures surface when waiting on a result/event.
+
+Configure caches independently of plan scratch storage:
+
+```python
+ImageGpu.configure_cache(image_bytes=32 * 1024 * 1024,
+                         control_bytes=4 * 1024 * 1024)
+print(ImageGpu.cache_info())
+```
+
+The defaults retain at most 128 MiB/16 reusable image allocations and
+16 MiB/64 control entries. Control caching includes the CPU lookup keys and
+reuses resize coefficient buffers and LUTs; small eager controls use inline
+Metal bindings. A fixed set of operation/format variants bounds compiled
+pipelines. Reconfiguration discards existing cache entries; zero disables a
+cache. In-flight commands and live images/plans retain their own resources
+independently of cache eviction. Cache limits bound retained cache storage,
+not total GPU memory or allocations still needed by submitted commands.
+
 ### Shared Metal memory
 
 Enable automatic sharing when uploading an image:

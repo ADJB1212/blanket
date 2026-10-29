@@ -1,5 +1,6 @@
 //! Backend-independent GPU image descriptors and operation preparation.
 
+pub mod plan;
 pub mod protocol;
 
 use protocol::{PARAMETER_COUNT, resampling, weights};

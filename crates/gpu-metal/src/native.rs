@@ -38,9 +38,11 @@ const PACKED_SAMPLES: usize = 4;
 // Bound retained allocations, including buffers whose GPU work is still pending.
 const POOL_MAX_BYTES: usize = 128 * 1024 * 1024;
 const POOL_MAX_BUFFERS: usize = 16;
+const CONTROL_MAX_BYTES: usize = 16 * 1024 * 1024;
 
 type Command = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
 type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
+type ControlEntry = (Vec<u32>, Retained<ProtocolObject<dyn MTLBuffer>>);
 
 fn packed_operation(op: u32, floating: bool, channels: u32) -> bool {
     !floating
@@ -53,10 +55,15 @@ fn finished(command: &Command) -> bool {
     matches!(command.status(), MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error)
 }
 
-#[derive(Default)]
 struct BufferPool {
     entries: Vec<PoolEntry>,
     bytes: usize,
+    limit: usize,
+}
+impl Default for BufferPool {
+    fn default() -> Self {
+        Self { entries: Vec::new(), bytes: 0, limit: POOL_MAX_BYTES }
+    }
 }
 
 struct PoolEntry {
@@ -77,14 +84,26 @@ impl BufferPool {
 
     fn put(&mut self, entry: PoolEntry) {
         let len = entry.buffer.length();
-        if len > POOL_MAX_BYTES {
+        if len > self.limit {
             return;
         }
-        while self.entries.len() >= POOL_MAX_BUFFERS || len > POOL_MAX_BYTES - self.bytes {
+        while self.entries.len() >= POOL_MAX_BUFFERS || len > self.limit - self.bytes {
             self.bytes -= self.entries.remove(0).buffer.length();
         }
         self.bytes += len;
         self.entries.push(entry);
+    }
+}
+
+struct ControlCache {
+    entries: Vec<ControlEntry>,
+    bytes: usize,
+    limit: usize,
+}
+unsafe impl Send for ControlCache {}
+impl Default for ControlCache {
+    fn default() -> Self {
+        Self { entries: Vec::new(), bytes: 0, limit: CONTROL_MAX_BYTES }
     }
 }
 
@@ -95,6 +114,8 @@ pub struct Context {
     library: Retained<ProtocolObject<dyn MTLLibrary>>,
     pipelines: [[OnceLock<Result<Pipeline, String>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
     pool: Arc<Mutex<BufferPool>>,
+    controls: Mutex<ControlCache>,
+    tile_pipelines: [Pipeline; SAMPLE_FORMAT_COUNT],
     conversions: [[Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT]; SAMPLE_FORMAT_COUNT],
     reductions: [Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT],
 }
@@ -105,6 +126,13 @@ pub struct Image {
     pool: Arc<Mutex<BufferPool>>,
     uses: Mutex<Vec<Command>>,
 }
+pub struct Plan {
+    geometry: blanket_gpu::plan::Plan,
+    controls: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
+}
+// Control buffers are immutable after preparation.
+unsafe impl Send for Plan {}
+unsafe impl Sync for Plan {}
 
 // Published buffers are immutable. Reader tracking and pool access are locked;
 // command status and completion waits may be queried from any CPU thread.
@@ -128,6 +156,127 @@ impl Drop for Image {
 }
 
 impl Context {
+    pub fn prepare_plan(&self, geometry: blanket_gpu::plan::Plan) -> Result<Plan, String> {
+        let controls = geometry
+            .steps()
+            .iter()
+            .map(|step| {
+                self.operation_pipeline(step.operation, geometry.descriptor().float, geometry.descriptor().channels)?;
+                self.control_buffer(if step.values.is_empty() { &[0.0] } else { &step.values })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Plan { geometry, controls })
+    }
+    pub fn plan_info(plan: &Plan) -> (usize, [u32; 2], [u32; 2], usize) {
+        (plan.geometry.steps().len(), plan.geometry.tile(), plan.geometry.halo(), plan.geometry.scratch_bytes())
+    }
+    fn encode_tile(
+        &self, command: &Command, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>, parameters: [u32; 11], floating: bool,
+    ) -> Result<(), String> {
+        let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal tile encoder")?;
+        let pipeline = &self.tile_pipelines[usize::from(floating)];
+        encoder.setComputePipelineState(pipeline);
+        // The plan bounds source/destination rectangles and retains every buffer.
+        unsafe {
+            encoder.setBuffer_offset_atIndex(Some(src), 0, SOURCE_SLOT);
+            encoder.setBuffer_offset_atIndex(Some(dst), 0, OUTPUT_SLOT);
+            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+        }
+        let samples = parameters[9] as usize * parameters[10] as usize * parameters[2] as usize;
+        encoder.dispatchThreads_threadsPerThreadgroup(
+            MTLSize { width: samples, height: 1, depth: 1 },
+            MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+        );
+        encoder.endEncoding();
+        Ok(())
+    }
+    pub fn execute_plan(&self, plan: &Plan, sources: &[&Image]) -> Result<Vec<Image>, String> {
+        autoreleasepool(|_| {
+            let geometry = &plan.geometry;
+            let d = geometry.descriptor();
+            let tile = geometry.tile();
+            let halo = geometry.halo();
+            if sources.len() > 1024 || sources.iter().any(|source| source.descriptor != d || !Arc::ptr_eq(&source.pool, &self.pool)) {
+                return Err("GPU plan inputs must match its descriptor and execution context (at most 1024 images)".into());
+            }
+            if sources.is_empty() {
+                return Ok(Vec::new());
+            }
+            let scratch = [self.allocate_image(geometry.scratch_bytes() / 2)?, self.allocate_image(geometry.scratch_bytes() / 2)?];
+            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal plan command buffer")?;
+            let mut outputs = Vec::with_capacity(sources.len());
+            for source in sources {
+                let output = self.allocate_image(d.byte_len()?)?;
+                for y in (0..d.height).step_by(tile[1] as usize) {
+                    for x in (0..d.width).step_by(tile[0] as usize) {
+                        let width = tile[0].min(d.width - x);
+                        let height = tile[1].min(d.height - y);
+                        let left = x.saturating_sub(halo[0]);
+                        let top = y.saturating_sub(halo[1]);
+                        let right = (u64::from(x) + u64::from(width) + u64::from(halo[0])).min(u64::from(d.width)) as u32;
+                        let bottom = (u64::from(y) + u64::from(height) + u64::from(halo[1])).min(u64::from(d.height)) as u32;
+                        let tw = right - left;
+                        let th = bottom - top;
+                        self.encode_tile(
+                            &command,
+                            &source.buffer,
+                            &scratch[0],
+                            [d.width, d.height, d.channels, tw, th, left, top, 0, 0, tw, th],
+                            d.float,
+                        )?;
+                        for (index, step) in geometry.steps().iter().enumerate() {
+                            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal plan encoder")?;
+                            let pipeline = self.operation_pipeline(step.operation, d.float, d.channels)?;
+                            encoder.setComputePipelineState(pipeline);
+                            let parameters = [tw, th, d.channels, tw, th, step.operation, step.kernel, step.axis];
+                            // Both scratch buffers fit the expanded tile and are used in command order.
+                            unsafe {
+                                encoder.setBuffer_offset_atIndex(Some(&scratch[index % 2]), 0, SOURCE_SLOT);
+                                encoder.setBuffer_offset_atIndex(Some(&scratch[(index + 1) % 2]), 0, OUTPUT_SLOT);
+                                encoder.setBuffer_offset_atIndex(Some(&scratch[index % 2]), 0, OTHER_SLOT);
+                                encoder.setBytes_length_atIndex(
+                                    std::ptr::NonNull::from(&parameters).cast(),
+                                    std::mem::size_of_val(&parameters),
+                                    PARAMETERS_SLOT,
+                                );
+                                encoder.setBuffer_offset_atIndex(Some(&plan.controls[index]), 0, VALUES_SLOT);
+                            }
+                            let samples = tw as usize * th as usize * d.channels as usize;
+                            let samples =
+                                if packed_operation(step.operation, d.float, d.channels) { samples.div_ceil(PACKED_SAMPLES) } else { samples };
+                            encoder.dispatchThreads_threadsPerThreadgroup(
+                                MTLSize { width: samples, height: 1, depth: 1 },
+                                MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+                            );
+                            encoder.endEncoding();
+                        }
+                        self.encode_tile(
+                            &command,
+                            &scratch[geometry.steps().len() % 2],
+                            &output,
+                            [tw, th, d.channels, d.width, d.height, x - left, y - top, x, y, width, height],
+                            d.float,
+                        )?;
+                    }
+                }
+                outputs.push(Image {
+                    descriptor: d,
+                    buffer: output,
+                    completion: Some(command.clone()),
+                    pool: Arc::clone(&self.pool),
+                    uses: Mutex::default(),
+                });
+            }
+            for source in sources {
+                source.track_read(&command);
+            }
+            command.commit();
+            for buffer in scratch {
+                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![command.clone()] });
+            }
+            Ok(outputs)
+        })
+    }
     pub fn is_complete(&self, image: &Image) -> bool {
         image.completion.as_ref().is_none_or(finished)
     }
@@ -157,7 +306,7 @@ impl Context {
 
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
-            let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}", super::SHADERS));
+            let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, include_str!("tiles.metal")));
             let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {
                 let function = library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| format!("Metal kernel unavailable: {name}"))?;
@@ -169,7 +318,19 @@ impl Context {
             let reductions = [pipeline("reduce_u8")?, pipeline("reduce_f32")?];
             let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
             let max_buffer_length = device.maxBufferLength();
-            Ok(Self { device, max_buffer_length, queue, library, pipelines, conversions, reductions, pool: Arc::default() })
+            let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
+            Ok(Self {
+                device,
+                max_buffer_length,
+                queue,
+                library,
+                pipelines,
+                conversions,
+                reductions,
+                pool: Arc::default(),
+                controls: Mutex::default(),
+                tile_pipelines,
+            })
         })
     }
     fn operation_pipeline(&self, operation: u32, floating: bool, channels: u32) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, String> {
@@ -210,6 +371,48 @@ impl Context {
         let cached = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len);
         cached.map_or_else(|| self.allocate_bytes(len), Ok)
     }
+    pub fn configure_cache(&self, image_bytes: usize, control_bytes: usize) {
+        let mut pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+        pool.limit = image_bytes;
+        pool.entries.clear();
+        pool.bytes = 0;
+        drop(pool);
+        let mut controls = self.controls.lock().unwrap_or_else(|error| error.into_inner());
+        controls.limit = control_bytes;
+        controls.entries.clear();
+        controls.bytes = 0;
+    }
+    pub fn cache_info(&self) -> (usize, usize, usize, usize) {
+        let pool = self.pool.lock().unwrap_or_else(|error| error.into_inner());
+        let controls = self.controls.lock().unwrap_or_else(|error| error.into_inner());
+        (pool.bytes, pool.limit, controls.bytes, controls.limit)
+    }
+    fn control_buffer(&self, values: &[f32]) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+        let key: Vec<u32> = values.iter().map(|value| value.to_bits()).collect();
+        let mut cache = self.controls.lock().unwrap_or_else(|error| error.into_inner());
+        if let Some(index) = cache.entries.iter().position(|entry| entry.0 == key) {
+            let entry = cache.entries.remove(index);
+            let buffer = entry.1.clone();
+            cache.entries.push(entry);
+            return Ok(buffer);
+        }
+        let len = std::mem::size_of_val(values);
+        let buffer = self.allocate_bytes(len)?;
+        // New storage is exclusively owned until published to the cache.
+        unsafe {
+            std::ptr::copy_nonoverlapping(values.as_ptr(), buffer.contents().cast().as_ptr(), values.len());
+        }
+        let retained_bytes = len.saturating_mul(2);
+        if retained_bytes <= cache.limit {
+            while cache.entries.len() >= 64 || retained_bytes > cache.limit - cache.bytes {
+                cache.bytes -= cache.entries.remove(0).0.len() * 8;
+            }
+            cache.bytes += retained_bytes;
+            cache.entries.push((key, buffer.clone()));
+        }
+        drop(cache);
+        Ok(buffer)
+    }
 }
 
 impl Backend for Context {
@@ -232,11 +435,7 @@ impl Backend for Context {
             let values = if request.values.is_empty() { &[0.0][..] } else { &request.values };
             let values_bytes = std::mem::size_of_val(values);
             let weights = if values_bytes > INLINE_CONTROL_BYTES {
-                let weights = self.allocate_bytes(values_bytes)?;
-                // The new control buffer is exclusively owned and fits the entire slice.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(values.as_ptr(), weights.contents().cast().as_ptr(), values.len());
-                }
+                let weights = self.control_buffer(values)?;
                 Some(weights)
             } else {
                 None

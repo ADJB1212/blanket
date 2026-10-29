@@ -516,18 +516,30 @@ downloadable artifact. Hardware CI and coverage remain unchecked until that
 suite runs on NVIDIA; compilation cannot establish CUDA parity. See GPU.md
 for setup.
 
-### GPU Phase 3 — Pipeline Efficiency and Resource Control
+### GPU Phase 3 — Pipeline Efficiency and Resource Control — Complete
 
-- [ ] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
+- [x] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
       bounded caches and explicit memory limits
-- [ ] Batch execution and reusable processing plans that reduce command
+- [x] Batch execution and reusable processing plans that reduce command
       overhead and intermediate allocations
-- [ ] Fuse compatible operations only when their rounding, saturation, alpha,
+- [x] Fuse compatible operations only when their rounding, saturation, alpha,
       and evaluation-order contracts remain satisfied
 - [x] Stream/event synchronization and asynchronous transfers with explicit
       completion, cancellation, and error propagation rules
-- [ ] Tile processing for images exceeding working-memory budgets, with correct
+- [x] Tile processing for images exceeding working-memory budgets, with correct
       filter halos and no unnecessary CPU round trips
+
+Native Metal provides configurable bounded image/control caches and reusable
+`ProcessingPlan` command batches for same-size unary operations. Plans reuse two
+scratch buffers within an explicit per-execution budget, tile with cumulative
+filter halos, and compose adjacent uint8 inversion/channel LUTs exactly.
+Uint8, float32, and unsigned 10/12/16-bit plans retain public operation rounding;
+float arithmetic and unsigned quantization boundaries are not fused. Input/output
+rasters and prepared controls are separate from the scratch budget. Plans cover
+brightness, inversion, channel LUTs, convolution, box/Gaussian blur, and rank
+filters; capabilities report this subset. CUDA and PyTorch execution retain their
+existing eager/async APIs and do not yet implement processing plans. See GPU.md
+for cache limits, ownership, completion, and error contracts.
 
 ### GPU Phase 4 — Broader Interoperability and Backends
 

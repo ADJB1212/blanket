@@ -74,6 +74,44 @@ mod native {
     // This wrapper contains only immutable Rust/Metal state. Completion waits
     // and downloads do not access Python objects while the GIL is released.
     unsafe impl pyo3::marker::Ungil for MetalImage {}
+    #[pyclass(frozen)]
+    pub(super) struct MetalPlan {
+        context: &'static Context,
+        plan: blanket_gpu_metal::Plan,
+    }
+    unsafe impl pyo3::marker::Ungil for MetalPlan {}
+
+    #[pymethods]
+    impl MetalPlan {
+        #[new]
+        fn new(
+            py: Python<'_>, width: u32, height: u32, channels: u32, float: bool, steps: Vec<(u32, u32, u32, Vec<f32>)>, memory_limit: usize,
+        ) -> PyResult<Self> {
+            let steps =
+                steps.into_iter().map(|(operation, kernel, axis, values)| blanket_gpu::plan::Step { operation, kernel, axis, values }).collect();
+            let geometry =
+                blanket_gpu::plan::Plan::new(Descriptor { width, height, channels, float }, steps, memory_limit).map_err(PyValueError::new_err)?;
+            py.detach(|| {
+                let context = context()?;
+                let plan = context.prepare_plan(geometry).map_err(PyRuntimeError::new_err)?;
+                Ok(Self { context, plan })
+            })
+        }
+        fn info(&self) -> (usize, [u32; 2], [u32; 2], usize) {
+            Context::plan_info(&self.plan)
+        }
+        fn run_batch(&self, py: Python<'_>, images: Vec<Py<MetalImage>>) -> PyResult<Vec<MetalImage>> {
+            let images = images.iter().map(|image| image.borrow(py)).collect::<Vec<_>>();
+            let sources = images.iter().map(|image| &**image).collect::<Vec<&MetalImage>>();
+            py.detach(|| {
+                let sources = sources.iter().map(|image| &image.image).collect::<Vec<_>>();
+                self.context
+                    .execute_plan(&self.plan, &sources)
+                    .map(|outputs| outputs.into_iter().map(|image| MetalImage { context: self.context, image }).collect())
+            })
+            .map_err(PyRuntimeError::new_err)
+        }
+    }
 
     impl MetalImage {
         fn wait_bytes(&self) -> Result<&[u8], String> {
@@ -364,6 +402,15 @@ mod native {
     pub(super) fn _gpu_available() -> bool {
         context().is_ok()
     }
+    #[pyfunction]
+    pub(super) fn _gpu_configure_cache(image_bytes: usize, control_bytes: usize) -> PyResult<()> {
+        context()?.configure_cache(image_bytes, control_bytes);
+        Ok(())
+    }
+    #[pyfunction]
+    pub(super) fn _gpu_cache_info() -> PyResult<(usize, usize, usize, usize)> {
+        Ok(context()?.cache_info())
+    }
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -377,8 +424,11 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(target_os = "macos")]
     {
         module.add_class::<native::MetalImage>()?;
+        module.add_class::<native::MetalPlan>()?;
         module.add_function(wrap_pyfunction!(native::_gpu_available, module)?)?;
         module.add_function(wrap_pyfunction!(native::_gpu_synchronize, module)?)?;
+        module.add_function(wrap_pyfunction!(native::_gpu_configure_cache, module)?)?;
+        module.add_function(wrap_pyfunction!(native::_gpu_cache_info, module)?)?;
     }
     Ok(())
 }

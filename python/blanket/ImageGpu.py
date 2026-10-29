@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING
 
 from . import Image, _blanket
 from ._gpu_async import Event, Stream, submit
+from ._gpu_plan import _OPERATIONS as _PLAN_OPERATIONS, ProcessingPlan, cache_info, configure_cache
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -106,6 +107,8 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
         "modes": tuple(_MODES),
         "operations": _OPERATIONS,
         "compiled_operations": _OPERATIONS if compiled else (),
+        "plan_runtimes": ("native",) if backend == "metal" and hasattr(_blanket, "MetalPlan") else (),
+        "plan_operations": tuple(sorted(_PLAN_OPERATIONS)) if backend == "metal" and hasattr(_blanket, "MetalPlan") else (),
         "unsigned_modes": ("L", "RGB", "RGBA"),
         "unsigned_depths": (10, 12, 16),
         "unsigned_operations": (
