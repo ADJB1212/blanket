@@ -547,6 +547,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "blanket-gpu-cuda"
+version = "0.3.0"
+dependencies = [
+ "blanket-gpu-metal",
+]
+
+[[package]]
 name = "blanket-gpu-metal"
 version = "0.3.0"
 dependencies = [
@@ -563,6 +570,7 @@ name = "blanket-gpu-python"
 version = "0.3.0"
 dependencies = [
  "blanket-gpu",
+ "blanket-gpu-cuda",
  "blanket-gpu-metal",
  "pyo3",
 ]

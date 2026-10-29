@@ -60,6 +60,10 @@ docs = [
 gpu = [
     "torch>=2.13",
 ]
+gpu-cuda = [
+    {include-group = "gpu"},
+    "cupy-cuda13x[ctk]>=14.2; sys_platform == 'linux' or sys_platform == 'win32'",
+]
 
 [tool.maturin]
 manifest-path = "crates/blanket/Cargo.toml"
@@ -114,7 +118,7 @@ python = "./.venv"
 output-format = "concise"
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["blanket._blanket"]
+allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
 [tool.ty.rules]
 invalid-assignment = "ignore"

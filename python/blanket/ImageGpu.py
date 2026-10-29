@@ -79,14 +79,28 @@ def _scalar(value: float) -> float:
     return value
 
 
-def capabilities() -> dict[str, object]:
-    """Report native support without importing PyTorch."""
-    compiled = hasattr(_blanket, "_gpu_weights")
+def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object]:
+    """Report backend support and driver diagnostics without importing PyTorch."""
+    if backend not in ("metal", "cuda"):
+        raise ValueError("unsupported GPU backend")
+    compiled = hasattr(_blanket, "_gpu_weights") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_source")
     probe = getattr(_blanket, "_gpu_available", None)
+    available = bool(probe and probe()) if backend == "metal" else False
+    diagnostic = None
+    if backend == "cuda":
+        from . import _gpu_cuda
+
+        try:
+            _gpu_cuda.require(device)
+            available = True
+        except (RuntimeError, ValueError) as error:
+            diagnostic = str(error)
     return {
         "compiled": compiled,
-        "available": bool(probe and probe()),
-        "backend": "metal",
+        "available": available,
+        "backend": backend,
+        "device": device,
+        "diagnostic": diagnostic,
         "modes": tuple(_MODES),
         "operations": _OPERATIONS,
         "compiled_operations": _OPERATIONS if compiled else (),
@@ -122,19 +136,26 @@ def capabilities() -> dict[str, object]:
             "statistics",
         ),
         "histogram_modes": ("L", "LA", "RGB", "RGBA"),
-        "torch_interop": "requires torch.mps.compile_shader",
+        "torch_interop": "DLPack with CUDA stream ordering" if backend == "cuda" else "requires torch.mps.compile_shader",
     }
 
 
-def _require() -> None:
-    if not capabilities()["available"]:
+def _require(backend: str = "metal", device: int = 0) -> None:
+    if backend == "cuda":
+        from . import _gpu_cuda
+
+        _gpu_cuda.require(device)
+    elif not capabilities()["available"]:
         raise RuntimeError("Metal unavailable; build Blanket with the gpu-metal feature on macOS")
 
 
-def _torch() -> ModuleType:
+def _torch(backend: str = "metal") -> ModuleType:
     import torch
 
-    if not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
+    if backend == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("CUDA interoperability requires a CUDA-enabled PyTorch installation and NVIDIA driver")
+    elif not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
         raise RuntimeError("PyTorch MPS with torch.mps.compile_shader is required")
     return torch
 
@@ -151,11 +172,13 @@ def _validate(size: tuple[int, int], mode: str) -> None:
         raise ValueError("invalid GPU image dimensions")
 
 
-def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native") -> GpuImage | GpuUnsignedImage:
+def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0) -> GpuImage | GpuUnsignedImage:
     """Upload the current CPU frame, retaining its metadata."""
-    _require()
-    if backend != "metal" or runtime not in ("native", "torch"):
+    if backend not in ("metal", "cuda") or runtime not in ("native", "torch"):
         raise ValueError("unsupported GPU backend or runtime")
+    _require(backend, device)
+    if backend == "metal" and device != 0:
+        raise ValueError("Metal supports only the default device")
     _validate(image.size, image.mode)
     if image.mode in ("L", "RGB", "RGBA") and image.bit_depth in (10, 12, 16):
         from ._gpu_unsigned import GpuUnsignedImage
@@ -164,7 +187,7 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         data = _blanket._gpu_unsigned_bytes(image.tobytes(), image.bit_depth, False)
         working = Image.frombytes(mode, image.size, data)
         working.info.update(image._metadata_info())
-        resident = from_image(working, backend=backend, runtime=runtime)
+        resident = from_image(working, backend=backend, runtime=runtime, device=device)
         if not isinstance(resident, GpuImage):
             raise RuntimeError("invalid unsigned GPU working storage")
         return GpuUnsignedImage(resident, image.mode, image.bit_depth)
@@ -172,7 +195,12 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         raise ValueError("unsupported GPU sample depth")
     channels, floating = _MODES[image.mode]
     data = image.tobytes()
-    if runtime == "native":
+    if backend == "cuda":
+        from . import _gpu_cuda
+
+        resource = _gpu_cuda.upload(data, (image.height, image.width, channels), floating, device)
+        runtime = "cuda"
+    elif runtime == "native":
         resource = _blanket.MetalImage(*image.size, channels, floating, data)
     else:
         torch = _torch()
@@ -181,14 +209,16 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
 
 
 def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None) -> GpuImage | GpuUnsignedImage:
-    """Borrow an MPS tensor. Views are packed on the GPU before processing."""
-    _require()
-    torch = _torch()
+    """Borrow an MPS/CUDA tensor. Views are packed on the GPU before processing."""
+    backend = "cuda" if getattr(getattr(tensor, "device", None), "type", None) == "cuda" else "metal"
+    device_type = "cuda" if backend == "cuda" else "mps"
+    _require(backend, tensor.device.index if backend == "cuda" else 0)
+    torch = _torch(backend)
     if bit_depth is not None:
         from ._gpu_unsigned import GpuUnsignedImage
 
-        if bit_depth not in (10, 12, 16) or not isinstance(tensor, torch.Tensor) or tensor.dtype != torch.uint16 or tensor.device.type != "mps":
-            raise ValueError("unsigned import requires an MPS uint16 tensor and depth 10, 12, or 16")
+        if bit_depth not in (10, 12, 16) or not isinstance(tensor, torch.Tensor) or tensor.dtype != torch.uint16 or tensor.device.type != device_type:
+            raise ValueError("unsigned import requires an MPS/CUDA uint16 tensor and depth 10, 12, or 16")
         if mode not in (None, "L", "RGB", "RGBA"):
             raise ValueError("unsupported unsigned GPU mode")
         working_mode = None if mode is None else {"L": "F", "RGB": "RGB;F", "RGBA": "RGBA;F"}[mode]
@@ -196,8 +226,8 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         if not isinstance(resident, GpuImage):
             raise RuntimeError("invalid unsigned tensor working storage")
         return GpuUnsignedImage(resident._run(30, values=[float((1 << bit_depth) - 1)]), {"F": "L", "RGB;F": "RGB", "RGBA;F": "RGBA"}[resident.mode], bit_depth)
-    if not isinstance(tensor, torch.Tensor) or tensor.device.type != "mps" or tensor.dtype not in (torch.uint8, torch.float32) or tensor.requires_grad:
-        raise ValueError("requires an MPS uint8/float32 tensor without gradients")
+    if not isinstance(tensor, torch.Tensor) or tensor.device.type != device_type or tensor.dtype not in (torch.uint8, torch.float32) or tensor.requires_grad:
+        raise ValueError("requires an MPS/CUDA uint8/float32 tensor without gradients")
     if layout == "HW" and tensor.ndim == 2:
         tensor = tensor.unsqueeze(-1)
     elif layout == "CHW" and tensor.ndim == 3:
@@ -211,6 +241,10 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
     if mode not in _MODES or _MODES[mode] != (channels, floating):
         raise ValueError("tensor channels/dtype do not match mode")
     _validate((width, height), mode)
+    if backend == "cuda":
+        from . import _gpu_cuda
+
+        return GpuImage(_gpu_cuda.from_torch(tensor, copy=copy), (width, height), mode, "cuda", {})
     return GpuImage(tensor.clone() if copy else tensor, (width, height), mode, "torch", {})
 
 
@@ -240,7 +274,7 @@ class GpuImage:
         self.mode = mode
         self.runtime = runtime
         self.info = info
-        self.device = "metal" if runtime == "native" else "mps"
+        self.device = f"cuda:{self._resource.device}" if runtime == "cuda" else "metal" if runtime == "native" else "mps"
         self.dtype = "float32" if _MODES[mode][1] else "uint8"
 
     def _check(self) -> None:
@@ -255,7 +289,12 @@ class GpuImage:
         resident_mean = op == 22 and k == 1 and other.mode == "RGBA;F" and other.size == (1, 1)
         coordinate_map = op == 27 and other.mode == "RGB;F" and other.size == size
         mask_band = op == 28 and other.mode == "F"
-        if not (compatible_mode or resident_mean or coordinate_map or mask_band) or not (self.size == other.size or resident_mean or coordinate_map) or self.runtime != other.runtime:
+        if (
+            not (compatible_mode or resident_mean or coordinate_map or mask_band)
+            or not (self.size == other.size or resident_mean or coordinate_map)
+            or self.runtime != other.runtime
+            or self.device != other.device
+        ):
             raise ValueError("GPU images must have matching size, mode, and execution context")
         size = self.size if size is None else size
         mode = self.mode if mode is None else mode
@@ -263,7 +302,9 @@ class GpuImage:
         channels, floating = _MODES[mode]
         parameters = [*self.size, _MODES[self.mode][0], *size, op, k, axis]
         values = [0.0] if values is None else values
-        if self.runtime == "native":
+        if self.runtime == "cuda":
+            resource = self._resource.run(other._resource, parameters, values, channels, floating, _MODES[self.mode][1])
+        elif self.runtime == "native":
             resource = self._resource.run(other._resource, parameters, values)
         else:
             torch = _torch()
@@ -691,7 +732,7 @@ class GpuImage:
     def synchronize(self) -> None:
         """Wait for pending execution and surface GPU errors."""
         self._check()
-        if self.runtime == "native":
+        if self.runtime in ("native", "cuda"):
             self._resource.synchronize()
         else:
             _torch().mps.synchronize()
@@ -699,7 +740,7 @@ class GpuImage:
     def to_image(self) -> Image.Image:
         """Download an independent CPU image."""
         self.synchronize()
-        data = self._resource.download() if self.runtime == "native" else bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
+        data = self._resource.download() if self.runtime in ("native", "cuda") else bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
         result = Image.frombytes(self.mode, self.size, data)
         result.info.update(self.info)
         return result
@@ -707,6 +748,15 @@ class GpuImage:
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
         """Share a tensor-backed result without downloading pixels."""
         self._check()
+        if self.runtime == "cuda":
+            resource = self._resource.to_torch()
+            if layout == "HWC":
+                return resource
+            if layout == "CHW":
+                return resource.permute(2, 0, 1)
+            if layout == "HW" and _MODES[self.mode][0] == 1:
+                return resource.squeeze(-1)
+            raise ValueError("invalid export layout")
         if self.runtime != "torch":
             raise ValueError("native Metal export unsupported; upload with runtime='torch'")
         if layout == "HWC":

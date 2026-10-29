@@ -34,6 +34,7 @@ blanket-draw.workspace = true
 
 [features]
 gpu-metal = ["dep:blanket-gpu-python"]
+gpu-cuda = ["dep:blanket-gpu-python", "blanket-gpu-python/cuda"]
 default = ["no-vendored-webp"]
 jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]

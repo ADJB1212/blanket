@@ -324,6 +324,94 @@ Native Metal `to_torch()` and mixing the two contexts are explicitly rejected.
 supported modes and operations, and the PyTorch interface requirement without
 importing torch.
 
+## NVIDIA CUDA
+
+Build the optional CUDA backend on Linux with a CUDA 13-compatible NVIDIA
+driver. The `gpu-cuda` dependency group installs CuPy, its CUDA runtime/NVRTC
+components, and PyTorch for interoperability/testing:
+
+```sh
+uv sync --no-install-project --group gpu-cuda --group test
+uv run --no-sync maturin develop --uv --features gpu-cuda
+```
+
+Use the platform's codec build features and native dependencies as described
+in the main build instructions. CUDA development headers and libtorch are not
+linked into the Rust extension. CuPy is an optional runtime dependency for
+CUDA, including its native image path; PyTorch is needed only for tensor
+exchange. CPU-only installations do not import either package. CUDA and Metal
+features may be enabled together.
+
+```python
+status = ImageGpu.capabilities("cuda", device=0)
+if not status["available"]:
+    raise RuntimeError(status["diagnostic"])
+
+gpu = ImageGpu.from_image(image, backend="cuda", device=0)
+result = gpu.resize((1024, 768)).contrast(1.1).sharpness(1.2)
+tensor = result.to_torch()  # Shares CUDA storage via DLPack.
+cpu_image = result.to_image()  # Explicit download.
+```
+
+Device IDs are CUDA ordinals. `device` reports `cuda:N`; binary operations
+reject mismatched devices. CUDA resources use `runtime="cuda"` internally;
+both `runtime="native"` and `runtime="torch"` uploads select this shared
+runtime when `backend="cuda"`. The default backend remains Metal.
+
+CUDA compiles the shared Metal operation contracts to CUDA C++ in the
+`blanket-gpu-cuda` workspace crate, with explicit vector/bit-cast helpers and
+64-bit integer accumulators. CuPy launches those compiled pixel kernels;
+Python manages shapes, controls, allocation, and exchange. All uint8, float32,
+and unsigned working formats and resident operations have the same advertised
+coverage. Float math is single precision with implicit FMA contraction disabled;
+backend math-library and boundary rounding differences still need hardware
+parity validation. There is no CPU fallback.
+
+`from_torch` detects CUDA tensors automatically, validates HW/HWC/CHW layouts,
+uint8/float32 dtype and disabled gradients, and imports through the DLPack
+protocol. Storage offsets and strides are retained. `copy=True` makes an
+independent GPU copy; noncontiguous inputs are packed on the GPU when an
+operation needs them. Unsigned tensor import uses the existing `bit_depth`
+argument and normalized float32 working storage.
+
+Import while the producing PyTorch stream is current, or establish producer
+completion before importing. DLPack negotiates a dependency onto the current
+CuPy stream. Every operation records an event; subsequent operations wait on
+their inputs even when the processing stream changes. Export enters the
+recorded producer stream and lets DLPack establish the dependency onto the
+consumer's current PyTorch stream. The protocol retains allocation ownership
+without CPU pixel staging. Subsequent external mutations require application
+synchronization or re-import on the new producer stream. Avoid concurrent
+mutation while kernels read shared input storage. See the
+[CuPy DLPack contract](https://docs.cupy.dev/en/stable/reference/generated/cupy.from_dlpack.html).
+
+Results retain their asynchronous inputs and controls; dropping the last CUDA
+resource waits for its event before releasing those owners. Closing a source
+does not invalidate submitted work or exported tensors. This initial runtime
+retains intermediate owners until results are released; bounded reuse and
+fully asynchronous reclamation remain Phase 3 work. Downloads are explicit
+and blocking. Driver initialization, unavailable devices, NVRTC/architecture
+failures, allocation errors, and execution failures report actionable diagnostics.
+The first CUDA capability probe compiles kernels; later probes use a bounded
+per-device module cache.
+
+Run the shared Metal numeric contracts on NVIDIA hardware:
+
+```sh
+BLANKET_REQUIRE_CUDA=1 uv run --no-sync pytest tests/test_gpu_cuda.py -n 0 -ra -x
+```
+
+The NVIDIA workflow uses a trusted Linux x64 self-hosted runner labeled
+`nvidia`, with the pinned Rust nightly, C/C++ build tools, and the Linux codec
+dependencies from CI.yml already installed (dav1d 1.3+, WebP, LittleCMS,
+libde265/x265, CMake, Ninja, pkg-config, NASM). It is manually dispatchable;
+set repository variable `BLANKET_NVIDIA_CI=true` to run it on main pushes.
+Pull requests do not execute on this runner. `BLANKET_REQUIRE_CUDA=1` makes
+missing GPU support a test failure rather than a skip. Local tests without
+CUDA report explicit skips; host C++ compilation tests check source portability
+but cannot certify NVRTC compilation or NVIDIA execution. GPU Phase 2's
+hardware parity checkbox remains pending that NVIDIA run.
+
 ## Native Rust benchmarks
 
 Criterion suites exercise control preparation without a GPU and native Metal
@@ -342,5 +430,6 @@ and LUT control-data validation and quantization.
 `blanket-gpu-metal` owns Metal allocations, command queues, and shaders.
 `blanket-gpu-python` exposes native resources and shader preparation to Python.
 Future backends implement the `Backend` trait and add Python device selection;
-they do not need to change CPU raster storage. CUDA and generic tensor exchange
-protocols are not implemented yet.
+they do not need to change CPU raster storage. The CUDA crate lowers the shared
+kernel contracts for NVRTC, with CuPy managing driver resources and DLPack.
+Generic tensor exchange beyond the PyTorch adapter is not exposed yet.

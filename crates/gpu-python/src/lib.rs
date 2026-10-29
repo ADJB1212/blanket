@@ -259,6 +259,8 @@ mod native {
 }
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "cuda")]
+    module.add("_gpu_cuda_source", blanket_gpu_cuda::shader_source())?;
     module.add_function(wrap_pyfunction!(_gpu_unsigned_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_weights, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_blur_parameters, module)?)?;

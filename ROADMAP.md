@@ -491,19 +491,27 @@ hardware; partial coverage must not trigger an implicit CPU fallback.
 
 ### GPU Phase 2 — NVIDIA and CUDA Tensor Pipelines
 
-- [ ] Add an optional CUDA backend in dedicated workspace crates, reusing
+- [x] Add an optional CUDA backend in dedicated workspace crates, reusing
       descriptors, validation, and operation contracts
 - [ ] Reach the shipped Metal operation and sample-format coverage on NVIDIA
       hardware, with explicit backend and device selection
-- [ ] Upload CPU images once, retain intermediate allocations on the selected
+- [x] Upload CPU images once, retain intermediate allocations on the selected
       CUDA device, and make CPU downloads explicit
-- [ ] Import/export compatible PyTorch CUDA tensors through DLPack, honoring
+- [x] Import/export compatible PyTorch CUDA tensors through DLPack, honoring
       device identity, storage offsets, strides, ownership, and producer/consumer
       stream ordering without CPU pixel staging
-- [ ] Report missing drivers, unsupported devices, allocation failures, and
+- [x] Report missing drivers, unsupported devices, allocation failures, and
       backend-specific capabilities through actionable errors and diagnostics
-- [ ] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
+- [x] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
       views, source lifetimes, chained operations, and transfer boundaries
+
+The optional `gpu-cuda` build feature supplies CUDA kernels through
+`blanket-gpu-cuda`, sharing Metal's pixel contracts. CuPy handles CUDA
+allocations, NVRTC compilation, and DLPack stream negotiation. Native CUDA
+execution needs CuPy but does not need PyTorch. The NVIDIA workflow runs the
+shared numeric contracts and CUDA ownership/stream tests on an opt-in GPU
+runner. Hardware coverage remains unchecked until that suite passes on NVIDIA;
+Apple Silicon checks cannot establish CUDA parity. See GPU.md for setup.
 
 ### GPU Phase 3 — Pipeline Efficiency and Resource Control
 

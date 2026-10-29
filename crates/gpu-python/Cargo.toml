@@ -9,9 +9,13 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+blanket-gpu-cuda = { workspace = true, optional = true }
 pyo3.workspace = true
 blanket-gpu.workspace = true
 blanket-gpu-metal.workspace = true
+
+[features]
+cuda = ["dep:blanket-gpu-cuda"]
 
 [lib]
 doctest = false

@@ -2,6 +2,7 @@
 members = [
     "crates/gpu",
     "crates/gpu-metal",
+    "crates/gpu-cuda",
     "crates/gpu-python",
     "crates/bench-support",
     "crates/core",
@@ -49,6 +50,7 @@ edition = "2024"
 [workspace.dependencies]
 blanket-gpu = { path = "crates/gpu" }
 blanket-gpu-metal = { path = "crates/gpu-metal" }
+blanket-gpu-cuda = { path = "crates/gpu-cuda" }
 blanket-gpu-python = { path = "crates/gpu-python" }
 blanket-kernels = { path = "crates/kernels" }
 blanket-resample = { path = "crates/resample" }
