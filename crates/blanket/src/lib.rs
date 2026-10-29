@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 /// Native implementation details for the public `blanket` Python package.
 #[pymodule]
 fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    #[cfg(feature = "gpu-metal")]
+    blanket_gpu_python::register(module)?;
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("UnidentifiedImageError", module.py().get_type::<UnidentifiedImageError>())?;
     module.add_class::<Image>()?;

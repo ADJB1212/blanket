@@ -50,11 +50,15 @@ test = [
     "rich>=15",
     "ruff>=0.17.2",
     "ty>=0.0.92",
+    {include-group = "gpu"},
 ]
 docs = [
     "zensical>=0.0.73",
     "mkdocstrings[python]>=1.0.8,<2",
     "ruff>=0.17.2",
+]
+gpu = [
+    "torch>=2.13",
 ]
 
 [tool.maturin]

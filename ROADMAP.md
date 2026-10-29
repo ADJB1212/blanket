@@ -464,18 +464,26 @@ Native Metal and PyTorch allocations currently use separate execution contexts.
 Native Metal buffer export to PyTorch is not implemented; CPU images intended
 for tensor output can be uploaded with `runtime="torch"`.
 
-### GPU Phase 1 — Operation and Precision Coverage
+### GPU Phase 1 — Operation and Precision Coverage — Complete
 
-- [ ] Mode conversion, channel extraction/merge, grayscale, and alpha handling
-- [ ] Gaussian/box blur, unsharp masking, min/max morphology, and median filters
-- [ ] Color, contrast, and sharpness enhancement; 3D LUTs and explicit
-      linear-light resize/compositing
-- [ ] Masked paste/compositing, affine and perspective transforms, arbitrary
+- [x] Mode conversion between supported uint8/float32 GPU modes, channel
+      extraction/merge, grayscale, and alpha replacement with resident results
+- [x] Gaussian/box blur, unsharp masking, and min/max morphology and median/rank
+      filters with odd 1x1 through 7x7 windows, on native Metal and PyTorch MPS
+- [x] Color, contrast, and sharpness enhancement with resident contrast reduction;
+      3D LUTs and explicit linear-light resize/compositing on native Metal and MPS
+- [x] Masked paste/compositing, affine and perspective transforms, arbitrary
       rotation, and reusable coordinate remapping
-- [ ] Resident reductions for histograms, extrema, moments, and statistics;
+- [x] Resident reductions for histograms, extrema, moments, and statistics;
       return small CPU results only when explicitly requested
-- [ ] Unsigned 10/12/16-bit processing with retained sample precision and
+- [x] Unsigned 10/12/16-bit processing with retained sample precision and
       documented rounding, saturation, alpha, and nonfinite behavior
+
+Geometry and reductions run on native Metal and MPS. Histograms cover uint8;
+statistics cover all working formats. Unsigned L/RGB/RGBA use normalized
+float32 storage and quantize resident public results to their original depth.
+GPU.md and `ImageGpu.capabilities()` specify the unsigned operation subset
+and numerical contracts; unsupported operations never use a CPU fallback.
 
 Add operations through shared contracts, then implement and validate them on
 each backend. Capability queries must distinguish missing kernels from missing

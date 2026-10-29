@@ -1,0 +1,20 @@
+[package]
+name = "blanket-gpu-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+pyo3.workspace = true
+blanket-gpu.workspace = true
+blanket-gpu-metal.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

@@ -1,0 +1,23 @@
+[package]
+name = "blanket-gpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+doctest = false
+
+[dev-dependencies]
+criterion.workspace = true
+blanket-bench-support.workspace = true
+
+[[bench]]
+name = "preparation"
+harness = false
+
+[lints]
+workspace = true
