@@ -216,7 +216,7 @@ dependencies = [
 
 [[package]]
 name = "blanket"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-cms",
  "blanket-codec-extended",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-bench-support"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "criterion",
@@ -248,7 +248,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-cms"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "lcms2",
@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-avif"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "bitreader",
  "blanket-bench-support",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-bmp-ico"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-image",
@@ -284,7 +284,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-common"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
@@ -293,7 +293,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-extended"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-image",
@@ -306,7 +306,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-gif"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-image",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-heif"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-image"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-core",
@@ -339,7 +339,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-jpeg"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-jpeg2000"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -365,7 +365,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-jxl"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-pdf"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
@@ -388,7 +388,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-png"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -404,7 +404,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-tiff"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-image",
@@ -418,7 +418,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codec-webp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-common",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-codecs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-codec-avif",
@@ -459,7 +459,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-composite"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-compressor"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codecs",
  "blanket-core",
@@ -482,7 +482,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-kernels",
@@ -496,7 +496,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-draw"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-enhance"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-filter"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
@@ -526,7 +526,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-font"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ab_glyph",
  "blanket-kernels",
@@ -539,7 +539,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-kernels"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "lru",
  "rayon",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-math"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
@@ -556,7 +556,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-metadata"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-codec-common",
  "blanket-codec-heif",
@@ -571,7 +571,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-ops"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
@@ -584,7 +584,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-palette"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
@@ -594,7 +594,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-resample"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-bench-support",
  "blanket-core",
@@ -607,7 +607,7 @@ dependencies = [
 
 [[package]]
 name = "blanket-stat"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "blanket-core",
  "pyo3",
