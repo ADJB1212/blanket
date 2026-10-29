@@ -326,8 +326,10 @@ importing torch.
 
 ## NVIDIA CUDA
 
-Build the optional CUDA backend on Linux with a CUDA 13-compatible NVIDIA
-driver. The `gpu-cuda` dependency group installs CuPy, its CUDA runtime/NVRTC
+Build the optional CUDA backend with the CUDA 13 toolkit (`nvcc` on PATH,
+or `NVCC` set to its executable). Building does not require a GPU or NVIDIA
+driver; execution requires a compatible NVIDIA driver. The `gpu-cuda`
+dependency group installs CuPy, its CUDA runtime/NVRTC
 components, and PyTorch for interoperability/testing:
 
 ```sh
@@ -336,8 +338,8 @@ uv run --no-sync maturin develop --uv --features gpu-cuda
 ```
 
 Use the platform's codec build features and native dependencies as described
-in the main build instructions. CUDA development headers and libtorch are not
-linked into the Rust extension. CuPy is an optional runtime dependency for
+in the main build instructions. The CUDA toolkit is needed at build time;
+libtorch is not linked into the Rust extension. CuPy is an optional runtime dependency for
 CUDA, including its native image path; PyTorch is needed only for tensor
 exchange. CPU-only installations do not import either package. CUDA and Metal
 features may be enabled together.
@@ -360,7 +362,15 @@ runtime when `backend="cuda"`. The default backend remains Metal.
 
 CUDA compiles the shared Metal operation contracts to CUDA C++ in the
 `blanket-gpu-cuda` workspace crate, with explicit vector/bit-cast helpers and
-64-bit integer accumulators. CuPy launches those compiled pixel kernels;
+64-bit integer accumulators. Its build script invokes nvcc to generate a
+fatbinary embedded in the extension and wheel. Default native targets are
+SM 75, 80, 86, 89, 90, 100, and 120. Set `BLANKET_CUDA_ARCHS` to a
+comma-separated list of numeric compute capabilities to customize the build.
+PTX for the lowest selected capability is also included for forward
+compatibility; the NVIDIA driver may JIT that PTX on an architecture without
+a matching native binary. Blanket's CUDA source is not compiled at runtime.
+CuPy can still compile its own internal array utilities.
+CuPy loads the embedded binary and launches those compiled pixel kernels;
 Python manages shapes, controls, allocation, and exchange. All uint8, float32,
 and unsigned working formats and resident operations have the same advertised
 coverage. Float math is single precision with implicit FMA contraction disabled;
@@ -390,9 +400,9 @@ resource waits for its event before releasing those owners. Closing a source
 does not invalidate submitted work or exported tensors. This initial runtime
 retains intermediate owners until results are released; bounded reuse and
 fully asynchronous reclamation remain Phase 3 work. Downloads are explicit
-and blocking. Driver initialization, unavailable devices, NVRTC/architecture
+and blocking. Driver initialization, unavailable devices, binary/architecture
 failures, allocation errors, and execution failures report actionable diagnostics.
-The first CUDA capability probe compiles kernels; later probes use a bounded
+The first CUDA capability probe loads the precompiled kernels; later probes use a bounded
 per-device module cache.
 
 Run the shared Metal numeric contracts on NVIDIA hardware:
@@ -401,16 +411,18 @@ Run the shared Metal numeric contracts on NVIDIA hardware:
 BLANKET_REQUIRE_CUDA=1 uv run --no-sync pytest tests/test_gpu_cuda.py -n 0 -ra -x
 ```
 
-The NVIDIA workflow uses a trusted Linux x64 self-hosted runner labeled
-`nvidia`, with the pinned Rust nightly, C/C++ build tools, and the Linux codec
-dependencies from CI.yml already installed (dav1d 1.3+, WebP, LittleCMS,
-libde265/x265, CMake, Ninja, pkg-config, NASM). It is manually dispatchable;
-set repository variable `BLANKET_NVIDIA_CI=true` to run it on main pushes.
-Pull requests do not execute on this runner. `BLANKET_REQUIRE_CUDA=1` makes
-missing GPU support a test failure rather than a skip. Local tests without
-CUDA report explicit skips; host C++ compilation tests check source portability
-but cannot certify NVRTC compilation or NVIDIA execution. GPU Phase 2's
-hardware parity checkbox remains pending that NVIDIA run.
+The CUDA wheel workflow runs on hosted Ubuntu for pushes, pull requests, and
+manual dispatch. It installs the CUDA compiler, compiles the kernels, builds
+the extension in the dev profile, and uploads the
+Python 3.14 wheel as `blanket-cuda-dev-linux-x86_64-py314`, downloadable from
+the run's artifacts for seven days. Kernel compilation errors fail the wheel
+build. Building requires no NVIDIA GPU or driver. The workflow does not execute GPU tests.
+
+For manual hardware testing, `BLANKET_REQUIRE_CUDA=1` makes missing GPU support
+a failure rather than a skip. Local tests without CUDA report explicit skips;
+host C++ compilation tests check source portability but cannot certify CUDA
+device compilation or NVIDIA execution. GPU Phase 2's hardware parity and hardware CI
+checkboxes remain pending NVIDIA execution coverage.
 
 ## Native Rust benchmarks
 
@@ -431,5 +443,6 @@ and LUT control-data validation and quantization.
 `blanket-gpu-python` exposes native resources and shader preparation to Python.
 Future backends implement the `Backend` trait and add Python device selection;
 they do not need to change CPU raster storage. The CUDA crate lowers the shared
-kernel contracts for NVRTC, with CuPy managing driver resources and DLPack.
+kernel contracts for build-time nvcc compilation, with CuPy loading embedded
+fatbinaries and managing driver resources and DLPack.
 Generic tensor exchange beyond the PyTorch adapter is not exposed yet.

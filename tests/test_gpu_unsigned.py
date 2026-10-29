@@ -59,6 +59,9 @@ def test_unsigned_filters_rounding_and_saturation(runtime, depth):
 def test_unsigned_transfer_nonfinite_and_malformed():
     from blanket import _blanket
 
+    if not hasattr(_blanket, "_gpu_unsigned_bytes"):
+        pytest.skip("GPU transfer bindings were not compiled")
+
     values = struct.pack("4f", float("nan"), float("inf"), -float("inf"), 0.5)
     assert struct.unpack("4H", _blanket._gpu_unsigned_bytes(values, 16, True)) == (0, 65535, 0, 32768)
     for depth, data in [(8, b""), (16, b"x")]:

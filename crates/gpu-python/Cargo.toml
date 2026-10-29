@@ -15,7 +15,7 @@ blanket-gpu.workspace = true
 blanket-gpu-metal.workspace = true
 
 [features]
-cuda = ["dep:blanket-gpu-cuda"]
+cuda = ["dep:blanket-gpu-cuda", "blanket-gpu-cuda/precompiled"]
 
 [lib]
 doctest = false

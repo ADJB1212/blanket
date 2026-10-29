@@ -502,16 +502,19 @@ hardware; partial coverage must not trigger an implicit CPU fallback.
       stream ordering without CPU pixel staging
 - [x] Report missing drivers, unsupported devices, allocation failures, and
       backend-specific capabilities through actionable errors and diagnostics
-- [x] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
+- [ ] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
       views, source lifetimes, chained operations, and transfer boundaries
 
 The optional `gpu-cuda` build feature supplies CUDA kernels through
 `blanket-gpu-cuda`, sharing Metal's pixel contracts. CuPy handles CUDA
-allocations, NVRTC compilation, and DLPack stream negotiation. Native CUDA
-execution needs CuPy but does not need PyTorch. The NVIDIA workflow runs the
-shared numeric contracts and CUDA ownership/stream tests on an opt-in GPU
-runner. Hardware coverage remains unchecked until that suite passes on NVIDIA;
-Apple Silicon checks cannot establish CUDA parity. See GPU.md for setup.
+allocations, precompiled fatbinary loading, and DLPack stream negotiation. Native CUDA
+execution needs CuPy but does not need PyTorch. Shared numeric contracts and
+CUDA ownership/stream tests are available for manual NVIDIA runs. The CUDA
+workflow compiles CUDA kernels with nvcc, embeds them in a dev-profile wheel
+on hosted Ubuntu, and uploads it as a
+downloadable artifact. Hardware CI and coverage remain unchecked until that
+suite runs on NVIDIA; compilation cannot establish CUDA parity. See GPU.md
+for setup.
 
 ### GPU Phase 3 — Pipeline Efficiency and Resource Control
 

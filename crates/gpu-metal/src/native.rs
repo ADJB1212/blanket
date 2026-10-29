@@ -5,7 +5,8 @@ use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
     MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder,
-    MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLResourceOptions, MTLSize,
+    MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDevice, MTLLibrary, MTLLibraryOptimizationLevel, MTLMathMode, MTLResourceOptions,
+    MTLSize,
 };
 
 // Metal device discovery requires CoreGraphics to be linked.
@@ -49,9 +50,9 @@ impl Context {
         autoreleasepool(|_| {
             let device = MTLCreateSystemDefaultDevice().ok_or("Metal device unavailable")?;
             let options = MTLCompileOptions::new();
-            // Keep the selector available on macOS versions predating mathMode.
-            #[allow(deprecated)]
-            options.setFastMathEnabled(false);
+
+            options.setMathMode(MTLMathMode::Relaxed);
+            options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
             let library =
                 device.newLibraryWithSource_options_error(&NSString::from_str(super::SHADERS), Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {

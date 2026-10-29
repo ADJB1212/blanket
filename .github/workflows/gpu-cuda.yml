@@ -1,4 +1,4 @@
-name: NVIDIA GPU
+name: CUDA wheel
 
 on:
   workflow_dispatch:
@@ -28,40 +28,56 @@ env:
   UV_LINK_MODE: "copy"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   FORCE_COLOR: "1"
-  MACOSX_DEPLOYMENT_TARGET: "26.0"
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
-  HOMEBREW_NO_ENV_HINTS: "1"
-  HOMEBREW_NO_ASK: "1"
-  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
-  UV_NO_SYNC: "1"
-  BLANKET_REQUIRE_CUDA: "1"
 
 permissions:
   contents: read
 
 jobs:
   cuda:
-    # Opt in only on trusted revisions; never run pull-request code on this runner.
-    if: github.event_name == 'workflow_dispatch' || vars.BLANKET_NVIDIA_CI == 'true'
-    runs-on: [self-hosted, linux, x64, nvidia]
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
+      - name: Restore Rust dependencies and build artifacts
+        id: cargo-cache-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
-      - name: Check NVIDIA driver
-        run: nvidia-smi
-      - name: Install Python dependencies
+        with:
+          version: "latest"
+          enable-cache: "false"
+          save-cache: "false"
+      - name: Install build dependencies
+        run: |
+          curl --fail --location --output /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config nasm mold libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev cuda-nvcc-13-2
+      - name: Install wheel builder
         run: |
           uv python install 3.14
-          uv tool install maturin
-          uv sync --no-install-project --group test --group gpu-cuda
-      - name: Build development extension
-        run: maturin develop --uv --features gpu-cuda,no-vendored-webp,use-system-lcms2,jxl-vendored,embedded-libheif
-      - name: Validate CUDA source and contracts
-        run: cargo test -p blanket-gpu -p blanket-gpu-cuda --locked
-      - name: NVIDIA hardware parity and interoperability
-        run: uv run pytest tests/test_gpu_cuda.py -n 0 -ra -x
+          uv tool install 'maturin[patchelf]>=1.15,<2'
+          cargo clean -p lcms2-sys
+          cargo clean -p lcms2
+      - name: Compile kernels and build development wheel
+        env:
+          NVCC: /usr/local/cuda-13.2/bin/nvcc
+        run: maturin build --profile dev --locked -i python3.14 --out dist --auditwheel=repair --features gpu-cuda,no-vendored-webp,jxl-vendored,embedded-libheif -- -C link-arg=-fuse-ld=mold -Z threads=4
+      - name: Upload wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: blanket-cuda-dev-linux-x86_64-py314
+          path: dist/*.whl
+          if-no-files-found: error
+          retention-days: 2

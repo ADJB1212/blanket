@@ -5,6 +5,8 @@ from __future__ import annotations
 __lazy_modules__ = {"cupy", "numpy", "torch", "collections.abc", "types"}
 
 from functools import lru_cache
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import TYPE_CHECKING, Any
 
 from . import _blanket
@@ -25,7 +27,7 @@ def cupy() -> ModuleType:
 
 
 def require(device: int) -> None:
-    if not hasattr(_blanket, "_gpu_cuda_source"):
+    if not hasattr(_blanket, "_gpu_cuda_fatbin"):
         raise RuntimeError("CUDA kernels unavailable; build Blanket with the gpu-cuda feature")
     if type(device) is not int or device < 0:
         raise ValueError("CUDA device must be a nonnegative integer")
@@ -45,11 +47,16 @@ def library(device: int) -> Callable[[str], Callable[..., None]]:
     cp = cupy()
     with cp.cuda.Device(device):
         try:
-            module = cp.RawModule(code=_blanket._gpu_cuda_source, options=("--std=c++17", "--fmad=false"), backend="nvrtc")
-            module.compile()
+            with TemporaryDirectory(prefix="blanket-cuda-") as directory:
+                path = Path(directory) / "blanket.fatbin"
+                path.write_bytes(_blanket._gpu_cuda_fatbin)
+                module = cp.RawModule(path=str(path))
+                # Resolve all entry points before removing the temporary file.
+                names = ("image_u8", "image_f32", "reduce_u8", "reduce_f32", "convert_u8_u8", "convert_u8_f32", "convert_f32_u8", "convert_f32_f32")
+                kernels = {name: module.get_function(name) for name in names}
         except Exception as error:
-            raise RuntimeError(f"CUDA kernel compilation failed on device {device}; check NVRTC/runtime installation and GPU architecture: {error}") from error
-    return module.get_function
+            raise RuntimeError(f"CUDA kernel loading failed on device {device}; check NVIDIA driver and GPU architecture compatibility: {error}") from error
+    return kernels.__getitem__
 
 
 class CudaImage:

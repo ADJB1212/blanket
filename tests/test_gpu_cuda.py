@@ -1,6 +1,7 @@
 import inspect
 import itertools
 import os
+from pathlib import Path
 
 import pytest
 import test_gpu_color as color_contracts
@@ -54,7 +55,7 @@ def test_shared_metal_contracts_on_cuda(cuda, function, arguments):
 def test_capability_diagnostics_without_cuda(monkeypatch):
     from blanket import _blanket
 
-    monkeypatch.delattr(_blanket, "_gpu_cuda_source", raising=False)
+    monkeypatch.delattr(_blanket, "_gpu_cuda_fatbin", raising=False)
     capability = ImageGpu.capabilities("cuda")
     assert not capability["compiled"]
     assert not capability["available"]
@@ -67,7 +68,7 @@ def test_capability_diagnostics_without_cuda(monkeypatch):
 def test_driver_diagnostics(monkeypatch):
     from blanket import _blanket
 
-    monkeypatch.setattr(_blanket, "_gpu_cuda_source", "", raising=False)
+    monkeypatch.setattr(_blanket, "_gpu_cuda_fatbin", b"", raising=False)
 
     class Runtime:
         @staticmethod
@@ -86,6 +87,55 @@ def test_driver_diagnostics(monkeypatch):
     assert "driver not found" in result["diagnostic"]
     with pytest.raises(ValueError, match="nonnegative"):
         cuda_runtime.require(-1)
+
+
+def test_precompiled_module_loads_without_source_compilation(monkeypatch):
+    from blanket import _blanket
+
+    monkeypatch.setattr(_blanket, "_gpu_cuda_fatbin", b"test fatbinary", raising=False)
+    paths = []
+    names = []
+
+    class Device:
+        def __init__(self, device):
+            assert device == 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+    class Module:
+        def __init__(self, *, path):
+            self.path = Path(path)
+            assert self.path.read_bytes() == b"test fatbinary"
+            paths.append(self.path)
+
+        def get_function(self, name):
+            assert self.path.exists()
+            names.append(name)
+            return lambda: name
+
+    class Cuda:
+        pass
+
+    Cuda.Device = Device
+
+    class CuPy:
+        cuda = Cuda
+        RawModule = Module
+
+    monkeypatch.setattr(cuda_runtime, "cupy", lambda: CuPy)
+    cuda_runtime.library.cache_clear()
+    try:
+        resolve = cuda_runtime.library(0)
+        assert len(names) == 8
+        assert resolve("image_f32")() == "image_f32"
+        assert resolve("convert_u8_f32")() == "convert_u8_f32"
+        assert all(not path.exists() for path in paths)
+    finally:
+        cuda_runtime.library.cache_clear()
 
 
 def test_dlpack_views_ownership_and_streams(cuda, monkeypatch):

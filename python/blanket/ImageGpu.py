@@ -83,7 +83,7 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
     """Report backend support and driver diagnostics without importing PyTorch."""
     if backend not in ("metal", "cuda"):
         raise ValueError("unsupported GPU backend")
-    compiled = hasattr(_blanket, "_gpu_weights") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_source")
+    compiled = hasattr(_blanket, "_gpu_weights") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_fatbin")
     probe = getattr(_blanket, "_gpu_available", None)
     available = bool(probe and probe()) if backend == "metal" else False
     diagnostic = None
