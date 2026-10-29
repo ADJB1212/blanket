@@ -128,6 +128,21 @@ impl Drop for Image {
 }
 
 impl Context {
+    pub fn is_complete(&self, image: &Image) -> bool {
+        image.completion.as_ref().is_none_or(finished)
+    }
+
+    pub fn wait_idle(&self) -> Result<(), String> {
+        autoreleasepool(|_| {
+            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
+            command.commit();
+            command.waitUntilCompleted();
+            if command.status() == MTLCommandBufferStatus::Error {
+                return Err(command.error().map_or_else(|| "Metal synchronization failed".into(), |error| error.to_string()));
+            }
+            Ok(())
+        })
+    }
     /// Borrow completed pixel storage until the image is released.
     pub fn download_bytes<'a>(&self, image: &'a Image) -> Result<&'a [u8], String> {
         self.synchronize(image)?;

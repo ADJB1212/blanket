@@ -524,7 +524,7 @@ for setup.
       overhead and intermediate allocations
 - [ ] Fuse compatible operations only when their rounding, saturation, alpha,
       and evaluation-order contracts remain satisfied
-- [ ] Stream/event synchronization and asynchronous transfers with explicit
+- [x] Stream/event synchronization and asynchronous transfers with explicit
       completion, cancellation, and error propagation rules
 - [ ] Tile processing for images exceeding working-memory budgets, with correct
       filter halos and no unnecessary CPU round trips

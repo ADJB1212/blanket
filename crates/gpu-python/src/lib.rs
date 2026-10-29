@@ -71,6 +71,21 @@ mod native {
         context: &'static Context,
         image: Image,
     }
+    // This wrapper contains only immutable Rust/Metal state. Completion waits
+    // and downloads do not access Python objects while the GIL is released.
+    unsafe impl pyo3::marker::Ungil for MetalImage {}
+
+    impl MetalImage {
+        fn wait_bytes(&self) -> Result<&[u8], String> {
+            self.context.download_bytes(&self.image)
+        }
+        fn wait_download(&self) -> Result<Vec<u8>, String> {
+            self.context.download(&self.image)
+        }
+        fn wait_completion(&self) -> Result<(), String> {
+            self.context.synchronize(&self.image)
+        }
+    }
     struct SharedMetalPixels {
         owner: Py<MetalImage>,
         address: usize,
@@ -95,7 +110,8 @@ mod native {
             if mode.channels() != d.channels as usize || mode.is_float() != d.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
-            let data = image.context.download_bytes(&image.image).map_err(PyRuntimeError::new_err)?;
+            let native: &MetalImage = &image;
+            let data = slf.py().detach(|| native.wait_bytes()).map_err(PyRuntimeError::new_err)?;
             let storage = SharedMetalPixels { owner: slf.clone().unbind(), address: data.as_ptr() as usize, len: data.len() };
             Ok(blanket_core::Image {
                 width: d.width,
@@ -127,7 +143,7 @@ mod native {
             Ok(())
         }
         #[staticmethod]
-        fn from_image(image: &blanket_core::Image) -> PyResult<Self> {
+        fn from_image(py: Python<'_>, image: &blanket_core::Image) -> PyResult<Self> {
             use blanket_core::PixelMode;
             if !matches!(
                 image.mode,
@@ -136,19 +152,22 @@ mod native {
             {
                 return Err(PyValueError::new_err("unsupported GPU image mode or depth"));
             }
-            let context = context()?;
             let descriptor =
                 Descriptor { width: image.width, height: image.height, channels: image.mode.channels() as u32, float: image.mode.is_float() };
-            let image = context.upload(descriptor, image.raw_data()?).map_err(PyValueError::new_err)?;
-            Ok(Self { context, image })
+            let data = image.raw_data()?;
+            py.detach(|| {
+                let context = context()?;
+                let image = context.upload(descriptor, data).map_err(PyValueError::new_err)?;
+                Ok(Self { context, image })
+            })
         }
-        fn download_image(&self, mode: &str) -> PyResult<blanket_core::Image> {
+        fn download_image(&self, py: Python<'_>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
             let descriptor = self.image.descriptor;
             if mode.channels() != descriptor.channels as usize || mode.is_float() != descriptor.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
-            let pixels = self.context.download(&self.image).map_err(PyRuntimeError::new_err)?;
+            let pixels = py.detach(|| self.wait_download()).map_err(PyRuntimeError::new_err)?;
             if descriptor.float {
                 blanket_core::Image::from_color_float_bytes(descriptor.width, descriptor.height, mode, pixels)
             } else {
@@ -327,12 +346,19 @@ mod native {
             Ok(Self { context: self.context, image })
         }
         fn download<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-            let data = self.context.download_bytes(&self.image).map_err(PyRuntimeError::new_err)?;
+            let data = py.detach(|| self.wait_bytes()).map_err(PyRuntimeError::new_err)?;
             Ok(PyBytes::new(py, data))
         }
-        fn synchronize(&self) -> PyResult<()> {
-            self.context.synchronize(&self.image).map_err(PyRuntimeError::new_err)
+        fn synchronize(&self, py: Python<'_>) -> PyResult<()> {
+            py.detach(|| self.wait_completion()).map_err(PyRuntimeError::new_err)
         }
+        fn done(&self) -> bool {
+            self.context.is_complete(&self.image)
+        }
+    }
+    #[pyfunction]
+    pub(super) fn _gpu_synchronize(py: Python<'_>) -> PyResult<()> {
+        py.detach(|| context()?.wait_idle().map_err(PyRuntimeError::new_err))
     }
     #[pyfunction]
     pub(super) fn _gpu_available() -> bool {
@@ -352,6 +378,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     {
         module.add_class::<native::MetalImage>()?;
         module.add_function(wrap_pyfunction!(native::_gpu_available, module)?)?;
+        module.add_function(wrap_pyfunction!(native::_gpu_synchronize, module)?)?;
     }
     Ok(())
 }

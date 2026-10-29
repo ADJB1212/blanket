@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"types", "torch", "collections.abc"}
+__lazy_modules__ = {"types", "torch", "collections.abc", "concurrent.futures"}
 
 import math
 import struct
@@ -11,9 +11,11 @@ from operator import index
 from typing import TYPE_CHECKING
 
 from . import Image, _blanket
+from ._gpu_async import Event, Stream, submit
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from concurrent.futures import Future
     from types import ModuleType
     from typing import Any
 
@@ -209,6 +211,23 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         torch = _torch()
         resource = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
     return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()), unified_memory=unified_memory)
+
+
+def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> Future[GpuImage | GpuUnsignedImage]:
+    """Snapshot the current CPU frame and upload on a transfer worker."""
+    if runtime != "native":
+        raise ValueError("asynchronous transfers require native Metal or CUDA")
+    snapshot = image.copy()
+
+    def upload() -> GpuImage | GpuUnsignedImage:
+        try:
+            result = from_image(snapshot, backend=backend, runtime=runtime, device=device, unified_memory=unified_memory)
+            result.synchronize()
+            return result
+        finally:
+            snapshot.close()
+
+    return submit(upload, device=f"cuda:{device}" if backend == "cuda" else "metal")
 
 
 def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None) -> GpuImage | GpuUnsignedImage:
@@ -751,8 +770,12 @@ class GpuImage:
             result = Image.Image(native)
             result.info.update(self.info)
             return result
-        self.synchronize()
-        data = self._resource.download() if self.runtime in ("native", "cuda") else bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
+        self._check()
+        if self.runtime == "cuda":
+            data = self._resource.download()
+        else:
+            self.synchronize()
+            data = bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
         result = Image.frombytes(self.mode, self.size, data)
         result.info.update(self.info)
         return result
@@ -761,6 +784,18 @@ class GpuImage:
         """Return an independently closable handle without copying pixel storage."""
         self._check()
         return GpuImage(self._resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
+
+    def record_event(self) -> Event:
+        """Retain this image's completion point without blocking the CPU."""
+        self._check()
+        return Event(self._resource, self.runtime, self.device)
+
+    def to_image_async(self) -> Future[Image.Image]:
+        """Export on a transfer worker, retaining pixels after this handle closes."""
+        if self.runtime == "torch":
+            raise ValueError("asynchronous transfers require native Metal or CUDA")
+        retained = self.share()
+        return submit(retained.to_image, device=self.device)
 
     def to_memoryview(self) -> memoryview:
         """Wait for GPU writes and borrow native Metal bytes without copying."""
@@ -805,6 +840,16 @@ class GpuReduction:
 
     def synchronize(self) -> None:
         self._image.synchronize()
+
+    def record_event(self) -> Event:
+        return self._image.record_event()
+
+    def to_cpu_async(self) -> Future[list[list[int]] | list[dict[str, object]]]:
+        """Download and decode the small result on a transfer worker."""
+        if self._image.runtime == "torch":
+            raise ValueError("asynchronous transfers require native Metal or CUDA")
+        retained = GpuReduction(self._image.share(), self.kind)
+        return submit(retained.to_cpu, device=self._image.device)
 
     def close(self) -> None:
         self._image.close()

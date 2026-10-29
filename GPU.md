@@ -451,8 +451,9 @@ Results retain their asynchronous inputs and controls; dropping the last CUDA
 resource waits for its event before releasing those owners. Closing a source
 does not invalidate submitted work or exported tensors. This initial runtime
 retains intermediate owners until results are released; bounded reuse and
-fully asynchronous reclamation remain Phase 3 work. Downloads are explicit
-and blocking. Driver initialization, unavailable devices, binary/architecture
+fully asynchronous reclamation remain future work. Downloads are explicit;
+`to_image()` blocks, while `to_image_async()` returns a completion future.
+Driver initialization, unavailable devices, binary/architecture
 failures, allocation errors, and execution failures report actionable diagnostics.
 The first CUDA capability probe loads the precompiled kernels; later probes use a bounded
 per-device module cache.
@@ -475,6 +476,73 @@ a failure rather than a skip. Local tests without CUDA report explicit skips;
 host C++ compilation tests check source portability but cannot certify CUDA
 device compilation or NVIDIA execution. GPU Phase 2's hardware parity and hardware CI
 checkboxes remain pending NVIDIA execution coverage.
+
+## Streams, events, and asynchronous transfers
+
+Native Metal and CUDA support transfer futures without changing the blocking API:
+
+```python
+upload = ImageGpu.from_image_async(image, unified_memory=True)
+# Do independent CPU work here.
+gpu = upload.result()
+result = gpu.resize((1024, 768))
+event = result.record_event()
+download = result.to_image_async()
+result.close()  # The future and event retain the storage.
+cpu = download.result(timeout=10)
+event.wait()
+assert event.done()
+```
+
+Uploads snapshot the current CPU frame and metadata before returning. Snapshot
+creation can copy CPU pixels on the calling thread; allocation and transfer run
+on one of two transfer workers. Later source edits, navigation, or closing do not
+change the upload. Download futures retain an independent image handle, including
+the unified-memory setting. Unsigned images support both directions. Resident
+statistics and histograms provide `to_cpu_async()` and `record_event()` as well.
+
+Futures use the standard `concurrent.futures.Future` contract:
+
+- `result()` waits for transfer completion and returns the image or reduction.
+- `done()` reports completion, cancellation, or failure; `exception()` retrieves
+  a stored error and `result()` re-raises it.
+- `cancel()` succeeds only before a worker starts. Submitted GPU work is never
+  interrupted or allowed to release its input or pinned memory prematurely.
+- `result(timeout=...)` raises `TimeoutError` without cancelling the transfer.
+  Closing the original handle or discarding a future does not abort queued work.
+
+CUDA uses pinned host buffers and nonblocking device copies. A completion event
+keeps the staging allocation alive until it is safe to read or release. This
+follows the [CuPy asynchronous copy contract](https://docs.cupy.dev/en/stable/reference/generated/cupy.ndarray.html).
+Transfer workers restore the CUDA device and stream that were current when the
+transfer was requested. Independent CUDA streams can overlap GPU processing:
+
+```python
+producer = ImageGpu.Stream("cuda", device=0)
+consumer = ImageGpu.Stream("cuda", device=0)
+with producer:
+    gpu = ImageGpu.from_image(image, backend="cuda")
+    result = gpu.invert()
+    ready = result.record_event()
+with consumer:
+    consumer.wait_event(ready)  # GPU-side dependency; does not wait on the CPU.
+    download = result.to_image_async()
+cpu = download.result()
+```
+
+`Stream.synchronize()` waits for preceding submissions on that stream.
+`Event.wait()` waits on the CPU and reports execution errors; events retain their
+completion resource after image handles close. `Event.done()` is a nonblocking
+completion query; completion does not imply success, so wait before consuming
+the result. Streams reject events from a different device or execution context.
+
+Native `Stream()` objects refer to the single ordered Metal queue, rather than
+independent queues. Native event dependencies are already ordered on this queue;
+`wait_event()` does not introduce a CPU wait. Metal transfers are CPU copies in
+shared RAM or unified-memory exports, performed on workers; they are not discrete
+GPU DMA transfers. Native completion waits and image downloads release the GIL.
+Events also support PyTorch MPS images, but transfer futures currently require
+native Metal or CUDA; PyTorch MPS transfers remain explicitly blocking.
 
 ## Native Rust benchmarks
 

@@ -7,13 +7,14 @@ __lazy_modules__ = {"cupy", "numpy", "torch", "collections.abc", "types"}
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from . import _blanket
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
+    from typing import Any
 
     from torch import Tensor
 
@@ -86,10 +87,23 @@ class CudaImage:
             raise RuntimeError(f"CUDA execution failed on device {self.device}: {error}") from error
 
     def download(self) -> bytes:
+        import numpy as np
+
         cp = cupy()
-        self.synchronize()
-        with cp.cuda.Device(self.device), self.stream:
-            return self.array.get().tobytes()
+        with cp.cuda.Device(self.device):
+            stream = cp.cuda.get_current_stream()
+            stream.wait_event(self.event)
+            memory = cp.cuda.alloc_pinned_memory(self.array.nbytes)
+            host = np.frombuffer(memory, dtype=self.array.dtype, count=self.array.size).reshape(self.array.shape)
+            try:
+                self.array.get(out=host, stream=stream, blocking=False)
+                completion = cp.cuda.Event()
+                completion.record(stream)
+                completion.synchronize()
+                return host.tobytes()
+            except Exception as error:
+                stream.synchronize()
+                raise RuntimeError(f"CUDA download failed on device {self.device}: {error}") from error
 
     def to_torch(self) -> Tensor:
         import torch
@@ -140,10 +154,13 @@ def upload(data: bytes, shape: tuple[int, int, int], floating: bool, device: int
     cp = cupy()
     with cp.cuda.Device(device):
         try:
-            host = np.frombuffer(data, dtype=np.float32 if floating else np.uint8).reshape(shape)
-            array = cp.asarray(host, blocking=True)
-            return CudaImage(array)
+            memory = cp.cuda.alloc_pinned_memory(len(data))
+            host = np.frombuffer(memory, dtype=np.float32 if floating else np.uint8).reshape(shape)
+            host.view(np.uint8).reshape(-1)[:] = np.frombuffer(data, dtype=np.uint8)
+            array = cp.asarray(host, blocking=False)
+            return CudaImage(array, owners=(memory, host))
         except Exception as error:
+            cp.cuda.get_current_stream().synchronize()
             raise RuntimeError(f"CUDA upload/allocation failed on device {device}: {error}") from error
 
 

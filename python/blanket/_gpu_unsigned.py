@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"torch", "collections.abc"}
+__lazy_modules__ = {"torch", "collections.abc", "concurrent.futures"}
 
 from typing import TYPE_CHECKING
 
@@ -10,9 +10,11 @@ from . import Image, _blanket
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from concurrent.futures import Future
 
     from torch import Tensor
 
+    from ._gpu_async import Event
     from .ImageGpu import GpuImage, GpuReduction
 
 
@@ -63,6 +65,17 @@ class GpuUnsignedImage:
 
     def synchronize(self) -> None:
         self._image.synchronize()
+
+    def record_event(self) -> Event:
+        return self._image.record_event()
+
+    def to_image_async(self) -> Future[Image.Image]:
+        from ._gpu_async import submit
+
+        if self.runtime == "torch":
+            raise ValueError("asynchronous transfers require native Metal or CUDA")
+        retained = GpuUnsignedImage(self._image.share(), self.mode, self.bit_depth)
+        return submit(retained.to_image, device=self.device)
 
     def close(self) -> None:
         self._image.close()
