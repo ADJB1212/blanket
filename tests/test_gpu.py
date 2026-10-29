@@ -8,6 +8,46 @@ def require_gpu():
         pytest.skip("Metal feature and device required")
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
+@pytest.mark.parametrize("width", [1, 3, 63, 64, 65, 257])
+def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
+    from blanket import ImageChops, ImageEnhance
+
+    require_gpu()
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    size = (width, 3)
+    image = Image.frombytes(mode, size, bytes((i * 37 + 13) % 256 for i in range(width * 3 * channels)))
+    other = Image.frombytes(mode, size, bytes((i * 19 + 71) % 256 for i in range(width * 3 * channels)))
+    gpu = ImageGpu.from_image(image, runtime="native")
+    rhs = ImageGpu.from_image(other, runtime="native")
+    assert gpu.invert().to_image().tobytes() == ImageChops.invert(image).tobytes()
+    assert gpu.convert(mode).to_image().tobytes() == image.tobytes()
+    for factor in (-0.5, 0.0, 0.4, 1.0, 1.75):
+        assert gpu.brightness(factor).to_image().tobytes() == ImageEnhance.Brightness(image).enhance(factor).tobytes()
+        assert gpu.blend(rhs, factor).to_image().tobytes() == Image.blend(image, other, factor).tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGBA", "F", "RGBA;F"])
+def test_native_closed_sources_survive_buffer_reuse(mode: str) -> None:
+    require_gpu()
+    pending = []
+    for value in range(24):
+        color = value if mode in ("L", "F") else (value,) * 4
+        image = Image.new(mode, (257, 129), color)
+        source = ImageGpu.from_image(image, runtime="native")
+        copied = source.convert(mode)
+        result = source.blend(copied, 0.5)
+        source.close()
+        copied.close()
+        # New uploads must not overwrite buffers still read by queued consumers.
+        replacement = ImageGpu.from_image(Image.new(mode, image.size), runtime="native")
+        replacement.close()
+        pending.append((result, image.tobytes()))
+    for result, expected in reversed(pending):
+        assert result.to_image().tobytes() == expected
+        result.close()
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_upload_roundtrip_and_lifetime(mode):
     require_gpu()

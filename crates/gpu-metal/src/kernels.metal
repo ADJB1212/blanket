@@ -1,6 +1,11 @@
 #include <metal_stdlib>
 using namespace metal;
 
+#ifdef BLANKET_METAL_SPECIALIZE
+// Specialization removes unrelated operations and their register requirements.
+constant uint SPECIALIZED_OPERATION [[function_constant(0)]];
+#endif
+
 // Match CPU luminance conversion and fractional box-filter precision.
 constant uint LUMA_RED = 19595, LUMA_GREEN = 38470, LUMA_BLUE = 7471, LUMA_BITS = 16;
 constant uint BOX_BITS = 24, BOX_SCALE = 1u << BOX_BITS, BOX_ROUND = BOX_SCALE / 2;
@@ -137,6 +142,9 @@ template <> uchar store_sample<uchar>(float v) {
 
 template <typename T> void process(device const T *src, device T *dst, device const T *other, constant uint *p, device const float *v, uint i) {
     uint sw = p[0], sh = p[1], c = p[2], dw = p[3], dh = p[4], op = p[5], k = p[6];
+#ifdef BLANKET_METAL_SPECIALIZE
+    op = SPECIALIZED_OPERATION;
+#endif
     if (op == 29) {
         if (i >= c)
             return;
@@ -578,3 +586,67 @@ kernel void image_f32(device const float *s [[buffer(0)]], device float *d [[buf
                       constant uint *p [[buffer(3)]], device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
     process(s, d, o, p, v, i);
 }
+
+#ifdef BLANKET_METAL_SPECIALIZE
+// Full vectors avoid byte stores and per-sample coordinate calculations.
+kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buffer(1)]], device const uchar *o [[buffer(2)]],
+                      constant uint *p [[buffer(3)]], device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+    constexpr uint PACKED_SAMPLES = 4;
+    uint first = i * PACKED_SAMPLES, count = p[3] * p[4] * p[2];
+    if (first + PACKED_SAMPLES > count) {
+        for (uint sample = first; sample < count; sample++)
+            process(s, d, o, p, v, sample);
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 0) {
+        uint x = i % p[3], y = i / p[3];
+        uint base = (p[7] == 0 ? x : y) * p[6];
+        uint start = uint(v[base]), taps = uint(v[base + 1]);
+        uint source = p[7] == 0 ? y * p[0] + start : start * p[0] + x;
+        uint stride = p[7] == 0 ? 1 : p[0];
+        long4 fixed = long4(RESIZE_ROUND);
+        for (uint t = 0; t < taps; t++) {
+            long weight = long(round(v[base + 2 + t] * float(RESIZE_SCALE)));
+            fixed += long4(reinterpret_cast<device const uchar4 *>(s)[source + t * stride]) * weight;
+        }
+        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(float4(fixed >> RESIZE_BITS), 0.0f, 255.0f));
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 18) {
+        uint x = i % p[3], y = i / p[3], radius = p[6];
+        long pos = p[7] == 0 ? x : y, last = (p[7] == 0 ? p[0] : p[1]) - 1;
+        long low = max(0l, pos - long(radius)), high = min(last, pos + long(radius));
+        uint repeat_low = uint(max(0l, long(radius) - pos)), repeat_high = uint(max(0l, pos + long(radius) - last));
+        uint source = p[7] == 0 ? y * p[0] : x, stride = p[7] == 0 ? 1 : p[0];
+        device const uchar4 *pixels = reinterpret_cast<device const uchar4 *>(s);
+        uint4 sum = uint4(0);
+        for (long t = low; t <= high; t++)
+            sum += uint4(pixels[source + uint(t) * stride]);
+        sum += uint4(pixels[source]) * repeat_low + uint4(pixels[source + uint(last) * stride]) * repeat_high;
+        uint left = source + uint(clamp(pos - long(radius) - 1, 0l, last)) * stride;
+        uint right = source + uint(clamp(pos + long(radius) + 1, 0l, last)) * stride;
+        uint4 fixed = sum * uint(v[0]) + (uint4(pixels[left]) + uint4(pixels[right])) * uint(v[1]) + BOX_ROUND;
+        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(fixed >> BOX_BITS);
+        return;
+    }
+    uchar4 bytes = reinterpret_cast<device const uchar4 *>(s)[i];
+    if (SPECIALIZED_OPERATION == 6) {
+        reinterpret_cast<device uchar4 *>(d)[i] = bytes;
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 11) {
+        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(255) - bytes;
+        return;
+    }
+    float4 a = float4(bytes), result;
+    if (SPECIALIZED_OPERATION == 2) {
+        float4 b = float4(reinterpret_cast<device const uchar4 *>(o)[i]);
+        result = a + (b - a) * v[0];
+    } else {
+        result = a * v[0];
+        if (p[2] == 4)
+            result.w = a.w;
+    }
+    reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(floor(result), 0.0f, 255.0f));
+}
+#endif

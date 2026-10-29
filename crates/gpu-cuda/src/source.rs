@@ -67,7 +67,7 @@ mod tests {
         assert!(!source.contains("[[buffer("));
         assert!(!source.contains("thread_position_in_grid"));
         assert!(!source.contains("metal_stdlib"));
-        assert_eq!(source.matches("uint i = blockIdx.x").count(), 4);
+        assert_eq!(source.matches("uint i = blockIdx.x").count(), 5);
         assert!(source.contains("extern \"C\" __global__ void image_u8"));
         assert!(source.contains("extern \"C\" __global__ void image_f32"));
         assert!(source.contains("CONVERSION_KERNEL(convert_f32_u8"));

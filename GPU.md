@@ -36,7 +36,13 @@ result.close()
 source position unchanged. Intermediate results stay resident. `to_image`
 waits and downloads an independent CPU raster. `synchronize` waits explicitly;
 `close` releases the handle while submitted commands retain their resources.
-Operations return independent allocations.
+Operations return independent pixel storage. Native Metal caches closed buffers
+up to 128 MiB and 16 allocations, and reuses them only after all GPU writers and
+readers have finished. Closing an image does not wait for its queued consumers.
+Metal compiles and caches pipelines per operation on first use. Packed byte
+kernels handle copy, blend, brightness, and invert; RGBA resize and box-blur
+passes share coordinate calculations across all four channels. PyTorch MPS and
+CUDA continue to use the shared portable kernels.
 
 Supported modes are uint8 L/LA/RGB/RGBA and float32 F/RGB;F/RGBA;F, plus
 unsigned 10/12/16-bit L/RGB/RGBA as described below. Resize
