@@ -280,13 +280,15 @@ Rust backend for performance and functionality Pillow doesn't offer.
       with bounded encoded input storage and independent previews after completed scans
 - [x] **Image hashing** — `ImageHash.average_hash`, `dhash`, and `phash` with
       configurable sizes, hexadecimal serialization, and Hamming distance
+- [x] **GPU acceleration foundation** — optional Apple Silicon Metal backend
+      with resident image operations and PyTorch MPS tensor pipelines.
+      See [GPU Roadmap](#gpu-roadmap) for shipped coverage and subsequent phases,
+      and [GPU images](GPU.md) for the current API and restrictions.
 
 ### Planned
 
 - [ ] **Batch processing API** — process multiple images in parallel with
       shared pipeline configuration
-- [ ] **GPU acceleration** — optional compute shader backend for large-image
-      operations (resize, convolution, compositing)
 - [ ] **Smart cropping** — content-aware crop using saliency detection or
       face detection hints
 - [ ] **Advanced quantization** — neural-network-based color quantization,
@@ -424,6 +426,102 @@ with new processing semantics exposed explicitly.
       temporal stability and explicit transparency constraints
 - [ ] **Sequence editing helpers** — trim, concatenate, and retime animations
       while preserving source positions and validating frame compatibility
+
+---
+
+## GPU Roadmap
+
+GPU development follows a separate track from the Pillow compatibility phases.
+Apple Silicon is the initial platform; NVIDIA support is the next backend.
+Keep backend-specific allocation, synchronization, and kernels in dedicated
+workspace crates, with common operation contracts and Python validation shared
+across backends. Existing CPU APIs retain their behavior.
+
+GPU processing remains explicit: upload CPU images when requested, keep GPU
+inputs and intermediate results resident, and download only through an explicit
+CPU export. Unsupported operations must report their limitations rather than
+silently staging pixels through CPU memory. Zero-copy sharing requires compatible
+devices, layouts, ownership, and synchronization; GPU copies may be needed.
+
+CPU-only builds must remain usable without GPU drivers or Python GPU packages.
+
+### GPU Phase 0 — Apple Silicon Foundation — Complete
+
+- [x] Separate `blanket-gpu`, `blanket-gpu-metal`, and `blanket-gpu-python`
+      crates, with optional Metal support through `objc2`/`objc2-metal`
+- [x] Explicit `ImageGpu` upload/download, resident results, capability queries,
+      synchronization, and resource ownership
+- [x] Uint8 L/LA/RGB/RGBA and float32 F/RGB;F/RGBA;F storage
+- [x] All six resize filters, crop, transpose, wrapped offset, 3x3/5x5
+      convolution, brightness, inversion, channel LUTs, solarize, posterize,
+      channel arithmetic, blending, and straight-alpha source-over
+- [x] Optional PyTorch MPS import/export with HW/HWC/CHW layouts, retained
+      tensor ownership, and GPU packing of views without CPU pixel staging
+- [x] Native Metal and MPS hardware tests for CPU parity, documented float
+      semantics, geometry, lifetime handling, validation, and residency
+
+Native Metal and PyTorch allocations currently use separate execution contexts.
+Native Metal buffer export to PyTorch is not implemented; CPU images intended
+for tensor output can be uploaded with `runtime="torch"`.
+
+### GPU Phase 1 — Operation and Precision Coverage
+
+- [ ] Mode conversion, channel extraction/merge, grayscale, and alpha handling
+- [ ] Gaussian/box blur, unsharp masking, min/max morphology, and median filters
+- [ ] Color, contrast, and sharpness enhancement; 3D LUTs and explicit
+      linear-light resize/compositing
+- [ ] Masked paste/compositing, affine and perspective transforms, arbitrary
+      rotation, and reusable coordinate remapping
+- [ ] Resident reductions for histograms, extrema, moments, and statistics;
+      return small CPU results only when explicitly requested
+- [ ] Unsigned 10/12/16-bit processing with retained sample precision and
+      documented rounding, saturation, alpha, and nonfinite behavior
+
+Add operations through shared contracts, then implement and validate them on
+each backend. Capability queries must distinguish missing kernels from missing
+hardware; partial coverage must not trigger an implicit CPU fallback.
+
+### GPU Phase 2 — NVIDIA and CUDA Tensor Pipelines
+
+- [ ] Add an optional CUDA backend in dedicated workspace crates, reusing
+      descriptors, validation, and operation contracts
+- [ ] Reach the shipped Metal operation and sample-format coverage on NVIDIA
+      hardware, with explicit backend and device selection
+- [ ] Upload CPU images once, retain intermediate allocations on the selected
+      CUDA device, and make CPU downloads explicit
+- [ ] Import/export compatible PyTorch CUDA tensors through DLPack, honoring
+      device identity, storage offsets, strides, ownership, and producer/consumer
+      stream ordering without CPU pixel staging
+- [ ] Report missing drivers, unsupported devices, allocation failures, and
+      backend-specific capabilities through actionable errors and diagnostics
+- [ ] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
+      views, source lifetimes, chained operations, and transfer boundaries
+
+### GPU Phase 3 — Pipeline Efficiency and Resource Control
+
+- [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
+      and already-resident tensor pipelines; publish measured crossover sizes
+- [ ] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
+      bounded caches and explicit memory limits
+- [ ] Batch execution and reusable processing plans that reduce command
+      overhead and intermediate allocations
+- [ ] Fuse compatible operations only when their rounding, saturation, alpha,
+      and evaluation-order contracts remain satisfied
+- [ ] Stream/event synchronization and asynchronous transfers with explicit
+      completion, cancellation, and error propagation rules
+- [ ] Tile processing for images exceeding working-memory budgets, with correct
+      filter halos and no unnecessary CPU round trips
+
+### GPU Phase 4 — Broader Interoperability and Backends
+
+- [ ] Native Metal/PyTorch buffer exchange where supported, with safe ownership
+      and synchronization; use explicit GPU copies when aliasing is unavailable
+- [ ] Extend tensor exchange to other DLPack producers with per-device layout
+      and stream compatibility checks
+- [ ] Add further backends, such as Vulkan/WebGPU or ROCm, behind the shared
+      operation contracts without requiring changes to CPU image storage
+- [ ] Define explicit cross-device transfers and capability negotiation for
+      applications using multiple GPUs or backend types
 
 ---
 
