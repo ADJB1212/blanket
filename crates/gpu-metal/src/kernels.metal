@@ -629,6 +629,23 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         reinterpret_cast<device uchar4 *>(d)[i] = uchar4(fixed >> BOX_BITS);
         return;
     }
+    if (SPECIALIZED_OPERATION == 1) {
+        uint x = i % p[3], y = i / p[3], size = p[6], radius = size / 2;
+        device const uchar4 *pixels = reinterpret_cast<device const uchar4 *>(s);
+        uchar4 result = pixels[i];
+        if (x >= radius && y >= radius && x + radius < p[0] && y + radius < p[1]) {
+            float4 sum = float4(v[1]);
+            for (uint ky = 0; ky < size; ky++) {
+                float4 subtotal = float4(0);
+                for (uint kx = 0; kx < size; kx++)
+                    subtotal += float4(pixels[(y + radius - ky) * p[0] + x + kx - radius]) * v[2 + ky * size + kx];
+                sum += subtotal;
+            }
+            result = uchar4(clamp(floor(sum + 0.5f), 0.0f, 255.0f));
+        }
+        reinterpret_cast<device uchar4 *>(d)[i] = result;
+        return;
+    }
     uchar4 bytes = reinterpret_cast<device const uchar4 *>(s)[i];
     if (SPECIALIZED_OPERATION == 6) {
         reinterpret_cast<device uchar4 *>(d)[i] = bytes;

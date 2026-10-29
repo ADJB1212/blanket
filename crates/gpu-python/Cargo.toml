@@ -9,6 +9,7 @@ repository.workspace = true
 publish = false
 
 [dependencies]
+blanket-core.workspace = true
 blanket-gpu-cuda = { workspace = true, optional = true }
 pyo3.workspace = true
 blanket-gpu.workspace = true

@@ -45,7 +45,8 @@ type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 fn packed_operation(op: u32, floating: bool, channels: u32) -> bool {
     !floating
         && (matches!(op, operation::COPY | operation::BLEND | operation::BRIGHTNESS | operation::INVERT)
-            || (channels == blanket_gpu::protocol::COLOR_ALPHA_CHANNELS && matches!(op, operation::RESIZE | operation::BOX_BLUR)))
+            || (channels == blanket_gpu::protocol::COLOR_ALPHA_CHANNELS
+                && matches!(op, operation::RESIZE | operation::BOX_BLUR | operation::CONVOLVE)))
 }
 
 fn finished(command: &Command) -> bool {

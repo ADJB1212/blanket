@@ -569,6 +569,7 @@ dependencies = [
 name = "blanket-gpu-python"
 version = "0.3.0"
 dependencies = [
+ "blanket-core",
  "blanket-gpu",
  "blanket-gpu-cuda",
  "blanket-gpu-metal",

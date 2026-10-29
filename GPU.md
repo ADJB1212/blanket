@@ -36,6 +36,8 @@ result.close()
 source position unchanged. Intermediate results stay resident. `to_image`
 waits and downloads an independent CPU raster. `synchronize` waits explicitly;
 `close` releases the handle while submitted commands retain their resources.
+Native Metal transfers copy directly between Rust image storage and Metal,
+without staging a full raster in Python `bytes`. Downloads own their CPU pixels.
 Operations return independent pixel storage. Native Metal caches closed buffers
 up to 128 MiB and 16 allocations, and reuses them only after all GPU writers and
 readers have finished. Closing an image does not wait for its queued consumers.

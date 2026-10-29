@@ -194,17 +194,16 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
     if image.mode not in ("F", "RGB;F", "RGBA;F") and image.bit_depth != 8:
         raise ValueError("unsupported GPU sample depth")
     channels, floating = _MODES[image.mode]
-    data = image.tobytes()
     if backend == "cuda":
         from . import _gpu_cuda
 
-        resource = _gpu_cuda.upload(data, (image.height, image.width, channels), floating, device)
+        resource = _gpu_cuda.upload(image.tobytes(), (image.height, image.width, channels), floating, device)
         runtime = "cuda"
     elif runtime == "native":
-        resource = _blanket.MetalImage(*image.size, channels, floating, data)
+        resource = _blanket.MetalImage.from_image(image._native)
     else:
         torch = _torch()
-        resource = torch.frombuffer(bytearray(data), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
+        resource = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
     return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()))
 
 
@@ -739,6 +738,11 @@ class GpuImage:
 
     def to_image(self) -> Image.Image:
         """Download an independent CPU image."""
+        if self.runtime == "native":
+            self._check()
+            result = Image.Image(self._resource.download_image(self.mode))
+            result.info.update(self.info)
+            return result
         self.synchronize()
         data = self._resource.download() if self.runtime in ("native", "cuda") else bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
         result = Image.frombytes(self.mode, self.size, data)

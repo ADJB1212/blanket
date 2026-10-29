@@ -73,6 +73,35 @@ mod native {
     }
     #[pymethods]
     impl MetalImage {
+        #[staticmethod]
+        fn from_image(image: &blanket_core::Image) -> PyResult<Self> {
+            use blanket_core::PixelMode;
+            if !matches!(
+                image.mode,
+                PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba | PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF
+            ) || (!image.mode.is_float() && image.bit_depth != 8)
+            {
+                return Err(PyValueError::new_err("unsupported GPU image mode or depth"));
+            }
+            let context = context()?;
+            let descriptor =
+                Descriptor { width: image.width, height: image.height, channels: image.mode.channels() as u32, float: image.mode.is_float() };
+            let image = context.upload(descriptor, image.raw_data()?).map_err(PyValueError::new_err)?;
+            Ok(Self { context, image })
+        }
+        fn download_image(&self, mode: &str) -> PyResult<blanket_core::Image> {
+            let mode = blanket_core::PixelMode::parse(mode)?;
+            let descriptor = self.image.descriptor;
+            if mode.channels() != descriptor.channels as usize || mode.is_float() != descriptor.float {
+                return Err(PyValueError::new_err("GPU image mode does not match storage"));
+            }
+            let pixels = self.context.download(&self.image).map_err(PyRuntimeError::new_err)?;
+            if descriptor.float {
+                blanket_core::Image::from_color_float_bytes(descriptor.width, descriptor.height, mode, pixels)
+            } else {
+                blanket_core::Image::from_pixels(descriptor.width, descriptor.height, mode, pixels, None)
+            }
+        }
         #[new]
         fn new(width: u32, height: u32, channels: u32, float: bool, data: &[u8]) -> PyResult<Self> {
             let context = context()?;

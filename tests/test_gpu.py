@@ -8,6 +8,25 @@ def require_gpu():
         pytest.skip("Metal feature and device required")
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+def test_native_transfers_bypass_python_bytes(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    require_gpu()
+    image = Image.new(mode, (65, 17))
+    expected = image.tobytes()
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("native transfers must not stage pixels in Python bytes")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Image.Image, "tobytes", unexpected)
+        patch.setattr(Image, "frombytes", unexpected)
+        resident = ImageGpu.from_image(image, runtime="native")
+        result = resident.to_image()
+        image.close()
+        resident.close()
+    assert result.tobytes() == expected
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("width", [1, 3, 63, 64, 65, 257])
 def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
