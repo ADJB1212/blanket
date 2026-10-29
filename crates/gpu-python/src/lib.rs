@@ -66,13 +66,66 @@ mod native {
     fn context() -> PyResult<&'static Context> {
         CONTEXT.get_or_init(Context::new).as_ref().map_err(|error| PyRuntimeError::new_err(error.clone()))
     }
-    #[pyclass(unsendable)]
+    #[pyclass(frozen)]
     pub(super) struct MetalImage {
         context: &'static Context,
         image: Image,
     }
+    struct SharedMetalPixels {
+        owner: Py<MetalImage>,
+        address: usize,
+        len: usize,
+    }
+    impl blanket_core::raster::SharedPixels for SharedMetalPixels {
+        fn bytes(&self) -> &[u8] {
+            // The owner retains immutable Metal storage; GPU writes completed
+            // before publication and CPU mutations detach into a separate Vec.
+            unsafe { std::slice::from_raw_parts(self.address as *const u8, self.len) }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
     #[pymethods]
     impl MetalImage {
+        fn shared_image(slf: Bound<'_, Self>, mode: &str) -> PyResult<blanket_core::Image> {
+            let mode = blanket_core::PixelMode::parse(mode)?;
+            let image = slf.borrow();
+            let d = image.image.descriptor;
+            if mode.channels() != d.channels as usize || mode.is_float() != d.float {
+                return Err(PyValueError::new_err("GPU image mode does not match storage"));
+            }
+            let data = image.context.download_bytes(&image.image).map_err(PyRuntimeError::new_err)?;
+            let storage = SharedMetalPixels { owner: slf.clone().unbind(), address: data.as_ptr() as usize, len: data.len() };
+            Ok(blanket_core::Image {
+                width: d.width,
+                height: d.height,
+                mode,
+                pixels: None,
+                shared_pixels: Some(std::sync::Arc::new(storage)),
+                bit_depth: if d.float { 32 } else { 8 },
+                format: None,
+                palette: None,
+            })
+        }
+        #[staticmethod]
+        fn shared_resource(py: Python<'_>, image: &blanket_core::Image) -> Option<Py<Self>> {
+            if image.pixels.is_some() {
+                return None;
+            }
+            image.shared_pixels.as_ref()?.as_any().downcast_ref::<SharedMetalPixels>().map(|storage| storage.owner.clone_ref(py))
+        }
+        unsafe fn __getbuffer__(slf: Bound<'_, Self>, view: *mut pyo3::ffi::Py_buffer, flags: std::ffi::c_int) -> PyResult<()> {
+            let image = slf.borrow();
+            let data = image.context.download_bytes(&image.image).map_err(PyRuntimeError::new_err)?;
+            // FillInfo retains the exporter. Pixels are immutable and remain out of
+            // the allocation pool until the last Python buffer view is released.
+            let result = unsafe { pyo3::ffi::PyBuffer_FillInfo(view, slf.as_ptr(), data.as_ptr().cast_mut().cast(), data.len() as isize, 1, flags) };
+            if result == -1 {
+                return Err(PyErr::fetch(slf.py()));
+            }
+            Ok(())
+        }
         #[staticmethod]
         fn from_image(image: &blanket_core::Image) -> PyResult<Self> {
             use blanket_core::PixelMode;

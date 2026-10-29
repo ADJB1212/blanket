@@ -9,6 +9,130 @@ def require_gpu():
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+def test_unified_memory_automatic_roundtrip_and_copy_on_write(mode: str) -> None:
+    from blanket import ImageDraw
+
+    require_gpu()
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    value = 0.25 if "F" in mode else 57
+    image = Image.new(mode, (17, 9), value if channels == 1 else (value,) * channels)
+    expected = image.tobytes()
+    gpu = ImageGpu.from_image(image, unified_memory=True)
+    result = gpu.convert(mode)
+    assert result.unified_memory and result.share().unified_memory
+    cpu = result.to_image()
+    sibling = result.to_image()
+    restored = ImageGpu.from_image(cpu, unified_memory=True)
+    assert restored.to_memoryview().obj is result.to_memoryview().obj
+    result.close()
+    gpu.close()
+    image.close()
+    assert cpu.tobytes() == expected
+    cpu.putpixel((0, 0), 0 if channels == 1 else (0,) * channels)
+    assert sibling.tobytes() == expected
+    assert restored.to_image().tobytes() == expected
+    detached = ImageGpu.from_image(cpu, unified_memory=True)
+    assert detached.to_image().tobytes() == cpu.tobytes()
+    assert detached.to_memoryview().obj is not restored.to_memoryview().obj
+    if mode in ("L", "RGB", "RGBA"):
+        ImageDraw.Draw(sibling).rectangle((0, 0, 3, 3), fill=0)
+        assert restored.to_image().tobytes() == expected
+    cpu.close()
+    assert restored.to_image().tobytes() == expected
+
+
+def test_unified_memory_paste_and_shared_image_close_on_worker() -> None:
+    from concurrent.futures import ThreadPoolExecutor
+
+    require_gpu()
+    original = Image.new("RGBA", (17, 9), (50, 100, 150, 200))
+    gpu = ImageGpu.from_image(original, unified_memory=True)
+    cpu = gpu.to_image()
+    last_shared = gpu.to_image()
+    copied = cpu.copy()
+    cpu.paste(Image.new("RGBA", (3, 3), "red"), (0, 0))
+    assert gpu.to_image().tobytes() == original.tobytes()
+    assert copied.tobytes() == original.tobytes()
+    gpu.close()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        assert pool.submit(copied.tobytes).result() == original.tobytes()
+        pool.submit(copied.close).result()
+        pool.submit(cpu.close).result()
+        pool.submit(last_shared.close).result()
+
+
+@pytest.mark.parametrize("operation", ["putdata", "putalpha", "alpha_composite", "paste"])
+def test_unified_memory_mutations_preserve_gpu_pixels(operation: str) -> None:
+    import io
+
+    require_gpu()
+    original = Image.new("RGBA", (17, 9), (50, 100, 150, 200))
+    gpu = ImageGpu.from_image(original, unified_memory=True)
+    cpu = gpu.to_image()
+    if operation == "putdata":
+        cpu.putdata([(1, 2, 3, 4)] * (17 * 9))
+    elif operation == "putalpha":
+        cpu.putalpha(0)
+    elif operation == "alpha_composite":
+        cpu.alpha_composite(Image.new("RGBA", cpu.size, "red"))
+    else:
+        cpu.paste(Image.new("RGBA", cpu.size, "red"))
+    assert cpu.tobytes() != original.tobytes()
+    assert gpu.to_image().tobytes() == original.tobytes()
+    output = io.BytesIO()
+    shared = gpu.to_image()
+    shared.save(output, format="PNG")
+    assert Image.open(io.BytesIO(output.getvalue())).tobytes() == original.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+def test_shared_metal_mapping_lifetime(mode: str) -> None:
+    require_gpu()
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    value = 0.25 if "F" in mode else 57
+    image = Image.new(mode, (65, 17), value if channels == 1 else (value,) * channels)
+    expected = image.tobytes()
+    source = ImageGpu.from_image(image, runtime="native")
+    result = source.convert(mode)
+    result.info["description"] = "shared image"
+    view = result.to_memoryview()
+    assert view.readonly and view.c_contiguous
+    assert bytes(view) == expected
+    with pytest.raises(TypeError):
+        view[0] = 1
+    shared = result.share()
+    assert shared.to_memoryview().obj is view.obj
+    assert shared.info == result.info
+    shared.info["description"] = "independent metadata"
+    assert result.info["description"] == "shared image"
+    result.close()
+    source.close()
+    image.close()
+    for _ in range(20):
+        temporary = ImageGpu.from_image(Image.new(mode, (65, 17)), runtime="native")
+        temporary.close()
+    assert bytes(view) == expected
+    view.release()
+    assert shared.to_image().tobytes() == expected
+    last_view = shared.to_memoryview()
+    shared.close()
+    replacement = ImageGpu.from_image(Image.new(mode, (65, 17)), runtime="native")
+    assert bytes(last_view) == expected
+    replacement.close()
+    last_view.release()
+
+
+def test_shared_metal_handles_reject_closed_images() -> None:
+    require_gpu()
+    gpu = ImageGpu.from_image(Image.new("RGBA", (3, 5)), runtime="native")
+    gpu.close()
+    with pytest.raises(ValueError, match="closed"):
+        gpu.to_memoryview()
+    with pytest.raises(ValueError, match="closed"):
+        gpu.share()
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_native_transfers_bypass_python_bytes(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     require_gpu()
     image = Image.new(mode, (65, 17))

@@ -104,6 +104,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("metal", "cuda"), default="metal")
     parser.add_argument("--runtime", choices=("native", "torch"), default="native")
+    parser.add_argument("--unified-memory", action="store_true", help="Share native Metal output storage with CPU images")
     parser.add_argument("--device", type=int, default=0)
     parser.add_argument("--sizes", type=dimensions, nargs="+", default=[(800, 600), (1920, 1080)])
     parser.add_argument("--modes", choices=("L", "LA", "RGB", "RGBA"), nargs="+", default=["RGB", "RGBA"])
@@ -120,7 +121,7 @@ def main() -> int:
         parser.error(str(capability.get("diagnostic") or f"{args.backend} unavailable; build the matching GPU feature"))
 
     def upload(image: Image.Image) -> ImageGpu.GpuImage:
-        result = ImageGpu.from_image(image, backend=args.backend, runtime=args.runtime, device=args.device)
+        result = ImageGpu.from_image(image, backend=args.backend, runtime=args.runtime, device=args.device, unified_memory=args.unified_memory)
         if not isinstance(result, ImageGpu.GpuImage):
             raise TypeError("benchmark fixtures require uint8 GPU images")
         return result
@@ -137,6 +138,8 @@ def main() -> int:
     emit(f"Blanket {__version__} | {platform.platform()} | {args.backend}, runtime={args.runtime}, device={args.device}")
     emit("Median wall time, milliseconds; speedup = CPU / GPU (greater than 1 means GPU is faster).")
     emit("Resident: pre-uploaded inputs, operation + synchronization. With transfers: uploads + operation + CPU export.")
+    if args.unified_memory:
+        emit("Unified memory: CPU exports share Metal storage; CPU writes copy on demand.")
     if console is None:
         emit(f"{'Mode / size / operation':44} {'CPU ms':>10} {'GPU resident':>13} {'speedup':>9} {'GPU + transfers':>16} {'speedup':>9}")
     for size in args.sizes:
@@ -224,10 +227,11 @@ def main() -> int:
             "backend": args.backend,
             "runtime": args.runtime,
             "device": args.device,
+            "unified_memory": args.unified_memory,
             "warmups": args.warmups,
             "repeats": args.repeats,
             "iterations": args.iterations,
-            "timing": "warm synchronized wall time; resident excludes transfers; transfer-inclusive uploads inputs and downloads output",
+            "timing": "warm synchronized wall time; resident excludes transfers; transfer-inclusive uploads inputs and exports output",
             "results": rows,
         }
         args.json.write_text(json.dumps(report, indent=2) + "\n")

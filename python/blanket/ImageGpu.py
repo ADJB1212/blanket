@@ -172,11 +172,13 @@ def _validate(size: tuple[int, int], mode: str) -> None:
         raise ValueError("invalid GPU image dimensions")
 
 
-def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0) -> GpuImage | GpuUnsignedImage:
+def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> GpuImage | GpuUnsignedImage:
     """Upload the current CPU frame, retaining its metadata."""
     if backend not in ("metal", "cuda") or runtime not in ("native", "torch"):
         raise ValueError("unsupported GPU backend or runtime")
     _require(backend, device)
+    if unified_memory and (backend != "metal" or runtime != "native" or image.bit_depth not in (8, 32)):
+        raise ValueError("unified memory requires native Metal uint8 or float32 images")
     if backend == "metal" and device != 0:
         raise ValueError("Metal supports only the default device")
     _validate(image.size, image.mode)
@@ -200,11 +202,13 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         resource = _gpu_cuda.upload(image.tobytes(), (image.height, image.width, channels), floating, device)
         runtime = "cuda"
     elif runtime == "native":
-        resource = _blanket.MetalImage.from_image(image._native)
+        resource = _blanket.MetalImage.shared_resource(image._native) if unified_memory else None
+        if resource is None:
+            resource = _blanket.MetalImage.from_image(image._native)
     else:
         torch = _torch()
         resource = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
-    return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()))
+    return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()), unified_memory=unified_memory)
 
 
 def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None) -> GpuImage | GpuUnsignedImage:
@@ -267,7 +271,10 @@ def merge(mode: str, bands: Sequence[GpuImage]) -> GpuImage:
 class GpuImage:
     """Resident image with independent operation results and explicit download."""
 
-    def __init__(self, resource: object, size: tuple[int, int], mode: str, runtime: str, info: dict[str, Any]) -> None:
+    def __init__(self, resource: object, size: tuple[int, int], mode: str, runtime: str, info: dict[str, Any], *, unified_memory: bool = False) -> None:
+        if unified_memory and runtime != "native":
+            raise ValueError("unified memory requires native Metal")
+        self.unified_memory = unified_memory
         self._resource: Any = resource
         self.size = size
         self.mode = mode
@@ -320,7 +327,7 @@ class GpuImage:
                 kernel_name = "reduce_f32" if _MODES[self.mode][1] else "reduce_u8"
             kernel = getattr(_library(), kernel_name)
             kernel(src, resource, rhs, parameters, weights, threads=size[0] * size[1] * channels, arg_casts={3: "int32"})
-        return GpuImage(resource, size, mode, self.runtime, self.info.copy())
+        return GpuImage(resource, size, mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
 
     def convert(self, mode: str) -> GpuImage:
         """Convert resident modes; F uses raw 0..255 units, color floats use 0..1."""
@@ -740,7 +747,8 @@ class GpuImage:
         """Download an independent CPU image."""
         if self.runtime == "native":
             self._check()
-            result = Image.Image(self._resource.download_image(self.mode))
+            native = self._resource.shared_image(self.mode) if self.unified_memory else self._resource.download_image(self.mode)
+            result = Image.Image(native)
             result.info.update(self.info)
             return result
         self.synchronize()
@@ -748,6 +756,18 @@ class GpuImage:
         result = Image.frombytes(self.mode, self.size, data)
         result.info.update(self.info)
         return result
+
+    def share(self) -> GpuImage:
+        """Return an independently closable handle without copying pixel storage."""
+        self._check()
+        return GpuImage(self._resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
+
+    def to_memoryview(self) -> memoryview:
+        """Wait for GPU writes and borrow native Metal bytes without copying."""
+        self._check()
+        if self.runtime != "native":
+            raise ValueError("shared mappings require native Metal storage")
+        return memoryview(self._resource)
 
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
         """Share a tensor-backed result without downloading pixels."""

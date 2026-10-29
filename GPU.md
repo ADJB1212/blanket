@@ -46,6 +46,50 @@ kernels handle copy, blend, brightness, and invert; RGBA resize and box-blur
 passes share coordinate calculations across all four channels. PyTorch MPS and
 CUDA continue to use the shared portable kernels.
 
+### Shared Metal memory
+
+Enable automatic sharing when uploading an image:
+
+```python
+gpu = ImageGpu.from_image(image, unified_memory=True)
+result = gpu.invert()
+cpu = result.to_image()  # Wait for GPU writes; share Metal storage without copying.
+again = ImageGpu.from_image(cpu, unified_memory=True)  # Reuse the allocation.
+cpu.putpixel((0, 0), 0)  # Detach before writing; result and again keep their pixels.
+```
+
+The option propagates through operations and shared handles. It supports native
+Metal uint8 and float32 modes. CPU images retain their backing storage even after
+GPU handles close; readers use it directly, and CPU mutations copy on write.
+An ordinary CPU image requires one initial upload because its existing allocation
+is not Metal-backed. Re-uploading a modified CPU image also copies its new pixels.
+The default `unified_memory=False` keeps independent CPU downloads.
+Pass `--unified-memory` to `scripts/benchmark_gpu.py` to measure this path.
+Its CPU export timings include synchronization and handle creation; they exclude
+scanning the shared pixels or the deferred copy on the first CPU write.
+
+For advanced access, native Metal images also expose read-only CPU memoryviews.
+Use `share()` when another GPU handle should use the same pixels:
+
+```python
+shared = gpu.share()  # No pixel copy; retains size, mode, and metadata.
+view = gpu.to_memoryview()  # Wait for GPU writes; no pixel copy.
+gpu.close()
+view.release()
+result = shared.invert()  # Continues using the same resident input storage.
+```
+
+Mappings are flat byte memoryviews. Float storage can be inspected with
+`view.cast("f")`. A view retains its Metal allocation, preventing buffer-pool
+reuse while the CPU can read it. Shared image handles can be closed independently
+and have separate metadata dictionaries. Operations create independent results.
+CPU mutation is intentionally
+excluded so existing GPU readers and other views remain valid.
+
+This avoids copies when accessing Metal output on the CPU and
+reusing that storage on the GPU. General CPU allocations are not
+wrapped with Metal's no-copy API; their alignment and ownership differ.
+
 Supported modes are uint8 L/LA/RGB/RGBA and float32 F/RGB;F/RGBA;F, plus
 unsigned 10/12/16-bit L/RGB/RGBA as described below. Resize
 supports all six `Image.Resampling` filters and premultiplies alpha for filtered

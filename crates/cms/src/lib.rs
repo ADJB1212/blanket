@@ -160,6 +160,7 @@ impl CmsTransform {
         }
         let result = self.apply(py, image)?;
         image.pixels = result.pixels;
+        image.shared_pixels = None;
         Ok(())
     }
 }

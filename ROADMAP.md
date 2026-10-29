@@ -518,8 +518,6 @@ for setup.
 
 ### GPU Phase 3 — Pipeline Efficiency and Resource Control
 
-- [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
-      and already-resident tensor pipelines; publish measured crossover sizes
 - [ ] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
       bounded caches and explicit memory limits
 - [ ] Batch execution and reusable processing plans that reduce command
@@ -541,6 +539,8 @@ for setup.
       operation contracts without requiring changes to CPU image storage
 - [ ] Define explicit cross-device transfers and capability negotiation for
       applications using multiple GPUs or backend types
+- [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
+      and already-resident tensor pipelines; publish measured crossover sizes
 
 ---
 

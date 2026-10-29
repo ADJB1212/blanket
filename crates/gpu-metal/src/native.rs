@@ -106,6 +106,11 @@ pub struct Image {
     uses: Mutex<Vec<Command>>,
 }
 
+// Published buffers are immutable. Reader tracking and pool access are locked;
+// command status and completion waits may be queried from any CPU thread.
+unsafe impl Send for Image {}
+unsafe impl Sync for Image {}
+
 impl Image {
     fn track_read(&self, command: &Command) {
         let mut uses = self.uses.lock().unwrap_or_else(|error| error.into_inner());
