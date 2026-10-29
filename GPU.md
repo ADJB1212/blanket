@@ -426,6 +426,34 @@ checkboxes remain pending NVIDIA execution coverage.
 
 ## Native Rust benchmarks
 
+Compare Blanket CPU and GPU public operations with:
+
+```sh
+uv run --no-sync maturin develop --uv --release --features gpu-metal
+uv run --no-sync scripts/benchmark_gpu.py --backend metal --sizes 256x256 1024x1024 --json gpu-results.json
+uv run --no-sync scripts/benchmark_gpu.py --backend metal --runtime torch --operations resize blend pipeline
+```
+
+For NVIDIA, build with `--release --features gpu-cuda` using the CUDA toolkit,
+then select `--backend cuda --device 0`. Use release builds for performance
+measurements. The script supports uint8 L/LA/RGB/RGBA and reports median CPU
+time, resident GPU time, transfer-inclusive GPU time, and CPU/GPU speedups for
+both GPU paths. Ratios above 1 mean the GPU was faster.
+
+Resident inputs are uploaded and synchronized before timing. Resident timings
+include the public operation's control preparation, allocations, GPU execution,
+and synchronization, without pixel upload/download. Transfer-inclusive timings
+upload all required inputs, run the operation, download the output, and release
+temporary GPU handles; binary operations upload both inputs. Pipeline results
+remain on the GPU between operations and download only the final image.
+Returned CPU images and resident GPU results are released outside their timing.
+Fixtures and initialization are excluded; each path is warmed before sampling.
+`--warmups`, `--repeats`, and `--iterations` control sampling; `--json` retains
+samples, medians, speedups, actual GPU device/runtime, and environment metadata.
+Output uses Rich tables with colored speedups by default; set `NO_RICH=1`
+for plain text without importing Rich. Rendering happens outside timed samples.
+These are synchronized wall-clock timings rather than isolated kernel timings.
+
 Criterion suites exercise control preparation without a GPU and native Metal
 execution without Python or PyTorch:
 
