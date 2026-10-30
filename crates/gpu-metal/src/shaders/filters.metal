@@ -200,7 +200,7 @@ uchar4 median9(thread uchar4 *s) {
 }
 
 // Resize or convolve one packed pixel with CPU-compatible rounding.
-template <typename P, typename I, typename F>
+template <typename P, typename I, typename F, bool Floating = false>
 void filter_pixels(device const P *src, device P *dst, constant uint *p, device const float *v, uint i) {
     if (i >= p[3] * p[4])
         return;
@@ -210,10 +210,17 @@ void filter_pixels(device const P *src, device P *dst, constant uint *p, device 
         uint start = uint(v[base]), taps = uint(v[base + 1]);
         uint source = p[7] == 0 ? y * p[0] + start : start * p[0] + x;
         uint stride = p[7] == 0 ? 1 : p[0];
-        I fixed = I(RESIZE_ROUND);
-        for (uint t = 0; t < taps; t++)
-            fixed += I(src[source + t * stride]) * int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
-        dst[i] = P(clamp(F(fixed >> RESIZE_BITS), 0.0f, 255.0f));
+        if (Floating) {
+            F sum = F(0);
+            for (uint t = 0; t < taps; t++)
+                sum += F(src[source + t * stride]) * v[base + 2 + t];
+            dst[i] = P(sum);
+        } else {
+            I fixed = I(RESIZE_ROUND);
+            for (uint t = 0; t < taps; t++)
+                fixed += I(src[source + t * stride]) * int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
+            dst[i] = P(clamp(F(fixed >> RESIZE_BITS), 0.0f, 255.0f));
+        }
     } else {
         uint size = p[6], radius = size / 2;
         P result = src[i];
@@ -225,7 +232,7 @@ void filter_pixels(device const P *src, device P *dst, constant uint *p, device 
                     subtotal += F(src[(y + radius - ky) * p[0] + x + kx - radius]) * v[2 + ky * size + kx];
                 sum += subtotal;
             }
-            result = P(clamp(floor(sum + 0.5f), 0.0f, 255.0f));
+            result = Floating ? P(sum) : P(clamp(floor(sum + 0.5f), 0.0f, 255.0f));
         }
         dst[i] = result;
     }

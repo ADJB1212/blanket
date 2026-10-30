@@ -39,6 +39,8 @@ const CHANNELS_CONSTANT: usize = 1;
 // Packed byte kernels process one aligned uchar4 per thread, with a scalar tail.
 const PACKED_SAMPLES: usize = 4;
 const SLIDING_BLUR_RADIUS: u32 = 32;
+// Matches BLUR_OUTPUTS in shaders/common.metal.
+const BLUR_OUTPUTS: usize = 16;
 // Matches MAX_SIMDGROUPS in shaders/statistics.metal.
 const STATISTICS_SIMDGROUPS: usize = 32;
 // Bound retained allocations, including buffers whose GPU work is still pending.
@@ -77,8 +79,11 @@ fn pixel_operation(op: u32) -> bool {
 fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_width: usize) -> usize {
     let [width, height, channels, output_width, output_height, op, radius, axis] = *parameters;
     if op == operation::BOX_BLUR && !floating && radius >= SLIDING_BLUR_RADIUS {
-        let (length, lines) = if axis == 0 { (width, height) } else { (height, width) };
-        (length as usize).div_ceil(simd_width) * lines as usize * simd_width
+        if axis == 0 {
+            (width as usize).div_ceil(simd_width) * height as usize * simd_width
+        } else {
+            (height as usize).div_ceil(BLUR_OUTPUTS) * width as usize
+        }
     } else if op == operation::LUMINANCE_REDUCE {
         samples / 4 * simd_width
     } else if op == operation::TRANSPOSE
@@ -88,6 +93,7 @@ fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_
     {
         (output_width as usize).div_ceil(TRANSPOSE_TILE) * (output_height as usize).div_ceil(TRANSPOSE_TILE) * TRANSPOSE_TILE * TRANSPOSE_TILE
     } else if pixel_operation(op)
+        || (floating && matches!(op, operation::RESIZE | operation::CONVOLVE | operation::WARP | operation::REMAP))
         || (!floating && matches!(op, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3))
     {
         samples / channels as usize
@@ -567,10 +573,10 @@ impl Context {
                 }
                 let name = if operation == operation::TRANSPOSE {
                     if floating { "transpose_f32" } else { "transpose_u8" }
-                } else if pixel_operation(operation) {
+                } else if pixel_operation(operation) || (floating && matches!(operation, operation::WARP | operation::REMAP)) {
                     if floating { "pixel_f32" } else { "pixel_u8" }
                 } else if floating {
-                    "image_f32"
+                    if matches!(operation, operation::RESIZE | operation::CONVOLVE) { "filter_f32" } else { "image_f32" }
                 } else if matches!(operation, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3) {
                     "color_u8"
                 } else if packed {
@@ -951,7 +957,7 @@ mod tests {
         let Some(context) = test_context() else { return };
         for channels in [1, 2, 3, 4] {
             let pipeline = &context.blur_pipelines[channels as usize - 1];
-            for (width, height) in [(1, 1), (1, 33), (33, 1), (31, 3), (32, 3), (33, 3), (65, 3), (3, 65)] {
+            for (width, height) in [(1, 1), (1, 33), (33, 1), (31, 3), (32, 3), (33, 3), (65, 3), (3, 65), (37, 15), (37, 16), (37, 17), (37, 129)] {
                 let descriptor = Descriptor { width, height, channels, float: false };
                 let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 97 + i / 7) as u8).collect();
                 let guarded = Descriptor { width: data.len() as u32 + 8, height: 1, channels: 1, float: false };
@@ -1030,6 +1036,63 @@ mod tests {
                         let actual: Vec<u32> = counts[band * 256..][..256].iter().map(|count| count.to_bits()).collect();
                         assert_eq!(actual, expected, "width={width}, channels={channels}, run={run}, band={band}");
                     }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn byte_luminance_partials_match_fixed_point_reference() {
+        let Some(context) = test_context() else { return };
+        for width in [1, 31, 32, 33, 255, 256, 257, 513] {
+            for channels in [1, 2, 3, 4] {
+                for white in [false, true] {
+                    let descriptor = Descriptor { width, height: 1, channels, float: false };
+                    let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| if white { 255 } else { (i * 97 + i / 7) as u8 }).collect();
+                    let mut input = vec![0xa5; data.len() + 8];
+                    input[4..4 + data.len()].copy_from_slice(&data);
+                    let source = context.upload(Descriptor { width: input.len() as u32, channels: 1, ..descriptor }, &input).unwrap();
+                    let blocks = width.div_ceil(256);
+                    let guarded = Descriptor { width: blocks * 16 + 8, height: 1, channels: 1, float: false };
+                    let result = context.upload(guarded, &vec![0xa5; guarded.byte_len().unwrap()]).unwrap();
+                    let parameters = [width, 1, channels, blocks, 1, operation::LUMINANCE_REDUCE, 0, 0];
+                    let pipeline = &context.reductions[0];
+                    let command = context.queue.command_buffer().unwrap();
+                    let encoder = command.compute_encoder().unwrap();
+                    encoder.set_pipeline(pipeline);
+                    // Offset bindings leave guards around input and output, including RGB tails.
+                    unsafe {
+                        encoder.set_buffer(Some(&source.buffer), 4, SOURCE_SLOT);
+                        encoder.set_buffer(Some(&result.buffer), 4, OUTPUT_SLOT);
+                        encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), size_of_val(&parameters), PARAMETERS_SLOT);
+                    }
+                    encoder.dispatch_threads(
+                        MTLSize { width: blocks as usize * pipeline.threadExecutionWidth(), height: 1, depth: 1 },
+                        MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+                    );
+                    encoder.end_encoding();
+                    command.commit();
+                    command.wait_until_completed();
+                    assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
+                    let bytes = context.download(&result).unwrap();
+                    assert_eq!(&bytes[..4], &[0xa5; 4]);
+                    assert_eq!(&bytes[bytes.len() - 4..], &[0xa5; 4]);
+                    let actual = floats(&bytes[4..bytes.len() - 4]);
+                    for (index, block) in data.chunks(256 * channels as usize).enumerate() {
+                        let expected: u32 = block
+                            .chunks_exact(channels as usize)
+                            .map(|pixel| {
+                                if channels < 3 {
+                                    u32::from(pixel[0])
+                                } else {
+                                    (u32::from(pixel[0]) * 19595 + u32::from(pixel[1]) * 38470 + u32::from(pixel[2]) * 7471 + (1 << 15)) >> 16
+                                }
+                            })
+                            .sum();
+                        assert_eq!(actual[index * 4].to_bits(), expected, "width={width}, channels={channels}, white={white}");
+                        assert!(actual[index * 4 + 1..index * 4 + 4].iter().all(|value| value.to_bits() == 0));
+                    }
+                    assert_eq!(context.download(&source).unwrap(), input);
                 }
             }
         }

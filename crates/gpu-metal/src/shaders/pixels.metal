@@ -74,39 +74,128 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
         dst[i] = P(clamp(floor(result + 0.5f), 0.0f, 255.0f));
 }
 
-// Dispatch a packed pixel to geometry or alpha processing.
+// Resize or convolve one float pixel while retaining its sample range.
+kernel void filter_f32(device const float *src [[buffer(0)]], device float *dst [[buffer(1)]], constant uint *p [[buffer(3)]],
+                       device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+    if (SPECIALIZED_CHANNELS == 1)
+        filter_pixels<float, int, float, true>(src, dst, p, v, i);
+    else if (SPECIALIZED_CHANNELS == 2)
+        filter_pixels<float2, int2, float2, true>(reinterpret_cast<device const float2 *>(src), reinterpret_cast<device float2 *>(dst), p, v, i);
+    else if (SPECIALIZED_CHANNELS == 3)
+        filter_pixels<packed_float3, int3, float3, true>(
+            reinterpret_cast<device const packed_float3 *>(src), reinterpret_cast<device packed_float3 *>(dst), p, v, i);
+    else
+        filter_pixels<float4, int4, float4, true>(reinterpret_cast<device const float4 *>(src), reinterpret_cast<device float4 *>(dst), p, v, i);
+}
+
+// Share coordinates and interpolation weights across a float pixel.
+template <typename P, typename F, uint Channels>
+void warp_pixels(device const P *src, device P *dst, device const P *other, constant uint *p, device const float *v, uint i) {
+    if (i >= p[3] * p[4])
+        return;
+    uint sw = p[0], sh = p[1];
+    float sx, sy;
+    if (SPECIALIZED_OPERATION == OP_REMAP) {
+        device const float *coordinates = reinterpret_cast<device const float *>(other);
+        sx = coordinates[i * 3];
+        sy = coordinates[i * 3 + 1];
+    } else {
+        float px = float(i % p[3]) + 0.5f, py = float(i / p[3]) + 0.5f;
+        float denominator = v[6] * px + v[7] * py + 1;
+        sx = (v[0] * px + v[1] * py + v[2]) / denominator;
+        sy = (v[3] * px + v[4] * py + v[5]) / denominator;
+    }
+    if (!isfinite(sx) || !isfinite(sy) || sx < 0 || sy < 0 || sx >= sw || sy >= sh) {
+        F fill;
+        for (uint band = 0; band < Channels; band++)
+            fill[band] = v[8 + band];
+        dst[i] = P(fill);
+        return;
+    }
+    if (p[6] == 0) {
+        dst[i] = src[uint(sy) * sw + uint(sx)];
+        return;
+    }
+    sx -= 0.5f;
+    sy -= 0.5f;
+    int ix = int(floor(sx)), iy = int(floor(sy));
+    float fx = sx - floor(sx), fy = sy - floor(sy);
+    F result = F(0);
+    // Retain the scalar interpolation order for nonfinite samples.
+    for (uint band = 0; band < Channels; band++) {
+        float out = 0;
+        if (p[6] == 2) {
+            float4 rows;
+            for (int ky = -1; ky <= 2; ky++) {
+                float4 taps;
+                for (int kx = -1; kx <= 2; kx++)
+                    taps[kx + 1] = float(src[uint(clamp(iy + ky, 0, int(sh) - 1)) * sw + uint(clamp(ix + kx, 0, int(sw) - 1))][band]);
+                rows[ky + 1] = warp_cubic(taps, fx);
+            }
+            out = warp_cubic(rows, fy);
+        } else {
+            for (int ky = 0; ky <= 1; ky++) {
+                float wy = ky == 0 ? 1 - fy : fy;
+                float row = 0;
+                for (int kx = 0; kx <= 1; kx++) {
+                    float wx = kx == 0 ? 1 - fx : fx;
+                    uint index = uint(clamp(iy + ky, 0, int(sh) - 1)) * sw + uint(clamp(ix + kx, 0, int(sw) - 1));
+                    row += float(src[index][band]) * wx;
+                }
+                out += row * wy;
+            }
+        }
+        result[band] = out;
+    }
+    dst[i] = P(result);
+}
+
+// Dispatch a packed pixel to geometry, resampling, or alpha processing.
 template <typename P, typename F, bool Floating, uint Channels>
-void process_pixel(device const P *src, device P *dst, device const P *other, constant uint *p, uint i) {
-    if (SPECIALIZED_OPERATION == OP_ALPHA_COMPOSITE || SPECIALIZED_OPERATION == OP_PREMULTIPLY || SPECIALIZED_OPERATION == OP_UNPREMULTIPLY)
+void process_pixel(device const P *src, device P *dst, device const P *other, constant uint *p, device const float *v, uint i) {
+    if (Floating && (SPECIALIZED_OPERATION == OP_WARP || SPECIALIZED_OPERATION == OP_REMAP))
+        warp_pixels<P, F, Channels>(src, dst, other, p, v, i);
+    else if (SPECIALIZED_OPERATION == OP_ALPHA_COMPOSITE || SPECIALIZED_OPERATION == OP_PREMULTIPLY || SPECIALIZED_OPERATION == OP_UNPREMULTIPLY)
         alpha_pixels<P, F, Floating, Channels>(src, dst, other, p, i);
     else
         geometry_pixels(src, dst, p, i);
 }
 
 #define PIXEL_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR, FLOATING)                                                                                       \
-    /* Dispatch geometry or alpha processing for the selected packed pixel type. */                                                                  \
+    /* Dispatch geometry, resampling, or alpha processing for the selected pixel type. */                                                            \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      device const SAMPLE *other [[buffer(2)]],                                                                                       \
                      constant uint *p [[buffer(3)]],                                                                                                 \
+                     device const float *v [[buffer(4)]],                                                                                            \
                      uint i [[thread_position_in_grid]]) {                                                                                           \
-        if (SPECIALIZED_CHANNELS == 1)                                                                                                               \
-            geometry_pixels(src, dst, p, i);                                                                                                         \
-        else if (SPECIALIZED_CHANNELS == 2)                                                                                                          \
-            process_pixel<TWO, float2, FLOATING, 2>(                                                                                                 \
-                reinterpret_cast<device const TWO *>(src), reinterpret_cast<device TWO *>(dst), reinterpret_cast<device const TWO *>(other), p, i);  \
-        else if (SPECIALIZED_CHANNELS == 3)                                                                                                          \
+        if (SPECIALIZED_CHANNELS == 1) {                                                                                                             \
+            if (SPECIALIZED_OPERATION == OP_WARP || SPECIALIZED_OPERATION == OP_REMAP)                                                               \
+                process_sample(src, dst, other, p, v, i);                                                                                            \
+            else                                                                                                                                     \
+                geometry_pixels(src, dst, p, i);                                                                                                     \
+        } else if (SPECIALIZED_CHANNELS == 2) {                                                                                                      \
+            process_pixel<TWO, float2, FLOATING, 2>(reinterpret_cast<device const TWO *>(src),                                                       \
+                                                    reinterpret_cast<device TWO *>(dst),                                                             \
+                                                    reinterpret_cast<device const TWO *>(other),                                                     \
+                                                    p,                                                                                               \
+                                                    v,                                                                                               \
+                                                    i);                                                                                              \
+        } else if (SPECIALIZED_CHANNELS == 3) {                                                                                                      \
             process_pixel<THREE, float3, FLOATING, 3>(reinterpret_cast<device const THREE *>(src),                                                   \
                                                       reinterpret_cast<device THREE *>(dst),                                                         \
                                                       reinterpret_cast<device const THREE *>(other),                                                 \
                                                       p,                                                                                             \
+                                                      v,                                                                                             \
                                                       i);                                                                                            \
-        else                                                                                                                                         \
+        } else {                                                                                                                                     \
             process_pixel<FOUR, float4, FLOATING, 4>(reinterpret_cast<device const FOUR *>(src),                                                     \
                                                      reinterpret_cast<device FOUR *>(dst),                                                           \
                                                      reinterpret_cast<device const FOUR *>(other),                                                   \
                                                      p,                                                                                              \
+                                                     v,                                                                                              \
                                                      i);                                                                                             \
+        }                                                                                                                                            \
     }
 PIXEL_KERNEL(pixel_u8, uchar, uchar2, packed_uchar3, uchar4, false)
 PIXEL_KERNEL(pixel_f32, float, float2, packed_float3, float4, true)

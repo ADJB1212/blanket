@@ -34,18 +34,21 @@ template <> uint4 blur_prefix(uint4 value) {
                  simd_prefix_exclusive_sum(value.w));
 }
 
-// One shared window and an exclusive scan produce a SIMD group's outputs.
+// Use coalesced column windows vertically and SIMD-group scans horizontally.
 template <typename T, typename S>
 void scan_box_blur(device const T *src, device T *dst, constant uint *p, device const float *v, uint i, uint lanes) {
-    uint width = p[0], height = p[1], radius = p[6];
-    bool horizontal = p[7] == 0;
-    uint length = horizontal ? width : height, lines = horizontal ? height : width;
+    if (p[7] != 0) {
+        sliding_box_blur<T, S>(src, dst, p, v, i, 1);
+        return;
+    }
+    uint width = p[0], radius = p[6];
+    uint length = width;
     uint blocks = (length + lanes - 1) / lanes, lane = i % lanes, group = i / lanes;
-    uint line = horizontal ? group / blocks : group % lines;
-    uint first = (horizontal ? group % blocks : group / lines) * lanes;
+    uint line = group / blocks;
+    uint first = (group % blocks) * lanes;
     uint last = length - 1, position = first + lane;
-    uint base = horizontal ? line * width : line;
-    uint stride = horizontal ? 1 : width;
+    uint base = line * width;
+    uint stride = 1;
     uint low = first > radius ? first - radius : 0, high = min(last, first + radius);
     S sum = S(0);
     for (uint t = low + lane; t <= high; t += lanes)
@@ -66,7 +69,7 @@ void scan_box_blur(device const T *src, device T *dst, constant uint *p, device 
 }
 
 #define SCAN_BLUR_KERNEL(NAME, PIXEL, SUM)                                                                                                           \
-    /* Dispatch the SIMD-group box blur for the selected byte pixel type. */                                                                         \
+    /* Dispatch the box blur for the selected byte pixel type. */                                                                                    \
     kernel void NAME(device const PIXEL *src [[buffer(0)]],                                                                                          \
                      device PIXEL *dst [[buffer(1)]],                                                                                                \
                      constant uint *p [[buffer(3)]],                                                                                                 \

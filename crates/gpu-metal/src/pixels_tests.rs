@@ -49,11 +49,11 @@ fn guarded_dispatch(
     bytes[16..16 + len].to_vec()
 }
 
-fn assert_float_samples(actual: &[u8], expected: &[u8]) {
+fn assert_float_samples(actual: &[u8], expected: &[u8], tolerance: f32) {
     assert_eq!(actual.len(), expected.len());
     for (index, (&a, &b)) in actual.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0).enumerate() {
         let (a, b) = (f32::from_ne_bytes(a), f32::from_ne_bytes(b));
-        assert!(a == b || (a.is_nan() && b.is_nan()) || (a - b).abs() <= 1e-6 * b.abs().max(1.0), "sample {index}: {a} != {b}");
+        assert!(a == b || (a.is_nan() && b.is_nan()) || (a - b).abs() <= tolerance * b.abs().max(1.0), "sample {index}: {a} != {b}");
     }
 }
 
@@ -96,12 +96,151 @@ fn pixel_geometry_and_alpha_match_scalar_shaders_and_preserve_guards() {
                         assert_eq!(fallback, expected);
                     }
                     if floating && matches!(op, operation::ALPHA_COMPOSITE | operation::PREMULTIPLY | operation::UNPREMULTIPLY) {
-                        assert_float_samples(&actual, &expected);
+                        assert_float_samples(&actual, &expected, 1e-6);
                     } else {
                         assert_eq!(actual, expected, "floating={floating}, channels={channels}, width={width}, op={op}, kind={kind}");
                     }
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn packed_filters_match_scalar_shaders_and_preserve_guards() {
+    let Some(context) = test_context() else { return };
+    for floating in [false, true] {
+        for channels in [1, 2, 3, 4] {
+            for op in [operation::RESIZE, operation::CONVOLVE] {
+                let scalar = scalar_pipeline(&context, op, channels, floating);
+                let packed = context.operation_pipeline(op, floating, channels).unwrap();
+                for (width, height) in [(1_u32, 1_u32), (1, 33), (33, 1), (7, 5), (31, 17), (32, 16), (33, 15)] {
+                    for nonfinite in [false, true] {
+                        let count = width as usize * height as usize * channels as usize;
+                        let input = if floating && !nonfinite {
+                            (0..count).flat_map(|i| (((i * 97 % 251) as f32 - 127.0) / 37.0).to_ne_bytes()).collect()
+                        } else {
+                            samples(count, floating, 0)
+                        };
+                        for axis in [0, 1] {
+                            let (dw, dh, kernel, values) = if op == operation::RESIZE {
+                                let (dw, dh) = if axis == 0 { (width * 2 + 1, height) } else { (width, height.div_ceil(2)) };
+                                let (kernel, values) = blanket_gpu::resize_weights(
+                                    if axis == 0 { width } else { height },
+                                    if axis == 0 { dw } else { dh },
+                                    blanket_gpu::protocol::resampling::LANCZOS,
+                                )
+                                .unwrap();
+                                (dw, dh, kernel, values)
+                            } else {
+                                let size = if axis == 0 { 3 } else { 5 };
+                                let values = [vec![0.0, -0.375], (0..size * size).map(|i| (i as f32 - 7.0) / 13.0).collect()].concat();
+                                (width, height, size, values)
+                            };
+                            let output = Descriptor { width: dw, height: dh, channels, float: floating };
+                            let request = Dispatch { output, parameters: [width, height, channels, dw, dh, op, kernel, axis], values };
+                            let count = dw as usize * dh as usize * channels as usize;
+                            let expected = guarded_dispatch(&context, &scalar, &request, &input, &input, count, THREADGROUP_THREADS);
+                            let threads = dispatch_samples(&request.parameters, floating, count, packed.threadExecutionWidth());
+                            let actual = guarded_dispatch(&context, packed, &request, &input, &input, threads, THREADGROUP_THREADS);
+                            if floating {
+                                assert_float_samples(&actual, &expected, 1e-6);
+                            } else {
+                                assert_eq!(actual, expected, "channels={channels}, size={width}x{height}, op={op}, axis={axis}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn packed_warps_match_scalar_shaders_and_preserve_guards() {
+    let Some(context) = test_context() else { return };
+    for floating in [false, true] {
+        for channels in [1, 2, 3, 4] {
+            for op in [operation::WARP, operation::REMAP] {
+                let scalar = scalar_pipeline(&context, op, channels, floating);
+                let packed = context.operation_pipeline(op, floating, channels).unwrap();
+                for (width, height) in [(1, 1), (1, 33), (33, 1), (7, 5), (31, 17), (32, 16), (33, 15)] {
+                    let dw = width + 2;
+                    let dh = height + 1;
+                    let count = width as usize * height as usize * channels as usize;
+                    let coordinates: Vec<u8> = (0..dw * dh)
+                        .flat_map(|i| {
+                            let x = i % dw;
+                            let y = i / dw;
+                            let sx = match x % 7 {
+                                0 => -0.25,
+                                1 => 0.0,
+                                2 => 0.5,
+                                3 => width as f32 - 0.25,
+                                4 => width as f32,
+                                5 => f32::NAN,
+                                _ => f32::INFINITY,
+                            };
+                            [sx, y as f32 - 0.125, 0.0].into_iter().flat_map(f32::to_ne_bytes)
+                        })
+                        .collect();
+                    for nonfinite in [false, true] {
+                        let input = if floating && !nonfinite {
+                            (0..count).flat_map(|i| (((i * 97 % 251) as f32 - 127.0) / 37.0).to_ne_bytes()).collect()
+                        } else {
+                            samples(count, floating, 0)
+                        };
+                        for kernel in [0, 1, 2] {
+                            for perspective in [false, true] {
+                                let values =
+                                    vec![1.0, 0.05, -0.75, -0.05, 1.0, 0.125, if perspective { -0.25 } else { 0.0 }, 0.0, -1.25, 17.5, 259.0, 0.25];
+                                let output = Descriptor { width: dw, height: dh, channels, float: floating };
+                                let request = Dispatch { output, parameters: [width, height, channels, dw, dh, op, kernel, 0], values };
+                                let count = dw as usize * dh as usize * channels as usize;
+                                let expected = guarded_dispatch(&context, &scalar, &request, &input, &coordinates, count, THREADGROUP_THREADS);
+                                let threads = dispatch_samples(&request.parameters, floating, count, packed.threadExecutionWidth());
+                                let actual = guarded_dispatch(&context, packed, &request, &input, &coordinates, threads, THREADGROUP_THREADS);
+                                if floating {
+                                    assert_float_samples(&actual, &expected, 1e-5);
+                                } else {
+                                    for (index, (a, b)) in actual.iter().zip(&expected).enumerate() {
+                                        assert_eq!(
+                                            a, b,
+                                            "sample={index}, channels={channels}, size={width}x{height}, op={op}, kernel={kernel}, perspective={perspective}"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn packed_float_convolution_plans_match_direct_dispatch() {
+    let Some(context) = test_context() else { return };
+    for channels in [1, 2, 3, 4] {
+        let descriptor = Descriptor { width: 37, height: 29, channels, float: true };
+        let input = samples(37 * 29 * channels as usize, true, 0);
+        let source = context.upload(descriptor, &input).unwrap();
+        for kernel in [3, 5] {
+            let values = [vec![0.0, -0.375], vec![1.0 / (kernel * kernel) as f32; (kernel * kernel) as usize]].concat();
+            let request =
+                Dispatch { output: descriptor, parameters: [37, 29, channels, 37, 29, operation::CONVOLVE, kernel, 0], values: values.clone() };
+            let direct = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
+            let expected = context.download(&direct).unwrap();
+            for limit in [4096, 1_000_000] {
+                let step = blanket_gpu::plan::Step { operation: operation::CONVOLVE, kernel, axis: 0, values: values.clone() };
+                let geometry = blanket_gpu::plan::Plan::new(descriptor, vec![step], limit).unwrap();
+                assert_eq!(geometry.tile() == [37, 29], limit == 1_000_000);
+                let plan = context.prepare_plan(geometry).unwrap();
+                let outputs = context.execute_plan(&plan, &[&source]).unwrap();
+                assert_float_samples(&context.download(&outputs[0]).unwrap(), &expected, 1e-6);
+            }
+            assert_eq!(context.download(&source).unwrap(), input);
         }
     }
 }

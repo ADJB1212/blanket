@@ -129,12 +129,24 @@ kernel void finish_statistics(device const float *src [[buffer(0)]], device floa
 template <typename T> void parallel_luminance(device const T *src, device float *dst, constant uint *p, uint i, uint lanes, uint lane) {
     uint block = i / lanes, first = block * REDUCTION_BLOCK_SIZE;
     uint last = min(first + REDUCTION_BLOCK_SIZE, p[0] * p[1]), stage = p[6];
+    if (stage == 0) {
+        uint sum = 0;
+        for (uint pixel = first + lane; pixel < last; pixel += lanes)
+            sum += uint(luminance(src, pixel * p[2], p[2]));
+        // A block contains at most 256 byte luminances, so no carry is possible.
+        sum = simd_sum(sum);
+        if (lane == 0) {
+            dst[block * 4] = as_type<float>(sum);
+            dst[block * 4 + 1] = 0;
+            dst[block * 4 + 2] = 0;
+            dst[block * 4 + 3] = 0;
+        }
+        return;
+    }
     ulong integer_sum = 0;
     float sum = 0;
     for (uint pixel = first + lane; pixel < last; pixel += lanes) {
-        if (stage == 0)
-            integer_sum += ulong(luminance(src, pixel * p[2], p[2]));
-        else if (stage == 1)
+        if (stage == 1)
             sum += luminance(src, pixel * p[2], p[2]);
         else if (stage == 2) {
             device const uint *words = reinterpret_cast<device const uint *>(src);
@@ -143,7 +155,7 @@ template <typename T> void parallel_luminance(device const T *src, device float 
             sum += float(src[pixel * 4]);
     }
     uint low = uint(integer_sum), high = uint(integer_sum >> 32);
-    if (stage == 0 || stage == 2) {
+    if (stage == 2) {
         for (uint delta = lanes / 2; delta > 0; delta /= 2) {
             uint next_low = simd_shuffle_down(low, delta), next_high = simd_shuffle_down(high, delta);
             uint combined = low + next_low;
@@ -154,8 +166,8 @@ template <typename T> void parallel_luminance(device const T *src, device float 
         sum = simd_sum(sum);
     if (lane == 0) {
         uint output = block * 4;
-        dst[output] = stage == 0 || stage == 2 ? as_type<float>(low) : sum;
-        dst[output + 1] = stage == 0 || stage == 2 ? as_type<float>(high) : 0;
+        dst[output] = stage == 2 ? as_type<float>(low) : sum;
+        dst[output + 1] = stage == 2 ? as_type<float>(high) : 0;
         dst[output + 2] = 0;
         dst[output + 3] = 0;
     }

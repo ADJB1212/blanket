@@ -3,21 +3,21 @@
 `src/lib.rs` concatenates these files in dependency order. Runtime compilation
 uses the assembled strings rather than filesystem includes.
 
-| File               | Responsibility                                            |
-| ------------------ | --------------------------------------------------------- |
-| `common.metal`     | Operation IDs, precision constants, and sample access     |
-| `color.metal`      | Luminance, sRGB transfer, color LUTs, and mode conversion |
-| `geometry.metal`   | Scalar crop, transpose, wrap, and resampling              |
-| `filters.metal`    | Scalar filters and packed byte-filter helpers             |
-| `reductions.metal` | Scalar histogram, moment, and luminance fallbacks         |
-| `arithmetic.metal` | Sample arithmetic, alpha math, and enhancement            |
-| `kernels.metal`    | Shared scalar dispatcher and image entry points           |
-| `packed.metal`     | Native packed-byte dispatch                               |
-| `pixels.metal`     | Native packed geometry, alpha, and tiled transpose        |
-| `blur.metal`       | Native SIMD-group box-blur scans                          |
-| `statistics.metal` | Native parallel statistics and luminance reductions       |
-| `paste.metal`      | Native clipped, masked paste                              |
-| `tiles.metal`      | Native packed tile copies                                 |
+| File               | Responsibility                                                |
+| ------------------ | ------------------------------------------------------------- |
+| `common.metal`     | Operation IDs, precision constants, and sample access         |
+| `color.metal`      | Luminance, sRGB transfer, color LUTs, and mode conversion     |
+| `geometry.metal`   | Scalar crop, transpose, wrap, and resampling                  |
+| `filters.metal`    | Scalar filters and packed byte-filter helpers                 |
+| `reductions.metal` | Scalar histogram, moment, and luminance fallbacks             |
+| `arithmetic.metal` | Sample arithmetic, alpha math, and enhancement                |
+| `kernels.metal`    | Shared scalar dispatcher and image entry points               |
+| `packed.metal`     | Native packed-byte dispatch                                   |
+| `pixels.metal`     | Native packed geometry, float filters/warps, alpha, transpose |
+| `blur.metal`       | Native horizontal scans and vertical sliding box blurs        |
+| `statistics.metal` | Native parallel statistics and luminance reductions           |
+| `paste.metal`      | Native clipped, masked paste                                  |
+| `tiles.metal`      | Native packed tile copies                                     |
 
 `SHADERS` supplies the scalar kernels to native Metal and PyTorch MPS.
 `NATIVE_SHADERS` adds optimized entry points after those shared helpers.
