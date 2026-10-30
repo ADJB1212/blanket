@@ -460,9 +460,9 @@ CPU-only builds must remain usable without GPU drivers or Python GPU packages.
 - [x] Native Metal and MPS hardware tests for CPU parity, documented float
       semantics, geometry, lifetime handling, validation, and residency
 
-Native Metal and PyTorch allocations currently use separate execution contexts.
-Native Metal buffer export to PyTorch is not implemented; CPU images intended
-for tensor output can be uploaded with `runtime="torch"`.
+Native Metal and PyTorch allocations use separate execution contexts. Explicit
+GPU copies connect them through `to_torch()` and
+`from_torch(..., runtime="native")`, as described in GPU Phase 4.
 
 ### GPU Phase 1 — Operation and Precision Coverage — Complete
 
@@ -546,7 +546,7 @@ for cache limits, ownership, completion, and error contracts.
 
 ### GPU Phase 4 — Broader Interoperability and Backends
 
-- [ ] Native Metal/PyTorch buffer exchange where supported, with safe ownership
+- [x] Native Metal/PyTorch buffer exchange where supported, with safe ownership
       and synchronization; use explicit GPU copies when aliasing is unavailable
 - [ ] Extend tensor exchange to other DLPack producers with per-device layout
       and stream compatibility checks

@@ -308,8 +308,7 @@ def test_torch_upload_copy_export_and_validation():
     native = ImageGpu.from_image(image)
     with pytest.raises(ValueError, match="execution context"):
         gpu.blend(native, 0.5)
-    with pytest.raises(ValueError, match="runtime"):
-        native.to_torch()
+    assert native.to_torch().device.type == "mps"
     with pytest.raises(ValueError):
         ImageGpu.from_torch(torch.zeros(2, 2), layout="HW")
     with pytest.raises(ValueError):

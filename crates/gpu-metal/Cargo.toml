@@ -14,7 +14,7 @@ blanket-gpu.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSError"] }
-objc2-metal = { version = "0.3", default-features = false, features = ["std", "MTLAllocation", "MTLBuffer", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLDataType", "MTLDevice", "MTLFunctionConstantValues", "MTLLibrary", "MTLResource", "MTLTypes"] }
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "MTLAllocation", "MTLBlitCommandEncoder", "MTLBuffer", "MTLCommandBuffer", "MTLCommandEncoder", "MTLCommandQueue", "MTLComputeCommandEncoder", "MTLComputePipeline", "MTLDataType", "MTLDevice", "MTLFunctionConstantValues", "MTLLibrary", "MTLResource", "MTLTypes"] }
 
 [lib]
 doctest = false

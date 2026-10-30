@@ -387,17 +387,18 @@ class GpuUnsignedImage:
         return self._result(self._image.paste(self._other(source), box, mask))
 
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
-        """Share normalized working samples with PyTorch without a CPU download.
+        """Export normalized working samples to PyTorch without a CPU download.
 
         Args:
             layout: "HWC", "CHW", or "HW"; HW requires L mode.
 
         Returns:
             A float32 tensor in 0..1 units, rather than uint16 sample storage.
-            Shared storage must remain immutable while GPU operations consume it.
+            Native Metal makes an independent synchronized GPU copy. Tensor
+            runtimes share storage, which must remain immutable during GPU reads.
 
         Raises:
-            ValueError: The layout is invalid or storage uses native Metal.
+            ValueError: The layout is invalid or the image is closed.
         """
         return self._image.to_torch(layout=layout)
 

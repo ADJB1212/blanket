@@ -50,26 +50,23 @@ jobs:
             target
           key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "latest"
           enable-cache: "false"
           save-cache: "false"
-      - name: Install build dependencies
-        run: |
-          curl --fail --location --output /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
-          sudo dpkg -i /tmp/cuda-keyring.deb
-          sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config nasm mold libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev cuda-nvcc-13-2
       - name: Install wheel builder
         run: |
           uv python install 3.14
           uv tool install 'maturin[patchelf]>=1.15,<2'
           cargo clean -p lcms2-sys
           cargo clean -p lcms2
+      - name: Install build dependencies
+        run: |
+          curl --fail --location --output /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+          sudo dpkg -i /tmp/cuda-keyring.deb
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config nasm mold libwebp-dev libdav1d-dev libde265-dev libx265-dev libnuma-dev cuda-nvcc-13-2
       - name: Compile kernels and build development wheel
         env:
           NVCC: /usr/local/cuda-13.2/bin/nvcc

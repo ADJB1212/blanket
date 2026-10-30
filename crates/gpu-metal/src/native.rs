@@ -7,9 +7,9 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder,
-    MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunctionConstantValues, MTLLibrary,
-    MTLLibraryOptimizationLevel, MTLMathMode, MTLResourceOptions, MTLSize,
+    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions,
+    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunctionConstantValues, MTLLibrary,
+    MTLLibraryOptimizationLevel, MTLMathMode, MTLResource, MTLResourceOptions, MTLSize,
 };
 
 // Metal device discovery requires CoreGraphics to be linked.
@@ -192,6 +192,62 @@ impl Drop for Image {
 }
 
 impl Context {
+    fn copy_buffer(
+        &self, source: &ProtocolObject<dyn MTLBuffer>, source_offset: usize, destination: &ProtocolObject<dyn MTLBuffer>, destination_offset: usize,
+        len: usize,
+    ) -> Result<(), String> {
+        if source.device().registryID() != self.device.registryID() || destination.device().registryID() != self.device.registryID() {
+            return Err("Metal/PyTorch exchange requires the same Metal device".into());
+        }
+        if source_offset.checked_add(len).is_none_or(|end| end > source.length())
+            || destination_offset.checked_add(len).is_none_or(|end| end > destination.length())
+        {
+            return Err("Metal/PyTorch exchange exceeds buffer bounds".into());
+        }
+        autoreleasepool(|_| {
+            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal exchange command buffer")?;
+            let encoder = command.blitCommandEncoder().ok_or("cannot allocate Metal exchange encoder")?;
+            // Both ranges are checked, owners outlive completion, and the caller
+            // orders access from external queues before entering this method.
+            unsafe {
+                encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(source, source_offset, destination, destination_offset, len)
+            };
+            encoder.endEncoding();
+            command.commit();
+            command.waitUntilCompleted();
+            if command.status() == MTLCommandBufferStatus::Error {
+                return Err(command.error().map_or_else(|| "Metal exchange failed".into(), |error| error.to_string()));
+            }
+            Ok(())
+        })
+    }
+
+    /// Copy a synchronized external Metal buffer into independent image storage.
+    ///
+    /// # Safety
+    /// `address` must point to a live MTLBuffer with no concurrent writers.
+    /// The owner must remain alive until this call returns.
+    pub unsafe fn import_buffer(&self, descriptor: Descriptor, address: usize, offset: usize) -> Result<Image, String> {
+        let len = descriptor.byte_len()?;
+        // The caller supplies a live MTLBuffer; retain it through GPU completion.
+        let source = unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or("null Metal buffer")?;
+        let buffer = self.allocate_image(len)?;
+        self.copy_buffer(&source, offset, &buffer, 0, len)?;
+        Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+    }
+
+    /// Copy image samples into a synchronized external Metal buffer.
+    ///
+    /// # Safety
+    /// `address` must point to a live, exclusively writable MTLBuffer.
+    /// The owner must remain alive until this call returns.
+    pub unsafe fn export_buffer(&self, image: &Image, address: usize, offset: usize) -> Result<(), String> {
+        self.synchronize(image)?;
+        // The caller supplies a live MTLBuffer; retain it through GPU completion.
+        let destination = unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or("null Metal buffer")?;
+        self.copy_buffer(&image.buffer, 0, &destination, offset, image.descriptor.byte_len()?)
+    }
+
     pub fn upload_with(&self, descriptor: Descriptor, initialize: impl FnOnce(&mut [u8])) -> Result<Image, String> {
         let len = descriptor.byte_len()?;
         let buffer = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len, true);
@@ -684,6 +740,32 @@ impl Backend for Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buffer_exchange_copies_offsets_and_checks_bounds() {
+        let context = Context::new().unwrap();
+        for len in [1, 3, 4, 7, 257] {
+            let descriptor = Descriptor { width: len, height: 1, channels: 1, float: false };
+            let bytes: Vec<u8> = (0..len + 6).map(|i| i as u8).collect();
+            let external = context.upload(Descriptor { width: len + 6, ..descriptor }, &bytes).unwrap();
+            let address = Retained::as_ptr(&external.buffer) as usize;
+            // The external image owns an idle buffer throughout each copy.
+            let imported = unsafe { context.import_buffer(descriptor, address, 3) }.unwrap();
+            assert_eq!(context.download(&imported).unwrap(), bytes[3..len as usize + 3]);
+            let output = context.upload(Descriptor { width: len + 6, ..descriptor }, &vec![99; len as usize + 6]).unwrap();
+            let destination = Retained::as_ptr(&output.buffer) as usize;
+            // No other queue accesses the destination; export waits for completion.
+            unsafe { context.export_buffer(&imported, destination, 1) }.unwrap();
+            let actual = context.download(&output).unwrap();
+            assert_eq!(actual[0], 99);
+            assert_eq!(actual[1..len as usize + 1], bytes[3..len as usize + 3]);
+            assert!(actual[len as usize + 1..].iter().all(|&byte| byte == 99));
+            for offset in [7, usize::MAX] {
+                assert!(unsafe { context.import_buffer(descriptor, address, offset) }.err().unwrap().contains("bounds"));
+                assert!(unsafe { context.export_buffer(&imported, destination, offset) }.unwrap_err().contains("bounds"));
+            }
+        }
+    }
 
     #[test]
     fn reader_tracking_retains_pending_commands_and_reclaims_completed_prefixes() {

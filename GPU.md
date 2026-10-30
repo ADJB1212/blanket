@@ -426,9 +426,10 @@ Statistics use normalized working units.
 With MPS, `from_torch(tensor, layout=..., bit_depth=10|12|16)` accepts uint16
 storage, including views, converts and packs entirely on the GPU, and retains
 independent normalized float32 working storage. `mode` may be L/RGB/RGBA or
-inferred. Unsigned `to_torch()` shares those normalized float32 working samples;
-it does not export uint16 storage. CPU-uploaded unsigned images require
-`runtime="torch"` for tensor export.
+inferred. Unsigned `to_torch()` exports those normalized float32 working samples;
+it does not export uint16 storage. Native Metal uses an independent GPU copy;
+the PyTorch runtime shares its working tensor. Unsigned imports also accept
+`runtime="native"` to copy into native Metal working storage.
 
 `capabilities()` reports unsigned depths, modes, and operation coverage, the
 histogram modes, and `compiled_operations` separately from device availability.
@@ -454,13 +455,38 @@ There is no autograd integration. `to_torch` shares tensor-backed storage;
 imported tensors have no image metadata. Processing does not call `.cpu()` or
 stage pixels through NumPy.
 
-Native Metal and PyTorch allocations are separate execution contexts. For CPU
-images that must produce tensors, use `from_image(image, runtime="torch")`.
-Native Metal `to_torch()` and mixing the two contexts are explicitly rejected.
+Native Metal images can export directly to PyTorch MPS, and MPS tensors can be
+copied into native Metal storage:
+
+```python
+native = ImageGpu.from_image(image)
+tensor = native.resize((512, 512)).to_torch(layout="CHW")
+restored = ImageGpu.from_torch(tensor, layout="CHW", runtime="native")
+```
+
+These calls make explicit GPU buffer copies without CPU pixel staging. Native
+images use immutable storage and PyTorch tensors permit mutation, so exchange
+does not alias the two allocations. `runtime="native"` always makes an independent
+copy, regardless of `copy`; the default `runtime="torch"` retains the existing
+borrowing behavior. HW/HWC/CHW layouts, nonzero storage offsets, and
+noncontiguous views are supported; view packing runs on MPS before import.
+Byte and float32 samples retain their exact bits, including nonfinite values.
+
+Exchange requires the same Metal device and waits for pending MPS producers,
+then waits for the native copy to finish before returning. Tensor owners remain
+alive through completion. Imports survive tensor deletion or mutation, and
+exports survive native handle closure and buffer-cache reuse. Callers must not
+mutate participating tensors concurrently with exchange. This bridge uses
+PyTorch's MPS storage representation (`id<MTLBuffer>`) without linking libtorch;
+it checks sample types, contiguous ranges, buffer bounds, and device identity.
+Binary operations still require matching execution contexts; convert explicitly
+through the exchange APIs first.
 
 `ImageGpu.capabilities()` reports compiled support, native device availability,
-supported modes and operations, and the PyTorch interface requirement without
-importing torch.
+supported modes and operations, the PyTorch interface requirement, and
+`native_torch_exchange`/`native_torch_exchange_policy` without importing torch.
+These exchange fields describe compiled support and its synchronized GPU copy
+policy; device availability and PyTorch installation are separate requirements.
 
 ## NVIDIA CUDA
 

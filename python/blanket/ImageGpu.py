@@ -157,6 +157,8 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
         ),
         "histogram_modes": ("L", "LA", "RGB", "RGBA"),
         "torch_interop": "DLPack with CUDA stream ordering" if backend == "cuda" else "requires torch.mps.compile_shader",
+        "native_torch_exchange": backend == "metal" and hasattr(_blanket, "MetalImage"),
+        "native_torch_exchange_policy": "synchronized GPU copy" if backend == "metal" and hasattr(_blanket, "MetalImage") else None,
     }
 
 
@@ -298,7 +300,7 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
     return submit(upload, device=f"cuda:{device}" if backend == "cuda" else "metal")
 
 
-def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None) -> GpuImage | GpuUnsignedImage:
+def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None, runtime: str = "torch") -> GpuImage | GpuUnsignedImage:
     """Import a GPU tensor without staging pixels through CPU memory.
 
     Args:
@@ -310,9 +312,13 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
             Noncontiguous views are packed on the GPU when processed.
         bit_depth: 10, 12, or 16 for unsigned uint16 input; otherwise None.
             Unsigned samples are converted to normalized float32 working storage.
+        runtime: "torch" retains MPS tensor storage. "native" packs MPS views
+            and copies into native Metal storage on the GPU, always independently
+            of copy. The copy waits for both execution contexts. CUDA keeps its
+            existing runtime for either value.
 
     Returns:
-        A tensor-backed GpuImage, or a GpuUnsignedImage for unsigned input.
+        A GpuImage in the requested runtime, or a GpuUnsignedImage for unsigned input.
         Borrowed storage must not be mutated while GPU operations consume it.
         F samples use raw units; RGB;F/RGBA;F use normalized color units.
 
@@ -320,6 +326,8 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         ValueError: Layout, dtype, channels, mode, or sample depth is unsupported.
         RuntimeError: The matching GPU backend or PyTorch support is unavailable.
     """
+    if runtime not in ("torch", "native"):
+        raise ValueError("unsupported GPU runtime")
     backend = "cuda" if getattr(getattr(tensor, "device", None), "type", None) == "cuda" else "metal"
     device_type = "cuda" if backend == "cuda" else "mps"
     _require(backend, tensor.device.index if backend == "cuda" else 0)
@@ -332,7 +340,7 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         if mode not in (None, "L", "RGB", "RGBA"):
             raise ValueError("unsupported unsigned GPU mode")
         working_mode = None if mode is None else {"L": "F", "RGB": "RGB;F", "RGBA": "RGBA;F"}[mode]
-        resident = from_torch(tensor.to(torch.float32) / ((1 << bit_depth) - 1), layout=layout, mode=working_mode)
+        resident = from_torch(tensor.to(torch.float32) / ((1 << bit_depth) - 1), layout=layout, mode=working_mode, runtime=runtime)
         if not isinstance(resident, GpuImage):
             raise RuntimeError("invalid unsigned tensor working storage")
         return GpuUnsignedImage(resident._run(30, values=[float((1 << bit_depth) - 1)]), {"F": "L", "RGB;F": "RGB", "RGBA;F": "RGBA"}[resident.mode], bit_depth)
@@ -355,6 +363,9 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         from . import _gpu_cuda
 
         return GpuImage(_gpu_cuda.from_torch(tensor, copy=copy), (width, height), mode, "cuda", {})
+    if runtime == "native":
+        resource = _blanket.MetalImage.from_torch(tensor.resolve_neg().contiguous())
+        return GpuImage(resource, (width, height), mode, "native", {})
     return GpuImage(tensor.clone() if copy else tensor, (width, height), mode, "torch", {})
 
 
@@ -1366,39 +1377,37 @@ class GpuImage:
         return memoryview(self._resource)
 
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
-        """Expose tensor-backed pixels without downloading them.
+        """Export GPU pixels to PyTorch without downloading them.
 
         Args:
             layout: "HWC", "CHW", or "HW"; HW requires one channel.
 
         Returns:
-            A PyTorch tensor sharing the MPS or CUDA resource, with the image's
-            dtype and sample values. CUDA export uses DLPack stream ordering.
+            A PyTorch tensor with the image's dtype and sample values. Native
+            Metal makes an independent GPU copy into MPS storage and waits for
+            completion. Tensor runtimes share their MPS or CUDA resource;
+            CUDA export uses DLPack stream ordering.
             Treat shared storage as immutable while operations consume it.
 
         Raises:
-            ValueError: The layout is invalid or storage uses native Metal.
-                Import with runtime="torch" to enable MPS tensor export.
+            ValueError: The layout is invalid or the image is closed.
         """
         self._check()
+        if layout not in ("HWC", "CHW", "HW") or (layout == "HW" and _MODES[self.mode][0] != 1):
+            raise ValueError("invalid export layout")
         if self.runtime == "cuda":
             resource = self._resource.to_torch()
-            if layout == "HWC":
-                return resource
-            if layout == "CHW":
-                return resource.permute(2, 0, 1)
-            if layout == "HW" and _MODES[self.mode][0] == 1:
-                return resource.squeeze(-1)
-            raise ValueError("invalid export layout")
-        if self.runtime != "torch":
-            raise ValueError("native Metal export unsupported; upload with runtime='torch'")
+        elif self.runtime == "native":
+            torch = _torch()
+            resource = torch.empty((self.size[1], self.size[0], _MODES[self.mode][0]), dtype=torch.float32 if _MODES[self.mode][1] else torch.uint8, device="mps")
+            self._resource.copy_to_torch(resource)
+        else:
+            resource = self._resource
         if layout == "HWC":
-            return self._resource
+            return resource
         if layout == "CHW":
-            return self._resource.permute(2, 0, 1)
-        if layout == "HW" and _MODES[self.mode][0] == 1:
-            return self._resource.squeeze(-1)
-        raise ValueError("invalid export layout")
+            return resource.permute(2, 0, 1)
+        return resource.squeeze(-1)
 
     def close(self) -> None:
         """Release this GPU handle without invalidating shared handles.

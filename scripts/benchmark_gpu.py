@@ -5,14 +5,16 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import math
 import os
 import platform
 import sys
 from array import array
 from contextlib import ExitStack
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
-from statistics import median
+from statistics import geometric_mean, median
 from time import perf_counter
 from typing import TYPE_CHECKING
 
@@ -27,9 +29,13 @@ if not NO_RICH:
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from typing import Any
 
 
 MODES = ("L", "LA", "RGB", "RGBA")
+SIZES: dict[str, tuple[int, int]] = {"web": (800, 600), "square": (1024, 1024), "HD": (1280, 720), "photo": (1920, 1280), "4K": (3840, 2160)}
+RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks" / "gpu"
+TIMINGS = ("cpu_ms", "gpu_resident_ms", "gpu_with_transfers_ms")
 CpuResult = Image.Image | tuple[Image.Image, ...] | list[list[int]] | list[dict[str, object]]
 GpuResult = ImageGpu.GpuImage | tuple[ImageGpu.GpuImage, ...] | ImageGpu.GpuReduction
 
@@ -235,14 +241,60 @@ def positive(value: str) -> int:
     return number
 
 
-def dimensions(value: str) -> tuple[int, int]:
-    try:
-        width, height = (positive(part) for part in value.lower().split("x"))
-    except (ValueError, argparse.ArgumentTypeError) as error:
-        raise argparse.ArgumentTypeError("size must be WIDTHxHEIGHT with positive dimensions") from error
-    if width * height > 178_956_970:
-        raise argparse.ArgumentTypeError("size exceeds Blanket's image pixel limit")
-    return width, height
+def result_key(row: dict[str, Any]) -> tuple[str, tuple[int, int], str]:
+    return row["mode"], tuple(row["size"]), row["operation"]
+
+
+def load_baseline(path: Path) -> dict[str, Any]:
+    document = json.loads(path.read_text())
+    if not isinstance(document, dict) or not isinstance(document.get("results"), list):
+        raise ValueError("expected a GPU benchmark run object")
+    cases: dict[tuple[str, tuple[int, int], str], list[dict[str, Any]]] = {}
+    for row in document["results"]:
+        try:
+            key = result_key(row)
+            for field in TIMINGS:
+                value = row[field]
+                if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                    raise ValueError(f"{field} for {key!r} must be positive and finite")
+            cases.setdefault(key, []).append(row)
+        except (KeyError, TypeError) as error:
+            raise ValueError("invalid GPU benchmark result") from error
+    document["results"] = [{**rows[0], **{field: median(row[field] for row in rows) for field in TIMINGS}} for rows in cases.values()]
+    return document
+
+
+def print_comparison(console: Console | None, results: list[dict[str, Any]], baseline: dict[str, Any]) -> None:
+    previous = {result_key(row): row for row in baseline["results"]}
+    current_keys = {result_key(row) for row in results}
+    matched = [row for row in results if result_key(row) in previous]
+    message = f"{len(matched)} matched; {len(current_keys - previous.keys())} new; {len(previous.keys() - current_keys)} previous cases not run. Negative time change = faster."
+    if console is None:
+        print(f"\n--- GPU benchmark vs previous run ---\n{message}")
+    else:
+        console.rule("GPU benchmark vs previous run")
+        console.print(message)
+    if not matched:
+        return
+    table = None
+    if console is None:
+        print(f"{'Mode / size / operation':44} {'CPU change':>14} {'Resident change':>17} {'Transfers change':>18}")
+    else:
+        table = Table("Mode / size / operation", "CPU change", "Resident change", "Transfers change")
+    for row in matched:
+        old = previous[result_key(row)]
+        changes = [(row[field] / old[field] - 1) * 100 for field in TIMINGS]
+        label = f"{row['mode']} / {row['size'][0]}x{row['size'][1]} / {row['operation']}"
+        if table is None:
+            print(f"{label:44} {changes[0]:+13.1f}% {changes[1]:+16.1f}% {changes[2]:+17.1f}%")
+        else:
+            table.add_row(label, *(Text(f"{change:+.1f}%", style="green" if change < 0 else "red" if change > 0 else "dim") for change in changes))
+    changes = [(geometric_mean(row[field] / previous[result_key(row)][field] for row in matched) - 1) * 100 for field in TIMINGS]
+    if table is None:
+        print(f"{'Geometric mean':44} {changes[0]:+13.1f}% {changes[1]:+16.1f}% {changes[2]:+17.1f}%")
+    else:
+        table.add_row("Geometric mean", *(Text(f"{change:+.1f}%", style="green" if change < 0 else "red" if change > 0 else "dim") for change in changes))
+        console.print(table)
 
 
 def fixture(mode: str, size: tuple[int, int], seed: int) -> Image.Image:
@@ -257,18 +309,26 @@ def main() -> int:
     parser.add_argument("--runtime", choices=("native", "torch"), default="native")
     parser.add_argument("-um", "--unified-memory", action="store_true", help="Share native Metal output storage with CPU images")
     parser.add_argument("--device", type=int, default=0)
-    parser.add_argument("--sizes", type=dimensions, nargs="+", default=[(800, 600), (3840, 2160)])
+    parser.add_argument("--sizes", choices=list(SIZES), nargs="+", default=["web", "4K"], help="Image size presets to benchmark (default: web 4K)")
     parser.add_argument("--modes", choices=MODES, nargs="+", default=["RGB", "RGBA"])
     parser.add_argument("--operations", choices=tuple(operations((1, 1))), nargs="+", default=list(operations((1, 1))))
     parser.add_argument("-w", "--warmups", type=positive, default=3)
     parser.add_argument("-r", "--repeats", type=positive, default=10)
     parser.add_argument("-i", "--iterations", type=positive, default=1)
     parser.add_argument("--json", type=Path, help="Write samples, medians, speedups, and environment metadata")
+    parser.add_argument("--compare", nargs="?", const="latest", help="Compare against the latest GPU run (default) or a saved GPU JSON path")
     args = parser.parse_args()
     if args.device < 0 or (args.backend == "metal" and args.device != 0):
         parser.error("device must be nonnegative; Metal supports only device 0")
     if args.unified_memory and (args.backend != "metal" or args.runtime != "native"):
         parser.error("unified memory requires native Metal")
+    baseline = None
+    if args.compare:
+        compare_path = RESULTS_DIRECTORY / "latest.json" if args.compare == "latest" else Path(args.compare)
+        try:
+            baseline = load_baseline(compare_path)
+        except (OSError, ValueError) as error:
+            parser.error(f"cannot read previous GPU run: {error}")
     capability = ImageGpu.capabilities(args.backend, device=args.device)
     if not capability["available"]:
         parser.error(str(capability.get("diagnostic") or f"{args.backend} unavailable; build the matching GPU feature"))
@@ -290,19 +350,35 @@ def main() -> int:
             console.print(message, markup=False)
 
     emit(f"Blanket {__version__} | {platform.platform()} | {args.backend}, runtime={args.runtime}, device={args.device}")
+    if baseline is not None:
+        emit(f"Previous GPU run: {compare_path}")
+        current = {
+            "platform": platform.platform(),
+            "backend": args.backend,
+            "runtime": args.runtime,
+            "device": args.device,
+            "unified_memory": args.unified_memory,
+            "warmups": args.warmups,
+            "repeats": args.repeats,
+            "iterations": args.iterations,
+        }
+        for field, value in current.items():
+            if field in baseline and baseline[field] != value:
+                emit(f"Comparison warning: {field} differs: {baseline[field]} -> {value}")
     emit("Median wall time, milliseconds; speedup = CPU / GPU (greater than 1 means GPU is faster).")
     emit("Resident: pre-uploaded inputs, operation + synchronization. With transfers: uploads + operation + CPU export.")
     emit("Auxiliary inputs are prepared before timing; transfer-inclusive runs upload masks, bands, and coordinate maps.")
-    emit("Remap CPU reference: affine transform equivalent to the prepared coordinate map. Statistics include raw moments of orders 1-4.")
     if args.unified_memory:
         emit("Unified memory: CPU exports share Metal storage; CPU writes copy on demand.")
+    emit("\n")
     if console is None:
         emit(f"{'Mode / size / operation':44} {'CPU ms':>10} {'GPU resident':>13} {'speedup':>9} {'GPU + transfers':>16} {'speedup':>9}")
-    for size in args.sizes:
+    for size_name in args.sizes:
+        size = SIZES[size_name]
         for mode in args.modes:
             table = None
             if console is not None:
-                table = Table(title=f"{mode} / {size[0]}x{size[1]}")
+                table = Table(title=f"{mode} / {size_name} ({size[0]}x{size[1]})")
                 table.add_column("Operation", style="cyan")
                 for heading in ("CPU ms", "GPU resident ms", "Speedup", "GPU + transfers ms", "Speedup"):
                     table.add_column(heading, justify="right")
@@ -315,7 +391,6 @@ def main() -> int:
                     operation = catalog[name]
                     if mode not in operation.modes:
                         reason = f"requires {'/'.join(operation.modes)}"
-                        emit(f"SKIP {mode} / {size[0]}x{size[1]} / {name}: {reason}")
                         skipped.append({"mode": mode, "size": size, "operation": name, "reason": reason})
                         continue
                     with ExitStack() as resources:
@@ -370,6 +445,7 @@ def main() -> int:
                         {
                             "mode": mode,
                             "size": size,
+                            "size_name": size_name,
                             "operation": name,
                             "input_uploads": len(inputs),
                             "input_modes": input_modes,
@@ -388,23 +464,34 @@ def main() -> int:
                     )
                 if console is not None and table is not None:
                     console.print(table)
+    if baseline is not None:
+        print_comparison(console, rows, baseline)
+    report = {
+        "timestamp": datetime.now(UTC).isoformat(timespec="seconds"),
+        "blanket": __version__,
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "backend": args.backend,
+        "runtime": args.runtime,
+        "device": args.device,
+        "unified_memory": args.unified_memory,
+        "warmups": args.warmups,
+        "repeats": args.repeats,
+        "iterations": args.iterations,
+        "timing": "warm synchronized wall time; fixture preparation excluded; resident excludes transfers; transfer-inclusive uploads all inputs and exports all outputs",
+        "results": rows,
+        "skipped": skipped,
+    }
+    RESULTS_DIRECTORY.mkdir(parents=True, exist_ok=True)
+    run_path = RESULTS_DIRECTORY / f"run-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S')}.json"
+    payload = json.dumps(report, indent=2) + "\n"
+    run_path.write_text(payload)
+    latest_path = RESULTS_DIRECTORY / "latest.json"
+    latest_path.unlink(missing_ok=True)
+    latest_path.symlink_to(run_path.name)
+    emit(f"Run saved: {run_path}")
     if args.json:
-        report = {
-            "blanket": __version__,
-            "python": sys.version,
-            "platform": platform.platform(),
-            "backend": args.backend,
-            "runtime": args.runtime,
-            "device": args.device,
-            "unified_memory": args.unified_memory,
-            "warmups": args.warmups,
-            "repeats": args.repeats,
-            "iterations": args.iterations,
-            "timing": "warm synchronized wall time; fixture preparation excluded; resident excludes transfers; transfer-inclusive uploads all inputs and exports all outputs",
-            "results": rows,
-            "skipped": skipped,
-        }
-        args.json.write_text(json.dumps(report, indent=2) + "\n")
+        args.json.write_text(payload)
     return 0
 
 

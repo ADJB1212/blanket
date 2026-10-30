@@ -162,6 +162,7 @@ def test_cuda_async_transfers_and_stream_events():
 
 
 def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
+    import weakref
     from contextlib import nullcontext
     from types import SimpleNamespace
 
@@ -172,8 +173,11 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
     pending = []
     allocations = []
     calls = []
+    hosts = []
 
     class FakeStream:
+        ptr = 1
+
         def wait_event(self, event):
             calls.append("wait")
 
@@ -184,9 +188,19 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
     stream = FakeStream()
 
     class FakeEvent:
+        def __init__(self):
+            self.complete = False
+
         def record(self, selected):
             assert selected is stream
             calls.append("record")
+            pending.append(self.finish)
+
+        def finish(self):
+            self.complete = True
+
+        def query(self):
+            return self.complete
 
         def synchronize(self):
             calls.append("complete")
@@ -210,18 +224,22 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
 
     def asarray(host, *, blocking):
         assert not blocking
+        hosts.append(weakref.ref(host))
         return FakeArray(host)
 
     cp = SimpleNamespace(cuda=SimpleNamespace(Device=lambda _: nullcontext(), Event=FakeEvent, get_current_stream=lambda: stream, alloc_pinned_memory=allocate), asarray=asarray)
     monkeypatch.setattr(_gpu_cuda, "cupy", lambda: cp)
     monkeypatch.setattr(_gpu_cuda, "require", lambda _: None)
+    monkeypatch.setattr(_gpu_cuda, "_PENDING", {})
+    monkeypatch.setattr(_gpu_cuda, "_PENDING_REGISTERED", True)
     resource = _gpu_cuda.upload(bytes(range(24)), (2, 3, 4), False, 0)
     try:
-        assert len(resource.owners) == 2
+        assert hosts[0]() is not None
         assert resource.download() == bytes(range(24))
         assert allocations == [24, 24]
         assert calls.index("wait") < calls.index("get") < calls.index("complete")
         assert not pending
+        assert hosts[0]() is None
+        assert not _gpu_cuda._PENDING
     finally:
         resource.synchronize()
-        del resource.event

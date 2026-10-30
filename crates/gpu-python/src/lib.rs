@@ -136,6 +136,42 @@ mod native {
             self.context.synchronize(&self.image)
         }
     }
+
+    fn torch_buffer(tensor: &Bound<'_, PyAny>) -> PyResult<(Descriptor, usize, usize)> {
+        let torch = tensor.py().import("torch")?;
+        if !tensor.is_instance(&torch.getattr("Tensor")?)?
+            || tensor.getattr("device")?.getattr("type")?.extract::<String>()? != "mps"
+            || tensor.getattr("requires_grad")?.extract::<bool>()?
+            || !tensor.call_method0("is_contiguous")?.extract::<bool>()?
+            || tensor.call_method0("is_neg")?.extract::<bool>()?
+        {
+            return Err(PyValueError::new_err("Metal exchange requires a contiguous MPS tensor without gradients or negative views"));
+        }
+        let dtype = tensor.getattr("dtype")?;
+        let float = dtype.is(&torch.getattr("float32")?);
+        if !float && !dtype.is(&torch.getattr("uint8")?) {
+            return Err(PyValueError::new_err("Metal exchange requires uint8 or float32 samples"));
+        }
+        let [height, width, channels]: [u32; 3] =
+            tensor.getattr("shape")?.extract().map_err(|_| PyValueError::new_err("Metal exchange requires HWC tensor storage"))?;
+        let descriptor = Descriptor { width, height, channels, float };
+        let len = descriptor.byte_len().map_err(PyValueError::new_err)?;
+        let offset = tensor
+            .call_method0("storage_offset")?
+            .extract::<usize>()?
+            .checked_mul(if float { size_of::<f32>() } else { 1 })
+            .ok_or_else(|| PyValueError::new_err("Metal tensor offset overflow"))?;
+        let storage = tensor.call_method0("untyped_storage")?;
+        let bytes = storage.call_method0("nbytes")?.extract::<usize>()?;
+        if offset.checked_add(len).is_none_or(|end| end > bytes) {
+            return Err(PyValueError::new_err("Metal tensor exceeds storage bounds"));
+        }
+        // PyTorch's MPS storage pointer is an id<MTLBuffer>, without the
+        // tensor's byte offset. The tensor retains its allocator ownership.
+        let address = storage.call_method0("data_ptr")?.extract::<usize>()?;
+        torch.getattr("mps")?.call_method0("synchronize")?;
+        Ok((descriptor, address, offset))
+    }
     struct SharedMetalPixels {
         owner: Py<MetalImage>,
         address: usize,
@@ -153,6 +189,28 @@ mod native {
     }
     #[pymethods]
     impl MetalImage {
+        #[staticmethod]
+        fn from_torch(tensor: &Bound<'_, PyAny>) -> PyResult<Self> {
+            let (descriptor, address, offset) = torch_buffer(tensor)?;
+            tensor.py().detach(|| {
+                let context = context()?;
+                // torch_buffer validates MPS storage and drains its producers.
+                // The tensor owner remains alive until the GPU copy completes.
+                let image = unsafe { context.import_buffer(descriptor, address, offset) }.map_err(PyRuntimeError::new_err)?;
+                Ok(Self { context, image })
+            })
+        }
+        fn copy_to_torch(&self, tensor: &Bound<'_, PyAny>) -> PyResult<()> {
+            let (descriptor, address, offset) = torch_buffer(tensor)?;
+            if descriptor != self.image.descriptor {
+                return Err(PyValueError::new_err("Metal export tensor does not match image storage"));
+            }
+            tensor.py().detach(|| {
+                // The destination is retained by the caller and its queue is
+                // idle. Completion precedes publication to PyTorch consumers.
+                unsafe { self.context.export_buffer(&self.image, address, offset) }.map_err(PyRuntimeError::new_err)
+            })
+        }
         fn shared_image(slf: Bound<'_, Self>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
             let image = slf.borrow();
