@@ -332,6 +332,60 @@ mod native {
             let image = self.context.paste(&self.image, &source.image, mask.map(|mask| &mask.image), position).map_err(PyValueError::new_err)?;
             Ok(Self { context: self.context, image })
         }
+        fn resize_axis(&self, py: Python<'_>, target: u32, method: u8, axis: u32) -> PyResult<Self> {
+            let d = self.image.descriptor;
+            if axis > VERTICAL {
+                return Err(PyValueError::new_err("invalid resize axis"));
+            }
+            let output = if axis == HORIZONTAL { Descriptor { width: target, ..d } } else { Descriptor { height: target, ..d } };
+            output.byte_len().map_err(PyValueError::new_err)?;
+            py.detach(|| {
+                let input = if axis == HORIZONTAL { d.width } else { d.height };
+                let (kernel, values) = blanket_gpu::resize_weights(input, target, method).map_err(PyValueError::new_err)?;
+                self.run(self, [d.width, d.height, d.channels, output.width, output.height, operation::RESIZE, kernel, axis], values)
+            })
+        }
+        fn color_lut(&self, py: Python<'_>, size: [u32; 3], channels: u32, table: Vec<f32>, output_format: u32) -> PyResult<Self> {
+            let d = self.image.descriptor;
+            py.detach(|| {
+                let values = blanket_gpu::lut_controls(size, channels, &table, d.float).map_err(PyValueError::new_err)?;
+                self.run(self, [d.width, d.height, d.channels, d.width, d.height, operation::COLOR_LUT, channels, output_format], values)
+            })
+        }
+        fn blur(&self, py: Python<'_>, radii: [f32; 2], gaussian: bool) -> PyResult<Self> {
+            py.detach(|| {
+                let mut steps = Vec::new();
+                for (axis, radius) in radii.into_iter().enumerate() {
+                    let (kernel, values) = blanket_gpu::blur_parameters(radius, gaussian).map_err(PyValueError::new_err)?;
+                    if radius == 0.0 {
+                        continue;
+                    }
+                    for _ in 0..if gaussian { blanket_gpu::protocol::GAUSSIAN_PASSES } else { 1 } {
+                        steps.push(blanket_gpu::plan::Step { operation: operation::BOX_BLUR, kernel, axis: axis as u32, values: values.to_vec() });
+                    }
+                }
+                let d = self.image.descriptor;
+                if steps.iter().any(|step| step.kernel > i32::MAX as u32 / 2) {
+                    // Tiled plans have a stricter kernel limit than individual blur dispatches.
+                    let mut result: Option<Self> = None;
+                    for step in steps {
+                        let source = result.as_ref().unwrap_or(self);
+                        result = Some(source.run(
+                            source,
+                            [d.width, d.height, d.channels, d.width, d.height, step.operation, step.kernel, step.axis],
+                            step.values,
+                        )?);
+                    }
+                    return Ok(result.expect("a large blur kernel requires at least one pass"));
+                }
+                let memory_limit = d.byte_len().map_err(PyValueError::new_err)? * 2;
+                let geometry = blanket_gpu::plan::Plan::new(d, steps, memory_limit).map_err(PyValueError::new_err)?;
+                let plan = self.context.prepare_plan(geometry).map_err(PyRuntimeError::new_err)?;
+                let mut images = self.context.execute_plan(&plan, &[&self.image]).map_err(PyRuntimeError::new_err)?;
+                let image = images.pop().expect("one blur input produces one output");
+                Ok(Self { context: self.context, image })
+            })
+        }
         fn run(&self, other: &Self, parameters: [u32; PARAMETER_COUNT], values: Vec<f32>) -> PyResult<Self> {
             let d = self.image.descriptor;
             let mut output = Descriptor { width: parameters[parameter::OUTPUT_WIDTH], height: parameters[parameter::OUTPUT_HEIGHT], ..d };

@@ -179,6 +179,77 @@ def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
             assert gpu.rank_filter(window, rank).to_image().tobytes() == image.filter(ImageFilter.RankFilter(window, rank)).tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("method", range(6))
+def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
+    import struct
+
+    require_gpu()
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    values = [(i * 37 % 251) for i in range(17 * 9 * channels)]
+    data = struct.pack(f"{len(values)}f", *[v / 127 - 0.5 for v in values]) if "F" in mode else bytes(values)
+    gpu = ImageGpu.from_image(Image.frombytes(mode, (17, 9), data))
+    for axis, size in [(0, (31, 9)), (1, (17, 5))]:
+        kernel, weights = ImageGpu._blanket._gpu_weights(gpu.size[axis], size[axis], method)
+        expected = gpu._run(0, size=size, k=kernel, axis=axis, values=weights)._resource.download()
+
+        def unexpected(*args, **kwargs):
+            raise AssertionError("native resize must not serialize weights through Python")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(ImageGpu._blanket, "_gpu_weights", unexpected)
+            actual = gpu._resource.resize_axis(size[axis], method, axis).download()
+            result = gpu.resize((31, 5), method)
+        assert actual == expected
+        assert result.size == (31, 5) and result.mode == mode
+    assert gpu.to_image().tobytes() == data
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("gaussian", [False, True])
+@pytest.mark.parametrize("radii", [(0, 0), (2.5, 0), (0, 32.5), (32.5, 40)])
+def test_native_blur_matches_individual_passes(mode, gaussian, radii, monkeypatch):
+    require_gpu()
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    image = Image.new(mode, (33, 17), 0.25 if channels == 1 else (0.25,) * channels) if "F" in mode else Image.frombytes(mode, (33, 17), bytes(i * 97 % 256 for i in range(33 * 17 * channels)))
+    gpu = ImageGpu.from_image(image, unified_memory=True)
+    gpu.info["description"] = "native blur"
+    expected = gpu
+    for axis, radius in enumerate(radii):
+        kernel, weights = ImageGpu._blanket._gpu_blur_parameters(radius, gaussian)
+        if radius:
+            for _ in range(3 if gaussian else 1):
+                expected = expected._run(18, k=kernel, axis=axis, values=list(weights))
+    expected_bytes = expected.to_image().tobytes()
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("native blur must prepare its passes in Rust")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ImageGpu._blanket, "_gpu_blur_parameters", unexpected)
+        result = gpu.gaussian_blur(radii) if gaussian else gpu.box_blur(radii)
+    assert result.unified_memory and result.info == gpu.info
+    assert result._resource is not gpu._resource
+    result.info["description"] = "independent"
+    gpu.close()
+    assert result.to_image().tobytes() == expected_bytes
+
+
+def test_native_preparation_validates_controls_and_large_blur_radii():
+    require_gpu()
+    gpu = ImageGpu.from_image(Image.new("L", (3, 1), 255))
+    for target, method, axis in [(0, 3, 0), (5, 6, 0), (5, 3, 2)]:
+        with pytest.raises(ValueError):
+            gpu._resource.resize_axis(target, method, axis)
+    for radii in [(-1, 0), (float("nan"), 1), (1, float("inf"))]:
+        with pytest.raises(ValueError):
+            gpu._resource.blur(radii, False)
+    radius = 1_500_000_000
+    kernel, weights = ImageGpu._blanket._gpu_blur_parameters(radius, False)
+    expected = gpu._run(18, k=kernel, axis=0, values=list(weights)).to_image().tobytes()
+    assert gpu.box_blur((radius, 0)).to_image().tobytes() == expected
+
+
 @pytest.mark.parametrize("mode", ["L", "RGBA", "F", "RGBA;F"])
 def test_native_closed_sources_survive_buffer_reuse(mode: str) -> None:
     require_gpu()

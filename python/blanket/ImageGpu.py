@@ -740,6 +740,9 @@ class GpuImage:
         radii = radius if isinstance(radius, tuple) else (radius, radius)
         if len(radii) != 2:
             raise ValueError("blur radius must contain two values")
+        if self.runtime == "native" and hasattr(self._resource, "blur"):
+            resource = self._resource.blur([_scalar(value) for value in radii], gaussian)
+            return GpuImage(resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         controls = [_blanket._gpu_blur_parameters(_scalar(value), gaussian) for value in radii]
         result = self
         for axis, (integer, weights) in enumerate(controls):
@@ -902,8 +905,12 @@ class GpuImage:
         for axis in axes:
             target = (size[0], result.size[1]) if axis == 0 else (result.size[0], size[1])
             if result.size[axis] != target[axis]:
-                stride, weights = _blanket._gpu_weights(result.size[axis], target[axis], resample)
-                result = result._run(0, size=target, k=stride, axis=axis, values=weights)
+                if result.runtime == "native":
+                    resource = result._resource.resize_axis(target[axis], resample, axis)
+                    result = GpuImage(resource, target, result.mode, result.runtime, result.info.copy(), unified_memory=result.unified_memory)
+                else:
+                    stride, weights = _blanket._gpu_weights(result.size[axis], target[axis], resample)
+                    result = result._run(0, size=target, k=stride, axis=axis, values=weights)
         if result is self:
             return self._run(6)
         return result._run(5) if alpha else (result._run(24) if clamp_alpha else result)
@@ -1077,6 +1084,9 @@ class GpuImage:
         table_channels = index(lut.channels)
         if channels < 3 or floating != output_float or output_channels < table_channels or (output_channels > table_channels and output_channels > channels):
             raise ValueError("3D LUT requires compatible RGB/RGBA input and output modes with matching dtype")
+        if self.runtime == "native":
+            resource = self._resource.color_lut(lut.size, table_channels, lut.table, _FORMATS.index(mode))
+            return GpuImage(resource, self.size, mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         controls = _blanket._gpu_lut_controls(lut.size, table_channels, list(lut.table), floating)
         return self._run(25, mode=mode, k=table_channels, axis=_FORMATS.index(mode), values=controls)
 

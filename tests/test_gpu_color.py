@@ -34,6 +34,28 @@ def floats(image):
     return struct.unpack(f"{len(data) // 4}f", data)
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("channels", [3, 4])
+def test_native_color_lut_keeps_controls_in_rust(mode, channels, monkeypatch):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal feature and device required")
+    gpu = ImageGpu.from_image(source(mode), unified_memory=True)
+    output_mode = ("RGBA;F" if "F" in mode else "RGBA") if channels == 4 else mode
+    lut = ImageFilter.Color3DLUT.generate((3, 4, 5), lambda r, g, b: (r * 0.8, g * 0.7, b * 0.9, 0.25)[:channels], channels=channels, target_mode=output_mode)
+    controls = ImageGpu._blanket._gpu_lut_controls(lut.size, channels, lut.table, "F" in mode)
+    expected = gpu._run(25, mode=output_mode, k=channels, axis=ImageGpu._FORMATS.index(output_mode), values=controls).to_image().tobytes()
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("native LUT controls must not pass back through Python")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ImageGpu._blanket, "_gpu_lut_controls", unexpected)
+        actual = gpu.color_lut(lut)
+    assert actual.info == gpu.info and actual.unified_memory
+    gpu.close()
+    assert actual.to_image().tobytes() == expected
+
+
 def assert_images_equal(actual, expected):
     assert actual.mode == expected.mode and actual.size == expected.size
     if "F" in expected.mode:
