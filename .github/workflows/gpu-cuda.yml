@@ -61,16 +61,24 @@ jobs:
           uv tool install 'maturin[patchelf]>=1.15,<2'
           cargo clean -p lcms2-sys
           cargo clean -p lcms2
+          cargo clean -p libheif-sys
       - name: Install build dependencies
         run: |
           curl --fail --location --output /tmp/cuda-keyring.deb https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
           sudo dpkg -i /tmp/cuda-keyring.deb
+          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake ninja-build pkg-config nasm mold libheif-dev libwebp-dev libdav1d-dev libde265-dev libx265-dev libnuma-dev cuda-nvcc-13-2
+          sudo apt-get install -y build-essential cmake ninja-build pkg-config nasm mold libheif-dev libwebp-dev libdav1d-dev libde265-dev libx265-dev libnuma-dev cuda-nvcc-13-2 clang-23 llvm-23 cmake
+          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
+          echo "CC=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
+          echo "CXX=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
       - name: Compile kernels and build development wheel
         env:
           NVCC: /usr/local/cuda-13.2/bin/nvcc
-        run: maturin build --profile dev --locked -i python3.14 --out dist --auditwheel=repair --features gpu-cuda,no-vendored-webp,jxl-vendored,embedded-libheif -- -C link-arg=-fuse-ld=mold -Z threads=4
+        run: maturin build --profile dev -i python3.14 --out dist --auditwheel=repair --features gpu-cuda,no-vendored-webp,jxl-vendored,embedded-libheif -- -C link-arg=-fuse-ld=mold
       - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:
