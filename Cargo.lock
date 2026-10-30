@@ -549,9 +549,6 @@ dependencies = [
 [[package]]
 name = "blanket-gpu-cuda"
 version = "0.3.0"
-dependencies = [
- "blanket-gpu-metal",
-]
 
 [[package]]
 name = "blanket-gpu-metal"

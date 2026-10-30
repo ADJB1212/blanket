@@ -8,12 +8,6 @@ rust-version.workspace = true
 repository.workspace = true
 publish = false
 
-[dependencies]
-blanket-gpu-metal.workspace = true
-
-[build-dependencies]
-blanket-gpu-metal.workspace = true
-
 [features]
 precompiled = []
 

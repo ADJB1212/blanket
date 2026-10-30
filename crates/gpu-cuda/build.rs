@@ -1,28 +1,20 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-// The public source generator is shared with the library.
-#[allow(unreachable_pub)]
-#[path = "src/source.rs"]
-mod source;
-
 // Native code for Turing through Blackwell, plus PTX for additional architectures.
 const DEFAULT_ARCHITECTURES: &str = "75,80,86,89,90,100,120";
 
 fn main() {
-    println!("cargo:rerun-if-changed=src/source.rs");
-    println!("cargo:rerun-if-changed=src/compat.cuh");
-    println!("cargo:rerun-if-changed=../gpu-metal/src/kernels.metal");
-    println!("cargo:rerun-if-changed=../gpu-metal/src/tiles.metal");
+    println!("cargo:rerun-if-changed=src/kernels.cu");
+    println!("cargo:rerun-if-changed=src/common.cuh");
     println!("cargo:rerun-if-env-changed=NVCC");
     println!("cargo:rerun-if-env-changed=BLANKET_CUDA_ARCHS");
     if std::env::var_os("CARGO_FEATURE_PRECOMPILED").is_none() {
         return;
     }
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let input = out.join("blanket.cu");
+    let input = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("src/kernels.cu");
     let output = out.join("blanket.fatbin");
-    std::fs::write(&input, source::shader_source()).expect("cannot write generated CUDA source");
     let architectures = std::env::var("BLANKET_CUDA_ARCHS").unwrap_or_else(|_| DEFAULT_ARCHITECTURES.into());
     let mut architectures: Vec<u16> = architectures
         .split(',')

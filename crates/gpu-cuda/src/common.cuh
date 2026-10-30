@@ -1,8 +1,7 @@
-#ifndef __CUDACC_RTC__
-#include <math.h>
-#endif
+#pragma once
 
-// NVRTC supplies device math functions without host standard-library headers.
+#include <math.h>
+
 #ifndef INFINITY
 #define INFINITY as_type<float>(0x7f800000u)
 #endif
@@ -12,16 +11,15 @@
 
 using uchar = unsigned char;
 using uint = unsigned int;
-using metal_ulong = unsigned long long;
-// Metal long remains 64-bit even when the host platform uses LLP64.
-using metal_long = long long;
+using uint64 = unsigned long long;
+using int64 = long long;
 
 template <class A, class B> constexpr bool is_same_v = false;
 template <class A> constexpr bool is_same_v<A, A> = true;
 
 template <class T> struct vec3 {
     T x, y, z;
-    __device__ vec3() = default;
+    __device__ vec3() {}
     __device__ explicit vec3(T v) : x(v), y(v), z(v) {}
     __device__ vec3(T a, T b, T c) : x(a), y(b), z(c) {}
     __device__ T &operator[](uint i) {
