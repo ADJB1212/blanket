@@ -4,8 +4,9 @@ use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
 pub use blanket_core::geometry::{ops_transpose, transpose};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use blanket_core::raster::{Image, PixelMode};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 use rayon::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -13,11 +14,15 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_equalize, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_autocontrast, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_colorize_stops, module)?)?;
     module.add_function(wrap_pyfunction!(ops_split, module)?)?;
     module.add_function(wrap_pyfunction!(ops_entropy, module)?)?;
     module.add_function(wrap_pyfunction!(ops_spread, module)?)?;
     module.add_function(wrap_pyfunction!(ops_remap_indices, module)?)?;
     module.add_function(wrap_pyfunction!(ops_xbm_bits, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_xbm, module)?)?;
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
     module.add_function(wrap_pyfunction!(ops_transpose, module)?)?;
     Ok(())
@@ -284,6 +289,28 @@ fn ops_xbm_bits(image: &Image) -> PyResult<Vec<u8>> {
 }
 
 #[pyfunction]
+fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'py, PyBytes>> {
+    let data = py.detach(|| {
+        let bits = ops_xbm_bits(image)?;
+        let mut result =
+            format!("#define {name}_width {}\n#define {name}_height {}\nstatic char {name}_bits[] = {{\n", image.width, image.height).into_bytes();
+        result.reserve(bits.len() * 5 + 3);
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        for (i, value) in bits.into_iter().enumerate() {
+            if i != 0 {
+                result.push(b',');
+            }
+            result.extend_from_slice(b"0x");
+            result.push(HEX[usize::from(value >> 4)]);
+            result.push(HEX[usize::from(value & 15)]);
+        }
+        result.extend_from_slice(b"\n};");
+        Ok::<_, PyErr>(result)
+    })?;
+    Ok(PyBytes::new(py, &data))
+}
+
+#[pyfunction]
 fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     let source = image.pixel_data()?;
     let channels = image.mode.channels();
@@ -306,6 +333,107 @@ fn apply_lut<const C: usize>(source: &[u8], output: &mut [u8], lut: &[u8]) {
         let start = i * CHUNK_PIXELS * C;
         crate::ops_simd::lut::<C>(&source[start..start + dst.len()], dst, lut);
     });
+}
+
+fn check_tone_mode(image: &Image) -> PyResult<()> {
+    if !matches!(image.mode, PixelMode::L | PixelMode::Rgb) {
+        return Err(PyOSError::new_err(format!("not supported for mode {}", image.mode.as_str())));
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<Image> {
+    let bins = ops_histogram(py, image, mask)?;
+    check_tone_mode(image)?;
+    let mut table = Vec::with_capacity(bins.len());
+    for counts in bins.as_chunks::<256>().0 {
+        let total = counts.iter().sum::<u64>();
+        let last = counts.iter().rfind(|&&count| count != 0).copied().unwrap_or(0);
+        let step = (total - last) / 255;
+        if step == 0 {
+            table.extend(0..=255);
+        } else {
+            let mut cumulative = step / 2;
+            for &count in counts {
+                table.push((cumulative / step).min(255) as u8);
+                cumulative += count;
+            }
+        }
+    }
+    ops_lut(py, image, table)
+}
+
+#[pyfunction]
+fn ops_autocontrast(
+    py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>,
+) -> PyResult<Image> {
+    let mut bins = ops_histogram(py, histogram_image, mask)?;
+    check_tone_mode(image)?;
+    if cutoff.iter().any(|&value| !(0.0..=100.0).contains(&value)) {
+        return Err(PyValueError::new_err("cutoff must be between 0 and 100"));
+    }
+    if ignore.iter().any(|&value| !(-256..256).contains(&value)) {
+        return Err(PyIndexError::new_err("list assignment index out of range"));
+    }
+    let mut table = Vec::with_capacity(bins.len());
+    for counts in bins.as_chunks_mut::<256>().0 {
+        for &value in &ignore {
+            counts[value.rem_euclid(256) as usize] = 0;
+        }
+        let total = counts.iter().sum::<u64>();
+        for (tail, percent) in cutoff.into_iter().enumerate() {
+            let product = total as f64 * percent;
+            // Match Python's float floor division, including its quotient correction.
+            let quotient = (product - product % 100.0) / 100.0;
+            let floor = quotient.floor();
+            let mut remaining = (floor + f64::from(quotient - floor > 0.5)) as u64;
+            for offset in 0..256 {
+                let index = if tail == 0 { offset } else { 255 - offset };
+                let removed = remaining.min(counts[index]);
+                counts[index] -= removed;
+                remaining -= removed;
+                if remaining == 0 {
+                    break;
+                }
+            }
+        }
+        let low = counts.iter().position(|&count| count != 0);
+        let high = counts.iter().rposition(|&count| count != 0);
+        match (low, high) {
+            (Some(low), Some(high)) if low < high => {
+                let gain = 255.0 / (high - low) as f64;
+                let offset = -(low as f64) * gain;
+                table.extend((0..256).map(|value| ((value as f64 * gain + offset) as i64).clamp(0, 255) as u8));
+            }
+            _ => table.extend(0..=255),
+        }
+    }
+    ops_lut(py, image, table)
+}
+
+#[pyfunction]
+fn ops_colorize_stops(py: Python<'_>, image: &Image, stops: Vec<(usize, [u8; 3])>) -> PyResult<Image> {
+    if !(2..=3).contains(&stops.len()) || stops.iter().any(|stop| stop.0 > 255) || stops.windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        return Err(PyValueError::new_err("invalid colorize stops"));
+    }
+    let mut table = vec![0; 768];
+    for value in 0..256 {
+        let right = stops.partition_point(|stop| stop.0 <= value);
+        for band in 0..3 {
+            table[band * 256 + value] = if right == 0 {
+                stops[0].1[band]
+            } else if right == stops.len() {
+                stops[right - 1].1[band]
+            } else {
+                let (start, first) = stops[right - 1];
+                let (end, last) = stops[right];
+                let delta = i32::from(last[band]) - i32::from(first[band]);
+                (i32::from(first[band]) + ((value - start) as i32 * delta).div_euclid((end - start) as i32)) as u8
+            };
+        }
+    }
+    ops_colorize(py, image, table)
 }
 
 #[pyfunction]

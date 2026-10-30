@@ -63,7 +63,7 @@ from ._blanket import (
     ops_spread,
     ops_transpose,
     ops_warp,
-    ops_xbm_bits,
+    ops_xbm,
     quantize as _native_quantize,
 )
 from ._color import color_pixel
@@ -1139,9 +1139,7 @@ class Image:
         if self.mode != "1":
             raise ValueError("not a bitmap")
         name.encode("ascii")
-        bits = [f"0x{value:02x}" for value in ops_xbm_bits(self._native)]
-        body = ",".join(bits)
-        return (f"#define {name}_width {self.width}\n#define {name}_height {self.height}\nstatic char {name}_bits[] = {{\n{body}\n}};").encode("ascii")
+        return ops_xbm(self._native, name)
 
     def effect_spread(self, distance: int) -> Image:
         """Return an image with pixels randomly sampled from nearby positions.

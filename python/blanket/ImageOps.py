@@ -7,10 +7,9 @@ lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "struct", "itertools"}
+__lazy_modules__ = {"collections.abc", "struct"}
 
 import struct
-from itertools import accumulate, pairwise
 from typing import TYPE_CHECKING, Protocol, overload
 
 if TYPE_CHECKING:
@@ -20,7 +19,7 @@ if TYPE_CHECKING:
     from ._blanket import _Image
 
 from . import Image
-from ._blanket import chops_invert, ops_canvas, ops_colorize, ops_histogram, ops_lut, ops_mesh, ops_transpose
+from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose
 from ._color import color_pixel
 from ._exif import transpose_metadata
 
@@ -107,9 +106,17 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
         ```
     """
     source = image.convert("L") if preserve_tone else image
-    histogram = ops_histogram(source._native, None if mask is None else mask._native)
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
+    if (
+        len(tails) == 2
+        and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails)
+        and isinstance(ignored, (tuple, list))
+        and all(isinstance(value, int) and -256 <= value < 256 for value in ignored)
+    ):
+        return _result(image, ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored))
+    # Retain Python's permissive cutoff and index semantics outside the native fast path.
+    histogram = ops_histogram(source._native, None if mask is None else mask._native)
     table = []
     for offset in range(0, len(histogram), 256):
         counts = histogram[offset : offset + 256]
@@ -166,14 +173,7 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
     if mid is not None:
         stops.append((midpoint, color_pixel(mid, "RGB")))
     stops.append((whitepoint, color_pixel(white, "RGB")))
-    table = []
-    for channel in range(3):
-        ramp = [stops[0][1][channel]] * blackpoint
-        for (start, first), (end, last) in pairwise(stops):
-            ramp.extend(first[channel] + (i - start) * (last[channel] - first[channel]) // (end - start) for i in range(start, end))
-        ramp.extend([stops[-1][1][channel]] * (256 - whitepoint))
-        table.extend(ramp)
-    return _result(image, ops_colorize(image._native, table))
+    return _result(image, ops_colorize_stops(image._native, stops))
 
 
 def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:
@@ -381,17 +381,7 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
         result = ImageOps.equalize(image)
         ```
     """
-    histogram = ops_histogram(image._native, None if mask is None else mask._native)
-    table = []
-    for offset in range(0, len(histogram), 256):
-        counts = histogram[offset : offset + 256]
-        occupied = [n for n in counts if n]
-        step = (sum(occupied) - occupied[-1]) // 255 if occupied else 0
-        if not step:
-            table.extend(range(256))
-            continue
-        table.extend(cumulative // step for cumulative in accumulate(counts[:-1], initial=step // 2))
-    return _lut(image, table)
+    return _result(image, ops_equalize(image._native, None if mask is None else mask._native))
 
 
 def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Image:

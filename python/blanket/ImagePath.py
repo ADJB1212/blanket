@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"struct", "math", "collections.abc"}
+__lazy_modules__ = {"struct", "collections.abc"}
 
 import struct
-from math import fmod
 from operator import index
 from typing import TYPE_CHECKING, overload
+
+from ._blanket import path_bbox, path_compact, path_transform
 
 if TYPE_CHECKING:
     from collections.abc import Buffer, Callable, Iterator, Sequence
@@ -112,36 +113,11 @@ class Path:
         """Remove vertices closer than the Manhattan distance; return the number removed."""
         if self._mapping:
             raise ValueError("Path compacted during mapping")
-        distance = float(distance)
-        if not self._points:
-            return 0
-        points = self._points
-        kept = 1
-        for i in range(1, len(points)):
-            point = points[i]
-            x, y = point
-            if abs(x - points[kept - 1][0]) + abs(y - points[kept - 1][1]) >= distance:
-                points[kept] = point
-                kept += 1
-        removed = len(points) - kept
-        del points[kept:]
-        return removed
+        return path_compact(self._points, float(distance))
 
     def getbbox(self) -> tuple[float, float, float, float]:
         """Return (left, top, right, bottom), or four zeros for an empty path."""
-        if not self._points:
-            return 0.0, 0.0, 0.0, 0.0
-        left, top = right, bottom = self._points[0]
-        for x, y in self._points:
-            if x < left:  # noqa: PLR1730
-                left = x
-            if x > right:  # noqa: PLR1730
-                right = x
-            if y < top:  # noqa: PLR1730
-                top = y
-            if y > bottom:  # noqa: PLR1730
-                bottom = y
-        return left, top, right, bottom
+        return path_bbox(self._points)
 
     def map(self, function: Callable[[float, float], tuple[float, float]]) -> None:
         """Replace each vertex with function(x, y), updating the path in place."""
@@ -162,7 +138,4 @@ class Path:
     def transform(self, matrix: Sequence[float], wrap: float = 0) -> None:
         """Apply (a*x + b*y + c, d*x + e*y + f), optionally wrapping x with fmod."""
         a, b, c, d, e, f = (self._number(value) for value in matrix)
-        wrap = float(wrap)
-        for i, (x, y) in enumerate(self._points):
-            tx, ty = a * x + b * y + c, d * x + e * y + f
-            self._points[i] = (fmod(tx, wrap) if wrap else tx, ty)
+        path_transform(self._points, (a, b, c, d, e, f), float(wrap))

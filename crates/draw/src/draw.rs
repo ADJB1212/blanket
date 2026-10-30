@@ -12,6 +12,7 @@ const STROKE_EPSILON: f64 = 1e-12;
 const MAX_MASK_PIXELS: usize = 100_000_000;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::path::register(module)?;
     module.add_function(wrap_pyfunction!(draw_points, module)?)?;
     module.add_function(wrap_pyfunction!(draw_rectangle, module)?)?;
     module.add_function(wrap_pyfunction!(draw_path, module)?)?;

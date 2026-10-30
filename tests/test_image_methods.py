@@ -151,6 +151,22 @@ def test_xbm_bitmap_matches_pillow() -> None:
         Image.new("L", (1, 1)).tobitmap()
 
 
+@pytest.mark.parametrize("width", [0, 1, 7, 8, 9, 31, 32, 33, 257])
+def test_native_xbm_preserves_partial_rows_and_ascii_names(width: int) -> None:
+    from blanket import _blanket
+
+    image = Image.new("1", (width, 3))
+    for y in range(3):
+        for x in range(width):
+            if (x * 7 + y) % 11 < 5:
+                image.putpixel((x, y), 255)
+    body = ",".join(f"0x{value:02x}" for value in _blanket.ops_xbm_bits(image._native))
+    expected = f"#define sample_width {width}\n#define sample_height 3\nstatic char sample_bits[] = {{\n{body}\n}};".encode("ascii")
+    assert image.tobitmap("sample") == expected
+    with pytest.raises(UnicodeEncodeError):
+        image.tobitmap("non-ascii-\u00e9")
+
+
 def test_eager_verify_draft_and_core_shim() -> None:
     stream = BytesIO()
     Image.new("RGB", (3, 2), (10, 20, 30)).save(stream, "PNG")

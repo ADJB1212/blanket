@@ -104,6 +104,43 @@ def test_path_mutation_failures() -> None:
         path.transform((1, 2, 3))
 
 
+@pytest.mark.parametrize("distance", [float("nan"), float("inf"), -float("inf")])
+def test_native_compaction_preserves_nonfinite_selection_and_identity(distance: float) -> None:
+    path = ImagePath.Path([(0, 0), (1, 2), (float("inf"), 3), (float("nan"), 4), (-5, 6)])
+    original = path.tolist()
+    expected = original[:1]
+    for point in original[1:]:
+        if abs(point[0] - expected[-1][0]) + abs(point[1] - expected[-1][1]) >= distance:
+            expected.append(point)
+    assert path.compact(distance) == len(original) - len(expected)
+    assert len(path) == len(expected)
+    assert all(a is b for a, b in zip(path, expected, strict=True))
+
+
+@pytest.mark.parametrize("wrap", [0.0, -0.0, -3.0, float("inf"), float("nan")])
+def test_native_path_transform_preserves_wrapping(wrap: float) -> None:
+    from math import fmod, isnan
+
+    path = ImagePath.Path([(-0.0, 2), (-7.25, 3), (8.5, 4), (float("nan"), 5)])
+    expected = []
+    for x, y in path:
+        tx, ty = 1 * x + 0 * y + 0, 0 * x + 1 * y + 0
+        expected.append((fmod(tx, wrap) if wrap else tx, ty))
+    path.transform((1, 0, 0, 0, 1, 0), wrap)
+    for point, reference in zip(path, expected, strict=True):
+        for actual, value in zip(point, reference, strict=True):
+            assert isnan(actual) if isnan(value) else actual == value
+
+
+def test_native_path_transform_preserves_partial_updates_on_domain_error() -> None:
+    path = ImagePath.Path([(1, 2), (float("inf"), 3), (4, 5)])
+    with pytest.raises(ValueError, match="math domain error"):
+        path.transform((2, 0, 1, 0, 1, 0), wrap=3)
+    assert path[0] == (0, 2)
+    assert path[1] == (float("inf"), 3)
+    assert path[2] == (4, 5)
+
+
 @pytest.mark.parametrize("coordinates", [[1], [(1, 2, 3)], ["1", "2"], None])
 def test_invalid_coordinates(coordinates: object) -> None:
     with pytest.raises((TypeError, ValueError)):

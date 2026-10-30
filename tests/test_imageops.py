@@ -107,6 +107,42 @@ def test_colorize(kwargs: dict) -> None:
     same(ImageOps.colorize(b, **kwargs), PILOps.colorize(p, **kwargs))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize("name", ["autocontrast", "equalize"])
+@pytest.mark.parametrize("size", [(0, 0), (1, 1), (33, 17)])
+def test_native_histogram_operations_avoid_python_tables(mode: str, name: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    image, reference = pair(mode, size)
+    image.info["description"] = "native tone mapping"
+    mask = Image.new("L", size, 1)
+    reference_mask = PILImage.new("L", size, 1)
+    options = {"cutoff": (2.5, 9), "ignore": [-1, 0], "preserve_tone": True} if name == "autocontrast" else {}
+    expected = getattr(PILOps, name)(reference, mask=reference_mask, **options)
+
+    def unexpected(*args: object, **kwargs: object) -> None:
+        raise AssertionError("histograms and tone tables must stay in Rust")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ImageOps, "ops_histogram", unexpected)
+        patch.setattr(ImageOps, "_lut", unexpected)
+        result = getattr(ImageOps, name)(image, mask=mask, **options)
+    same(result, expected)
+    assert result.info == image.info and result.info is not image.info
+
+
+@pytest.mark.parametrize("cutoff", [0.1, (0.3, 0.7), (33.33333333333333, 66.66666666666666), (100, 100), (-3, 110), (2, 4, 6)])
+def test_autocontrast_fractional_and_unusual_cutoffs(cutoff: object) -> None:
+    image, reference = pair("RGB", (53, 41))
+    same(ImageOps.autocontrast(image, cutoff=cutoff), PILOps.autocontrast(reference, cutoff=cutoff))
+
+
+@pytest.mark.parametrize("points", [(0, 0, 255), (0, 255, 255), (70, 70, 200), (70, 200, 200), (255, 255, 255), (0, 0, 0)])
+def test_colorize_coincident_stops_preserve_floor_rounding(points: tuple[int, int, int]) -> None:
+    image = Image.frombytes("L", (256, 1), bytes(range(256)))
+    reference = PILImage.frombytes("L", image.size, image.tobytes())
+    options = {"black": (250, 30, 17), "mid": (10, 230, 90), "white": (20, 40, 55), "blackpoint": points[0], "midpoint": points[1], "whitepoint": points[2]}
+    same(ImageOps.colorize(image, **options), PILOps.colorize(reference, **options))
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ["flip", "mirror", "grayscale"])
 def test_flips_and_grayscale(mode: str, name: str) -> None:
