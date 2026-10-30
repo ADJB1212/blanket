@@ -148,3 +148,27 @@ def test_unsigned_tensor_import_stays_resident():
     gpu = ImageGpu.from_torch(tensor, layout="HWC", mode="RGB", bit_depth=12)
     assert gpu.to_image().tobytes() == struct.pack("12H", *range(12))
     assert gpu.to_torch().device.type == "mps"
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("mode,channels", [("L", "L"), ("RGB", "RGB"), ("RGBA", "RGBA")])
+def test_unsigned_named_channels(runtime, depth, mode, channels):
+    samples = tuple(range(1, len(channels) + 1))
+    image = Image.frombytes(mode, (1, 1), struct.pack(f"{len(samples)}H", *samples), bit_depth=depth)
+    gpu = ImageGpu.from_image(image, runtime=runtime)
+    for band, value in zip(channels, samples, strict=True):
+        result = gpu.getchannel(band).to_image()
+        assert result.mode == "L" and result.bit_depth == depth
+        assert result.getpixel((0, 0)) == value
+    with pytest.raises(ValueError, match="unknown image band"):
+        gpu.getchannel("F")
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("angle", [90, 270])
+def test_unsigned_expanded_quarter_turn(runtime, depth, angle):
+    image = Image.frombytes("L", (2, 3), struct.pack("6H", *range(6)), bit_depth=depth)
+    actual = ImageGpu.from_image(image, runtime=runtime).rotate(angle, expand=True).to_image()
+    expected = image.transpose(Image.Transpose.ROTATE_90 if angle == 90 else Image.Transpose.ROTATE_270)
+    assert actual.size == (3, 2) and actual.bit_depth == depth
+    assert actual.tobytes() == expected.tobytes()

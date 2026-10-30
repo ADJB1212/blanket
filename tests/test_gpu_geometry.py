@@ -68,6 +68,35 @@ def test_geometry_validation(runtime):
         source.rotate(math.nan)
 
 
+@pytest.mark.parametrize("size", [(2, 3), (3, 2), (4, 7), (1, 2)])
+@pytest.mark.parametrize("angle", [90, 270, -90])
+@pytest.mark.parametrize("resample", [0, 2, 3])
+def test_expanded_quarter_turn_mixed_dimension_parity(runtime, size, angle, resample):
+    image = Image.frombytes("L", size, bytes(range(size[0] * size[1])))
+    actual = ImageGpu.from_image(image, runtime=runtime).rotate(angle, resample, expand=True).to_image()
+    expected = image.rotate(angle, resample, expand=True)
+    assert actual.size == expected.size == size[::-1]
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["LA", "RGBA"])
+@pytest.mark.parametrize("alpha", [0, 127, 255])
+def test_transparent_byte_composite_preserves_background(runtime, mode, alpha):
+    color = (40,) if mode == "LA" else (40, 50, 60)
+    background = Image.new(mode, (3, 1), (*color, alpha))
+    source = Image.new(mode, background.size, (*color[::-1], 0))
+    actual = ImageGpu.from_image(background, runtime=runtime).alpha_composite(ImageGpu.from_image(source, runtime=runtime)).to_image()
+    assert actual.tobytes() == background.tobytes()
+
+
+@pytest.mark.parametrize("alpha", [1.0, 2.0, math.inf])
+def test_opaque_float_composite_discards_nonfinite_background(runtime, alpha):
+    background = Image.new("RGBA;F", (3, 1), (math.nan, math.inf, -math.inf, 1.0))
+    source = Image.new("RGBA;F", background.size, (0.2, 0.3, 0.4, alpha))
+    actual = ImageGpu.from_image(background, runtime=runtime).alpha_composite(ImageGpu.from_image(source, runtime=runtime)).to_image()
+    assert struct.unpack("12f", actual.tobytes()) == pytest.approx((0.2, 0.3, 0.4, 1.0) * 3)
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 def test_masked_paste(runtime, mode):
     background = Image.new(mode, (7, 5), 12 if mode == "L" else tuple([12] * len(Image.new(mode, (1, 1)).getbands())))
@@ -230,6 +259,34 @@ def test_nonfinite_statistics_and_mask_edges(runtime):
     mask = ImageGpu.from_image(Image.frombytes("F", (2, 1), struct.pack("2f", 0.0, 1.0)), runtime=runtime)
     actual = struct.unpack("2f", background.paste(gpu, mask=mask).to_image().tobytes())
     assert actual == (7.0, math.inf)
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("position", [(10**100, 0), (-(10**100), 0), (0, 10**100), (0, -(10**100))])
+@pytest.mark.parametrize("mask_mode", [None, "L", "F"])
+def test_fully_clipped_paste_with_huge_offsets(runtime, mode, position, mask_mode):
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    value = 0.25 if "F" in mode else 37
+    background = Image.new(mode, (3, 2), value if channels == 1 else (value,) * channels)
+    source = ImageGpu.from_image(Image.new(mode, (2, 3)), runtime=runtime)
+    gpu = ImageGpu.from_image(background, runtime=runtime)
+    gpu.info["description"] = "clipped paste"
+    mask = None if mask_mode is None else ImageGpu.from_image(Image.new(mask_mode, source.size), runtime=runtime)
+    result = gpu.paste(source, position, mask)
+    gpu.close()
+    source.close()
+    if mask is not None:
+        mask.close()
+    assert result.size == background.size and result.mode == mode
+    assert result.info == {"description": "clipped paste"}
+    assert result.to_image().tobytes() == background.tobytes()
+
+
+def test_fully_clipped_paste_still_validates_mask(runtime):
+    gpu = ImageGpu.from_image(Image.new("L", (2, 3)), runtime=runtime)
+    mask = ImageGpu.from_image(Image.new("RGB", gpu.size), runtime=runtime)
+    with pytest.raises(ValueError, match="paste mask"):
+        gpu.paste(gpu, (10**100, 0), mask)
 
 
 @pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])

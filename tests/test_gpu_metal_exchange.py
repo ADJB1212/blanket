@@ -94,6 +94,23 @@ def test_native_exchange_preserves_nonfinite_sample_bits() -> None:
     assert restored.to_image().tobytes() == data
 
 
+@pytest.mark.parametrize("mode", ["F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("copy", [False, True])
+@pytest.mark.parametrize("strided", [False, True])
+def test_mps_negative_views_export_and_process(mode: str, copy: bool, strided: bool) -> None:
+    channels = MODES[mode]
+    source = torch.arange(3 * 4 * channels, dtype=torch.float32, device="mps").reshape(3, 4, channels)
+    if strided:
+        source = source[:, ::2]
+    negative = torch._neg_view(source)
+    expected = negative.cpu().contiguous()
+    gpu = ImageGpu.from_torch(negative, layout="HWC", mode=mode, copy=copy)
+    assert gpu.to_image().tobytes() == expected.numpy().tobytes()
+    assert torch.equal(gpu.invert().to_torch().cpu(), 1 - expected)
+    positive = ImageGpu.from_torch(source, layout="HWC", mode=mode)
+    assert torch.equal(positive.difference(gpu).to_torch().cpu(), -2 * expected)
+
+
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_native_unsigned_exchange(depth: int, mode: str) -> None:

@@ -50,6 +50,10 @@ float arithmetic_sample(device const T *src, device const T *other, constant uin
         float da = read_sample(src, base + c - 1) / maxval, sa = read_sample(other, base + c - 1) / maxval;
         da = isnan(da) ? 0.0f : clamp(da, 0.0f, 1.0f);
         sa = isnan(sa) ? 0.0f : clamp(sa, 0.0f, 1.0f);
+        if (is_same_v<T, uchar> && sa == 0)
+            return a;
+        if (sa == 1)
+            return band == c - 1 ? maxval : read_sample(other, i);
         float alpha = sa + da * (1 - sa);
         out = band == c - 1 ? alpha * maxval
                             : (alpha == 0 ? 0 : ((sa == 0 ? 0 : read_sample(other, i) * sa) + (da == 0 ? 0 : a * da) * (1 - sa)) / alpha);

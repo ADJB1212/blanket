@@ -479,6 +479,14 @@ template <typename T> __device__ void process(const T *src, T *dst, const T *oth
         float da = read_sample(src, base + c - 1) / maxval, sa = read_sample(other, base + c - 1) / maxval;
         da = isnan(da) ? 0.0f : clamp(da, 0.0f, 1.0f);
         sa = isnan(sa) ? 0.0f : clamp(sa, 0.0f, 1.0f);
+        if (is_same_v<T, uchar> && sa == 0) {
+            dst[i] = src[i];
+            return;
+        }
+        if (sa == 1) {
+            dst[i] = band == c - 1 ? T(maxval) : other[i];
+            return;
+        }
         float alpha = sa + da * (1 - sa);
         out = band == c - 1 ? alpha * maxval
                             : (alpha == 0 ? 0 : ((sa == 0 ? 0 : read_sample(other, i) * sa) + (da == 0 ? 0 : a * da) * (1 - sa)) / alpha);

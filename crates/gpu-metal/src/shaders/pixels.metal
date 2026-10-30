@@ -58,8 +58,12 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
         F b = F(other[i]);
         float sa = float(b[Channels - 1]) / maxval;
         sa = isnan(sa) ? 0.0f : clamp(sa, 0.0f, 1.0f);
+        if (!Floating && sa == 0) {
+            dst[i] = src[i];
+            return;
+        }
         float alpha = sa + da * (1 - sa);
-        result = alpha == 0 ? F(0) : ((sa == 0 ? F(0) : b * sa) + (da == 0 ? F(0) : a * da) * (1 - sa)) / alpha;
+        result = sa == 1 ? b : (alpha == 0 ? F(0) : ((sa == 0 ? F(0) : b * sa) + (da == 0 ? F(0) : a * da) * (1 - sa)) / alpha);
         result[Channels - 1] = alpha * maxval;
     } else {
         result = da == 0 ? ((SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating) ? a : F(0))

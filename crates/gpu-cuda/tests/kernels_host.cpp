@@ -52,6 +52,31 @@ template <typename T> bool statistics_match_serial() {
 }
 
 int main() {
+    for (uint channels : {2u, 4u}) {
+        uchar background[4] = {40, 50, 60, 0}, source[4] = {90, 100, 110, 0}, output[6] = {173, 173, 173, 173, 173, 173};
+        background[channels - 1] = source[channels - 1] = 0;
+        uint p[8] = {1, 1, channels, 1, 1, 3, 0, 0};
+        float controls[1] = {0};
+        for (uint i = 0; i <= channels; i++)
+            process(background, output + 1, source, p, controls, i);
+        for (uint i = 0; i < channels; i++)
+            if (output[i + 1] != background[i])
+                return 9;
+        if (output[0] != 173 || output[channels + 1] != 173)
+            return 10;
+    }
+    for (float alpha : {1.0f, 2.0f, INFINITY}) {
+        float background[4] = {NAN, INFINITY, -INFINITY, 1}, source[4] = {0.2f, 0.3f, 0.4f, alpha};
+        float output[6] = {-123, 0, 0, 0, 0, -123}, controls[1] = {0};
+        uint p[8] = {1, 1, 4, 1, 1, 3, 0, 0};
+        for (uint i = 0; i <= 4; i++)
+            process(background, output + 1, source, p, controls, i);
+        for (uint i = 0; i < 4; i++)
+            if (output[i + 1] != (i == 3 ? 1.0f : source[i]))
+                return 11;
+        if (output[0] != -123 || output[5] != -123)
+            return 12;
+    }
     if (!statistics_match_serial<uchar>() || !statistics_match_serial<float>())
         return 7;
     {

@@ -107,7 +107,7 @@ pub fn lut_controls(size: [u32; 3], channels: u32, table: &[f32], floating: bool
     Ok(values)
 }
 
-pub fn resize_weights(input: u32, output: u32, method: u8) -> Result<(u32, Vec<f32>), String> {
+pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Result<(u32, Vec<f32>), String> {
     if input == 0 || output == 0 || method > resampling::HAMMING {
         return Err("invalid resize arguments".into());
     }
@@ -123,11 +123,14 @@ pub fn resize_weights(input: u32, output: u32, method: u8) -> Result<(u32, Vec<f
     let stride = ((2.0 * support).ceil() as usize + weights::HEADER_LEN + 1).min(input as usize + weights::HEADER_LEN);
     let mut result = vec![0.0; stride.checked_mul(output as usize).ok_or("resize weights overflow")?];
     if method == resampling::NEAREST {
+        // Byte resize follows Pillow's accumulated coordinates; float resize uses direct coordinates.
+        let mut position = 0.5 * scale;
         for (i, row) in result.chunks_exact_mut(stride).enumerate() {
-            let center = (i as f64 + 0.5) * scale;
+            let center = if floating { (i as f64 + 0.5) * scale } else { position };
             row[weights::START] = (center.floor() as u32).min(input - 1) as f32;
             row[weights::COUNT] = 1.0;
             row[weights::HEADER_LEN] = 1.0;
+            position += scale;
         }
         return Ok((stride as u32, result));
     }
@@ -184,7 +187,7 @@ mod tests {
     fn weights_preserve_constants() {
         for method in resampling::NEAREST..=resampling::HAMMING {
             for (input, output) in [(1, 17), (17, 1), (31, 19)] {
-                let (stride, weights) = resize_weights(input, output, method).unwrap();
+                let (stride, weights) = resize_weights(input, output, method, false).unwrap();
                 for row in weights.chunks_exact(stride as usize) {
                     assert!((row[weights::HEADER_LEN..weights::HEADER_LEN + row[weights::COUNT] as usize].iter().sum::<f32>() - 1.0).abs() < 1e-6);
                 }
@@ -193,13 +196,20 @@ mod tests {
     }
     #[test]
     fn resize_rows_keep_boundaries_and_padding() {
-        assert_eq!(resize_weights(2, 3, resampling::BILINEAR).unwrap(), (4, vec![0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 0.5, 0.5, 1.0, 1.0, 1.0, 0.0]));
-        assert_eq!(resize_weights(2, 3, resampling::NEAREST).unwrap(), (3, vec![0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(resize_weights(2, 3, resampling::BILINEAR, false).unwrap(), (4, vec![0.0, 1.0, 1.0, 0.0, 0.0, 2.0, 0.5, 0.5, 1.0, 1.0, 1.0, 0.0]));
+        assert_eq!(resize_weights(2, 3, resampling::NEAREST, false).unwrap(), (3, vec![0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]));
         for method in resampling::NEAREST..=resampling::HAMMING {
-            let (stride, rows) = resize_weights(1, 31, method).unwrap();
+            let (stride, rows) = resize_weights(1, 31, method, false).unwrap();
             assert_eq!(stride, 3);
             assert!(rows.as_chunks::<3>().0.iter().all(|row| *row == [0.0, 1.0, 1.0]));
         }
+    }
+    #[test]
+    fn nearest_positions_preserve_byte_and_float_evaluation_order() {
+        let (_, bytes) = resize_weights(24, 11, resampling::NEAREST, false).unwrap();
+        let (_, floats) = resize_weights(24, 11, resampling::NEAREST, true).unwrap();
+        assert_eq!(bytes.as_chunks::<3>().0.iter().map(|row| row[0] as u32).collect::<Vec<_>>(), [1, 3, 5, 7, 9, 11, 14, 16, 18, 20, 22]);
+        assert_eq!(floats[5 * 3], 12.0);
     }
     #[test]
     fn blur_controls_match_fractional_box_weights() {

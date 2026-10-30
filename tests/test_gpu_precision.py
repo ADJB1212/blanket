@@ -39,6 +39,49 @@ def floats(image):
     return struct.unpack(f"{len(data) // 4}f", data)
 
 
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("axis", [0, 1])
+def test_nearest_resize_integer_boundaries(runtime, mode, axis):
+    image = source(mode, (5, 24) if axis == 1 else (24, 5))
+    size = (6, 11) if axis == 1 else (11, 6)
+    actual = ImageGpu.from_image(image, runtime=runtime).resize(size, Image.Resampling.NEAREST).to_image()
+    expected = image.resize(size, Image.Resampling.NEAREST)
+    if "F" in mode:
+        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=1e-6)
+    else:
+        assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("resample", [Image.Resampling.NEAREST, Image.Resampling.BOX])
+def test_resize_avoids_oversized_intermediate(runtime, mode, resample):
+    channels = CHANNELS[mode]
+    value = 0.25 if "F" in mode else 17
+    color = value if channels == 1 else (value,) * (channels - 1) + (1.0 if "F" in mode else 255,)
+    image = Image.new(mode, (160, 13400), color)
+    gpu = ImageGpu.from_image(image, runtime=runtime)
+    result = gpu.resize((13400, 160), resample)
+    assert result.size == (13400, 160) and result.mode == mode
+    for x, y in ((0, 0), (13399, 0), (0, 159), (13399, 159)):
+        pixel = result.crop((x, y, x + 1, y + 1)).to_image().getpixel((0, 0))
+        assert pixel == pytest.approx(color, rel=1e-5, abs=1e-6)
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_blend_and_convolve_reject_overflowing_controls(runtime, mode):
+    gpu = ImageGpu.from_image(source(mode, (3, 3)), runtime=runtime)
+    for alpha in (1e40, -1e40, math.inf, math.nan):
+        with pytest.raises(ValueError):
+            gpu.blend(gpu, alpha)
+    for arguments in ({"kernel": [1e40, -1e40, 0, 0, 0, 0, 0, 0, 0], "scale": 1}, {"kernel": [1] * 9, "scale": 1e-40}, {"kernel": [1] * 9, "offset": 1e40}):
+        with pytest.raises(ValueError):
+            gpu.convolve(**arguments)
+        if runtime == "native":
+            with pytest.raises(ValueError):
+                ImageGpu.ProcessingPlan(gpu.size, mode, [("convolve", arguments)])
+    assert gpu.convolve([1e40] * 9, scale=9e40).to_image().size == gpu.size
+
+
 @pytest.mark.parametrize(("src", "dst"), CPU_CONVERSIONS)
 def test_mode_conversion_cpu_parity(runtime, src, dst):
     image = source(src)

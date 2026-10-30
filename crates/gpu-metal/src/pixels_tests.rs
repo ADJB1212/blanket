@@ -129,6 +129,7 @@ fn packed_filters_match_scalar_shaders_and_preserve_guards() {
                                     if axis == 0 { width } else { height },
                                     if axis == 0 { dw } else { dh },
                                     blanket_gpu::protocol::resampling::LANCZOS,
+                                    floating,
                                 )
                                 .unwrap();
                                 (dw, dh, kernel, values)

@@ -1,5 +1,9 @@
 # GPU images
 
+GPU operations do not guarantee byte-exact results with Pillow or CPU Blanket.
+Floating-point precision, accumulation order, interpolation boundaries, and
+quantization can change output samples across execution backends.
+
 For PyTorch interoperability, install the optional GPU runtime group, then
 build on Apple Silicon:
 
@@ -354,8 +358,10 @@ result = gpu.resize((512, 512), linear_light=True, premultiply_alpha=True)
 result = result.alpha_composite(overlay, linear_light=True)
 ```
 
-GPU arithmetic can differ from CPU results: the target tolerance is one uint8
-level, or float32 `rtol=1e-5, atol=1e-6` for finite values. Float alpha is clamped
+Comparisons with CPU results generally target a tolerance of one uint8 level,
+or float32 `rtol=1e-5, atol=1e-6` for finite values. These are comparison targets,
+not universal error bounds or a guarantee of byte-exact Pillow output.
+Interpolation boundary decisions can select different samples. Float alpha is clamped
 to [0, 1], NaN alpha becomes zero, and zero-alpha float colors become zero when
 premultiplying/unpremultiplying. Negative and nonfinite color samples otherwise
 participate in floating-point arithmetic. No color-space conversion is implicit.
@@ -431,6 +437,11 @@ follow the corresponding float color alpha rules. Source-over normalizes
 alpha; RGB/RGBA resize/compositing can opt into linear-light processing.
 Convolution offsets and unsharp thresholds use unsigned sample units.
 Statistics use normalized working units.
+
+Near half-sample boundaries, normalized float32 arithmetic can move a result
+across the rounding threshold and change the final unsigned sample by one level.
+Blending, masked paste, and other arithmetic operations therefore also carry
+the GPU path's approximate numerical contract.
 
 With MPS, `from_torch(tensor, layout=..., bit_depth=10|12|16)` accepts uint16
 storage, including views, converts and packs entirely on the GPU, and retains

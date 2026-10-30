@@ -16,7 +16,7 @@ fn preparation(c: &mut Criterion) {
                 ("lanczos", resampling::LANCZOS),
             ] {
                 group.bench_function(BenchmarkId::new(name, format!("{input}-{output}")), |b| {
-                    b.iter(|| resize_weights(black_box(input), black_box(output), black_box(method)).unwrap());
+                    b.iter(|| resize_weights(black_box(input), black_box(output), black_box(method), false).unwrap());
                 });
             }
         }

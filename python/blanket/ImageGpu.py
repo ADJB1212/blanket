@@ -1,4 +1,8 @@
-"""Explicit resident GPU images; CPU transfers occur only at import/export."""
+"""Explicit resident GPU images; CPU transfers occur only at import/export.
+
+GPU operations do not guarantee byte-exact results with Pillow or CPU Blanket.
+Floating-point arithmetic, interpolation, and quantization can change samples.
+"""
 
 from __future__ import annotations
 
@@ -27,6 +31,7 @@ if TYPE_CHECKING:
 
 _MODES = {"L": (1, False), "LA": (2, False), "RGB": (3, False), "RGBA": (4, False), "F": (1, True), "RGB;F": (3, True), "RGBA;F": (4, True)}
 _FORMATS = tuple(_MODES)
+_MAX_PIXELS = 178_956_970
 _OPERATIONS = (
     "resize",
     "convolve",
@@ -194,7 +199,7 @@ def _validate(size: tuple[int, int], mode: str) -> None:
     """Validate the mode, positive integer dimensions, and decoded-pixel limit."""
     if mode not in _MODES:
         raise ValueError("unsupported GPU image mode")
-    if len(size) != 2 or any(type(v) is not int or v <= 0 or v > 0xFFFFFFFF for v in size) or size[0] * size[1] > 178_956_970:
+    if len(size) != 2 or any(type(v) is not int or v <= 0 or v > 0xFFFFFFFF for v in size) or size[0] * size[1] > _MAX_PIXELS:
         raise ValueError("invalid GPU image dimensions")
 
 
@@ -473,8 +478,8 @@ class GpuImage:
             resource = self._resource.run(other._resource, parameters, values)
         else:
             torch = _torch()
-            src = self._resource.contiguous()
-            rhs = other._resource.contiguous()
+            src = self._resource.resolve_neg().contiguous()
+            rhs = other._resource.resolve_neg().contiguous()
             resource = torch.empty((size[1], size[0], channels), dtype=torch.float32 if floating else torch.uint8, device=src.device)
             weights = torch.tensor(values, dtype=torch.float32, device="mps")
             kernel_name = "image_f32" if floating else "image_u8"
@@ -583,7 +588,9 @@ class GpuImage:
         a, b = round(math.cos(radians), 15), round(math.sin(radians), 15)
         d, e = -b, a
         size = self.size
-        if expand:
+        if expand and angle in (90, 270):
+            size = self.size[::-1]
+        elif expand:
             cx = width / 2 - a * width / 2 - b * height / 2
             cy = height / 2 - d * width / 2 - e * height / 2
             corners = [(a * x + b * y + cx, d * x + e * y + cy) for x, y in ((0, 0), (width, 0), (0, height), (width, height))]
@@ -647,9 +654,9 @@ class GpuImage:
                 raise ValueError("paste mask must be L/F and match source size and execution context")
         if self.device != source.device:
             raise ValueError("paste source must match mode and execution context")
+        if x >= self.size[0] or y >= self.size[1] or x <= -source.size[0] or y <= -source.size[1]:
+            return self._run(6)
         if self.runtime == "native":
-            if x >= self.size[0] or y >= self.size[1] or x <= -source.size[0] or y <= -source.size[1]:
-                return self._run(6)
             resource = self._resource.paste(source._resource, None if mask is None else mask._resource, (x, y))
             return GpuImage(resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         working_mode = "F" if self.mode in ("L", "F") else "RGB;F" if self.mode in ("RGB", "RGB;F") else "RGBA;F"
@@ -902,6 +909,8 @@ class GpuImage:
         clamp_alpha = has_alpha and floating and not premultiply_alpha
         result = self._run(4) if alpha else (self._run(24) if clamp_alpha else self)
         axes = (1, 0) if not _MODES[self.mode][1] and self.size[1] > self.size[0] * 100 and size[1] < self.size[1] else (0, 1)
+        if size[axes[0]] * self.size[axes[1]] > _MAX_PIXELS:
+            axes = axes[::-1]
         for axis in axes:
             target = (size[0], result.size[1]) if axis == 0 else (result.size[0], size[1])
             if result.size[axis] != target[axis]:
@@ -909,7 +918,7 @@ class GpuImage:
                     resource = result._resource.resize_axis(target[axis], resample, axis)
                     result = GpuImage(resource, target, result.mode, result.runtime, result.info.copy(), unified_memory=result.unified_memory)
                 else:
-                    stride, weights = _blanket._gpu_weights(result.size[axis], target[axis], resample)
+                    stride, weights = _blanket._gpu_weights(result.size[axis], target[axis], resample, floating)
                     result = result._run(0, size=target, k=stride, axis=axis, values=weights)
         if result is self:
             return self._run(6)
@@ -925,6 +934,7 @@ class GpuImage:
             scale: Nonzero finite divisor for coefficients. None uses their sum,
                 substituting 1 when the sum is zero.
             offset: Finite value added to each output sample in source units.
+                Offset and scaled coefficients must fit finite float32 values.
 
         Returns:
             A resident image of the same size/mode. All channels, including alpha,
@@ -935,7 +945,7 @@ class GpuImage:
         scale = (sum(kernel) or 1.0) if scale is None else scale
         if scale == 0 or not all(math.isfinite(v) for v in [*kernel, scale, offset]):
             raise ValueError("kernel parameters must be finite with nonzero scale")
-        return self._run(1, k=size, values=[0.0, float(offset), *[float(v / scale) for v in kernel]])
+        return self._run(1, k=size, values=[0.0, _scalar(offset), *[_scalar(v / scale) for v in kernel]])
 
     def crop(self, box: tuple[int, int, int, int]) -> GpuImage:
         """Copy an integer rectangle, filling outside-source samples with zero.
@@ -1253,16 +1263,14 @@ class GpuImage:
 
         Args:
             other: GPU image matching size, mode, runtime, and device.
-            alpha: Finite weight in self + (other-self)*alpha. Values outside
+            alpha: Finite float32 weight in self + (other-self)*alpha. Values outside
                 0..1 extrapolate.
 
         Returns:
             A new resident image with every band, including alpha, blended.
             Byte samples are floored and clipped; float samples are not clipped.
         """
-        if not math.isfinite(alpha):
-            raise ValueError("blend alpha must be finite")
-        return self._run(2, other=other, values=[float(alpha)])
+        return self._run(2, other=other, values=[_scalar(alpha)])
 
     def alpha_composite(self, source: GpuImage, *, linear_light: bool = False, transfer: str = "srgb") -> GpuImage:
         """Composite a source image over this background using straight alpha.
@@ -1329,7 +1337,7 @@ class GpuImage:
             data = self._resource.download()
         else:
             self.synchronize()
-            data = bytes(self._resource.contiguous().view(_torch().uint8).cpu().flatten().tolist())
+            data = bytes(self._resource.resolve_neg().contiguous().view(_torch().uint8).cpu().flatten().tolist())
         result = Image.frombytes(self.mode, self.size, data)
         result.info.update(self.info)
         return result

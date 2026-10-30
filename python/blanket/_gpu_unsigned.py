@@ -411,6 +411,12 @@ class GpuUnsignedImage:
         Returns:
             An independent L-mode GpuUnsignedImage with the original depth.
         """
+        self._image._check()
+        if isinstance(channel, str):
+            try:
+                channel = Image._BANDS[self.mode].index(channel)
+            except ValueError as error:
+                raise ValueError("unknown image band") from error
         return self._result(self._image.getchannel(channel), "L")
 
     def split(self) -> tuple[GpuUnsignedImage, ...]:

@@ -116,9 +116,9 @@ mod benchmarks {
                 let (radius, controls) = blur_parameters(2.5, false).unwrap();
                 let small = Descriptor { width: width / 2, ..descriptor };
                 let resized = Descriptor { height: height / 2, ..small };
-                let (stride, weights) = resize_weights(width, small.width, resampling::LANCZOS).unwrap();
+                let (stride, weights) = resize_weights(width, small.width, resampling::LANCZOS, descriptor.float).unwrap();
                 let horizontal = request(descriptor, small, operation::RESIZE, stride, 0, weights);
-                let (stride, weights) = resize_weights(height, resized.height, resampling::LANCZOS).unwrap();
+                let (stride, weights) = resize_weights(height, resized.height, resampling::LANCZOS, descriptor.float).unwrap();
                 let vertical = request(small, resized, operation::RESIZE, stride, 1, weights);
                 let resized_brightness = request(resized, resized, operation::BRIGHTNESS, 0, 0, vec![1.2]);
                 let mut cases = vec![

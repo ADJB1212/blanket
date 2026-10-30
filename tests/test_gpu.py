@@ -190,7 +190,7 @@ def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
     data = struct.pack(f"{len(values)}f", *[v / 127 - 0.5 for v in values]) if "F" in mode else bytes(values)
     gpu = ImageGpu.from_image(Image.frombytes(mode, (17, 9), data))
     for axis, size in [(0, (31, 9)), (1, (17, 5))]:
-        kernel, weights = ImageGpu._blanket._gpu_weights(gpu.size[axis], size[axis], method)
+        kernel, weights = ImageGpu._blanket._gpu_weights(gpu.size[axis], size[axis], method, "F" in mode)
         expected = gpu._run(0, size=size, k=kernel, axis=axis, values=weights)._resource.download()
 
         def unexpected(*args, **kwargs):

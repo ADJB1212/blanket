@@ -30,8 +30,9 @@ fn _gpu_unsigned_bytes<'py>(py: Python<'py>, data: &[u8], depth: u8, encode: boo
 }
 
 #[pyfunction]
-fn _gpu_weights(input: u32, output: u32, method: u8) -> PyResult<(u32, Vec<f32>)> {
-    blanket_gpu::resize_weights(input, output, method).map_err(PyValueError::new_err)
+#[pyo3(signature = (input, output, method, floating=false))]
+fn _gpu_weights(input: u32, output: u32, method: u8, floating: bool) -> PyResult<(u32, Vec<f32>)> {
+    blanket_gpu::resize_weights(input, output, method, floating).map_err(PyValueError::new_err)
 }
 
 #[pyfunction]
@@ -341,7 +342,7 @@ mod native {
             output.byte_len().map_err(PyValueError::new_err)?;
             py.detach(|| {
                 let input = if axis == HORIZONTAL { d.width } else { d.height };
-                let (kernel, values) = blanket_gpu::resize_weights(input, target, method).map_err(PyValueError::new_err)?;
+                let (kernel, values) = blanket_gpu::resize_weights(input, target, method, d.float).map_err(PyValueError::new_err)?;
                 self.run(self, [d.width, d.height, d.channels, output.width, output.height, operation::RESIZE, kernel, axis], values)
             })
         }
@@ -428,9 +429,12 @@ mod native {
                         })
                 }
                 operation::CONVOLVE => {
-                    matches!(k, SMALL_KERNEL_SIZE | LARGE_KERNEL_SIZE) && values.len() == k * k + CONVOLUTION_HEADER_LEN && output == d
+                    matches!(k, SMALL_KERNEL_SIZE | LARGE_KERNEL_SIZE)
+                        && values.len() == k * k + CONVOLUTION_HEADER_LEN
+                        && values.iter().all(|v| v.is_finite())
+                        && output == d
                 }
-                operation::BLEND => values.len() == 1 && output == d && other.image.descriptor == d,
+                operation::BLEND => values.len() == 1 && values[0].is_finite() && output == d && other.image.descriptor == d,
                 operation::ALPHA_COMPOSITE => {
                     matches!(d.channels, GRAY_ALPHA_CHANNELS | COLOR_ALPHA_CHANNELS) && output == d && other.image.descriptor == d
                 }
