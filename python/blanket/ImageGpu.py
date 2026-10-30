@@ -445,6 +445,17 @@ class GpuImage:
         if len(box) != 2:
             raise ValueError("paste box requires an (x, y) pair")
         x, y = (index(value) for value in box)
+        if mask is not None:
+            mask._check()
+            if mask.mode not in ("L", "F") or mask.size != source.size or mask.runtime != source.runtime or mask.device != source.device:
+                raise ValueError("paste mask must be L/F and match source size and execution context")
+        if self.device != source.device:
+            raise ValueError("paste source must match mode and execution context")
+        if self.runtime == "native":
+            if x >= self.size[0] or y >= self.size[1] or x <= -source.size[0] or y <= -source.size[1]:
+                return self._run(6)
+            resource = self._resource.paste(source._resource, None if mask is None else mask._resource, (x, y))
+            return GpuImage(resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         working_mode = "F" if self.mode in ("L", "F") else "RGB;F" if self.mode in ("RGB", "RGB;F") else "RGBA;F"
         background, foreground = self.convert(working_mode), source.convert(working_mode)
         if mask is None:
@@ -452,9 +463,6 @@ class GpuImage:
             coverage = source.convert("RGBA;F").putalpha(1.0).getchannel("A")
             maximum = 1.0
         else:
-            mask._check()
-            if mask.mode not in ("L", "F") or mask.size != source.size or mask.runtime != source.runtime:
-                raise ValueError("paste mask must be L/F and match source size and execution context")
             maximum = 255.0 if mask.mode == "L" else 1.0
             coverage = mask.convert("F")
         coefficients = (1, 0, -x, 0, 1, -y)

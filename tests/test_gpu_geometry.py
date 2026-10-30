@@ -97,6 +97,93 @@ def test_resident_reductions(runtime):
         statistics.to_cpu()
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
+@pytest.mark.parametrize("size", [(4095, 1), (4096, 1), (4097, 1), (1025, 1025)])
+def test_native_reduction_partitions(mode, size):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    image = Image.frombytes(mode, size, bytes(range(256)) * (size[0] * size[1] * channels // 256) + bytes(range(size[0] * size[1] * channels % 256)))
+    gpu = ImageGpu.from_image(image, runtime="native")
+    histogram = gpu.histogram()
+    statistics = gpu.statistics()
+    gpu.close()
+    assert [value for band in histogram.to_cpu() for value in band] == image.histogram()
+    raw = image.tobytes()
+    for band, actual in enumerate(statistics.to_cpu()):
+        values = raw[band::channels]
+        assert actual["count"] == size[0] * size[1]
+        assert actual["extrema"] == (min(values), max(values))
+        assert actual["moments"] == pytest.approx([sum(value**order for value in values) / len(values) for order in range(1, 5)], rel=1e-5)
+
+
+def test_native_float_reduction_partitions_and_nan():
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    samples = [float(i % 31 - 15) / 8 for i in range(8193)]
+    image = Image.frombytes("F", (8193, 1), struct.pack("8193f", *samples))
+    gpu = ImageGpu.from_image(image, runtime="native")
+    actual = gpu.statistics().to_cpu()[0]
+    assert actual["count"] == len(samples)
+    assert actual["extrema"] == (min(samples), max(samples))
+    assert actual["moments"] == pytest.approx([sum(value**order for value in samples) / len(samples) for order in range(1, 5)], rel=1e-5)
+    samples[-1] = math.nan
+    image = Image.frombytes("F", image.size, struct.pack("8193f", *samples))
+    actual = ImageGpu.from_image(image, runtime="native").statistics().to_cpu()[0]
+    assert all(math.isnan(value) for value in actual["extrema"])
+    assert all(math.isnan(value) for value in actual["moments"])
+
+
+def test_native_histogram_concentrated_bins_and_pending_reuse():
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    pending = []
+    for value in (0, 255, 19, 71):
+        gpu = ImageGpu.from_image(Image.new("RGBA", (513, 257), (value,) * 4), runtime="native")
+        pending.append((gpu.histogram(), value))
+        gpu.close()
+    for result, value in reversed(pending):
+        expected = [0] * 256
+        expected[value] = 513 * 257
+        assert result.to_cpu() == [expected] * 4
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("mask_mode", [None, "L", "F"])
+@pytest.mark.parametrize("position", [(-2, 1), (3, -2), (0, 0), (10**30, 0)])
+def test_native_paste_clipping_and_lifetime(mode, mask_mode, position):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    floating = "F" in mode
+    first, second = (0.25, 0.75) if floating else (17, 193)
+    background = Image.new(mode, (7, 5), first if channels == 1 else (first,) * channels)
+    source = Image.new(mode, (5, 3), second if channels == 1 else (second,) * channels)
+    coverage = [0.0, 0.25, 0.5, 0.75, 1.0] * 3
+    mask = None if mask_mode is None else Image.frombytes(mask_mode, source.size, bytes(int(v * 255) for v in coverage) if mask_mode == "L" else struct.pack("15f", *coverage))
+    gpu, rhs = (ImageGpu.from_image(image, runtime="native", unified_memory=True) for image in (background, source))
+    gpu.info["description"] = "paste"
+    gpu_mask = None if mask is None else ImageGpu.from_image(mask, runtime="native")
+    result = gpu.paste(rhs, position, gpu_mask)
+    gpu.close()
+    rhs.close()
+    if gpu_mask is not None:
+        gpu_mask.close()
+    actual = result.to_image()
+    assert actual.info["description"] == "paste"
+    assert result.unified_memory
+    for y in range(5):
+        for x in range(7):
+            sx, sy = x - position[0], y - position[1]
+            weight = 0.0
+            if 0 <= sx < 5 and 0 <= sy < 3:
+                weight = 1.0 if mask is None else mask.getpixel((sx, sy)) / (255 if mask_mode == "L" else 1)
+            expected = first * (1 - weight) + second * weight
+            pixel = actual.getpixel((x, y))
+            values = (pixel,) if channels == 1 else pixel
+            assert values == pytest.approx((expected,) * channels, abs=1e-6 if floating else 0.5)
+
+
 def test_geometry_and_reductions_remain_resident(monkeypatch):
     if not ImageGpu.capabilities()["available"]:
         pytest.skip("Metal required")

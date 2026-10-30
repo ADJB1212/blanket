@@ -270,6 +270,10 @@ mod native {
             let image = context.upload(Descriptor { width, height, channels, float }, data).map_err(PyValueError::new_err)?;
             Ok(Self { context, image })
         }
+        fn paste(&self, source: &Self, mask: Option<&Self>, position: [i32; 2]) -> PyResult<Self> {
+            let image = self.context.paste(&self.image, &source.image, mask.map(|mask| &mask.image), position).map_err(PyValueError::new_err)?;
+            Ok(Self { context: self.context, image })
+        }
         fn run(&self, other: &Self, parameters: [u32; PARAMETER_COUNT], values: Vec<f32>) -> PyResult<Self> {
             let d = self.image.descriptor;
             let mut output = Descriptor { width: parameters[parameter::OUTPUT_WIDTH], height: parameters[parameter::OUTPUT_HEIGHT], ..d };

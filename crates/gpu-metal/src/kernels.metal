@@ -4,6 +4,7 @@ using namespace metal;
 #ifdef BLANKET_METAL_SPECIALIZE
 // Specialization removes unrelated operations and their register requirements.
 constant uint SPECIALIZED_OPERATION [[function_constant(0)]];
+constant uint SPECIALIZED_CHANNELS [[function_constant(1)]];
 #endif
 
 // Match CPU luminance conversion and fractional box-filter precision.
@@ -177,6 +178,7 @@ template <typename T> void process(device const T *src, device T *dst, device co
     uint sw = p[0], sh = p[1], c = p[2], dw = p[3], dh = p[4], op = p[5], k = p[6];
 #ifdef BLANKET_METAL_SPECIALIZE
     op = SPECIALIZED_OPERATION;
+    c = SPECIALIZED_CHANNELS;
 #endif
     if (op == 18 && is_same_v<T, uchar> && k >= SLIDING_BLUR_RADIUS) {
         sliding_box_blur<T, uint>(src, dst, p, v, i, c);
@@ -625,6 +627,116 @@ kernel void image_f32(device const float *s [[buffer(0)]], device float *d [[buf
 }
 
 #ifdef BLANKET_METAL_SPECIALIZE
+uchar4 rank_samples(device const uchar *src, uint first, uint width, uint height, int dx, int dy) {
+    uint c = SPECIALIZED_CHANNELS;
+    uint row = width * c, y = first / row;
+    uint x = (first % row) / c, last = ((first + 3) % row) / c;
+    if (first / row == (first + 3) / row && int(x) + dx >= 0 && int(last) + dx < int(width) && int(y) + dy >= 0 && int(y) + dy < int(height))
+        return uchar4(*reinterpret_cast<device const packed_uchar4 *>(src + int(first) + dy * int(row) + dx * int(c)));
+    uchar4 result;
+    for (uint lane = 0; lane < 4; lane++) {
+        uint sample = first + lane;
+        uint sx = uint(clamp(int(sample / c % width) + dx, 0, int(width) - 1));
+        uint sy = uint(clamp(int(sample / row) + dy, 0, int(height) - 1));
+        result[lane] = src[(sy * width + sx) * c + sample % c];
+    }
+    return result;
+}
+
+void rank_swap(thread uchar4 &a, thread uchar4 &b) {
+    uchar4 low = min(a, b);
+    b = max(a, b);
+    a = low;
+}
+
+uchar4 median9(thread uchar4 *s) {
+    rank_swap(s[1], s[2]);
+    rank_swap(s[4], s[5]);
+    rank_swap(s[7], s[8]);
+    rank_swap(s[0], s[1]);
+    rank_swap(s[3], s[4]);
+    rank_swap(s[6], s[7]);
+    rank_swap(s[1], s[2]);
+    rank_swap(s[4], s[5]);
+    rank_swap(s[7], s[8]);
+    rank_swap(s[0], s[3]);
+    rank_swap(s[5], s[8]);
+    rank_swap(s[4], s[7]);
+    rank_swap(s[3], s[6]);
+    rank_swap(s[1], s[4]);
+    rank_swap(s[2], s[5]);
+    rank_swap(s[4], s[7]);
+    rank_swap(s[4], s[2]);
+    rank_swap(s[6], s[4]);
+    rank_swap(s[4], s[2]);
+    return s[4];
+}
+
+template <typename P, typename I, typename F>
+void filter_pixels(device const P *src, device P *dst, constant uint *p, device const float *v, uint i) {
+    if (i >= p[3] * p[4])
+        return;
+    uint x = i % p[3], y = i / p[3];
+    if (SPECIALIZED_OPERATION == 0) {
+        uint base = (p[7] == 0 ? x : y) * p[6];
+        uint start = uint(v[base]), taps = uint(v[base + 1]);
+        uint source = p[7] == 0 ? y * p[0] + start : start * p[0] + x;
+        uint stride = p[7] == 0 ? 1 : p[0];
+        I fixed = I(RESIZE_ROUND);
+        for (uint t = 0; t < taps; t++)
+            fixed += I(src[source + t * stride]) * int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
+        dst[i] = P(clamp(F(fixed >> RESIZE_BITS), 0.0f, 255.0f));
+    } else {
+        uint size = p[6], radius = size / 2;
+        P result = src[i];
+        if (x >= radius && y >= radius && x + radius < p[0] && y + radius < p[1]) {
+            F sum = F(v[1]);
+            for (uint ky = 0; ky < size; ky++) {
+                F subtotal = F(0);
+                for (uint kx = 0; kx < size; kx++)
+                    subtotal += F(src[(y + radius - ky) * p[0] + x + kx - radius]) * v[2 + ky * size + kx];
+                sum += subtotal;
+            }
+            result = P(clamp(floor(sum + 0.5f), 0.0f, 255.0f));
+        }
+        dst[i] = result;
+    }
+}
+
+template <typename P, typename U> void box_pixels(device const P *src, device P *dst, constant uint *p, device const float *v, uint i) {
+    if (i >= p[3] * p[4])
+        return;
+    uint x = i % p[3], y = i / p[3], radius = p[6];
+    long pos = p[7] == 0 ? x : y, last = (p[7] == 0 ? p[0] : p[1]) - 1;
+    long low = max(0l, pos - long(radius)), high = min(last, pos + long(radius));
+    uint repeat_low = uint(max(0l, long(radius) - pos)), repeat_high = uint(max(0l, pos + long(radius) - last));
+    uint source = p[7] == 0 ? y * p[0] : x, stride = p[7] == 0 ? 1 : p[0];
+    U sum = U(0);
+    for (long t = low; t <= high; t++)
+        sum += U(src[source + uint(t) * stride]);
+    sum += U(src[source]) * repeat_low + U(src[source + uint(last) * stride]) * repeat_high;
+    uint left = source + uint(clamp(pos - long(radius) - 1, 0l, last)) * stride;
+    uint right = source + uint(clamp(pos + long(radius) + 1, 0l, last)) * stride;
+    U fixed = sum * uint(v[0]) + (U(src[left]) + U(src[right])) * uint(v[1]) + BOX_ROUND;
+    dst[i] = P(fixed >> BOX_BITS);
+}
+
+kernel void color_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buffer(1)]], constant uint *p [[buffer(3)]],
+                     device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
+    if (SPECIALIZED_CHANNELS == 3) {
+        if (SPECIALIZED_OPERATION == 18)
+            box_pixels<packed_uchar3, uint3>(reinterpret_cast<device const packed_uchar3 *>(s), reinterpret_cast<device packed_uchar3 *>(d), p, v, i);
+        else
+            filter_pixels<packed_uchar3, int3, float3>(
+                reinterpret_cast<device const packed_uchar3 *>(s), reinterpret_cast<device packed_uchar3 *>(d), p, v, i);
+    } else {
+        if (SPECIALIZED_OPERATION == 18)
+            box_pixels<uchar2, uint2>(reinterpret_cast<device const uchar2 *>(s), reinterpret_cast<device uchar2 *>(d), p, v, i);
+        else
+            filter_pixels<uchar2, int2, float2>(reinterpret_cast<device const uchar2 *>(s), reinterpret_cast<device uchar2 *>(d), p, v, i);
+    }
+}
+
 // Full vectors avoid byte stores and per-sample coordinate calculations.
 kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buffer(1)]], device const uchar *o [[buffer(2)]],
                       constant uint *p [[buffer(3)]], device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
@@ -635,55 +747,109 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
             process(s, d, o, p, v, sample);
         return;
     }
-    if (SPECIALIZED_OPERATION == 0) {
-        uint x = i % p[3], y = i / p[3];
-        uint base = (p[7] == 0 ? x : y) * p[6];
-        uint start = uint(v[base]), taps = uint(v[base + 1]);
-        uint source = p[7] == 0 ? y * p[0] + start : start * p[0] + x;
-        uint stride = p[7] == 0 ? 1 : p[0];
-        int4 fixed = int4(RESIZE_ROUND);
-        for (uint t = 0; t < taps; t++) {
-            int weight = int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
-            fixed += int4(reinterpret_cast<device const uchar4 *>(s)[source + t * stride]) * weight;
-        }
-        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(float4(fixed >> RESIZE_BITS), 0.0f, 255.0f));
-        return;
-    }
-    if (SPECIALIZED_OPERATION == 18) {
-        uint x = i % p[3], y = i / p[3], radius = p[6];
-        long pos = p[7] == 0 ? x : y, last = (p[7] == 0 ? p[0] : p[1]) - 1;
-        long low = max(0l, pos - long(radius)), high = min(last, pos + long(radius));
-        uint repeat_low = uint(max(0l, long(radius) - pos)), repeat_high = uint(max(0l, pos + long(radius) - last));
-        uint source = p[7] == 0 ? y * p[0] : x, stride = p[7] == 0 ? 1 : p[0];
-        device const uchar4 *pixels = reinterpret_cast<device const uchar4 *>(s);
-        uint4 sum = uint4(0);
-        for (long t = low; t <= high; t++)
-            sum += uint4(pixels[source + uint(t) * stride]);
-        sum += uint4(pixels[source]) * repeat_low + uint4(pixels[source + uint(last) * stride]) * repeat_high;
-        uint left = source + uint(clamp(pos - long(radius) - 1, 0l, last)) * stride;
-        uint right = source + uint(clamp(pos + long(radius) + 1, 0l, last)) * stride;
-        uint4 fixed = sum * uint(v[0]) + (uint4(pixels[left]) + uint4(pixels[right])) * uint(v[1]) + BOX_ROUND;
-        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(fixed >> BOX_BITS);
-        return;
-    }
-    if (SPECIALIZED_OPERATION == 1) {
-        uint x = i % p[3], y = i / p[3], size = p[6], radius = size / 2;
-        device const uchar4 *pixels = reinterpret_cast<device const uchar4 *>(s);
-        uchar4 result = pixels[i];
-        if (x >= radius && y >= radius && x + radius < p[0] && y + radius < p[1]) {
-            float4 sum = float4(v[1]);
-            for (uint ky = 0; ky < size; ky++) {
-                float4 subtotal = float4(0);
-                for (uint kx = 0; kx < size; kx++)
-                    subtotal += float4(pixels[(y + radius - ky) * p[0] + x + kx - radius]) * v[2 + ky * size + kx];
-                sum += subtotal;
+    if (SPECIALIZED_OPERATION == 19) {
+        uint size = p[6], rank = p[7];
+        uchar4 result;
+        if (rank == 0 || rank == size * size - 1) {
+            result = uchar4(rank == 0 ? 255 : 0);
+            for (uint y = 0; y < size; y++)
+                for (uint x = 0; x < size; x++) {
+                    uchar4 value = rank_samples(s, first, p[0], p[1], int(x) - int(size / 2), int(y) - int(size / 2));
+                    result = rank == 0 ? min(result, value) : max(result, value);
+                }
+        } else if (size == 3) {
+            uchar4 samples[9];
+#pragma unroll
+            for (uint y = 0; y < 3; y++) {
+#pragma unroll
+                for (uint x = 0; x < 3; x++)
+                    samples[y * 3 + x] = rank_samples(s, first, p[0], p[1], int(x) - 1, int(y) - 1);
             }
-            result = uchar4(clamp(floor(sum + 0.5f), 0.0f, 255.0f));
+            if (rank == 4) {
+                result = median9(samples);
+            } else {
+#pragma unroll
+                for (uint phase = 0; phase < 9; phase++) {
+#pragma unroll
+                    for (uint j = phase % 2; j < 8; j += 2) {
+                        rank_swap(samples[j], samples[j + 1]);
+                    }
+                }
+                result = samples[rank];
+            }
+        } else {
+            for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
+                process(s, d, o, p, v, first + lane);
+            return;
         }
         reinterpret_cast<device uchar4 *>(d)[i] = result;
         return;
     }
+    if (SPECIALIZED_OPERATION == 0) {
+        filter_pixels<uchar4, int4, float4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 18) {
+        if (SPECIALIZED_CHANNELS != 4) {
+            int radius = int(p[6]);
+            bool horizontal = p[7] == 0;
+            uint4 sum = uint4(0);
+            for (int delta = -radius; delta <= radius; delta++)
+                sum += uint4(rank_samples(s, first, p[0], p[1], horizontal ? delta : 0, horizontal ? 0 : delta));
+            uint4 fixed = sum * uint(v[0]) + BOX_ROUND;
+            if (v[1] != 0) {
+                uint4 left = uint4(rank_samples(s, first, p[0], p[1], horizontal ? -radius - 1 : 0, horizontal ? 0 : -radius - 1));
+                uint4 right = uint4(rank_samples(s, first, p[0], p[1], horizontal ? radius + 1 : 0, horizontal ? 0 : radius + 1));
+                fixed += (left + right) * uint(v[1]);
+            }
+            reinterpret_cast<device uchar4 *>(d)[i] = uchar4(fixed >> BOX_BITS);
+            return;
+        }
+        box_pixels<uchar4, uint4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 1) {
+        filter_pixels<uchar4, int4, float4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
+        return;
+    }
     uchar4 bytes = reinterpret_cast<device const uchar4 *>(s)[i];
+    if (SPECIALIZED_OPERATION == 12) {
+        uchar4 result;
+        for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
+            result[lane] = uchar(v[((first + lane) % SPECIALIZED_CHANNELS) * 256 + uint(bytes[lane])]);
+        reinterpret_cast<device uchar4 *>(d)[i] = result;
+        return;
+    }
+    if (SPECIALIZED_OPERATION == 13) {
+        uint4 a = uint4(bytes), b = uint4(reinterpret_cast<device const uchar4 *>(o)[i]);
+        uint kind = p[6];
+        float4 result;
+        switch (kind) {
+        case 0:
+            result = float4(max(a, b) - min(a, b));
+            break;
+        case 1:
+            result = float4(a * b / 255);
+            break;
+        case 2:
+            result = float4(255 - (255 - a) * (255 - b) / 255);
+            break;
+        case 3:
+            result = float4(max(a, b));
+            break;
+        case 4:
+            result = float4(min(a, b));
+            break;
+        default:
+            result = (kind == 5 ? float4(a + b) : float4(int4(a) - int4(b))) / v[0] + v[1];
+            for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
+                if (!isfinite(result[lane]) || result[lane] >= 2147483648.0f || result[lane] < -2147483648.0f)
+                    result[lane] = 0;
+            result = floor(result);
+        }
+        reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(result, 0.0f, 255.0f));
+        return;
+    }
     if (SPECIALIZED_OPERATION == 6) {
         reinterpret_cast<device uchar4 *>(d)[i] = bytes;
         return;
@@ -698,7 +864,7 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         result = a + (b - a) * v[0];
     } else {
         result = a * v[0];
-        if (p[2] == 4)
+        if (SPECIALIZED_CHANNELS == 4)
             result.w = a.w;
     }
     reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(floor(result), 0.0f, 255.0f));

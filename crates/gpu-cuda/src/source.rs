@@ -72,11 +72,13 @@ mod tests {
         assert!(!source.contains("[[buffer("));
         assert!(!source.contains("thread_position_in_grid"));
         assert!(!source.contains("metal_stdlib"));
-        assert_eq!(source.matches("uint i = blockIdx.x").count(), 7);
+        assert_eq!(source.matches("uint i = blockIdx.x").count(), 8);
         assert!(source.contains("extern \"C\" __global__ void tile_u8"));
         assert!(source.contains("extern \"C\" __global__ void tile_f32"));
         assert!(source.contains("extern \"C\" __global__ void image_u8"));
         assert!(source.contains("extern \"C\" __global__ void image_f32"));
+        assert!(source.contains("extern \"C\" __global__ void color_u8"));
+        assert!(source.contains("extern \"C\" __global__ void packed_u8"));
         assert!(source.contains("CONVERSION_KERNEL(convert_f32_u8"));
         assert!(source.contains("REDUCTION_KERNEL(reduce_u8"));
     }

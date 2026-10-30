@@ -168,6 +168,15 @@ def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
     for factor in (-0.5, 0.0, 0.4, 1.0, 1.75):
         assert gpu.brightness(factor).to_image().tobytes() == ImageEnhance.Brightness(image).enhance(factor).tobytes()
         assert gpu.blend(rhs, factor).to_image().tobytes() == Image.blend(image, other, factor).tobytes()
+    lut = [(i * 73 + i // 256) % 256 for i in range(256 * channels)]
+    assert gpu.point(lut).to_image().tobytes() == image.point(lut).tobytes()
+    for name in ("difference", "multiply", "screen", "lighter", "darker", "add", "subtract"):
+        arguments = (2.5, -13) if name in ("add", "subtract") else ()
+        assert getattr(gpu, name)(rhs, *arguments).to_image().tobytes() == getattr(ImageChops, name)(image, other, *arguments).tobytes()
+    for window in (3, 5, 7):
+        ranks = range(9) if window == 3 else (0, window * window // 2, window * window - 1)
+        for rank in ranks:
+            assert gpu.rank_filter(window, rank).to_image().tobytes() == image.filter(ImageFilter.RankFilter(window, rank)).tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGBA", "F", "RGBA;F"])

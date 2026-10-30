@@ -17,8 +17,8 @@ unsafe extern "C" {}
 
 // Pipeline indices distinguish uint8 and float32 sample storage.
 const SAMPLE_FORMAT_COUNT: usize = 2;
-// Scalar bytes, packed bytes, and scalar float kernels have separate pipelines.
-const PIPELINE_VARIANTS: usize = 3;
+// Scalar bytes, packed bytes, and floats specialize each channel count.
+const PIPELINE_VARIANTS: usize = 12;
 // Buffer slots match the [[buffer(n)]] arguments in kernels.metal.
 const SOURCE_SLOT: usize = 0;
 const OUTPUT_SLOT: usize = 1;
@@ -33,6 +33,7 @@ const THREADGROUP_THREADS: usize = 256;
 const OPERATION_COUNT: usize = operation::QUANTIZE as usize + 1;
 // Matches SPECIALIZED_OPERATION in kernels.metal.
 const OPERATION_CONSTANT: usize = 0;
+const CHANNELS_CONSTANT: usize = 1;
 // Packed byte kernels process one aligned uchar4 per thread, with a scalar tail.
 const PACKED_SAMPLES: usize = 4;
 const SLIDING_BLUR_RADIUS: u32 = 32;
@@ -49,9 +50,17 @@ type ControlEntry = (Vec<u32>, Retained<ProtocolObject<dyn MTLBuffer>>);
 
 fn packed_operation(op: u32, floating: bool, channels: u32) -> bool {
     !floating
-        && (matches!(op, operation::COPY | operation::BLEND | operation::BRIGHTNESS | operation::INVERT)
-            || (channels == blanket_gpu::protocol::COLOR_ALPHA_CHANNELS
-                && matches!(op, operation::RESIZE | operation::BOX_BLUR | operation::CONVOLVE)))
+        && (matches!(
+            op,
+            operation::COPY
+                | operation::BLEND
+                | operation::BRIGHTNESS
+                | operation::INVERT
+                | operation::BINARY
+                | operation::POINT
+                | operation::RANK
+                | operation::BOX_BLUR
+        ) || (channels >= blanket_gpu::protocol::GRAY_ALPHA_CHANNELS && matches!(op, operation::RESIZE | operation::CONVOLVE)))
 }
 
 fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_width: usize) -> usize {
@@ -60,6 +69,10 @@ fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_
         let (length, lines) = if axis == 0 { (width, height) } else { (height, width) };
         let lanes = if channels == 4 { 1 } else { channels as usize };
         (length as usize).div_ceil(simd_width) * lines as usize * lanes * simd_width
+    } else if op == operation::LUMINANCE_REDUCE {
+        samples / 4 * simd_width
+    } else if !floating && matches!(op, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3) {
+        samples / channels as usize
     } else if packed_operation(op, floating, channels) {
         samples.div_ceil(PACKED_SAMPLES)
     } else {
@@ -136,6 +149,8 @@ pub struct Context {
     conversions: [[Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT]; SAMPLE_FORMAT_COUNT],
     reductions: [Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT],
     statistics: [Pipeline; SAMPLE_FORMAT_COUNT],
+    finish_statistics: Pipeline,
+    paste: [Pipeline; SAMPLE_FORMAT_COUNT],
 }
 pub struct Image {
     pub descriptor: Descriptor,
@@ -317,6 +332,61 @@ impl Context {
         image.completion.as_ref().is_none_or(finished)
     }
 
+    pub fn paste(&self, background: &Image, source: &Image, mask: Option<&Image>, position: [i32; 2]) -> Result<Image, String> {
+        let d = background.descriptor;
+        let s = source.descriptor;
+        if d.channels != s.channels
+            || d.float != s.float
+            || !Arc::ptr_eq(&background.pool, &self.pool)
+            || !Arc::ptr_eq(&source.pool, &self.pool)
+            || mask.is_some_and(|mask| {
+                mask.descriptor.width != s.width
+                    || mask.descriptor.height != s.height
+                    || mask.descriptor.channels != 1
+                    || !Arc::ptr_eq(&mask.pool, &self.pool)
+            })
+        {
+            return Err("incompatible GPU paste images".into());
+        }
+        autoreleasepool(|_| {
+            let buffer = self.allocate_image(d.byte_len()?)?;
+            let pipeline = &self.paste[usize::from(d.float)];
+            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
+            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal compute encoder")?;
+            let parameters = [
+                d.width,
+                d.height,
+                d.channels,
+                s.width,
+                s.height,
+                position[0] as u32,
+                position[1] as u32,
+                mask.map_or(0, |mask| if mask.descriptor.float { 2 } else { 1 }),
+            ];
+            encoder.setComputePipelineState(pipeline);
+            // Shapes and contexts are checked above; commands retain every input.
+            unsafe {
+                encoder.setBuffer_offset_atIndex(Some(&background.buffer), 0, SOURCE_SLOT);
+                encoder.setBuffer_offset_atIndex(Some(&buffer), 0, OUTPUT_SLOT);
+                encoder.setBuffer_offset_atIndex(Some(&source.buffer), 0, OTHER_SLOT);
+                encoder.setBuffer_offset_atIndex(Some(&mask.unwrap_or(source).buffer), 0, 5);
+                encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+            }
+            encoder.dispatchThreads_threadsPerThreadgroup(
+                MTLSize { width: d.width as usize * d.height as usize * if d.float { d.channels as usize } else { 1 }, height: 1, depth: 1 },
+                MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+            );
+            encoder.endEncoding();
+            background.track_read(&command);
+            source.track_read(&command);
+            if let Some(mask) = mask {
+                mask.track_read(&command);
+            }
+            command.commit();
+            Ok(Image { descriptor: d, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
+        })
+    }
+
     pub fn wait_idle(&self) -> Result<(), String> {
         autoreleasepool(|_| {
             let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
@@ -343,11 +413,12 @@ impl Context {
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
             let source = NSString::from_str(&format!(
-                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}",
+                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}\n{}",
                 super::SHADERS,
                 include_str!("tiles.metal"),
                 include_str!("blur.metal"),
-                include_str!("statistics.metal")
+                include_str!("statistics.metal"),
+                include_str!("paste.metal")
             ));
             let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {
@@ -357,8 +428,10 @@ impl Context {
             let pipelines = std::array::from_fn(|_| std::array::from_fn(|_| OnceLock::new()));
             let conversions =
                 [[pipeline("convert_u8_u8")?, pipeline("convert_u8_f32")?], [pipeline("convert_f32_u8")?, pipeline("convert_f32_f32")?]];
-            let reductions = [pipeline("reduce_u8")?, pipeline("reduce_f32")?];
+            let reductions = [pipeline("luminance_u8")?, pipeline("luminance_f32")?];
             let statistics = [pipeline("statistics_u8")?, pipeline("statistics_f32")?];
+            let finish_statistics = pipeline("finish_statistics")?;
+            let paste = [pipeline("paste_u8")?, pipeline("paste_f32")?];
             let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
             let max_buffer_length = device.maxBufferLength();
             let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
@@ -372,6 +445,8 @@ impl Context {
                 conversions,
                 reductions,
                 statistics,
+                finish_statistics,
+                paste,
                 pool: Arc::default(),
                 controls: Mutex::default(),
                 tile_pipelines,
@@ -382,16 +457,26 @@ impl Context {
     fn operation_pipeline(&self, operation: u32, floating: bool, channels: u32) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, String> {
         let slots = self.pipelines.get(operation as usize).ok_or("invalid GPU operation")?;
         let packed = packed_operation(operation, floating, channels);
-        let variant = if floating { PIPELINE_VARIANTS - 1 } else { usize::from(packed) };
+        let variant = (if floating {
+            8
+        } else if packed {
+            4
+        } else {
+            0
+        }) + channels as usize
+            - 1;
         slots[variant]
             .get_or_init(|| {
                 let constants = MTLFunctionConstantValues::new();
                 // Metal copies one uint into the shader's operation constant at index zero.
                 unsafe {
                     constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&operation).cast(), MTLDataType::UInt, OPERATION_CONSTANT);
+                    constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&channels).cast(), MTLDataType::UInt, CHANNELS_CONSTANT);
                 }
                 let name = if floating {
                     "image_f32"
+                } else if matches!(operation, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3) {
+                    "color_u8"
                 } else if packed {
                     "packed_u8"
                 } else {
@@ -495,17 +580,19 @@ impl Backend for Context {
             } else {
                 self.operation_pipeline(op, request.output.float, source.descriptor.channels)?
             };
+            let blocks = (source.descriptor.width as usize * source.descriptor.height as usize).div_ceil(4096).min(256);
+            let partials = if op == operation::STATISTICS && blocks > 1 { Some(self.allocate_image(output_bytes * blocks)?) } else { None };
+            let mut parameters = request.parameters;
+            if op == operation::STATISTICS {
+                parameters[7] = blocks as u32;
+            }
             encoder.setComputePipelineState(pipeline);
             // The caller validates shader bounds and layouts; the command retains all buffers.
             unsafe {
                 encoder.setBuffer_offset_atIndex(Some(&source.buffer), 0, SOURCE_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(&buffer), 0, OUTPUT_SLOT);
+                encoder.setBuffer_offset_atIndex(Some(partials.as_ref().unwrap_or(&buffer)), 0, OUTPUT_SLOT);
                 encoder.setBuffer_offset_atIndex(Some(&other.buffer), 0, OTHER_SLOT);
-                encoder.setBytes_length_atIndex(
-                    std::ptr::NonNull::from(&request.parameters).cast(),
-                    std::mem::size_of_val(&request.parameters),
-                    PARAMETERS_SLOT,
-                );
+                encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
                 if let Some(weights) = &weights {
                     encoder.setBuffer_offset_atIndex(Some(weights), 0, VALUES_SLOT);
                 } else {
@@ -515,11 +602,24 @@ impl Backend for Context {
             }
             if op == operation::STATISTICS {
                 let width = pipeline.threadExecutionWidth();
-                let threads = pipeline.maxTotalThreadsPerThreadgroup().min(STATISTICS_SIMDGROUPS * width) / width * width;
+                let threads = pipeline.maxTotalThreadsPerThreadgroup().min(THREADGROUP_THREADS).min(STATISTICS_SIMDGROUPS * width) / width * width;
                 encoder.dispatchThreadgroups_threadsPerThreadgroup(
-                    MTLSize { width: source.descriptor.channels as usize, height: 1, depth: 1 },
+                    MTLSize { width: source.descriptor.channels as usize * blocks, height: 1, depth: 1 },
                     MTLSize { width: threads, height: 1, depth: 1 },
                 );
+                if let Some(partials) = &partials {
+                    encoder.setComputePipelineState(&self.finish_statistics);
+                    // The serial encoder completes partial writes before the merge.
+                    unsafe {
+                        encoder.setBuffer_offset_atIndex(Some(partials), 0, SOURCE_SLOT);
+                        encoder.setBuffer_offset_atIndex(Some(&buffer), 0, OUTPUT_SLOT);
+                    }
+                    let samples = if parameters[6] == 1 { output_bytes / size_of::<f32>() } else { source.descriptor.channels as usize };
+                    encoder.dispatchThreads_threadsPerThreadgroup(
+                        MTLSize { width: samples, height: 1, depth: 1 },
+                        MTLSize { width: THREADGROUP_THREADS.min(self.finish_statistics.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+                    );
+                }
             } else {
                 let n = output_bytes / if request.output.float { size_of::<f32>() } else { size_of::<u8>() };
                 let n = dispatch_samples(&request.parameters, request.output.float, n, pipeline.threadExecutionWidth());
@@ -535,6 +635,9 @@ impl Backend for Context {
                 other.track_read(&command);
             }
             command.commit();
+            if let Some(buffer) = partials {
+                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![command.clone()] });
+            }
             Ok(Image { descriptor: request.output, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
@@ -593,6 +696,26 @@ mod tests {
     }
 
     #[test]
+    fn luminance_partials_preserve_carries_and_short_simd_groups() {
+        let context = Context::new().unwrap();
+        for width in [1, 31, 32, 33, 255, 256, 257] {
+            let descriptor = Descriptor { width, height: 1, channels: 4, float: true };
+            let values: Vec<u64> = (0..width).map(|i| u64::from(u32::MAX) + u64::from(i) * 17).collect();
+            let data: Vec<u8> =
+                values.iter().flat_map(|&value| [value as u32, (value >> 32) as u32, 0, 0].into_iter().flat_map(u32::to_ne_bytes)).collect();
+            let source = context.upload(descriptor, &data).unwrap();
+            let output = Descriptor { width: width.div_ceil(256), ..descriptor };
+            let request = Dispatch { output, parameters: [width, 1, 4, output.width, 1, operation::LUMINANCE_REDUCE, 2, 0], values: vec![] };
+            let result = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
+            let actual = floats(&context.download(&result).unwrap());
+            for (index, block) in values.chunks(256).enumerate() {
+                let sum = u64::from(actual[index * 4].to_bits()) | (u64::from(actual[index * 4 + 1].to_bits()) << 32);
+                assert_eq!(sum, block.iter().sum());
+            }
+        }
+    }
+
+    #[test]
     fn parallel_statistics_match_serial_reductions() {
         use blanket_gpu::protocol::statistics;
         let context = Context::new().unwrap();
@@ -635,7 +758,7 @@ mod tests {
     #[test]
     fn byte_resize_matches_signed_fixed_point() {
         let context = Context::new().unwrap();
-        for channels in [1, 4] {
+        for channels in [1, 2, 3, 4] {
             let descriptor = Descriptor { width: 9, height: 2, channels, float: false };
             let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 97) as u8).collect();
             let image = context.upload(descriptor, &data).unwrap();
