@@ -57,6 +57,11 @@ class GpuUnsignedImage:
         return image._image
 
     def to_image(self) -> Image.Image:
+        if self.runtime == "native":
+            self._image._check()
+            result = Image.Image(self._image._resource.download_unsigned_image(self.mode, self.bit_depth))
+            result.info.update(self.info)
+            return result
         working = self._image.to_image()
         data = _blanket._gpu_unsigned_bytes(working.tobytes(), self.bit_depth, True)
         result = Image.frombytes(self.mode, self.size, data, bit_depth=self.bit_depth)

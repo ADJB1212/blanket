@@ -177,6 +177,13 @@ def _validate(size: tuple[int, int], mode: str) -> None:
         raise ValueError("invalid GPU image dimensions")
 
 
+def _dispatch_threads(parameters: list[int], channels: int, floating: bool) -> int:
+    if parameters[5] == 18 and not floating and parameters[6] >= 32:
+        length, lines = parameters[:2] if parameters[7] == 0 else parameters[1::-1]
+        return ((length + 15) // 16) * lines * channels
+    return parameters[3] * parameters[4] * channels
+
+
 def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> GpuImage | GpuUnsignedImage:
     """Upload the current CPU frame, retaining its metadata."""
     if backend not in ("metal", "cuda") or runtime not in ("native", "torch"):
@@ -191,6 +198,9 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         from ._gpu_unsigned import GpuUnsignedImage
 
         mode = {"L": "F", "RGB": "RGB;F", "RGBA": "RGBA;F"}[image.mode]
+        if backend == "metal" and runtime == "native":
+            resource = _blanket.MetalImage.from_unsigned_image(image._native)
+            return GpuUnsignedImage(GpuImage(resource, image.size, mode, runtime, dict(image._metadata_info())), image.mode, image.bit_depth)
         data = _blanket._gpu_unsigned_bytes(image.tobytes(), image.bit_depth, False)
         working = Image.frombytes(mode, image.size, data)
         working.info.update(image._metadata_info())
@@ -348,7 +358,7 @@ class GpuImage:
             elif op == 21:
                 kernel_name = "reduce_f32" if _MODES[self.mode][1] else "reduce_u8"
             kernel = getattr(_library(), kernel_name)
-            kernel(src, resource, rhs, parameters, weights, threads=size[0] * size[1] * channels, arg_casts={3: "int32"})
+            kernel(src, resource, rhs, parameters, weights, threads=_dispatch_threads(parameters, channels, floating), arg_casts={3: "int32"})
         return GpuImage(resource, size, mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
 
     def convert(self, mode: str) -> GpuImage:

@@ -112,6 +112,25 @@ mod benchmarks {
                         ),
                     ),
                 ];
+                for radius in [8.5, 32.5, 128.5] {
+                    let (kernel, controls) = blur_parameters(radius, false).unwrap();
+                    cases.push((
+                        match kernel {
+                            8 => "box_blur_r8",
+                            32 => "box_blur_r32",
+                            _ => "box_blur_r128",
+                        },
+                        request(descriptor, descriptor, operation::BOX_BLUR, kernel, 0, controls.to_vec()),
+                    ));
+                    cases.push((
+                        match kernel {
+                            8 => "box_blur_vertical_r8",
+                            32 => "box_blur_vertical_r32",
+                            _ => "box_blur_vertical_r128",
+                        },
+                        request(descriptor, descriptor, operation::BOX_BLUR, kernel, 1, controls.to_vec()),
+                    ));
+                }
                 if floating {
                     cases.push(("quantize_u16", request(descriptor, descriptor, operation::QUANTIZE, 0, 0, vec![f32::from(u16::MAX)])));
                 } else {
@@ -145,6 +164,15 @@ mod benchmarks {
                         b.iter(|| {
                             let first = dispatch(&context, &source, &source, &brightness);
                             complete(&context, dispatch(&context, &first, &first, &invert))
+                        })
+                    });
+                    resident.bench_function("queued_brightness_chain", |b| {
+                        b.iter(|| {
+                            let mut image = dispatch(&context, &source, &source, &brightness);
+                            for _ in 0..15 {
+                                image = dispatch(&context, &image, &image, &brightness);
+                            }
+                            complete(&context, image)
                         })
                     });
                     resident.finish();

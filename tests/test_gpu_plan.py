@@ -72,6 +72,16 @@ def test_gaussian_halos_and_small_image_boundaries(metal, size):
     assert plan.run(image).to_image().tobytes() == image.gaussian_blur(1.7).max_filter(5).to_image().tobytes()
 
 
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("LA", 2), ("RGB", 3), ("RGBA", 4)])
+def test_sliding_blur_in_tiled_plan(metal, mode, channels):
+    image = ImageGpu.from_image(source(mode, (257, 129)))
+    operations = [("invert", {}), ("box_blur", {"radius": (32.5, 40)}), ("brightness", {"factor": 0.73})]
+    plan = ImageGpu.ProcessingPlan(image.size, mode, operations, memory_limit=50_000 * channels)
+    assert plan.info()["tile_size"] != image.size
+    expected = image.invert().box_blur((32.5, 40)).brightness(0.73).to_image().tobytes()
+    assert plan.run(image).to_image().tobytes() == expected
+
+
 def test_batch_owns_inputs_controls_and_outputs_after_close(metal):
     images = [ImageGpu.from_image(source("RGBA", (21, 17))) for _ in range(3)]
     images[0].info["test"] = "first"

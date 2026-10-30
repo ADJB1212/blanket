@@ -35,6 +35,7 @@ const OPERATION_COUNT: usize = operation::QUANTIZE as usize + 1;
 const OPERATION_CONSTANT: usize = 0;
 // Packed byte kernels process one aligned uchar4 per thread, with a scalar tail.
 const PACKED_SAMPLES: usize = 4;
+const SLIDING_BLUR_RADIUS: u32 = 32;
 // Bound retained allocations, including buffers whose GPU work is still pending.
 const POOL_MAX_BYTES: usize = 128 * 1024 * 1024;
 const POOL_MAX_BUFFERS: usize = 16;
@@ -49,6 +50,19 @@ fn packed_operation(op: u32, floating: bool, channels: u32) -> bool {
         && (matches!(op, operation::COPY | operation::BLEND | operation::BRIGHTNESS | operation::INVERT)
             || (channels == blanket_gpu::protocol::COLOR_ALPHA_CHANNELS
                 && matches!(op, operation::RESIZE | operation::BOX_BLUR | operation::CONVOLVE)))
+}
+
+fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_width: usize) -> usize {
+    let [width, height, channels, _, _, op, radius, axis] = *parameters;
+    if op == operation::BOX_BLUR && !floating && radius >= SLIDING_BLUR_RADIUS {
+        let (length, lines) = if axis == 0 { (width, height) } else { (height, width) };
+        let lanes = if channels == 4 { 1 } else { channels as usize };
+        (length as usize).div_ceil(simd_width) * lines as usize * lanes * simd_width
+    } else if packed_operation(op, floating, channels) {
+        samples.div_ceil(PACKED_SAMPLES)
+    } else {
+        samples
+    }
 }
 
 fn finished(command: &Command) -> bool {
@@ -72,12 +86,12 @@ struct PoolEntry {
 }
 
 // Entries own closed images and only committed commands. Moving them transfers
-// ownership; CPU access and re-encoding wait until every GPU use has completed.
+// ownership; CPU access waits for completion and GPU writes follow queue order.
 unsafe impl Send for PoolEntry {}
 
 impl BufferPool {
-    fn take(&mut self, len: usize) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
-        let index = self.entries.iter().position(|entry| entry.buffer.length() == len && entry.uses.iter().all(finished))?;
+    fn take(&mut self, len: usize, cpu_access: bool) -> Option<Retained<ProtocolObject<dyn MTLBuffer>>> {
+        let index = self.entries.iter().position(|entry| entry.buffer.length() == len && (!cpu_access || entry.uses.iter().all(finished)))?;
         self.bytes -= len;
         Some(self.entries.swap_remove(index).buffer)
     }
@@ -116,6 +130,7 @@ pub struct Context {
     pool: Arc<Mutex<BufferPool>>,
     controls: Mutex<ControlCache>,
     tile_pipelines: [Pipeline; SAMPLE_FORMAT_COUNT],
+    blur_pipeline: Pipeline,
     conversions: [[Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT]; SAMPLE_FORMAT_COUNT],
     reductions: [Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT],
 }
@@ -156,6 +171,16 @@ impl Drop for Image {
 }
 
 impl Context {
+    pub fn upload_with(&self, descriptor: Descriptor, initialize: impl FnOnce(&mut [u8])) -> Result<Image, String> {
+        let len = descriptor.byte_len()?;
+        let buffer = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len, true);
+        let buffer = buffer.map_or_else(|| self.allocate_bytes(len), Ok)?;
+        // CPU reuse requires completed GPU readers and exclusive buffer ownership.
+        let bytes = unsafe { std::slice::from_raw_parts_mut(buffer.contents().cast().as_ptr(), len) };
+        initialize(bytes);
+        Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+    }
+
     pub fn prepare_plan(&self, geometry: blanket_gpu::plan::Plan) -> Result<Plan, String> {
         let controls = geometry
             .steps()
@@ -226,7 +251,11 @@ impl Context {
                         )?;
                         for (index, step) in geometry.steps().iter().enumerate() {
                             let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal plan encoder")?;
-                            let pipeline = self.operation_pipeline(step.operation, d.float, d.channels)?;
+                            let pipeline = if step.operation == operation::BOX_BLUR && !d.float && step.kernel >= SLIDING_BLUR_RADIUS {
+                                &*self.blur_pipeline
+                            } else {
+                                self.operation_pipeline(step.operation, d.float, d.channels)?
+                            };
                             encoder.setComputePipelineState(pipeline);
                             let parameters = [tw, th, d.channels, tw, th, step.operation, step.kernel, step.axis];
                             // Both scratch buffers fit the expanded tile and are used in command order.
@@ -242,8 +271,7 @@ impl Context {
                                 encoder.setBuffer_offset_atIndex(Some(&plan.controls[index]), 0, VALUES_SLOT);
                             }
                             let samples = tw as usize * th as usize * d.channels as usize;
-                            let samples =
-                                if packed_operation(step.operation, d.float, d.channels) { samples.div_ceil(PACKED_SAMPLES) } else { samples };
+                            let samples = dispatch_samples(&parameters, d.float, samples, pipeline.threadExecutionWidth());
                             encoder.dispatchThreads_threadsPerThreadgroup(
                                 MTLSize { width: samples, height: 1, depth: 1 },
                                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
@@ -306,7 +334,12 @@ impl Context {
 
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
-            let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, include_str!("tiles.metal")));
+            let source = NSString::from_str(&format!(
+                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}",
+                super::SHADERS,
+                include_str!("tiles.metal"),
+                include_str!("blur.metal")
+            ));
             let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {
                 let function = library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| format!("Metal kernel unavailable: {name}"))?;
@@ -319,6 +352,7 @@ impl Context {
             let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
             let max_buffer_length = device.maxBufferLength();
             let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
+            let blur_pipeline = pipeline("scan_blur_u8")?;
             Ok(Self {
                 device,
                 max_buffer_length,
@@ -330,6 +364,7 @@ impl Context {
                 pool: Arc::default(),
                 controls: Mutex::default(),
                 tile_pipelines,
+                blur_pipeline,
             })
         })
     }
@@ -368,7 +403,7 @@ impl Context {
         self.device.newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared).ok_or_else(|| "cannot allocate Metal buffer".into())
     }
     fn allocate_image(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
-        let cached = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len);
+        let cached = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len, false);
         cached.map_or_else(|| self.allocate_bytes(len), Ok)
     }
     pub fn configure_cache(&self, image_bytes: usize, control_bytes: usize) {
@@ -421,12 +456,7 @@ impl Backend for Context {
         if descriptor.byte_len()? != bytes.len() {
             return Err("incorrect upload length".into());
         }
-        let buffer = self.allocate_image(bytes.len())?;
-        // The new allocation is exclusively owned and has exactly bytes.len() writable bytes.
-        unsafe {
-            std::ptr::copy_nonoverlapping(bytes.as_ptr(), buffer.contents().cast().as_ptr(), bytes.len());
-        }
-        Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
+        self.upload_with(descriptor, |output| output.copy_from_slice(bytes))
     }
     unsafe fn dispatch(&self, source: &Image, other: &Image, request: &Dispatch) -> Result<Image, String> {
         autoreleasepool(|_| {
@@ -445,6 +475,8 @@ impl Backend for Context {
             let op = request.parameters[blanket_gpu::protocol::parameter::OPERATION];
             let pipeline = if op == operation::CONVERT {
                 &*self.conversions[usize::from(source.descriptor.float)][usize::from(request.output.float)]
+            } else if op == operation::BOX_BLUR && !request.output.float && request.parameters[6] >= SLIDING_BLUR_RADIUS {
+                &*self.blur_pipeline
             } else if op == operation::LUMINANCE_REDUCE {
                 &*self.reductions[usize::from(source.descriptor.float)]
             } else {
@@ -473,7 +505,7 @@ impl Backend for Context {
                 }
             }
             let n = output_bytes / if request.output.float { size_of::<f32>() } else { size_of::<u8>() };
-            let n = if packed_operation(op, request.output.float, request.output.channels) { n.div_ceil(PACKED_SAMPLES) } else { n };
+            let n = dispatch_samples(&request.parameters, request.output.float, n, pipeline.threadExecutionWidth());
             encoder.dispatchThreads_threadsPerThreadgroup(
                 MTLSize { width: n, height: 1, depth: 1 },
                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
@@ -499,5 +531,42 @@ impl Backend for Context {
     }
     fn download(&self, image: &Image) -> Result<Vec<u8>, String> {
         self.download_bytes(image).map(<[u8]>::to_vec)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pending_buffers_require_completion_only_for_cpu_access() {
+        let context = Context::new().unwrap();
+        let buffer = context.allocate_bytes(1024).unwrap();
+        let address = buffer.contents();
+        let command = context.queue.commandBuffer().unwrap();
+        let mut pool = BufferPool::default();
+        pool.put(PoolEntry { buffer, uses: vec![command.clone()] });
+        assert!(pool.take(1024, true).is_none());
+        assert_eq!(pool.take(1024, false).unwrap().contents(), address);
+        assert_eq!(pool.bytes, 0);
+        command.commit();
+        command.waitUntilCompleted();
+    }
+
+    #[test]
+    fn queued_operations_reuse_storage_without_overwriting_live_inputs() {
+        let context = Context::new().unwrap();
+        let descriptor = Descriptor { width: 257, height: 129, channels: 4, float: false };
+        let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 37) as u8).collect();
+        let mut image = context.upload(descriptor, &data).unwrap();
+        let mut addresses = std::collections::HashSet::new();
+        let request = Dispatch { output: descriptor, parameters: [257, 129, 4, 257, 129, operation::INVERT, 0, 0], values: vec![] };
+        for _ in 0..64 {
+            addresses.insert(image.buffer.contents());
+            // Matching immutable inputs and output dimensions satisfy shader bounds.
+            image = unsafe { context.dispatch(&image, &image, &request) }.unwrap();
+        }
+        assert_eq!(addresses.len(), 2);
+        assert_eq!(context.download(&image).unwrap(), data);
     }
 }

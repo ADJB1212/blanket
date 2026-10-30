@@ -121,6 +121,16 @@ def test_tiny_blur_and_large_radius(runtime, size):
 
 
 @pytest.mark.parametrize("mode", MODES[:4])
+@pytest.mark.parametrize("size", [(1, 65), (65, 1), (15, 17), (16, 33), (32, 32), (33, 31), (63, 65), (65, 63), (257, 3)])
+@pytest.mark.parametrize("radius", [31.75, 32, 32.5, 128.5])
+def test_sliding_blur_blocks_tails_and_edges(runtime, mode, size, radius):
+    image = source(mode, size)
+    gpu = ImageGpu.from_image(image, runtime=runtime)
+    for axes in ((radius, 0), (0, radius), (radius, radius)):
+        assert gpu.box_blur(axes).to_image().tobytes() == image.filter(ImageFilter.BoxBlur(axes)).tobytes()
+
+
+@pytest.mark.parametrize("mode", MODES[:4])
 @pytest.mark.parametrize("size", [1, 3, 5, 7])
 @pytest.mark.parametrize(("method", "filter_class"), [("min_filter", ImageFilter.MinFilter), ("max_filter", ImageFilter.MaxFilter), ("median_filter", ImageFilter.MedianFilter)])
 def test_rank_cpu_parity(runtime, mode, size, method, filter_class):

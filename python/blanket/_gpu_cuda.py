@@ -115,6 +115,8 @@ class CudaImage:
             return dlpack.from_dlpack(self.array)
 
     def run(self, other: CudaImage, parameters: list[int], values: list[float], channels: int, floating: bool, source_float: bool) -> CudaImage:
+        from .ImageGpu import _dispatch_threads
+
         if self.device != other.device:
             raise ValueError("CUDA images must use the same device")
         cp = cupy()
@@ -143,7 +145,7 @@ class CudaImage:
                 kernel = library(self.device)(kernel_name)
                 # A moderate block size covers multiple warps without assuming GPU limits.
                 threads = 128
-                count = parameters[3] * parameters[4] * channels
+                count = _dispatch_threads(parameters, channels, floating)
                 kernel(((count + threads - 1) // threads,), (threads,), (source, output, rhs, controls, weights), stream=stream)
                 return CudaImage(output, owners=(self, other, source, rhs, parameter_owner, weight_owner, kernel))
             except Exception as error:

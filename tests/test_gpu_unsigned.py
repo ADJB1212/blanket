@@ -70,6 +70,67 @@ def test_unsigned_transfer_nonfinite_and_malformed():
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
+def test_native_unsigned_transfers_bypass_staging(depth, mode, channels, monkeypatch):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    maximum = (1 << depth) - 1
+    count = 65 * 17 * channels
+    data = struct.pack(f"{count}H", *((i * 719) % (maximum + 1) for i in range(count)))
+    image = Image.frombytes(mode, (65, 17), data, bit_depth=depth)
+    image.info["description"] = "unsigned transfer"
+
+    def unexpected(*args, **kwargs):
+        raise AssertionError("native unsigned transfers must not stage Python bytes or float images")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Image.Image, "tobytes", unexpected)
+        patch.setattr(Image, "frombytes", unexpected)
+        gpu = ImageGpu.from_image(image, runtime="native")
+        result = gpu.to_image()
+        gpu.close()
+        image.close()
+    assert result.tobytes() == data
+    assert result.bit_depth == depth and result.mode == mode
+    assert result.info["description"] == "unsigned transfer"
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_native_unsigned_download_nonfinite_and_half_samples(depth):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    from blanket._gpu_unsigned import GpuUnsignedImage
+
+    maximum = (1 << depth) - 1
+    values = [float("nan"), float("inf"), -float("inf"), -0.5, 0.0, 0.5, 1.0, 2.0]
+    raw = struct.pack("8f", *values)
+    gpu = ImageGpu.from_image(Image.frombytes("F", (8, 1), raw), runtime="native")
+    result = GpuUnsignedImage(gpu, "L", depth).to_image()
+    assert struct.unpack("8H", result.tobytes()) == (0, maximum, 0, 0, 0, (maximum + 1) // 2, maximum, maximum)
+
+
+def test_native_unsigned_transfer_validation_and_closed_images():
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    from blanket import _blanket
+
+    with pytest.raises(ValueError, match="mode or depth"):
+        _blanket.MetalImage.from_unsigned_image(Image.new("L", (1, 1))._native)
+    gpu = ImageGpu.from_image(Image.new("F", (1, 1)))
+    for mode, depth in [("L", 8), ("RGBA", 16), ("F", 16)]:
+        with pytest.raises(ValueError, match="mode or depth"):
+            gpu._resource.download_unsigned_image(mode, depth)
+    source = Image.frombytes("L", (1, 1), b"\xff\x03", bit_depth=10)
+    unsigned = ImageGpu.from_image(source)
+    source.close()
+    with pytest.raises(ValueError, match="closed"):
+        ImageGpu.from_image(source)
+    unsigned.close()
+    with pytest.raises(ValueError, match="closed"):
+        unsigned.to_image()
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
 def test_unsigned_alpha(runtime, depth):
     maximum = (1 << depth) - 1
     background = Image.frombytes("RGBA", (1, 1), struct.pack("4H", maximum, 0, 0, maximum), bit_depth=depth)

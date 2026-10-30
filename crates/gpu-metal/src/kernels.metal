@@ -21,6 +21,39 @@ constant uint LUT_HEADER_LEN = 6;
 constant uint STATISTICS_FIELDS = 7, MOMENT_ORDERS = 4, HISTOGRAM_BINS = 256;
 // Resize coefficients use the CPU kernel's 22-bit fixed-point scale.
 constant uint RESIZE_BITS = 22, RESIZE_SCALE = 1u << RESIZE_BITS, RESIZE_ROUND = RESIZE_SCALE / 2;
+constant uint BLUR_OUTPUTS = 16, SLIDING_BLUR_RADIUS = 32;
+
+// Byte sums can slide exactly, including modular overflow at extreme radii.
+template <typename T, typename S>
+void sliding_box_blur(device const T *src, device T *dst, constant uint *p, device const float *v, uint i, uint channels) {
+    uint width = p[0], height = p[1], radius = p[6];
+    bool horizontal = p[7] == 0;
+    uint length = horizontal ? width : height, lines = horizontal ? height : width;
+    uint blocks = (length + BLUR_OUTPUTS - 1) / BLUR_OUTPUTS;
+    if (i >= blocks * lines * channels)
+        return;
+    uint band = i % channels, lane = i / channels;
+    uint line = horizontal ? lane / blocks : lane % lines;
+    uint position = (horizontal ? lane % blocks : lane / lines) * BLUR_OUTPUTS;
+    uint last = length - 1;
+    uint base = horizontal ? line * width * channels + band : line * channels + band;
+    uint stride = horizontal ? channels : width * channels;
+    uint low = position > radius ? position - radius : 0, high = min(last, position + radius);
+    S sum = S(0);
+    for (uint t = low; t <= high; t++)
+        sum += S(src[base + t * stride]);
+    sum += S(src[base]) * (radius > position ? radius - position : 0);
+    sum += S(src[base + last * stride]) * (position + radius > last ? position + radius - last : 0);
+    uint end = min(position + BLUR_OUTPUTS, length);
+    for (; position < end; position++) {
+        uint left = base + (position > radius ? position - radius - 1 : 0) * stride;
+        uint right = base + min(position + radius + 1, last) * stride;
+        S fixed = sum * uint(v[0]) + (S(src[left]) + S(src[right])) * uint(v[1]) + BOX_ROUND;
+        dst[base + position * stride] = T(fixed >> BOX_BITS);
+        uint outgoing = base + (position > radius ? position - radius : 0) * stride;
+        sum = sum - S(src[outgoing]) + S(src[right]);
+    }
+}
 
 template <typename T> float luminance(device const T *src, uint base, uint channels) {
     if (channels < 3)
@@ -145,6 +178,10 @@ template <typename T> void process(device const T *src, device T *dst, device co
 #ifdef BLANKET_METAL_SPECIALIZE
     op = SPECIALIZED_OPERATION;
 #endif
+    if (op == 18 && is_same_v<T, uchar> && k >= SLIDING_BLUR_RADIUS) {
+        sliding_box_blur<T, uint>(src, dst, p, v, i, c);
+        return;
+    }
     if (op == 29) {
         if (i >= c)
             return;

@@ -2,33 +2,31 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
+fn unsigned_transfer(data: &[u8], output: &mut [u8], depth: u8, encode: bool) {
+    let maximum = f32::from(u16::MAX >> (16 - depth));
+    if encode {
+        for (src, dst) in data.as_chunks::<4>().0.iter().zip(output.as_chunks_mut::<2>().0) {
+            let value = f32::from_le_bytes(*src);
+            let value = if value.is_nan() { 0.0 } else { value.clamp(0.0, 1.0) };
+            *dst = ((value * maximum).round() as u16).to_le_bytes();
+        }
+    } else {
+        for (src, dst) in data.as_chunks::<2>().0.iter().zip(output.as_chunks_mut::<4>().0) {
+            *dst = (f32::from(u16::from_le_bytes(*src)).min(maximum) / maximum).to_le_bytes();
+        }
+    }
+}
+
 #[pyfunction]
 fn _gpu_unsigned_bytes<'py>(py: Python<'py>, data: &[u8], depth: u8, encode: bool) -> PyResult<Bound<'py, PyBytes>> {
     if !matches!(depth, 10 | 12 | 16) || !data.len().is_multiple_of(if encode { 4 } else { 2 }) {
         return Err(PyValueError::new_err("invalid unsigned GPU transfer"));
     }
-    let maximum = f32::from(u16::MAX >> (16 - depth));
-    let bytes = if encode {
-        data.as_chunks::<4>()
-            .0
-            .iter()
-            .flat_map(|chunk| {
-                let value = f32::from_le_bytes(*chunk);
-                let value = if value.is_nan() { 0.0 } else { value.clamp(0.0, 1.0) };
-                ((value * maximum).round() as u16).to_le_bytes()
-            })
-            .collect::<Vec<_>>()
-    } else {
-        data.as_chunks::<2>()
-            .0
-            .iter()
-            .flat_map(|chunk| {
-                let value = u16::from_le_bytes(*chunk);
-                (f32::from(value).min(maximum) / maximum).to_le_bytes()
-            })
-            .collect::<Vec<_>>()
-    };
-    Ok(PyBytes::new(py, &bytes))
+    let len = if encode { data.len() / 2 } else { data.len().checked_mul(2).ok_or_else(|| PyValueError::new_err("GPU transfer overflow"))? };
+    PyBytes::new_with(py, len, |output| {
+        py.detach(|| unsigned_transfer(data, output, depth, encode));
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -195,6 +193,26 @@ mod native {
             Ok(())
         }
         #[staticmethod]
+        fn from_unsigned_image(py: Python<'_>, image: &blanket_core::Image) -> PyResult<Self> {
+            if !matches!(image.mode, blanket_core::PixelMode::L | blanket_core::PixelMode::Rgb | blanket_core::PixelMode::Rgba)
+                || !matches!(image.bit_depth, 10 | 12 | 16)
+            {
+                return Err(PyValueError::new_err("unsupported unsigned GPU image mode or depth"));
+            }
+            let descriptor = Descriptor { width: image.width, height: image.height, channels: image.mode.channels() as u32, float: true };
+            let data = image.raw_data()?;
+            if descriptor.byte_len().map_err(PyValueError::new_err)? / 2 != data.len() {
+                return Err(PyValueError::new_err("incorrect unsigned upload length"));
+            }
+            py.detach(|| {
+                let context = context()?;
+                let native = context
+                    .upload_with(descriptor, |output| unsigned_transfer(data, output, image.bit_depth, false))
+                    .map_err(PyRuntimeError::new_err)?;
+                Ok(Self { context, image: native })
+            })
+        }
+        #[staticmethod]
         fn from_image(py: Python<'_>, image: &blanket_core::Image) -> PyResult<Self> {
             use blanket_core::PixelMode;
             if !matches!(
@@ -225,6 +243,26 @@ mod native {
             } else {
                 blanket_core::Image::from_pixels(descriptor.width, descriptor.height, mode, pixels, None)
             }
+        }
+        fn download_unsigned_image(&self, py: Python<'_>, mode: &str, depth: u8) -> PyResult<blanket_core::Image> {
+            let mode = blanket_core::PixelMode::parse(mode)?;
+            let d = self.image.descriptor;
+            if !matches!(mode, blanket_core::PixelMode::L | blanket_core::PixelMode::Rgb | blanket_core::PixelMode::Rgba)
+                || !matches!(depth, 10 | 12 | 16)
+                || mode.channels() != d.channels as usize
+                || !d.float
+            {
+                return Err(PyValueError::new_err("unsigned GPU image mode or depth does not match storage"));
+            }
+            let pixels = py
+                .detach(|| {
+                    let data = self.wait_bytes()?;
+                    let mut pixels = vec![0; data.len() / 2];
+                    unsigned_transfer(data, &mut pixels, depth, true);
+                    Ok::<_, String>(pixels)
+                })
+                .map_err(PyRuntimeError::new_err)?;
+            blanket_core::Image::from_sample_bytes(d.width, d.height, mode, pixels, depth, None)
         }
         #[new]
         fn new(width: u32, height: u32, channels: u32, float: bool, data: &[u8]) -> PyResult<Self> {

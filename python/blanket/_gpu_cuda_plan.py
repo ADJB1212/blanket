@@ -7,6 +7,7 @@ from threading import RLock
 from typing import Any
 
 from . import _blanket, _gpu_cuda
+from .ImageGpu import _dispatch_threads
 
 
 class _Cache:
@@ -121,7 +122,7 @@ class CudaPlan:
                 self.schedule.append((len(steps) % 2, -1, -1))
                 parameters.extend([tw, th, channels, width, height, x - left, y - top, x, y, w, h])
         self.counts = [
-            parameters[i + 9] * parameters[i + 10] * channels if entry[2] == -1 else parameters[i + 3] * parameters[i + 4] * channels
+            parameters[i + 9] * parameters[i + 10] * channels if entry[2] == -1 else _dispatch_threads(parameters[i : i + 8], channels, floating)
             for i, entry in zip(range(0, len(parameters), 11), self.schedule, strict=True)
         ]
         cp = _gpu_cuda.cupy()

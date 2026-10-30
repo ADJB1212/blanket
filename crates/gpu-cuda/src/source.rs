@@ -96,7 +96,7 @@ mod tests {
             .spawn()
             .expect("C++ compiler required for CUDA portability checks");
         let source = format!(
-            "#define __device__\n#define __global__\nstruct Dim {{ unsigned x; }}; Dim blockIdx{{0}}, blockDim{{1}}, threadIdx{{0}};\n{}\n{}",
+            "#include <initializer_list>\n#define __device__\n#define __global__\nstruct Dim {{ unsigned x; }}; Dim blockIdx{{0}}, blockDim{{1}}, threadIdx{{0}};\n{}\n{}",
             shader_source(),
             r"
 int main() {
@@ -124,6 +124,40 @@ int main() {
     }
     if (output[0] != 255 || output[1] != 254 || output[2] != 1 || output[3] != 127) return 3;
     if (tile_output[0] != -1 || tile_output[1] != -1 || tile_output[2] != 1 || tile_output[3] != 127) return 4;
+    for (uint channels = 1; channels <= 4; channels++) {
+        for (uint width : {1u, 15u, 16u, 17u, 31u, 32u, 33u}) {
+            uint height = 17, count = width * height * channels;
+            uchar input[2246], result[2246];
+            for (uint j = 0; j < count + 2; j++) input[j] = uchar(j * 37 + j / 11);
+            for (uint axis = 0; axis < 2; axis++) {
+                for (uint radius : {32u, 128u, 10000000u}) {
+                    uint scale = BOX_SCALE / (2 * radius + 2);
+                    float weights[2] = {float(scale), float((BOX_SCALE - (2 * radius + 1) * scale) / 2)};
+                    uint p[8] = {width, height, channels, width, height, 18, radius, axis};
+                    for (uint j = 0; j < count + 2; j++) result[j] = 173;
+                    for (uint j = 0; j <= count; j++) {
+                        blockIdx.x = j;
+                        image_u8(input + 1, result + 1, input + 1, p, weights);
+                    }
+                    if (result[0] != 173 || result[count + 1] != 173) return 5;
+                    for (uint j = 0; j < count; j++) {
+                        uint band = j % channels, x = (j / channels) % width, y = j / (channels * width);
+                        metal_long pos = axis == 0 ? x : y, last = (axis == 0 ? width : height) - 1;
+                        uint base = axis == 0 ? y * width * channels + band : x * channels + band;
+                        uint stride = axis == 0 ? channels : width * channels, sum = 0;
+                        for (metal_long t = max(0ll, pos - radius); t <= min(last, pos + radius); t++)
+                            sum += input[1 + base + uint(t) * stride];
+                        sum += input[1 + base] * uint(max(0ll, metal_long(radius) - pos));
+                        sum += input[1 + base + uint(last) * stride] * uint(max(0ll, pos + radius - last));
+                        uint left = base + uint(clamp(pos - radius - 1, 0ll, last)) * stride;
+                        uint right = base + uint(clamp(pos + radius + 1, 0ll, last)) * stride;
+                        uint fixed = sum * uint(weights[0]) + (uint(input[1 + left]) + uint(input[1 + right])) * uint(weights[1]) + BOX_ROUND;
+                        if (result[1 + j] != uchar(fixed >> BOX_BITS)) return 6;
+                    }
+                }
+            }
+        }
+    }
     return 0;
 }
 "
