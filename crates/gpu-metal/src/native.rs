@@ -20,7 +20,7 @@ unsafe extern "C" {}
 const SAMPLE_FORMAT_COUNT: usize = 2;
 // Scalar bytes, packed bytes, and floats specialize each channel count.
 const PIPELINE_VARIANTS: usize = 12;
-// Buffer slots match the [[buffer(n)]] arguments in kernels.metal.
+// Buffer slots match the [[buffer(n)]] arguments in the shader entry points.
 const SOURCE_SLOT: usize = 0;
 const OUTPUT_SLOT: usize = 1;
 const OTHER_SLOT: usize = 2;
@@ -34,13 +34,13 @@ const THREADGROUP_THREADS: usize = 256;
 const TRANSPOSE_TILE: usize = 16;
 // Operation IDs are contiguous through unsigned quantization.
 const OPERATION_COUNT: usize = operation::QUANTIZE as usize + 1;
-// Matches SPECIALIZED_OPERATION in kernels.metal.
+// Matches SPECIALIZED_OPERATION in shaders/common.metal.
 const OPERATION_CONSTANT: usize = 0;
 const CHANNELS_CONSTANT: usize = 1;
 // Packed byte kernels process one aligned uchar4 per thread, with a scalar tail.
 const PACKED_SAMPLES: usize = 4;
 const SLIDING_BLUR_RADIUS: u32 = 32;
-// Matches MAX_SIMDGROUPS in statistics.metal.
+// Matches MAX_SIMDGROUPS in shaders/statistics.metal.
 const STATISTICS_SIMDGROUPS: usize = 32;
 // Bound retained allocations, including buffers whose GPU work is still pending.
 const POOL_MAX_BYTES: usize = 128 * 1024 * 1024;
@@ -511,15 +511,7 @@ impl Context {
 
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
-            let source = NSString::from_str(&format!(
-                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}\n{}\n{}",
-                super::SHADERS,
-                include_str!("pixels.metal"),
-                include_str!("tiles.metal"),
-                include_str!("blur.metal"),
-                include_str!("statistics.metal"),
-                include_str!("paste.metal")
-            ));
+            let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
             let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {
                 let function = library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| format!("Metal kernel unavailable: {name}"))?;

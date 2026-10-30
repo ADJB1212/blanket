@@ -1,3 +1,4 @@
+// Paste a clipped pixel through byte or float mask coverage.
 template <typename T, typename F, bool Floating = false>
 void paste_image(device const T *background, device T *dst, device const T *source, device const uchar *mask, constant uint *p, uint i,
                  uint channels) {
@@ -27,6 +28,7 @@ void paste_image(device const T *background, device T *dst, device const T *sour
         dst[i] = T(clamp(floor(value + 0.5f), 0.0f, 255.0f));
 }
 
+// Dispatch byte paste with the packed pixel type for its channel count.
 kernel void paste_u8(device const uchar *a [[buffer(0)]], device uchar *dst [[buffer(1)]], device const uchar *b [[buffer(2)]],
                      constant uint *p [[buffer(3)]], device const uchar *mask [[buffer(5)]], uint i [[thread_position_in_grid]]) {
     if (p[2] == 4)
@@ -57,6 +59,7 @@ kernel void paste_u8(device const uchar *a [[buffer(0)]], device uchar *dst [[bu
         paste_image<uchar, float>(a, dst, b, mask, p, i, 1);
 }
 
+// Dispatch float paste with the packed pixel type for its channel count.
 kernel void paste_f32(device const float *a [[buffer(0)]], device float *dst [[buffer(1)]], device const float *b [[buffer(2)]],
                       constant uint *p [[buffer(3)]], device const uchar *mask [[buffer(5)]], uint i [[thread_position_in_grid]]) {
     if (p[2] == 4)

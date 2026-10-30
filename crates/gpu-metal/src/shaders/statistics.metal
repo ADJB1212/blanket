@@ -1,6 +1,7 @@
 // Threadgroups partition channels; partials hold extrema, power sums, and NaN.
 constant uint MAX_SIMDGROUPS = 32, STATISTICS_PARTIALS = 7;
 
+// Reduce a channel partition into histogram counts or statistical moments.
 template <typename T, bool Histogram>
 void channel_statistics(device const T *src, device float *output, constant uint *p, threadgroup atomic_uint *counts, threadgroup float *partials,
                         uint band, uint block, uint member, uint threads, uint lane, uint group, uint groups, uint lanes) {
@@ -71,6 +72,7 @@ void channel_statistics(device const T *src, device float *output, constant uint
 }
 
 #define STATISTICS_KERNEL(NAME, SRC, HISTOGRAM)                                                                                                      \
+    /* Dispatch a channel partition with only the required shared scratch storage. */                                                                \
     kernel void NAME(device const SRC *s [[buffer(0)]],                                                                                              \
                      device float *d [[buffer(1)]],                                                                                                  \
                      constant uint *p [[buffer(3)]],                                                                                                 \
@@ -90,6 +92,7 @@ STATISTICS_KERNEL(statistics_u8, uchar, false)
 STATISTICS_KERNEL(statistics_f32, float, false)
 STATISTICS_KERNEL(histogram_u8, uchar, true)
 
+// Merge channel partitions while preserving exact counts and NaN extrema.
 kernel void finish_statistics(device const float *src [[buffer(0)]], device float *dst [[buffer(1)]], constant uint *p [[buffer(3)]],
                               uint i [[thread_position_in_grid]]) {
     uint blocks = p[7];
@@ -122,6 +125,7 @@ kernel void finish_statistics(device const float *src [[buffer(0)]], device floa
     result[STATISTICS_FIELDS - 1] = as_type<float>(p[0] * p[1]);
 }
 
+// Reduce one luminance block cooperatively, carrying byte sums across words.
 template <typename T> void parallel_luminance(device const T *src, device float *dst, constant uint *p, uint i, uint lanes, uint lane) {
     uint block = i / lanes, first = block * REDUCTION_BLOCK_SIZE;
     uint last = min(first + REDUCTION_BLOCK_SIZE, p[0] * p[1]), stage = p[6];
@@ -158,6 +162,7 @@ template <typename T> void parallel_luminance(device const T *src, device float 
 }
 
 #define LUMINANCE_KERNEL(NAME, TYPE)                                                                                                                 \
+    /* Dispatch a SIMD-group luminance reduction for this sample type. */                                                                            \
     kernel void NAME(device const TYPE *src [[buffer(0)]],                                                                                           \
                      device float *dst [[buffer(1)]],                                                                                                \
                      constant uint *p [[buffer(3)]],                                                                                                 \

@@ -1,14 +1,15 @@
+// Copy one packed pixel through crop, transpose, or wrapped-offset geometry.
 template <typename P> void geometry_pixels(device const P *src, device P *dst, constant uint *p, uint i) {
     uint sw = p[0], sh = p[1], width = p[3], height = p[4];
     if (i >= width * height)
         return;
     uint x = i % width, y = i / width, sx = x, sy = y;
-    if (SPECIALIZED_OPERATION == 7) {
+    if (SPECIALIZED_OPERATION == OP_CROP) {
         long cx = long(x) + as_type<int>(p[6]), cy = long(y) + as_type<int>(p[7]);
         dst[i] = cx >= 0 && cy >= 0 && cx < sw && cy < sh ? src[uint(cy) * sw + uint(cx)] : P(0);
         return;
     }
-    if (SPECIALIZED_OPERATION == 8) {
+    if (SPECIALIZED_OPERATION == OP_TRANSPOSE) {
         switch (p[6]) {
         case 0:
             sx = sw - 1 - x;
@@ -44,6 +45,7 @@ template <typename P> void geometry_pixels(device const P *src, device P *dst, c
     dst[i] = src[sy * sw + sx];
 }
 
+// Composite or change alpha association for one packed pixel.
 template <typename P, typename F, bool Floating, uint Channels>
 void alpha_pixels(device const P *src, device P *dst, device const P *other, constant uint *p, uint i) {
     if (i >= p[3] * p[4])
@@ -52,7 +54,7 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
     float maxval = Floating ? 1.0f : 255.0f;
     float raw = float(a[Channels - 1]);
     float da = isnan(raw) ? 0.0f : clamp(raw / maxval, 0.0f, 1.0f);
-    if (SPECIALIZED_OPERATION == 3) {
+    if (SPECIALIZED_OPERATION == OP_ALPHA_COMPOSITE) {
         F b = F(other[i]);
         float sa = float(b[Channels - 1]) / maxval;
         sa = isnan(sa) ? 0.0f : clamp(sa, 0.0f, 1.0f);
@@ -60,10 +62,10 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
         result = alpha == 0 ? F(0) : ((sa == 0 ? F(0) : b * sa) + (da == 0 ? F(0) : a * da) * (1 - sa)) / alpha;
         result[Channels - 1] = alpha * maxval;
     } else {
-        result = da == 0 ? ((SPECIALIZED_OPERATION == 5 && !Floating) ? a : F(0))
-                         : (SPECIALIZED_OPERATION == 4 ? a * da : (Floating ? a / da : a * maxval / raw));
+        result = da == 0 ? ((SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating) ? a : F(0))
+                         : (SPECIALIZED_OPERATION == OP_PREMULTIPLY ? a * da : (Floating ? a / da : a * maxval / raw));
         result[Channels - 1] = da * maxval;
-        if (SPECIALIZED_OPERATION == 5 && !Floating)
+        if (SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating)
             result = floor(result);
     }
     if (Floating)
@@ -72,15 +74,17 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
         dst[i] = P(clamp(floor(result + 0.5f), 0.0f, 255.0f));
 }
 
+// Dispatch a packed pixel to geometry or alpha processing.
 template <typename P, typename F, bool Floating, uint Channels>
 void process_pixel(device const P *src, device P *dst, device const P *other, constant uint *p, uint i) {
-    if (SPECIALIZED_OPERATION == 3 || SPECIALIZED_OPERATION == 4 || SPECIALIZED_OPERATION == 5)
+    if (SPECIALIZED_OPERATION == OP_ALPHA_COMPOSITE || SPECIALIZED_OPERATION == OP_PREMULTIPLY || SPECIALIZED_OPERATION == OP_UNPREMULTIPLY)
         alpha_pixels<P, F, Floating, Channels>(src, dst, other, p, i);
     else
         geometry_pixels(src, dst, p, i);
 }
 
 #define PIXEL_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR, FLOATING)                                                                                       \
+    /* Dispatch geometry or alpha processing for the selected packed pixel type. */                                                                  \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      device const SAMPLE *other [[buffer(2)]],                                                                                       \
@@ -109,6 +113,7 @@ PIXEL_KERNEL(pixel_f32, float, float2, packed_float3, float4, true)
 
 constant uint TRANSPOSE_TILE = 16, TRANSPOSE_STRIDE = TRANSPOSE_TILE + 1;
 
+// Transpose coalesced pixel tiles, falling back for small or partial groups.
 template <typename P>
 void transpose_pixels(device const P *src, device P *dst, constant uint *p, threadgroup P *tile, uint i, uint member, uint group, uint threads) {
     uint width = p[3], height = p[4], method = p[6];
@@ -132,6 +137,7 @@ void transpose_pixels(device const P *src, device P *dst, constant uint *p, thre
 }
 
 #define TRANSPOSE_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR)                                                                                             \
+    /* Dispatch tiled transpose with storage matching the image channel count. */                                                                    \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      constant uint *p [[buffer(3)]],                                                                                                 \

@@ -1,3 +1,4 @@
+// Copy one packed pixel between source and destination tile rectangles.
 template <typename T> void copy_tile(device const T *src, device T *dst, constant uint *p, uint i) {
     uint width = p[9], height = p[10];
     if (i >= width * height)
@@ -7,6 +8,7 @@ template <typename T> void copy_tile(device const T *src, device T *dst, constan
 }
 
 #define TILE_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR)                                                                                                  \
+    /* Dispatch a tile copy with storage matching the image channel count. */                                                                        \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      constant uint *p [[buffer(3)]],                                                                                                 \
