@@ -57,6 +57,25 @@ def test_cuda_tiled_plans_match_eager_rounding(cuda, mode, channels, depth):
     assert plan.run(image).to_image().tobytes() == expected.to_image().tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("count", range(5))
+def test_cuda_full_image_plan_matches_each_eager_intermediate(cuda, mode, count):
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    values = [(i * 37 + i // 11) % 256 for i in range(37 * 29 * channels)]
+    data = struct.pack(f"<{len(values)}f", *(v / 31 - 2 for v in values)) if "F" in mode else bytes(values)
+    cpu = Image.frombytes(mode, (37, 29), data)
+    image = ImageGpu.from_image(cpu, backend="cuda")
+    operations = [("brightness", {"factor": factor}) for factor in (0.731, 1.37, 0.81, 1.19)[:count]]
+    expected = image
+    for name, arguments in operations:
+        expected = getattr(expected, name)(**arguments)
+    plan = ImageGpu.ProcessingPlan(image.size, mode, operations, backend="cuda")
+    assert plan.info()["tile_size"] == image.size
+    assert plan.info()["scratch_bytes"] == len(data) * int(count > 1)
+    assert plan.run(image).to_image().tobytes() == expected.to_image().tobytes()
+    assert image.to_image().tobytes() == data
+
+
 def test_cuda_plan_stream_ordering_ownership_and_caches(cuda):
     cp = cuda
     ImageGpu.configure_cache(backend="cuda", image_bytes=4_096, control_bytes=16_384)

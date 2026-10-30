@@ -45,6 +45,22 @@ def test_plan_tiles_match_sequential_filters_and_rounding(metal, mode, memory_li
     assert result.to_image().tobytes() == expected.to_image().tobytes()
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("count", range(5))
+def test_full_image_plan_preserves_each_intermediate_rounding(metal, mode, count):
+    image = ImageGpu.from_image(source(mode))
+    operations = [("brightness", {"factor": factor}) for factor in (0.731, 1.37, 0.81, 1.19)[:count]]
+    expected = image
+    for name, arguments in operations:
+        expected = getattr(expected, name)(**arguments)
+    plan = ImageGpu.ProcessingPlan(image.size, mode, operations)
+    assert plan.info()["tile_size"] == image.size
+    assert plan.info()["scratch_bytes"] == len(image.to_image().tobytes()) * int(count > 1)
+    result = plan.run(image)
+    assert result.to_image().tobytes() == expected.to_image().tobytes()
+    assert image.to_image().tobytes() == source(mode).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 def test_plan_fuses_only_exact_uint8_lookup_steps(metal, mode):
     operations = [("invert", {}), ("posterize", {"bits": 5}), ("solarize", {"threshold": 90}), ("brightness", {"factor": 1.3}), ("invert", {})]

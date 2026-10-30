@@ -1,4 +1,5 @@
 #include <initializer_list>
+#include <vector>
 
 #define __device__
 #define __global__
@@ -9,7 +10,61 @@ Dim blockIdx{0}, blockDim{1}, threadIdx{0};
 
 #include "../src/kernels.cu"
 
+template <typename T> bool statistics_match_serial() {
+    for (uint channels = 1; channels <= 4; channels++) {
+        for (uint pixels : {1u, 37u, 1031u}) {
+            std::vector<T> source(pixels * channels + 2);
+            for (uint i = 0; i < source.size(); i++)
+                source[i] = T((i * 37 + i / 11) % 16);
+            for (uint kind : {0u, 1u}) {
+                if (kind == 1 && !is_same_v<T, uchar>)
+                    continue;
+                uint fields = kind == 1 ? HISTOGRAM_BINS : STATISTICS_FIELDS;
+                uint p[8] = {pixels, 1, channels, fields, channels, 29, kind, 0};
+                float controls[1] = {0};
+                std::vector<float> expected(fields * channels);
+                for (uint i = 0; i < channels; i++)
+                    process(source.data() + 1, reinterpret_cast<T *>(expected.data()), source.data() + 1, p, controls, i);
+                for (uint blocks : {1u, 2u, 7u}) {
+                    p[7] = blocks;
+                    std::vector<float> partials(fields * channels * blocks + 2, -123);
+                    std::vector<float> output(fields * channels + 2, -123);
+                    for (uint i = 0; i <= channels * blocks; i++)
+                        process(source.data() + 1, reinterpret_cast<T *>(partials.data() + 1), source.data() + 1, p, controls, i);
+                    for (uint i = 0; i <= fields * channels; i++) {
+                        blockIdx.x = i;
+                        finish_statistics(partials.data() + 1, output.data() + 1, p);
+                    }
+                    if (partials.front() != -123 || partials.back() != -123 || output.front() != -123 || output.back() != -123)
+                        return false;
+                    for (uint i = 0; i < expected.size(); i++) {
+                        if (kind == 1 || i % fields == fields - 1) {
+                            if (as_type<uint>(output[i + 1]) != as_type<uint>(expected[i]))
+                                return false;
+                        } else if (abs(output[i + 1] - expected[i]) > max(0.001f, abs(expected[i]) * 1e-5f))
+                            return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 int main() {
+    if (!statistics_match_serial<uchar>() || !statistics_match_serial<float>())
+        return 7;
+    {
+        float samples[3] = {1, NAN, INFINITY}, partials[21], output[7];
+        uint p[8] = {3, 1, 1, 7, 1, 29, 0, 3};
+        float controls[1] = {0};
+        for (uint i = 0; i < 3; i++)
+            process(samples, partials, samples, p, controls, i);
+        blockIdx.x = 0;
+        finish_statistics(partials, output, p);
+        if (!isnan(output[0]) || !isnan(output[1]) || !isnan(output[2]) || as_type<uint>(output[6]) != 3)
+            return 8;
+    }
     uchar source[4] = {0, 1, 127, 255}, output[4] = {};
     uint parameters[8] = {4, 1, 1, 4, 1, 11, 0, 0};
     float controls[1] = {0};

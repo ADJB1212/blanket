@@ -173,21 +173,25 @@ template <typename T> __device__ void process(const T *src, T *dst, const T *oth
         return;
     }
     if (op == 29) {
-        if (i >= c)
+        uint blocks = max(p[7], 1u), pixels = sw * sh;
+        if (i >= c * blocks)
             return;
+        uint band = i / blocks, block = i % blocks;
+        uint chunk = (pixels + blocks - 1) / blocks;
+        uint first = min(block * chunk, pixels), last = min(first + chunk, pixels);
         float *output = reinterpret_cast<float *>(dst);
         if (k == 1) {
             uint counts[HISTOGRAM_BINS] = {0};
-            for (uint pixel = 0; pixel < sw * sh; pixel++)
-                counts[uint(src[pixel * c + i])]++;
+            for (uint pixel = first; pixel < last; pixel++)
+                counts[uint(src[pixel * c + band])]++;
             for (uint bin = 0; bin < HISTOGRAM_BINS; bin++)
                 output[i * HISTOGRAM_BINS + bin] = as_type<float>(counts[bin]);
         } else {
             float low = INFINITY, high = -INFINITY;
             float sums[MOMENT_ORDERS] = {0};
             bool nan = false;
-            for (uint pixel = 0; pixel < sw * sh; pixel++) {
-                float value = float(src[pixel * c + i]);
+            for (uint pixel = first; pixel < last; pixel++) {
+                float value = float(src[pixel * c + band]);
                 nan = nan || isnan(value);
                 low = min(low, value);
                 high = max(high, value);
@@ -201,7 +205,7 @@ template <typename T> __device__ void process(const T *src, T *dst, const T *oth
             output[i * STATISTICS_FIELDS + 1] = nan ? NAN : high;
             for (uint order = 0; order < MOMENT_ORDERS; order++)
                 output[i * STATISTICS_FIELDS + 2 + order] = sums[order];
-            output[i * STATISTICS_FIELDS + STATISTICS_FIELDS - 1] = as_type<float>(sw * sh);
+            output[i * STATISTICS_FIELDS + STATISTICS_FIELDS - 1] = as_type<float>(last - first);
         }
         return;
     }
@@ -596,6 +600,37 @@ CONVERSION_KERNEL(convert_f32_f32, float, float)
     }
 REDUCTION_KERNEL(reduce_u8, uchar)
 REDUCTION_KERNEL(reduce_f32, float)
+
+extern "C" __global__ void finish_statistics(const float *src, float *dst, const uint *p) {
+    uint i = blockIdx.x * blockDim.x + threadIdx.x, blocks = p[7];
+    if (p[6] == 1) {
+        if (i >= p[2] * HISTOGRAM_BINS)
+            return;
+        uint band = i / HISTOGRAM_BINS, bin = i % HISTOGRAM_BINS, count = 0;
+        for (uint block = 0; block < blocks; block++)
+            count += as_type<uint>(src[(band * blocks + block) * HISTOGRAM_BINS + bin]);
+        dst[i] = as_type<float>(count);
+        return;
+    }
+    if (i >= p[2])
+        return;
+    float low = INFINITY, high = -INFINITY, sums[MOMENT_ORDERS] = {0};
+    bool nan = false;
+    for (uint block = 0; block < blocks; block++) {
+        const float *partial = src + (i * blocks + block) * STATISTICS_FIELDS;
+        nan = nan || isnan(partial[0]);
+        low = min(low, partial[0]);
+        high = max(high, partial[1]);
+        for (uint order = 0; order < MOMENT_ORDERS; order++)
+            sums[order] += partial[2 + order];
+    }
+    float *result = dst + i * STATISTICS_FIELDS;
+    result[0] = nan ? NAN : low;
+    result[1] = nan ? NAN : high;
+    for (uint order = 0; order < MOMENT_ORDERS; order++)
+        result[2 + order] = sums[order];
+    result[STATISTICS_FIELDS - 1] = as_type<float>(p[0] * p[1]);
+}
 
 extern "C" __global__ void image_u8(const uchar *src, uchar *dst, const uchar *other, const uint *p, const float *v) {
     uint i = blockIdx.x * blockDim.x + threadIdx.x;

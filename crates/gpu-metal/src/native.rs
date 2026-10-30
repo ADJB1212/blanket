@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use blanket_gpu::protocol::operation;
@@ -157,7 +158,7 @@ pub struct Image {
     buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     completion: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
     pool: Arc<Mutex<BufferPool>>,
-    uses: Mutex<Vec<Command>>,
+    uses: Mutex<VecDeque<Command>>,
 }
 pub struct Plan {
     geometry: blanket_gpu::plan::Plan,
@@ -175,14 +176,16 @@ unsafe impl Sync for Image {}
 impl Image {
     fn track_read(&self, command: &Command) {
         let mut uses = self.uses.lock().unwrap_or_else(|error| error.into_inner());
-        uses.retain(|command| !finished(command));
-        uses.push(command.clone());
+        while uses.front().is_some_and(finished) {
+            uses.pop_front();
+        }
+        uses.push_back(command.clone());
     }
 }
 
 impl Drop for Image {
     fn drop(&mut self) {
-        let mut uses = std::mem::take(self.uses.get_mut().unwrap_or_else(|error| error.into_inner()));
+        let mut uses: Vec<_> = std::mem::take(self.uses.get_mut().unwrap_or_else(|error| error.into_inner())).into();
         uses.extend(self.completion.take());
         self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer: self.buffer.clone(), uses });
     }
@@ -211,7 +214,10 @@ impl Context {
         Ok(Plan { geometry, controls })
     }
     pub fn plan_info(plan: &Plan) -> (usize, [u32; 2], [u32; 2], usize) {
-        (plan.geometry.steps().len(), plan.geometry.tile(), plan.geometry.halo(), plan.geometry.scratch_bytes())
+        let geometry = &plan.geometry;
+        let descriptor = geometry.descriptor();
+        let count = if geometry.tile() == [descriptor.width, descriptor.height] { usize::from(geometry.steps().len() > 1) } else { 2 };
+        (geometry.steps().len(), geometry.tile(), geometry.halo(), geometry.scratch_bytes() / 2 * count)
     }
     fn encode_tile(
         &self, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>,
@@ -243,7 +249,9 @@ impl Context {
             if sources.is_empty() {
                 return Ok(Vec::new());
             }
-            let scratch = [self.allocate_image(geometry.scratch_bytes() / 2)?, self.allocate_image(geometry.scratch_bytes() / 2)?];
+            let direct = tile == [d.width, d.height];
+            let scratch_count = if direct { usize::from(geometry.steps().len() > 1) } else { 2 };
+            let scratch = (0..scratch_count).map(|_| self.allocate_image(geometry.scratch_bytes() / 2)).collect::<Result<Vec<_>, _>>()?;
             let buffers = sources.iter().map(|_| self.allocate_image(d.byte_len()?)).collect::<Result<Vec<_>, String>>()?;
             let pipelines = geometry
                 .steps()
@@ -271,21 +279,37 @@ impl Context {
                         let bottom = (u64::from(y) + u64::from(height) + u64::from(halo[1])).min(u64::from(d.height)) as u32;
                         let tw = right - left;
                         let th = bottom - top;
-                        self.encode_tile(
-                            &encoder,
-                            &source.buffer,
-                            &scratch[0],
-                            [d.width, d.height, d.channels, tw, th, left, top, 0, 0, tw, th],
-                            d.float,
-                        );
+                        if !direct || geometry.steps().is_empty() {
+                            self.encode_tile(
+                                &encoder,
+                                &source.buffer,
+                                if direct { &output } else { &scratch[0] },
+                                [d.width, d.height, d.channels, tw, th, left, top, 0, 0, tw, th],
+                                d.float,
+                            );
+                        }
                         for (index, (step, pipeline)) in geometry.steps().iter().zip(&pipelines).enumerate() {
                             encoder.setComputePipelineState(pipeline);
                             let parameters = [tw, th, d.channels, tw, th, step.operation, step.kernel, step.axis];
-                            // Both scratch buffers fit the expanded tile and are used in command order.
+                            let (src, dst) = if direct {
+                                let last = (geometry.steps().len() - index) % 2 == 1;
+                                let src = if index == 0 {
+                                    &source.buffer
+                                } else if last {
+                                    &scratch[0]
+                                } else {
+                                    &output
+                                };
+                                let dst = if last { &output } else { &scratch[0] };
+                                (src, dst)
+                            } else {
+                                (&scratch[index % 2], &scratch[(index + 1) % 2])
+                            };
+                            // Serial dispatches complete writes before reusing intermediate storage.
                             unsafe {
-                                encoder.setBuffer_offset_atIndex(Some(&scratch[index % 2]), 0, SOURCE_SLOT);
-                                encoder.setBuffer_offset_atIndex(Some(&scratch[(index + 1) % 2]), 0, OUTPUT_SLOT);
-                                encoder.setBuffer_offset_atIndex(Some(&scratch[index % 2]), 0, OTHER_SLOT);
+                                encoder.setBuffer_offset_atIndex(Some(src), 0, SOURCE_SLOT);
+                                encoder.setBuffer_offset_atIndex(Some(dst), 0, OUTPUT_SLOT);
+                                encoder.setBuffer_offset_atIndex(Some(src), 0, OTHER_SLOT);
                                 encoder.setBytes_length_atIndex(
                                     std::ptr::NonNull::from(&parameters).cast(),
                                     std::mem::size_of_val(&parameters),
@@ -300,13 +324,15 @@ impl Context {
                                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                             );
                         }
-                        self.encode_tile(
-                            &encoder,
-                            &scratch[geometry.steps().len() % 2],
-                            &output,
-                            [tw, th, d.channels, d.width, d.height, x - left, y - top, x, y, width, height],
-                            d.float,
-                        );
+                        if !direct {
+                            self.encode_tile(
+                                &encoder,
+                                &scratch[geometry.steps().len() % 2],
+                                &output,
+                                [tw, th, d.channels, d.width, d.height, x - left, y - top, x, y, width, height],
+                                d.float,
+                            );
+                        }
                     }
                 }
                 outputs.push(Image {
@@ -658,6 +684,47 @@ impl Backend for Context {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reader_tracking_retains_pending_commands_and_reclaims_completed_prefixes() {
+        let context = Context::new().unwrap();
+        let image = context.upload(Descriptor { width: 1, height: 1, channels: 1, float: false }, &[7]).unwrap();
+        let commands: Vec<_> = (0..16).map(|_| context.queue.commandBuffer().unwrap()).collect();
+        for command in &commands {
+            image.track_read(command);
+        }
+        assert_eq!(image.uses.lock().unwrap().len(), commands.len());
+        for command in &commands {
+            command.commit();
+        }
+        commands.last().unwrap().waitUntilCompleted();
+        let next = context.queue.commandBuffer().unwrap();
+        image.track_read(&next);
+        assert_eq!(image.uses.lock().unwrap().len(), 1);
+        next.commit();
+        next.waitUntilCompleted();
+    }
+
+    #[test]
+    fn full_image_plans_need_at_most_one_intermediate_buffer() {
+        let context = Context::new().unwrap();
+        let descriptor = Descriptor { width: 37, height: 29, channels: 1, float: false };
+        let source = context.upload(descriptor, &vec![127; descriptor.byte_len().unwrap()]).unwrap();
+        for count in 0..5 {
+            context.configure_cache(POOL_MAX_BYTES, CONTROL_MAX_BYTES);
+            let steps =
+                (0..count).map(|_| blanket_gpu::plan::Step { operation: operation::BRIGHTNESS, kernel: 0, axis: 0, values: vec![0.731] }).collect();
+            let geometry = blanket_gpu::plan::Plan::new(descriptor, steps, 1_000_000).unwrap();
+            let plan = context.prepare_plan(geometry).unwrap();
+            let outputs = context.execute_plan(&plan, &[&source]).unwrap();
+            assert_eq!(context.cache_info().0, usize::from(count > 1) * descriptor.byte_len().unwrap());
+            let mut value = 127.0f32;
+            for _ in 0..count {
+                value = (value * 0.731).trunc();
+            }
+            assert_eq!(context.download(&outputs[0]).unwrap(), vec![value as u8; descriptor.byte_len().unwrap()]);
+        }
+    }
 
     #[test]
     fn pending_buffers_require_completion_only_for_cpu_access() {

@@ -4,9 +4,12 @@ from __future__ import annotations
 
 __lazy_modules__ = {"cupy", "numpy", "torch", "collections.abc", "types"}
 
+import atexit
+from collections import deque
 from functools import lru_cache
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from threading import RLock
 from typing import TYPE_CHECKING
 
 from . import _blanket
@@ -17,6 +20,40 @@ if TYPE_CHECKING:
     from typing import Any
 
     from torch import Tensor
+
+
+_PENDING: dict[tuple[int, int], deque[tuple[Any, tuple[object, ...]]]] = {}
+_PENDING_LOCK = RLock()
+_PENDING_REGISTERED = False
+
+
+def _collect_pending(device: int, stream: int | None = None) -> None:
+    """Release completed submissions without waiting for GPU work."""
+    retired = []
+    with _PENDING_LOCK:
+        keys = tuple(_PENDING) if stream is None else ((device, stream),)
+        for key in keys:
+            if key[0] != device:
+                continue
+            queue = _PENDING.get(key)
+            if queue is None:
+                continue
+            while queue and queue[0][0].query():
+                retired.append(queue.popleft())
+            if not queue:
+                del _PENDING[key]
+    retired.clear()
+
+
+def _finish_pending() -> None:
+    """Keep asynchronous storage alive until its device finishes at shutdown."""
+    with _PENDING_LOCK:
+        pending = list(_PENDING.items())
+        _PENDING.clear()
+    for (device, _), queue in pending:
+        with cupy().cuda.Device(device):
+            for event, _owners in queue:
+                event.synchronize()
 
 
 def cupy() -> ModuleType:
@@ -76,7 +113,7 @@ def library(device: int) -> Callable[[str], Callable[..., None]]:
                 path.write_bytes(_blanket._gpu_cuda_fatbin)
                 module = cp.RawModule(path=str(path))
                 # Resolve all entry points before removing the temporary file.
-                names = ("image_u8", "image_f32", "reduce_u8", "reduce_f32", "convert_u8_u8", "convert_u8_f32", "convert_f32_u8", "convert_f32_f32", "tile_u8", "tile_f32")
+                names = ("image_u8", "image_f32", "reduce_u8", "reduce_f32", "convert_u8_u8", "convert_u8_f32", "convert_f32_u8", "convert_f32_f32", "tile_u8", "tile_f32", "finish_statistics")
                 kernels = {name: module.get_function(name) for name in names}
         except Exception as error:
             raise RuntimeError(f"CUDA kernel loading failed on device {device}; check NVIDIA driver and GPU architecture compatibility: {error}") from error
@@ -99,28 +136,30 @@ class CudaImage:
             completion: Existing CUDA completion event, or None to record one
                 on the current stream of the array's device.
         """
+        global _PENDING_REGISTERED
         cp = cupy()
         self.array: Any = array
         self.device = int(self.array.device.id)
-        self.owners = owners
         with cp.cuda.Device(self.device):
             self.stream: Any = cp.cuda.get_current_stream()
             self.event: Any = cp.cuda.Event() if completion is None else completion
             if completion is None:
                 self.event.record(self.stream)
-
-    def __del__(self) -> None:
-        """Wait for submitted work before releasing retained asynchronous input owners."""
-        # Keep owners alive while the last handle waits for its submitted work.
-        if hasattr(self, "event"):
-            with cupy().cuda.Device(self.device):
-                self.event.synchronize()
+            _collect_pending(self.device, int(self.stream.ptr))
+            dependencies = tuple(owner.array if isinstance(owner, CudaImage) else owner for owner in owners)
+            with _PENDING_LOCK:
+                if not _PENDING_REGISTERED:
+                    atexit.register(_finish_pending)
+                    _PENDING_REGISTERED = True
+                queue = _PENDING.setdefault((self.device, int(self.stream.ptr)), deque())
+                queue.append((self.event, (self.array, *dependencies)))
 
     def synchronize(self) -> None:
         """Wait for this resource's event and wrap execution failures as RuntimeError."""
         try:
             with cupy().cuda.Device(self.device):
                 self.event.synchronize()
+                _collect_pending(self.device)
         except Exception as error:
             raise RuntimeError(f"CUDA execution failed on device {self.device}: {error}") from error
 
@@ -147,6 +186,7 @@ class CudaImage:
                 completion = cp.cuda.Event()
                 completion.record(stream)
                 completion.synchronize()
+                _collect_pending(self.device)
                 return host.tobytes()
             except Exception as error:
                 stream.synchronize()
@@ -194,18 +234,22 @@ class CudaImage:
         with cp.cuda.Device(self.device):
             stream = cp.cuda.get_current_stream()
             stream.wait_event(self.event)
-            stream.wait_event(other.event)
+            if other is not self:
+                stream.wait_event(other.event)
             try:
                 source = cp.ascontiguousarray(self.array)
-                rhs = cp.ascontiguousarray(other.array)
+                rhs = source if other is self else cp.ascontiguousarray(other.array)
                 output = cp.empty((parameters[4], parameters[3], channels), dtype=cp.float32 if floating else cp.uint8)
                 from ._gpu_cuda_plan import cache
 
                 state = cache(self.device)
+                op = parameters[5]
+                blocks = min((parameters[0] * parameters[1] + 1023) // 1024, 4096) if op == 29 else 1
+                if op == 29:
+                    parameters = [*parameters[:7], blocks]
                 parameter_owner = state.control(parameters, "uint32")
                 weight_owner = state.control(values, "float32")
                 controls, weights = parameter_owner.array, weight_owner.array
-                op = parameters[5]
                 kernel_name = "image_f32" if floating else "image_u8"
                 if op == 14:
                     kernel_name = f"convert_{'f32' if source_float else 'u8'}_{'f32' if floating else 'u8'}"
@@ -217,8 +261,16 @@ class CudaImage:
                 # A moderate block size covers multiple warps without assuming GPU limits.
                 threads = 128
                 count = _dispatch_threads(parameters, channels, floating)
-                kernel(((count + threads - 1) // threads,), (threads,), (source, output, rhs, controls, weights), stream=stream)
-                return CudaImage(output, owners=(self, other, source, rhs, parameter_owner, weight_owner, kernel))
+                partials = cp.empty((output.size * blocks,), dtype=cp.float32) if blocks > 1 else output
+                if op == 29:
+                    count = parameters[2] * blocks
+                kernel(((count + threads - 1) // threads,), (threads,), (source, partials, rhs, controls, weights), stream=stream)
+                finish = None
+                if blocks > 1:
+                    finish = library(self.device)("finish_statistics")
+                    count = output.size if parameters[6] == 1 else parameters[2]
+                    finish(((count + threads - 1) // threads,), (threads,), (partials, output, controls), stream=stream)
+                return CudaImage(output, owners=(self, other, source, rhs, parameter_owner, weight_owner, kernel, partials, finish))
             except Exception as error:
                 # Failed launches must finish before temporary input owners disappear.
                 stream.synchronize()

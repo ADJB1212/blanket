@@ -1,6 +1,8 @@
 import inspect
 import itertools
+import math
 import os
+import struct
 from pathlib import Path
 
 import pytest
@@ -130,7 +132,8 @@ def test_precompiled_module_loads_without_source_compilation(monkeypatch):
     cuda_runtime.library.cache_clear()
     try:
         resolve = cuda_runtime.library(0)
-        assert len(names) == 10
+        assert len(names) == 11
+        assert resolve("finish_statistics")() == "finish_statistics"
         assert resolve("tile_u8")() == "tile_u8"
         assert resolve("tile_f32")() == "tile_f32"
         assert resolve("image_f32")() == "image_f32"
@@ -218,3 +221,55 @@ def test_cuda_allocation_error_has_device_context(cuda, monkeypatch):
     monkeypatch.setattr(cuda, "empty", fail_allocation)
     with pytest.raises(RuntimeError, match=r"CUDA dispatch failed on device 0.*out of device memory"):
         image.invert()
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+def test_cuda_statistics_merge_large_images_and_preserve_counts(cuda, mode):
+    channels = len(Image.new(mode, (1, 1)).getbands())
+    pixels = 1031 * 17
+    samples = [(i * 37 + i // 11) % 256 for i in range(pixels * channels)]
+    data = struct.pack(f"<{len(samples)}f", *(v / 32 for v in samples)) if "F" in mode else bytes(samples)
+    image = ImageGpu.from_image(Image.frombytes(mode, (1031, 17), data))
+    statistics = image.statistics()
+    histogram = None if "F" in mode else image.histogram()
+    image.close()
+    actual = statistics.to_cpu()
+    counts = None if histogram is None else histogram.to_cpu()
+    for band in range(channels):
+        values = samples[band::channels]
+        if counts is not None:
+            expected = [0] * 256
+            for value in values:
+                expected[value] += 1
+            assert counts[band] == expected
+        values = [v / 32 for v in values] if "F" in mode else values
+        assert actual[band]["count"] == pixels
+        assert actual[band]["extrema"] == (min(values), max(values))
+        assert actual[band]["moments"] == pytest.approx([sum(v**order for v in values) / pixels for order in range(1, 5)], rel=1e-5)
+
+
+def test_cuda_statistics_propagate_nan_from_later_partitions(cuda):
+    samples = [1.0] * 4099
+    samples[3000] = math.nan
+    image = ImageGpu.from_image(Image.frombytes("F", (4099, 1), struct.pack("<4099f", *samples)))
+    result = image.statistics().to_cpu()[0]
+    assert result["count"] == 4099
+    assert all(math.isnan(v) for v in result["extrema"])
+    assert all(math.isnan(v) for v in result["moments"])
+
+
+def test_cuda_unary_dispatch_packs_noncontiguous_input_once(cuda, monkeypatch):
+    torch = pytest.importorskip("torch")
+    tensor = torch.arange(17 * 19 * 3, device="cuda").to(torch.uint8).reshape(17, 19, 3)[:, ::2]
+    image = ImageGpu.from_torch(tensor, layout="HWC")
+    original = cuda.ascontiguousarray
+    calls = []
+
+    def pack(array):
+        calls.append(array)
+        return original(array)
+
+    monkeypatch.setattr(cuda, "ascontiguousarray", pack)
+    result = image.invert()
+    assert len(calls) == 1
+    torch.testing.assert_close(result.to_torch(layout="HWC"), 255 - tensor)

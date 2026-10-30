@@ -136,8 +136,8 @@ class ProcessingPlan:
 
         Returns:
             A dictionary with steps (fused dispatch count), tile_size (width,
-            height), halo (horizontal, vertical), and scratch_bytes (both scratch
-            buffers together). Sizes and halos are measured in pixels.
+            height), halo (horizontal, vertical), and scratch_bytes (total
+            intermediate storage). Sizes and halos are measured in pixels.
         """
         self._check()
         steps, tile, halo, scratch_bytes = self._resource.info()

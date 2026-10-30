@@ -21,39 +21,48 @@ class _Cache:
         self.control_limit = 16 * 1024 * 1024
         self.scratch: list[Any] = []
         self.controls: OrderedDict[tuple[str, bytes], Any] = OrderedDict()
+        self.scratch_bytes = 0
+        self.control_bytes = 0
 
     def info(self) -> tuple[int, int, int, int]:
         """Return retained scratch bytes/limit and control bytes/limit, in that order."""
+        with _gpu_cuda.cupy().cuda.Device(self.device):
+            _gpu_cuda._collect_pending(self.device)
         with self.lock:
-            return (sum(array.nbytes for array in self.scratch), self.image_limit, sum(len(key[1]) + value.array.nbytes for key, value in self.controls.items()), self.control_limit)
+            return (self.scratch_bytes, self.image_limit, self.control_bytes, self.control_limit)
 
     def configure(self, image_bytes: int, control_bytes: int) -> None:
         """Replace byte limits and discard cached scratch and control entries."""
+        with _gpu_cuda.cupy().cuda.Device(self.device):
+            _gpu_cuda._collect_pending(self.device)
         with self.lock:
             self.image_limit, self.control_limit = image_bytes, control_bytes
             self.scratch.clear()
             self.controls.clear()
+            self.scratch_bytes = self.control_bytes = 0
 
     def take(self, size: int) -> object:
         """Remove an exact-size scratch buffer from the cache or allocate new storage."""
         with self.lock:
             for i, array in enumerate(self.scratch):
                 if array.nbytes == size:
+                    self.scratch_bytes -= size
                     return self.scratch.pop(i)
         cp = _gpu_cuda.cupy()
         # Direct allocations keep this cache independent of CuPy's global pool.
         memory = cp.cuda.MemoryPointer(cp.cuda.Memory(size), 0)
         return cp.ndarray((size,), dtype=cp.uint8, memptr=memory)
 
-    def put(self, arrays: tuple[Any, Any]) -> None:
+    def put(self, arrays: tuple[Any, ...]) -> None:
         """Retain completed scratch buffers while respecting byte and entry limits."""
         with self.lock:
             for array in arrays:
                 if array.nbytes > self.image_limit:
                     continue
-                while self.scratch and (len(self.scratch) >= 16 or sum(a.nbytes for a in self.scratch) + array.nbytes > self.image_limit):
-                    self.scratch.pop(0)
+                while self.scratch and (len(self.scratch) >= 16 or self.scratch_bytes + array.nbytes > self.image_limit):
+                    self.scratch_bytes -= self.scratch.pop(0).nbytes
                 self.scratch.append(array)
+                self.scratch_bytes += array.nbytes
 
     def control(self, values: list[int] | list[float], dtype: str) -> _gpu_cuda.CudaImage:
         """Reuse or upload an immutable CUDA control array.
@@ -82,9 +91,11 @@ class _Cache:
             array.set(host, stream=cp.cuda.get_current_stream())
             value = _gpu_cuda.CudaImage(array, owners=(key, host))
             if len(key[1]) * 2 <= self.control_limit:
-                while self.controls and (len(self.controls) >= 64 or self.info()[2] + len(key[1]) * 2 > self.control_limit):
-                    self.controls.popitem(last=False)
+                while self.controls and (len(self.controls) >= 64 or self.control_bytes + len(key[1]) * 2 > self.control_limit):
+                    old_key, old_value = self.controls.popitem(last=False)
+                    self.control_bytes -= len(old_key[1]) + old_value.array.nbytes
                 self.controls[key] = value
+                self.control_bytes += len(key[1]) + value.array.nbytes
             return value
 
 
@@ -103,19 +114,13 @@ def cache(device: int) -> _Cache:
 class _ScratchLease:
     """Hold plan scratch buffers until the associated completion event finishes."""
 
-    def __init__(self, state: _Cache, scratch: tuple[Any, Any], event: object) -> None:
-        """Retain a scratch-buffer pair, its cache, and the batch completion event."""
+    def __init__(self, state: _Cache, scratch: tuple[Any, ...]) -> None:
+        """Retain scratch buffers and their cache until completion tracking releases them."""
         self.state, self.scratch = state, scratch
-        self.event: Any = event
 
     def __del__(self) -> None:
-        """Wait for batch completion and return scratch buffers to their device cache."""
-        with _gpu_cuda.cupy().cuda.Device(self.state.device):
-            try:
-                self.event.synchronize()
-            except Exception:
-                return
-            self.state.put(self.scratch)
+        """Return scratch after the completion queue releases this lease."""
+        self.state.put(self.scratch)
 
 
 class CudaPlan:
@@ -145,6 +150,8 @@ class CudaPlan:
         self.schedule: list[tuple[int, int, int]] = []
         parameters: list[int] = []
         _, tile, halo, _ = self._info
+        direct = tuple(tile) == (width, height)
+        self.scratch_count = int(len(steps) > 1) if direct else 2
         tiles = ((width + tile[0] - 1) // tile[0]) * ((height + tile[1] - 1) // tile[1])
         if tiles * (len(steps) + 2) > 65_536:
             raise ValueError("CUDA plan exceeds 65536 dispatches; increase memory_limit or reduce steps")
@@ -153,13 +160,20 @@ class CudaPlan:
                 w, h = min(tile[0], width - x), min(tile[1], height - y)
                 left, top = max(0, x - halo[0]), max(0, y - halo[1])
                 tw, th = min(width, x + w + halo[0]) - left, min(height, y + h + halo[1]) - top
-                self.schedule.append((-1, 0, -1))
-                parameters.extend([width, height, channels, tw, th, left, top, 0, 0, tw, th])
+                if not direct or not steps:
+                    self.schedule.append((-1, -1 if direct else 0, -1))
+                    parameters.extend([width, height, channels, tw, th, left, top, 0, 0, tw, th])
                 for i, (op, kernel, axis, _) in enumerate(steps):
-                    self.schedule.append((i % 2, (i + 1) % 2, i))
+                    if direct:
+                        last = (len(steps) - i) % 2 == 1
+                        src = -1 if i == 0 else (0 if last else -2)
+                        self.schedule.append((src, -1 if last else 0, i))
+                    else:
+                        self.schedule.append((i % 2, (i + 1) % 2, i))
                     parameters.extend([tw, th, channels, tw, th, op, kernel, axis, 0, 0, 0])
-                self.schedule.append((len(steps) % 2, -1, -1))
-                parameters.extend([tw, th, channels, width, height, x - left, y - top, x, y, w, h])
+                if not direct:
+                    self.schedule.append((len(steps) % 2, -1, -1))
+                    parameters.extend([tw, th, channels, width, height, x - left, y - top, x, y, w, h])
         self.counts = [
             parameters[i + 9] * parameters[i + 10] * channels if entry[2] == -1 else _dispatch_threads(parameters[i : i + 8], channels, floating)
             for i, entry in zip(range(0, len(parameters), 11), self.schedule, strict=True)
@@ -167,14 +181,15 @@ class CudaPlan:
         cp = _gpu_cuda.cupy()
         with cp.cuda.Device(device):
             self.parameters = self.state.control(parameters, "uint32")
-            self.rows = self.parameters.array.reshape((-1, 11))
+            self.rows = tuple(self.parameters.array.reshape((-1, 11)))
             self.controls = [self.state.control(values or [0.0], "float32") for _, _, _, values in steps]
             self.kernel = _gpu_cuda.library(device)("image_f32" if floating else "image_u8")
             self.tile_kernel = _gpu_cuda.library(device)("tile_f32" if floating else "tile_u8")
 
     def info(self) -> tuple[int, list[int], list[int], int]:
         """Return fused step count, tile dimensions, halo dimensions, and scratch bytes."""
-        return self._info
+        steps, tile, halo, scratch_bytes = self._info
+        return steps, tile, halo, scratch_bytes // 2 * self.scratch_count
 
     def run_batch(self, images: list[Any]) -> list[Any]:
         """Submit resident CUDA inputs through the prepared tile schedule.
@@ -199,7 +214,7 @@ class CudaPlan:
         cp = _gpu_cuda.cupy()
         with cp.cuda.Device(self.device):
             stream = cp.cuda.get_current_stream()
-            scratch: tuple[Any, Any] | None = None
+            scratch: tuple[Any, ...] | None = None
             try:
                 for image in [*images, self.parameters, *self.controls]:
                     stream.wait_event(image.event)
@@ -208,11 +223,11 @@ class CudaPlan:
                     raise ValueError("CUDA plan input sample type must match its prepared mode")
                 inputs = [cp.ascontiguousarray(image.array) for image in images]
                 outputs = [cp.empty(self.shape, dtype=dtype) for _ in images]
-                scratch = (self.state.take(self._info[3] // 2), self.state.take(self._info[3] // 2))
-                buffers = (scratch[0].view(dtype), scratch[1].view(dtype))
+                scratch = tuple(self.state.take(self._info[3] // 2) for _ in range(self.scratch_count))
+                buffers = tuple(array.view(dtype) for array in scratch)
                 for source, output in zip(inputs, outputs, strict=True):
                     for row, (src, dst, step), count in zip(self.rows, self.schedule, self.counts, strict=True):
-                        source_buffer = source if src == -1 else buffers[src]
+                        source_buffer = source if src == -1 else (output if src == -2 else buffers[src])
                         destination = output if dst == -1 else buffers[dst]
                         if step == -1:
                             self.tile_kernel(((count + 127) // 128,), (128,), (source_buffer, destination, row), stream=stream)
@@ -220,7 +235,7 @@ class CudaPlan:
                             self.kernel(((count + 127) // 128,), (128,), (source_buffer, destination, source_buffer, row, self.controls[step].array), stream=stream)
                 event = cp.cuda.Event()
                 event.record(stream)
-                lease = _ScratchLease(self.state, scratch, event)
+                lease = _ScratchLease(self.state, scratch)
                 scratch = None
                 owners = (self, lease, *images, *inputs)
                 return [_gpu_cuda.CudaImage(output, owners=owners, completion=event) for output in outputs]
