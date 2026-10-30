@@ -445,7 +445,7 @@ template <typename T> void process(device const T *src, device T *dst, device co
         return;
     }
     if (op == 9) {
-        uint sx = uint((long(x) - int(k) + sw) % sw), sy = uint((long(y) - int(p[7]) + sh) % sh);
+        uint sx = x >= k ? x - k : x + sw - k, sy = y >= p[7] ? y - p[7] : y + sh - p[7];
         dst[i] = src[(sy * sw + sx) * c + band];
         return;
     }

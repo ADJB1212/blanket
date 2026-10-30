@@ -30,6 +30,8 @@ const VALUES_SLOT: usize = 4;
 const INLINE_CONTROL_BYTES: usize = 4096;
 // Eight SIMD groups amortize threadgroup scheduling for streaming image kernels.
 const THREADGROUP_THREADS: usize = 256;
+// Transpose groups exchange a padded 16x16 pixel tile in threadgroup memory.
+const TRANSPOSE_TILE: usize = 16;
 // Operation IDs are contiguous through unsigned quantization.
 const OPERATION_COUNT: usize = operation::QUANTIZE as usize + 1;
 // Matches SPECIALIZED_OPERATION in kernels.metal.
@@ -64,15 +66,29 @@ fn packed_operation(op: u32, floating: bool, channels: u32) -> bool {
         ) || (channels >= blanket_gpu::protocol::GRAY_ALPHA_CHANNELS && matches!(op, operation::RESIZE | operation::CONVOLVE)))
 }
 
+fn pixel_operation(op: u32) -> bool {
+    matches!(
+        op,
+        operation::CROP | operation::TRANSPOSE | operation::OFFSET | operation::ALPHA_COMPOSITE | operation::PREMULTIPLY | operation::UNPREMULTIPLY
+    )
+}
+
 fn dispatch_samples(parameters: &[u32; 8], floating: bool, samples: usize, simd_width: usize) -> usize {
-    let [width, height, channels, _, _, op, radius, axis] = *parameters;
+    let [width, height, channels, output_width, output_height, op, radius, axis] = *parameters;
     if op == operation::BOX_BLUR && !floating && radius >= SLIDING_BLUR_RADIUS {
         let (length, lines) = if axis == 0 { (width, height) } else { (height, width) };
-        let lanes = if channels == 4 { 1 } else { channels as usize };
-        (length as usize).div_ceil(simd_width) * lines as usize * lanes * simd_width
+        (length as usize).div_ceil(simd_width) * lines as usize * simd_width
     } else if op == operation::LUMINANCE_REDUCE {
         samples / 4 * simd_width
-    } else if !floating && matches!(op, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3) {
+    } else if op == operation::TRANSPOSE
+        && matches!(radius, 2 | 4 | 5 | 6)
+        && output_width >= TRANSPOSE_TILE as u32
+        && output_height >= TRANSPOSE_TILE as u32
+    {
+        (output_width as usize).div_ceil(TRANSPOSE_TILE) * (output_height as usize).div_ceil(TRANSPOSE_TILE) * TRANSPOSE_TILE * TRANSPOSE_TILE
+    } else if pixel_operation(op)
+        || (!floating && matches!(op, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3))
+    {
         samples / channels as usize
     } else if packed_operation(op, floating, channels) {
         samples.div_ceil(PACKED_SAMPLES)
@@ -146,10 +162,11 @@ pub struct Context {
     pool: Arc<Mutex<BufferPool>>,
     controls: Mutex<ControlCache>,
     tile_pipelines: [Pipeline; SAMPLE_FORMAT_COUNT],
-    blur_pipeline: Pipeline,
+    blur_pipelines: [Pipeline; 4],
     conversions: [[Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT]; SAMPLE_FORMAT_COUNT],
     reductions: [Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT],
     statistics: [Pipeline; SAMPLE_FORMAT_COUNT],
+    histogram: Pipeline,
     finish_statistics: Pipeline,
     paste: [Pipeline; SAMPLE_FORMAT_COUNT],
 }
@@ -287,7 +304,7 @@ impl Context {
             encoder.setBuffer_offset_atIndex(Some(dst), 0, OUTPUT_SLOT);
             encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
         }
-        let samples = parameters[9] as usize * parameters[10] as usize * parameters[2] as usize;
+        let samples = parameters[9] as usize * parameters[10] as usize;
         encoder.dispatchThreads_threadsPerThreadgroup(
             MTLSize { width: samples, height: 1, depth: 1 },
             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
@@ -314,7 +331,7 @@ impl Context {
                 .iter()
                 .map(|step| {
                     if step.operation == operation::BOX_BLUR && !d.float && step.kernel >= SLIDING_BLUR_RADIUS {
-                        Ok(&*self.blur_pipeline)
+                        Ok(&*self.blur_pipelines[d.channels as usize - 1])
                     } else {
                         self.operation_pipeline(step.operation, d.float, d.channels)
                     }
@@ -455,7 +472,7 @@ impl Context {
                 encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
             }
             encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: d.width as usize * d.height as usize * if d.float { d.channels as usize } else { 1 }, height: 1, depth: 1 },
+                MTLSize { width: d.width as usize * d.height as usize, height: 1, depth: 1 },
                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
             );
             encoder.endEncoding();
@@ -495,8 +512,9 @@ impl Context {
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
             let source = NSString::from_str(&format!(
-                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}\n{}",
+                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}\n{}\n{}",
                 super::SHADERS,
+                include_str!("pixels.metal"),
                 include_str!("tiles.metal"),
                 include_str!("blur.metal"),
                 include_str!("statistics.metal"),
@@ -512,12 +530,14 @@ impl Context {
                 [[pipeline("convert_u8_u8")?, pipeline("convert_u8_f32")?], [pipeline("convert_f32_u8")?, pipeline("convert_f32_f32")?]];
             let reductions = [pipeline("luminance_u8")?, pipeline("luminance_f32")?];
             let statistics = [pipeline("statistics_u8")?, pipeline("statistics_f32")?];
+            let histogram = pipeline("histogram_u8")?;
             let finish_statistics = pipeline("finish_statistics")?;
             let paste = [pipeline("paste_u8")?, pipeline("paste_f32")?];
             let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
             let max_buffer_length = device.maxBufferLength();
             let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
-            let blur_pipeline = pipeline("scan_blur_u8")?;
+            let blur_pipelines =
+                [pipeline("scan_blur_l_u8")?, pipeline("scan_blur_la_u8")?, pipeline("scan_blur_rgb_u8")?, pipeline("scan_blur_rgba_u8")?];
             Ok(Self {
                 device,
                 max_buffer_length,
@@ -527,12 +547,13 @@ impl Context {
                 conversions,
                 reductions,
                 statistics,
+                histogram,
                 finish_statistics,
                 paste,
                 pool: Arc::default(),
                 controls: Mutex::default(),
                 tile_pipelines,
-                blur_pipeline,
+                blur_pipelines,
             })
         })
     }
@@ -555,7 +576,11 @@ impl Context {
                     constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&operation).cast(), MTLDataType::UInt, OPERATION_CONSTANT);
                     constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&channels).cast(), MTLDataType::UInt, CHANNELS_CONSTANT);
                 }
-                let name = if floating {
+                let name = if operation == operation::TRANSPOSE {
+                    if floating { "transpose_f32" } else { "transpose_u8" }
+                } else if pixel_operation(operation) {
+                    if floating { "pixel_f32" } else { "pixel_u8" }
+                } else if floating {
                     "image_f32"
                 } else if matches!(operation, operation::RESIZE | operation::CONVOLVE | operation::BOX_BLUR) && matches!(channels, 2 | 3) {
                     "color_u8"
@@ -654,11 +679,11 @@ impl Backend for Context {
             let pipeline = if op == operation::CONVERT {
                 &*self.conversions[usize::from(source.descriptor.float)][usize::from(request.output.float)]
             } else if op == operation::BOX_BLUR && !request.output.float && request.parameters[6] >= SLIDING_BLUR_RADIUS {
-                &*self.blur_pipeline
+                &*self.blur_pipelines[source.descriptor.channels as usize - 1]
             } else if op == operation::LUMINANCE_REDUCE {
                 &*self.reductions[usize::from(source.descriptor.float)]
             } else if op == operation::STATISTICS {
-                &*self.statistics[usize::from(source.descriptor.float)]
+                if request.parameters[6] == 1 { &*self.histogram } else { &*self.statistics[usize::from(source.descriptor.float)] }
             } else {
                 self.operation_pipeline(op, request.output.float, source.descriptor.channels)?
             };
@@ -736,6 +761,10 @@ impl Backend for Context {
         self.download_bytes(image).map(<[u8]>::to_vec)
     }
 }
+
+#[cfg(test)]
+#[path = "pixels_tests.rs"]
+mod pixels_tests;
 
 #[cfg(test)]
 mod tests {
@@ -842,6 +871,95 @@ mod tests {
 
     fn floats(bytes: &[u8]) -> Vec<f32> {
         bytes.as_chunks::<4>().0.iter().map(|&chunk| f32::from_ne_bytes(chunk)).collect()
+    }
+
+    #[test]
+    fn packed_scan_blur_matches_wrapping_reference_and_preserves_guards() {
+        let context = Context::new().unwrap();
+        for channels in [1, 2, 3, 4] {
+            let pipeline = &context.blur_pipelines[channels as usize - 1];
+            for (width, height) in [(1, 1), (1, 33), (33, 1), (31, 3), (32, 3), (33, 3), (65, 3), (3, 65)] {
+                let descriptor = Descriptor { width, height, channels, float: false };
+                let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 97 + i / 7) as u8).collect();
+                let guarded = Descriptor { width: data.len() as u32 + 8, height: 1, channels: 1, float: false };
+                let mut input = vec![0xa5; guarded.byte_len().unwrap()];
+                input[4..4 + data.len()].copy_from_slice(&data);
+                let source = context.upload(guarded, &input).unwrap();
+                for radius in [32.0, 32.5, 128.5, 16_777_216.0] {
+                    let (radius, values) = blanket_gpu::blur_parameters(radius, false).unwrap();
+                    for axis in [0, 1] {
+                        let output = context.upload(guarded, &vec![0xa5; input.len()]).unwrap();
+                        let parameters = [width, height, channels, width, height, operation::BOX_BLUR, radius, axis];
+                        let command = context.queue.commandBuffer().unwrap();
+                        let encoder = command.computeCommandEncoder().unwrap();
+                        encoder.setComputePipelineState(pipeline);
+                        // Four-byte offsets satisfy Metal alignment but misalign packed RGB rows.
+                        unsafe {
+                            encoder.setBuffer_offset_atIndex(Some(&source.buffer), 4, SOURCE_SLOT);
+                            encoder.setBuffer_offset_atIndex(Some(&output.buffer), 4, OUTPUT_SLOT);
+                            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), size_of_val(&parameters), PARAMETERS_SLOT);
+                            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&values).cast(), size_of_val(&values), VALUES_SLOT);
+                        }
+                        encoder.dispatchThreads_threadsPerThreadgroup(
+                            MTLSize { width: dispatch_samples(&parameters, false, data.len(), pipeline.threadExecutionWidth()), height: 1, depth: 1 },
+                            MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+                        );
+                        encoder.endEncoding();
+                        command.commit();
+                        command.waitUntilCompleted();
+                        assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
+                        let actual = context.download(&output).unwrap();
+                        assert_eq!(&actual[..4], &[0xa5; 4]);
+                        assert_eq!(&actual[4 + data.len()..], &[0xa5; 4]);
+                        let (length, stride) = if axis == 0 { (width, channels) } else { (height, width * channels) };
+                        for (index, &sample) in actual[4..4 + data.len()].iter().enumerate() {
+                            let position = if axis == 0 { index as u32 / channels % width } else { index as u32 / (width * channels) };
+                            let base = index as u32 - position * stride;
+                            let at = |position: u32| u32::from(data[(base + position * stride) as usize]);
+                            let low = position.saturating_sub(radius);
+                            let high = (position + radius).min(length - 1);
+                            let mut sum = (low..=high).map(at).sum::<u32>();
+                            sum = sum.wrapping_add(at(0).wrapping_mul(radius.saturating_sub(position)));
+                            sum = sum.wrapping_add(at(length - 1).wrapping_mul((position + radius).saturating_sub(length - 1)));
+                            let edges = at(position.saturating_sub(radius + 1)) + at((position + radius + 1).min(length - 1));
+                            let expected =
+                                sum.wrapping_mul(values[0] as u32).wrapping_add(edges.wrapping_mul(values[1] as u32)).wrapping_add(1 << 23) >> 24;
+                            assert_eq!(u32::from(sample), expected, "{parameters:?}, sample {index}");
+                        }
+                        assert_eq!(context.download(&source).unwrap(), input);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn histogram_simd_votes_cover_uniform_mixed_and_partial_groups() {
+        use blanket_gpu::protocol::statistics;
+        let context = Context::new().unwrap();
+        for width in [1, 31, 32, 33, 255, 256, 257, 4095, 4096, 4097, 8193] {
+            for channels in [1, 2, 3, 4] {
+                for run in [1, 16, 32, 33, 8193] {
+                    let descriptor = Descriptor { width, height: 1, channels, float: false };
+                    let data: Vec<u8> =
+                        (0..width).flat_map(|pixel| (0..channels).map(move |band| ((pixel / run * 85 + band * 17) % 256) as u8)).collect();
+                    let source = context.upload(descriptor, &data).unwrap();
+                    let output = Descriptor { width: statistics::HISTOGRAM_BINS, height: channels, channels: 1, float: true };
+                    let request =
+                        Dispatch { output, parameters: [width, 1, channels, output.width, channels, operation::STATISTICS, 1, 0], values: vec![] };
+                    let result = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
+                    let counts = floats(&context.download(&result).unwrap());
+                    for band in 0..channels as usize {
+                        let mut expected = [0_u32; 256];
+                        for &value in data.iter().skip(band).step_by(channels as usize) {
+                            expected[value as usize] += 1;
+                        }
+                        let actual: Vec<u32> = counts[band * 256..][..256].iter().map(|count| count.to_bits()).collect();
+                        assert_eq!(actual, expected, "width={width}, channels={channels}, run={run}, band={band}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

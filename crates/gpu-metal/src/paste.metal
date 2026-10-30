@@ -1,4 +1,4 @@
-template <typename T, typename F>
+template <typename T, typename F, bool Floating = false>
 void paste_image(device const T *background, device T *dst, device const T *source, device const uchar *mask, constant uint *p, uint i,
                  uint channels) {
     uint width = p[0], height = p[1];
@@ -21,7 +21,7 @@ void paste_image(device const T *background, device T *dst, device const T *sour
     }
     F a = F(background[i]), b = F(source[source_pixel * channels + band]);
     F value = (coverage == 1 ? F(0) : a * (1 - coverage)) + (coverage == 0 ? F(0) : b * coverage);
-    if (is_same_v<T, float>)
+    if (Floating)
         dst[i] = T(value);
     else
         dst[i] = T(clamp(floor(value + 0.5f), 0.0f, 255.0f));
@@ -59,5 +59,30 @@ kernel void paste_u8(device const uchar *a [[buffer(0)]], device uchar *dst [[bu
 
 kernel void paste_f32(device const float *a [[buffer(0)]], device float *dst [[buffer(1)]], device const float *b [[buffer(2)]],
                       constant uint *p [[buffer(3)]], device const uchar *mask [[buffer(5)]], uint i [[thread_position_in_grid]]) {
-    paste_image<float, float>(a, dst, b, mask, p, i, p[2]);
+    if (p[2] == 4)
+        paste_image<float4, float4, true>(reinterpret_cast<device const float4 *>(a),
+                                          reinterpret_cast<device float4 *>(dst),
+                                          reinterpret_cast<device const float4 *>(b),
+                                          mask,
+                                          p,
+                                          i,
+                                          1);
+    else if (p[2] == 3)
+        paste_image<packed_float3, float3, true>(reinterpret_cast<device const packed_float3 *>(a),
+                                                 reinterpret_cast<device packed_float3 *>(dst),
+                                                 reinterpret_cast<device const packed_float3 *>(b),
+                                                 mask,
+                                                 p,
+                                                 i,
+                                                 1);
+    else if (p[2] == 2)
+        paste_image<float2, float2, true>(reinterpret_cast<device const float2 *>(a),
+                                          reinterpret_cast<device float2 *>(dst),
+                                          reinterpret_cast<device const float2 *>(b),
+                                          mask,
+                                          p,
+                                          i,
+                                          1);
+    else
+        paste_image<float, float, true>(a, dst, b, mask, p, i, 1);
 }

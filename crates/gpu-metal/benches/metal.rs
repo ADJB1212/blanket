@@ -13,7 +13,7 @@ mod benchmarks {
     const CHANNELS: u32 = 4;
 
     fn fixture(descriptor: Descriptor) -> Vec<u8> {
-        let samples = descriptor.width as usize * descriptor.height as usize * CHANNELS as usize;
+        let samples = descriptor.width as usize * descriptor.height as usize * descriptor.channels as usize;
         if descriptor.float {
             (0..samples).flat_map(|i| ((i % 251) as f32 / 250.0).to_ne_bytes()).collect()
         } else {
@@ -47,6 +47,46 @@ mod benchmarks {
 
         let sizes = if blanket_bench_support::full_matrix() { &SIZES[..] } else { &SIZES[..2] };
         for &(width, height) in sizes {
+            {
+                let mut scans = c.benchmark_group(format!("gpu/metal/scan/{width}x{height}"));
+                scans.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
+                for channels in [1, 2, 3, 4] {
+                    let descriptor = Descriptor { width, height, channels, float: false };
+                    let source = context.upload(descriptor, &fixture(descriptor)).unwrap();
+                    let (radius, controls) = blur_parameters(32.5, false).unwrap();
+                    for (axis, name) in [(0, "horizontal"), (1, "vertical")] {
+                        let request = request(descriptor, descriptor, operation::BOX_BLUR, radius, axis, controls.to_vec());
+                        complete(&context, dispatch(&context, &source, &source, &request));
+                        scans.bench_function(format!("c{channels}/{name}"), |b| {
+                            b.iter(|| complete(&context, dispatch(&context, &source, &source, &request)))
+                        });
+                    }
+                }
+                scans.finish();
+            }
+            {
+                let mut histograms = c.benchmark_group(format!("gpu/metal/histogram/{width}x{height}"));
+                histograms.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
+                let descriptor = Descriptor { width, height, channels: CHANNELS, float: false };
+                for (name, bytes) in [
+                    ("constant", vec![71; descriptor.byte_len().unwrap()]),
+                    ("striped", (0..descriptor.byte_len().unwrap()).map(|i| ((i / 64) % 4 * 85) as u8).collect()),
+                    ("patterned", fixture(descriptor)),
+                ] {
+                    let source = context.upload(descriptor, &bytes).unwrap();
+                    let request = request(
+                        descriptor,
+                        Descriptor { width: statistics::HISTOGRAM_BINS, height: CHANNELS, channels: 1, float: true },
+                        operation::STATISTICS,
+                        1,
+                        0,
+                        vec![],
+                    );
+                    complete(&context, dispatch(&context, &source, &source, &request));
+                    histograms.bench_function(name, |b| b.iter(|| complete(&context, dispatch(&context, &source, &source, &request))));
+                }
+                histograms.finish();
+            }
             for floating in [false, true] {
                 let descriptor = Descriptor { width, height, channels: CHANNELS, float: floating };
                 let bytes = fixture(descriptor);
@@ -81,7 +121,13 @@ mod benchmarks {
                     ("copy", request(descriptor, descriptor, operation::COPY, 0, 0, vec![])),
                     ("brightness", request(descriptor, descriptor, operation::BRIGHTNESS, 0, 0, vec![1.2])),
                     ("blend", request(descriptor, descriptor, operation::BLEND, 0, 0, vec![0.4])),
+                    ("multiply", request(descriptor, descriptor, operation::BINARY, 1, 0, vec![])),
+                    ("offset", request(descriptor, descriptor, operation::OFFSET, 7, 5, vec![])),
+                    ("crop", request(descriptor, resized, operation::CROP, width / 4, height / 4, vec![])),
+                    ("rotate_90", request(descriptor, Descriptor { width: height, height: width, ..descriptor }, operation::TRANSPOSE, 2, 0, vec![])),
                     ("alpha_composite", request(descriptor, descriptor, operation::ALPHA_COMPOSITE, 0, 0, vec![])),
+                    ("premultiply", request(descriptor, descriptor, operation::PREMULTIPLY, 0, 0, vec![])),
+                    ("unpremultiply", request(descriptor, descriptor, operation::UNPREMULTIPLY, 0, 0, vec![])),
                     ("convolve_3x3", request(descriptor, descriptor, operation::CONVOLVE, 3, 0, [vec![0.0, 0.0], vec![1.0 / 9.0; 9]].concat())),
                     ("box_blur_horizontal", request(descriptor, descriptor, operation::BOX_BLUR, radius, 0, controls.to_vec())),
                     ("median_3x3", request(descriptor, descriptor, operation::RANK, 3, 4, vec![])),
@@ -154,6 +200,11 @@ mod benchmarks {
                         complete(&context, dispatch(&context, &source, &other, &request));
                         resident.bench_function(name, |b| b.iter(|| complete(&context, dispatch(&context, &source, &other, &request))));
                     }
+                    let mask_descriptor = Descriptor { channels: 1, ..descriptor };
+                    let mask = context.upload(mask_descriptor, &fixture(mask_descriptor)).unwrap();
+                    resident.bench_function("masked_paste", |b| {
+                        b.iter(|| complete(&context, context.paste(&source, &other, Some(&mask), [3, 5]).unwrap()))
+                    });
                     resident.bench_function("resize_lanczos_2pass", |b| {
                         b.iter(|| {
                             let first = dispatch(&context, &source, &source, &horizontal);

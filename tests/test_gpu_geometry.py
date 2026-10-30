@@ -230,3 +230,40 @@ def test_nonfinite_statistics_and_mask_edges(runtime):
     mask = ImageGpu.from_image(Image.frombytes("F", (2, 1), struct.pack("2f", 0.0, 1.0)), runtime=runtime)
     actual = struct.unpack("2f", background.paste(gpu, mask=mask).to_image().tobytes())
     assert actual == (7.0, math.inf)
+
+
+@pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("mask_mode", ["L", "F"])
+def test_native_float_paste_nonfinite_channels_and_odd_rows(mode, channels, mask_mode):
+    if not ImageGpu.capabilities()["available"]:
+        pytest.skip("Metal required")
+    values = [math.nan, math.inf, -math.inf, -2.0, 0.0, 0.25, 1.0, 2.0]
+    background_samples = [values[i % len(values)] for i in range(33 * 3 * channels)]
+    source_samples = [values[(i * 3 + 1) % len(values)] for i in range(35 * 4 * channels)]
+    background = Image.frombytes(mode, (33, 3), struct.pack(f"{len(background_samples)}f", *background_samples))
+    source = Image.frombytes(mode, (35, 4), struct.pack(f"{len(source_samples)}f", *source_samples))
+    weights = [0.0, 1.0, 0.25, math.nan, math.inf, -math.inf, -1.0, 2.0]
+    mask_samples = [weights[i % len(weights)] for i in range(35 * 4)]
+    if mask_mode == "L":
+        mask_samples = [(0, 255, 63, 128, 255, 0, 1, 254)[i % 8] for i in range(35 * 4)]
+        mask_bytes = bytes(mask_samples)
+    else:
+        mask_bytes = struct.pack(f"{len(mask_samples)}f", *mask_samples)
+    mask = Image.frombytes(mask_mode, source.size, mask_bytes)
+    gpu, rhs, coverage = (ImageGpu.from_image(image, runtime="native") for image in (background, source, mask))
+    result = gpu.paste(rhs, (-1, 1), coverage)
+    gpu.close()
+    rhs.close()
+    coverage.close()
+    actual = struct.unpack(f"{len(background_samples)}f", result.to_image().tobytes())
+    expected = background_samples.copy()
+    for y in range(1, 3):
+        for x in range(33):
+            source_pixel = (y - 1) * 35 + x + 1
+            weight = mask_samples[source_pixel] / (255 if mask_mode == "L" else 1)
+            weight = 0.0 if math.isnan(weight) else max(0.0, min(1.0, weight))
+            for band in range(channels):
+                index = (y * 33 + x) * channels + band
+                a, b = background_samples[index], source_samples[source_pixel * channels + band]
+                expected[index] = (0.0 if weight == 1 else a * (1 - weight)) + (0.0 if weight == 0 else b * weight)
+    assert actual == pytest.approx(expected, rel=1e-6, abs=1e-6, nan_ok=True)
