@@ -68,7 +68,7 @@ fn samples(count: usize, floating: bool, seed: usize) -> Vec<u8> {
 
 #[test]
 fn pixel_geometry_and_alpha_match_scalar_shaders_and_preserve_guards() {
-    let context = Context::new().unwrap();
+    let Some(context) = test_context() else { return };
     for floating in [false, true] {
         for channels in [1, 2, 3, 4] {
             let mut cases = vec![(operation::CROP, (-2_i32) as u32, 1), (operation::OFFSET, 2, 1)];
@@ -108,7 +108,7 @@ fn pixel_geometry_and_alpha_match_scalar_shaders_and_preserve_guards() {
 
 #[test]
 fn packed_tile_copies_preserve_pixels_outside_odd_rectangles() {
-    let context = Context::new().unwrap();
+    let Some(context) = test_context() else { return };
     for floating in [false, true] {
         for channels in [1, 2, 3, 4] {
             let src = Descriptor { width: 37, height: 7, channels, float: floating };

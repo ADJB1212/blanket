@@ -490,6 +490,13 @@ impl Context {
         Ok(unsafe { std::slice::from_raw_parts(image.buffer.contents().cast().as_ptr(), image.buffer.length()) })
     }
 
+    /// Report whether the OS and default GPU support Metal 4.
+    pub fn is_available() -> bool {
+        autoreleasepool(|_| {
+            objc2::available!(macos = 26.0) && MTLCreateSystemDefaultDevice().is_some_and(|device| device.supportsFamily(MTLGPUFamily::Metal4))
+        })
+    }
+
     pub fn new() -> Result<Self, String> {
         autoreleasepool(|_| {
             let device = MTLCreateSystemDefaultDevice().ok_or("Metal device unavailable")?;
@@ -745,6 +752,15 @@ impl Backend for Context {
 }
 
 #[cfg(test)]
+fn test_context() -> Option<Context> {
+    if !Context::is_available() {
+        eprintln!("skipping Metal hardware test: Metal 4 requires macOS 26 or later and a supported GPU");
+        return None;
+    }
+    Some(Context::new().expect("Metal 4 context initialization failed on a supported GPU"))
+}
+
+#[cfg(test)]
 #[path = "pixels_tests.rs"]
 mod pixels_tests;
 
@@ -753,10 +769,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn availability_matches_context_initialization_requirements() {
+        if Context::is_available() {
+            assert!(Context::new().is_ok());
+        } else {
+            let error = Context::new().err().expect("unsupported Metal 4 hosts must reject context creation");
+            assert!(matches!(error.as_str(), "Metal device unavailable" | "Metal 4 requires macOS 26 or later and a supported GPU"));
+        }
+    }
+
+    #[test]
     fn metal4_submission_retains_inputs_controls_and_pipelines_after_context_drop() {
         let descriptor = Descriptor { width: 1025, height: 17, channels: 4, float: false };
         let result = {
-            let context = Context::new().unwrap();
+            let Some(context) = test_context() else { return };
             assert!(context.device.supportsFamily(MTLGPUFamily::Metal4));
             let source = context.upload(descriptor, &vec![127; descriptor.byte_len().unwrap()]).unwrap();
             let request = Dispatch { output: descriptor, parameters: [1025, 17, 4, 1025, 17, operation::BRIGHTNESS, 0, 0], values: vec![0.5] };
@@ -774,7 +800,7 @@ mod tests {
 
     #[test]
     fn metal4_dispatches_snapshot_bindings_and_inline_controls() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let descriptor = Descriptor { width: 33, height: 17, channels: 1, float: false };
         let source = context.upload(descriptor, &vec![100; descriptor.byte_len().unwrap()]).unwrap();
         let outputs: Vec<_> = (1..=4).map(|_| context.upload(descriptor, &vec![0; descriptor.byte_len().unwrap()]).unwrap()).collect();
@@ -804,7 +830,7 @@ mod tests {
 
     #[test]
     fn metal4_wait_idle_finishes_all_live_submissions() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let descriptor = Descriptor { width: 1025, height: 257, channels: 4, float: false };
         let source = context.upload(descriptor, &vec![71; descriptor.byte_len().unwrap()]).unwrap();
         let request = Dispatch { output: descriptor, parameters: [1025, 257, 4, 1025, 257, operation::INVERT, 0, 0], values: vec![] };
@@ -819,7 +845,7 @@ mod tests {
 
     #[test]
     fn buffer_exchange_copies_offsets_and_checks_bounds() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         for len in [1, 3, 4, 7, 257] {
             let descriptor = Descriptor { width: len, height: 1, channels: 1, float: false };
             let bytes: Vec<u8> = (0..len + 6).map(|i| i as u8).collect();
@@ -845,7 +871,7 @@ mod tests {
 
     #[test]
     fn reader_tracking_retains_pending_commands_and_reclaims_completed_prefixes() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let image = context.upload(Descriptor { width: 1, height: 1, channels: 1, float: false }, &[7]).unwrap();
         let commands: Vec<_> = (0..16).map(|_| context.queue.command_buffer().unwrap()).collect();
         for command in &commands {
@@ -865,7 +891,7 @@ mod tests {
 
     #[test]
     fn full_image_plans_need_at_most_one_intermediate_buffer() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let descriptor = Descriptor { width: 37, height: 29, channels: 1, float: false };
         let source = context.upload(descriptor, &vec![127; descriptor.byte_len().unwrap()]).unwrap();
         for count in 0..5 {
@@ -886,7 +912,7 @@ mod tests {
 
     #[test]
     fn pending_buffers_require_completion_only_for_cpu_access() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let buffer = context.allocate_bytes(1024).unwrap();
         let address = buffer.contents();
         let command = context.queue.command_buffer().unwrap();
@@ -901,7 +927,7 @@ mod tests {
 
     #[test]
     fn queued_operations_reuse_storage_without_overwriting_live_inputs() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         let descriptor = Descriptor { width: 257, height: 129, channels: 4, float: false };
         let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 37) as u8).collect();
         let mut image = context.upload(descriptor, &data).unwrap();
@@ -922,7 +948,7 @@ mod tests {
 
     #[test]
     fn packed_scan_blur_matches_wrapping_reference_and_preserves_guards() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         for channels in [1, 2, 3, 4] {
             let pipeline = &context.blur_pipelines[channels as usize - 1];
             for (width, height) in [(1, 1), (1, 33), (33, 1), (31, 3), (32, 3), (33, 3), (65, 3), (3, 65)] {
@@ -983,7 +1009,7 @@ mod tests {
     #[test]
     fn histogram_simd_votes_cover_uniform_mixed_and_partial_groups() {
         use blanket_gpu::protocol::statistics;
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         for width in [1, 31, 32, 33, 255, 256, 257, 4095, 4096, 4097, 8193] {
             for channels in [1, 2, 3, 4] {
                 for run in [1, 16, 32, 33, 8193] {
@@ -1011,7 +1037,7 @@ mod tests {
 
     #[test]
     fn luminance_partials_preserve_carries_and_short_simd_groups() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         for width in [1, 31, 32, 33, 255, 256, 257] {
             let descriptor = Descriptor { width, height: 1, channels: 4, float: true };
             let values: Vec<u64> = (0..width).map(|i| u64::from(u32::MAX) + u64::from(i) * 17).collect();
@@ -1032,7 +1058,7 @@ mod tests {
     #[test]
     fn parallel_statistics_match_serial_reductions() {
         use blanket_gpu::protocol::statistics;
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         // Odd sizes leave partial SIMD groups and idle threads in each threadgroup.
         for (width, height) in [(1, 1), (37, 3), (1031, 17)] {
             let descriptor = Descriptor { width, height, channels: 3, float: false };
@@ -1071,7 +1097,7 @@ mod tests {
 
     #[test]
     fn byte_resize_matches_signed_fixed_point() {
-        let context = Context::new().unwrap();
+        let Some(context) = test_context() else { return };
         for channels in [1, 2, 3, 4] {
             let descriptor = Descriptor { width: 9, height: 2, channels, float: false };
             let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 97) as u8).collect();

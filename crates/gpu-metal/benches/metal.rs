@@ -36,6 +36,10 @@ mod benchmarks {
     }
 
     pub(super) fn metal(c: &mut Criterion) {
+        if !Context::is_available() {
+            eprintln!("skipping Metal benchmarks: Metal 4 requires macOS 26 or later and a supported GPU");
+            return;
+        }
         let context = Context::new().expect("Metal benchmarks require an available Metal device");
         {
             let mut initialization = c.benchmark_group("gpu/metal/context");
