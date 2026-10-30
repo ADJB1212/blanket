@@ -803,13 +803,13 @@ mod tests {
         let Some(context) = test_context() else { return };
         let descriptor = Descriptor { width: 33, height: 17, channels: 1, float: false };
         let source = context.upload(descriptor, &vec![100; descriptor.byte_len().unwrap()]).unwrap();
-        let outputs: Vec<_> = (1..=4).map(|_| context.upload(descriptor, &vec![0; descriptor.byte_len().unwrap()]).unwrap()).collect();
+        let outputs: Vec<_> = (0..100).map(|_| context.upload(descriptor, &vec![0; descriptor.byte_len().unwrap()]).unwrap()).collect();
         let command = context.queue.command_buffer().unwrap();
         let encoder = command.compute_encoder().unwrap();
         encoder.set_pipeline(context.operation_pipeline(operation::BRIGHTNESS, false, 1).unwrap());
         for (index, output) in outputs.iter().enumerate() {
             let parameters = [33, 17, 1, 33, 17, operation::BRIGHTNESS, 0, 0];
-            let factor = (index + 1) as f32 * 0.25;
+            let factor = (index % 4 + 1) as f32 * 0.25;
             unsafe {
                 encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
                 encoder.set_buffer(Some(&source.buffer), 0, OTHER_SLOT);
@@ -824,7 +824,7 @@ mod tests {
         command.wait_until_completed();
         assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
         for (index, output) in outputs.iter().enumerate() {
-            assert_eq!(context.download(output).unwrap(), vec![(index as u8 + 1) * 25; descriptor.byte_len().unwrap()]);
+            assert_eq!(context.download(output).unwrap(), vec![(index as u8 % 4 + 1) * 25; descriptor.byte_len().unwrap()]);
         }
     }
 

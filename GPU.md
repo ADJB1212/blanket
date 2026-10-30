@@ -42,6 +42,9 @@ The native backend owns command allocators, argument tables, and residency
 sets until Metal 4 commit feedback reports completion. Explicit barriers order
 dependent dispatches and queued buffer reuse; each dispatch captures independent
 bindings and control values. PyTorch manages the separate MPS execution path.
+Completed native submissions reuse their command buffers, allocators, residency
+sets, and argument tables through a bounded cache. Inline controls share aligned
+4 KiB pages whose contents remain immutable until GPU completion.
 Native Metal transfers copy directly between Rust image storage and Metal,
 without staging a full raster in Python `bytes`. Downloads own their CPU pixels.
 Operations return independent pixel storage. Native Metal caches closed buffers
