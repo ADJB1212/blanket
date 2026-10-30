@@ -76,6 +76,7 @@ _OPERATIONS = (
 
 
 def _scalar(value: float) -> float:
+    """Convert a control value to a finite number representable as float32."""
     value = float(value)
     if not math.isfinite(value) or abs(value) > 3.4028234663852886e38:
         raise ValueError("GPU scalar must be finite and representable as float32")
@@ -83,7 +84,21 @@ def _scalar(value: float) -> float:
 
 
 def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object]:
-    """Report backend support and driver diagnostics without importing PyTorch."""
+    """Describe compiled features and availability for a GPU backend.
+
+    Args:
+        backend: "metal" or "cuda"; defaults to Metal.
+        device: CUDA device index. Metal uses device 0.
+
+    Returns:
+        A dictionary containing compiled/available flags, diagnostics, supported
+        modes, operations, sample depths, plans, and tensor interoperability.
+        CUDA probing can import CuPy and initialize its driver; PyTorch is
+        not imported. An unavailable CUDA backend is reported in diagnostic.
+
+    Raises:
+        ValueError: The backend name is unsupported.
+    """
     if backend not in ("metal", "cuda"):
         raise ValueError("unsupported GPU backend")
     compiled = hasattr(_blanket, "_gpu_weights") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_fatbin")
@@ -146,6 +161,7 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
 
 
 def _require(backend: str = "metal", device: int = 0) -> None:
+    """Raise RuntimeError unless the selected backend and device are usable."""
     if backend == "cuda":
         from . import _gpu_cuda
 
@@ -155,6 +171,7 @@ def _require(backend: str = "metal", device: int = 0) -> None:
 
 
 def _torch(backend: str = "metal") -> ModuleType:
+    """Import PyTorch and require CUDA or MPS shader interoperability."""
     import torch
 
     if backend == "cuda":
@@ -167,10 +184,12 @@ def _torch(backend: str = "metal") -> ModuleType:
 
 @lru_cache(maxsize=1)
 def _library() -> object:
+    """Return the cached PyTorch MPS shader library."""
     return _torch().mps.compile_shader(_blanket._gpu_shader_source)
 
 
 def _validate(size: tuple[int, int], mode: str) -> None:
+    """Validate the mode, positive integer dimensions, and decoded-pixel limit."""
     if mode not in _MODES:
         raise ValueError("unsupported GPU image mode")
     if len(size) != 2 or any(type(v) is not int or v <= 0 or v > 0xFFFFFFFF for v in size) or size[0] * size[1] > 178_956_970:
@@ -178,6 +197,7 @@ def _validate(size: tuple[int, int], mode: str) -> None:
 
 
 def _dispatch_threads(parameters: list[int], channels: int, floating: bool) -> int:
+    """Return the grid size, accounting for byte blur's sliding windows."""
     if parameters[5] == 18 and not floating and parameters[6] >= 32:
         length, lines = parameters[:2] if parameters[7] == 0 else parameters[1::-1]
         return ((length + 15) // 16) * lines * channels
@@ -185,7 +205,27 @@ def _dispatch_threads(parameters: list[int], channels: int, floating: bool) -> i
 
 
 def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> GpuImage | GpuUnsignedImage:
-    """Upload the current CPU frame, retaining its metadata."""
+    """Upload the current CPU frame and copy its metadata.
+
+    Args:
+        image: An open Image in L, LA, RGB, RGBA, F, RGB;F, or RGBA;F mode.
+            Byte modes require depth 8, except L/RGB/RGBA also allow 10/12/16.
+        backend: "metal" or "cuda".
+        runtime: "native" for native Metal or "torch" for MPS tensors.
+            CUDA uses its CuPy runtime regardless of this selection.
+        device: CUDA device index; Metal supports only 0.
+        unified_memory: Share native Metal exports with CPU images. Requires
+            8-bit or float32 storage; CPU mutations detach shared storage.
+
+    Returns:
+        A resident GpuImage, or GpuUnsignedImage for 10/12/16-bit input.
+        Float grayscale F keeps raw sample units; float color modes use
+        normalized color units. Upload does not navigate source frames.
+
+    Raises:
+        ValueError: The mode, depth, dimensions, runtime, or options are invalid.
+        RuntimeError: The requested backend or runtime is unavailable.
+    """
     if backend not in ("metal", "cuda") or runtime not in ("native", "torch"):
         raise ValueError("unsupported GPU backend or runtime")
     _require(backend, device)
@@ -227,12 +267,27 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
 
 
 def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> Future[GpuImage | GpuUnsignedImage]:
-    """Snapshot the current CPU frame and upload on a transfer worker."""
+    """Snapshot the current frame and upload it on a transfer worker.
+
+    Args:
+        image: CPU image to copy immediately; subsequent edits do not affect
+            the upload.
+        backend: "metal" or "cuda".
+        runtime: Must be "native"; PyTorch MPS transfers are unsupported here.
+        device: CUDA device index; Metal requires 0.
+        unified_memory: Enable native Metal sharing as in from_image.
+
+    Returns:
+        A Future whose result is a synchronized GpuImage or GpuUnsignedImage.
+        Calling result() waits and re-raises upload errors. CUDA work uses
+        the stream current when the transfer was submitted.
+    """
     if runtime != "native":
         raise ValueError("asynchronous transfers require native Metal or CUDA")
     snapshot = image.copy()
 
     def upload() -> GpuImage | GpuUnsignedImage:
+        """Upload the retained snapshot, synchronize it, and release the CPU copy."""
         try:
             result = from_image(snapshot, backend=backend, runtime=runtime, device=device, unified_memory=unified_memory)
             result.synchronize()
@@ -244,7 +299,27 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
 
 
 def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bool = False, bit_depth: int | None = None) -> GpuImage | GpuUnsignedImage:
-    """Borrow an MPS/CUDA tensor. Views are packed on the GPU before processing."""
+    """Import a GPU tensor without staging pixels through CPU memory.
+
+    Args:
+        tensor: MPS or CUDA tensor with uint8 or float32 samples and no gradients.
+            Unsigned-depth import instead accepts uint16 storage.
+        layout: "HW", "HWC", or "CHW", matching the tensor dimensions.
+        mode: Matching image mode, or None to infer it from channels and dtype.
+        copy: Copy ordinary byte/float storage instead of borrowing it.
+            Noncontiguous views are packed on the GPU when processed.
+        bit_depth: 10, 12, or 16 for unsigned uint16 input; otherwise None.
+            Unsigned samples are converted to normalized float32 working storage.
+
+    Returns:
+        A tensor-backed GpuImage, or a GpuUnsignedImage for unsigned input.
+        Borrowed storage must not be mutated while GPU operations consume it.
+        F samples use raw units; RGB;F/RGBA;F use normalized color units.
+
+    Raises:
+        ValueError: Layout, dtype, channels, mode, or sample depth is unsupported.
+        RuntimeError: The matching GPU backend or PyTorch support is unavailable.
+    """
     backend = "cuda" if getattr(getattr(tensor, "device", None), "type", None) == "cuda" else "metal"
     device_type = "cuda" if backend == "cuda" else "mps"
     _require(backend, tensor.device.index if backend == "cuda" else 0)
@@ -284,7 +359,17 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
 
 
 def merge(mode: str, bands: Sequence[GpuImage]) -> GpuImage:
-    """Merge independent resident single-channel images into a supported mode."""
+    """Combine resident single-channel bands into a new GPU image.
+
+    Args:
+        mode: Supported output mode determining the number and dtype of bands.
+        bands: L bands for byte output or F bands for float output, in image
+            band order. Sizes, runtimes, and devices must match.
+
+    Returns:
+        An independent resident image carrying metadata from the first band.
+        Band sample values are copied without rescaling.
+    """
     if mode not in _MODES or len(bands) != _MODES[mode][0]:
         raise ValueError("mode and number of bands do not match")
     first = bands[0]
@@ -301,9 +386,38 @@ def merge(mode: str, bands: Sequence[GpuImage]) -> GpuImage:
 
 
 class GpuImage:
-    """Resident image with independent operation results and explicit download."""
+    """An explicitly resident byte or float32 image.
+
+    Create images with from_image or from_torch. Operations return independent
+    GPU results and preserve source pixels and metadata unless stated otherwise.
+    Work is normally submitted without waiting; synchronize and CPU exports wait
+    for completion. Binary operations require matching size, mode, runtime,
+    and device unless their method documents different input shapes.
+
+    Supported modes are L/LA/RGB/RGBA (uint8) and F/RGB;F/RGBA;F (float32).
+    F uses raw sample units; color floats conventionally use 0..1 and can retain
+    values outside that range. close releases one handle; queued work and shared
+    handles retain the storage they need.
+
+    Example:
+        >>> resident = ImageGpu.from_image(image)
+        >>> result = resident.resize((320, 240)).brightness(1.2)
+        >>> cpu_image = result.to_image()
+    """
 
     def __init__(self, resource: object, size: tuple[int, int], mode: str, runtime: str, info: dict[str, Any], *, unified_memory: bool = False) -> None:
+        """Wrap an existing backend resource with image metadata.
+
+        Args:
+            resource: Native Metal, MPS tensor, or CUDA image resource.
+            size: Raster dimensions as (width, height).
+            mode: Supported mode matching the resource's channels and sample dtype.
+            runtime: "native", "torch", or "cuda".
+            info: Metadata dictionary owned by this handle.
+            unified_memory: Enable shared CPU exports for native Metal storage.
+
+        Use from_image or from_torch for validated public construction.
+        """
         if unified_memory and runtime != "native":
             raise ValueError("unified memory requires native Metal")
         self.unified_memory = unified_memory
@@ -316,10 +430,12 @@ class GpuImage:
         self.dtype = "float32" if _MODES[mode][1] else "uint8"
 
     def _check(self) -> None:
+        """Raise ValueError if this handle has been closed."""
         if self._resource is None:
             raise ValueError("GPU image is closed")
 
     def _run(self, op: int, *, size: tuple[int, int] | None = None, mode: str | None = None, k: int = 0, axis: int = 0, values: list[float] | None = None, other: GpuImage | None = None) -> GpuImage:
+        """Validate inputs and dispatch a numeric operation into a new resident image."""
         self._check()
         other = self if other is None else other
         other._check()
@@ -362,23 +478,62 @@ class GpuImage:
         return GpuImage(resource, size, mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
 
     def convert(self, mode: str) -> GpuImage:
-        """Convert resident modes; F uses raw 0..255 units, color floats use 0..1."""
+        """Convert mode or copy resident samples without downloading them.
+
+        Args:
+            mode: L, LA, RGB, RGBA, F, RGB;F, or RGBA;F.
+
+        Returns:
+            An independent GPU image in the requested mode. Byte/color-float
+            conversions rescale between 0..255 and 0..1. F uses raw grayscale
+            units, and same-mode conversion copies the image.
+        """
         self._check()
         _validate(self.size, mode)
         return self._run(6) if mode == self.mode else self._run(14, mode=mode, k=_FORMATS.index(mode))
 
     def statistics(self) -> GpuReduction:
-        """Retain per-channel extrema and raw moments of orders 1..4 on the GPU."""
+        """Compute resident per-channel extrema and raw moments of orders 1..4.
+
+        Returns:
+            A GpuReduction. Its to_cpu() returns one dictionary per band with
+            count, extrema, sum, sum2, moments, mean, variance, and stddev.
+            Values use the source's sample units, including alpha. Power sums
+            accumulate in float32 and can have rounding error; NaNs propagate.
+        """
         return GpuReduction(self._run(29, size=(7, _MODES[self.mode][0]), mode="F"), "statistics")
 
     def histogram(self) -> GpuReduction:
-        """Retain exact 256-bin uint8 channel histograms on the GPU."""
+        """Compute exact 256-bin histograms for byte channels, including alpha.
+
+        Returns:
+            A resident GpuReduction; to_cpu() returns one list of 256 integer
+            counts per band. This call submits work without downloading counts.
+
+        Raises:
+            ValueError: The image is closed or has float32 samples.
+        """
         if _MODES[self.mode][1]:
             raise ValueError("GPU histograms currently require uint8 samples")
         return GpuReduction(self._run(29, size=(256, _MODES[self.mode][0]), mode="F", k=1), "histogram")
 
     def transform(self, size: tuple[int, int], method: int, data: Sequence[float], resample: int = Image.Resampling.NEAREST, *, fillcolor: float | Sequence[float] = 0) -> GpuImage:
-        """Apply inverse affine or perspective mapping with edge-clamped sampling."""
+        """Apply an inverse affine or perspective map to a new resident image.
+
+        Args:
+            size: Positive output (width, height).
+            method: Image.Transform.AFFINE or Image.Transform.PERSPECTIVE.
+            data: Six affine coefficients (a, b, c, d, e, f), or eight perspective
+                coefficients adding (g, h). Coordinates map output pixel centers
+                to ((a*x+b*y+c)/(g*x+h*y+1), (d*x+e*y+f)/(g*x+h*y+1)).
+            resample: NEAREST, BILINEAR, or BICUBIC.
+            fillcolor: Finite scalar or one value per source channel, in sample
+                units, for coordinates outside the source.
+
+        Returns:
+            An image with the requested size and original mode. Interpolation
+            clamps neighbor reads to source edges; alpha is sampled independently.
+        """
         self._check()
         if method not in (Image.Transform.AFFINE, Image.Transform.PERSPECTIVE):
             raise ValueError("GPU transform supports AFFINE and PERSPECTIVE")
@@ -399,7 +554,18 @@ class GpuImage:
         return self._run(26, size=size, k=sampling, values=controls)
 
     def rotate(self, angle: float, resample: int = Image.Resampling.NEAREST, *, expand: bool = False, fillcolor: float | Sequence[float] = 0) -> GpuImage:
-        """Rotate counterclockwise about the image center."""
+        """Rotate around the image center and return a resident result.
+
+        Args:
+            angle: Finite angle in degrees; positive angles are counterclockwise.
+            resample: NEAREST, BILINEAR, or BICUBIC.
+            expand: Enlarge the output canvas to contain the rotated image.
+            fillcolor: Finite scalar or one value per band for uncovered pixels.
+
+        Returns:
+            A GPU image in the same mode; size is unchanged unless expand is True.
+            Interpolation and alpha handling follow transform.
+        """
         angle = _scalar(angle) % 360
         width, height = self.size
         radians = -math.radians(angle)
@@ -416,9 +582,18 @@ class GpuImage:
         return self.transform(size, Image.Transform.AFFINE, (a, b, c, d, e, f), resample, fillcolor=fillcolor)
 
     def remap(self, coordinates: GpuImage, resample: int = Image.Resampling.NEAREST, *, fillcolor: float | Sequence[float] = 0) -> GpuImage:
-        """Reuse an RGB;F coordinate map: red=x, green=y; blue is ignored.
+        """Sample through a reusable resident coordinate map.
 
-        Coordinates address pixel centers at (x + 0.5, y + 0.5).
+        Args:
+            coordinates: RGB;F image on the same runtime/device. Red stores source
+                x, green stores source y, and blue is ignored. Pixel centers are
+                (x + 0.5, y + 0.5); map dimensions determine the output size.
+            resample: NEAREST, BILINEAR, or BICUBIC.
+            fillcolor: Finite scalar or one value per band, used for out-of-bounds
+                or nonfinite map coordinates.
+
+        Returns:
+            A new GPU image in the source mode, with independently sampled alpha.
         """
         coordinates._check()
         if coordinates.mode != "RGB;F":
@@ -433,10 +608,20 @@ class GpuImage:
         return self._run(27, size=coordinates.size, other=coordinates, k=sampling, values=[0.0] * 8 + [_scalar(v) for v in fill])
 
     def paste(self, source: GpuImage, box: tuple[int, int] = (0, 0), mask: GpuImage | None = None) -> GpuImage:
-        """Return an independent image with source pasted through an L/F mask.
+        """Paste a resident source through an optional mask into a new image.
 
-        L masks use 0..255 coverage; F masks use 0..1, with NaN treated as zero.
-        All channels, including alpha, are interpolated independently.
+        Args:
+            source: Image with the same mode, runtime, and device; sizes may differ.
+            box: Integer (x, y) destination for the source's top-left corner.
+                Regions outside the destination are clipped.
+            mask: Optional L or F image matching the source size and execution
+                context. L coverage is divided by 255; F coverage is clamped to
+                0..1 and NaNs are treated as zero. None means full coverage.
+
+        Returns:
+            An independent image of the original size and mode. Every channel,
+            including alpha, is interpolated separately; source alpha does not
+            implicitly supply coverage.
         """
         self._check()
         source._check()
@@ -473,11 +658,27 @@ class GpuImage:
         return background.add(foreground).convert(self.mode)
 
     def grayscale(self) -> GpuImage:
-        """Return L for uint8 or raw-sample F for float32, discarding alpha."""
+        """Return resident luminance, discarding any alpha channel.
+
+        Returns:
+            An independent L image for byte input, or F image for float input.
+            Float color luminance is rescaled into raw grayscale sample units.
+        """
         return self.convert("F" if _MODES[self.mode][1] else "L")
 
     def getchannel(self, channel: int | str) -> GpuImage:
-        """Extract an independent resident channel without rescaling samples."""
+        """Extract one channel without rescaling its samples.
+
+        Args:
+            channel: Zero-based band index or band name such as "R" or "A".
+
+        Returns:
+            An independent L or F GPU image of the same size. In particular,
+            extracting a float color band into F retains its original 0..1 units.
+
+        Raises:
+            ValueError: The band is absent or its index is out of range.
+        """
         self._check()
         if isinstance(channel, str):
             try:
@@ -490,12 +691,27 @@ class GpuImage:
         return self._run(15, mode="F" if _MODES[self.mode][1] else "L", k=channel)
 
     def split(self) -> tuple[GpuImage, ...]:
-        """Return independent resident copies of all channels."""
+        """Copy all image bands into independent resident single-channel images.
+
+        Returns:
+            A tuple in image band order. Byte bands use L; float bands use F.
+            Sample values are preserved without rescaling.
+        """
         self._check()
         return tuple(self.getchannel(channel) for channel in range(_MODES[self.mode][0]))
 
     def putalpha(self, alpha: GpuImage | float) -> GpuImage:
-        """Return a copy with replaced alpha; float grayscale promotes to RGBA;F."""
+        """Return a resident copy with a replaced or newly added alpha band.
+
+        Args:
+            alpha: Integer coverage clamped to 0..255 for byte images, or finite
+                coverage clamped to 0..1 for floats. A resident L/F band may
+                instead supply coverage and must match size, dtype, and context.
+
+        Returns:
+            LA for byte grayscale, RGBA for byte color, or RGBA;F for float input.
+            Float grayscale is promoted to RGB color; input pixels are unchanged.
+        """
         self._check()
         if _MODES[self.mode][1]:
             mode = "RGBA;F"
@@ -508,6 +724,7 @@ class GpuImage:
         return result._run(17, values=[value])
 
     def _blur(self, radius: float | tuple[float, float], gaussian: bool) -> GpuImage:
+        """Prepare fractional box weights and submit one or three passes per axis."""
         self._check()
         radii = radius if isinstance(radius, tuple) else (radius, radius)
         if len(radii) != 2:
@@ -522,15 +739,44 @@ class GpuImage:
         return self._run(6) if result is self else result
 
     def box_blur(self, radius: float | tuple[float, float] = 2.0) -> GpuImage:
-        """Blur with a fractional box kernel and replicated edges, including alpha."""
+        """Blur every channel, including alpha, using a fractional box kernel.
+
+        Args:
+            radius: Finite nonnegative radius, or (horizontal, vertical) radii.
+                Zero on an axis leaves that axis unchanged.
+
+        Returns:
+            A new image with the same size and mode. Edges repeat the nearest
+            sample; byte passes retain fixed-point rounding.
+        """
         return self._blur(radius, False)
 
     def gaussian_blur(self, radius: float | tuple[float, float] = 2.0) -> GpuImage:
-        """Approximate Gaussian blur with three fractional box passes per axis."""
+        """Approximate a Gaussian blur with three box passes per axis.
+
+        Args:
+            radius: Finite nonnegative Gaussian radius, or separate horizontal
+                and vertical radii. A zero radius produces an independent copy.
+
+        Returns:
+            A resident image of the same size and mode. All channels, including
+            alpha, are filtered with replicated edges.
+        """
         return self._blur(radius, True)
 
     def unsharp_mask(self, radius: float = 2.0, percent: int = 150, threshold: float = 3.0) -> GpuImage:
-        """Sharpen against Gaussian blur; threshold is measured in sample units."""
+        """Sharpen differences between the image and its Gaussian blur.
+
+        Args:
+            radius: Finite nonnegative Gaussian blur radius.
+            percent: Signed 32-bit integer percentage of the difference to add.
+            threshold: Finite difference threshold in source sample units.
+                Only differences strictly greater than this value are sharpened.
+
+        Returns:
+            A new GPU image with the same size and mode. Alpha is processed as
+            a channel; byte results saturate to 0..255.
+        """
         self._check()
         percent = index(percent)
         threshold = _scalar(threshold)
@@ -542,33 +788,84 @@ class GpuImage:
         return self._run(20, other=self.gaussian_blur(radius), k=percent & 0xFFFFFFFF, values=[threshold])
 
     def rank_filter(self, size: int, rank: int) -> GpuImage:
-        """Select a rank from an odd 1x1 through 7x7 replicated-edge window."""
+        """Select a sorted neighborhood sample independently in every channel.
+
+        Args:
+            size: Square window width: 1, 3, 5, or 7.
+            rank: Zero-based index in the sorted size*size samples.
+
+        Returns:
+            A resident image with replicated edges and unchanged size/mode.
+            Alpha is filtered too; any NaN in a float window propagates.
+        """
         size, rank = index(size), index(rank)
         if size not in (1, 3, 5, 7) or not 0 <= rank < size * size:
             raise ValueError("rank filters require an odd size from 1 to 7 and a valid rank")
         return self._run(19, k=size, axis=rank)
 
     def min_filter(self, size: int = 3) -> GpuImage:
-        """Apply per-channel erosion with replicated edges; float NaNs propagate."""
+        """Return the minimum sample in each channel's square neighborhood.
+
+        Args:
+            size: Odd window width from 1 through 7.
+
+        Returns:
+            A resident image with replicated edges. Alpha is included and float
+            NaNs propagate. Equivalent to rank_filter(size, 0).
+        """
         return self.rank_filter(size, 0)
 
     def max_filter(self, size: int = 3) -> GpuImage:
-        """Apply per-channel dilation with replicated edges; float NaNs propagate."""
+        """Return the maximum sample in each channel's square neighborhood.
+
+        Args:
+            size: Odd window width from 1 through 7.
+
+        Returns:
+            A resident image with replicated edges. Alpha is included and float
+            NaNs propagate. Equivalent to rank_filter(size, size*size - 1).
+        """
         size = index(size)
         return self.rank_filter(size, size * size - 1)
 
     def median_filter(self, size: int = 3) -> GpuImage:
-        """Select each channel's median, including alpha; float NaNs propagate."""
+        """Return the median sample in each channel's square neighborhood.
+
+        Args:
+            size: Odd window width from 1 through 7.
+
+        Returns:
+            A resident image with replicated edges. Alpha is included and float
+            NaNs propagate. Equivalent to rank_filter(size, size*size // 2).
+        """
         size = index(size)
         return self.rank_filter(size, size * size // 2)
 
     def _float_color(self) -> GpuImage:
+        """Convert RGB/RGBA input to float color storage for linear-light operations."""
         if self.mode not in ("RGB", "RGBA", "RGB;F", "RGBA;F"):
             raise ValueError("linear-light processing requires RGB or RGBA color")
         return self.convert("RGBA;F" if _MODES[self.mode][0] == 4 else "RGB;F")
 
     def resize(self, size: tuple[int, int], resample: int = Image.Resampling.BICUBIC, *, linear_light: bool = False, transfer: str = "srgb", premultiply_alpha: bool = True) -> GpuImage:
-        """Resize with optional linear-light processing and float alpha selection."""
+        """Resize resident pixels using a separable resampling filter.
+
+        Args:
+            size: Positive output (width, height).
+            resample: An Image.Resampling filter: NEAREST, LANCZOS, BILINEAR,
+                BICUBIC, BOX, or HAMMING.
+            linear_light: Decode color before filtering and encode it afterward.
+                Requires RGB/RGBA byte or float color input.
+            transfer: "srgb" to decode/encode sRGB, or "linear" when color samples
+                already represent linear light. Used when linear_light is True.
+            premultiply_alpha: Premultiply float alpha during filtering. False
+                samples float channels independently and clamps alpha. Byte
+                alpha is always premultiplied for non-nearest resampling.
+
+        Returns:
+            An independent GPU image of the requested size and original mode.
+            Byte results retain fixed-point rounding; float colors are not clipped.
+        """
         self._check()
         _validate(size, self.mode)
         if resample not in range(6):
@@ -601,7 +898,20 @@ class GpuImage:
         return result._run(5) if alpha else (result._run(24) if clamp_alpha else result)
 
     def convolve(self, kernel: list[float], *, size: int = 3, scale: float | None = None, offset: float = 0.0) -> GpuImage:
-        """Apply a 3x3 or 5x5 kernel, retaining border samples."""
+        """Apply a square convolution kernel while copying border samples.
+
+        Args:
+            kernel: Row-major list of finite coefficients, with size*size entries.
+                Rows follow ImageFilter.Kernel's bottom-to-top sampling order.
+            size: Kernel width, either 3 or 5.
+            scale: Nonzero finite divisor for coefficients. None uses their sum,
+                substituting 1 when the sum is zero.
+            offset: Finite value added to each output sample in source units.
+
+        Returns:
+            A resident image of the same size/mode. All channels, including alpha,
+            are processed; borders lacking a full window retain the source.
+        """
         if size not in (3, 5) or len(kernel) != size * size:
             raise ValueError("kernel must be 3x3 or 5x5")
         scale = (sum(kernel) or 1.0) if scale is None else scale
@@ -610,7 +920,16 @@ class GpuImage:
         return self._run(1, k=size, values=[0.0, float(offset), *[float(v / scale) for v in kernel]])
 
     def crop(self, box: tuple[int, int, int, int]) -> GpuImage:
-        """Crop integer bounds, filling pixels outside the source with zero."""
+        """Copy an integer rectangle, filling outside-source samples with zero.
+
+        Args:
+            box: (left, top, right, bottom), with right/bottom exclusive. Bounds
+                must fit signed 32-bit integers and define positive dimensions.
+
+        Returns:
+            A resident image sized (right-left, bottom-top) in the source mode.
+            Out-of-bounds alpha is zero as well.
+        """
         self._check()
         if len(box) != 4:
             raise ValueError("crop box must contain four integers")
@@ -620,7 +939,16 @@ class GpuImage:
         return self._run(7, size=(right - left, bottom - top), k=left & 0xFFFFFFFF, axis=top & 0xFFFFFFFF)
 
     def transpose(self, method: int) -> GpuImage:
-        """Flip, rotate, or transpose using Image.Transpose identifiers."""
+        """Flip or rotate resident samples without interpolation.
+
+        Args:
+            method: An Image.Transpose constant for a flip, right-angle rotation,
+                diagonal transpose, or transverse operation.
+
+        Returns:
+            An independent image in the original mode. Quarter-turn rotations
+            and diagonal transposes swap width and height.
+        """
         self._check()
         method = index(method)
         if method not in range(7):
@@ -629,18 +957,46 @@ class GpuImage:
         return self._run(8, size=size, k=method)
 
     def offset(self, xoffset: int, yoffset: int | None = None) -> GpuImage:
-        """Translate with wraparound, matching ImageChops.offset."""
+        """Translate resident pixels with wraparound.
+
+        Args:
+            xoffset: Integer horizontal offset; positive values move right.
+            yoffset: Integer vertical offset; positive values move down.
+                None uses xoffset for both axes.
+
+        Returns:
+            An independent image with the same size and mode. Offsets are
+            reduced modulo the image dimensions.
+        """
         self._check()
         xoffset = index(xoffset)
         yoffset = xoffset if yoffset is None else index(yoffset)
         return self._run(9, k=xoffset % self.size[0], axis=yoffset % self.size[1])
 
     def brightness(self, factor: float) -> GpuImage:
-        """Scale channels, preserving RGBA alpha; float colors are not clipped."""
+        """Scale brightness without downloading pixels.
+
+        Args:
+            factor: Finite multiplier; 0 gives black color samples and 1 copies
+                their values. Values outside 0..1 are allowed.
+
+        Returns:
+            A resident image with RGBA alpha preserved. LA alpha is scaled.
+            Byte samples are truncated and clipped; float colors are not clipped.
+        """
         return self._run(10, values=[_scalar(factor)])
 
     def color(self, factor: float) -> GpuImage:
-        """Adjust saturation around luminance, preserving alpha and sample range."""
+        """Adjust color saturation around per-pixel luminance.
+
+        Args:
+            factor: Finite blend factor; 0 produces grayscale color, 1 preserves
+                the original, and values above 1 increase saturation.
+
+        Returns:
+            A new resident image with alpha preserved. Grayscale inputs copy
+            unchanged; byte color results clip, while float colors remain unbounded.
+        """
         self._check()
         factor = _scalar(factor)
         if factor == 1 or _MODES[self.mode][0] < 3:
@@ -648,7 +1004,16 @@ class GpuImage:
         return self._run(22, k=0, values=[factor])
 
     def contrast(self, factor: float) -> GpuImage:
-        """Adjust contrast around mean luminance computed entirely on the GPU."""
+        """Adjust contrast around mean luminance computed on the GPU.
+
+        Args:
+            factor: Finite blend factor; 0 fills color bands with mean luminance,
+                1 preserves the original, and larger values increase contrast.
+
+        Returns:
+            An independent resident image with LA/RGBA alpha preserved. The mean
+            uses every pixel; byte results clip and float results remain unbounded.
+        """
         self._check()
         factor = _scalar(factor)
         if factor == 1:
@@ -661,7 +1026,16 @@ class GpuImage:
         return self._run(22, other=partials, k=1, axis=count, values=[factor])
 
     def sharpness(self, factor: float) -> GpuImage:
-        """Enhance against the CPU's 3x3 smooth kernel, retaining borders and RGBA alpha."""
+        """Blend with the 3x3 smooth kernel to adjust sharpness.
+
+        Args:
+            factor: Finite blend factor; 0 smooths, 1 preserves the original,
+                and values above 1 sharpen.
+
+        Returns:
+            A resident image retaining borders and RGBA alpha. LA alpha is
+            processed; images smaller than 3 pixels on either axis are copied.
+        """
         self._check()
         factor = _scalar(factor)
         if factor == 1 or min(self.size) < 3:
@@ -669,7 +1043,17 @@ class GpuImage:
         return self._run(22, k=2, values=[factor])
 
     def color_lut(self, lut: Color3DLUT) -> GpuImage:
-        """Apply a Color3DLUT on resident RGB/RGBA pixels, retaining sample precision."""
+        """Apply a three-dimensional color lookup table on the GPU.
+
+        Args:
+            lut: ImageFilter.Color3DLUT with three or four output channels.
+                Input must be RGB/RGBA byte or float color. An explicit lut.mode
+                must be supported and retain the source sample dtype.
+
+        Returns:
+            A resident image using trilinear lookup. A three-channel table
+            preserves an existing alpha band; four-channel tables supply alpha.
+        """
         from .ImageFilter import Color3DLUT
 
         self._check()
@@ -686,11 +1070,28 @@ class GpuImage:
         return self._run(25, mode=mode, k=table_channels, axis=_FORMATS.index(mode), values=controls)
 
     def invert(self) -> GpuImage:
-        """Invert every channel, including alpha, around 255 or float 1."""
+        """Invert every sample, including alpha, into a new resident image.
+
+        Returns:
+            255 minus each byte sample, or 1 minus each float sample. Float
+            values remain unbounded, including raw-unit F samples.
+        """
         return self._run(11)
 
     def point(self, lut: list[float]) -> GpuImage:
-        """Map uint8 channels through a shared or per-channel 256-entry LUT."""
+        """Map byte samples through shared or per-channel lookup tables.
+
+        Args:
+            lut: 256 entries shared by every channel, or 256*bands entries
+                concatenated in band order. Finite entries are rounded with
+                Python's round and clamped to 0..255.
+
+        Returns:
+            A new byte GPU image with every channel, including alpha, mapped.
+
+        Raises:
+            ValueError: The source has float samples or the table is invalid.
+        """
         self._check()
         channels, floating = _MODES[self.mode]
         if floating:
@@ -703,12 +1104,29 @@ class GpuImage:
         return self._run(12, values=values)
 
     def solarize(self, threshold: int = 128) -> GpuImage:
-        """Invert uint8 channel values at or above the threshold, including alpha."""
+        """Invert byte samples at or above a threshold, including alpha.
+
+        Args:
+            threshold: Integer cutoff in byte sample units; values outside
+                0..255 are accepted.
+
+        Returns:
+            An independent byte GPU image. Samples below threshold are copied;
+            all remaining samples become 255 minus their original value.
+        """
         threshold = index(threshold)
         return self.point([v if v < threshold else 255 - v for v in range(256)])
 
     def posterize(self, bits: int) -> GpuImage:
-        """Retain the requested high bits of every uint8 channel, including alpha."""
+        """Keep only the requested high bits of each byte sample.
+
+        Args:
+            bits: Integer from 0 through 8; 0 clears every band and 8 copies it.
+
+        Returns:
+            A resident byte image with the mask applied to every band, including
+            alpha. Float sources are unsupported.
+        """
         bits = index(bits)
         if bits not in range(9):
             raise ValueError("bits must be between 0 and 8")
@@ -716,47 +1134,129 @@ class GpuImage:
         return self.point([v & mask for v in range(256)])
 
     def _binary(self, other: GpuImage, operation: int, scale: float = 1.0, offset: float = 0.0) -> GpuImage:
+        """Validate arithmetic controls and dispatch a matching-image channel operation."""
         scale = _scalar(scale)
         if abs(scale) < 1.1754943508222875e-38:
             raise ValueError("scale must be a nonzero normal float32 value")
         return self._run(13, other=other, k=operation, values=[scale, _scalar(offset)])
 
     def difference(self, other: GpuImage) -> GpuImage:
-        """Return the absolute difference in each channel, including alpha."""
+        """Return absolute channel differences, including alpha.
+
+        Args:
+            other: GPU image matching this image's size, mode, runtime, and device.
+
+        Returns:
+            A new resident image containing abs(self - other) per sample.
+        """
         return self._binary(other, 0)
 
     def multiply(self, other: GpuImage) -> GpuImage:
-        """Multiply channels, normalized by 255 for uint8 and 1 for float32."""
+        """Multiply corresponding samples, including alpha.
+
+        Args:
+            other: GPU image matching this image's size, mode, runtime, and device.
+
+        Returns:
+            A resident image containing self*other/255 for bytes, with integer
+            truncation, or self*other for floats.
+        """
         return self._binary(other, 1)
 
     def screen(self, other: GpuImage) -> GpuImage:
-        """Screen channels using 255 for uint8 and 1 for float32 as white."""
+        """Screen corresponding samples, including alpha.
+
+        Args:
+            other: GPU image matching this image's size, mode, runtime, and device.
+
+        Returns:
+            A resident image containing white - (white-self)*(white-other)/white,
+            where white is 255 for bytes and 1 for floats.
+        """
         return self._binary(other, 2)
 
     def lighter(self, other: GpuImage) -> GpuImage:
-        """Return per-channel maxima; float NaNs propagate."""
+        """Select the larger corresponding sample in every channel.
+
+        Args:
+            other: GPU image matching this image's size, mode, runtime, and device.
+
+        Returns:
+            A new resident image of channel maxima, including alpha.
+            Float NaNs propagate.
+        """
         return self._binary(other, 3)
 
     def darker(self, other: GpuImage) -> GpuImage:
-        """Return per-channel minima; float NaNs propagate."""
+        """Select the smaller corresponding sample in every channel.
+
+        Args:
+            other: GPU image matching this image's size, mode, runtime, and device.
+
+        Returns:
+            A new resident image of channel minima, including alpha.
+            Float NaNs propagate.
+        """
         return self._binary(other, 4)
 
     def add(self, other: GpuImage, scale: float = 1.0, offset: float = 0.0) -> GpuImage:
-        """Add channels, divide by scale, add offset, and clip only uint8."""
+        """Add corresponding samples, including alpha, with scale and offset.
+
+        Args:
+            other: GPU image matching size, mode, runtime, and device.
+            scale: Finite, nonzero, normal float32 divisor.
+            offset: Finite amount to add after scaling, in source sample units.
+
+        Returns:
+            A new resident image containing (self+other)/scale + offset.
+            Byte results are floored and clipped; float results are not clipped.
+        """
         return self._binary(other, 5, scale, offset)
 
     def subtract(self, other: GpuImage, scale: float = 1.0, offset: float = 0.0) -> GpuImage:
-        """Subtract channels, divide by scale, add offset, and clip only uint8."""
+        """Subtract corresponding samples, including alpha, with scale and offset.
+
+        Args:
+            other: GPU image matching size, mode, runtime, and device.
+            scale: Finite, nonzero, normal float32 divisor.
+            offset: Finite amount to add after scaling, in source sample units.
+
+        Returns:
+            A new resident image containing (self-other)/scale + offset.
+            Byte results are floored and clipped; float results are not clipped.
+        """
         return self._binary(other, 6, scale, offset)
 
     def blend(self, other: GpuImage, alpha: float) -> GpuImage:
-        """Blend matching images using a finite scalar weight."""
+        """Interpolate matching images using a constant weight.
+
+        Args:
+            other: GPU image matching size, mode, runtime, and device.
+            alpha: Finite weight in self + (other-self)*alpha. Values outside
+                0..1 extrapolate.
+
+        Returns:
+            A new resident image with every band, including alpha, blended.
+            Byte samples are floored and clipped; float samples are not clipped.
+        """
         if not math.isfinite(alpha):
             raise ValueError("blend alpha must be finite")
         return self._run(2, other=other, values=[float(alpha)])
 
     def alpha_composite(self, source: GpuImage, *, linear_light: bool = False, transfer: str = "srgb") -> GpuImage:
-        """Composite source over this image with optional linear-light processing."""
+        """Composite a source image over this background using straight alpha.
+
+        Args:
+            source: Image matching size, mode, runtime, and device. Mode must
+                have alpha: LA, RGBA, or RGBA;F.
+            linear_light: Composite color in linear light; requires RGBA/RGBA;F.
+            transfer: "srgb" to decode/encode sRGB, or "linear" for color already
+                in linear light. Used when linear_light is True.
+
+        Returns:
+            A new resident image in the source mode. Float alpha is clamped to
+            0..1 with NaNs treated as zero; float color remains unbounded.
+        """
         self._check()
         source._check()
         if transfer not in ("srgb", "linear"):
@@ -776,7 +1276,12 @@ class GpuImage:
         return self._run(3, other=source)
 
     def synchronize(self) -> None:
-        """Wait for pending execution and surface GPU errors."""
+        """Wait for this image's pending GPU work and report execution errors.
+
+        Returns:
+            None. Pixels stay resident. PyTorch MPS waits for the device queue;
+            native Metal and CUDA wait for this resource's completion point.
+        """
         self._check()
         if self.runtime in ("native", "cuda"):
             self._resource.synchronize()
@@ -784,7 +1289,14 @@ class GpuImage:
             _torch().mps.synchronize()
 
     def to_image(self) -> Image.Image:
-        """Download an independent CPU image."""
+        """Wait for GPU completion and export a CPU image with copied metadata.
+
+        Returns:
+            An Image with the same size, mode, and samples. Normally pixels are
+            copied. With native Metal unified_memory, the CPU image instead
+            shares immutable storage and detaches when modified. It remains
+            valid after the GPU handle is closed.
+        """
         if self.runtime == "native":
             self._check()
             native = self._resource.shared_image(self.mode) if self.unified_memory else self._resource.download_image(self.mode)
@@ -802,31 +1314,72 @@ class GpuImage:
         return result
 
     def share(self) -> GpuImage:
-        """Return an independently closable handle without copying pixel storage."""
+        """Create another independently closable handle without copying pixels.
+
+        Returns:
+            A GpuImage sharing the backend resource and pending work, with an
+            independent metadata dictionary. This call does not synchronize.
+        """
         self._check()
         return GpuImage(self._resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
 
     def record_event(self) -> Event:
-        """Retain this image's completion point without blocking the CPU."""
+        """Record a completion point without waiting on the CPU.
+
+        Returns:
+            An Event retaining the image resource even if this handle closes.
+            Native Metal/CUDA track resource completion; PyTorch MPS records
+            an event on its current stream.
+        """
         self._check()
         return Event(self._resource, self.runtime, self.device)
 
     def to_image_async(self) -> Future[Image.Image]:
-        """Export on a transfer worker, retaining pixels after this handle closes."""
+        """Export pixels and metadata on a transfer worker.
+
+        Returns:
+            A Future resolving to a CPU Image after completion. Storage is
+            retained even if this GPU handle closes; result() reports errors.
+            CUDA uses the stream current at submission.
+
+        Raises:
+            ValueError: This image uses the PyTorch MPS runtime.
+        """
         if self.runtime == "torch":
             raise ValueError("asynchronous transfers require native Metal or CUDA")
         retained = self.share()
         return submit(retained.to_image, device=self.device)
 
     def to_memoryview(self) -> memoryview:
-        """Wait for GPU writes and borrow native Metal bytes without copying."""
+        """Wait for completion and borrow native Metal sample bytes.
+
+        Returns:
+            A read-only contiguous memoryview retaining the pixel resource after
+            the image closes. Float samples are exposed as raw bytes.
+
+        Raises:
+            ValueError: The handle is closed or uses CUDA/PyTorch storage.
+        """
         self._check()
         if self.runtime != "native":
             raise ValueError("shared mappings require native Metal storage")
         return memoryview(self._resource)
 
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
-        """Share a tensor-backed result without downloading pixels."""
+        """Expose tensor-backed pixels without downloading them.
+
+        Args:
+            layout: "HWC", "CHW", or "HW"; HW requires one channel.
+
+        Returns:
+            A PyTorch tensor sharing the MPS or CUDA resource, with the image's
+            dtype and sample values. CUDA export uses DLPack stream ordering.
+            Treat shared storage as immutable while operations consume it.
+
+        Raises:
+            ValueError: The layout is invalid or storage uses native Metal.
+                Import with runtime="torch" to enable MPS tensor export.
+        """
         self._check()
         if self.runtime == "cuda":
             resource = self._resource.to_torch()
@@ -848,34 +1401,69 @@ class GpuImage:
         raise ValueError("invalid export layout")
 
     def close(self) -> None:
-        """Release this handle; submitted work retains its resources."""
+        """Release this GPU handle without invalidating shared handles.
+
+        Queued work, exported views, and shared CPU images retain their resources.
+        Repeated calls are allowed; subsequent operations on this handle raise
+        ValueError. Closing does not download pixels.
+        """
         self._resource = None
 
 
 class GpuReduction:
-    """Small resident result; to_cpu explicitly synchronizes and downloads."""
+    """Resident histograms or per-band statistics with explicit CPU export.
+
+    Use GpuImage.histogram or GpuImage.statistics to create a reduction.
+    The result retains its storage independently of the source image.
+    """
 
     def __init__(self, image: GpuImage, kind: str) -> None:
+        """Wrap a resident result image with kind 'histogram' or 'statistics'."""
         self._image = image
         self.kind = kind
 
     def synchronize(self) -> None:
+        """Wait for reduction completion without downloading its values."""
         self._image.synchronize()
 
     def record_event(self) -> Event:
+        """Retain a nonblocking completion point for this reduction.
+
+        Returns:
+            An Event that remains valid after the reduction handle closes.
+        """
         return self._image.record_event()
 
     def to_cpu_async(self) -> Future[list[list[int]] | list[dict[str, object]]]:
-        """Download and decode the small result on a transfer worker."""
+        """Download and decode the reduction on a transfer worker.
+
+        Returns:
+            A Future resolving to the same band-ordered lists as to_cpu().
+            Storage survives closing this handle; result() reports transfer errors.
+
+        Raises:
+            ValueError: The reduction uses the PyTorch MPS runtime.
+        """
         if self._image.runtime == "torch":
             raise ValueError("asynchronous transfers require native Metal or CUDA")
         retained = GpuReduction(self._image.share(), self.kind)
         return submit(retained.to_cpu, device=self._image.device)
 
     def close(self) -> None:
+        """Release this reduction handle; retained events and transfers stay valid."""
         self._image.close()
 
     def to_cpu(self) -> list[list[int]] | list[dict[str, object]]:
+        """Wait for completion, download, and decode band-ordered results.
+
+        Returns:
+            For histograms, one 256-element list of exact integer counts per band.
+            For statistics, one dictionary per band containing count, extrema,
+            sum, sum2, moments, mean, variance, and stddev. moments contains
+            normalized raw moments of orders 1..4; variance is the population
+            variance, clamped to zero for negative rounding error. Statistics use
+            source sample units and float32 accumulation; NaNs propagate.
+        """
         data = self._image.to_image().tobytes()
         if self.kind == "histogram":
             counts = struct.unpack(f"{len(data) // 4}I", data)

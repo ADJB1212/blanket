@@ -18,10 +18,21 @@ if TYPE_CHECKING:
 
 @lru_cache(maxsize=1)
 def _executor() -> ThreadPoolExecutor:
+    """Return the shared two-worker pool used for CPU/GPU transfers."""
     return ThreadPoolExecutor(max_workers=2, thread_name_prefix="blanket-transfer")
 
 
 def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
+    """Schedule an operation while retaining the caller's CUDA stream context.
+
+    Args:
+        operation: Callable executed on a transfer worker.
+        device: "metal", "mps", or "cuda:<index>"; CUDA captures its current
+            device stream before submission.
+
+    Returns:
+        A Future propagating the callable's result or exception.
+    """
     stream = None
     if device.startswith("cuda:"):
         from ._gpu_cuda import cupy
@@ -32,6 +43,7 @@ def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
             stream = cp.cuda.get_current_stream()
 
     def run() -> T:
+        """Execute the operation under the captured CUDA device and stream, if any."""
         if stream is None:
             return operation()
         with cp.cuda.Device(index), stream:
@@ -41,9 +53,24 @@ def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
 
 
 class Event:
-    """Retain a completion point and its inputs independently of image handles."""
+    """A retained GPU completion point independent of an image handle.
+
+    Use an image or reduction's record_event method to create events. done
+    polls without waiting; wait blocks the CPU; Stream.wait_event orders later
+    work in a compatible execution context.
+    """
 
     def __init__(self, resource: object, runtime: str, device: str) -> None:
+        """Retain a backend resource and capture its completion point.
+
+        Args:
+            resource: Native Metal image, MPS tensor, or CUDA image resource.
+            runtime: "native", "torch", or "cuda".
+            device: Identifier of the resource's execution device.
+
+        PyTorch MPS records an event on the current stream; other runtimes use
+        the retained resource's existing completion point.
+        """
         self._resource: Any = resource
         self.runtime = runtime
         self.device = device
@@ -55,6 +82,11 @@ class Event:
             self._event.record()
 
     def done(self) -> bool:
+        """Check completion without blocking the CPU.
+
+        Returns:
+            True once the retained GPU work has completed, otherwise False.
+        """
         if self.runtime == "native":
             return self._resource.done()
         if self.runtime == "torch":
@@ -65,6 +97,11 @@ class Event:
             return self._resource.event.query()
 
     def wait(self) -> None:
+        """Block the CPU until this completion point finishes.
+
+        Returns:
+            None. Pixels remain resident; backend execution errors propagate.
+        """
         if self.runtime == "torch":
             self._event.synchronize()
         else:
@@ -72,9 +109,24 @@ class Event:
 
 
 class Stream:
-    """CUDA execution stream, or the native Metal ordered queue."""
+    """A CUDA stream context or the shared native Metal ordered queue.
+
+    CUDA contexts select a nonblocking stream on the requested device and
+    restore the caller's context on exit. Metal contexts use the existing
+    ordered native queue. Exiting a context does not synchronize it.
+    """
 
     def __init__(self, backend: str = "metal", *, device: int = 0) -> None:
+        """Create an execution context for resident work.
+
+        Args:
+            backend: "metal" or "cuda".
+            device: Nonnegative CUDA device index; Metal supports only 0.
+
+        Raises:
+            ValueError: The backend or device is invalid.
+            RuntimeError: The requested backend is unavailable.
+        """
         from .ImageGpu import _require
 
         if backend not in ("metal", "cuda") or type(device) is not int or device < 0 or (backend == "metal" and device != 0):
@@ -91,6 +143,7 @@ class Stream:
                 self._stream = cupy().cuda.Stream(non_blocking=True)
 
     def __enter__(self) -> Self:
+        """Select this CUDA stream/device, or retain the native Metal queue context."""
         if self._stream is not None:
             from ._gpu_cuda import cupy
 
@@ -107,10 +160,24 @@ class Stream:
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None) -> None:
+        """Restore the previous CUDA stream/device without waiting for completion."""
         if self._stream is not None:
             self._local.stacks.pop().__exit__(exc_type, exc, traceback)
 
     def wait_event(self, event: Event) -> None:
+        """Order subsequent stream work after a completion event.
+
+        Args:
+            event: Event from the same device and compatible runtime. Native
+                Metal requires a native event on its shared ordered queue.
+
+        Returns:
+            None. CUDA enqueues a GPU-side wait without blocking the CPU; native
+            Metal already guarantees the required queue order.
+
+        Raises:
+            ValueError: Stream and event execution contexts differ.
+        """
         expected = f"cuda:{self.device}" if self.backend == "cuda" else "metal"
         if event.device != expected or (self.backend == "metal" and event.runtime != "native"):
             raise ValueError("stream and event must use the same execution context")
@@ -122,6 +189,12 @@ class Stream:
         # Native images are already committed to the same ordered Metal queue.
 
     def synchronize(self) -> None:
+        """Block the CPU until the stream's previously submitted work completes.
+
+        Returns:
+            None. Metal waits for its shared native queue; CUDA waits for this
+            stream. Backend execution errors propagate.
+        """
         if self._stream is not None:
             from ._gpu_cuda import cupy
 

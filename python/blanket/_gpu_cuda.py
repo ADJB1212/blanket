@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 
 
 def cupy() -> ModuleType:
+    """Import CuPy lazily, raising RuntimeError with CUDA dependency guidance."""
     try:
         import cupy
     except ImportError as error:
@@ -28,6 +29,16 @@ def cupy() -> ModuleType:
 
 
 def require(device: int) -> None:
+    """Require compiled CUDA kernels and a usable NVIDIA device.
+
+    Args:
+        device: Nonnegative CUDA device index.
+
+    Raises:
+        ValueError: The index is invalid or outside the driver's device count.
+        RuntimeError: CUDA support, dependencies, driver initialization, or
+            kernel loading is unavailable.
+    """
     if not hasattr(_blanket, "_gpu_cuda_fatbin"):
         raise RuntimeError("CUDA kernels unavailable; build Blanket with the gpu-cuda feature")
     if type(device) is not int or device < 0:
@@ -45,6 +56,18 @@ def require(device: int) -> None:
 
 @lru_cache(maxsize=8)
 def library(device: int) -> Callable[[str], Callable[..., None]]:
+    """Load and cache the extension's precompiled CUDA module on one device.
+
+    Args:
+        device: CUDA device index used for module loading and entry resolution.
+
+    Returns:
+        A kernel-name lookup callable retaining the loaded module functions.
+        No CUDA source compilation is performed at runtime.
+
+    Raises:
+        RuntimeError: Driver or GPU architecture compatibility prevents loading.
+    """
     cp = cupy()
     with cp.cuda.Device(device):
         try:
@@ -61,9 +84,21 @@ def library(device: int) -> Callable[[str], Callable[..., None]]:
 
 
 class CudaImage:
-    """Own an array and retain all asynchronous inputs until completion."""
+    """Own a CUDA array and retain asynchronous input owners until completion.
+
+    The array's device, submission stream, and completion event travel with the
+    resource. Consumers order streams through events before reading its pixels.
+    """
 
     def __init__(self, array: object, *, owners: tuple[object, ...] = (), completion: object | None = None) -> None:
+        """Retain CUDA storage and its completion dependencies.
+
+        Args:
+            array: CuPy-compatible GPU array exposing its device identifier.
+            owners: Objects that must outlive this resource's pending work.
+            completion: Existing CUDA completion event, or None to record one
+                on the current stream of the array's device.
+        """
         cp = cupy()
         self.array: Any = array
         self.device = int(self.array.device.id)
@@ -75,12 +110,14 @@ class CudaImage:
                 self.event.record(self.stream)
 
     def __del__(self) -> None:
+        """Wait for submitted work before releasing retained asynchronous input owners."""
         # Keep owners alive while the last handle waits for its submitted work.
         if hasattr(self, "event"):
             with cupy().cuda.Device(self.device):
                 self.event.synchronize()
 
     def synchronize(self) -> None:
+        """Wait for this resource's event and wrap execution failures as RuntimeError."""
         try:
             with cupy().cuda.Device(self.device):
                 self.event.synchronize()
@@ -88,6 +125,15 @@ class CudaImage:
             raise RuntimeError(f"CUDA execution failed on device {self.device}: {error}") from error
 
     def download(self) -> bytes:
+        """Copy CUDA pixels through pinned host storage and wait for completion.
+
+        Returns:
+            Packed CPU bytes in the array's dtype and shape order. The current
+            stream waits for this resource's event before starting the transfer.
+
+        Raises:
+            RuntimeError: Transfer or CUDA execution fails.
+        """
         import numpy as np
 
         cp = cupy()
@@ -107,6 +153,12 @@ class CudaImage:
                 raise RuntimeError(f"CUDA download failed on device {self.device}: {error}") from error
 
     def to_torch(self) -> Tensor:
+        """Export the CUDA array as a shared PyTorch tensor through DLPack.
+
+        Returns:
+            A tensor on the same device, with DLPack-managed storage ownership
+            and stream ordering. No CPU pixel transfer is performed.
+        """
         import torch
         from torch.utils import dlpack
 
@@ -115,6 +167,25 @@ class CudaImage:
             return dlpack.from_dlpack(self.array)
 
     def run(self, other: CudaImage, parameters: list[int], values: list[float], channels: int, floating: bool, source_float: bool) -> CudaImage:
+        """Submit a validated image operation on the current CUDA stream.
+
+        Args:
+            other: Secondary resource on the same CUDA device.
+            parameters: Eight protocol words describing input/output geometry
+                and operation-specific selectors.
+            values: Float32 operation controls.
+            channels: Output channel count.
+            floating: Whether output samples use float32 rather than uint8.
+            source_float: Whether source samples use float32.
+
+        Returns:
+            A new CudaImage retaining inputs, packed views, controls, and its
+            kernel until asynchronous execution completes.
+
+        Raises:
+            ValueError: Inputs use different CUDA devices.
+            RuntimeError: Allocation, preparation, or dispatch fails.
+        """
         from .ImageGpu import _dispatch_threads
 
         if self.device != other.device:
@@ -155,6 +226,20 @@ class CudaImage:
 
 
 def upload(data: bytes, shape: tuple[int, int, int], floating: bool, device: int) -> CudaImage:
+    """Upload packed CPU samples through pinned memory on the current stream.
+
+    Args:
+        data: Packed uint8 or float32 sample bytes matching shape.
+        shape: Output array shape in (height, width, channels) order.
+        floating: True for float32 samples, False for uint8.
+        device: CUDA device index.
+
+    Returns:
+        A CudaImage retaining pinned input storage until transfer completes.
+
+    Raises:
+        RuntimeError: CUDA initialization, allocation, or upload fails.
+    """
     import numpy as np
 
     require(device)
@@ -172,6 +257,16 @@ def upload(data: bytes, shape: tuple[int, int, int], floating: bool, device: int
 
 
 def from_torch(tensor: Tensor, *, copy: bool = False) -> CudaImage:
+    """Import CUDA tensor storage through DLPack without a CPU transfer.
+
+    Args:
+        tensor: Validated CUDA tensor whose storage and device are retained.
+        copy: Copy into independent CUDA storage rather than borrowing it.
+
+    Returns:
+        A CudaImage recording completion on the current device stream.
+        Layout, dtype, mode, and gradient checks belong to ImageGpu.from_torch.
+    """
     device = tensor.device.index
     require(device)
     cp = cupy()
