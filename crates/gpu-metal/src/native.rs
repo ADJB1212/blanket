@@ -7,9 +7,8 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBlitCommandEncoder, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue, MTLCompileOptions,
-    MTLComputeCommandEncoder, MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunctionConstantValues, MTLLibrary,
-    MTLLibraryOptimizationLevel, MTLMathMode, MTLResource, MTLResourceOptions, MTLSize,
+    MTLBuffer, MTLCommandBufferStatus, MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunctionConstantValues,
+    MTLGPUFamily, MTLLanguageVersion, MTLLibrary, MTLLibraryOptimizationLevel, MTLMathMode, MTLResource, MTLResourceOptions, MTLSize,
 };
 
 // Metal device discovery requires CoreGraphics to be linked.
@@ -26,7 +25,7 @@ const OUTPUT_SLOT: usize = 1;
 const OTHER_SLOT: usize = 2;
 const PARAMETERS_SLOT: usize = 3;
 const VALUES_SLOT: usize = 4;
-// Metal setBytes accepts at most 4 KiB per binding.
+// Cache larger controls; small controls are copied into per-command storage.
 const INLINE_CONTROL_BYTES: usize = 4096;
 // Eight SIMD groups amortize threadgroup scheduling for streaming image kernels.
 const THREADGROUP_THREADS: usize = 256;
@@ -47,7 +46,9 @@ const POOL_MAX_BYTES: usize = 128 * 1024 * 1024;
 const POOL_MAX_BUFFERS: usize = 16;
 const CONTROL_MAX_BYTES: usize = 16 * 1024 * 1024;
 
-type Command = Retained<ProtocolObject<dyn MTLCommandBuffer>>;
+#[path = "command.rs"]
+mod command;
+use command::{Command, Encoder, Queue};
 type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 type ControlEntry = (Vec<u32>, Retained<ProtocolObject<dyn MTLBuffer>>);
 
@@ -156,7 +157,7 @@ impl Default for ControlCache {
 pub struct Context {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
     max_buffer_length: usize,
-    queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    queue: Queue,
     library: Retained<ProtocolObject<dyn MTLLibrary>>,
     pipelines: [[OnceLock<Result<Pipeline, String>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
     pool: Arc<Mutex<BufferPool>>,
@@ -173,7 +174,7 @@ pub struct Context {
 pub struct Image {
     pub descriptor: Descriptor,
     buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
-    completion: Option<Retained<ProtocolObject<dyn MTLCommandBuffer>>>,
+    completion: Option<Command>,
     pool: Arc<Mutex<BufferPool>>,
     uses: Mutex<VecDeque<Command>>,
 }
@@ -196,7 +197,7 @@ impl Image {
         while uses.front().is_some_and(finished) {
             uses.pop_front();
         }
-        uses.push_back(command.clone());
+        uses.push_back(Arc::clone(command));
     }
 }
 
@@ -222,18 +223,16 @@ impl Context {
             return Err("Metal/PyTorch exchange exceeds buffer bounds".into());
         }
         autoreleasepool(|_| {
-            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal exchange command buffer")?;
-            let encoder = command.blitCommandEncoder().ok_or("cannot allocate Metal exchange encoder")?;
+            let command = self.queue.command_buffer().ok_or("cannot allocate Metal exchange command buffer")?;
+            let encoder = command.compute_encoder().ok_or("cannot allocate Metal exchange encoder")?;
             // Both ranges are checked, owners outlive completion, and the caller
             // orders access from external queues before entering this method.
-            unsafe {
-                encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(source, source_offset, destination, destination_offset, len)
-            };
-            encoder.endEncoding();
+            unsafe { encoder.copy_buffer(source, source_offset, destination, destination_offset, len) };
+            encoder.end_encoding();
             command.commit();
-            command.waitUntilCompleted();
+            command.wait_until_completed();
             if command.status() == MTLCommandBufferStatus::Error {
-                return Err(command.error().map_or_else(|| "Metal exchange failed".into(), |error| error.to_string()));
+                return Err(command.error().unwrap_or_else(|| "Metal exchange failed".into()));
             }
             Ok(())
         })
@@ -293,19 +292,18 @@ impl Context {
         (geometry.steps().len(), geometry.tile(), geometry.halo(), geometry.scratch_bytes() / 2 * count)
     }
     fn encode_tile(
-        &self, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>,
-        parameters: [u32; 11], floating: bool,
+        &self, encoder: &Encoder, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>, parameters: [u32; 11], floating: bool,
     ) {
         let pipeline = &self.tile_pipelines[usize::from(floating)];
-        encoder.setComputePipelineState(pipeline);
+        encoder.set_pipeline(pipeline);
         // The plan bounds source/destination rectangles and retains every buffer.
         unsafe {
-            encoder.setBuffer_offset_atIndex(Some(src), 0, SOURCE_SLOT);
-            encoder.setBuffer_offset_atIndex(Some(dst), 0, OUTPUT_SLOT);
-            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+            encoder.set_buffer(Some(src), 0, SOURCE_SLOT);
+            encoder.set_buffer(Some(dst), 0, OUTPUT_SLOT);
+            encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
         }
         let samples = parameters[9] as usize * parameters[10] as usize;
-        encoder.dispatchThreads_threadsPerThreadgroup(
+        encoder.dispatch_threads(
             MTLSize { width: samples, height: 1, depth: 1 },
             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
         );
@@ -337,9 +335,9 @@ impl Context {
                     }
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal plan command buffer")?;
-            // Serial compute encoders complete each dispatch before the next begins.
-            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal plan encoder")?;
+            let command = self.queue.command_buffer().ok_or("cannot allocate Metal plan command buffer")?;
+            // Encoder barriers complete each dispatch before the next begins.
+            let encoder = command.compute_encoder().ok_or("cannot allocate Metal plan encoder")?;
             let mut outputs = Vec::with_capacity(sources.len());
             for (source, output) in sources.iter().zip(buffers) {
                 for y in (0..d.height).step_by(tile[1] as usize) {
@@ -362,7 +360,7 @@ impl Context {
                             );
                         }
                         for (index, (step, pipeline)) in geometry.steps().iter().zip(&pipelines).enumerate() {
-                            encoder.setComputePipelineState(pipeline);
+                            encoder.set_pipeline(pipeline);
                             let parameters = [tw, th, d.channels, tw, th, step.operation, step.kernel, step.axis];
                             let (src, dst) = if direct {
                                 let last = (geometry.steps().len() - index) % 2 == 1;
@@ -378,21 +376,17 @@ impl Context {
                             } else {
                                 (&scratch[index % 2], &scratch[(index + 1) % 2])
                             };
-                            // Serial dispatches complete writes before reusing intermediate storage.
+                            // Encoder barriers complete writes before reusing intermediate storage.
                             unsafe {
-                                encoder.setBuffer_offset_atIndex(Some(src), 0, SOURCE_SLOT);
-                                encoder.setBuffer_offset_atIndex(Some(dst), 0, OUTPUT_SLOT);
-                                encoder.setBuffer_offset_atIndex(Some(src), 0, OTHER_SLOT);
-                                encoder.setBytes_length_atIndex(
-                                    std::ptr::NonNull::from(&parameters).cast(),
-                                    std::mem::size_of_val(&parameters),
-                                    PARAMETERS_SLOT,
-                                );
-                                encoder.setBuffer_offset_atIndex(Some(&plan.controls[index]), 0, VALUES_SLOT);
+                                encoder.set_buffer(Some(src), 0, SOURCE_SLOT);
+                                encoder.set_buffer(Some(dst), 0, OUTPUT_SLOT);
+                                encoder.set_buffer(Some(src), 0, OTHER_SLOT);
+                                encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+                                encoder.set_buffer(Some(&plan.controls[index]), 0, VALUES_SLOT);
                             }
                             let samples = tw as usize * th as usize * d.channels as usize;
                             let samples = dispatch_samples(&parameters, d.float, samples, pipeline.threadExecutionWidth());
-                            encoder.dispatchThreads_threadsPerThreadgroup(
+                            encoder.dispatch_threads(
                                 MTLSize { width: samples, height: 1, depth: 1 },
                                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                             );
@@ -411,18 +405,18 @@ impl Context {
                 outputs.push(Image {
                     descriptor: d,
                     buffer: output,
-                    completion: Some(command.clone()),
+                    completion: Some(Arc::clone(&command)),
                     pool: Arc::clone(&self.pool),
                     uses: Mutex::default(),
                 });
             }
-            encoder.endEncoding();
+            encoder.end_encoding();
             for source in sources {
                 source.track_read(&command);
             }
             command.commit();
             for buffer in scratch {
-                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![command.clone()] });
+                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
             }
             Ok(outputs)
         })
@@ -450,8 +444,8 @@ impl Context {
         autoreleasepool(|_| {
             let buffer = self.allocate_image(d.byte_len()?)?;
             let pipeline = &self.paste[usize::from(d.float)];
-            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
-            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal compute encoder")?;
+            let command = self.queue.command_buffer().ok_or("cannot allocate Metal command buffer")?;
+            let encoder = command.compute_encoder().ok_or("cannot allocate Metal compute encoder")?;
             let parameters = [
                 d.width,
                 d.height,
@@ -462,20 +456,20 @@ impl Context {
                 position[1] as u32,
                 mask.map_or(0, |mask| if mask.descriptor.float { 2 } else { 1 }),
             ];
-            encoder.setComputePipelineState(pipeline);
+            encoder.set_pipeline(pipeline);
             // Shapes and contexts are checked above; commands retain every input.
             unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&background.buffer), 0, SOURCE_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(&buffer), 0, OUTPUT_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(&source.buffer), 0, OTHER_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(&mask.unwrap_or(source).buffer), 0, 5);
-                encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+                encoder.set_buffer(Some(&background.buffer), 0, SOURCE_SLOT);
+                encoder.set_buffer(Some(&buffer), 0, OUTPUT_SLOT);
+                encoder.set_buffer(Some(&source.buffer), 0, OTHER_SLOT);
+                encoder.set_buffer(Some(&mask.unwrap_or(source).buffer), 0, 5);
+                encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
             }
-            encoder.dispatchThreads_threadsPerThreadgroup(
+            encoder.dispatch_threads(
                 MTLSize { width: d.width as usize * d.height as usize, height: 1, depth: 1 },
                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
             );
-            encoder.endEncoding();
+            encoder.end_encoding();
             background.track_read(&command);
             source.track_read(&command);
             if let Some(mask) = mask {
@@ -487,15 +481,7 @@ impl Context {
     }
 
     pub fn wait_idle(&self) -> Result<(), String> {
-        autoreleasepool(|_| {
-            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
-            command.commit();
-            command.waitUntilCompleted();
-            if command.status() == MTLCommandBufferStatus::Error {
-                return Err(command.error().map_or_else(|| "Metal synchronization failed".into(), |error| error.to_string()));
-            }
-            Ok(())
-        })
+        self.queue.wait_idle()
     }
     /// Borrow completed pixel storage until the image is released.
     pub fn download_bytes<'a>(&self, image: &'a Image) -> Result<&'a [u8], String> {
@@ -507,7 +493,11 @@ impl Context {
     pub fn new() -> Result<Self, String> {
         autoreleasepool(|_| {
             let device = MTLCreateSystemDefaultDevice().ok_or("Metal device unavailable")?;
-            let options = MTLCompileOptions::new();
+            if !objc2::available!(macos = 26.0) || !device.supportsFamily(MTLGPUFamily::Metal4) {
+                return Err("Metal 4 requires macOS 26 or later and a supported GPU".into());
+            }
+            let options = objc2_metal::MTLCompileOptions::new();
+            options.setLanguageVersion(MTLLanguageVersion::Version4_0);
 
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
@@ -525,7 +515,7 @@ impl Context {
             let histogram = pipeline("histogram_u8")?;
             let finish_statistics = pipeline("finish_statistics")?;
             let paste = [pipeline("paste_u8")?, pipeline("paste_f32")?];
-            let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
+            let queue = Queue::new(&device)?;
             let max_buffer_length = device.maxBufferLength();
             let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
             let blur_pipelines =
@@ -665,8 +655,8 @@ impl Backend for Context {
             } else {
                 None
             };
-            let command = self.queue.commandBuffer().ok_or("cannot allocate Metal command buffer")?;
-            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal compute encoder")?;
+            let command = self.queue.command_buffer().ok_or("cannot allocate Metal command buffer")?;
+            let encoder = command.compute_encoder().ok_or("cannot allocate Metal compute encoder")?;
             let op = request.parameters[blanket_gpu::protocol::parameter::OPERATION];
             let pipeline = if op == operation::CONVERT {
                 &*self.conversions[usize::from(source.descriptor.float)][usize::from(request.output.float)]
@@ -685,36 +675,36 @@ impl Backend for Context {
             if op == operation::STATISTICS {
                 parameters[7] = blocks as u32;
             }
-            encoder.setComputePipelineState(pipeline);
+            encoder.set_pipeline(pipeline);
             // The caller validates shader bounds and layouts; the command retains all buffers.
             unsafe {
-                encoder.setBuffer_offset_atIndex(Some(&source.buffer), 0, SOURCE_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(partials.as_ref().unwrap_or(&buffer)), 0, OUTPUT_SLOT);
-                encoder.setBuffer_offset_atIndex(Some(&other.buffer), 0, OTHER_SLOT);
-                encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
+                encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
+                encoder.set_buffer(Some(partials.as_ref().unwrap_or(&buffer)), 0, OUTPUT_SLOT);
+                encoder.set_buffer(Some(&other.buffer), 0, OTHER_SLOT);
+                encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), std::mem::size_of_val(&parameters), PARAMETERS_SLOT);
                 if let Some(weights) = &weights {
-                    encoder.setBuffer_offset_atIndex(Some(weights), 0, VALUES_SLOT);
+                    encoder.set_buffer(Some(weights), 0, VALUES_SLOT);
                 } else {
-                    // setBytes copies these controls before the borrowed slice expires.
-                    encoder.setBytes_length_atIndex(std::ptr::NonNull::from(values).cast(), values_bytes, VALUES_SLOT);
+                    // Copy these controls before the borrowed slice expires.
+                    encoder.set_bytes(std::ptr::NonNull::from(values).cast(), values_bytes, VALUES_SLOT);
                 }
             }
             if op == operation::STATISTICS {
                 let width = pipeline.threadExecutionWidth();
                 let threads = pipeline.maxTotalThreadsPerThreadgroup().min(THREADGROUP_THREADS).min(STATISTICS_SIMDGROUPS * width) / width * width;
-                encoder.dispatchThreadgroups_threadsPerThreadgroup(
+                encoder.dispatch_threadgroups(
                     MTLSize { width: source.descriptor.channels as usize * blocks, height: 1, depth: 1 },
                     MTLSize { width: threads, height: 1, depth: 1 },
                 );
                 if let Some(partials) = &partials {
-                    encoder.setComputePipelineState(&self.finish_statistics);
-                    // The serial encoder completes partial writes before the merge.
+                    encoder.set_pipeline(&self.finish_statistics);
+                    // The encoder barrier completes partial writes before the merge.
                     unsafe {
-                        encoder.setBuffer_offset_atIndex(Some(partials), 0, SOURCE_SLOT);
-                        encoder.setBuffer_offset_atIndex(Some(&buffer), 0, OUTPUT_SLOT);
+                        encoder.set_buffer(Some(partials), 0, SOURCE_SLOT);
+                        encoder.set_buffer(Some(&buffer), 0, OUTPUT_SLOT);
                     }
                     let samples = if parameters[6] == 1 { output_bytes / size_of::<f32>() } else { source.descriptor.channels as usize };
-                    encoder.dispatchThreads_threadsPerThreadgroup(
+                    encoder.dispatch_threads(
                         MTLSize { width: samples, height: 1, depth: 1 },
                         MTLSize { width: THREADGROUP_THREADS.min(self.finish_statistics.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                     );
@@ -722,12 +712,12 @@ impl Backend for Context {
             } else {
                 let n = output_bytes / if request.output.float { size_of::<f32>() } else { size_of::<u8>() };
                 let n = dispatch_samples(&request.parameters, request.output.float, n, pipeline.threadExecutionWidth());
-                encoder.dispatchThreads_threadsPerThreadgroup(
+                encoder.dispatch_threads(
                     MTLSize { width: n, height: 1, depth: 1 },
                     MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                 );
             }
-            encoder.endEncoding();
+            encoder.end_encoding();
             // A source may be closed before its consumers finish; pool reuse waits for every reader.
             source.track_read(&command);
             if !std::ptr::eq(source, other) {
@@ -735,16 +725,16 @@ impl Backend for Context {
             }
             command.commit();
             if let Some(buffer) = partials {
-                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![command.clone()] });
+                self.pool.lock().unwrap_or_else(|error| error.into_inner()).put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
             }
             Ok(Image { descriptor: request.output, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
     fn synchronize(&self, image: &Image) -> Result<(), String> {
         if let Some(command) = &image.completion {
-            command.waitUntilCompleted();
+            command.wait_until_completed();
             if command.status() == MTLCommandBufferStatus::Error {
-                return Err(command.error().map_or_else(|| "Metal command execution failed".into(), |error| error.to_string()));
+                return Err(command.error().unwrap_or_else(|| "Metal command execution failed".into()));
             }
         }
         Ok(())
@@ -761,6 +751,71 @@ mod pixels_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn metal4_submission_retains_inputs_controls_and_pipelines_after_context_drop() {
+        let descriptor = Descriptor { width: 1025, height: 17, channels: 4, float: false };
+        let result = {
+            let context = Context::new().unwrap();
+            assert!(context.device.supportsFamily(MTLGPUFamily::Metal4));
+            let source = context.upload(descriptor, &vec![127; descriptor.byte_len().unwrap()]).unwrap();
+            let request = Dispatch { output: descriptor, parameters: [1025, 17, 4, 1025, 17, operation::BRIGHTNESS, 0, 0], values: vec![0.5] };
+            let first = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
+            let request = Dispatch { output: descriptor, parameters: [1025, 17, 4, 1025, 17, operation::INVERT, 0, 0], values: vec![] };
+            unsafe { context.dispatch(&first, &first, &request) }.unwrap()
+        };
+        let completion = result.completion.as_ref().unwrap();
+        completion.wait_until_completed();
+        assert_eq!(completion.status(), MTLCommandBufferStatus::Completed);
+        // Completion precedes CPU reads, and the image owns this immutable storage.
+        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(result.buffer.contents().cast().as_ptr(), descriptor.byte_len().unwrap()) };
+        assert!(bytes.as_chunks::<4>().0.iter().all(|pixel| pixel == &[192, 192, 192, 128]));
+    }
+
+    #[test]
+    fn metal4_dispatches_snapshot_bindings_and_inline_controls() {
+        let context = Context::new().unwrap();
+        let descriptor = Descriptor { width: 33, height: 17, channels: 1, float: false };
+        let source = context.upload(descriptor, &vec![100; descriptor.byte_len().unwrap()]).unwrap();
+        let outputs: Vec<_> = (1..=4).map(|_| context.upload(descriptor, &vec![0; descriptor.byte_len().unwrap()]).unwrap()).collect();
+        let command = context.queue.command_buffer().unwrap();
+        let encoder = command.compute_encoder().unwrap();
+        encoder.set_pipeline(context.operation_pipeline(operation::BRIGHTNESS, false, 1).unwrap());
+        for (index, output) in outputs.iter().enumerate() {
+            let parameters = [33, 17, 1, 33, 17, operation::BRIGHTNESS, 0, 0];
+            let factor = (index + 1) as f32 * 0.25;
+            unsafe {
+                encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
+                encoder.set_buffer(Some(&source.buffer), 0, OTHER_SLOT);
+                encoder.set_buffer(Some(&output.buffer), 0, OUTPUT_SLOT);
+                encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), size_of_val(&parameters), PARAMETERS_SLOT);
+                encoder.set_bytes(std::ptr::NonNull::from(&factor).cast(), size_of_val(&factor), VALUES_SLOT);
+            }
+            encoder.dispatch_threads(MTLSize { width: (33usize * 17).div_ceil(4), height: 1, depth: 1 }, MTLSize { width: 256, height: 1, depth: 1 });
+        }
+        encoder.end_encoding();
+        command.commit();
+        command.wait_until_completed();
+        assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
+        for (index, output) in outputs.iter().enumerate() {
+            assert_eq!(context.download(output).unwrap(), vec![(index as u8 + 1) * 25; descriptor.byte_len().unwrap()]);
+        }
+    }
+
+    #[test]
+    fn metal4_wait_idle_finishes_all_live_submissions() {
+        let context = Context::new().unwrap();
+        let descriptor = Descriptor { width: 1025, height: 257, channels: 4, float: false };
+        let source = context.upload(descriptor, &vec![71; descriptor.byte_len().unwrap()]).unwrap();
+        let request = Dispatch { output: descriptor, parameters: [1025, 257, 4, 1025, 257, operation::INVERT, 0, 0], values: vec![] };
+        let results: Vec<_> = (0..16).map(|_| unsafe { context.dispatch(&source, &source, &request) }.unwrap()).collect();
+        drop(source);
+        context.wait_idle().unwrap();
+        assert!(results.iter().all(|image| context.is_complete(image)));
+        for result in results {
+            assert!(context.download(&result).unwrap().iter().all(|&value| value == 184));
+        }
+    }
 
     #[test]
     fn buffer_exchange_copies_offsets_and_checks_bounds() {
@@ -792,7 +847,7 @@ mod tests {
     fn reader_tracking_retains_pending_commands_and_reclaims_completed_prefixes() {
         let context = Context::new().unwrap();
         let image = context.upload(Descriptor { width: 1, height: 1, channels: 1, float: false }, &[7]).unwrap();
-        let commands: Vec<_> = (0..16).map(|_| context.queue.commandBuffer().unwrap()).collect();
+        let commands: Vec<_> = (0..16).map(|_| context.queue.command_buffer().unwrap()).collect();
         for command in &commands {
             image.track_read(command);
         }
@@ -800,12 +855,12 @@ mod tests {
         for command in &commands {
             command.commit();
         }
-        commands.last().unwrap().waitUntilCompleted();
-        let next = context.queue.commandBuffer().unwrap();
+        commands.last().unwrap().wait_until_completed();
+        let next = context.queue.command_buffer().unwrap();
         image.track_read(&next);
         assert_eq!(image.uses.lock().unwrap().len(), 1);
         next.commit();
-        next.waitUntilCompleted();
+        next.wait_until_completed();
     }
 
     #[test]
@@ -834,14 +889,14 @@ mod tests {
         let context = Context::new().unwrap();
         let buffer = context.allocate_bytes(1024).unwrap();
         let address = buffer.contents();
-        let command = context.queue.commandBuffer().unwrap();
+        let command = context.queue.command_buffer().unwrap();
         let mut pool = BufferPool::default();
-        pool.put(PoolEntry { buffer, uses: vec![command.clone()] });
+        pool.put(PoolEntry { buffer, uses: vec![Arc::clone(&command)] });
         assert!(pool.take(1024, true).is_none());
         assert_eq!(pool.take(1024, false).unwrap().contents(), address);
         assert_eq!(pool.bytes, 0);
         command.commit();
-        command.waitUntilCompleted();
+        command.wait_until_completed();
     }
 
     #[test]
@@ -882,23 +937,23 @@ mod tests {
                     for axis in [0, 1] {
                         let output = context.upload(guarded, &vec![0xa5; input.len()]).unwrap();
                         let parameters = [width, height, channels, width, height, operation::BOX_BLUR, radius, axis];
-                        let command = context.queue.commandBuffer().unwrap();
-                        let encoder = command.computeCommandEncoder().unwrap();
-                        encoder.setComputePipelineState(pipeline);
+                        let command = context.queue.command_buffer().unwrap();
+                        let encoder = command.compute_encoder().unwrap();
+                        encoder.set_pipeline(pipeline);
                         // Four-byte offsets satisfy Metal alignment but misalign packed RGB rows.
                         unsafe {
-                            encoder.setBuffer_offset_atIndex(Some(&source.buffer), 4, SOURCE_SLOT);
-                            encoder.setBuffer_offset_atIndex(Some(&output.buffer), 4, OUTPUT_SLOT);
-                            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&parameters).cast(), size_of_val(&parameters), PARAMETERS_SLOT);
-                            encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&values).cast(), size_of_val(&values), VALUES_SLOT);
+                            encoder.set_buffer(Some(&source.buffer), 4, SOURCE_SLOT);
+                            encoder.set_buffer(Some(&output.buffer), 4, OUTPUT_SLOT);
+                            encoder.set_bytes(std::ptr::NonNull::from(&parameters).cast(), size_of_val(&parameters), PARAMETERS_SLOT);
+                            encoder.set_bytes(std::ptr::NonNull::from(&values).cast(), size_of_val(&values), VALUES_SLOT);
                         }
-                        encoder.dispatchThreads_threadsPerThreadgroup(
+                        encoder.dispatch_threads(
                             MTLSize { width: dispatch_samples(&parameters, false, data.len(), pipeline.threadExecutionWidth()), height: 1, depth: 1 },
                             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                         );
-                        encoder.endEncoding();
+                        encoder.end_encoding();
                         command.commit();
-                        command.waitUntilCompleted();
+                        command.wait_until_completed();
                         assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
                         let actual = context.download(&output).unwrap();
                         assert_eq!(&actual[..4], &[0xa5; 4]);

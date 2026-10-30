@@ -16,8 +16,10 @@ uv run --no-sync maturin develop --uv --features gpu-metal
 uv run --no-sync pytest tests/test_gpu.py tests/test_gpu_operations.py -n 0
 ```
 
-Native Metal execution requires no additional Python runtime packages; build
-it with `maturin develop --uv --features gpu-metal`.
+Native execution uses Metal 4 and Metal Shading Language 4.0. It requires
+macOS 26 or later and a Metal 4-capable Apple Silicon GPU, with no additional
+Python runtime packages. Build it with
+`maturin develop --uv --features gpu-metal`.
 The feature is optional; normal Blanket installations need neither Metal nor
 PyTorch. GPU operations never silently fall back to CPU processing.
 
@@ -36,6 +38,10 @@ result.close()
 source position unchanged. Intermediate results stay resident. `to_image`
 waits and downloads an independent CPU raster. `synchronize` waits explicitly;
 `close` releases the handle while submitted commands retain their resources.
+The native backend owns command allocators, argument tables, and residency
+sets until Metal 4 commit feedback reports completion. Explicit barriers order
+dependent dispatches and queued buffer reuse; each dispatch captures independent
+bindings and control values. PyTorch manages the separate MPS execution path.
 Native Metal transfers copy directly between Rust image storage and Metal,
 without staging a full raster in Python `bytes`. Downloads own their CPU pixels.
 Operations return independent pixel storage. Native Metal caches closed buffers

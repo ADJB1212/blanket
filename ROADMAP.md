@@ -464,6 +464,10 @@ Native Metal and PyTorch allocations use separate execution contexts. Explicit
 GPU copies connect them through `to_torch()` and
 `from_torch(..., runtime="native")`, as described in GPU Phase 4.
 
+The native backend uses Metal 4 command submission and MSL 4.0 on macOS 26 or
+later. It owns resource residency and argument tables explicitly, orders GPU
+dependencies with barriers, and releases submitted resources after commit feedback.
+
 ### GPU Phase 1 — Operation and Precision Coverage — Complete
 
 - [x] Mode conversion between supported uint8/float32 GPU modes, channel

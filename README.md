@@ -30,7 +30,7 @@ with Image.open("photo.jpg") as image:
   `ImagePath`, and `ImageStat`.
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
-- **Optional GPU processing.** Explicit Metal images support resident resize,
+- **Optional GPU processing.** Explicit Metal 4 images support resident resize,
   convolution, compositing, and PyTorch MPS pipelines. See [GPU images](GPU.md).
 - **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
   using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.

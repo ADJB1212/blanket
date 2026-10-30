@@ -24,24 +24,24 @@ fn guarded_dispatch(
     let other = upload(other);
     let len = request.output.byte_len().unwrap();
     let output = upload(&vec![0xa5; len]);
-    let command = context.queue.commandBuffer().unwrap();
-    let encoder = command.computeCommandEncoder().unwrap();
+    let command = context.queue.command_buffer().unwrap();
+    let encoder = command.compute_encoder().unwrap();
     let values = if request.values.is_empty() { &[0.0][..] } else { &request.values };
-    encoder.setComputePipelineState(pipeline);
+    encoder.set_pipeline(pipeline);
     unsafe {
-        encoder.setBuffer_offset_atIndex(Some(&source.buffer), 16, SOURCE_SLOT);
-        encoder.setBuffer_offset_atIndex(Some(&output.buffer), 16, OUTPUT_SLOT);
-        encoder.setBuffer_offset_atIndex(Some(&other.buffer), 16, OTHER_SLOT);
-        encoder.setBytes_length_atIndex(std::ptr::NonNull::from(&request.parameters).cast(), size_of_val(&request.parameters), PARAMETERS_SLOT);
-        encoder.setBytes_length_atIndex(std::ptr::NonNull::from(values).cast(), size_of_val(values), VALUES_SLOT);
+        encoder.set_buffer(Some(&source.buffer), 16, SOURCE_SLOT);
+        encoder.set_buffer(Some(&output.buffer), 16, OUTPUT_SLOT);
+        encoder.set_buffer(Some(&other.buffer), 16, OTHER_SLOT);
+        encoder.set_bytes(std::ptr::NonNull::from(&request.parameters).cast(), size_of_val(&request.parameters), PARAMETERS_SLOT);
+        encoder.set_bytes(std::ptr::NonNull::from(values).cast(), size_of_val(values), VALUES_SLOT);
     }
-    encoder.dispatchThreads_threadsPerThreadgroup(
+    encoder.dispatch_threads(
         MTLSize { width: threads, height: 1, depth: 1 },
         MTLSize { width: group_threads.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
     );
-    encoder.endEncoding();
+    encoder.end_encoding();
     command.commit();
-    command.waitUntilCompleted();
+    command.wait_until_completed();
     assert_eq!(command.status(), MTLCommandBufferStatus::Completed, "{:?}", command.error());
     let bytes = context.download(&output).unwrap();
     assert!(bytes[..16].iter().chain(&bytes[16 + len..]).all(|&value| value == 0xa5));
@@ -119,12 +119,12 @@ fn packed_tile_copies_preserve_pixels_outside_odd_rectangles() {
             for width in [1, 3, 31, 32, 33] {
                 let mut expected = vec![0xa5; dst.byte_len().unwrap()];
                 let output = context.upload(dst, &expected).unwrap();
-                let command = context.queue.commandBuffer().unwrap();
-                let encoder = command.computeCommandEncoder().unwrap();
+                let command = context.queue.command_buffer().unwrap();
+                let encoder = command.compute_encoder().unwrap();
                 context.encode_tile(&encoder, &source.buffer, &output.buffer, [37, 7, channels, 41, 9, 3, 2, 5, 4, width, 3], floating);
-                encoder.endEncoding();
+                encoder.end_encoding();
                 command.commit();
-                command.waitUntilCompleted();
+                command.wait_until_completed();
                 assert_eq!(command.status(), MTLCommandBufferStatus::Completed);
                 for y in 0..3 {
                     let from = ((y + 2) * 37 + 3) * pixel_bytes;
