@@ -453,13 +453,13 @@ template <typename T> void process(device const T *src, device T *dst, device co
         uint pos = p[7] == 0 ? x : y;
         uint base = pos * k, start = uint(v[base]), count = uint(v[base + 1]);
         out = 0;
-        long fixed = RESIZE_ROUND;
+        int fixed = RESIZE_ROUND;
         uint first = p[7] == 0 ? (y * sw + start) * c + band : (start * sw + x) * c + band;
         uint stride = p[7] == 0 ? c : sw * c;
         for (uint t = 0; t < count; t++) {
             uint idx = first + t * stride;
             if (is_same_v<T, uchar>)
-                fixed += long(src[idx]) * long(round(v[base + 2 + t] * float(RESIZE_SCALE)));
+                fixed += int(src[idx]) * int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
             else
                 out += read_sample(src, idx) * v[base + 2 + t];
         }
@@ -641,10 +641,10 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         uint start = uint(v[base]), taps = uint(v[base + 1]);
         uint source = p[7] == 0 ? y * p[0] + start : start * p[0] + x;
         uint stride = p[7] == 0 ? 1 : p[0];
-        long4 fixed = long4(RESIZE_ROUND);
+        int4 fixed = int4(RESIZE_ROUND);
         for (uint t = 0; t < taps; t++) {
-            long weight = long(round(v[base + 2 + t] * float(RESIZE_SCALE)));
-            fixed += long4(reinterpret_cast<device const uchar4 *>(s)[source + t * stride]) * weight;
+            int weight = int(round(v[base + 2 + t] * float(RESIZE_SCALE)));
+            fixed += int4(reinterpret_cast<device const uchar4 *>(s)[source + t * stride]) * weight;
         }
         reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(float4(fixed >> RESIZE_BITS), 0.0f, 255.0f));
         return;

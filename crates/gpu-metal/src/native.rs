@@ -36,6 +36,8 @@ const OPERATION_CONSTANT: usize = 0;
 // Packed byte kernels process one aligned uchar4 per thread, with a scalar tail.
 const PACKED_SAMPLES: usize = 4;
 const SLIDING_BLUR_RADIUS: u32 = 32;
+// Matches MAX_SIMDGROUPS in statistics.metal.
+const STATISTICS_SIMDGROUPS: usize = 32;
 // Bound retained allocations, including buffers whose GPU work is still pending.
 const POOL_MAX_BYTES: usize = 128 * 1024 * 1024;
 const POOL_MAX_BUFFERS: usize = 16;
@@ -133,6 +135,7 @@ pub struct Context {
     blur_pipeline: Pipeline,
     conversions: [[Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT]; SAMPLE_FORMAT_COUNT],
     reductions: [Retained<ProtocolObject<dyn MTLComputePipelineState>>; SAMPLE_FORMAT_COUNT],
+    statistics: [Pipeline; SAMPLE_FORMAT_COUNT],
 }
 pub struct Image {
     pub descriptor: Descriptor,
@@ -196,9 +199,9 @@ impl Context {
         (plan.geometry.steps().len(), plan.geometry.tile(), plan.geometry.halo(), plan.geometry.scratch_bytes())
     }
     fn encode_tile(
-        &self, command: &Command, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>, parameters: [u32; 11], floating: bool,
-    ) -> Result<(), String> {
-        let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal tile encoder")?;
+        &self, encoder: &ProtocolObject<dyn MTLComputeCommandEncoder>, src: &ProtocolObject<dyn MTLBuffer>, dst: &ProtocolObject<dyn MTLBuffer>,
+        parameters: [u32; 11], floating: bool,
+    ) {
         let pipeline = &self.tile_pipelines[usize::from(floating)];
         encoder.setComputePipelineState(pipeline);
         // The plan bounds source/destination rectangles and retains every buffer.
@@ -212,8 +215,6 @@ impl Context {
             MTLSize { width: samples, height: 1, depth: 1 },
             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
         );
-        encoder.endEncoding();
-        Ok(())
     }
     pub fn execute_plan(&self, plan: &Plan, sources: &[&Image]) -> Result<Vec<Image>, String> {
         autoreleasepool(|_| {
@@ -228,10 +229,23 @@ impl Context {
                 return Ok(Vec::new());
             }
             let scratch = [self.allocate_image(geometry.scratch_bytes() / 2)?, self.allocate_image(geometry.scratch_bytes() / 2)?];
+            let buffers = sources.iter().map(|_| self.allocate_image(d.byte_len()?)).collect::<Result<Vec<_>, String>>()?;
+            let pipelines = geometry
+                .steps()
+                .iter()
+                .map(|step| {
+                    if step.operation == operation::BOX_BLUR && !d.float && step.kernel >= SLIDING_BLUR_RADIUS {
+                        Ok(&*self.blur_pipeline)
+                    } else {
+                        self.operation_pipeline(step.operation, d.float, d.channels)
+                    }
+                })
+                .collect::<Result<Vec<_>, String>>()?;
             let command = self.queue.commandBuffer().ok_or("cannot allocate Metal plan command buffer")?;
+            // Serial compute encoders complete each dispatch before the next begins.
+            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal plan encoder")?;
             let mut outputs = Vec::with_capacity(sources.len());
-            for source in sources {
-                let output = self.allocate_image(d.byte_len()?)?;
+            for (source, output) in sources.iter().zip(buffers) {
                 for y in (0..d.height).step_by(tile[1] as usize) {
                     for x in (0..d.width).step_by(tile[0] as usize) {
                         let width = tile[0].min(d.width - x);
@@ -243,19 +257,13 @@ impl Context {
                         let tw = right - left;
                         let th = bottom - top;
                         self.encode_tile(
-                            &command,
+                            &encoder,
                             &source.buffer,
                             &scratch[0],
                             [d.width, d.height, d.channels, tw, th, left, top, 0, 0, tw, th],
                             d.float,
-                        )?;
-                        for (index, step) in geometry.steps().iter().enumerate() {
-                            let encoder = command.computeCommandEncoder().ok_or("cannot allocate Metal plan encoder")?;
-                            let pipeline = if step.operation == operation::BOX_BLUR && !d.float && step.kernel >= SLIDING_BLUR_RADIUS {
-                                &*self.blur_pipeline
-                            } else {
-                                self.operation_pipeline(step.operation, d.float, d.channels)?
-                            };
+                        );
+                        for (index, (step, pipeline)) in geometry.steps().iter().zip(&pipelines).enumerate() {
                             encoder.setComputePipelineState(pipeline);
                             let parameters = [tw, th, d.channels, tw, th, step.operation, step.kernel, step.axis];
                             // Both scratch buffers fit the expanded tile and are used in command order.
@@ -276,15 +284,14 @@ impl Context {
                                 MTLSize { width: samples, height: 1, depth: 1 },
                                 MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
                             );
-                            encoder.endEncoding();
                         }
                         self.encode_tile(
-                            &command,
+                            &encoder,
                             &scratch[geometry.steps().len() % 2],
                             &output,
                             [tw, th, d.channels, d.width, d.height, x - left, y - top, x, y, width, height],
                             d.float,
-                        )?;
+                        );
                     }
                 }
                 outputs.push(Image {
@@ -295,6 +302,7 @@ impl Context {
                     uses: Mutex::default(),
                 });
             }
+            encoder.endEncoding();
             for source in sources {
                 source.track_read(&command);
             }
@@ -335,10 +343,11 @@ impl Context {
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
             let source = NSString::from_str(&format!(
-                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}",
+                "#define BLANKET_METAL_SPECIALIZE\n{}\n{}\n{}\n{}",
                 super::SHADERS,
                 include_str!("tiles.metal"),
-                include_str!("blur.metal")
+                include_str!("blur.metal"),
+                include_str!("statistics.metal")
             ));
             let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
             let pipeline = |name| {
@@ -349,6 +358,7 @@ impl Context {
             let conversions =
                 [[pipeline("convert_u8_u8")?, pipeline("convert_u8_f32")?], [pipeline("convert_f32_u8")?, pipeline("convert_f32_f32")?]];
             let reductions = [pipeline("reduce_u8")?, pipeline("reduce_f32")?];
+            let statistics = [pipeline("statistics_u8")?, pipeline("statistics_f32")?];
             let queue = device.newCommandQueue().ok_or("cannot allocate Metal command queue")?;
             let max_buffer_length = device.maxBufferLength();
             let tile_pipelines = [pipeline("tile_u8")?, pipeline("tile_f32")?];
@@ -361,6 +371,7 @@ impl Context {
                 pipelines,
                 conversions,
                 reductions,
+                statistics,
                 pool: Arc::default(),
                 controls: Mutex::default(),
                 tile_pipelines,
@@ -479,12 +490,10 @@ impl Backend for Context {
                 &*self.blur_pipeline
             } else if op == operation::LUMINANCE_REDUCE {
                 &*self.reductions[usize::from(source.descriptor.float)]
+            } else if op == operation::STATISTICS {
+                &*self.statistics[usize::from(source.descriptor.float)]
             } else {
-                self.operation_pipeline(
-                    op,
-                    if op == operation::STATISTICS { source.descriptor.float } else { request.output.float },
-                    source.descriptor.channels,
-                )?
+                self.operation_pipeline(op, request.output.float, source.descriptor.channels)?
             };
             encoder.setComputePipelineState(pipeline);
             // The caller validates shader bounds and layouts; the command retains all buffers.
@@ -504,12 +513,21 @@ impl Backend for Context {
                     encoder.setBytes_length_atIndex(std::ptr::NonNull::from(values).cast(), values_bytes, VALUES_SLOT);
                 }
             }
-            let n = output_bytes / if request.output.float { size_of::<f32>() } else { size_of::<u8>() };
-            let n = dispatch_samples(&request.parameters, request.output.float, n, pipeline.threadExecutionWidth());
-            encoder.dispatchThreads_threadsPerThreadgroup(
-                MTLSize { width: n, height: 1, depth: 1 },
-                MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
-            );
+            if op == operation::STATISTICS {
+                let width = pipeline.threadExecutionWidth();
+                let threads = pipeline.maxTotalThreadsPerThreadgroup().min(STATISTICS_SIMDGROUPS * width) / width * width;
+                encoder.dispatchThreadgroups_threadsPerThreadgroup(
+                    MTLSize { width: source.descriptor.channels as usize, height: 1, depth: 1 },
+                    MTLSize { width: threads, height: 1, depth: 1 },
+                );
+            } else {
+                let n = output_bytes / if request.output.float { size_of::<f32>() } else { size_of::<u8>() };
+                let n = dispatch_samples(&request.parameters, request.output.float, n, pipeline.threadExecutionWidth());
+                encoder.dispatchThreads_threadsPerThreadgroup(
+                    MTLSize { width: n, height: 1, depth: 1 },
+                    MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
+                );
+            }
             encoder.endEncoding();
             // A source may be closed before its consumers finish; pool reuse waits for every reader.
             source.track_read(&command);
@@ -568,5 +586,73 @@ mod tests {
         }
         assert_eq!(addresses.len(), 2);
         assert_eq!(context.download(&image).unwrap(), data);
+    }
+
+    fn floats(bytes: &[u8]) -> Vec<f32> {
+        bytes.as_chunks::<4>().0.iter().map(|&chunk| f32::from_ne_bytes(chunk)).collect()
+    }
+
+    #[test]
+    fn parallel_statistics_match_serial_reductions() {
+        use blanket_gpu::protocol::statistics;
+        let context = Context::new().unwrap();
+        // Odd sizes leave partial SIMD groups and idle threads in each threadgroup.
+        for (width, height) in [(1, 1), (37, 3), (1031, 17)] {
+            let descriptor = Descriptor { width, height, channels: 3, float: false };
+            let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| ((i * 37) % 251) as u8).collect();
+            let image = context.upload(descriptor, &data).unwrap();
+            let parameters = |output: Descriptor, kind| [width, height, 3, output.width, output.height, operation::STATISTICS, kind, 0];
+            let output = Descriptor { width: statistics::HISTOGRAM_BINS, height: 3, channels: 1, float: true };
+            let request = Dispatch { output, parameters: parameters(output, 1), values: vec![] };
+            let counts = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
+            let output = Descriptor { width: statistics::FIELDS, height: 3, channels: 1, float: true };
+            let request = Dispatch { output, parameters: parameters(output, 0), values: vec![] };
+            let fields = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
+            for band in 0..3 {
+                let values: Vec<u32> = data.iter().skip(band).step_by(3).map(|&value| u32::from(value)).collect();
+                let mut expected = [0_u32; 256];
+                values.iter().for_each(|&value| expected[value as usize] += 1);
+                let actual: Vec<u32> = counts[band * 256..][..256].iter().map(|count| count.to_bits()).collect();
+                assert_eq!(actual, expected);
+                let field = &fields[band * statistics::FIELDS as usize..][..statistics::FIELDS as usize];
+                assert_eq!(field[0], *values.iter().min().unwrap() as f32);
+                assert_eq!(field[1], *values.iter().max().unwrap() as f32);
+                assert_eq!(field[2], values.iter().sum::<u32>() as f32);
+                let fourth: f64 = values.iter().map(|&value| f64::from(value).powi(4)).sum();
+                assert!((f64::from(field[5]) - fourth).abs() <= fourth * 1e-5);
+                assert_eq!(field[6].to_bits(), values.len() as u32);
+            }
+        }
+        let descriptor = Descriptor { width: 999, height: 1, channels: 1, float: true };
+        let samples: Vec<f32> = (0..999).map(|i| if i == 700 { f32::NAN } else { i as f32 }).collect();
+        let image = context.upload(descriptor, &samples.iter().flat_map(|value| value.to_ne_bytes()).collect::<Vec<_>>()).unwrap();
+        let output = Descriptor { width: statistics::FIELDS, height: 1, channels: 1, float: true };
+        let request = Dispatch { output, parameters: [999, 1, 1, output.width, 1, operation::STATISTICS, 0, 0], values: vec![] };
+        let fields = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
+        assert!(fields[0].is_nan() && fields[1].is_nan());
+    }
+
+    #[test]
+    fn byte_resize_matches_signed_fixed_point() {
+        let context = Context::new().unwrap();
+        for channels in [1, 4] {
+            let descriptor = Descriptor { width: 9, height: 2, channels, float: false };
+            let data: Vec<u8> = (0..descriptor.byte_len().unwrap()).map(|i| (i * 97) as u8).collect();
+            let image = context.upload(descriptor, &data).unwrap();
+            let weights = [-0.1_f32, 0.6, 0.7, -0.2];
+            let values: Vec<f32> = (0..6).flat_map(|x| [x as f32, 4.0].into_iter().chain(weights)).collect();
+            let output = Descriptor { width: 6, ..descriptor };
+            let request = Dispatch { output, parameters: [9, 2, channels, 6, 2, operation::RESIZE, 6, 0], values };
+            let actual = context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap();
+            let fixed = weights.map(|weight| (weight * (1 << 22) as f32).round() as i64);
+            let expected: Vec<u8> = (0..actual.len())
+                .map(|i| {
+                    let (band, x, y) = (i % channels as usize, i / channels as usize % 6, i / channels as usize / 6);
+                    let sum: i64 = (0..4).map(|t| i64::from(data[(y * 9 + x + t) * channels as usize + band]) * fixed[t]).sum();
+                    ((sum + (1 << 21)) >> 22).clamp(0, 255) as u8
+                })
+                .collect();
+            assert_eq!(actual, expected);
+        }
     }
 }

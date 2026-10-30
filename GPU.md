@@ -52,13 +52,7 @@ Native Metal and CUDA support reusable, same-size processing plans. Operations u
 same keyword arguments and numerical contracts as `GpuImage` methods:
 
 ```python
-plan = ImageGpu.ProcessingPlan(
-    gpu.size, gpu.mode,
-    [("brightness", {"factor": 1.2}),
-     ("gaussian_blur", {"radius": 2.0}),
-     ("invert", {})],
-    memory_limit=8 * 1024 * 1024,
-)
+plan = ImageGpu.ProcessingPlan(gpu.size, gpu.mode, [("brightness", {"factor": 1.2}), ("gaussian_blur", {"radius": 2.0}), ("invert", {})], memory_limit=8 * 1024 * 1024)
 result = plan.run(gpu)
 results = plan.run_batch([gpu, gpu])
 print(plan.info())
@@ -103,8 +97,7 @@ results, and Metal execution failures surface when waiting on a result/event.
 Configure caches independently of plan scratch storage:
 
 ```python
-ImageGpu.configure_cache(image_bytes=32 * 1024 * 1024,
-                         control_bytes=4 * 1024 * 1024)
+ImageGpu.configure_cache(image_bytes=32 * 1024 * 1024, control_bytes=4 * 1024 * 1024)
 print(ImageGpu.cache_info())
 ```
 
