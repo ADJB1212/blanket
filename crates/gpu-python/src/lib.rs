@@ -575,6 +575,10 @@ mod native {
         context().is_ok()
     }
     #[pyfunction]
+    pub(super) fn _gpu_diagnostic() -> Option<String> {
+        CONTEXT.get_or_init(Context::new).as_ref().err().cloned()
+    }
+    #[pyfunction]
     pub(super) fn _gpu_configure_cache(image_bytes: usize, control_bytes: usize) -> PyResult<()> {
         context()?.configure_cache(image_bytes, control_bytes);
         Ok(())
@@ -599,6 +603,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
         module.add_class::<native::MetalImage>()?;
         module.add_class::<native::MetalPlan>()?;
         module.add_function(wrap_pyfunction!(native::_gpu_available, module)?)?;
+        module.add_function(wrap_pyfunction!(native::_gpu_diagnostic, module)?)?;
         module.add_function(wrap_pyfunction!(native::_gpu_synchronize, module)?)?;
         module.add_function(wrap_pyfunction!(native::_gpu_configure_cache, module)?)?;
         module.add_function(wrap_pyfunction!(native::_gpu_cache_info, module)?)?;

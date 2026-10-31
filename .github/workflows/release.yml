@@ -208,6 +208,8 @@ jobs:
         run: |
           uv python install 3.14
           uv tool install 'maturin[patchelf]>=1.15,<2'
+      - name: Install CUDA compiler
+        run: bash scripts/setup_cuda.sh
       - name: Restore aom
         uses: actions/cache/restore@v6
         with:
@@ -290,7 +292,7 @@ jobs:
             ) }}
         run: |
           uv sync --no-install-project --only-group test --python /opt/python/cp314-cp314/bin/python
-          maturin build --release --out dist --features default -i python3.12 python3.13 python3.14 python3.15 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 $TUNE_ARGS
+          maturin build --release --out dist --features default,gpu-cuda -i python3.12 python3.13 python3.14 python3.15 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 $TUNE_ARGS
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
@@ -311,6 +313,7 @@ jobs:
           LD_LIBRARY_PATH: ""
         run: |
           uv pip install --python .venv/bin/python --compile-bytecode dist/*-cp314-cp314-*.whl
+          .venv/bin/python -c 'from blanket import ImageGpu; assert ImageGpu.capabilities("cuda")["compiled"]'
           .venv/bin/python scripts/verify_behavior.py
           .venv/bin/python -m pytest
       - uses: actions/upload-artifact@v7
@@ -446,7 +449,7 @@ jobs:
         id: build-wheel
         run: |
           uv sync --no-install-project --only-group test --managed-python --python 3.14
-          maturin build --release --out dist-unrepaired --features default -i python3.12 python3.13 python3.14 python3.15 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
+          maturin build --release --out dist-unrepaired --features default,gpu-metal -i python3.12 python3.13 python3.14 python3.15 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
@@ -461,6 +464,7 @@ jobs:
       - name: Install and verify wheels
         run: |
           uv pip install --compile-bytecode dist/*-cp314-cp314-*.whl
+          uv run python -c 'from blanket import ImageGpu; assert ImageGpu.capabilities("metal")["compiled"]'
           uv run scripts/verify_behavior.py
           uv run pytest
       - uses: actions/upload-artifact@v7

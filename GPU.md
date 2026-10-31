@@ -4,8 +4,61 @@ GPU operations do not guarantee byte-exact results with Pillow or CPU Blanket.
 Floating-point precision, accumulation order, interpolation boundaries, and
 quantization can change output samples across execution backends.
 
-For PyTorch interoperability, install the optional GPU runtime group, then
-build on Apple Silicon:
+## Installation and availability
+
+Install the same distribution for CPU and GPU processing:
+
+```sh
+pip install pyblanket
+```
+
+Release wheels include CPU support plus Metal on macOS or CUDA on Linux.
+CPU operations work without GPU hardware, drivers, CuPy, or PyTorch. There is
+no separate GPU distribution or `pyblanket[gpu]` extra. Native Metal requires
+macOS 26+ and a supported Apple Silicon GPU, with no additional Python packages.
+CUDA requires a compatible NVIDIA GPU and driver plus the runtime packages:
+
+```sh
+pip install "cupy-cuda13x[ctk]>=14.2"
+```
+
+For PyTorch tensor interoperability, also install `torch>=2.13`. The CUDA
+toolkit/compiler is needed for source builds, not for using release wheels.
+Source builds enable GPU support explicitly with `gpu-metal` or `gpu-cuda`;
+the default source build remains CPU-only.
+
+GPU use is explicit. Uploads, streams, and processing plans raise `RuntimeError`
+when compiled support, compatible hardware, drivers, runtime dependencies, or
+kernel loading are unavailable. Asynchronous uploads report that error through
+the returned future's `result()`. Invalid backend/device arguments raise
+`ValueError`. No GPU request automatically falls back to CPU processing.
+
+`capabilities(backend)` returns `compiled`, `available`, and `diagnostic`.
+`compiled=True` describes the installed extension and does not guarantee a
+usable GPU. CUDA probing may initialize its driver and load kernels. PyTorch
+interoperability is checked separately when requested. Applications can choose
+CPU processing explicitly:
+
+```python
+import sys
+from blanket import ImageGpu
+
+backend = "metal" if sys.platform == "darwin" else "cuda"
+status = ImageGpu.capabilities(backend)
+if status["available"]:
+    result = ImageGpu.from_image(image, backend=backend).resize((512, 512)).to_image()
+else:
+    print(status["diagnostic"])
+    result = image.resize((512, 512))
+```
+
+CI compiles the platform's CPU+GPU build and runs the Python and Rust suites.
+GPU execution tests require compatible runner hardware; CUDA execution tests
+skip on ordinary hosted Linux runners without an NVIDIA GPU.
+
+## Building from source
+
+For development with PyTorch interoperability on Apple Silicon:
 
 ```sh
 uv sync --no-default-groups --no-install-project --group gpu
@@ -456,7 +509,8 @@ histogram modes, and `compiled_operations` separately from device availability.
 
 ## PyTorch MPS
 
-The `gpu` group installs PyTorch 2.13 or newer. It must expose
+Install `torch>=2.13` for this path; the development `gpu` group includes it.
+PyTorch must expose
 `torch.mps.compile_shader` and a working MPS device. The adapter uses the public
 shader interface and the
 PyTorch command stream, without linking libtorch into Blanket.
@@ -510,7 +564,8 @@ policy; device availability and PyTorch installation are separate requirements.
 
 ## NVIDIA CUDA
 
-Build the optional CUDA backend with the CUDA 13 toolkit (`nvcc` on PATH,
+Linux release wheels already contain precompiled CUDA kernels. For source
+builds, enable the CUDA backend with the CUDA 13 toolkit (`nvcc` on PATH,
 or `NVCC` set to its executable). Building does not require a GPU or NVIDIA
 driver; execution requires a compatible NVIDIA driver. The `gpu-cuda`
 dependency group installs CuPy, its CUDA runtime/NVRTC

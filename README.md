@@ -31,8 +31,8 @@ with Image.open("photo.jpg") as image:
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
 - **Optional GPU processing.** Explicit Metal 4 images support resident resize,
-convolution, compositing, and PyTorch MPS pipelines. GPU operations do not
-guarantee byte-exact results with Pillow. See [GPU images](GPU.md).
+  convolution, compositing, and PyTorch MPS pipelines. GPU operations do not
+  guarantee byte-exact results with Pillow. See [GPU images](GPU.md).
 - **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
   using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.
 - **Image hashing.** Find visually similar images using native aHash, dHash,
@@ -67,6 +67,24 @@ Blanket requires **Python 3.12+**. Install it with pip:
 ```sh
 pip install pyblanket
 ```
+
+There is one distribution: release wheels include CPU processing and the
+platform's GPU backend (Metal on macOS, CUDA on Linux). CPU processing needs no
+GPU hardware or GPU Python dependencies. Native Metal needs macOS 26+ and a
+supported Apple Silicon GPU. For CUDA processing, install its optional runtime
+packages and use a compatible NVIDIA GPU and driver:
+
+```sh
+pip install "cupy-cuda13x[ctk]>=14.2"
+```
+
+PyTorch interoperability additionally needs `pip install "torch>=2.13"`.
+These packages are installed separately; there is no `pyblanket[gpu]` extra.
+An explicit GPU request raises `RuntimeError` if the backend, hardware, driver,
+or runtime dependency is unavailable; it never silently runs on the CPU.
+Check `ImageGpu.capabilities("metal")` or `ImageGpu.capabilities("cuda")` for
+availability and a diagnostic before selecting a backend. See
+[GPU installation and availability](GPU.md).
 
 See the [development notes](https://adjb1212.github.io/blanket-docs/development/)
 for information on building from source.

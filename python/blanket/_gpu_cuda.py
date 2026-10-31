@@ -60,8 +60,8 @@ def cupy() -> ModuleType:
     """Import CuPy lazily, raising RuntimeError with CUDA dependency guidance."""
     try:
         import cupy
-    except ImportError as error:
-        raise RuntimeError("CUDA requires the optional gpu-cuda dependency group (CuPy and NVIDIA CUDA runtime)") from error
+    except (ImportError, OSError) as error:
+        raise RuntimeError("CUDA requires CuPy and the CUDA runtime; install 'cupy-cuda13x[ctk]>=14.2'") from error
     return cupy
 
 
@@ -80,15 +80,21 @@ def require(device: int) -> None:
         raise RuntimeError("CUDA kernels unavailable; build Blanket with the gpu-cuda feature")
     if type(device) is not int or device < 0:
         raise ValueError("CUDA device must be a nonnegative integer")
+    cp = cupy()
     try:
-        count = cupy().cuda.runtime.getDeviceCount()
-        if device >= count:
-            raise ValueError(f"CUDA device {device} unavailable; found {count} NVIDIA devices")
-    except ValueError:
-        raise
+        count = cp.cuda.runtime.getDeviceCount()
     except Exception as error:
         raise RuntimeError(f"CUDA driver initialization failed: {error}") from error
-    library(device)
+    if count == 0:
+        raise RuntimeError("CUDA unavailable: no NVIDIA GPUs detected")
+    if device >= count:
+        raise ValueError(f"CUDA device {device} unavailable; found {count} NVIDIA devices")
+    try:
+        library(device)
+    except RuntimeError:
+        raise
+    except Exception as error:
+        raise RuntimeError(f"CUDA context initialization failed on device {device}: {error}") from error
 
 
 @lru_cache(maxsize=8)

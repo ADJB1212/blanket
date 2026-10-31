@@ -99,17 +99,26 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
         A dictionary containing compiled/available flags, diagnostics, supported
         modes, operations, sample depths, plans, and tensor interoperability.
         CUDA probing can import CuPy and initialize its driver; PyTorch is
-        not imported. An unavailable CUDA backend is reported in diagnostic.
+        not imported. Unavailable backends report a diagnostic without
+        falling back to CPU processing.
 
     Raises:
-        ValueError: The backend name is unsupported.
+        ValueError: The backend name or device index is invalid.
     """
     if backend not in ("metal", "cuda"):
         raise ValueError("unsupported GPU backend")
-    compiled = hasattr(_blanket, "_gpu_weights") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_fatbin")
+    if type(device) is not int or device < 0 or (backend == "metal" and device != 0):
+        raise ValueError("unsupported GPU device index")
+    compiled = hasattr(_blanket, "MetalImage") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_fatbin")
     probe = getattr(_blanket, "_gpu_available", None)
-    available = bool(probe and probe()) if backend == "metal" else False
+    available = bool(compiled and probe and probe()) if backend == "metal" else False
     diagnostic = None
+    if backend == "metal" and not available:
+        if compiled:
+            explain = getattr(_blanket, "_gpu_diagnostic", None)
+            diagnostic = (explain() if explain else None) or "Metal requires macOS 26 or later and a supported GPU"
+        else:
+            diagnostic = "Metal support unavailable in this build; build Blanket with the gpu-metal feature on macOS"
     if backend == "cuda":
         from . import _gpu_cuda
 
@@ -173,13 +182,18 @@ def _require(backend: str = "metal", device: int = 0) -> None:
         from . import _gpu_cuda
 
         _gpu_cuda.require(device)
-    elif not capabilities()["available"]:
-        raise RuntimeError("Metal unavailable; build Blanket with the gpu-metal feature on macOS")
+    else:
+        capability = capabilities(backend, device=device)
+        if not capability["available"]:
+            raise RuntimeError(f"Metal unavailable: {capability['diagnostic']}")
 
 
 def _torch(backend: str = "metal") -> ModuleType:
     """Import PyTorch and require CUDA or MPS shader interoperability."""
-    import torch
+    try:
+        import torch
+    except (ImportError, OSError) as error:
+        raise RuntimeError("PyTorch interoperability requires PyTorch; install 'torch>=2.13'") from error
 
     if backend == "cuda":
         if not torch.cuda.is_available():
@@ -291,6 +305,14 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
     """
     if runtime != "native":
         raise ValueError("asynchronous transfers require native Metal or CUDA")
+    try:
+        _require(backend, device)
+    except (RuntimeError, ValueError) as error:
+        from concurrent.futures import Future
+
+        failed: Future[GpuImage | GpuUnsignedImage] = Future()
+        failed.set_exception(error)
+        return failed
     snapshot = image.copy()
 
     def upload() -> GpuImage | GpuUnsignedImage:
