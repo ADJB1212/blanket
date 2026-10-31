@@ -27,7 +27,8 @@ on:
 env:
   RUSTUP_TERM_PROGRESS_WHEN: "never"
   RUST_BACKTRACE: "1"
-  UV_LINK_MODE: "copy"
+  UV_LINK_MODE: "hardlink"
+  CARGO_INCREMENTAL: "0"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   FORCE_COLOR: "1"
   MACOSX_DEPLOYMENT_TARGET: "26.0"
@@ -45,6 +46,8 @@ permissions:
 jobs:
   test:
     timeout-minutes: 30
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
     strategy:
       fail-fast: false
       matrix:

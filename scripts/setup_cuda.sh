@@ -29,6 +29,7 @@ esac
 
 cuda_root="${RUNNER_TEMP:?RUNNER_TEMP must be set}/cuda-13.2"
 cuda_downloads=$(mktemp -d "$RUNNER_TEMP/cuda-downloads.XXXXXX")
+trap 'rm -rf -- "$cuda_downloads"' EXIT
 mkdir -p "$cuda_root"
 cuda_components=(cuda_nvcc cuda_cudart cuda_crt libnvvm)
 for index in "${!cuda_components[@]}"; do

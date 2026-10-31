@@ -27,7 +27,8 @@ on:
 env:
   RUSTUP_TERM_PROGRESS_WHEN: "never"
   RUST_BACKTRACE: "1"
-  UV_LINK_MODE: "copy"
+  UV_LINK_MODE: "hardlink"
+  CARGO_INCREMENTAL: "0"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   FORCE_COLOR: "1"
   PYTHONFAULTHANDLER: "1"
@@ -40,6 +41,8 @@ jobs:
   cuda:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
     steps:
       - uses: actions/checkout@v7
       - name: Restore Rust dependencies and build artifacts

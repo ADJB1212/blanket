@@ -10,7 +10,7 @@ on:
 
 env:
   RUSTUP_TERM_PROGRESS_WHEN: "never"
-  UV_LINK_MODE: "copy"
+  UV_LINK_MODE: "hardlink"
   PIP_DISABLE_PIP_VERSION_CHECK: "1"
   FORCE_COLOR: "1"
   RUST_BACKTRACE: "1"
@@ -176,6 +176,8 @@ jobs:
           - runner: ubuntu-26.04-arm
             target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.runner }}
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
     container:
       image: ${{ format('quay.io/pypa/manylinux_2_28_{0}', matrix.target == 'aarch64-unknown-linux-gnu' && 'aarch64' || 'x86_64') }}
       options: --cap-add=SYS_NICE
@@ -327,6 +329,8 @@ jobs:
     needs: [prepare, libheif, libwebp, libjxl, lcms2]
     timeout-minutes: 60
     runs-on: macos-latest
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
     steps:
       - uses: actions/checkout@v7
         with:
