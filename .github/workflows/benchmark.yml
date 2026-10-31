@@ -189,7 +189,7 @@ jobs:
       - name: Install Python from uv
         run: |
           uv python install 3.14
-          uv tool install 'maturin[patchelf]>=1.15,<2'
+          uv tool install 'maturin[patchelf]>=1.16,<2'
 
       - name: Setup codec dependencies
         run: |

@@ -24,7 +24,8 @@ def cuda_events(monkeypatch):
         def record(self, stream):
             pass
 
-        def query(self):
+        @property
+        def done(self):
             self.queries += 1
             return self.complete
 
@@ -44,6 +45,42 @@ class Array:
 
     def __init__(self, nbytes=16):
         self.nbytes = nbytes
+
+
+@pytest.mark.parametrize("floating", [False, True])
+@pytest.mark.parametrize("channels", [1, 3, 4])
+def test_cuda_upload_ignores_pinned_allocation_padding(cuda_events, monkeypatch, floating, channels):
+    import numpy as np
+
+    events, _ = cuda_events
+    cp = _gpu_cuda.cupy()
+    shape = (7, 11, channels)
+    dtype = np.float32 if floating else np.uint8
+    expected = np.arange(np.prod(shape), dtype=dtype).reshape(shape)
+    data = expected.tobytes()
+    memory = bytearray([0xAB]) * (len(data) + 512)
+
+    def allocate(size):
+        assert size == len(data)
+        return memory
+
+    def asarray(host, *, blocking):
+        assert blocking is False
+        np.testing.assert_array_equal(host, expected)
+        assert host.nbytes == len(data)
+        array = Array(host.nbytes)
+        array.host = host
+        return array
+
+    cp.cuda.alloc_pinned_memory = allocate
+    cp.asarray = asarray
+    monkeypatch.setattr(_gpu_cuda, "cupy", lambda: cp)
+    monkeypatch.setattr(_gpu_cuda, "require", lambda device: None)
+    image = _gpu_cuda.upload(data, shape, floating, 0)
+    assert image.array.host.tobytes() == data
+    assert memory[len(data) :] == bytearray([0xAB]) * 512
+    image.synchronize()
+    assert events[0].complete
 
 
 def test_cuda_close_does_not_wait_and_retains_pending_storage(cuda_events):

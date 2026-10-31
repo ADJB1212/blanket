@@ -94,7 +94,7 @@ class Event:
         from ._gpu_cuda import cupy
 
         with cupy().cuda.Device(self._resource.device):
-            return self._resource.event.query()
+            return self._resource.event.done
 
     def wait(self) -> None:
         """Block the CPU until this completion point finishes.

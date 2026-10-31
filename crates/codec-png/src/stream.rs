@@ -13,6 +13,9 @@ struct Sink {
     active: Arc<AtomicBool>,
 }
 
+// Python objects are accessed only inside Python::attach in Write::write.
+unsafe impl pyo3::marker::Ungil for Sink {}
+
 impl Write for Sink {
     fn write(&mut self, data: &[u8]) -> io::Result<usize> {
         if !self.active.load(Ordering::Relaxed) {
@@ -84,7 +87,7 @@ impl PngStreamWriter {
     }
 
     #[new]
-    fn new(sink: Py<PyAny>, mode: &str, size: (u32, u32), bit_depth: u8, compress_level: u8) -> PyResult<Self> {
+    fn new(py: Python<'_>, sink: Py<PyAny>, mode: &str, size: (u32, u32), bit_depth: u8, compress_level: u8) -> PyResult<Self> {
         let (width, height) = size;
         let (color, channels, depth) = layout(mode, size, bit_depth, compress_level)?;
         let stride = if depth == 1 { (width as usize).div_ceil(8) } else { width as usize * channels * if depth > 8 { 2 } else { 1 } };
@@ -104,42 +107,50 @@ impl PngStreamWriter {
         } else {
             png::DeflateCompression::Level(compress_level)
         });
-        let result = (|| {
-            let mut writer = encoder.write_header()?;
-            if matches!(depth, 10 | 12) {
-                writer.write_chunk(png::chunk::sBIT, &vec![depth; channels])?;
-            }
-            writer.into_stream_writer()
-        })();
+        let result = py.detach(move || {
+            (|| {
+                let mut writer = encoder.write_header()?;
+                if matches!(depth, 10 | 12) {
+                    writer.write_chunk(png::chunk::sBIT, &vec![depth; channels])?;
+                }
+                writer.into_stream_writer()
+            })()
+            .map_err(|error| error.to_string())
+        });
         let writer = result.map_err(|err| error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(err)))?;
         Ok(Self { writer: Some(writer), error, active, stride, remaining: stride * height as usize, depth })
     }
 
-    fn write(&mut self, data: &[u8]) -> PyResult<()> {
+    fn write(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
         if self.writer.is_none() {
             return Err(PyValueError::new_err("closed PNG writer"));
         }
         if !data.len().is_multiple_of(self.stride) || data.len() > self.remaining {
             return Err(PyValueError::new_err("write requires complete rows within the declared image size"));
         }
-        if self.depth > 8 && data.as_chunks::<2>().0.iter().any(|&sample| u16::from_le_bytes(sample) as u32 >= (1_u32 << self.depth)) {
+        let depth = self.depth;
+        let stride = self.stride;
+        if depth > 8 && py.detach(|| data.as_chunks::<2>().0.iter().any(|&sample| u16::from_le_bytes(sample) as u32 >= (1_u32 << depth))) {
             return Err(PyValueError::new_err("sample exceeds bit depth"));
         }
-        let result = if self.depth > 8 {
-            let writer = self.writer.as_mut().expect("writer checked above");
-            let mut result = Ok(());
-            let mut converted = vec![0; self.stride];
-            for row in data.chunks_exact(self.stride) {
-                blanket_core::simd::samples_to_be16(row, &mut converted, self.depth);
-                if let Err(error) = writer.write_all(&converted) {
-                    result = Err(error);
-                    break;
+        let writer = self.writer.as_mut().expect("writer checked above");
+        let result = py.detach(|| {
+            let result = if depth > 8 {
+                let mut result = Ok(());
+                let mut converted = vec![0; stride];
+                for row in data.chunks_exact(stride) {
+                    blanket_core::simd::samples_to_be16(row, &mut converted, depth);
+                    if let Err(error) = writer.write_all(&converted) {
+                        result = Err(error);
+                        break;
+                    }
                 }
-            }
-            result
-        } else {
-            self.writer.as_mut().expect("writer checked above").write_all(data)
-        };
+                result
+            } else {
+                writer.write_all(data)
+            };
+            result.map_err(|error| error.to_string())
+        });
         if let Err(error) = result {
             let error = self.error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(error));
             self.active.store(false, Ordering::Relaxed);
@@ -150,13 +161,14 @@ impl PngStreamWriter {
         Ok(())
     }
 
-    fn close(&mut self) -> PyResult<()> {
+    fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         let Some(writer) = self.writer.take() else { return Ok(()) };
         if self.remaining > 0 {
             self.active.store(false, Ordering::Relaxed);
             return Err(PyOSError::new_err("incomplete PNG rows"));
         }
-        writer.finish().map_err(|error| self.error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(error)))?;
+        py.detach(move || writer.finish().map_err(|error| error.to_string()))
+            .map_err(|error| self.error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(error)))?;
         let error = self.error.lock().expect("sink error lock").take();
         if let Some(error) = error {
             return Err(error);

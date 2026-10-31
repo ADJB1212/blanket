@@ -31,8 +31,8 @@ fn _gpu_unsigned_bytes<'py>(py: Python<'py>, data: &[u8], depth: u8, encode: boo
 
 #[pyfunction]
 #[pyo3(signature = (input, output, method, floating=false))]
-fn _gpu_weights(input: u32, output: u32, method: u8, floating: bool) -> PyResult<(u32, Vec<f32>)> {
-    blanket_gpu::resize_weights(input, output, method, floating).map_err(PyValueError::new_err)
+fn _gpu_weights(py: Python<'_>, input: u32, output: u32, method: u8, floating: bool) -> PyResult<(u32, Vec<f32>)> {
+    py.detach(|| blanket_gpu::resize_weights(input, output, method, floating)).map_err(PyValueError::new_err)
 }
 
 #[pyfunction]
@@ -41,8 +41,8 @@ fn _gpu_blur_parameters(radius: f32, gaussian: bool) -> PyResult<(u32, [f32; 2])
 }
 
 #[pyfunction]
-fn _gpu_lut_controls(size: [u32; 3], channels: u32, table: Vec<f32>, floating: bool) -> PyResult<Vec<f32>> {
-    blanket_gpu::lut_controls(size, channels, &table, floating).map_err(PyValueError::new_err)
+fn _gpu_lut_controls(py: Python<'_>, size: [u32; 3], channels: u32, table: Vec<f32>, floating: bool) -> PyResult<Vec<f32>> {
+    py.detach(|| blanket_gpu::lut_controls(size, channels, &table, floating)).map_err(PyValueError::new_err)
 }
 
 type PlanStep = (u32, u32, u32, Vec<f32>);

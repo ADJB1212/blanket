@@ -97,41 +97,44 @@ impl CmsTransform {
     #[new]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        input: &[u8], output: &[u8], input_mode: &str, output_mode: &str, rendering_intent: u32, flags: u32, proof: Option<&[u8]>, proof_intent: u32,
+        py: Python<'_>, input: &[u8], output: &[u8], input_mode: &str, output_mode: &str, rendering_intent: u32, flags: u32, proof: Option<&[u8]>,
+        proof_intent: u32,
     ) -> PyResult<Self> {
-        let context = ThreadContext::new();
-        let input_profile = Profile::new_icc_context(&context, input).map_err(error)?;
-        let output_profile = Profile::new_icc_context(&context, output).map_err(error)?;
-        let input = PixelMode::parse(input_mode)?;
-        let output = PixelMode::parse(output_mode)?;
-        let mut options = Flags::default();
-        options.0 = flags;
-        let transform = if let Some(proof) = proof {
-            let proof = Profile::new_icc_context(&context, proof).map_err(error)?;
-            Transform::new_proofing_context(
-                &context,
-                &input_profile,
-                pixel_format(input)?,
-                &output_profile,
-                pixel_format(output)?,
-                &proof,
-                intent(rendering_intent)?,
-                intent(proof_intent)?,
-                options,
-            )
-        } else {
-            Transform::new_flags_context(
-                &context,
-                &input_profile,
-                pixel_format(input)?,
-                &output_profile,
-                pixel_format(output)?,
-                intent(rendering_intent)?,
-                options,
-            )
-        }
-        .map_err(error)?;
-        Ok(Self { transform: Mutex::new((transform, context)), input, output })
+        py.detach(|| {
+            let context = ThreadContext::new();
+            let input_profile = Profile::new_icc_context(&context, input).map_err(error)?;
+            let output_profile = Profile::new_icc_context(&context, output).map_err(error)?;
+            let input = PixelMode::parse(input_mode)?;
+            let output = PixelMode::parse(output_mode)?;
+            let mut options = Flags::default();
+            options.0 = flags;
+            let transform = if let Some(proof) = proof {
+                let proof = Profile::new_icc_context(&context, proof).map_err(error)?;
+                Transform::new_proofing_context(
+                    &context,
+                    &input_profile,
+                    pixel_format(input)?,
+                    &output_profile,
+                    pixel_format(output)?,
+                    &proof,
+                    intent(rendering_intent)?,
+                    intent(proof_intent)?,
+                    options,
+                )
+            } else {
+                Transform::new_flags_context(
+                    &context,
+                    &input_profile,
+                    pixel_format(input)?,
+                    &output_profile,
+                    pixel_format(output)?,
+                    intent(rendering_intent)?,
+                    options,
+                )
+            }
+            .map_err(error)?;
+            Ok(Self { transform: Mutex::new((transform, context)), input, output })
+        })
     }
 
     fn apply(&self, py: Python<'_>, image: &Image) -> PyResult<Image> {
@@ -142,15 +145,15 @@ impl CmsTransform {
         let mut pixels = alloc_pixels(image.width as usize * image.height as usize * self.output.channels())?;
         py.detach(|| {
             self.transform.lock().map_err(|_| error("color transform lock poisoned"))?.0.transform_pixels(source, &mut pixels);
+            if self.output == PixelMode::Rgba {
+                if self.input == PixelMode::Rgba {
+                    blanket_core::pixels::restore_alpha::<true>(&mut pixels, source);
+                } else {
+                    blanket_core::pixels::restore_alpha::<false>(&mut pixels, source);
+                }
+            }
             Ok::<_, PyErr>(())
         })?;
-        if self.output == PixelMode::Rgba {
-            if self.input == PixelMode::Rgba {
-                blanket_core::pixels::restore_alpha::<true>(&mut pixels, source);
-            } else {
-                blanket_core::pixels::restore_alpha::<false>(&mut pixels, source);
-            }
-        }
         Image::from_pixels(image.width, image.height, self.output, pixels, None)
     }
 
@@ -183,7 +186,7 @@ mod tests {
             let context = ThreadContext::new();
             let gray = Profile::new_gray_context(&context, CIExyY::d50(), &ToneCurve::new(1.0)).unwrap().icc().unwrap();
             let rgb = Profile::new_srgb_context(&context).icc().unwrap();
-            let transform = CmsTransform::new(&gray, &rgb, "L", "RGB", 1, 0, None, 3).unwrap();
+            let transform = CmsTransform::new(py, &gray, &rgb, "L", "RGB", 1, 0, None, 3).unwrap();
             let image = Image::from_pixels(3, 1, PixelMode::L, vec![0, 128, 255], None).unwrap();
             let result = transform.apply(py, &image).unwrap();
             let pixels = result.pixel_data().unwrap();

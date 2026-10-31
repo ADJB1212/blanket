@@ -99,3 +99,38 @@ def test_array_conversion_uses_current_frame(lazy):
     np.testing.assert_array_equal(second_array, np.full((4, 2), 42, dtype=np.uint8))
     image.close()
     np.testing.assert_array_equal(first_array, np.full((2, 3, 3), [255, 0, 0], dtype=np.uint8))
+
+
+@pytest.mark.parametrize("dtype", ["<u2", ">u2", "<i4", "<f4", ">f4", "<f8", ">f8"])
+@pytest.mark.parametrize("strided", [False, True])
+def test_fromarray_snapshots_buffer_without_tobytes(dtype, strided):
+    values = np.arange(35, dtype=dtype).reshape(5, 7)
+    if strided:
+        values = values[::-1, ::2]
+
+    class ArrayBuffer:
+        __array_interface__ = values.__array_interface__
+
+        def __buffer__(self, flags):
+            return memoryview(values)
+
+    image = Image.fromarray(ArrayBuffer())
+    expected = values.astype("<f4").tobytes() if np.dtype(dtype).kind == "f" else values.tobytes()
+    values[:] = 0
+    assert image.tobytes() == expected
+
+
+@pytest.mark.parametrize("dtype", ["<u2", "<i4", "<f4"])
+def test_fromarray_snapshots_tobytes_without_buffer(dtype):
+    values = np.arange(35, dtype=dtype).reshape(5, 7)
+
+    class ArrayBytes:
+        __array_interface__ = values.__array_interface__
+
+        def tobytes(self):
+            return values.tobytes()
+
+    expected = values.tobytes()
+    image = Image.fromarray(ArrayBytes())
+    values[:] = 0
+    assert image.tobytes() == expected

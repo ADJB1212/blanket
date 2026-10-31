@@ -35,7 +35,7 @@ fn main() {
         .arg("--output-file")
         .arg(&output)
         .output()
-        .expect("CUDA builds require CUDA 13 nvcc on PATH, or NVCC set to its executable; CPU/Metal builds do not require CUDA");
+        .expect("CUDA builds require CUDA 12.9 or newer nvcc on PATH, or NVCC set to its executable; CPU/Metal builds do not require CUDA");
     assert!(
         result.status.success(),
         "CUDA kernel compilation failed:\n{}\n{}",

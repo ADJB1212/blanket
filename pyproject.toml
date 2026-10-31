@@ -48,18 +48,20 @@ test = [
     "pytest>=9,<10",
     "pytest-xdist>=3.8.0",
     "rich>=15",
-    "ruff>=0.17.2",
-    "ty>=0.0.92",
-    {include-group = "gpu"},
+    "ruff>=0.17.3",
+    "ty>=0.0.95",
+    "torch>=2.13"
 ]
 docs = [
-    "zensical>=0.0.73",
+    "zensical>=0.0.74",
     "mkdocstrings[python]>=1.0.8,<2",
-    "ruff>=0.17.2",
+    "ruff>=0.17.3",
 ]
+
+[project.optional-dependencies]
 gpu = [
     "torch>=2.13",
-    "cupy-cuda13x[ctk]>=14.2; sys_platform == 'linux' or sys_platform == 'win32'",
+    "cupy-cuda13x[ctk]>=14.0; (sys_platform == 'linux' or sys_platform == 'win32') and python_version < '3.15'"
 ]
 
 [tool.maturin]

@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dnf install -y numactl-devel brotli brotli-devel pkgconf-pkg-config make perl curl tar xz git
+dnf install -y numactl-devel brotli brotli-devel pkgconf-pkg-config make perl curl tar xz git ninja-build meson cmake
 manylinux-install-clang -v 23.1.4.0
 export PATH="/opt/clang/bin:/opt/python/cp314-cp314/bin:$PATH"
 clang --version
 [[ "$(clang -dumpversion)" == 23.1.4 ]]
 
-python -m pip install 'cmake>=3.28' ninja meson
 export CC=/opt/clang/bin/clang
 export CXX=/opt/clang/bin/clang++
 export LDFLAGS=-fuse-ld=lld
@@ -17,7 +16,7 @@ curl -fsSL --retry 3 "https://www.nasm.us/pub/nasm/releasebuilds/$nasm_version/n
 tar -xJf "$RUNNER_TEMP/nasm.tar.xz" -C "$RUNNER_TEMP"
 (
 	cd "$nasm_source"
-	./configure --prefix=/usr/local
+	./configure --prefix=/usr/local --disable-gdb --disable-pedantic
 	make -j2
 	make install
 )

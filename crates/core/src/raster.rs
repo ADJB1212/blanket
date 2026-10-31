@@ -1,7 +1,7 @@
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyMemoryView, PyTuple};
 use rustc_hash::FxHashMap;
 
 use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
@@ -667,8 +667,9 @@ impl Image {
             if channel >= self.mode.channels() {
                 return Err(PyValueError::new_err("band index out of range"));
             }
+            let data = self.raw_data()?;
             let pixels =
-                self.raw_data()?.chunks_exact(self.raw_bytes_per_pixel()).flat_map(|p| p[channel * 4..channel * 4 + 4].iter().copied()).collect();
+                py.detach(|| data.chunks_exact(self.raw_bytes_per_pixel()).flat_map(|p| p[channel * 4..channel * 4 + 4].iter().copied()).collect());
             return Self::from_float_bytes(self.width, self.height, pixels);
         }
         if self.mode.is_wide_scalar() {
@@ -1114,7 +1115,7 @@ impl Image {
         }
         let destination = PixelMode::parse(mode)?;
         if matches!(self.mode, PixelMode::RgbF | PixelMode::RgbaF) || matches!(destination, PixelMode::RgbF | PixelMode::RgbaF) {
-            return crate::float::convert(self, destination, bit_depth);
+            return py.detach(|| crate::float::convert(self, destination, bit_depth));
         }
         if self.mode == PixelMode::Lab && destination != PixelMode::Lab {
             let source = self.pixel_data()?;
@@ -1214,12 +1215,14 @@ impl Image {
                 if bit_depth.is_some_and(|depth| depth != 8) {
                     return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
                 }
-                let pixels = pixels
-                    .as_chunks::<3>()
-                    .0
-                    .iter()
-                    .map(|p| if u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114 >= 128000 { 255 } else { 0 })
-                    .collect();
+                let pixels = py.detach(|| {
+                    pixels
+                        .as_chunks::<3>()
+                        .0
+                        .iter()
+                        .map(|p| if u32::from(p[0]) * 299 + u32::from(p[1]) * 587 + u32::from(p[2]) * 114 >= 128000 { 255 } else { 0 })
+                        .collect()
+                });
                 return Self::from_pixels(self.width, self.height, destination, pixels, None);
             }
             let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
@@ -1238,7 +1241,9 @@ impl Image {
                 let pixels = py.detach(|| convert_pixels(source, PixelMode::Hsv, destination));
                 return Self::from_pixels(self.width, self.height, destination, pixels, None);
             }
-            let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, hsv_to_rgb_bytes(self.pixel_data()?), None)?;
+            let source = self.pixel_data()?;
+            let pixels = py.detach(|| hsv_to_rgb_bytes(source));
+            let rgb = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
             return if destination == PixelMode::Rgb { Ok(rgb) } else { rgb.convert(py, mode, bit_depth) };
         }
         if destination == PixelMode::Hsv && self.bit_depth > 8 {
@@ -1360,7 +1365,7 @@ impl Image {
         let pixels = self.raw_data()?;
         let packed;
         let source = if self.mode == PixelMode::Lab {
-            packed = lab_raw_bytes(pixels);
+            packed = py.detach(|| lab_raw_bytes(pixels));
             packed.as_slice()
         } else if self.mode == PixelMode::One {
             packed = py.detach(|| pack_bilevel(pixels, self.width as usize, self.height as usize));
@@ -1430,17 +1435,8 @@ pub fn frombytes(
 }
 
 fn with_array_bytes<T>(obj: &Bound<'_, PyAny>, convert: impl FnOnce(&[u8]) -> PyResult<T>) -> PyResult<T> {
-    if let Ok(buffer) = pyo3::buffer::PyUntypedBuffer::get(obj)
-        && buffer.is_c_contiguous()
-    {
-        // Keep the buffer export alive and Python attached while reading its bytes.
-        let raw =
-            if buffer.len_bytes() == 0 { &[] } else { unsafe { std::slice::from_raw_parts(buffer.buf_ptr().cast::<u8>(), buffer.len_bytes()) } };
-        convert(raw)
-    } else {
-        let bytes = obj.call_method0("tobytes")?;
-        convert(bytes.cast::<PyBytes>()?.as_bytes())
-    }
+    let bytes = if let Ok(view) = PyMemoryView::from(obj) { view.call_method0("tobytes")? } else { obj.call_method0("tobytes")? };
+    convert(bytes.cast::<PyBytes>()?.as_bytes())
 }
 
 #[pyfunction(signature = (obj, mode = None, bit_depth = None))]

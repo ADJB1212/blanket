@@ -193,10 +193,11 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-${{ matrix.target }}-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "latest"
@@ -209,7 +210,8 @@ jobs:
       - name: Install build frontend
         run: |
           uv python install 3.14
-          uv tool install 'maturin[patchelf]>=1.15,<2'
+          uv tool install 'maturin[patchelf]>=1.16,<2'
+          uv python install 3.12 3.13 3.14t 3.15 3.15t
       - name: Install CUDA compiler
         run: bash scripts/setup_cuda.sh
       - name: Restore aom
@@ -294,14 +296,15 @@ jobs:
             ) }}
         run: |
           uv sync --no-install-project --only-group test --python /opt/python/cp314-cp314/bin/python
-          maturin build --release --out dist --features default,gpu-cuda -i python3.12 python3.13 python3.14 python3.15 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 $TUNE_ARGS
+          maturin build --release --out dist --features default,gpu-cuda -i python3.15t python3.15 python3.14t python3.14 python3.13 python3.12 --strip --target ${{ matrix.target }} --compatibility manylinux_2_28 --auditwheel=repair -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 $TUNE_ARGS
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             target
           key: ${{ steps.rust-cache-restore.outputs.cache-primary-key }}
       - name: Audit bundled wheels
@@ -340,10 +343,11 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             target
-          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ runner.os }}-${{ runner.arch }}-cargo-source-codecs-${{ needs.prepare.outputs.aom-version }}-${{ needs.prepare.outputs.x265-version }}-${{ needs.prepare.outputs.libde265-version }}-${{ needs.prepare.outputs.dav1d-version }}-${{ needs.prepare.outputs.libheif-version }}-${{ needs.prepare.outputs.libwebp-version }}-${{ needs.prepare.outputs.libjxl-version }}-${{ needs.prepare.outputs.lcms2-version }}-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
       - uses: actions/setup-python@v7
         with:
           python-version: "3.14"
@@ -367,9 +371,10 @@ jobs:
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
       - name: Install Python from uv
         run: |
-          uv python install 3.12 3.13 3.14 3.15
+          uv python install 3.14
           uv tool install maturin
           uv tool install delocate
+          uv python install 3.12 3.13 3.15 3.14t 3.15t
       - name: Install build tools
         run: |
           brew install llvm lld cmake ninja nasm pkg-config gcc
@@ -453,14 +458,15 @@ jobs:
         id: build-wheel
         run: |
           uv sync --no-install-project --only-group test --managed-python --python 3.14
-          maturin build --release --out dist-unrepaired --features default,gpu-metal -i python3.12 python3.13 python3.14 python3.15 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
+          maturin build --release --out dist-unrepaired --features default,gpu-metal -i python3.15t python3.15 python3.14t python3.14 python3.13 python3.12 --strip --auditwheel=skip -- -C linker=clang -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-O3 -C target-cpu=apple-m1
       - name: Save Rust Cache
         if: steps.rust-cache-restore.outputs.cache-hit != 'true' && steps.build-wheel.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: |
-            ~/.cargo/registry
-            ~/.cargo/git
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
             target
           key: ${{ steps.rust-cache-restore.outputs.cache-primary-key }}
       - name: Repair macOS wheels

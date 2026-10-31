@@ -169,6 +169,7 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
     import numpy as np
 
     from blanket import _gpu_cuda
+    from blanket._gpu_async import Event
 
     pending = []
     allocations = []
@@ -199,7 +200,8 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
         def finish(self):
             self.complete = True
 
-        def query(self):
+        @property
+        def done(self):
             return self.complete
 
         def synchronize(self):
@@ -233,7 +235,9 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
     monkeypatch.setattr(_gpu_cuda, "_PENDING", {})
     monkeypatch.setattr(_gpu_cuda, "_PENDING_REGISTERED", True)
     resource = _gpu_cuda.upload(bytes(range(24)), (2, 3, 4), False, 0)
+    event = Event(resource, "cuda", "cuda:0")
     try:
+        assert not event.done()
         assert hosts[0]() is not None
         assert resource.download() == bytes(range(24))
         assert allocations == [24, 24]
@@ -241,5 +245,6 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
         assert not pending
         assert hosts[0]() is None
         assert not _gpu_cuda._PENDING
+        assert event.done()
     finally:
         resource.synchronize()

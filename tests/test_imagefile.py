@@ -374,3 +374,28 @@ def test_png_writer_invalid_headers_preserve_existing_file(tmp_path: Path) -> No
     with pytest.raises(ValueError):
         ImageFile.PngWriter(path, "P", (1, 1))
     assert path.read_bytes() == b"existing output"
+
+
+def test_png_callback_cannot_reenter_native_writer() -> None:
+    from blanket import _blanket
+
+    class ReentrantSink(BytesIO):
+        writer = None
+        attempts = 0
+
+        def write(self, data: bytes) -> int:
+            if self.writer is not None:
+                self.attempts += 1
+                with pytest.raises(RuntimeError, match="borrowed"):
+                    self.writer.abort()
+            return super().write(data)
+
+    output = ReentrantSink()
+    writer = _blanket.PngStreamWriter(output, "L", (8192, 32), 8, 0)
+    output.writer = writer
+    raw = bytes(8192 * 32)
+    writer.write(raw)
+    writer.close()
+    output.writer = None
+    assert output.attempts > 0
+    assert Image.open(BytesIO(output.getvalue())).tobytes() == raw

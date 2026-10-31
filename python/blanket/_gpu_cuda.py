@@ -38,7 +38,7 @@ def _collect_pending(device: int, stream: int | None = None) -> None:
             queue = _PENDING.get(key)
             if queue is None:
                 continue
-            while queue and queue[0][0].query():
+            while queue and queue[0][0].done:
                 retired.append(queue.popleft())
             if not queue:
                 del _PENDING[key]
@@ -305,7 +305,7 @@ def upload(data: bytes, shape: tuple[int, int, int], floating: bool, device: int
     with cp.cuda.Device(device):
         try:
             memory = cp.cuda.alloc_pinned_memory(len(data))
-            host = np.frombuffer(memory, dtype=np.float32 if floating else np.uint8).reshape(shape)
+            host = np.frombuffer(memory, dtype=np.float32 if floating else np.uint8, count=shape[0] * shape[1] * shape[2]).reshape(shape)
             host.view(np.uint8).reshape(-1)[:] = np.frombuffer(data, dtype=np.uint8)
             array = cp.asarray(host, blocking=False)
             return CudaImage(array, owners=(memory, host))
