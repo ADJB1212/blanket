@@ -19,7 +19,7 @@ from pathlib import Path
 from statistics import geometric_mean, median
 from tempfile import TemporaryDirectory
 from time import perf_counter
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -63,6 +63,7 @@ from blanket import (
 
 if TYPE_CHECKING:
     from types import ModuleType
+    from typing import Any
 
 pillow_heif.register_heif_opener()
 

@@ -40,12 +40,14 @@ fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<Vec<u8>
         bit_depth: image.bit_depth,
         format: None,
         palette: None,
+        shared_pixels: None,
     };
     pixel.putpixel((0, 0), value)?;
     Ok(pixel.pixels.unwrap())
 }
 
 fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
+    image.ensure_owned();
     if x < 0 || y < 0 || x >= i64::from(image.width) || y >= i64::from(image.height) {
         return;
     }
@@ -120,6 +122,7 @@ fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) ->
 }
 
 fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bool) {
+    image.ensure_owned();
     if y < 0 || y >= i64::from(image.height) {
         return;
     }
@@ -166,6 +169,7 @@ fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8], blend: bool) {
 }
 
 fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) {
+    image.ensure_owned();
     if coverage == 255 {
         paint(image, x, y, ink, blend);
     } else if coverage != 0 && x >= 0 && y >= 0 && x < i64::from(image.width) && y < i64::from(image.height) {
@@ -395,6 +399,7 @@ fn draw_path(
 fn draw_mask(
     image: &mut Image, position: (i64, i64), size: (usize, usize), mask: &[u8], value: &Bound<'_, PyAny>, blend: bool, stroke: usize,
 ) -> PyResult<()> {
+    image.ensure_owned();
     let ink = ink(image, value, blend)?;
     if size.0.checked_mul(size.1) != Some(mask.len()) {
         return Err(PyValueError::new_err("invalid mask size"));
@@ -559,6 +564,7 @@ fn draw_floodfill(
 }
 
 fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Option<&[u8]>, threshold: f64) {
+    image.ensure_owned();
     let (x, y) = position;
     let stride = image.mode.channels() * image.mode.sample_bytes();
     let seed_index = y as usize * image.width as usize + x as usize;

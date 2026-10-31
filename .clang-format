@@ -1,0 +1,12 @@
+Language: Cpp
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 150
+PointerAlignment: Right
+SortIncludes:
+  Enabled: true
+BinPackParameters: "BinPack"
+BinPackArguments: false
+AllowShortFunctionsOnASingleLine: Empty
+MaxEmptyLinesToKeep: 1
+Standard: Latest

@@ -1,0 +1,25 @@
+[package]
+name = "blanket-gpu-python"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+blanket-gpu-cuda = { workspace = true, optional = true }
+pyo3.workspace = true
+blanket-gpu.workspace = true
+blanket-gpu-metal.workspace = true
+
+[features]
+cuda = ["dep:blanket-gpu-cuda", "blanket-gpu-cuda/precompiled"]
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

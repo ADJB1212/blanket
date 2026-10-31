@@ -430,6 +430,7 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
         bit_depth: image.bit_depth,
         format: None,
         palette: image.palette.clone(),
+        shared_pixels: None,
     })
 }
 

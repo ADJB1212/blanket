@@ -481,6 +481,12 @@ pub fn alloc_pixels(len: usize) -> PyResult<Vec<u8>> {
     Ok(unsafe { Vec::from_raw_parts(pointer, len, len) })
 }
 
+/// Immutable external pixel storage; writers must first detach into owned pixels.
+pub trait SharedPixels: std::any::Any + Send + Sync + pyo3::marker::Ungil {
+    fn bytes(&self) -> &[u8];
+    fn as_any(&self) -> &dyn std::any::Any;
+}
+
 #[pyclass(name = "_Image", module = "blanket._blanket")]
 #[derive(Clone)]
 pub struct Image {
@@ -488,12 +494,20 @@ pub struct Image {
     pub height: u32,
     pub mode: PixelMode,
     pub pixels: Option<Vec<u8>>,
+    pub shared_pixels: Option<std::sync::Arc<dyn SharedPixels>> = None,
     pub bit_depth: u8 = 8,
     pub format: Option<String> = None,
     pub palette: Option<(PixelMode, Vec<u8>)> = None,
 }
 
 impl Image {
+    pub fn ensure_owned(&mut self) {
+        if self.pixels.is_none()
+            && let Some(shared) = self.shared_pixels.take()
+        {
+            self.pixels = Some(shared.bytes().to_vec());
+        }
+    }
     pub fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
         if mode.is_wide_scalar() {
             return Err(PyValueError::new_err("wide scalar modes require 32-bit or 16-bit sample storage"));
@@ -535,7 +549,10 @@ impl Image {
     }
 
     pub fn raw_data(&self) -> PyResult<&[u8]> {
-        self.pixels.as_deref().ok_or_else(|| PyValueError::new_err("operation on closed image"))
+        self.pixels
+            .as_deref()
+            .or_else(|| self.shared_pixels.as_ref().map(|shared| shared.bytes()))
+            .ok_or_else(|| PyValueError::new_err("operation on closed image"))
     }
 
     /// Bytes occupied by one pixel in raw storage: accounts for wide scalars,
@@ -785,6 +802,7 @@ impl Image {
     }
 
     pub fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {
+        self.ensure_owned();
         self.raw_data()?;
         let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
         let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
@@ -828,6 +846,7 @@ impl Image {
     }
 
     pub fn putdata(&mut self, data: &Bound<'_, PyAny>, scale: f64, offset: f64) -> PyResult<()> {
+        self.ensure_owned();
         self.raw_data()?;
         let length = data.len()?;
         if length > self.width as usize * self.height as usize {
@@ -1085,6 +1104,7 @@ impl Image {
 
     pub fn close(&mut self) {
         self.pixels = None;
+        self.shared_pixels = None;
     }
 
     #[pyo3(signature = (mode, bit_depth=None))]
@@ -1858,6 +1878,30 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_pixels_detach_on_write_and_close_independently() {
+        struct Storage(Vec<u8>);
+        impl super::SharedPixels for Storage {
+            fn bytes(&self) -> &[u8] {
+                &self.0
+            }
+            fn as_any(&self) -> &dyn std::any::Any {
+                self
+            }
+        }
+        let mut image = super::Image::from_pixels(3, 1, super::PixelMode::L, vec![1, 2, 3], None).unwrap();
+        image.shared_pixels = Some(std::sync::Arc::new(Storage(image.pixels.take().unwrap())));
+        let mut sibling = image.clone();
+        assert_eq!(image.raw_data().unwrap(), [1, 2, 3]);
+        image.ensure_owned();
+        image.pixels.as_mut().unwrap()[0] = 9;
+        assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
+        assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);
+        assert!(image.shared_pixels.is_none());
+        sibling.close();
+        assert!(sibling.shared_pixels.is_none());
+        assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
+    }
     #[test]
     fn zeroed_pixel_allocations_support_vec_mutation_and_growth() {
         for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 1024 * 1024] {

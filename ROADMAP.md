@@ -460,22 +460,34 @@ CPU-only builds must remain usable without GPU drivers or Python GPU packages.
 - [x] Native Metal and MPS hardware tests for CPU parity, documented float
       semantics, geometry, lifetime handling, validation, and residency
 
-Native Metal and PyTorch allocations currently use separate execution contexts.
-Native Metal buffer export to PyTorch is not implemented; CPU images intended
-for tensor output can be uploaded with `runtime="torch"`.
+Native Metal and PyTorch allocations use separate execution contexts. Explicit
+GPU copies connect them through `to_torch()` and
+`from_torch(..., runtime="native")`, as described in GPU Phase 4.
 
-### GPU Phase 1 — Operation and Precision Coverage
+The native backend uses Metal 4 command submission and MSL 4.0 on macOS 26 or
+later. It owns resource residency and argument tables explicitly, orders GPU
+dependencies with barriers, and releases submitted resources after commit feedback.
 
-- [ ] Mode conversion, channel extraction/merge, grayscale, and alpha handling
-- [ ] Gaussian/box blur, unsharp masking, min/max morphology, and median filters
-- [ ] Color, contrast, and sharpness enhancement; 3D LUTs and explicit
-      linear-light resize/compositing
-- [ ] Masked paste/compositing, affine and perspective transforms, arbitrary
+### GPU Phase 1 — Operation and Precision Coverage — Complete
+
+- [x] Mode conversion between supported uint8/float32 GPU modes, channel
+      extraction/merge, grayscale, and alpha replacement with resident results
+- [x] Gaussian/box blur, unsharp masking, and min/max morphology and median/rank
+      filters with odd 1x1 through 7x7 windows, on native Metal and PyTorch MPS
+- [x] Color, contrast, and sharpness enhancement with resident contrast reduction;
+      3D LUTs and explicit linear-light resize/compositing on native Metal and MPS
+- [x] Masked paste/compositing, affine and perspective transforms, arbitrary
       rotation, and reusable coordinate remapping
-- [ ] Resident reductions for histograms, extrema, moments, and statistics;
+- [x] Resident reductions for histograms, extrema, moments, and statistics;
       return small CPU results only when explicitly requested
-- [ ] Unsigned 10/12/16-bit processing with retained sample precision and
+- [x] Unsigned 10/12/16-bit processing with retained sample precision and
       documented rounding, saturation, alpha, and nonfinite behavior
+
+Geometry and reductions run on native Metal and MPS. Histograms cover uint8;
+statistics cover all working formats. Unsigned L/RGB/RGBA use normalized
+float32 storage and quantize resident public results to their original depth.
+GPU.md and `ImageGpu.capabilities()` specify the unsigned operation subset
+and numerical contracts; unsupported operations never use a CPU fallback.
 
 Add operations through shared contracts, then implement and validate them on
 each backend. Capability queries must distinguish missing kernels from missing
@@ -483,38 +495,62 @@ hardware; partial coverage must not trigger an implicit CPU fallback.
 
 ### GPU Phase 2 — NVIDIA and CUDA Tensor Pipelines
 
-- [ ] Add an optional CUDA backend in dedicated workspace crates, reusing
+- [x] Add an optional CUDA backend in dedicated workspace crates, reusing
       descriptors, validation, and operation contracts
 - [ ] Reach the shipped Metal operation and sample-format coverage on NVIDIA
       hardware, with explicit backend and device selection
-- [ ] Upload CPU images once, retain intermediate allocations on the selected
+- [x] Upload CPU images once, retain intermediate allocations on the selected
       CUDA device, and make CPU downloads explicit
-- [ ] Import/export compatible PyTorch CUDA tensors through DLPack, honoring
+- [x] Import/export compatible PyTorch CUDA tensors through DLPack, honoring
       device identity, storage offsets, strides, ownership, and producer/consumer
       stream ordering without CPU pixel staging
-- [ ] Report missing drivers, unsupported devices, allocation failures, and
+- [x] Report missing drivers, unsupported devices, allocation failures, and
       backend-specific capabilities through actionable errors and diagnostics
 - [ ] Add NVIDIA hardware CI and cross-backend parity tests, including tensor
       views, source lifetimes, chained operations, and transfer boundaries
 
-### GPU Phase 3 — Pipeline Efficiency and Resource Control
+The optional `gpu-cuda` build feature supplies CUDA kernels through
+`blanket-gpu-cuda`, sharing Metal's pixel contracts. CuPy handles CUDA
+allocations, precompiled fatbinary loading, and DLPack stream negotiation. Native CUDA
+execution needs CuPy but does not need PyTorch. Shared numeric contracts and
+CUDA ownership/stream tests are available for manual NVIDIA runs. The CUDA
+workflow compiles CUDA kernels with nvcc, embeds them in a dev-profile wheel
+on hosted Ubuntu, and uploads it as a
+downloadable artifact. Hardware CI and coverage remain unchecked until that
+suite runs on NVIDIA; compilation cannot establish CUDA parity. See GPU.md
+for setup.
 
-- [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
-      and already-resident tensor pipelines; publish measured crossover sizes
-- [ ] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
+### GPU Phase 3 — Pipeline Efficiency and Resource Control — Complete
+
+- [x] Reuse allocations, compiled pipelines, coefficient buffers, and LUTs with
       bounded caches and explicit memory limits
-- [ ] Batch execution and reusable processing plans that reduce command
+- [x] Batch execution and reusable processing plans that reduce command
       overhead and intermediate allocations
-- [ ] Fuse compatible operations only when their rounding, saturation, alpha,
+- [x] Fuse compatible operations only when their rounding, saturation, alpha,
       and evaluation-order contracts remain satisfied
-- [ ] Stream/event synchronization and asynchronous transfers with explicit
+- [x] Stream/event synchronization and asynchronous transfers with explicit
       completion, cancellation, and error propagation rules
-- [ ] Tile processing for images exceeding working-memory budgets, with correct
+- [x] Tile processing for images exceeding working-memory budgets, with correct
       filter halos and no unnecessary CPU round trips
+
+Native Metal provides configurable bounded image/control caches and reusable
+`ProcessingPlan` command batches for same-size unary operations. Plans reuse two
+scratch buffers within an explicit per-execution budget, tile with cumulative
+filter halos, and compose adjacent uint8 inversion/channel LUTs exactly.
+Uint8, float32, and unsigned 10/12/16-bit plans retain public operation rounding;
+float arithmetic and unsigned quantization boundaries are not fused. Input/output
+rasters and prepared controls are separate from the scratch budget. Plans cover
+brightness, inversion, channel LUTs, convolution, box/Gaussian blur, and rank
+filters; capabilities report this subset. CUDA also implements these plans,
+per-device scratch/control caches, resident tiling, and stream-ordered batches
+with shared completion events. CUDA launches individual kernels without graph
+capture; NVIDIA hardware validation remains pending. PyTorch MPS execution
+retains its eager/async APIs. See GPU.md
+for cache limits, ownership, completion, and error contracts.
 
 ### GPU Phase 4 — Broader Interoperability and Backends
 
-- [ ] Native Metal/PyTorch buffer exchange where supported, with safe ownership
+- [x] Native Metal/PyTorch buffer exchange where supported, with safe ownership
       and synchronization; use explicit GPU copies when aliasing is unavailable
 - [ ] Extend tensor exchange to other DLPack producers with per-device layout
       and stream compatibility checks
@@ -522,6 +558,8 @@ hardware; partial coverage must not trigger an implicit CPU fallback.
       operation contracts without requiring changes to CPU image storage
 - [ ] Define explicit cross-device transfers and capability negotiation for
       applications using multiple GPUs or backend types
+- [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
+      and already-resident tensor pipelines; publish measured crossover sizes
 
 ---
 

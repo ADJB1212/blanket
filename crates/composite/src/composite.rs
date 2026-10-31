@@ -113,6 +113,7 @@ pub(crate) fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: u
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
+    image.ensure_owned();
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::paste(image, source, position, mask, fill));
     }
@@ -284,6 +285,7 @@ pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image
 
 #[pyfunction]
 fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image) -> PyResult<()> {
+    image.ensure_owned();
     if image.mode != PixelMode::Rgba || overlay.mode != PixelMode::Rgba || image.palette.is_some() || overlay.palette.is_some() {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
@@ -364,6 +366,7 @@ fn composite_scalar(pixels: &mut [u8], source: &[u8]) {
 
 #[pyfunction]
 fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<()> {
+    image.ensure_owned();
     if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) || image.palette.is_some() {
         return Err(PyValueError::new_err("putalpha requires RGB or RGBA; LA mode is not supported"));
     }

@@ -91,7 +91,7 @@ impl LossyImageCompressor {
 
     fn optimize_png(&self, image: &Image, options: SaveOptions, mut output: Vec<u8>) -> PyResult<Vec<u8>> {
         let channels = image.mode.channels();
-        let pixels = image.pixels.as_ref().expect("validated image");
+        let pixels = image.raw_data()?;
         let histogram = png_rounding_histogram(pixels, channels);
         let limit = self.max_rmse * self.max_rmse * f64::from(image.width) * f64::from(image.height) * 3.0;
         let mut tried = vec![std::array::from_fn(|sample| sample as u8)];
@@ -108,6 +108,7 @@ impl LossyImageCompressor {
                 }
                 tried.push(color_table);
                 let rounded = rounded.get_or_insert_with(|| image.clone());
+                rounded.ensure_owned();
                 let destination = rounded.pixels.as_mut().expect("validated image");
                 round_png_pixels(pixels, destination, channels, &color_table);
                 let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;

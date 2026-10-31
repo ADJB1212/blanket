@@ -50,11 +50,19 @@ test = [
     "rich>=15",
     "ruff>=0.17.2",
     "ty>=0.0.92",
+    {include-group = "gpu"},
 ]
 docs = [
     "zensical>=0.0.73",
     "mkdocstrings[python]>=1.0.8,<2",
     "ruff>=0.17.2",
+]
+gpu = [
+    "torch>=2.13",
+]
+gpu-cuda = [
+    {include-group = "gpu"},
+    "cupy-cuda13x[ctk]>=14.2; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 
 [tool.maturin]
@@ -110,7 +118,7 @@ python = "./.venv"
 output-format = "concise"
 
 [tool.ty.analysis]
-allowed-unresolved-imports = ["blanket._blanket"]
+allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
 [tool.ty.rules]
 invalid-assignment = "ignore"

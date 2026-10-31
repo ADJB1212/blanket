@@ -14,6 +14,7 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+blanket-gpu-python = { workspace = true, optional = true }
 blanket-font.workspace = true
 blanket-resample.workspace = true
 blanket-codec-extended.workspace = true
@@ -32,6 +33,8 @@ blanket-stat.workspace = true
 blanket-draw.workspace = true
 
 [features]
+gpu-metal = ["dep:blanket-gpu-python"]
+gpu-cuda = ["dep:blanket-gpu-python", "blanket-gpu-python/cuda"]
 default = ["no-vendored-webp"]
 jxl-vendored = ["blanket-codecs/jxl-vendored"]
 embedded-libheif = ["blanket-codecs/embedded-libheif"]
