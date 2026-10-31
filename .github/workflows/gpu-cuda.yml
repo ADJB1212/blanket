@@ -2,27 +2,6 @@ name: CUDA wheel
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths-ignore:
-      - "**.md"
-      - "LICENSE"
-      - ".gitignore"
-      - ".github/**"
-      - "!.github/workflows/gpu-cuda.yml"
-      - "scripts/**"
-      - "!scripts/verify_behavior.py"
-      - "!scripts/setup_cuda.sh"
-  pull_request:
-    paths-ignore:
-      - "**.md"
-      - "LICENSE"
-      - ".gitignore"
-      - ".github/**"
-      - "!.github/workflows/gpu-cuda.yml"
-      - "scripts/**"
-      - "!scripts/verify_behavior.py"
-      - "!scripts/setup_cuda.sh"
 
 env:
   RUSTUP_TERM_PROGRESS_WHEN: "never"

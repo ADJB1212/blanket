@@ -138,8 +138,8 @@ jobs:
         run: |
           uv python install 3.14
           uv tool install maturin
-          uv sync --no-install-project --only-group test --only-group gpu-cuda --managed-python
-          maturin develop -G test -G gpu-cuda --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER -Z threads=4
+          uv sync --no-install-project --only-group test --managed-python
+          maturin develop -G test --uv --profile dev --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER -Z threads=3
       - name: Verify GPU backend is compiled
         run: |
           uv run python -c 'import sys; from blanket import ImageGpu; backend = "metal" if sys.platform == "darwin" else "cuda"; info = ImageGpu.capabilities(backend); assert info["compiled"], info; print(info)'

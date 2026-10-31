@@ -32,7 +32,7 @@ Documentation = "https://adjb1212.github.io/blanket-docs"
 Releases = "https://github.com/ADJB1212/blanket/releases"
 
 [build-system]
-requires = ["maturin>=1.15,<2.0"]
+requires = ["maturin>=1.16,<2.0"]
 build-backend = "maturin"
 
 [dependency-groups]
@@ -59,9 +59,6 @@ docs = [
 ]
 gpu = [
     "torch>=2.13",
-]
-gpu-cuda = [
-    {include-group = "gpu"},
     "cupy-cuda13x[ctk]>=14.2; sys_platform == 'linux' or sys_platform == 'win32'",
 ]
 
