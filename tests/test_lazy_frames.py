@@ -112,6 +112,31 @@ def test_lazy_tiff_mixed_pages_and_metadata(mode, compression):
         assert dict(image.getexif()) == dict(eager.getexif())
 
 
+def test_lazy_tiff_metadata_traverses_forward_once_and_restarts_on_backward_seek(monkeypatch):
+    from blanket import _lazy_frames
+
+    data = sequence_data("TIFF")
+    visited = []
+    read_metadata = _lazy_frames.read_tiff_metadata
+
+    def tracked(data, count):
+        for index, metadata in enumerate(read_metadata(data, count)):
+            visited.append(index)
+            yield metadata
+
+    monkeypatch.setattr(_lazy_frames, "read_tiff_metadata", tracked)
+    image = Image.open(BytesIO(data), lazy=True)
+    eager = Image.open(BytesIO(data))
+    for frame in [0, 1, 2, 0, 2]:
+        image.seek(frame)
+        eager.seek(frame)
+        assert image.tobytes() == eager.tobytes()
+        assert image.info == eager.info
+    assert visited == [0, 1, 2, 0, 1, 2]
+    image.close()
+    assert image._lazy_frames._tiff_metadata is None
+
+
 def test_lazy_tiff_jpeg_pages():
     frames = [PillowImage.new("RGB", (9, 7), "red"), PillowImage.new("L", (5, 3), 123)]
     stream = BytesIO()

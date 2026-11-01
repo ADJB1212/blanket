@@ -3,7 +3,7 @@
 Run from the repository root using the pinned nightly toolchain:
 
 ```sh
-cargo bench -p blanket-ops --bench resize
+cargo bench -p blanket-resample --bench resize
 cargo bench -p blanket-codec-jxl --bench codec
 ```
 
@@ -40,7 +40,8 @@ Benchmarks live in the owning crate's `benches/` directory. Select a crate with
 | Crate                    | Targets                          | Workloads                                                                                                                    |
 | ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `blanket-core`           | `conversion`                     | All L/RGB/RGBA mode pairs at 8/10/12/16 bits, plus combined mode/depth conversions and same-mode depth scaling.              |
-| `blanket-ops`            | `resize`, `histogram`            | Nearest/bilinear/Lanczos downsampling, upscaling, and fractional crops; random, constant-color, and masked 8-bit histograms. |
+| `blanket-resample`       | `resize`                         | Nearest/bilinear/Lanczos downsampling, upscaling, and fractional crops. |
+| `blanket-ops`            | `histogram`                      | Random, constant-color, and masked 8-bit histograms. |
 | `blanket-filter`         | `blur`                           | Gaussian blur at 8/16 bits.                                                                                                  |
 | `blanket-enhance`        | `blend`                          | Blending at 8/16 bits.                                                                                                       |
 | `blanket-composite`      | `alpha_composite`                | RGBA alpha compositing at 8/16 bits.                                                                                         |
@@ -59,7 +60,7 @@ it depends on the core and Criterion, without pulling in other codec backends.
 Filter benchmarks, smoke test all cases, or save and compare a baseline:
 
 ```sh
-BLANKET_BENCH_FULL=1 cargo bench -p blanket-ops --bench resize -- 'resize/RGBA-16'
+BLANKET_BENCH_FULL=1 cargo bench -p blanket-resample --bench resize -- 'resize/RGBA-16'
 cargo bench -p blanket-codec-jxl --features jxl-vendored --bench codec -- 'codecs/jxl-lossless'
 BLANKET_BENCH_FULL=1 cargo bench -p blanket-codec-jxl --features jxl-vendored --bench settings -- 'jxl-settings/RGB-16'
 cargo bench -p blanket-codec-jpeg --bench streaming -- 'streaming/jpeg-progressive'

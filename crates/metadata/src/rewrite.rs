@@ -3,7 +3,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-use super::{PngChunk, jxl_box, write_metadata};
+use super::{PngChunk, encode_metadata, jxl_box};
 
 #[pyfunction]
 #[pyo3(signature = (data, format, exif, xmp, icc, text, dpi, remove_resolution))]
@@ -51,7 +51,7 @@ fn rewrite(
         }
         _ => return Err(PyValueError::new_err(format!("metadata-only rewriting is not supported for {format}"))),
     };
-    write_metadata(&output, format, exif.unwrap_or_default(), xmp.unwrap_or_default(), icc.unwrap_or_default(), &chunks)
+    encode_metadata(output, format, exif.unwrap_or_default(), xmp.unwrap_or_default(), icc.unwrap_or_default(), &chunks)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -304,6 +304,25 @@ fn jxl(data: &[u8], exif: Option<&[u8]>, xmp: Option<&[u8]>) -> PyResult<Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_rewrite_preserves_pixels_when_removing_and_replacing_metadata() {
+        use blanket_codecs::codecs::{ImageFormat, SaveOptions, decode, encode};
+        use blanket_core::{Image, PixelMode};
+
+        let image = Image::from_pixels(17, 19, PixelMode::Rgb, (0..17 * 19 * 3).map(|i| (i * 137) as u8).collect(), None).unwrap();
+        let base = encode(&image, ImageFormat::Png, SaveOptions::default()).unwrap();
+        let old = vec![(b"tEXt".to_vec(), b"old\0value".to_vec(), false)];
+        let data = super::super::write_metadata(&base, "PNG", b"old exif", b"old xmp", &[], &old).unwrap();
+        for chunks in [Vec::new(), vec![(b"tEXt".to_vec(), b"new\0before".to_vec(), false), (b"tEXt".to_vec(), b"after\0value".to_vec(), true)]] {
+            for exif in [b"".as_slice(), b"new exif"] {
+                let output = rewrite(&data, "PNG", Some(exif), Some(&[]), None, Some(&chunks), None, false).unwrap();
+                let expected = super::super::write_metadata(&base, "PNG", exif, &[], &[], &chunks).unwrap();
+                assert_eq!(output, expected);
+                assert_eq!(decode(&output, ImageFormat::Png).unwrap().raw_data().unwrap(), image.raw_data().unwrap());
+            }
+        }
+    }
 
     #[test]
     fn jpeg_rewrites_markers_between_scans_without_touching_entropy() {

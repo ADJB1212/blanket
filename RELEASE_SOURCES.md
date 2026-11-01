@@ -25,7 +25,10 @@ operating-system components are installed separately.
 4. Set `PKG_CONFIG_PATH`, `CMAKE_PREFIX_PATH`, and `LD_LIBRARY_PATH` (Linux) or
    `DYLD_LIBRARY_PATH` (macOS) as in `.github/workflows/release.yml`, pointing at
    `$HOME/deps/`. Set `LCMS2_LIB_DIR` and `LCMS2_INCLUDE_DIR` as in that workflow.
-5. Build using `maturin build --release --locked --features default`. The supplied
+5. Build using `maturin build --release --locked --features default,gpu-metal`
+   on macOS, or `--features default,gpu-cuda` on Linux. CUDA builds require
+   the CUDA 13 toolkit and `nvcc`; follow the release workflow's compiler setup.
+   The supplied
    `project/.cargo/config.toml` selects the adjacent vendored Cargo sources;
    no registry dependency source download is needed. The workflow records the
    platform-specific compiler flags and wheel repair commands.

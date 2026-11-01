@@ -162,7 +162,7 @@ Support reading and writing animated and multi-page images. This is a large
 architectural change that touches codecs, the `Image` struct, and the Python
 API.
 
-Frames decode eagerly into independent rasters. Animated GIFs expose composited
+Frames decode eagerly by default, with opt-in lazy access described below. Animated GIFs expose composited
 RGBA canvases. Navigation retains frame edits; copies and transforms operate on
 the current frame. Sequence saving uses `save_all` and `append_images`, with
 format-specific timing and composition controls. See the formats guide for
@@ -265,8 +265,8 @@ Rust backend for performance and functionality Pillow doesn't offer.
       operations and formats
 - [x] **Modern format defaults** — JPEG XL, AVIF, HEIC as first-class citizens,
       not plugin extras
-- [x] **SIMD-accelerated pixel kernels** — NEON, SSSE3, and portable SIMD
-      paths for critical operations
+- [x] **SIMD-accelerated pixel kernels** — nightly portable SIMD
+      for owned pixel operations; external codecs manage their own SIMD
 - [x] **Parallel execution** — automatic rayon-based parallelism with
       small-buffer fast paths
 - [x] **3D color LUTs** — `Color3DLUT` with trilinear interpolation,
@@ -280,8 +280,8 @@ Rust backend for performance and functionality Pillow doesn't offer.
       with bounded encoded input storage and independent previews after completed scans
 - [x] **Image hashing** — `ImageHash.average_hash`, `dhash`, and `phash` with
       configurable sizes, hexadecimal serialization, and Hamming distance
-- [x] **GPU acceleration foundation** — optional Apple Silicon Metal backend
-      with resident image operations and PyTorch MPS tensor pipelines.
+- [x] **GPU acceleration foundation** — Metal and CUDA backends
+      with resident image operations and PyTorch tensor pipelines.
       See [GPU Roadmap](#gpu-roadmap) for shipped coverage and subsequent phases,
       and [GPU images](GPU.md) for the current API and restrictions.
 
@@ -432,7 +432,7 @@ with new processing semantics exposed explicitly.
 ## GPU Roadmap
 
 GPU development follows a separate track from the Pillow compatibility phases.
-Apple Silicon is the initial platform; NVIDIA support is the next backend.
+Metal on Apple Silicon and CUDA on NVIDIA are implemented backends.
 Keep backend-specific allocation, synchronization, and kernels in dedicated
 workspace crates, with common operation contracts and Python validation shared
 across backends. Existing CPU APIs retain their behavior.

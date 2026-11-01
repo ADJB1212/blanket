@@ -11,6 +11,8 @@ from ._blanket import _open_sequence
 from ._exif import read_metadata, read_tiff_metadata
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
+
     from .Image import Image
 
 
@@ -25,6 +27,8 @@ class LazyFrames:
         self.loop = loop
         self.default_image = default_image
         self.cache: dict[int, Image] = {}
+        self._tiff_metadata: Iterator[dict[object, object]] | None = None
+        self._tiff_frame = 0
 
     def get(self, frame: int) -> Image:
         """Decode or retrieve a cached frame by its zero-based index."""
@@ -36,7 +40,11 @@ class LazyFrames:
             frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None)
             selected = Image(frames[0])
             if selected.format == "TIFF":
-                selected.info.update(next(islice(read_tiff_metadata(self.data, self.count), frame, None)))
+                if self._tiff_metadata is None or frame < self._tiff_frame:
+                    self._tiff_metadata = read_tiff_metadata(self.data, self.count)
+                    self._tiff_frame = 0
+                selected.info.update(next(islice(self._tiff_metadata, frame - self._tiff_frame, None)))
+                self._tiff_frame = frame + 1
             else:
                 selected.info.update(read_metadata(self.data, selected.format))
             duration, disposal, blend = controls[0]
@@ -60,4 +68,5 @@ class LazyFrames:
         for frame in self.cache.values():
             frame.close()
         self.cache.clear()
+        self._tiff_metadata = None
         self.data = b""

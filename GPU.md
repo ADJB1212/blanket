@@ -14,12 +14,13 @@ pip install pyblanket
 
 Release wheels include CPU support plus Metal on macOS or CUDA on Linux.
 CPU operations work without GPU hardware, drivers, CuPy, or PyTorch. There is
-no separate GPU distribution or `pyblanket[gpu]` extra. Native Metal requires
+no separate GPU distribution. The `pyblanket[gpu]` extra installs PyTorch and,
+on Linux/Windows with Python below 3.15, CuPy. Native Metal requires
 macOS 26+ and a supported Apple Silicon GPU, with no additional Python packages.
 CUDA requires a compatible NVIDIA GPU and driver plus the runtime packages:
 
 ```sh
-pip install "cupy-cuda13x[ctk]>=14.2"
+pip install "cupy-cuda13x[ctk]>=14.0"
 ```
 
 For PyTorch tensor interoperability, also install `torch>=2.13`. The CUDA
@@ -572,7 +573,7 @@ dependency group installs CuPy, its CUDA runtime/NVRTC
 components, and PyTorch for interoperability/testing:
 
 ```sh
-uv sync --no-install-project --group gpu-cuda --group test
+uv sync --no-install-project --dev --extra gpu
 uv run --no-sync maturin develop --uv --features gpu-cuda
 ```
 

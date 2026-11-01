@@ -30,7 +30,7 @@ with Image.open("photo.jpg") as image:
   `ImagePath`, and `ImageStat`.
 - **Native processing.** Rust kernels use SIMD and parallel execution for
   supported operations, with small-image fast paths.
-- **Optional GPU processing.** Explicit Metal 4 images support resident resize,
+- **Optional GPU processing.** Explicit Metal and CUDA images support resident resize,
   convolution, compositing, and PyTorch MPS pipelines. GPU operations do not
   guarantee byte-exact results with Pillow. See [GPU images](GPU.md).
 - **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
@@ -43,7 +43,7 @@ with Image.open("photo.jpg") as image:
   apply retention policies, normalize resolution, and extract previews with
   `ImageMetadata`. See the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
 - **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
-  PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single-page PDFs.
+  PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single- or multi-page PDFs.
 - **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
   workflows, and choose when to convert to 8 bits.
 - **Python interoperability.** Import array data, work with binary streams,
@@ -75,11 +75,13 @@ supported Apple Silicon GPU. For CUDA processing, install its optional runtime
 packages and use a compatible NVIDIA GPU and driver:
 
 ```sh
-pip install "cupy-cuda13x[ctk]>=14.2"
+pip install "cupy-cuda13x[ctk]>=14.0"
 ```
 
 PyTorch interoperability additionally needs `pip install "torch>=2.13"`.
-These packages are installed separately; there is no `pyblanket[gpu]` extra.
+Install them separately or use `pip install "pyblanket[gpu]"`. The `gpu`
+extra includes PyTorch and, on Linux/Windows with Python below 3.15, CuPy.
+CuPy availability on other Python versions depends on upstream support.
 An explicit GPU request raises `RuntimeError` if the backend, hardware, driver,
 or runtime dependency is unavailable; it never silently runs on the CPU.
 Check `ImageGpu.capabilities("metal")` or `ImageGpu.capabilities("cuda")` for
@@ -549,11 +551,11 @@ operation-specific restrictions, palette support, and interoperability examples.
 ## Performance
 
 Native Rust benchmarks live in each crate's `benches/` directory. Run
-`cargo bench -p blanket-ops --bench resize` for resize benchmarks or
+`cargo bench -p blanket-resample --bench resize` for resize benchmarks or
 `cargo bench -p blanket-codec-jxl --features jxl-vendored --bench codec` for JPEG XL. See the
 [native benchmark guide](crates/BENCHMARKS.md) for all targets, file I/O,
 streaming decoding, filters, and baseline comparisons.
-Defaults use a short run on 512x512 images; set `BLANKET_BENCH_FULL=1` for
+Defaults use a short run on 800x600 images; set `BLANKET_BENCH_FULL=1` for
 the full matrix and longer statistical measurements.
 
 The benchmark suite compares Blanket and Pillow using equal in-memory inputs
@@ -561,7 +563,7 @@ and eager decoding. After completing the development setup below, run it with
 a release build:
 
 ```sh
-maturin develop -r --extras test --uv
+uv run --no-sync maturin develop --release -G dev --uv
 uv run --no-sync scripts/benchmark.py --sizes web
 ```
 
@@ -577,16 +579,16 @@ explains baseline comparisons and reproducible runs.
 Source builds require the Rust nightly pinned in `rust-toolchain.toml` for
 portable SIMD.
 
-With the [build prerequisites](#installation) installed, set up a development
+With the [build prerequisites](https://adjb1212.github.io/blanket-docs/development/) installed, set up a development
 environment and run the checks:
 
 ```sh
-uv sync --no-install-project --extra test
+uv sync --no-install-project --dev
 uv tool install maturin
-maturin develop --extras test --uv
-cargo fmt --check
-cargo clippy -- -D warnings
+maturin develop -G dev --uv
+cargo clippy --profile dev --locked --all-targets --workspace -- -D warnings
 cargo test
+uv run --no-sync ty check
 uv run --no-sync pytest -q
 uv run --no-sync scripts/verify_behavior.py
 ```

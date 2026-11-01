@@ -65,7 +65,7 @@ pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> P
         small_rank(&source, &mut values, width, height, channels, radius, rank as usize);
         return samples::output(image, &values);
     }
-    sliding_neighborhood(&source, &mut values, width, height, channels, radius, rank);
+    sliding_neighborhood(&source, &mut values, (width, height, channels, samples::maximum(image)), radius, rank);
     samples::output(image, &values)
 }
 
@@ -112,7 +112,7 @@ impl RankCounts {
 
     fn select(&self, mut rank: u64) -> u16 {
         let mut index = 0;
-        let mut step = 1 << 15;
+        let mut step = (self.tree.len() - 1) / 2;
         while step != 0 {
             let next = index + step;
             if self.tree[next] <= rank {
@@ -125,20 +125,23 @@ impl RankCounts {
     }
 }
 
-fn sliding_neighborhood(source: &[u16], values: &mut [u16], width: usize, height: usize, channels: usize, radius: usize, rank: Option<u64>) {
+fn sliding_neighborhood(source: &[u16], values: &mut [u16], dimensions: (usize, usize, usize, u16), radius: usize, rank: Option<u64>) {
+    let (width, height, channels, _) = dimensions;
     if width == 0 || height == 0 {
         return;
     }
     blanket_core::parallel::chunks_mut_above(values, width * channels * 16, 256 * 1024, |band, rows| {
-        sliding_neighborhood_rows(source, rows, (width, height, channels), radius, rank, band * 16);
+        sliding_neighborhood_rows(source, rows, dimensions, radius, rank, band * 16);
     });
 }
 
-fn sliding_neighborhood_rows(source: &[u16], values: &mut [u16], dimensions: (usize, usize, usize), radius: usize, rank: Option<u64>, first: usize) {
-    let (width, height, channels) = dimensions;
+fn sliding_neighborhood_rows(
+    source: &[u16], values: &mut [u16], dimensions: (usize, usize, usize, u16), radius: usize, rank: Option<u64>, first: usize,
+) {
+    let (width, height, channels, maximum) = dimensions;
     let mut histogram = BTreeMap::<u16, u64>::new();
     // Amortize the fixed-size count tree over sufficiently large windows and rows.
-    let mut counts = RankCounts { tree: if rank.is_some() && radius >= 4 && width >= 64 { vec![0; 65537] } else { Vec::new() } };
+    let mut counts = RankCounts { tree: if rank.is_some() && radius >= 4 && width >= 64 { vec![0; usize::from(maximum) + 2] } else { Vec::new() } };
     let maximum_rank = (radius as u64 * 2 + 1).pow(2) - 1;
     for y in first..first + values.len() / (width * channels) {
         for c in 0..channels {
@@ -641,27 +644,30 @@ mod tests {
     #[test]
     fn parallel_ranks_match_sorted_windows() {
         let (width, height, channels) = (257, 257, 4);
-        let source: Vec<u16> = (0..width * height * channels).map(|i| (i * 7919) as u16).collect();
-        for rank in [1, 40, 79] {
-            let mut output = vec![173; source.len() + 2];
-            sliding_neighborhood(&source, &mut output[1..source.len() + 1], width, height, channels, 4, Some(rank));
-            for y in [0_usize, 15, 16, 127, 128, 255, 256] {
-                for x in [0_usize, 63, 128, 256] {
-                    for c in 0..channels {
-                        let mut window = Vec::new();
-                        for yy in 0..9 {
-                            for xx in 0..9 {
-                                let row = (y + yy).saturating_sub(4).min(height - 1);
-                                let col = (x + xx).saturating_sub(4).min(width - 1);
-                                window.push(source[(row * width + col) * channels + c]);
+        for depth in [10, 12, 16] {
+            let maximum = ((1_u32 << depth) - 1) as u16;
+            let source: Vec<u16> = (0..width * height * channels).map(|i| (i * 7919) as u16 & maximum).collect();
+            for rank in [1, 40, 79] {
+                let mut output = vec![173; source.len() + 2];
+                sliding_neighborhood(&source, &mut output[1..source.len() + 1], (width, height, channels, maximum), 4, Some(rank));
+                for y in [0_usize, 15, 16, 127, 128, 255, 256] {
+                    for x in [0_usize, 63, 128, 256] {
+                        for c in 0..channels {
+                            let mut window = Vec::new();
+                            for yy in 0..9 {
+                                for xx in 0..9 {
+                                    let row = (y + yy).saturating_sub(4).min(height - 1);
+                                    let col = (x + xx).saturating_sub(4).min(width - 1);
+                                    window.push(source[(row * width + col) * channels + c]);
+                                }
                             }
+                            window.sort_unstable();
+                            assert_eq!(output[1 + (y * width + x) * channels + c], window[rank as usize]);
                         }
-                        window.sort_unstable();
-                        assert_eq!(output[1 + (y * width + x) * channels + c], window[rank as usize]);
                     }
                 }
+                assert_eq!((output[0], output[source.len() + 1]), (173, 173));
             }
-            assert_eq!((output[0], output[source.len() + 1]), (173, 173));
         }
     }
 
@@ -753,7 +759,7 @@ mod tests {
                         for rank in [None, Some(0), Some((taps / 2) as u64), Some((taps - 1) as u64)] {
                             let mut output = vec![173; source.len() + 2];
                             output[1..source.len() + 1].copy_from_slice(&source);
-                            sliding_neighborhood(&source, &mut output[1..source.len() + 1], width, height, channels, radius, rank);
+                            sliding_neighborhood(&source, &mut output[1..source.len() + 1], (width, height, channels, u16::MAX), radius, rank);
                             for y in 0..height {
                                 for x in 0..width {
                                     for c in 0..channels {

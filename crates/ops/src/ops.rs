@@ -39,13 +39,11 @@ fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, s
         return Err(PyValueError::new_err("compositing requires matching RGBA images"));
     }
     py.detach(|| {
-        let back = blanket_core::float::prepare(background, srgb, true)?;
-        let front = blanket_core::float::prepare(foreground, srgb, true)?;
-        let mut values = blanket_core::float::values(&back)?;
-        let source = blanket_core::float::values(&front)?;
+        let mut values = blanket_core::float::prepare_values(background, srgb, true)?;
+        let source = blanket_core::float::prepare_values(foreground, srgb, true)?;
         blanket_core::float::composite(&mut values, &source);
-        let result = Image::from_color_float_bytes(back.width, back.height, back.mode, values.into_iter().flat_map(f32::to_le_bytes).collect())?;
-        blanket_core::float::finish(&result, background, srgb, true)
+        drop(source);
+        blanket_core::float::finish_values(background, background, srgb, true, values)
     })
 }
 

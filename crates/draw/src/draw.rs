@@ -237,6 +237,17 @@ fn path_contains(edges: &[&PathEdge], crossings: &[f64], point: (f64, f64)) -> b
         || edges.iter().any(|edge| edge.near(point, STROKE_EPSILON.sqrt()) && distance_squared(point, edge.a, edge.b) < STROKE_EPSILON)
 }
 
+fn advance_edges<'a>(edges: &[&'a PathEdge], next: &mut usize, active: &mut Vec<&'a PathEdge>, x: f64, margin: f64) {
+    active.retain(|edge| edge.right + margin >= x - 0.5);
+    while *next < edges.len() && edges[*next].left - margin <= x + 0.5 {
+        let edge = edges[*next];
+        if edge.right + margin >= x - 0.5 {
+            active.push(edge);
+        }
+        *next += 1;
+    }
+}
+
 fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
@@ -345,6 +356,7 @@ fn draw_path(
         }
         let mut next_edge = 0;
         let mut active: Vec<&PathEdge> = Vec::new();
+        let mut nearby = Vec::new();
         let mut crossings: [Vec<f64>; 4] = std::array::from_fn(|_| Vec::new());
         for y in first_row..=last_row {
             if sorted {
@@ -363,6 +375,12 @@ fn draw_path(
             if active.is_empty() {
                 continue;
             }
+            let sweep_columns = active.len() >= 32 && right - left >= 32.0;
+            if sweep_columns {
+                active.sort_unstable_by(|a, b| a.left.total_cmp(&b.left));
+            }
+            nearby.clear();
+            let mut next_column_edge = 0;
             if filled {
                 for sy in 0..samples {
                     let scan_y = y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5;
@@ -373,6 +391,10 @@ fn draw_path(
                 }
             }
             for x in (left.floor() as i64).max(0)..=(right.ceil() as i64).min(i64::from(image.width) - 1) {
+                if sweep_columns {
+                    advance_edges(&active, &mut next_column_edge, &mut nearby, x as f64, margin);
+                }
+                let candidates = if sweep_columns { &nearby } else { &active };
                 let mut covered = 0;
                 for sy in 0..samples {
                     for sx in 0..samples {
@@ -381,9 +403,9 @@ fn draw_path(
                             y as f64 + (f64::from(sy) + 0.5) / f64::from(samples) - 0.5,
                         );
                         let hit = if filled {
-                            path_contains(&active, &crossings[sy as usize], point)
+                            path_contains(candidates, &crossings[sy as usize], point)
                         } else {
-                            active.iter().any(|edge| edge.near(point, margin) && distance_squared(point, edge.a, edge.b) < limit)
+                            candidates.iter().any(|edge| edge.near(point, margin) && distance_squared(point, edge.a, edge.b) < limit)
                         };
                         covered += i32::from(hit);
                     }
@@ -626,6 +648,38 @@ fn flood_run(pixels: &mut [u8], index: usize, width: usize, stride: usize, fill:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn horizontal_edge_sweep_preserves_fill_and_stroke_samples() {
+        let mut edges: Vec<_> = (0..257)
+            .map(|i| {
+                let x = (i * 719 % 271) as f64 / 4.0 - 15.0;
+                let y = (i * 31 % 97) as f64 / 8.0 - 6.0;
+                PathEdge::new((x, y), (x + (i % 7) as f64 - 3.0, y + (i % 5) as f64 - 2.0))
+            })
+            .collect();
+        edges.push(PathEdge::new((-100.0, 0.0), (100.0, 0.0)));
+        edges.push(PathEdge::new((0.0, -100.0), (0.0, 100.0)));
+        let mut sorted: Vec<_> = edges.iter().collect();
+        sorted.sort_unstable_by(|a, b| a.left.total_cmp(&b.left));
+        for margin in [STROKE_EPSILON.sqrt(), 0.5, 3.0, 20.0] {
+            let mut next = 0;
+            let mut nearby = Vec::new();
+            for x in -20..80 {
+                advance_edges(&sorted, &mut next, &mut nearby, f64::from(x), margin);
+                for y in [-5.0, -0.375, 0.0, 0.375, 5.0] {
+                    let mut crossings: Vec<_> = edges.iter().filter_map(|edge| edge.crossing(y)).collect();
+                    crossings.sort_unstable_by(f64::total_cmp);
+                    for offset in [-0.375, -0.125, 0.0, 0.125, 0.375] {
+                        let point = (f64::from(x) + offset, y);
+                        assert_eq!(path_contains(&nearby, &crossings, point), path_contains(&sorted, &crossings, point));
+                        let hit = |edge: &&PathEdge| edge.near(point, margin) && distance_squared(point, edge.a, edge.b) < margin * margin;
+                        assert_eq!(nearby.iter().any(hit), sorted.iter().any(hit));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn clipped_mask_rows_match_disk_reference() {

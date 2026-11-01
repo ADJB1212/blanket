@@ -216,6 +216,7 @@ impl JpegStreamDecoder {
             density_unit: 0,
             x_density: 1,
             y_density: 1,
+            saw_jfif_marker: true,
             adobe_transform: None,
         });
         Ok(())

@@ -107,9 +107,10 @@ def test_sample_chops_rejects_mismatched_depths():
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize(("window", "rank"), [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 0), (9, 80)])
-def test_rank_filters_use_samples_and_extend_edges(mode, depth, window, rank):
-    image = make_image(mode, depth)
+@pytest.mark.parametrize(("window", "rank"), [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 0), (9, 40), (9, 80)])
+@pytest.mark.parametrize("size", [(7, 5), (65, 3)])
+def test_rank_filters_use_samples_and_extend_edges(mode, depth, window, rank, size):
+    image = make_image(mode, depth, size)
     image.info["test"] = "metadata"
     original = samples(image)
     channels = len(image.getbands())

@@ -40,6 +40,7 @@ def test_sorted_path_edges_match_independently_clipped_bands(style: str, antiali
         [(1.25, 1.5), (13.5, 10.25), (1.25, 10.25), (13.5, 1.5)],
         [(2.0, 2.0), (12.0, 2.0), (12.0, 2.0), (7.0, 6.0), (12.0, 10.0), (2.0, 10.0)],
         [((i * 71 % 23) - 4.375, (i * 53 % 19) - 3.125) for i in range(73)],
+        [((i * 71 % 61) - 24.375, (i * 53 % 19) - 3.125) for i in range(97)],
     ],
 )
 def test_path_scanlines_match_scalar_coverage(style, antialias, width, points) -> None:

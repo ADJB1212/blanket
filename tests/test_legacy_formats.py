@@ -225,6 +225,24 @@ def test_xpm_transparency_and_multichar_keys() -> None:
     assert Image.open(stream).tobytes() == actual.tobytes()
 
 
+@pytest.mark.parametrize(("mode", "count"), [(mode, count) for mode in ("L", "RGB", "RGBA") for count in (1, 16, 17, 256, 257, 4097) if mode != "L" or count <= 256])
+def test_xpm_encoded_keys_preserve_order_padding_and_repeated_rows(count: int, mode: str) -> None:
+    colors = [i if mode == "L" else (i & 255, i >> 8, 71) + ((255,) if mode == "RGBA" else ()) for i in range(count)]
+    if mode == "RGBA":
+        colors[-1] = (0, 0, 0, 0)
+    source = Image.new(mode, (count + 3, 3))
+    source.putdata([colors[(i * 7 + i // (count + 3)) % count] for i in range(source.width * source.height)])
+    stream = BytesIO()
+    source.save(stream, "XPM")
+    encoded = stream.getvalue()
+    actual = Image.open(BytesIO(encoded)).convert("RGBA" if mode == "RGBA" else "RGB")
+    assert actual.tobytes() == source.convert(actual.mode).tobytes()
+    assert actual.tobytes() == PillowImage.open(BytesIO(encoded)).convert(actual.mode).tobytes()
+    lines = [line[1:-2] for line in encoded.splitlines() if line.startswith(b'"')]
+    width, height, entries, cpp = map(int, lines[0].split())
+    assert all(len(row) == width * cpp for row in lines[1 + entries : 1 + entries + height])
+
+
 @pytest.mark.parametrize("w", [9, 17, 33, 129])
 def test_xbm_short_and_nonbyte_width(w: int) -> None:
     rows = [1 | (1 << (w - 1)), ((1 << (w - 2)) - 1) << 1]

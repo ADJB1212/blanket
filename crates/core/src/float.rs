@@ -66,7 +66,10 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
     if (float && depth != 32) || (!float && !matches!(depth, 8 | 10 | 12 | 16)) {
         return Err(PyValueError::new_err("invalid color sample depth"));
     }
-    let mut source = values(image)?;
+    convert_values(image, mode, depth, values(image)?)
+}
+
+fn convert_values(image: &Image, mode: PixelMode, depth: u8, mut source: Vec<f32>) -> PyResult<Image> {
     if image.mode.channels() != mode.channels() {
         let mut mapped = vec![0.0; source.len() / image.mode.channels() * mode.channels()];
         if mode.channels() == 4 {
@@ -76,16 +79,16 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
         }
         source = mapped;
     }
-    if !float {
-        let bytes = quantize(&source, depth);
-        return if depth == 8 {
-            Image::from_pixels(image.width, image.height, mode, bytes, None)
-        } else {
-            Image::from_sample_bytes(image.width, image.height, mode, bytes, depth, None)
-        };
+    color_output(image.width, image.height, mode, depth, &source)
+}
+
+fn color_output(width: u32, height: u32, mode: PixelMode, depth: u8, values: &[f32]) -> PyResult<Image> {
+    if mode.is_float() {
+        let bytes = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        return Image::from_color_float_bytes(width, height, mode, bytes);
     }
-    let bytes = source.into_iter().flat_map(f32::to_le_bytes).collect();
-    Image::from_color_float_bytes(image.width, image.height, mode, bytes)
+    let bytes = quantize(values, depth);
+    if depth == 8 { Image::from_pixels(width, height, mode, bytes, None) } else { Image::from_sample_bytes(width, height, mode, bytes, depth, None) }
 }
 
 pub fn quantize(source: &[f32], depth: u8) -> Vec<u8> {
@@ -176,6 +179,16 @@ fn transfer_colors(values: &mut [f32], channels: usize, decode: bool) {
 }
 
 pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
+    let values = prepare_values(image, srgb, premultiply)?;
+    Image::from_color_float_bytes(
+        image.width,
+        image.height,
+        if image.mode.channels() == 4 { PixelMode::RgbaF } else { PixelMode::RgbF },
+        values.into_iter().flat_map(f32::to_le_bytes).collect(),
+    )
+}
+
+pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Vec<f32>> {
     if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba | PixelMode::RgbF | PixelMode::RgbaF) {
         return Err(PyValueError::new_err("linear-light processing requires RGB or RGBA color"));
     }
@@ -187,29 +200,58 @@ pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> 
     if channels == 4 {
         alpha(&mut values, false, premultiply);
     }
-    Image::from_color_float_bytes(
-        image.width,
-        image.height,
-        if channels == 4 { PixelMode::RgbaF } else { PixelMode::RgbF },
-        values.into_iter().flat_map(f32::to_le_bytes).collect(),
-    )
+    Ok(values)
 }
 
 pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
-    let mut values = values(image)?;
+    finish_values(image, original, srgb, premultiply, values(image)?)
+}
+
+pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: bool, mut values: Vec<f32>) -> PyResult<Image> {
     if image.mode.channels() == 4 {
         alpha(&mut values, true, premultiply);
     }
     if srgb {
         transfer_colors(&mut values, image.mode.channels(), false);
     }
-    let result = Image::from_color_float_bytes(image.width, image.height, image.mode, values.into_iter().flat_map(f32::to_le_bytes).collect())?;
-    convert(&result, original.mode, Some(original.bit_depth))
+    convert_values(image, original.mode, original.bit_depth, values)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn finish_matches_materialized_float_conversion() {
+        let samples = [-0.0, 0.0, -2.0, 0.0031308, 0.04045, 0.5, 1.0, 4.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        for width in [0, 1, 3, 4, 5, 17, 33] {
+            for mode in [PixelMode::RgbF, PixelMode::RgbaF] {
+                let data: Vec<_> = (0..width as usize * mode.channels()).map(|i| samples[i % samples.len()]).collect();
+                let image = color_output(width, 1, mode, 32, &data).unwrap();
+                for target in [PixelMode::Rgb, PixelMode::Rgba, PixelMode::RgbF, PixelMode::RgbaF] {
+                    for depth in if target.is_float() { &[32][..] } else { &[8, 10, 12, 16][..] } {
+                        let original = convert(&image, target, Some(*depth)).unwrap();
+                        for srgb in [false, true] {
+                            for premultiply in [false, true] {
+                                let mut expected = values(&image).unwrap();
+                                if mode.channels() == 4 {
+                                    alpha(&mut expected, true, premultiply);
+                                }
+                                if srgb {
+                                    transfer_colors(&mut expected, mode.channels(), false);
+                                }
+                                let intermediate = color_output(width, 1, mode, 32, &expected).unwrap();
+                                let expected = convert(&intermediate, target, Some(*depth)).unwrap();
+                                let actual = finish(&image, &original, srgb, premultiply).unwrap();
+                                assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
+                                assert_eq!((actual.mode, actual.bit_depth), (target, *depth));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn quantization_matches_scalar() {

@@ -217,21 +217,21 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     }
     let mut palette = FxHashMap::default();
     let mut colors = Vec::new();
-    let mut indices = Vec::with_capacity(im.width as usize * im.height as usize);
-    for p in pixels.chunks_exact(im.mode.channels()) {
-        let rgba = match im.mode {
-            PixelMode::L => [p[0], p[0], p[0], 255],
-            PixelMode::Rgb => [p[0], p[1], p[2], 255],
-            _ => [p[0], p[1], p[2], p[3]],
-        };
+    let channels = im.mode.channels();
+    let rgba = |p: &[u8]| match im.mode {
+        PixelMode::L => [p[0], p[0], p[0], 255],
+        PixelMode::Rgb => [p[0], p[1], p[2], 255],
+        _ => [p[0], p[1], p[2], p[3]],
+    };
+    for p in pixels.chunks_exact(channels) {
+        let rgba = rgba(p);
         if !matches!(rgba[3], 0 | 255) {
             return Err("XPM supports binary transparency only".into());
         }
-        let index = *palette.entry(rgba).or_insert_with(|| {
+        palette.entry(rgba).or_insert_with(|| {
             colors.push(rgba);
             colors.len() - 1
         });
-        indices.push(index);
     }
     let cpp = format!("{:x}", colors.len() - 1).len();
     let mut out = format!("/* XPM */\nstatic char *im[] = {{\n\"{} {} {} {cpp}\",\n", im.width, im.height, colors.len());
@@ -239,10 +239,15 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
         let c = if p[3] == 0 { "None".into() } else { format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2]) };
         out.push_str(&format!("\"{i:0cpp$x} c {c}\",\n"));
     }
-    for row in indices.chunks_exact(im.width as usize) {
+    out.reserve(im.width as usize * im.height as usize * cpp + im.height as usize * 4 + 3);
+    let hex = b"0123456789abcdef";
+    for row in pixels.chunks_exact(im.width as usize * channels) {
         out.push('"');
-        for i in row {
-            out.push_str(&format!("{i:0cpp$x}"));
+        for pixel in row.chunks_exact(channels) {
+            let index = palette[&rgba(pixel)];
+            for digit in (0..cpp).rev() {
+                out.push(char::from(hex[(index >> (digit * 4)) & 15]));
+            }
         }
         out.push_str("\",\n");
     }
