@@ -10,6 +10,7 @@ from __future__ import annotations
 __lazy_modules__ = {"collections.abc", "struct"}
 
 import struct
+from operator import index
 from typing import TYPE_CHECKING, Protocol, overload
 
 if TYPE_CHECKING:
@@ -52,13 +53,26 @@ Border = int | tuple[int, ...]
 def _result(image: Image.Image, native: _Image) -> Image.Image:
     """Wrap a native result and copy metadata from the source image."""
     result = Image.Image(native)
-    result.info.update(image.info)
+    result.info.update(image._metadata_info())
     return result
 
 
 def _copy(image: Image.Image) -> Image.Image:
     """Copy the native raster and source metadata."""
-    return _result(image, ops_transpose(image._native, 1))
+    return image.copy()
+
+
+def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
+    """Adapt scalar canvas fills without narrowing integer samples."""
+    if image.mode in ("I", "I;16", "I;16L", "I;16B"):
+        if isinstance(color, tuple):
+            if len(color) != 1:
+                raise TypeError("color must be an integer or a single-element tuple")
+            color = color[0]
+        return [0 if color is None else index(color)]
+    if image.mode == "F":
+        return list(struct.pack("<f", 0.0 if color is None else float(color)))
+    return color_pixel(color, image.mode)
 
 
 def _lut(image: Image.Image, table: list[int]) -> Image.Image:
@@ -254,8 +268,8 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     if resized.size == tuple(size):
         return resized
     offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
-    fill = list(struct.pack("<f", 0.0 if color is None else float(color))) if image.mode == "F" else color_pixel(color, image.mode)
-    return Image.Image(ops_canvas(resized._native, size, offset, fill))
+    fill = _canvas_color(resized, color)
+    return _result(resized, ops_canvas(resized._native, size, offset, fill))
 
 
 def crop(image: Image.Image, border: int = 0) -> Image.Image:
@@ -363,6 +377,7 @@ def deform(image: Image.Image, deformer: SupportsGetMesh, resample: int = Image.
         raise ZeroDivisionError("division by zero")
     if resample not in (0, 2, 3):
         raise ValueError("mesh transforms support NEAREST, BILINEAR and BICUBIC")
+    image.load()
     return _result(image, ops_mesh(image._native, mesh, resample))
 
 
@@ -404,8 +419,9 @@ def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Ima
     size = (image.width + left + right, image.height + top + bottom)
     if min(size) < 0:
         raise ValueError("Width and height must be >= 0")
-    color = list(struct.pack("<f", 0.0 if fill is None else float(fill))) if image.mode == "F" else color_pixel(fill, image.mode)
-    return Image.Image(ops_canvas(image._native, size, (left, top), color))
+    image.load()
+    color = _canvas_color(image, fill)
+    return _result(image, ops_canvas(image._native, size, (left, top), color))
 
 
 def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, bleed: float = 0.0, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
@@ -458,7 +474,7 @@ def flip(image: Image.Image) -> Image.Image:
         result = ImageOps.flip(image)
         ```
     """
-    return _result(image, ops_transpose(image._native, 4))
+    return image.transpose(Image.Transpose.FLIP_TOP_BOTTOM)
 
 
 def grayscale(image: Image.Image) -> Image.Image:
@@ -512,7 +528,7 @@ def mirror(image: Image.Image) -> Image.Image:
         result = ImageOps.mirror(image)
         ```
     """
-    return _result(image, ops_transpose(image._native, 2))
+    return image.transpose(Image.Transpose.FLIP_LEFT_RIGHT)
 
 
 def posterize(image: Image.Image, bits: int) -> Image.Image:

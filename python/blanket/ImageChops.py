@@ -44,7 +44,9 @@ def _logical(image1: Image.Image, image2: Image.Image, operation: str) -> Image.
     """Validate bilevel inputs and apply a native logical operation."""
     if image1.mode != "1" or image2.mode != "1":
         raise ValueError("image has wrong mode")
-    return Image.Image(chops_binary(image1._native, image2._native, operation, 1.0, 0))
+    result = Image.Image(chops_binary(image1._native, image2._native, operation, 1.0, 0))
+    result.info.update(image1._metadata_info())
+    return result
 
 
 def logical_and(image1: Image.Image, image2: Image.Image) -> Image.Image:
@@ -67,7 +69,7 @@ def _binary(image1: Image.Image, image2: Image.Image, operation: str, scale: flo
     image1.load()
     image2.load()
     result = Image.Image(chops_binary(image1._native, image2._native, operation, scale, offset))
-    result.info.update(image1.info)
+    result.info.update(image1._metadata_info())
     return result
 
 
@@ -319,7 +321,7 @@ def invert(image: Image.Image) -> Image.Image:
     """
     image.load()
     result = Image.Image(chops_invert(image._native))
-    result.info.update(image.info)
+    result.info.update(image._metadata_info())
     return result
 
 
@@ -341,7 +343,7 @@ def offset(image: Image.Image, xoffset: int, yoffset: int | None = None) -> Imag
     """
     image.load()
     result = Image.Image(chops_offset(image._native, xoffset, xoffset if yoffset is None else yoffset))
-    result.info.update(image.info)
+    result.info.update(image._metadata_info())
     return result
 
 

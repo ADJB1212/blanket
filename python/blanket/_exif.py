@@ -11,7 +11,7 @@ import zlib
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Mapping
 
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
@@ -107,6 +107,16 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
             elif isinstance(value, tuple):
                 result[key] = tuple(ORIENTATION_REMOVE_BYTES_RE.sub(b"", v) for v in value)
     return orientation, result
+
+
+def exif_source(info: Mapping[object, object]) -> object:
+    """Resolve EXIF bytes, including the legacy PNG text representation."""
+    raw = info.get("exif")
+    profile = info.get("Raw profile type exif")
+    if raw is None and isinstance(profile, str):
+        with contextlib.suppress(ValueError):
+            return bytes.fromhex("".join(profile.split("\n")[3:]) if "\n" in profile else profile)
+    return raw
 
 
 def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[object, object]:
@@ -335,6 +345,7 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
         raise TypeError("pnginfo is supported only for PNG")
     if not supported:
         return b"", b"", b"", []
+    exif_supplied = "exif" in options
     values = []
     for key in ("exif", "xmp", "icc_profile"):
         value = options.pop(key) if key in options else image._metadata_value(key)
@@ -382,7 +393,12 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
                 continue
             text_info: dict[object, object] = {}
             _png_metadata(text_info, kind, payload)
+            raw_exif = exif_source(text_info)
+            if isinstance(raw_exif, bytes):
+                text_info["exif"] = raw_exif
             retained = policy.apply(text_info)
+            if isinstance(raw_exif, bytes) and not exif_supplied and not values[0]:
+                values[0] = cast("bytes", retained.get("exif", b""))
             if "Raw profile type exif" in retained:
                 retained.pop("Raw profile type exif")
             text = PngInfo()

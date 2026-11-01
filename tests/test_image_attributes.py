@@ -26,6 +26,12 @@ def test_image_attributes(mode: str) -> None:
     assert image.has_transparency_data is pillow.has_transparency_data
 
 
+@pytest.mark.parametrize("alpha", [0.0, 0.5, 1.0])
+def test_float_color_transparency_data(alpha: float) -> None:
+    assert Image.new("RGBA;F", (1, 1), (1.0, 0.0, 0.0, alpha)).has_transparency_data
+    assert not Image.new("RGB;F", (1, 1), (1.0, 0.0, 0.0)).has_transparency_data
+
+
 @pytest.mark.parametrize("path_type", [str, bytes, Path])
 def test_filename_from_path(tmp_path: Path, path_type: type) -> None:
     path = tmp_path / "image.png"

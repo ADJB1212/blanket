@@ -76,14 +76,28 @@ def test_parallel_enhancers_match_pillow(mode: str, name: str) -> None:
 
 
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
-def test_enhance_returns_fresh_image_with_pillow_metadata(name: str) -> None:
+def test_enhance_returns_fresh_image_with_source_metadata(name: str) -> None:
     blanket, pillow = pair("RGBA")
-    blanket.info["custom"] = pillow.info["custom"] = "not copied"
+    blanket.info["custom"] = pillow.info["custom"] = "retained"
     actual = getattr(ImageEnhance, name)(blanket).enhance(1)
     expected = getattr(PILEnhance, name)(pillow).enhance(1)
     same(actual, expected)
     assert actual is not blanket
-    assert actual.info == expected.info
+    assert actual.info == blanket.info
+    assert actual.info is not blanket.info
+
+
+@pytest.mark.parametrize("name", ImageEnhance.__all__)
+def test_enhance_preserves_metadata_edits_after_construction(name: str) -> None:
+    image = Image.new("RGB", (3, 3), (40, 80, 120))
+    enhancer = getattr(ImageEnhance, name)(image)
+    image.getexif()[305] = "edited"
+    image.info["custom"] = "edited"
+    result = enhancer.enhance(1.5)
+    assert result.getexif()[305] == "edited"
+    assert result.info["custom"] == "edited"
+    result.getexif()[305] = "result"
+    assert image.getexif()[305] == "edited"
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK"])

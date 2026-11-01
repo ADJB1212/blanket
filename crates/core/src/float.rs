@@ -15,11 +15,12 @@ pub fn composite(background: &mut [f32], foreground: &[f32]) {
         let b = Simd::<f32, 16>::from_slice(&background[i..]);
         let f = Simd::<f32, 16>::from_slice(&foreground[i..]);
         let alpha = simd_swizzle!(f, [3, 3, 3, 3, 7, 7, 7, 7, 11, 11, 11, 11, 15, 15, 15, 15]);
-        (f + b * (Simd::splat(1.0) - alpha)).copy_to_slice(&mut background[i..i + 16]);
+        let result = f + b * (Simd::splat(1.0) - alpha);
+        alpha.simd_eq(Simd::splat(1.0)).select(f, result).copy_to_slice(&mut background[i..i + 16]);
     }
     for (b, f) in background[end..].as_chunks_mut::<4>().0.iter_mut().zip(foreground[end..].as_chunks::<4>().0) {
         for c in 0..4 {
-            b[c] = f[c] + b[c] * (1.0 - f[3]);
+            b[c] = if f[3] == 1.0 { f[c] } else { f[c] + b[c] * (1.0 - f[3]) };
         }
     }
 }
@@ -340,7 +341,7 @@ mod tests {
                 let mut expected = original.clone();
                 for (b, f) in expected.as_chunks_mut::<4>().0.iter_mut().zip(original.as_chunks::<4>().0) {
                     for c in 0..4 {
-                        b[c] = f[c] + b[c] * (1.0 - f[3]);
+                        b[c] = if f[3] == 1.0 { f[c] } else { f[c] + b[c] * (1.0 - f[3]) };
                     }
                 }
                 let mut guarded = vec![123.0; offset + original.len() + 4];
@@ -348,6 +349,24 @@ mod tests {
                 composite(&mut guarded[offset..offset + original.len()], &original);
                 equal(&guarded[offset..offset + original.len()], &expected);
                 assert!(guarded[..offset].iter().chain(&guarded[offset + original.len()..]).all(|&v| v == 123.0));
+            }
+        }
+    }
+
+    #[test]
+    fn opaque_composite_replaces_nonfinite_background() {
+        for count in [0, 1, 3, 4, 5, 15, 16, 17] {
+            for offset in 0..16 {
+                let original = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1.0].repeat(count);
+                let foreground = [-0.0, 0.5, 0.75, 1.0].repeat(count);
+                let mut guarded = vec![123.0; offset + original.len() + 4];
+                let mut source = vec![173.0; offset + foreground.len() + 4];
+                guarded[offset..offset + original.len()].copy_from_slice(&original);
+                source[offset..offset + foreground.len()].copy_from_slice(&foreground);
+                composite(&mut guarded[offset..offset + original.len()], &source[offset..offset + foreground.len()]);
+                equal(&guarded[offset..offset + original.len()], &foreground);
+                assert!(guarded[..offset].iter().chain(&guarded[offset + original.len()..]).all(|&v| v == 123.0));
+                assert!(source[..offset].iter().chain(&source[offset + foreground.len()..]).all(|&v| v == 173.0));
             }
         }
     }

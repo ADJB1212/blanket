@@ -67,7 +67,7 @@ from ._blanket import (
     quantize as _native_quantize,
 )
 from ._color import color_pixel
-from ._exif import ORIENTATION_RE, read_metadata, read_tiff_metadata, save_metadata
+from ._exif import ORIENTATION_RE, exif_source, read_metadata, read_tiff_metadata, save_metadata
 from ._ifd import Exif
 from ._io import write_all
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
@@ -535,7 +535,7 @@ class Image:
             print(image.has_transparency_data)
             ```
         """
-        return self.mode in ("LA", "PA", "RGBA") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
+        return self.mode in ("LA", "PA", "RGBA", "RGBA;F") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> PixelAccess:
         """Return a pixel accessor for the current raster.
@@ -795,10 +795,7 @@ class Image:
         """
         self._native.load()
         info = self._info
-        raw = info.get("exif")
-        if raw is None and isinstance(info.get("Raw profile type exif"), str):
-            value = info["Raw profile type exif"]
-            raw = bytes.fromhex("".join(value.split("\n")[3:]) if "\n" in value else value)
+        raw = exif_source(info)
         if self._exif is None or raw != self._exif_source:
             self._exif = Exif()
             if isinstance(raw, bytes):
@@ -814,8 +811,11 @@ class Image:
 
     def _metadata_value(self, key: str) -> object:
         """Resolve a metadata value, including cached EXIF edits and the XMP alias."""
-        if key == "exif" and self._exif is not None and self.info.get("exif") == self._exif_source:
-            return self._exif.tobytes() if self._exif or self._exif._hidden or self._exif.thumbnail is not None else b""
+        if key == "exif":
+            raw = exif_source(self.info)
+            if self._exif is not None and raw == self._exif_source:
+                return self._exif.tobytes() if self._exif or self._exif._hidden or self._exif.thumbnail is not None else b""
+            return raw
         return self.info.get(key, self.info.get("XML:com.adobe.xmp") if key == "xmp" else None)
 
     def _metadata_info(self) -> dict[object, object]:
@@ -1602,6 +1602,7 @@ class Image:
         method = index(method)
         if method not in range(7):
             raise ValueError("No such transpose operation")
+        self.load()
         result = Image(ops_transpose(self._native, (2, 4, 8, 3, 6, 5, 7)[method]))
         result.info.update(self._metadata_info())
         return result

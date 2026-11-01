@@ -37,7 +37,7 @@ class _Enhance:
         """
 
         result = Image.Image(enhance_blend(self.degenerate._native, self.image._native, factor))
-        result.info.update(self.degenerate.info)
+        result.info.update(self.image._metadata_info())
         return result
 
 

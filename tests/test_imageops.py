@@ -153,6 +153,72 @@ def test_flips_and_grayscale(mode: str, name: str) -> None:
     assert result.info == p.info
 
 
+@pytest.mark.parametrize("mode", ["P", "PA"])
+@pytest.mark.parametrize("operation", [*range(7), "mirror", "flip", "scale", "expand", "deform"])
+def test_geometry_preserves_pending_palette_edits(mode, operation):
+    indices = bytes([0, 1, 2, 2, 1, 0])
+    raw = indices if mode == "P" else bytes(value for index in indices for value in (index, 127))
+    image = Image.frombytes(mode, (3, 2), raw)
+    reference = PILImage.frombytes(mode, image.size, raw)
+    palette = bytes([255, 0, 0, 0, 255, 0, 0, 0, 255]) + bytes(759)
+    image.palette.palette = palette
+    reference.putpalette(palette)
+    if isinstance(operation, int):
+        result = image.transpose(operation)
+        expected = reference.transpose(operation)
+    elif operation == "deform":
+        deformer = Deformer([((0, 0, 3, 2), (0, 0, 0, 2, 3, 2, 3, 0))])
+        result = ImageOps.deform(image, deformer)
+        expected = PILOps.deform(reference, deformer)
+    else:
+        args = (1,) if operation in ("scale", "expand") else ()
+        result = getattr(ImageOps, operation)(image, *args)
+        expected = getattr(PILOps, operation)(reference, *args)
+    assert result.palette.tobytes() == palette
+    assert result.tobytes() == expected.tobytes()
+    assert result.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize("fill", [None, 0, 255, 1000, 65535, -10, -(1 << 31), (1 << 31) - 1])
+@pytest.mark.parametrize("operation", ["expand", "pad"])
+def test_integer_canvas_fill_preserves_samples_and_byte_order(mode, fill, operation):
+    image = Image.new(mode, (3, 2), 512)
+    reference = PILImage.frombytes(mode, image.size, image.tobytes())
+    if operation == "expand":
+        result = ImageOps.expand(image, (1, 2), fill=fill)
+        expected = PILOps.expand(reference, (1, 2), fill=fill)
+    else:
+        result = ImageOps.pad(image, (5, 2), color=fill)
+        expected = PILOps.pad(reference, (5, 2), color=fill)
+    same(result, expected)
+    assert result.bit_depth == image.bit_depth
+    assert image.getpixel((0, 0)) == 512
+
+
+@pytest.mark.parametrize("mode,depth", [("F", 32), *[(mode, depth) for mode in ("L", "RGB", "RGBA") for depth in (10, 12, 16)]])
+@pytest.mark.parametrize("operation", ["expand", "pad"])
+def test_canvas_preserves_float_and_high_depth_samples(mode, depth, operation):
+    image = Image.new(mode, (3, 2), 73)
+    if mode != "F":
+        image = image.convert(mode, bit_depth=depth)
+    fill = -1.25 if mode == "F" else "white"
+    if operation == "expand":
+        result = ImageOps.expand(image, 1, fill=fill)
+        source_corner = (1, 1)
+    else:
+        result = ImageOps.pad(image, (5, 2), color=fill)
+        source_corner = (1, 0)
+    expected = -1.25 if mode == "F" else (1 << depth) - 1
+    if mode in ("RGB", "RGBA"):
+        expected = (expected,) * len(mode)
+    assert result.getpixel((0, 0)) == expected
+    assert result.getpixel(source_corner) == image.getpixel((0, 0))
+    assert result.mode == mode
+    assert result.bit_depth == depth
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("border", [0, 2, (1, 3), (1, 2, 3, 4), -2, (-1, 3, 2, -4), (18, 14, 19, 15)])
 @pytest.mark.parametrize("name", ["crop", "expand"])

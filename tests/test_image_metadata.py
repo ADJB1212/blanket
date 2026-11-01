@@ -159,6 +159,69 @@ def test_legacy_png_exif_is_independent_of_text_and_exposes_thumbnails():
     assert not Image.open(BytesIO(stripped)).getexif()
 
 
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP", "JXL", "TIFF", "HEIF"])
+@pytest.mark.parametrize("edited", [False, True])
+@pytest.mark.parametrize("profile_header", [False, True])
+def test_legacy_png_exif_survives_save_and_cached_edits(format, edited, profile_header):
+    exif = exif_data(thumbnail=True)
+    raw = exif.tobytes()
+    value = raw.hex()
+    if profile_header:
+        value = f"\nexif\n{len(raw):8d}\n{value}\n"
+    text = PngImagePlugin.PngInfo()
+    text.add_text("Raw profile type exif", value)
+    image = Image.decode(encode(pnginfo=text))
+    if edited:
+        image.getexif()[305] = "edited-software"
+        assert image.getexif()[305] == "edited-software"
+        image = image.copy()
+    result = Image.decode(image.encode(format)).getexif()
+    assert result[305] == ("edited-software" if edited else "public-software")
+    assert result.get_ifd(34853)[1] == "N"
+    assert result.thumbnail == exif.thumbnail
+
+
+@pytest.mark.parametrize(
+    "policy",
+    [
+        ImageMetadata.MetadataPolicy(),
+        ImageMetadata.MetadataPolicy(text=False),
+        ImageMetadata.MetadataPolicy(location=False),
+        ImageMetadata.MetadataPolicy(exif=False),
+        ImageMetadata.MetadataPolicy(exif_tags=frozenset({305})),
+    ],
+)
+@pytest.mark.parametrize("opened", [False, True])
+def test_save_policy_filters_legacy_png_exif(policy, opened):
+    exif = exif_data(thumbnail=True)
+    text = PngImagePlugin.PngInfo()
+    text.add_text("Raw profile type exif", exif.tobytes().hex(), zip=True)
+    if opened:
+        image = Image.decode(encode(pnginfo=text))
+        data = image.encode("PNG", metadata_policy=policy)
+    else:
+        data = encode(pnginfo=text, metadata_policy=policy)
+    result = Image.decode(data).getexif()
+    if not policy.exif:
+        assert not result
+        return
+    assert result[305] == "public-software"
+    assert (34853 in result) is (policy.location and policy.exif_tags is None)
+    assert (result.thumbnail is not None) is (policy.location and policy.exif_tags is None)
+
+
+@pytest.mark.parametrize("replacement", [None, b"", "replacement"])
+def test_explicit_exif_overrides_legacy_pnginfo_with_policy(replacement):
+    text = PngImagePlugin.PngInfo()
+    text.add_text("Raw profile type exif", exif_data().tobytes().hex())
+    exif = replacement
+    if replacement == "replacement":
+        exif = Image.Exif()
+        exif[305] = replacement
+    result = Image.decode(encode(pnginfo=text, exif=exif, metadata_policy=ImageMetadata.MetadataPolicy())).getexif()
+    assert dict(result) == ({305: replacement} if replacement else {})
+
+
 @pytest.mark.parametrize("format", ["PNG", "WEBP"])
 def test_animation_bytes_controls_and_all_frames_preserved(format):
     stream = BytesIO()

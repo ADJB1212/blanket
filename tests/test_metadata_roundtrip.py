@@ -10,7 +10,7 @@ import pytest
 from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
 from PIL.TiffImagePlugin import IFDRational
 
-from blanket import Image, ImageOps, PngImagePlugin
+from blanket import Image, ImageChops, ImageEnhance, ImageOps, PngImagePlugin
 from blanket._exif import read_metadata
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
@@ -34,6 +34,60 @@ def exif_tags() -> Image.Exif:
     exif[34665] = {36867: "2026:10:23 10:00:00", 33434: Fraction(1, 125), 37500: b"opaque maker note", 40965: {1: "R98"}}
     exif[34853] = {1: "N", 2: (IFDRational(40), IFDRational(30), IFDRational(15, 2))}
     return exif
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "mirror",
+        "flip",
+        "grayscale",
+        "expand",
+        "pad",
+        "scale",
+        "autocontrast",
+        "equalize",
+        "invert",
+        "posterize",
+        "solarize",
+        "Brightness",
+        "Contrast",
+        "Color",
+        "Sharpness",
+        "difference",
+        "chops_invert",
+        "offset",
+    ],
+)
+def test_processing_preserves_metadata_and_cached_exif_edits(mode, operation, profile):
+    source = Image.new(mode, (3, 2), 73)
+    image = Image.decode(source.encode("PNG", exif=exif_tags(), icc_profile=profile, xmp=b"<metadata/>"))
+    original = image.info.copy()
+    image.getexif()[305] = "Edited"
+    image.getexif().get_ifd(34665)[36867] = "2026:11:01 12:00:00"
+    image.info["custom"] = "retained"
+    if operation in ImageEnhance.__all__:
+        result = getattr(ImageEnhance, operation)(image).enhance(1.5)
+    elif operation == "difference":
+        result = ImageChops.difference(image, image)
+    elif operation == "chops_invert":
+        result = ImageChops.invert(image)
+    elif operation == "offset":
+        result = ImageChops.offset(image, 1)
+    else:
+        args = {"expand": (1,), "pad": ((5, 2),), "scale": (1,), "posterize": (4,)}.get(operation, ())
+        result = getattr(ImageOps, operation)(image, *args)
+    assert result.getexif()[305] == "Edited"
+    assert result.getexif().get_ifd(34665)[36867] == "2026:11:01 12:00:00"
+    assert result.info["icc_profile"] == profile
+    assert result.info["xmp"] == b"<metadata/>"
+    assert result.info["custom"] == "retained"
+    assert result.info is not image.info
+    result.getexif()[305] = "result"
+    result.info["custom"] = "result"
+    assert image.getexif()[305] == "Edited"
+    assert image.info == {**original, "custom": "retained"}
 
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF"])

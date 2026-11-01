@@ -204,3 +204,19 @@ def test_float_zero_and_nonfinite_alpha() -> None:
     for mode in ("L", "F", "CMYK"):
         with pytest.raises(ValueError, match="RGB"):
             Image.new(mode, (2, 2)).resize((1, 1), linear_light=True)
+
+
+@pytest.mark.parametrize("width", [1, 3, 4, 5, 17])
+@pytest.mark.parametrize("linear_light", [False, True])
+@pytest.mark.parametrize("inplace", [False, True])
+def test_opaque_float_composite_ignores_nonfinite_background(width: int, linear_light: bool, inplace: bool) -> None:
+    background = Image.new("RGBA;F", (width, 1), (math.nan, math.inf, -math.inf, 1.0))
+    foreground = Image.new("RGBA;F", (width, 1), (0.25, 0.5, 0.75, 1.0))
+    if inplace:
+        background.alpha_composite(foreground, linear_light=linear_light)
+        result = background
+    else:
+        result = Image.alpha_composite(background, foreground, linear_light=linear_light)
+    for pixel in result.getdata():
+        assert pixel == pytest.approx((0.25, 0.5, 0.75, 1.0), abs=1e-6)
+    assert foreground.getpixel((0, 0)) == (0.25, 0.5, 0.75, 1.0)

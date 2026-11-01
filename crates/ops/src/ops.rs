@@ -510,24 +510,25 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 
 /// Place the source on a filled canvas. Negative offsets clip the source.
 #[pyfunction]
-fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<u8>) -> PyResult<Image> {
+fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<i64>) -> PyResult<Image> {
     let source = image.raw_data()?;
     if fill.len() != image.mode.channels() * if image.mode.is_float() { 4 } else { 1 } {
         return Err(PyValueError::new_err("invalid fill color"));
     }
-    let fill = if image.mode.is_float() {
-        fill
-    } else if image.mode.is_integer() {
+    let fill = if image.mode.is_integer() {
         match image.mode {
-            PixelMode::I => i32::from(fill[0]).to_le_bytes().to_vec(),
-            PixelMode::I16B => u16::from(fill[0]).to_be_bytes().to_vec(),
-            _ => u16::from(fill[0]).to_le_bytes().to_vec(),
+            PixelMode::I => (fill[0] as i32).to_le_bytes().to_vec(),
+            PixelMode::I16B => (fill[0] as u16).to_be_bytes().to_vec(),
+            _ => (fill[0] as u16).to_le_bytes().to_vec(),
         }
-    } else if image.bit_depth > 8 {
-        let maximum = (1_u32 << image.bit_depth) - 1;
-        fill.into_iter().flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes()).collect()
     } else {
-        fill
+        let fill = fill.into_iter().map(u8::try_from).collect::<Result<Vec<_>, _>>().map_err(|_| PyValueError::new_err("invalid fill color"))?;
+        if !image.mode.is_float() && image.bit_depth > 8 {
+            let maximum = (1_u32 << image.bit_depth) - 1;
+            fill.into_iter().flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes()).collect()
+        } else {
+            fill
+        }
     };
     let channels = image.raw_bytes_per_pixel();
     if offset.0 <= 0
@@ -622,6 +623,36 @@ mod tests {
             assert_eq!(rotated.pixel_data().unwrap(), [4, 1, 5, 2, 6, 3]);
             let clipped = ops_canvas(py, &image, (3, 3), (-1, 1), vec![9]).unwrap();
             assert_eq!(clipped.pixel_data().unwrap(), [9, 9, 9, 2, 3, 9, 5, 6, 9]);
+        });
+    }
+
+    #[test]
+    fn integer_canvas_preserves_signed_samples_and_byte_order() {
+        Python::initialize();
+        Python::attach(|py| {
+            for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+                let source = if mode == PixelMode::I {
+                    512_i32.to_le_bytes().to_vec()
+                } else if mode == PixelMode::I16B {
+                    512_u16.to_be_bytes().to_vec()
+                } else {
+                    512_u16.to_le_bytes().to_vec()
+                };
+                let image = Image::from_integer_bytes(1, 1, mode, source.clone()).unwrap();
+                for value in [0, 1000, -10, i64::from(i32::MIN), i64::from(i32::MAX)] {
+                    let expected = if mode == PixelMode::I {
+                        (value as i32).to_le_bytes().to_vec()
+                    } else if mode == PixelMode::I16B {
+                        (value as u16).to_be_bytes().to_vec()
+                    } else {
+                        (value as u16).to_le_bytes().to_vec()
+                    };
+                    let result = ops_canvas(py, &image, (3, 1), (1, 0), vec![value]).unwrap();
+                    assert_eq!(result.mode, mode);
+                    assert_eq!(result.raw_data().unwrap(), [expected.as_slice(), &source, &expected].concat());
+                }
+                assert_eq!(image.raw_data().unwrap(), source);
+            }
         });
     }
 

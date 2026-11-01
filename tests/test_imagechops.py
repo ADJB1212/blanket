@@ -20,6 +20,21 @@ def test_logical_operations_match_pillow_across_chunks(name: str, size: tuple[in
     same(getattr(ImageChops, name)(first, second), getattr(PILChops, name)(pil_first, pil_second))
 
 
+@pytest.mark.parametrize("name", ["logical_and", "logical_or", "logical_xor"])
+def test_logical_operations_preserve_first_image_metadata(name: str) -> None:
+    first, second = Image.new("1", (3, 2), 1), Image.new("1", (3, 2))
+    first.getexif()[305] = "edited"
+    first.info["custom"] = "first"
+    second.info["custom"] = "second"
+    result = getattr(ImageChops, name)(first, second)
+    assert result.getexif()[305] == "edited"
+    assert result.info["custom"] == "first"
+    result.getexif()[305] = "result"
+    result.info["custom"] = "result"
+    assert first.getexif()[305] == "edited"
+    assert first.info["custom"] == "first"
+
+
 @pytest.mark.parametrize("name", ["difference", "lighter", "darker", "add_modulo", "subtract_modulo", "invert"])
 @pytest.mark.parametrize("size", [(1025, 1027), (2049, 2051)])
 def test_memory_operations_large_parallel_tail(name: str, size: tuple[int, int]) -> None:
