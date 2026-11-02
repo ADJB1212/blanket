@@ -130,8 +130,6 @@ def test_validation_and_closed_images():
         lambda: image.paste(image, mask=Image.new("L", (1, 1))),
         lambda: image.putalpha(Image.new("RGB", image.size)),
         lambda: image.putalpha(image),
-        lambda: Image.new("L", image.size).putalpha(255),
-        lambda: Image.new("P", image.size).putalpha(255),
         lambda: Image.alpha_composite(image, Image.new("RGB", image.size)),
         lambda: Image.alpha_composite(image, Image.new("RGBA", (1, 1))),
         lambda: image.alpha_composite(image, source=(-1, 0)),

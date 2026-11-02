@@ -1,7 +1,7 @@
 //! Channel arithmetic and wraparound translation for `ImageChops`.
 
 use std::mem::MaybeUninit;
-use std::simd::cmp::{SimdOrd, SimdPartialOrd};
+use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
@@ -180,23 +180,24 @@ fn hard_light_chunk<const OVERLAY: bool>(a: &[u8], b: &[u8], output: &mut [Maybe
 }
 
 fn bitwise_chunk<const OP: u8>(a: &[u8], b: &[u8], output: &mut [u8]) {
-    let (words, tail) = output.as_chunks_mut::<8>();
-    for ((dst, left), right) in words.iter_mut().zip(a.as_chunks::<8>().0).zip(b.as_chunks::<8>().0) {
-        let left = u64::from_ne_bytes(*left);
-        let right = u64::from_ne_bytes(*right);
-        *dst = match OP {
-            0 => left & right,
-            1 => left | right,
-            _ => left ^ right,
-        }
-        .to_ne_bytes();
-    }
-    for ((dst, &left), &right) in tail.iter_mut().zip(&a[words.len() * 8..]).zip(&b[words.len() * 8..]) {
-        *dst = match OP {
+    let end = output.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let left = Bytes::from_slice(&a[i..i + 16]).simd_ne(Bytes::splat(0));
+        let right = Bytes::from_slice(&b[i..i + 16]).simd_ne(Bytes::splat(0));
+        let result = match OP {
             0 => left & right,
             1 => left | right,
             _ => left ^ right,
         };
+        result.select(Bytes::splat(255), Bytes::splat(0)).copy_to_slice(&mut output[i..i + 16]);
+    }
+    for ((dst, &left), &right) in output[end..].iter_mut().zip(&a[end..]).zip(&b[end..]) {
+        let (left, right) = (left != 0, right != 0);
+        *dst = u8::from(match OP {
+            0 => left & right,
+            1 => left | right,
+            _ => left ^ right,
+        }) * 255;
     }
 }
 
@@ -322,9 +323,9 @@ fn binary_samples(first: &Image, second: &Image, operation: Operation, scale: f3
                 let a = &a[y * first.width as usize * channels..][..row];
                 let b = &b[y * second.width as usize * channels..][..row];
                 match maximum {
-                    1023 => sample_row::<1023>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
-                    4095 => sample_row::<4095>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
-                    65535 => sample_row::<65535>(a, b, dst, operation, (scale, offset), first.mode == PixelMode::I16B),
+                    1023 => sample_row::<1023>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
+                    4095 => sample_row::<4095>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
+                    65535 => sample_row::<65535>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
                     _ => unreachable!(),
                 }
             }
@@ -349,12 +350,12 @@ pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
                 let end = source.len() / 16 * 16;
                 for i in (0..end).step_by(16) {
                     let value = Samples::splat(maximum) - Samples::from_slice(&source[i..]);
-                    let bytes = if image.mode == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
+                    let bytes = if image.mode.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
                     bytes.copy_to_slice(&mut dst[i * 2..i * 2 + 32]);
                 }
                 for (dst, &sample) in dst[end * 2..].as_chunks_mut::<2>().0.iter_mut().zip(&source[end..]) {
                     let value = maximum - sample;
-                    *dst = if image.mode == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
+                    *dst = if image.mode.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
                 }
             });
             blanket_core::samples::output_bytes(image, pixels)
@@ -511,12 +512,19 @@ mod tests {
     fn bitwise_chunks_match_scalar_with_unaligned_buffers_tails_and_guards() {
         for offset in 0..8 {
             for len in 0..=33 {
-                let a: Vec<u8> = (0..offset + len).map(|i| (i * 37) as u8).collect();
-                let b: Vec<u8> = (0..offset + len + 1).map(|i| (i * 53) as u8).collect();
+                let a: Vec<u8> = (0..offset + len).map(|i| if i % 5 == 0 { 0 } else { (i * 37) as u8 }).collect();
+                let b: Vec<u8> = (0..offset + len + 1).map(|i| if i % 7 == 0 { 0 } else { (i * 53) as u8 }).collect();
                 for operation in [Operation::And, Operation::Or, Operation::Xor] {
                     let mut expected = vec![0xa5; offset + len + 8];
                     for i in 0..len {
-                        expected[offset + i] = operation.apply(a[offset + i], b[offset + i + 1], 1.0, 0);
+                        let left = a[offset + i] != 0;
+                        let right = b[offset + i + 1] != 0;
+                        expected[offset + i] = u8::from(match operation {
+                            Operation::And => left && right,
+                            Operation::Or => left || right,
+                            Operation::Xor => left != right,
+                            _ => unreachable!(),
+                        }) * 255;
                     }
                     let mut output = vec![0xa5; expected.len()];
                     let dst = &mut output[offset..offset + len];

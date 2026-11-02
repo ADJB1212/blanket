@@ -26,6 +26,54 @@ def encode(image: Image.Image, format: str, **options: object) -> bytes:
     return stream.getvalue()
 
 
+@pytest.mark.parametrize("short_writes", [False, True])
+def test_png_chunk_writer_interoperability(short_writes: bool) -> None:
+    class ShortWriter(BytesIO):
+        def write(self, data: bytes) -> int:
+            return super().write(data[:3])
+
+    output = ShortWriter() if short_writes else BytesIO()
+    reference = BytesIO()
+    BytesIO.write(output, PngImagePlugin._MAGIC)
+    reference.write(b"\x89PNG\r\n\x1a\n")
+    chunks = [
+        (b"IHDR", PngImagePlugin.o32(2), PngImagePlugin.o32(1), b"\x08\x02\x00\x00\x00"),
+        (b"tEXt", b"Note\0", b"generated metadata"),
+        (b"IDAT", zlib.compress(b"\0\xff\0\0\0\0\xff")),
+        (b"IEND", b""),
+    ]
+    for cid, *data in chunks:
+        PngImagePlugin.putchunk(output, cid, *data)
+        PILPng.putchunk(reference, cid, *data)
+    assert output.getvalue() == reference.getvalue()
+    assert PngImagePlugin.o16(0x1234) == b"\x12\x34"
+    for module in (Image, PILImage):
+        with module.open(BytesIO(output.getvalue())) as decoded:
+            assert decoded.convert("RGB").tobytes() == b"\xff\0\0\0\0\xff"
+            assert decoded.info["Note"] == "generated metadata"
+
+
+def test_apng_public_control_enums_interoperate_with_pillow() -> None:
+    first = Image.new("RGBA", (3, 2), "red")
+    second = Image.new("RGBA", first.size, "blue")
+    data = first.encode(
+        "PNG",
+        save_all=True,
+        append_images=[second],
+        duration=[20, 40],
+        disposal=[PngImagePlugin.Disposal.OP_BACKGROUND, PngImagePlugin.Disposal.OP_PREVIOUS],
+        blend=[PngImagePlugin.Blend.OP_SOURCE, PngImagePlugin.Blend.OP_OVER],
+    )
+    for module in (Image, PILImage):
+        with module.open(BytesIO(data)) as decoded:
+            for i, frame in enumerate((first, second)):
+                decoded.seek(i)
+                decoded.load()
+                assert decoded.convert("RGBA").tobytes() == frame.tobytes()
+                assert decoded.info["disposal"] == (PILPng.Disposal.OP_BACKGROUND, PILPng.Disposal.OP_PREVIOUS)[i]
+                assert decoded.info["blend"] == (PILPng.Blend.OP_SOURCE, PILPng.Blend.OP_OVER)[i]
+
+
 def exif_tags() -> Image.Exif:
     exif = Image.Exif()
     exif[270] = "A description stored outside the IFD"
@@ -34,6 +82,25 @@ def exif_tags() -> Image.Exif:
     exif[34665] = {36867: "2026:10:23 10:00:00", 33434: Fraction(1, 125), 37500: b"opaque maker note", 40965: {1: "R98"}}
     exif[34853] = {1: "N", 2: (IFDRational(40), IFDRational(30), IFDRational(15, 2))}
     return exif
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("nested", [False, True])
+def test_string_user_comment_roundtrips_like_pillow(endian: str, nested: bool) -> None:
+    exif = Image.Exif()
+    reference = PILImage.Exif()
+    for value in (exif, reference):
+        value.endian = endian
+        if nested:
+            value[34665] = {37510: "A comment"}
+        else:
+            value[37510] = "A comment"
+    for loader in (Image.Exif, PILImage.Exif):
+        restored = loader()
+        restored.load(exif.tobytes())
+        expected = loader()
+        expected.load(reference.tobytes())
+        assert (restored.get_ifd(34665) if nested else restored)[37510] == (expected.get_ifd(34665) if nested else expected)[37510] == "A comment"
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
@@ -88,6 +155,27 @@ def test_processing_preserves_metadata_and_cached_exif_edits(mode, operation, pr
     result.info["custom"] = "result"
     assert image.getexif()[305] == "Edited"
     assert image.info == {**original, "custom": "retained"}
+
+
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "P", "PA"])
+def test_pa_conversion_preserves_metadata_and_cached_exif_edits(mode, profile):
+    image = Image.new(mode, (3, 2), 73)
+    image.info.update(exif=exif_tags().tobytes(), icc_profile=profile, xmp=b"<metadata/>", custom="retained")
+    image.getexif()[305] = "Edited"
+    image.getexif().get_ifd(34665)[36867] = "2026:11:01 12:00:00"
+    result = image.convert("PA")
+    assert result.mode == "PA"
+    assert result.info == image._metadata_info()
+    assert result.info is not image.info
+    reopened = Image.decode(result.encode("PNG"))
+    assert reopened.info["icc_profile"] == profile
+    assert reopened.info["xmp"] == b"<metadata/>"
+    assert reopened.getexif()[305] == "Edited"
+    assert reopened.getexif().get_ifd(34665)[36867] == "2026:11:01 12:00:00"
+    result.getexif()[305] = "result"
+    result.info["custom"] = "result"
+    assert image.getexif()[305] == "Edited"
+    assert image.info["custom"] == "retained"
 
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF"])

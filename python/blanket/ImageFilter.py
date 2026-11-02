@@ -6,15 +6,17 @@ They also support 10/12/16-bit `L`/`RGB`/`RGBA` and `I;16` variants without
 reducing precision. Kernel offsets and unsharp thresholds use sample units;
 rounding and border rules follow the corresponding 8-bit filters. Color3DLUT
 normalizes high-depth RGB/RGBA inputs and retains their depth on output.
+Signed I images support convolution and rank filters; F images support rank
+filters. Convolution clips negative I results to zero and saturates overflow.
+Nonfinite convolution intermediates use saturating casts, with NaN becoming zero.
 """
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "functools", "operator", "blanket._blanket"}
+__lazy_modules__ = {"collections.abc", "blanket._blanket"}
 
 from abc import ABC, abstractmethod
-from functools import reduce
-from operator import add
+from math import isfinite
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -89,6 +91,8 @@ class BuiltinFilter(MultibandFilter):
             result = image.filter(ImageFilter.BLUR)
             ```
         """
+        if image.mode == "P":
+            raise ValueError("cannot filter palette images")
         return filter_kernel(image, *self.filterargs)
 
 
@@ -103,7 +107,7 @@ class Kernel(BuiltinFilter):
         Args:
             size: Kernel dimensions: `(3, 3)` or `(5, 5)`.
             kernel: Row-major convolution coefficients for a 3 by 3 or 5 by 5 kernel.
-            scale: Divisor for the kernel coefficients; None uses their sum, or 1 when the sum is zero.
+            scale: Divisor for the kernel coefficients; None uses their sum.
             offset: Value added after scaling.
 
         Examples:
@@ -115,7 +119,7 @@ class Kernel(BuiltinFilter):
             ```
         """
         if scale is None:
-            scale = reduce(add, kernel)
+            scale = sum(kernel)
         if size[0] * size[1] != len(kernel):
             raise ValueError("not enough coefficients in kernel")
         self.filterargs = size, scale, offset, kernel
@@ -164,8 +168,12 @@ class RankFilter(Filter):
             result = image.filter(ImageFilter.RankFilter(size=3, rank=4))
             ```
         """
+        if self.size * self.size * 4 > 2**31 - 1:
+            raise ValueError("filter size too large")
         if self.size < 0:
             raise ValueError("bad kernel size")
+        if image.mode == "P":
+            raise ValueError("cannot filter palette images")
         return filter_rank(image, self.size, self.rank)
 
 
@@ -303,10 +311,14 @@ class ModeFilter(Filter):
 def _radii(radius: float | Sequence[float]) -> tuple[float, float]:
     """Normalize a scalar radius or a two-element sequence to a horizontal and vertical pair."""
     if isinstance(radius, (int, float)):
-        return radius, radius
-    if len(radius) != 2:
-        raise TypeError("argument 1 must be sequence of length 2, not " + str(len(radius)))
-    return radius[0], radius[1]
+        values = radius, radius
+    else:
+        if len(radius) != 2:
+            raise TypeError("argument 1 must be sequence of length 2, not " + str(len(radius)))
+        values = radius[0], radius[1]
+    if any(abs(value) >= 2**31 or not isfinite(value) for value in values):
+        raise ValueError("radius must be finite and less than 2**31")
+    return values
 
 
 class GaussianBlur(MultibandFilter):
@@ -367,8 +379,10 @@ class BoxBlur(MultibandFilter):
             ```
         """
         xy: Any = radius if isinstance(radius, (tuple, list)) else (radius, radius)
-        if xy[0] < 0 or xy[1] < 0:
+        if not all(value >= 0 for value in xy):
             raise ValueError("radius must be >= 0")
+        if any(value >= 2**31 for value in xy):
+            raise ValueError("radius too large")
         self.radius = radius
 
     def filter(self, image: _Image) -> _Image:

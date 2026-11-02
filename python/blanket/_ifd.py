@@ -6,13 +6,15 @@ import struct
 from collections.abc import Mapping, MutableMapping
 from typing import TYPE_CHECKING
 
+from .ExifTags import IFD
+
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from typing import BinaryIO, Self
 
 _FORMATS = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 11: "f", 12: "d", 13: "I"}
 _SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
-_POINTERS = {34665, 34853, 40965}
+_POINTERS = {IFD.Exif, IFD.GPSInfo, IFD.Interop}
 _TYPES = {
     274: 3,
     282: 5,
@@ -164,6 +166,8 @@ class Exif(MutableMapping[int, object]):
 
     def get_ifd(self, tag: int) -> dict[int, object]:
         """Return the mutable IFD selected by its pointer tag, or IFD1 (1)."""
+        if tag == IFD.IFD1:
+            tag = 1
         if tag in self._ifds:
             return self._ifds[tag]
         parent = self.get_ifd(34665) if tag == 40965 else self._data
@@ -221,12 +225,10 @@ class Exif(MutableMapping[int, object]):
                     if previous is not None and value == previous[1]:
                         records.append(previous[0])
                         continue
-                    kind = types.get(tag) or _TYPES.get(tag)
+                    kind = 2 if isinstance(value, str) else types.get(tag) or _TYPES.get(tag)
                 if kind is None:
                     items = value if isinstance(value, (tuple, list)) else (value,)
-                    if isinstance(value, str):
-                        kind = 2
-                    elif isinstance(value, bytes):
+                    if isinstance(value, bytes):
                         kind = 7
                     elif any(isinstance(v, float) or (hasattr(v, "denominator") and not isinstance(v, int)) for v in items):
                         kind = 5 if all(float(v) >= 0 for v in items) else 10

@@ -85,7 +85,7 @@ pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) 
     }
     let maximum = samples::maximum(first);
     let mut pixels = blanket_core::raster::alloc_pixels(a.len() * 2)?;
-    py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.mode == PixelMode::I16B));
+    py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.mode.is_big_endian()));
     samples::output_bytes(first, pixels)
 }
 

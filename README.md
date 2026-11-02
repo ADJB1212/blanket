@@ -51,7 +51,8 @@ with Image.open("photo.jpg") as image:
 
 Blanket is currently **alpha software**. It implements a focused subset of
 Pillow's API, centered on images in the `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`,
-`CMYK`, `YCbCr`, and `LAB` modes. It also supports integer `I` and `I;16`
+`CMYK`, `YCbCr`, and `LAB` modes. It also supports premultiplied `La`/`RGBa`,
+`RGBX`, integer `I` and `I;16` (including native-endian `I;16N`)
 modes, floating-point `F`, and indexed `P` and `PA` images to a limited
 extent. It is not yet a drop-in replacement for `PIL`.
 
@@ -323,7 +324,8 @@ with Image.open("photo.jpg") as image:
     sharpened.save("edited.png")
 ```
 
-`resize()` supports all six `Image.Resampling` filters. `ImageOps` includes
+`resize()` supports all eight Pillow 13 `Image.Resampling` filters, including
+MKS2013 and MKS2021. `ImageOps` includes
 cropping, padding, flips, color adjustments, and EXIF orientation correction.
 `ImageFilter` provides blur, convolution, and rank filters, as well as 3D color
 LUTs.
@@ -515,7 +517,9 @@ compression can still change RGB values during RGB/YUV conversion.
 ## Compatibility and scope
 
 - **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
-  Integer `I`, `I;16`, `I;16L`, and `I;16B` and floating-point `F` support pixel access,
+  Premultiplied `La`/`RGBa` and four-channel `RGBX` support raw channel operations,
+  filters, and geometry; convert explicitly to LA/RGBA/RGB before encoding.
+  Integer `I`, `I;16`, `I;16L`, `I;16B`, and native-endian `I;16N` and floating-point `F` support pixel access,
   conversion, copying, cropping, transposition, and resizing. `F` also supports
   transforms and TIFF interchange.
   Indexed `P` and `PA` images have a smaller supported operation set.

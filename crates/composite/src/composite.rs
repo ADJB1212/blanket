@@ -55,9 +55,11 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_d
             PixelMode::I | PixelMode::F => fill_pixels::<4>(spare, &color),
             PixelMode::RgbF => fill_pixels::<12>(spare, &color),
             PixelMode::RgbaF => fill_pixels::<16>(spare, &color),
-            PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::La | PixelMode::Pa => fill_pixels::<2>(spare, &color),
+            PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::I16N | PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
+                fill_pixels::<2>(spare, &color)
+            }
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => fill_pixels::<3>(spare, &color),
-            PixelMode::Rgba | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
+            PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => fill_pixels::<4>(spare, &color),
         }
         // All reserved bytes above have been initialized, including empty images.
         unsafe { pixels.set_len(len) };
@@ -367,17 +369,59 @@ fn composite_scalar(pixels: &mut [u8], source: &[u8]) {
 #[pyfunction]
 fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<()> {
     image.ensure_owned();
-    if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) || image.palette.is_some() {
-        return Err(PyValueError::new_err("putalpha requires RGB or RGBA; LA mode is not supported"));
+    if !matches!(
+        image.mode,
+        PixelMode::One
+            | PixelMode::L
+            | PixelMode::La
+            | PixelMode::PremulLa
+            | PixelMode::Pa
+            | PixelMode::Rgb
+            | PixelMode::Rgba
+            | PixelMode::PremulRgba
+            | PixelMode::Rgbx
+    ) {
+        return Err(PyValueError::new_err("image has wrong mode"));
     }
     if alpha.mode != PixelMode::L || alpha.palette.is_some() || (alpha.width, alpha.height) != (image.width, image.height) {
         return Err(PyValueError::new_err("illegal image mode or size for alpha"));
     }
+    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
+        let mode = if image.mode == PixelMode::PremulLa { "LA" } else { "RGBA" };
+        let converted = image.convert(py, mode, None)?;
+        image.pixels = converted.pixels;
+        image.mode = converted.mode;
+    }
     if blanket_core::samples::supported(image) {
+        if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+            return Err(PyValueError::new_err("high-depth putalpha requires RGB or RGBA"));
+        }
         return py.detach(|| crate::high_depth::putalpha(image, alpha));
     }
     let source = image.pixel_data()?;
     let alpha = alpha.pixel_data()?;
+    if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
+        let channels = image.mode.channels();
+        let bilevel = image.mode == PixelMode::One;
+        let mode = if image.palette.is_some() || image.mode == PixelMode::Pa { PixelMode::Pa } else { PixelMode::La };
+        let mut pixels = vec![0; alpha.len() * 2];
+        py.detach(|| {
+            let end = alpha.len() / 16 * 16;
+            for i in (0..end).step_by(16) {
+                let gray = if channels == 1 { load::<1>(&source[i..])[0] } else { load::<2>(&source[i * 2..])[0] };
+                let gray = if bilevel { gray.simd_ne(Bytes::splat(0)).select(Bytes::splat(255), Bytes::splat(0)) } else { gray };
+                store::<2>(&mut pixels[i * 2..], [gray, Bytes::from_slice(&alpha[i..i + 16])]);
+            }
+            for i in end..alpha.len() {
+                let gray = source[i * channels];
+                pixels[i * 2] = if bilevel { u8::from(gray != 0) * 255 } else { gray };
+                pixels[i * 2 + 1] = alpha[i];
+            }
+        });
+        image.pixels = Some(pixels);
+        image.mode = mode;
+        return Ok(());
+    }
     if image.mode == PixelMode::Rgb {
         let mut pixels = vec![0; alpha.len() * 4];
         py.detach(|| {

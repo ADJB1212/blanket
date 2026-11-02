@@ -102,15 +102,17 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         loop = _bounded_int("loop", loop, 0, 65535 if format in ("GIF", "WEBP") else 0x7FFFFFFF)
     prepared: list[Image] = []
     for frame in frames:
-        if frame.mode in ("HSV", "LAB", "F", "YCbCr") or (frame.mode == "CMYK" and format != "PDF"):
+        if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):
             raise UnsupportedCodecError(f"cannot write mode {frame.mode} as {format}", format=format, operation="encode")
-        if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B"):
+        if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             frame = frame.convert("L", bit_depth=16)
         if format == "PDF":
-            target = frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B") else "RGB"
+            target = (
+                frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
+            )
         else:
             target = "RGBA"
-        if frame.bit_depth != 8 and format != "PNG" and frame.mode not in ("I", "I;16", "I;16L", "I;16B"):
+        if frame.bit_depth != 8 and format != "PNG" and frame.mode not in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             raise UnsupportedCodecError("high-bit-depth images require explicit conversion for this format", format=format, operation="encode")
         prepared.append(frame.convert(target) if frame.mode != target else frame)
     encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"]))

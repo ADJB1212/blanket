@@ -51,7 +51,7 @@ def compare_images(actual: BlanketImage.Image, expected: PillowImage.Image, labe
 
 
 def pixels(mode: str, width: int = 37, height: int = 29) -> bytes:
-    channels = {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3, "LAB": 3}[mode]
+    channels = {"L": 1, "LA": 2, "La": 2, "RGB": 3, "RGBA": 4, "RGBa": 4, "RGBX": 4, "HSV": 3, "CMYK": 4, "YCbCr": 3, "LAB": 3}[mode]
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
@@ -136,9 +136,9 @@ def check_fromarray() -> int:
 def check_image_access() -> int:
     """Compare pixel mutation, channel access, bounds, histograms, and LUTs."""
     checks = 0
-    for mode in ("1", "L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "P", "PA", "I", "I;16", "I;16L", "I;16B", "F"):
+    for mode in ("1", "L", "LA", "La", "RGB", "RGBA", "RGBa", "RGBX", "HSV", "CMYK", "YCbCr", "LAB", "P", "PA", "I", "I;16", "I;16L", "I;16B", "I;16N", "F"):
         reference = PillowImage.new(mode, (37, 29))
-        if mode in ("1", "P", "I", "F", "I;16", "I;16L", "I;16B"):
+        if mode in ("1", "P", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             reference.putdata([255 if i % 3 else 0 for i in range(37 * 29)] if mode == "1" else [(i * 17) % 251 for i in range(37 * 29)])
         else:
             source_mode = "LA" if mode == "PA" else mode
@@ -147,7 +147,7 @@ def check_image_access() -> int:
         assert actual.getbands() == reference.getbands(), mode
         assert actual.get_flattened_data() == reference.get_flattened_data(), mode
         assert actual.getdata() == list(reference.get_flattened_data()), mode
-        assert actual.getextrema() == (reference.convert("I") if mode in ("I;16L", "I;16B") else reference).getextrema(), mode
+        assert actual.getextrema() == (reference.convert("I") if mode in ("I;16L", "I;16B", "I;16N") else reference).getextrema(), mode
         for alpha_only in (False, True):
             assert actual.getbbox(alpha_only=alpha_only) == reference.getbbox(alpha_only=alpha_only), (mode, alpha_only)
         for limit in () if mode.startswith("I;16") else (1, 256, 37 * 29):
@@ -162,7 +162,7 @@ def check_image_access() -> int:
         compare_images(copied, reference_copy, (mode, "putpixel"))
         compare_images(actual, reference, (mode, "copy independence"))
         checks += 2
-        if mode in ("I", "F", "I;16", "I;16L", "I;16B", "PA"):
+        if mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N", "PA"):
             continue
         mask = BlanketImage.frombytes("L", actual.size, pixels("L"))
         reference_mask = PillowImage.frombytes("L", actual.size, mask.tobytes())
@@ -269,12 +269,9 @@ def check_imagecolor() -> int:
     for color in colors:
         assert BlanketColor.getrgb(color) == PillowColor.getrgb(color), color
         checks += 1
-        for mode in ("L", "LA", "RGB", "RGBA", "I", "F"):
+        for mode in ("1", "L", "LA", "RGB", "RGBA", "I", "F", "P", "PA", "CMYK", "YCbCr", "LAB", "HSV"):
             assert BlanketColor.getcolor(color, mode) == PillowColor.getcolor(color, mode), (color, mode)
             checks += 1
-        # Blanket normalizes bilevel colors to binary sample values.
-        assert BlanketColor.getcolor(color, "1") == (255 if PillowColor.getcolor(color, "L") >= 128 else 0), color
-        checks += 1
     return checks
 
 

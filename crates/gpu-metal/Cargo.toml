@@ -10,6 +10,7 @@ publish = false
 
 [dependencies]
 blanket-gpu.workspace = true
+rustc-hash.workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6"

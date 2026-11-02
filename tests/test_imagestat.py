@@ -8,6 +8,49 @@ from blanket import Image, ImageStat
 STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("fill", [0, 1])
+def test_bilevel_masks_match_pillow(mode: str, fill: int) -> None:
+    image, pillow = pair(mode, (19, 11))
+    mask = Image.new("1", image.size, fill)
+    reference = PILImage.new("1", image.size, fill)
+    mask.putpixel((0, 0), 1 - fill)
+    reference.putpixel((0, 0), 1 - fill)
+    assert image.histogram(mask) == pillow.histogram(reference)
+    same(ImageStat.Stat(image, mask), PILStat.Stat(pillow, reference))
+
+
+def test_integer_moments_preserve_variance_rounding() -> None:
+    stats = ImageStat.Stat(Image.new("L", (919, 405), 255))
+    reference = PILStat.Stat(PILImage.new("L", (919, 405), 255))
+    assert isinstance(stats.sum[0], int)
+    assert isinstance(stats.sum2[0], int)
+    assert stats.var == reference.var == [0.0]
+    assert stats.stddev == [0.0]
+
+
+def test_large_histogram_moments_remain_exact_integers() -> None:
+    histogram = [0] * 256
+    histogram[253] = (1 << 64) - 1
+    stats = ImageStat.Stat(histogram)
+    reference = PILStat.Stat(histogram)
+    assert stats.sum == reference.sum
+    assert stats.sum2 == reference.sum2
+    assert stats.var == reference.var
+
+
+@pytest.mark.parametrize("bit_depth", [10, 12, 16])
+def test_high_depth_statistics_accept_bilevel_masks(bit_depth: int) -> None:
+    image = Image.frombytes("L", (3, 1), b"\x00\x01\x00\x02\x00\x03", bit_depth=bit_depth)
+    mask = Image.new("1", image.size, 0)
+    mask.putpixel((1, 0), 1)
+    stats = ImageStat.Stat(image, mask)
+    assert stats.count == [1]
+    assert stats.mean == [512]
+    assert stats.median == [512]
+    assert stats.var == [0.0]
+
+
 def pair(mode: str, size: tuple[int, int]) -> tuple[Image.Image, PILImage.Image]:
     raw = bytes((i * 37 + i // 11) % 256 for i in range(size[0] * size[1] * len(mode)))
     return Image.frombytes(mode, size, raw), PILImage.frombytes(mode, size, raw)

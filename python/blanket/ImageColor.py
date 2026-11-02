@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from ._blanket import color_getcolor
 from ._color import _rgb
+from ._color_names import CSS_COLORS
+
+colormap = CSS_COLORS
 
 
 def getrgb(color: str) -> tuple[int, ...]:
@@ -17,8 +20,13 @@ def getrgb(color: str) -> tuple[int, ...]:
 
 
 def getcolor(color: str, mode: str) -> int | tuple[int, ...]:
-    """Convert a CSS color string to a pixel value for *mode*."""
+    """Return Pillow-compatible color samples for *mode*.
+
+    Mode 1 returns luminance rather than thresholding it. Color modes other
+    than HSV return RGB samples, with alpha for PA and RGBA; use image
+    conversion when actual CMYK, YCbCr, or LAB pixel values are needed.
+    """
     return color_getcolor(_rgb(color), mode)
 
 
-__all__ = ["getcolor", "getrgb"]
+__all__ = ["colormap", "getcolor", "getrgb"]

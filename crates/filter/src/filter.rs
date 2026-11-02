@@ -23,11 +23,22 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
-    Image::from_pixels(image.width, image.height, image.mode, pixels, None)
+    let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
+    result.palette.clone_from(&image.palette);
+    Ok(result)
 }
 
 #[pyfunction]
 fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, offset: f32, kernel: Vec<f32>) -> PyResult<Image> {
+    if (image.palette.is_some() && image.mode != PixelMode::Pa) || image.mode == PixelMode::F {
+        return Err(PyValueError::new_err("image has wrong mode"));
+    }
+    if image.mode == PixelMode::I {
+        if size.0 != size.1 || !matches!(size.0, 3 | 5) || kernel.len() != (size.0 * size.1) as usize {
+            return Err(PyValueError::new_err("bad kernel size"));
+        }
+        return py.detach(|| crate::wide::kernel(image, size.0 as usize, scale, offset, &kernel));
+    }
     if blanket_core::samples::supported(image) {
         if size.0 != size.1 || !matches!(size.0, 3 | 5) || kernel.len() != (size.0 * size.1) as usize {
             return Err(PyValueError::new_err("bad kernel size"));
@@ -50,12 +61,16 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
     py.detach(|| match (image.mode, size.0) {
         (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
         (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::La | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::La | PixelMode::Pa, _) => convolve::<2, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, _) => convolve::<2, 5>(source, &mut pixels, width, &weights, offset),
         (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
         (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba | PixelMode::Cmyk, 3) => convolve::<4, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba | PixelMode::Cmyk, _) => convolve::<4, 5>(source, &mut pixels, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, 3) => {
+            convolve::<4, 3>(source, &mut pixels, width, &weights, offset)
+        }
+        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, _) => {
+            convolve::<4, 5>(source, &mut pixels, width, &weights, offset)
+        }
         _ => unreachable!(),
     });
     output(image, pixels)
@@ -137,6 +152,9 @@ pub(crate) fn kernel_add(value: f32, weight: f32, sum: f32) -> f32 {
 
 #[pyfunction]
 pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<Image> {
+    if image.palette.is_some() && image.mode != PixelMode::Pa {
+        return Err(PyValueError::new_err("image has wrong mode"));
+    }
     if size < 1 || size % 2 == 0 {
         return Err(PyValueError::new_err("bad filter size"));
     }
@@ -149,6 +167,9 @@ pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyRes
     }
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::neighborhood(image, (size / 2) as usize, Some(rank as u64)));
+    }
+    if matches!(image.mode, PixelMode::I | PixelMode::F) {
+        return py.detach(|| crate::wide::rank(image, size as usize, rank as usize));
     }
     match (size, rank) {
         (3, 0) => return small_rank::<3, 0>(py, image),
@@ -566,6 +587,9 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
 }
 
 pub(crate) fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
+    if <[f32; 2]>::from(radii).iter().any(|value| !value.is_finite() || value.abs() >= i32::MAX as f32) {
+        return Err(PyValueError::new_err("radius must be finite and less than 2**31"));
+    }
     let radii = if gaussian { (gaussian_radius(radii.0), gaussian_radius(radii.1)) } else { radii };
     if <[f32; 2]>::from(radii).iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
@@ -575,11 +599,11 @@ pub(crate) fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f3
 
 fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
     debug_assert_eq!(source.len(), width * height * C);
+    let radii = blur_radii(radii, gaussian)?;
     let mut pixels = alloc_pixels(source.len())?;
     if pixels.is_empty() {
         return Ok(pixels);
     }
-    let radii = blur_radii(radii, gaussian)?;
     let passes = if gaussian { 3 } else { 1 };
     let horizontal_passes = if radii.0 > 0.0 { passes } else { 0 };
     let vertical_passes = if radii.1 > 0.0 { passes } else { 0 };
@@ -611,9 +635,9 @@ fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyRe
     let (width, height) = (image.width as usize, image.height as usize);
     match image.mode {
         PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
-        PixelMode::La | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => blurred::<3>(source, width, height, radii, gaussian),
-        PixelMode::Rgba | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, gaussian),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, gaussian),
         _ => unreachable!(),
     }
 }
@@ -765,9 +789,9 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
     let mut pixels = alloc_pixels(sources[0].len().checked_mul(bands.len()).ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?)?;
     py.detach(|| match mode {
         PixelMode::One | PixelMode::L => pixels.copy_from_slice(sources[0]),
-        PixelMode::La | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => merge::<3>(&sources, &mut pixels),
-        PixelMode::Rgba | PixelMode::Cmyk => merge::<4>(&sources, &mut pixels),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => merge::<4>(&sources, &mut pixels),
         _ => unreachable!(),
     });
     Image::from_pixels(width, height, mode, pixels, None)

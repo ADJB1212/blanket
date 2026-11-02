@@ -119,8 +119,8 @@ def test_lazy_tiff_metadata_traverses_forward_once_and_restarts_on_backward_seek
     visited = []
     read_metadata = _lazy_frames.read_tiff_metadata
 
-    def tracked(data, count):
-        for index, metadata in enumerate(read_metadata(data, count)):
+    def tracked(data, count, *, decoded=False):
+        for index, metadata in enumerate(read_metadata(data, count, decoded=decoded)):
             visited.append(index)
             yield metadata
 

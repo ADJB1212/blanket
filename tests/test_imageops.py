@@ -17,6 +17,20 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+def test_deformer_can_subclass_public_protocol(mode: str) -> None:
+    class IdentityDeformer(ImageOps.SupportsGetMesh):
+        def getmesh(self, image: Image.Image) -> list[tuple[tuple[int, int, int, int], tuple[float, float, float, float, float, float, float, float]]]:
+            width, height = image.size
+            return [((0, 0, width, height), (0, 0, 0, height, width, height, width, 0))]
+
+    image = Image.frombytes(mode, (7, 5), bytes((i * 17) % 256 for i in range(35 * Image.getmodebands(mode))))
+    result = ImageOps.deform(image, IdentityDeformer(), Image.Resampling.NEAREST)
+    assert result.size == image.size
+    assert result.mode == image.mode
+    assert result.tobytes() == image.tobytes()
+
+
 def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:
     raw = np.random.default_rng(42).integers(0, 256, size[0] * size[1] * len(mode), dtype=np.uint8).tobytes()
     return Image.frombytes(mode, size, raw), PILImage.frombytes(mode, size, raw)

@@ -1,6 +1,6 @@
-use std::simd::cmp::{SimdOrd, SimdPartialOrd};
+use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
-use std::simd::{Simd, ToBytes};
+use std::simd::{Select, Simd, ToBytes};
 
 use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
@@ -279,7 +279,7 @@ fn gray_to_integer_chunk(src: &[u8], dst: &mut [u8], mode: PixelMode) {
             values.cast::<i32>().to_le_bytes().copy_to_slice(&mut dst[i * 4..(i + 16) * 4]);
         } else {
             let values = values.cast::<u16>();
-            let bytes = if mode == PixelMode::I16B { values.to_be_bytes() } else { values.to_le_bytes() };
+            let bytes = if mode.is_big_endian() { values.to_be_bytes() } else { values.to_le_bytes() };
             bytes.copy_to_slice(&mut dst[i * 2..(i + 16) * 2]);
         }
     }
@@ -288,7 +288,7 @@ fn gray_to_integer_chunk(src: &[u8], dst: &mut [u8], mode: PixelMode) {
             pixel.copy_from_slice(&i32::from(value).to_le_bytes());
         } else {
             let value = u16::from(value);
-            pixel.copy_from_slice(&if mode == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() });
+            pixel.copy_from_slice(&if mode.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() });
         }
     }
 }
@@ -310,7 +310,7 @@ fn integer_to_float_chunk(src: &[u8], dst: &mut [u8], mode: PixelMode) {
         let input = &src[i * stride..];
         let values = match mode {
             PixelMode::I => Simd::<i32, 16>::from_le_bytes(Simd::from_slice(input)).cast::<f32>(),
-            PixelMode::I16B => load_u16::<true>(input).cast::<f32>(),
+            mode if mode.is_big_endian() => load_u16::<true>(input).cast::<f32>(),
             _ => load_u16::<false>(input).cast::<f32>(),
         };
         values.to_le_bytes().copy_to_slice(&mut dst[i * 4..(i + 16) * 4]);
@@ -318,7 +318,7 @@ fn integer_to_float_chunk(src: &[u8], dst: &mut [u8], mode: PixelMode) {
     for (bytes, pixel) in src[end * stride..].chunks_exact(stride).zip(dst[end * 4..].as_chunks_mut::<4>().0) {
         let value = match mode {
             PixelMode::I => i32::from_le_bytes(bytes.try_into().unwrap()),
-            PixelMode::I16B => i32::from(u16::from_be_bytes(bytes.try_into().unwrap())),
+            mode if mode.is_big_endian() => i32::from(u16::from_be_bytes(bytes.try_into().unwrap())),
             _ => i32::from(u16::from_le_bytes(bytes.try_into().unwrap())),
         };
         *pixel = (value as f32).to_le_bytes();
@@ -460,7 +460,7 @@ pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
                     *pixel = i32::from_le_bytes(*bytes).clamp(0, 255) as u8;
                 }
             }
-            PixelMode::I16B => u16_to_l::<true>(src, dst),
+            mode if mode.is_big_endian() => u16_to_l::<true>(src, dst),
             _ => u16_to_l::<false>(src, dst),
         }
     });
@@ -493,7 +493,7 @@ fn integer_to_color_pixels<const C: usize>(source: &[u8], mode: PixelMode) -> Ve
     if C == 4 && source.len() / stride * C < 4 << 20 {
         return match mode {
             PixelMode::I => integer_to_color_serial::<C, 4>(source.as_chunks::<4>().0, i32::from_le_bytes),
-            PixelMode::I16B => integer_to_color_serial::<C, 2>(source.as_chunks::<2>().0, |v| i32::from(u16::from_be_bytes(v))),
+            mode if mode.is_big_endian() => integer_to_color_serial::<C, 2>(source.as_chunks::<2>().0, |v| i32::from(u16::from_be_bytes(v))),
             _ => integer_to_color_serial::<C, 2>(source.as_chunks::<2>().0, |v| i32::from(u16::from_le_bytes(v))),
         };
     }
@@ -523,7 +523,7 @@ fn integer_to_color_serial<const C: usize, const S: usize>(source: &[[u8; S]], s
 fn integer_to_color_chunk<const C: usize>(src: &[u8], dst: &mut [u8], mode: PixelMode) {
     match mode {
         PixelMode::I => integer_to_color_samples::<C, 4>(src.as_chunks::<4>().0, dst, i32::from_le_bytes),
-        PixelMode::I16B => integer_to_color_samples::<C, 2>(src.as_chunks::<2>().0, dst, |v| i32::from(u16::from_be_bytes(v))),
+        mode if mode.is_big_endian() => integer_to_color_samples::<C, 2>(src.as_chunks::<2>().0, dst, |v| i32::from(u16::from_be_bytes(v))),
         _ => integer_to_color_samples::<C, 2>(src.as_chunks::<2>().0, dst, |v| i32::from(u16::from_le_bytes(v))),
     }
 }
@@ -548,7 +548,7 @@ fn integer_to_color_samples<const C: usize, const S: usize>(src: &[[u8; S]], dst
 
 pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     if to == PixelMode::I && from != PixelMode::I {
-        return if from == PixelMode::I16B { widen_integer::<true>(source) } else { widen_integer::<false>(source) };
+        return if from.is_big_endian() { widen_integer::<true>(source) } else { widen_integer::<false>(source) };
     }
     let source_bytes = from.sample_bytes();
     let target_bytes = to.sample_bytes();
@@ -560,14 +560,14 @@ pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8>
             let input = &src[i * source_bytes..];
             let values = match from {
                 PixelMode::I => Simd::<i32, 16>::from_le_bytes(Simd::from_slice(input)),
-                PixelMode::I16B => load_u16::<true>(input).cast::<i32>(),
+                mode if mode.is_big_endian() => load_u16::<true>(input).cast::<i32>(),
                 _ => load_u16::<false>(input).cast::<i32>(),
             };
             if to == PixelMode::I {
                 values.to_le_bytes().copy_to_slice(&mut dst[i * 4..(i + 16) * 4]);
             } else {
                 let values = values.simd_clamp(Simd::splat(0), Simd::splat(65535)).cast::<u16>();
-                let bytes = if to == PixelMode::I16B { values.to_be_bytes() } else { values.to_le_bytes() };
+                let bytes = if to.is_big_endian() { values.to_be_bytes() } else { values.to_le_bytes() };
                 bytes.copy_to_slice(&mut dst[i * 2..(i + 16) * 2]);
             }
         }
@@ -576,14 +576,14 @@ pub fn convert_integer(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8>
         {
             let value = match from {
                 PixelMode::I => i64::from(i32::from_le_bytes(input.try_into().unwrap())),
-                PixelMode::I16B => i64::from(u16::from_be_bytes(input.try_into().unwrap())),
+                mode if mode.is_big_endian() => i64::from(u16::from_be_bytes(input.try_into().unwrap())),
                 _ => i64::from(u16::from_le_bytes(input.try_into().unwrap())),
             };
             if to == PixelMode::I {
                 output.copy_from_slice(&(value as i32).to_le_bytes());
             } else {
                 let value = value.clamp(0, 65535) as u16;
-                let bytes = if to == PixelMode::I16B { value.to_be_bytes() } else { value.to_le_bytes() };
+                let bytes = if to.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
                 output.copy_from_slice(&bytes);
             }
         }
@@ -605,6 +605,27 @@ fn widen_integer<const BIG_ENDIAN: bool>(source: &[u8]) -> Vec<u8> {
     let mut output = output.into_flattened();
     output.extend(tail.as_chunks::<2>().0.iter().flat_map(|&bytes| u32::from(sample(bytes)).to_le_bytes()));
     output
+}
+
+pub fn bilevel_to_l(source: &[u8]) -> Vec<u8> {
+    let mut output = vec![0; source.len()];
+    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, row| {
+        bilevel_to_l_chunk(&source[chunk * CHUNK_PIXELS..][..row.len()], row);
+    });
+    output
+}
+
+fn bilevel_to_l_chunk(source: &[u8], output: &mut [u8]) {
+    let end = output.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        Bytes::from_slice(&source[i..i + 16])
+            .simd_ne(Bytes::splat(0))
+            .select(Bytes::splat(255), Bytes::splat(0))
+            .copy_to_slice(&mut output[i..i + 16]);
+    }
+    for (&value, dst) in source[end..].iter().zip(&mut output[end..]) {
+        *dst = u8::from(value != 0) * 255;
+    }
 }
 
 pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
@@ -901,6 +922,20 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn bilevel_conversion_normalizes_all_bytes_with_unaligned_tails_and_guards() {
+        for offset in 0..8 {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 256] {
+                let source: Vec<u8> = (0..offset + count).map(|i| i as u8).collect();
+                let mut output = vec![0xa5; offset + count + 13];
+                super::bilevel_to_l_chunk(&source[offset..], &mut output[offset..offset + count]);
+                let expected: Vec<u8> = source[offset..].iter().map(|&value| u8::from(value != 0) * 255).collect();
+                assert_eq!(&output[offset..offset + count], expected);
+                assert!(output[..offset].iter().chain(&output[offset + count..]).all(|&value| value == 0xa5));
+            }
+        }
+    }
+
+    #[test]
     fn u16_grayscale_saturation_endianness_and_tails() {
         for big_endian in [false, true] {
             for count in [0, 1, 15, 16, 17, 31, 32, 33, 65536] {
@@ -1169,7 +1204,7 @@ mod tests {
         for count in [0, 1, 15, 16, 17, 31, 32, 33, 257] {
             for offset in 0..16 {
                 let source: Vec<_> = (0..offset + count).map(|i| (i * 37) as u8).collect();
-                for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+                for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
                     let stride = mode.sample_bytes();
                     let mut output = vec![93; offset + count * stride + 16];
                     gray_to_integer_chunk(&source[offset..], &mut output[offset..offset + count * stride], mode);
@@ -1178,7 +1213,7 @@ mod tests {
                         .flat_map(|&value| {
                             if mode == PixelMode::I {
                                 i32::from(value).to_le_bytes().to_vec()
-                            } else if mode == PixelMode::I16B {
+                            } else if mode.is_big_endian() {
                                 u16::from(value).to_be_bytes().to_vec()
                             } else {
                                 u16::from(value).to_le_bytes().to_vec()
@@ -1195,13 +1230,13 @@ mod tests {
     #[test]
     fn gray_integer_widening_preserves_parallel_tail() {
         let source: Vec<_> = (0..(CHUNK_PIXELS * 16 + 17)).map(|i| (i * 37) as u8).collect();
-        for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+        for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
             let output = gray_to_integer(&source, mode);
             assert_eq!(output.len(), source.len() * mode.sample_bytes());
             for (&value, pixel) in source.iter().zip(output.chunks_exact(mode.sample_bytes())) {
                 let result = match mode {
                     PixelMode::I => i32::from_le_bytes(pixel.try_into().unwrap()),
-                    PixelMode::I16B => i32::from(u16::from_be_bytes(pixel.try_into().unwrap())),
+                    mode if mode.is_big_endian() => i32::from(u16::from_be_bytes(pixel.try_into().unwrap())),
                     _ => i32::from(u16::from_le_bytes(pixel.try_into().unwrap())),
                 };
                 assert_eq!(result, i32::from(value));
@@ -1282,13 +1317,13 @@ mod tests {
                 for i in 0..count {
                     assert_eq!(output[offset + i], floats[i % floats.len()].clamp(0.0, 255.0) as u8);
                 }
-                for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+                for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
                     let source: Vec<_> = std::iter::repeat_n(93, offset)
                         .chain((0..count).flat_map(|i| {
                             let v = integers[i % integers.len()];
                             match mode {
                                 PixelMode::I => v.to_le_bytes().to_vec(),
-                                PixelMode::I16B => (v as u16).to_be_bytes().to_vec(),
+                                mode if mode.is_big_endian() => (v as u16).to_be_bytes().to_vec(),
                                 _ => (v as u16).to_le_bytes().to_vec(),
                             }
                         }))
@@ -1396,10 +1431,10 @@ mod tests {
     #[test]
     fn integer_narrowing_and_byte_order_match_scalar_at_vector_boundaries() {
         let values = [i32::MIN, -1, 0, 1, 255, 256, 65535, 65536, i32::MAX];
-        let modes = [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B];
+        let modes = [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N];
         let encode = |mode: PixelMode, v: i32| match mode {
             PixelMode::I => v.to_le_bytes().to_vec(),
-            PixelMode::I16B => (v.clamp(0, 65535) as u16).to_be_bytes().to_vec(),
+            mode if mode.is_big_endian() => (v.clamp(0, 65535) as u16).to_be_bytes().to_vec(),
             _ => (v.clamp(0, 65535) as u16).to_le_bytes().to_vec(),
         };
         for count in [0, 1, 15, 16, 17, 31, 32, 33] {
@@ -1438,7 +1473,7 @@ mod tests {
 
     #[test]
     fn integer_to_color_matches_gray_expansion() {
-        for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+        for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
             let values = [-10_i32, 0, 1, 127, 255, 256, 65535, 100000];
             for count in [0, 1, 15, 16, 17, 257, (2 << 20) / 3 - 1, (2 << 20) / 3 + 1] {
                 let source: Vec<u8> = values
@@ -1447,7 +1482,7 @@ mod tests {
                     .take(count)
                     .flat_map(|&value| match mode {
                         PixelMode::I => value.to_le_bytes().to_vec(),
-                        PixelMode::I16B => (value as u16).to_be_bytes().to_vec(),
+                        mode if mode.is_big_endian() => (value as u16).to_be_bytes().to_vec(),
                         _ => (value as u16).to_le_bytes().to_vec(),
                     })
                     .collect();

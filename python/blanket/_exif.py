@@ -15,6 +15,7 @@ if TYPE_CHECKING:
 
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
+from .ExifTags import Base
 from .PngImagePlugin import PngInfo, iTXt
 
 # Limit expansion of compressed PNG text while reading metadata.
@@ -22,7 +23,7 @@ _MAX_TEXT_BYTES = 1024 << 10
 _MAX_PNG_METADATA_BYTES = _MAX_TEXT_BYTES << 6
 # Classic TIFF identifies its header and IFD0 orientation with these values.
 _TIFF_MAGIC = 42
-_ORIENTATION_TAG = 0x112
+_ORIENTATION_TAG = Base.Orientation
 _IFD_ENTRY_BYTES = 12
 
 
@@ -238,7 +239,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
     return info
 
 
-def read_tiff_metadata(data: bytes, count: int) -> Iterator[dict[object, object]]:
+def read_tiff_metadata(data: bytes, count: int, *, decoded: bool = False) -> Iterator[dict[object, object]]:
     """Read page metadata in one traversal of the TIFF directory chain."""
     offset = 0
     endian = "<" if data[:2] == b"II" else ">"
@@ -264,6 +265,11 @@ def read_tiff_metadata(data: bytes, count: int) -> Iterator[dict[object, object]
                 value = exif.get(tag)
                 if value is not None:
                     info[key] = value if isinstance(value, bytes) else bytes(value if isinstance(value, tuple) else (value,))
+            if decoded and Base.Orientation in exif:
+                exif.pop(Base.Orientation, None)
+                xmp = info.get("xmp")
+                if isinstance(xmp, bytes):
+                    info["xmp"] = ORIENTATION_REMOVE_BYTES_RE.sub(b"", xmp)
             exif._raw, exif._entries, exif._next = b"", {}, 0
             if exif or exif.thumbnail is not None:
                 info["exif"] = exif.tobytes()
@@ -369,6 +375,8 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
                 text.add_text(key, value)
         chunks = text.chunks
     if format == "PNG":
+        overridden = {keyword for keyword, key in ((b"Raw profile type exif", "exif"), (b"XML:com.adobe.xmp", "xmp")) if key in keys}
+        chunks = [(kind, payload, after_idat) for kind, payload, after_idat in chunks if not (kind in (b"tEXt", b"zTXt", b"iTXt") and payload.split(b"\0", 1)[0] in overridden)]
         seen = set()
         for kind, payload, after_idat in chunks:
             if kind in HDR_KEYS:

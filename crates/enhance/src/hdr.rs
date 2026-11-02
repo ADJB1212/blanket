@@ -102,7 +102,7 @@ fn hdr_tone_map(
     }
     let mode = match image.mode {
         PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba => image.mode,
-        PixelMode::F | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B => PixelMode::L,
+        PixelMode::F | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::I16N => PixelMode::L,
         _ => return Err(PyValueError::new_err("tone mapping requires L, LA, RGB, RGBA, F, or I;16 pixels")),
     };
     if mode == PixelMode::La && bit_depth == 16 {
@@ -124,7 +124,7 @@ fn hdr_tone_map(
                 for (c, value) in values.iter_mut().enumerate().take(channels) {
                     *value = match image.mode {
                         PixelMode::F => f64::from(f32::from_le_bytes(data.try_into().unwrap())),
-                        PixelMode::I16B => f64::from(u16::from_be_bytes(data.try_into().unwrap())) / maximum,
+                        mode if mode.is_big_endian() => f64::from(u16::from_be_bytes(data.try_into().unwrap())) / maximum,
                         _ if image.bit_depth > 8 => f64::from(u16::from_le_bytes([data[c * 2], data[c * 2 + 1]])) / maximum,
                         _ => f64::from(data[c]) / maximum,
                     };

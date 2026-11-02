@@ -9,12 +9,12 @@ from blanket import Image, UnidentifiedImageError
 
 
 def pixels(mode: str, size: tuple[int, int] = (17, 13)) -> bytes:
-    channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
+    channels = {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4}[mode]
     width, height = size
     return bytes((x * 17 + y * 29 + channel * 53) % 256 for y in range(height) for x in range(width) for channel in range(channels))
 
 
-@pytest.mark.parametrize(("mode", "channels"), [("L", ()), ("RGB", (3,)), ("RGBA", (4,))])
+@pytest.mark.parametrize(("mode", "channels"), [("L", ()), ("LA", (2,)), ("RGB", (3,)), ("RGBA", (4,))])
 def test_fromarray(mode: str, channels: tuple[int, ...]) -> None:
     raw = pixels(mode)
     array = np.frombuffer(raw, dtype=np.uint8).reshape((13, 17, *channels)).copy()
@@ -33,11 +33,10 @@ def test_fromarray_supports_strided_arrays() -> None:
     assert image.tobytes() == array.tobytes()
 
 
-def test_fromarray_rejects_unsupported_arrays() -> None:
+@pytest.mark.parametrize(("shape", "dtype"), [((3, 5, 3), np.float16), ((3, 5, 5), np.uint8), ((3, 5, 2), np.uint16), ((3, 5, 2), np.float32)])
+def test_fromarray_rejects_unsupported_arrays(shape: tuple[int, ...], dtype: object) -> None:
     with pytest.raises(TypeError, match="cannot handle this data type"):
-        Image.fromarray(np.zeros((3, 5, 3), dtype=np.float16))
-    with pytest.raises(TypeError, match="cannot handle this data type"):
-        Image.fromarray(np.zeros((3, 5, 2), dtype=np.uint8))
+        Image.fromarray(np.zeros(shape, dtype=dtype))
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])

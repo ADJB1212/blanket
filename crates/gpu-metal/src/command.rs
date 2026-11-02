@@ -1,4 +1,3 @@
-use std::collections::{HashMap, HashSet};
 use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
@@ -10,6 +9,7 @@ use objc2_metal::{
     MTL4CommitFeedback, MTL4CommitOptions, MTL4ComputeCommandEncoder, MTL4VisibilityOptions, MTLBuffer, MTLCommandBufferStatus,
     MTLComputePipelineState, MTLDevice, MTLResidencySet, MTLResidencySetDescriptor, MTLResourceOptions, MTLSize, MTLStages,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 type Buffer = Retained<ProtocolObject<dyn MTLBuffer>>;
 pub(super) type Command = Arc<CommandBuffer>;
@@ -29,9 +29,9 @@ struct Submission {
     controls: Vec<Buffer>,
     control_page: usize,
     control_offset: usize,
-    buffers: HashMap<usize, Buffer>,
-    pipelines: HashMap<usize, Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
-    resident: HashSet<usize>,
+    buffers: FxHashMap<usize, Buffer>,
+    pipelines: FxHashMap<usize, Retained<ProtocolObject<dyn MTLComputePipelineState>>>,
+    resident: FxHashSet<usize>,
 }
 
 impl Submission {
@@ -47,9 +47,9 @@ impl Submission {
             controls: Vec::new(),
             control_page: 0,
             control_offset: 0,
-            buffers: HashMap::new(),
-            pipelines: HashMap::new(),
-            resident: HashSet::new(),
+            buffers: FxHashMap::default(),
+            pipelines: FxHashMap::default(),
+            resident: FxHashSet::default(),
         })
     }
 

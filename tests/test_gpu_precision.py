@@ -108,6 +108,18 @@ def test_extended_float_grayscale_conversion(runtime):
     assert gpu.convert("LA").to_image().getpixel((0, 0)) == (151, 64)
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+@pytest.mark.parametrize("width", [1, 15, 16, 17, 33])
+def test_byte_color_to_float_preserves_fractional_luminance(runtime, mode, width):
+    channels = CHANNELS[mode]
+    colors = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (71, 0, 0), (255, 255, 255)]
+    raw = bytes(value for i in range(width) for value in (*colors[i % len(colors)], *([i % 256] if channels == 4 else [])))
+    image = Image.frombytes(mode, (width, 1), raw)
+    result = ImageGpu.from_image(image, runtime=runtime).convert("F").to_image()
+    expected = tuple((r * 299 + g * 587 + b * 114) / 1000 for r, g, b in (colors[i % len(colors)] for i in range(width)))
+    assert floats(result) == pytest.approx(expected, rel=1e-6, abs=1e-7)
+
+
 @pytest.mark.parametrize("mode", MODES)
 def test_channels_merge_and_alpha(runtime, mode):
     image = source(mode)

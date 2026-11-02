@@ -59,22 +59,30 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
     if image.bit_depth > 8 {
         py.detach(|| match image.mode {
             PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            PixelMode::La | PixelMode::Pa => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
+                transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            }
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                 transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
             }
-            PixelMode::Rgba | PixelMode::Cmyk => transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            }
             _ => unreachable!(),
         });
         return output(image, size, pixels);
     }
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-        PixelMode::La | PixelMode::Pa => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
+            transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+        }
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
             transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
         }
-        PixelMode::Rgba | PixelMode::Cmyk => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+            transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+        }
         _ => unreachable!(),
     });
     output(image, size, pixels)

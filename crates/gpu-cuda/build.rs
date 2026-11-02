@@ -24,7 +24,7 @@ fn main() {
     architectures.dedup();
     let nvcc = std::env::var_os("NVCC").unwrap_or_else(|| "nvcc".into());
     let mut command = Command::new(nvcc);
-    command.args(["--fatbin", "--std=c++17", "--fmad=false"]);
+    command.args(["--fatbin", "--std=c++17", "--fmad=false", "--threads=4", "-O3", "--use_fast_math", "-DNDEBUG"]);
     for architecture in &architectures {
         command.arg(format!("--generate-code=arch=compute_{architecture},code=sm_{architecture}"));
     }
@@ -35,7 +35,7 @@ fn main() {
         .arg("--output-file")
         .arg(&output)
         .output()
-        .expect("CUDA builds require CUDA 12.9 or newer nvcc on PATH, or NVCC set to its executable; CPU/Metal builds do not require CUDA");
+        .expect("CUDA builds require CUDA 13.2 or newer nvcc on PATH, or NVCC set to its executable; CPU/Metal builds do not require CUDA");
     assert!(
         result.status.success(),
         "CUDA kernel compilation failed:\n{}\n{}",

@@ -41,7 +41,7 @@ class LazyFrames:
             selected = Image(frames[0])
             if selected.format == "TIFF":
                 if self._tiff_metadata is None or frame < self._tiff_frame:
-                    self._tiff_metadata = read_tiff_metadata(self.data, self.count)
+                    self._tiff_metadata = read_tiff_metadata(self.data, self.count, decoded=True)
                     self._tiff_frame = 0
                 selected.info.update(next(islice(self._tiff_metadata, frame - self._tiff_frame, None)))
                 self._tiff_frame = frame + 1

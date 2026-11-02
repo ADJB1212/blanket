@@ -211,15 +211,46 @@ def test_save_policy_filters_legacy_png_exif(policy, opened):
 
 
 @pytest.mark.parametrize("replacement", [None, b"", "replacement"])
-def test_explicit_exif_overrides_legacy_pnginfo_with_policy(replacement):
+@pytest.mark.parametrize("policy", [None, ImageMetadata.MetadataPolicy()])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_explicit_exif_overrides_legacy_pnginfo(replacement, policy, compressed):
     text = PngImagePlugin.PngInfo()
-    text.add_text("Raw profile type exif", exif_data().tobytes().hex())
+    text.add_text("Raw profile type exif", exif_data().tobytes().hex(), zip=compressed)
+    original = tuple(text.chunks)
     exif = replacement
     if replacement == "replacement":
         exif = Image.Exif()
         exif[305] = replacement
-    result = Image.decode(encode(pnginfo=text, exif=exif, metadata_policy=ImageMetadata.MetadataPolicy())).getexif()
+    data = encode(pnginfo=text, exif=exif, metadata_policy=policy)
+    result = Image.decode(data).getexif()
     assert dict(result) == ({305: replacement} if replacement else {})
+    assert b"Raw profile type exif" not in data
+    assert tuple(text.chunks) == original
+
+
+@pytest.mark.parametrize("replacement", [None, b"", b"<replacement/>"])
+@pytest.mark.parametrize("policy", [None, ImageMetadata.MetadataPolicy(), ImageMetadata.MetadataPolicy(xmp=False)])
+@pytest.mark.parametrize("compressed", [False, True])
+@pytest.mark.parametrize("animated", [False, True])
+def test_explicit_xmp_overrides_pnginfo(replacement, policy, compressed, animated):
+    text = PngImagePlugin.PngInfo()
+    text.add_itxt("XML:com.adobe.xmp", "<original/>", zip=compressed)
+    text.add_itxt("XML:com.adobe.xmp", "<later-original/>")
+    kind, payload, _ = text.chunks[-1]
+    text.chunks[-1] = kind, payload, True
+    text.add_text("Author", "retained")
+    original = tuple(text.chunks)
+    options = {"save_all": True, "append_images": [Image.new("RGB", (17, 9), "blue")]} if animated else {}
+    data = encode(pnginfo=text, xmp=replacement, metadata_policy=policy, **options)
+    expected = replacement if replacement and (policy is None or policy.xmp) else None
+    for image in (Image.decode(data), PillowImage.open(BytesIO(data))):
+        assert image.info.get("XML:com.adobe.xmp") == (expected.decode() if expected else None)
+    info = Image.inspect(BytesIO(data)).info
+    assert info.get("xmp") == expected
+    assert info["Author"] == "retained"
+    assert tuple(text.chunks) == original
+    packets = [raw for kind, raw in png_chunks(data) if kind in (b"tEXt", b"zTXt", b"iTXt") and b"XML:com.adobe.xmp\0" in raw]
+    assert len(packets) == int(expected is not None)
 
 
 @pytest.mark.parametrize("format", ["PNG", "WEBP"])

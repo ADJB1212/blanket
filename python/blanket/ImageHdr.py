@@ -42,7 +42,7 @@ def tone_map(
     stale ICC, HDR, and gamma metadata is removed. No ICC transform is applied.
     Source pixels, metadata, and frame position are unchanged.
     """
-    if image.mode not in ("L", "LA", "RGB", "RGBA", "F", "I;16", "I;16L", "I;16B"):
+    if image.mode not in ("L", "LA", "RGB", "RGBA", "F", "I;16", "I;16L", "I;16B", "I;16N"):
         raise ValueError("tone mapping requires L, LA, RGB, RGBA, F, or I;16 pixels")
     cicp = image.info.get("cicp")
     if cicp is not None:

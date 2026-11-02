@@ -109,10 +109,13 @@ fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f3
 
 #[pyfunction]
 pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba) {
+        return Err(PyValueError::new_err("color enhancement does not support premultiplied modes"));
+    }
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "color");
     }
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
         return image.convert(py, "L", None)?.convert(py, image.mode.as_str(), None);
     }
     let source = image.pixel_data()?;
@@ -157,10 +160,13 @@ fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
 
 #[pyfunction]
 pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba) {
+        return Err(PyValueError::new_err("contrast enhancement does not support premultiplied modes"));
+    }
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "contrast");
     }
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
+    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
         let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8 });
@@ -272,9 +278,9 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let width = image.width as usize;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => smooth::<1, 1>(source, &mut pixels, width),
-        PixelMode::La | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, &mut pixels, width),
-        PixelMode::Cmyk => smooth::<4, 4>(source, &mut pixels, width),
+        PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => smooth::<4, 4>(source, &mut pixels, width),
         PixelMode::Rgba => smooth::<4, 3>(source, &mut pixels, width),
         _ => unreachable!(),
     });

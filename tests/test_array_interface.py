@@ -101,7 +101,7 @@ def test_array_conversion_uses_current_frame(lazy):
     np.testing.assert_array_equal(first_array, np.full((2, 3, 3), [255, 0, 0], dtype=np.uint8))
 
 
-@pytest.mark.parametrize("dtype", ["<u2", ">u2", "<i4", "<f4", ">f4", "<f8", ">f8"])
+@pytest.mark.parametrize("dtype", ["|u1", "<u2", ">u2", "<i4", "<f4", ">f4", "<f8", ">f8"])
 @pytest.mark.parametrize("strided", [False, True])
 def test_fromarray_snapshots_buffer_without_tobytes(dtype, strided):
     values = np.arange(35, dtype=dtype).reshape(5, 7)
@@ -120,9 +120,12 @@ def test_fromarray_snapshots_buffer_without_tobytes(dtype, strided):
     assert image.tobytes() == expected
 
 
-@pytest.mark.parametrize("dtype", ["<u2", "<i4", "<f4"])
-def test_fromarray_snapshots_tobytes_without_buffer(dtype):
+@pytest.mark.parametrize("dtype", ["|u1", "<u2", "<i4", "<f4"])
+@pytest.mark.parametrize("strided", [False, True])
+def test_fromarray_snapshots_tobytes_without_buffer(dtype, strided):
     values = np.arange(35, dtype=dtype).reshape(5, 7)
+    if strided:
+        values = values[::-1, ::2]
 
     class ArrayBytes:
         __array_interface__ = values.__array_interface__
@@ -134,3 +137,19 @@ def test_fromarray_snapshots_tobytes_without_buffer(dtype):
     image = Image.fromarray(ArrayBytes())
     values[:] = 0
     assert image.tobytes() == expected
+
+
+@pytest.mark.parametrize("mode", [None, "LA"])
+@pytest.mark.parametrize("strided", [False, True])
+def test_fromarray_grayscale_alpha_matches_pillow(mode, strided):
+    values = np.arange(70, dtype=np.uint8).reshape(5, 7, 2)
+    if strided:
+        values = values[::-1, ::2, ::-1]
+    expected = PillowImage.fromarray(values)
+    image = Image.fromarray(values, mode)
+    assert image.mode == expected.mode == "LA"
+    assert image.size == expected.size
+    assert image.tobytes() == expected.tobytes()
+    np.testing.assert_array_equal(np.asarray(image), values)
+    values[:] = 0
+    assert image.tobytes() == expected.tobytes()

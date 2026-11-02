@@ -41,7 +41,7 @@ def test_resize_matches_pillow(mode: str, method: int | None, subtests: pytest.S
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("method", [Image.Resampling.BOX, Image.Resampling.BILINEAR, Image.Resampling.HAMMING, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
+@pytest.mark.parametrize("method", [method for method in Image.Resampling if method != Image.Resampling.NEAREST])
 def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: Image.Resampling, subtests: pytest.Subtests) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
     image = Image.frombytes(mode, (67, 49), raw)
@@ -93,7 +93,7 @@ def test_horizontal_resize_writes_output_directly_with_full_height(mode: str, su
         ({"size": (-1, 2)}, ValueError),
         ({"size": (2.5, 2)}, TypeError),
         ({"size": (2,)}, TypeError),
-        ({"resample": 6}, ValueError),
+        ({"resample": 8}, ValueError),
         ({"reducing_gap": 0.5}, ValueError),
         ({"box": (-1, 0, 2, 2)}, ValueError),
         ({"box": (0, 0, 4, 2)}, ValueError),

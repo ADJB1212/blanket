@@ -3,7 +3,7 @@
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
 pub use blanket_core::geometry::{ops_transpose, transpose};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
-use blanket_core::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -12,6 +12,8 @@ use rayon::prelude::*;
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_color_composite, module)?)?;
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_linear_gradient, module)?)?;
+    module.add_function(wrap_pyfunction!(wide_histogram, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_histogram, module)?)?;
     module.add_function(wrap_pyfunction!(ops_equalize, module)?)?;
@@ -148,7 +150,7 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Opt
 
 fn validate_mask<'a>(mask: Option<&'a Image>, image: &Image) -> PyResult<Option<&'a [u8]>> {
     mask.map(|mask| {
-        if mask.mode != PixelMode::L || mask.bit_depth != 8 {
+        if !matches!(mask.mode, PixelMode::One | PixelMode::L) || mask.bit_depth != 8 {
             return Err(PyValueError::new_err("bad transparency mask"));
         }
         if (mask.width, mask.height) != (image.width, image.height) {
@@ -159,21 +161,22 @@ fn validate_mask<'a>(mask: Option<&'a Image>, image: &Image) -> PyResult<Option<
     .transpose()
 }
 
+#[pyfunction(signature = (image, mask=None, extrema=None))]
 fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
     let raw = image.raw_data()?;
     let mask_data = validate_mask(mask, image)?;
-    let channels = image.mode.channels();
     py.detach(|| match image.mode {
-        PixelMode::I => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
-        PixelMode::F => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v))),
-        PixelMode::I16B => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
-        _ => sample_histogram(raw, channels, mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
+        PixelMode::I => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
+        PixelMode::F => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v))),
+        mode if mode.is_big_endian() => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
+        _ => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
     })
 }
 
 fn sample_histogram<const N: usize>(
-    raw: &[u8], channels: usize, mask: Option<&[u8]>, extrema: Option<(f64, f64)>, sample: impl Fn(&[u8; N]) -> f64,
+    raw: &[u8], mode: PixelMode, mask: Option<&[u8]>, extrema: Option<(f64, f64)>, sample: impl Fn(&[u8; N]) -> f64,
 ) -> PyResult<Vec<u64>> {
+    let channels = mode.channels();
     let samples = raw.as_chunks::<N>().0;
     let mut bins = vec![0_u64; channels << 8];
     if samples.is_empty() {
@@ -188,6 +191,16 @@ fn sample_histogram<const N: usize>(
     if high == low {
         return Ok(bins);
     }
+    let scale = match mode {
+        PixelMode::I => 255.0 / (high as i32).wrapping_sub(low as i32) as f32,
+        PixelMode::F => {
+            if high as f32 == low as f32 {
+                return Ok(bins);
+            }
+            255.0 / (high as f32 - low as f32)
+        }
+        _ => 0.0,
+    };
     for (pixel_index, pixel) in samples.chunks_exact(channels).enumerate() {
         if mask.is_some_and(|mask| mask[pixel_index] == 0) {
             continue;
@@ -195,7 +208,12 @@ fn sample_histogram<const N: usize>(
         for (channel, bytes) in pixel.iter().enumerate() {
             let value = sample(bytes);
             if value.is_finite() {
-                let slot = ((value - low) * 255.0 / (high - low)).trunc() as i64;
+                let position = match mode {
+                    PixelMode::I => f64::from((value as i32).wrapping_sub(low as i32) as f32 * scale),
+                    PixelMode::F => f64::from((value as f32 - low as f32) * scale),
+                    _ => (value - low) * 255.0 / (high - low),
+                };
+                let slot = position.trunc() as i64;
                 if (0..256).contains(&slot) {
                     bins[channel * 256 + slot as usize] += 1;
                 }
@@ -318,9 +336,9 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     let mut pixels = buffer((image.width, image.height), channels)?;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
-        PixelMode::La | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => apply_lut::<3>(source, &mut pixels, &lut),
-        PixelMode::Rgba | PixelMode::Cmyk => apply_lut::<4>(source, &mut pixels, &lut),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => apply_lut::<4>(source, &mut pixels, &lut),
         _ => unreachable!(),
     });
     output(image, (image.width, image.height), pixels)
@@ -456,11 +474,33 @@ pub fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyR
     let mask = validate_mask(mask, image)?;
     Ok(py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => histogram::<1>(source, mask),
-        PixelMode::La | PixelMode::Pa => histogram::<2>(source, mask),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => histogram::<2>(source, mask),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => histogram::<3>(source, mask),
-        PixelMode::Rgba | PixelMode::Cmyk => histogram::<4>(source, mask),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => histogram::<4>(source, mask),
         _ => unreachable!(),
     }))
+}
+
+#[pyfunction]
+fn ops_linear_gradient(mode: &str) -> PyResult<Image> {
+    let mode = PixelMode::parse(mode)?;
+    match mode {
+        PixelMode::L => {
+            let mut pixels = alloc_pixels(256 * 256)?;
+            for (y, row) in pixels.as_chunks_mut::<256>().0.iter_mut().enumerate() {
+                row.fill(y as u8);
+            }
+            Image::from_pixels(256, 256, mode, pixels, None)
+        }
+        PixelMode::F => {
+            let mut pixels = alloc_pixels(256 * 256 * 4)?;
+            for (y, row) in pixels.as_chunks_mut::<1024>().0.iter_mut().enumerate() {
+                row.as_chunks_mut::<4>().0.fill((y as f32).to_le_bytes());
+            }
+            Image::from_float_bytes(256, 256, pixels)
+        }
+        _ => Err(PyValueError::new_err("image has wrong mode")),
+    }
 }
 
 fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
@@ -518,7 +558,7 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
     let fill = if image.mode.is_integer() {
         match image.mode {
             PixelMode::I => (fill[0] as i32).to_le_bytes().to_vec(),
-            PixelMode::I16B => (fill[0] as u16).to_be_bytes().to_vec(),
+            mode if mode.is_big_endian() => (fill[0] as u16).to_be_bytes().to_vec(),
             _ => (fill[0] as u16).to_le_bytes().to_vec(),
         }
     } else {
@@ -630,10 +670,10 @@ mod tests {
     fn integer_canvas_preserves_signed_samples_and_byte_order() {
         Python::initialize();
         Python::attach(|py| {
-            for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B] {
+            for mode in [PixelMode::I, PixelMode::I16, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
                 let source = if mode == PixelMode::I {
                     512_i32.to_le_bytes().to_vec()
-                } else if mode == PixelMode::I16B {
+                } else if mode.is_big_endian() {
                     512_u16.to_be_bytes().to_vec()
                 } else {
                     512_u16.to_le_bytes().to_vec()
@@ -642,7 +682,7 @@ mod tests {
                 for value in [0, 1000, -10, i64::from(i32::MIN), i64::from(i32::MAX)] {
                     let expected = if mode == PixelMode::I {
                         (value as i32).to_le_bytes().to_vec()
-                    } else if mode == PixelMode::I16B {
+                    } else if mode.is_big_endian() {
                         (value as u16).to_be_bytes().to_vec()
                     } else {
                         (value as u16).to_le_bytes().to_vec()

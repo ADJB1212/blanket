@@ -52,6 +52,25 @@ template <typename T> bool statistics_match_serial() {
 }
 
 int main() {
+    for (uint channels : {3u, 4u}) {
+        for (uint count : {1u, 15u, 16u, 17u, 33u}) {
+            std::vector<uchar> source(count * channels + 2, 173);
+            std::vector<float> output(count + 2, -123);
+            for (uint i = 0; i < count * channels; i++)
+                source[i + 1] = uchar((i * 37 + i / 11) % 256);
+            uint p[8] = {count, 1, channels, count, 1, 14, 4, 0};
+            for (uint i = 0; i <= count; i++)
+                convert_image(source.data() + 1, output.data() + 1, p, i);
+            for (uint i = 0; i < count; i++) {
+                uint base = 1 + i * channels;
+                float expected = float(uint(source[base]) * 299 + uint(source[base + 1]) * 587 + uint(source[base + 2]) * 114) / 1000.0f;
+                if (output[i + 1] != expected)
+                    return 13;
+            }
+            if (output.front() != -123 || output.back() != -123 || source.front() != 173 || source.back() != 173)
+                return 14;
+        }
+    }
     for (uint channels : {2u, 4u}) {
         uchar background[4] = {40, 50, 60, 0}, source[4] = {90, 100, 110, 0}, output[6] = {173, 173, 173, 173, 173, 173};
         background[channels - 1] = source[channels - 1] = 0;

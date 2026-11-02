@@ -110,12 +110,20 @@ def test_container_metadata(format):
     profile = ImageCms.createProfile("sRGB").tobytes()
     data = encode(format=format, exif=exif, xmp=b"<test/>", icc_profile=profile)
     header = Image.inspect(BytesIO(data))
-    assert header.info == Image.open(BytesIO(data)).info
+    image = Image.open(BytesIO(data))
     assert header.info["xmp"] == b"<test/>"
     assert header.info["icc_profile"] == profile
     parsed = Image.Exif()
     parsed.load(header.info["exif"])
     assert parsed[274] == 6
+    if format == "TIFF":
+        assert header.size == image.size == (9, 17)
+        assert {key: value for key, value in header.info.items() if key != "exif"} == {key: value for key, value in image.info.items() if key != "exif"}
+        source_tags = dict(parsed)
+        del source_tags[274]
+        assert dict(image.getexif()) == source_tags
+    else:
+        assert header.info == image.info
 
 
 def test_png_text_metadata_after_pixels_and_corrupt_pixels():

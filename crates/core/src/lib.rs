@@ -1,4 +1,5 @@
 #![feature(default_field_values, portable_simd)]
+mod alpha;
 pub mod cache;
 pub mod color;
 pub mod float;

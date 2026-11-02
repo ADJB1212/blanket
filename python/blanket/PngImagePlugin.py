@@ -4,11 +4,43 @@ from __future__ import annotations
 
 __lazy_modules__ = {"zlib"}
 
+import struct
 import zlib
+from enum import IntEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing import BinaryIO, Self
+
+from ._io import write_all
+
+_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class Disposal(IntEnum):
+    OP_NONE = 0
+    OP_BACKGROUND = 1
+    OP_PREVIOUS = 2
+
+
+class Blend(IntEnum):
+    OP_SOURCE = 0
+    OP_OVER = 1
+
+
+def o16(value: int) -> bytes:
+    return struct.pack(">H", value)
+
+
+def o32(value: int) -> bytes:
+    return struct.pack(">I", value)
+
+
+def putchunk(fp: BinaryIO, cid: bytes, *data: bytes) -> None:
+    """Write a PNG chunk with its length and checksum."""
+    payload = b"".join(data)
+    checksum = zlib.crc32(payload, zlib.crc32(cid))
+    write_all(fp, o32(len(payload)) + cid + payload + o32(checksum))
 
 
 class iTXt(str):

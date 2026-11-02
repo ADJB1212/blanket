@@ -2,3 +2,4 @@
 pub mod filter;
 mod filter_simd;
 mod high_depth;
+mod wide;

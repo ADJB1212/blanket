@@ -12,6 +12,9 @@ use rayon::prelude::*;
 pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option<Image>, String> {
     use tiff::tags::Tag;
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
+    if decoder.get_tag_u32(Tag::Orientation).is_ok_and(|value| (2..=8).contains(&value)) {
+        return Ok(None);
+    }
     let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
     validate_dimensions(width, height)?;
     let (left, top, right, bottom) = bounds;
@@ -72,7 +75,10 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
     use tiff::tags::Tag;
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
-    let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    let (mut width, mut height) = decoder.dimensions().map_err(|e| e.to_string())?;
+    if decoder.get_tag_u32(Tag::Orientation).is_ok_and(|value| (5..=8).contains(&value)) {
+        std::mem::swap(&mut width, &mut height);
+    }
     let bits = decoder.get_tag_u16_vec(Tag::BitsPerSample).unwrap_or_else(|_| vec![1]);
     let depth = *bits.first().ok_or("missing TIFF sample depth")?;
     if bits.iter().any(|&b| b != depth) {
@@ -386,7 +392,34 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
-    decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|error| error.to_string())?;
+    let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
+    let image = decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    if !(2..=8).contains(&orientation) {
+        return Ok(image);
+    }
+    let source = image.raw_data().map_err(|error| error.to_string())?;
+    let size = if orientation >= 5 { (image.height, image.width) } else { (image.width, image.height) };
+    let mut pixels = blanket_core::raster::alloc_pixels(source.len()).map_err(|error| error.to_string())?;
+    macro_rules! orient {
+        ($channels:literal) => {
+            blanket_core::geometry::transpose::<$channels>(source, &mut pixels, image.width as usize, image.height as usize, orientation as u8)
+        };
+    }
+    match image.raw_bytes_per_pixel() {
+        1 => orient!(1),
+        2 => orient!(2),
+        3 => orient!(3),
+        4 => orient!(4),
+        6 => orient!(6),
+        8 => orient!(8),
+        12 => orient!(12),
+        16 => orient!(16),
+        _ => return Err("unsupported TIFF pixel layout".into()),
+    }
+    let mut result = blanket_core::buffers::output(&image, size, pixels).map_err(|error| error.to_string())?;
+    result.format = Some("TIFF".into());
+    Ok(result)
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {

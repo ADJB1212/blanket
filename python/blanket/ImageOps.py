@@ -1,8 +1,9 @@
 """Pillow-shaped image operations, backed by native Blanket pixel kernels.
 
 Geometry, canvas, and resampling work on the current Image modes, including
-`1`, `LA`, `PA`, integer, float, and print/luma/chroma modes. Histogram and
-lookup-table operations accept `L` and `RGB`, matching Pillow's restrictions.
+`1`, `LA`, `PA`, integer, float, and print/luma/chroma modes.
+Histogram operations accept `L` and `RGB`. Invert, posterize, and solarize
+also transform P palettes while preserving indices and palette alpha.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ if TYPE_CHECKING:
 
 from . import Image
 from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose
-from ._color import color_pixel
+from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
 __all__ = [
@@ -64,7 +65,16 @@ def _copy(image: Image.Image) -> Image.Image:
 
 def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
     """Adapt scalar canvas fills without narrowing integer samples."""
-    if image.mode in ("I", "I;16", "I;16L", "I;16B"):
+    if image.mode == "P":
+        if isinstance(color, str):
+            color = _rgb(color)
+        if isinstance(color, tuple) and len(color) in (3, 4):
+            if image.palette is None:
+                raise ValueError("image has no palette")
+            color = image.palette.getcolor(color, image)
+            image._sync_palette()
+        return [0 if color is None else index(color)]
+    if image.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
         if isinstance(color, tuple):
             if len(color) != 1:
                 raise TypeError("color must be an integer or a single-element tuple")
@@ -75,8 +85,21 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
     return color_pixel(color, image.mode)
 
 
-def _lut(image: Image.Image, table: list[int]) -> Image.Image:
+def _lut(image: Image.Image, table: list[int], *, palette: bool = False) -> Image.Image:
     """Apply a clamped 8-bit lookup table to an L or RGB image."""
+    if image.mode == "P":
+        if not palette:
+            raise NotImplementedError("mode P support coming soon")
+        result = image.copy()
+        if result.palette is None:
+            raise ValueError("image has no palette")
+        mode = result.palette.mode
+        entries = result.palette.tobytes()
+        colors = Image.frombytes(mode, (len(entries) // len(mode), 1), entries)
+        tables = table if mode == "RGB" else table * 3 + list(range(256))
+        mapped = Image.Image(ops_lut(colors._native, tables))
+        result.putpalette(mapped.tobytes(), mode)
+        return result
     if image.mode not in ("L", "RGB"):
         raise OSError(f"not supported for mode {image.mode}")
     return _result(image, ops_lut(image._native, [max(0, min(255, v)) for v in table]))
@@ -119,6 +142,8 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
         result = ImageOps.autocontrast(image, cutoff=1)
         ```
     """
+    if image.mode == "P":
+        raise NotImplementedError("mode P support coming soon")
     source = image.convert("L") if preserve_tone else image
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
@@ -178,11 +203,11 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
         ```
     """
     if image.mode != "L":
-        raise ValueError("colorize requires an L image")
+        raise ValueError(f"mode must be L, not {image.mode}")
     if not 0 <= blackpoint <= whitepoint <= 255:
-        raise ValueError("expected 0 <= blackpoint <= whitepoint <= 255")
+        raise ValueError("blackpoint and whitepoint must each be between 0 and 255, with blackpoint <= whitepoint")
     if mid is not None and not blackpoint <= midpoint <= whitepoint:
-        raise ValueError("expected blackpoint <= midpoint <= whitepoint")
+        raise ValueError("midpoint must be between or equal to blackpoint and whitepoint")
     stops = [(blackpoint, color_pixel(black, "RGB"))]
     if mid is not None:
         stops.append((midpoint, color_pixel(mid, "RGB")))
@@ -237,6 +262,10 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
         result = ImageOps.cover(image, (4, 6))
         ```
     """
+    if image.height == 0:
+        return Image.new(image.mode, (size[0], 0))
+    if size[1] == 0:
+        return Image.new(image.mode, (0, 0))
     ratio = image.width / image.height
     target = size[0] / size[1]
     if ratio < target:
@@ -268,6 +297,8 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     if resized.size == tuple(size):
         return resized
     offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
+    if resized.mode == "P":
+        resized = resized.copy()
     fill = _canvas_color(resized, color)
     return _result(resized, ops_canvas(resized._native, size, offset, fill))
 
@@ -396,6 +427,8 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
         result = ImageOps.equalize(image)
         ```
     """
+    if image.mode == "P":
+        image = image.convert("RGB")
     return _result(image, ops_equalize(image._native, None if mask is None else mask._native))
 
 
@@ -420,6 +453,8 @@ def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Ima
     if min(size) < 0:
         raise ValueError("Width and height must be >= 0")
     image.load()
+    if image.mode == "P":
+        image = image.copy()
     color = _canvas_color(image, fill)
     return _result(image, ops_canvas(image._native, size, (left, top), color))
 
@@ -452,7 +487,9 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     if height == 0:
         return Image.new(image.mode, size)
     ratio = size[0] / size[1]
-    if width / height >= ratio:
+    if width / height == ratio:
+        cw, ch = width, height
+    elif width / height > ratio:
         cw, ch = ratio * height, height
     else:
         cw, ch = width, width / ratio
@@ -511,7 +548,9 @@ def invert(image: Image.Image) -> Image.Image:
     if image.bit_depth in (10, 12, 16) and image.mode in ("L", "RGB"):
         image.load()
         return _result(image, chops_invert(image._native))
-    return _lut(image, list(range(255, -1, -1)))
+    if image.mode == "1":
+        return image.point(list(range(255, -1, -1)))
+    return _lut(image, list(range(255, -1, -1)), palette=True)
 
 
 def mirror(image: Image.Image) -> Image.Image:
@@ -549,7 +588,7 @@ def posterize(image: Image.Image, bits: int) -> Image.Image:
     if not 1 <= bits <= 8:
         raise ValueError("bits must be between or equal to 1 and 8")
     mask = ~(2 ** (8 - bits) - 1)
-    return _lut(image, [v & mask for v in range(256)])
+    return _lut(image, [v & mask for v in range(256)], palette=True)
 
 
 def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
@@ -567,7 +606,7 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
         result = ImageOps.solarize(image, threshold=128)
         ```
     """
-    return _lut(image, [v if v < threshold else 255 - v for v in range(256)])
+    return _lut(image, [v if v < threshold else 255 - v for v in range(256)], palette=True)
 
 
 @overload

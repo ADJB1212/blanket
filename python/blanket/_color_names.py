@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-CSS_COLORS = {
+CSS_COLORS: dict[str, str | tuple[int, ...]] = {
     "aliceblue": "#f0f8ff",
     "antiquewhite": "#faebd7",
     "aqua": "#00ffff",

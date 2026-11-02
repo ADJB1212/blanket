@@ -563,6 +563,7 @@ fn sample_distance(mode: PixelMode, a: &[u8], b: &[u8]) -> f64 {
     match mode {
         PixelMode::I => (f64::from(i32::from_ne_bytes(a.try_into().unwrap())) - f64::from(i32::from_ne_bytes(b.try_into().unwrap()))).abs(),
         PixelMode::F => (f64::from(f32::from_ne_bytes(a.try_into().unwrap())) - f64::from(f32::from_ne_bytes(b.try_into().unwrap()))).abs(),
+        PixelMode::I16N => (f64::from(u16::from_ne_bytes(a.try_into().unwrap())) - f64::from(u16::from_ne_bytes(b.try_into().unwrap()))).abs(),
         PixelMode::I16 | PixelMode::I16L => {
             (f64::from(u16::from_le_bytes(a.try_into().unwrap())) - f64::from(u16::from_le_bytes(b.try_into().unwrap()))).abs()
         }

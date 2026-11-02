@@ -30,7 +30,8 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
     let source = image.raw_data()?;
     let mask = mask
         .map(|mask| {
-            if mask.mode != PixelMode::L || mask.bit_depth != 8 || (mask.width, mask.height) != (image.width, image.height) {
+            if !matches!(mask.mode, PixelMode::One | PixelMode::L) || mask.bit_depth != 8 || (mask.width, mask.height) != (image.width, image.height)
+            {
                 return Err(PyValueError::new_err("bad mask mode or size"));
             }
             mask.pixel_data()
@@ -45,7 +46,7 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
                 continue;
             }
             for (c, &bytes) in pixel.as_chunks::<2>().0.iter().enumerate() {
-                let value = if image.mode == PixelMode::I16B { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
+                let value = if image.mode.is_big_endian() { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
                 histogram[c * bins + usize::from(value)] += 1;
             }
         }
@@ -163,9 +164,26 @@ fn weighted_sum(histogram: &[u64], squared: bool) -> f64 {
 
 #[pyfunction]
 #[pyo3(signature = (histogram, squared, bins=256))]
-fn stat_sum(py: Python<'_>, histogram: Vec<u64>, squared: bool, bins: usize) -> PyResult<Vec<f64>> {
+fn stat_sum(py: Python<'_>, histogram: Vec<u64>, squared: bool, bins: usize) -> PyResult<Py<PyAny>> {
     let bands = sample_bands(&histogram, bins)?;
-    Ok(py.detach(|| bands.map(|band| weighted_sum(band, squared)).collect()))
+    if bins == 256 {
+        let sums: Vec<u128> = py.detach(|| {
+            bands
+                .map(|band| {
+                    band.iter()
+                        .enumerate()
+                        .map(|(i, &count)| {
+                            let weight = if squared { i * i } else { i };
+                            weight as u128 * u128::from(count)
+                        })
+                        .sum()
+                })
+                .collect()
+        });
+        return Ok(sums.into_pyobject(py)?.into_any().unbind());
+    }
+    let sums: Vec<f64> = py.detach(|| bands.map(|band| weighted_sum(band, squared)).collect());
+    Ok(sums.into_pyobject(py)?.into_any().unbind())
 }
 
 fn median(histogram: &[u64], count: u128) -> u16 {
@@ -238,26 +256,25 @@ fn centered_sum(histogram: &[u64], mean: f64) -> f64 {
 /// contribution first to compute population variance in Pillow's order.
 #[pyfunction]
 #[pyo3(signature = (values, counts, sums=None))]
-fn stat_normalize(py: Python<'_>, values: Vec<f64>, counts: Vec<u128>, sums: Option<Vec<f64>>) -> PyResult<Vec<f64>> {
+fn stat_normalize(values: Vec<Bound<'_, PyAny>>, counts: Vec<u128>, sums: Option<Vec<Bound<'_, PyAny>>>) -> PyResult<Vec<f64>> {
     if values.len() != counts.len() || sums.as_ref().is_some_and(|sums| sums.len() != values.len()) {
         return Err(PyValueError::new_err("statistics have different band counts"));
     }
-    Ok(py.detach(|| {
-        values
-            .iter()
-            .zip(&counts)
-            .enumerate()
-            .map(|(i, (&value, &count))| {
-                if count == 0 {
-                    0.0
-                } else if let Some(sums) = &sums {
-                    (value - sums[i].powi(2) / count as f64) / count as f64
-                } else {
-                    value / count as f64
-                }
-            })
-            .collect()
-    }))
+    values
+        .iter()
+        .zip(&counts)
+        .enumerate()
+        .map(|(i, (value, &count))| {
+            if count == 0 {
+                Ok(0.0)
+            } else if let Some(sums) = &sums {
+                let contribution = sums[i].call_method1("__pow__", (2,))?.call_method1("__truediv__", (count,))?.extract::<f64>()?;
+                Ok((value.extract::<f64>()? - contribution) / count as f64)
+            } else {
+                value.call_method1("__truediv__", (count,))?.extract::<f64>()
+            }
+        })
+        .collect()
 }
 
 #[pyfunction]

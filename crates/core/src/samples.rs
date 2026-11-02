@@ -9,7 +9,10 @@ use crate::raster::{Image, PixelMode};
 
 pub fn supported(image: &Image) -> bool {
     matches!(image.bit_depth, 10 | 12 | 16)
-        && matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B)
+        && matches!(
+            image.mode,
+            PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::I16N
+        )
 }
 
 pub fn maximum(image: &Image) -> u16 {
@@ -17,11 +20,11 @@ pub fn maximum(image: &Image) -> u16 {
 }
 
 pub fn read(image: &Image) -> PyResult<Vec<u16>> {
-    decode(image.raw_data()?, image.mode == PixelMode::I16B)
+    decode(image.raw_data()?, image.mode.is_big_endian())
 }
 
 pub fn view(image: &Image) -> PyResult<Cow<'_, [u16]>> {
-    view_bytes(image.raw_data()?, image.mode == PixelMode::I16B)
+    view_bytes(image.raw_data()?, image.mode.is_big_endian())
 }
 
 fn view_bytes(source: &[u8], big_endian: bool) -> PyResult<Cow<'_, [u16]>> {
@@ -80,7 +83,7 @@ pub(crate) fn encode(values: &[u16], big_endian: bool) -> PyResult<Vec<u8>> {
 }
 
 pub fn output(image: &Image, values: &[u16]) -> PyResult<Image> {
-    let pixels = encode(values, image.mode == PixelMode::I16B)?;
+    let pixels = encode(values, image.mode.is_big_endian())?;
     output_bytes(image, pixels)
 }
 

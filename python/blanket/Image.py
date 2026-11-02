@@ -1,6 +1,6 @@
 """Pillow-shaped image constructors and the Image type, backed by Blanket's Rust extension.
 
-Supported modes are `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
+Supported modes are `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGBX`, `HSV`, `CMYK`,
 `YCbCr`, `LAB`, integer `I`/`I;16` variants, and float `F`/`RGB;F`/`RGBA;F`.
 """
 
@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+from copy import deepcopy
 from dataclasses import dataclass
 from enum import IntEnum
 from io import BytesIO
@@ -55,6 +56,7 @@ from ._blanket import (
     ops_color_resize,
     ops_entropy,
     ops_histogram,
+    ops_linear_gradient,
     ops_lut,
     ops_reduce,
     ops_remap_indices,
@@ -65,6 +67,7 @@ from ._blanket import (
     ops_warp,
     ops_xbm,
     quantize as _native_quantize,
+    wide_histogram,
 )
 from ._color import color_pixel
 from ._exif import ORIENTATION_RE, exif_source, read_metadata, read_tiff_metadata, save_metadata
@@ -122,18 +125,52 @@ _BANDS = {
     "I;16": ("I",),
     "I;16L": ("I",),
     "I;16B": ("I",),
+    "I;16N": ("I",),
     "LA": ("L", "A"),
+    "La": ("L", "a"),
     "P": ("P",),
     "PA": ("P", "A"),
     "RGB": ("R", "G", "B"),
     "RGBA": ("R", "G", "B", "A"),
+    "RGBa": ("R", "G", "B", "a"),
+    "RGBX": ("R", "G", "B", "X"),
     "HSV": ("H", "S", "V"),
     "CMYK": ("C", "M", "Y", "K"),
     "YCbCr": ("Y", "Cb", "Cr"),
     "LAB": ("L", "A", "B"),
 }
+MODES = ["1", "CMYK", "F", "HSV", "I", "I;16", "I;16B", "I;16L", "I;16N", "L", "LA", "La", "LAB", "P", "PA", "RGB", "RGBA", "RGBa", "RGBX", "YCbCr"]
+_MODE_BANDS = _BANDS | {**dict.fromkeys(("I;16S", "I;16LS", "I;16BS", "I;16NS", "I;32", "I;32L", "I;32B", "I;32S", "I;32LS", "I;32BS"), ("I",))}
+
+
+def getmodebandnames(mode: str) -> tuple[str, ...]:
+    """Return mode metadata, including modes without native raster support."""
+    return _MODE_BANDS[mode]
+
+
+def getmodebands(mode: str) -> int:
+    """Return the number of bands described by a mode."""
+    return len(getmodebandnames(mode))
+
+
+def getmodebase(mode: str) -> str:
+    """Return the grayscale, palette, or color base mode."""
+    bands = getmodebandnames(mode)
+    if mode == "P":
+        return "P"
+    return "RGB" if len(bands) > 2 or mode == "PA" else "L"
+
+
+def getmodetype(mode: str) -> str:
+    """Return the L, I, or F storage type described by a mode."""
+    getmodebandnames(mode)
+    if mode in ("F", "RGB;F", "RGBA;F"):
+        return "F"
+    return "I" if mode == "I" else "L"
+
+
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
-_RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1}
+_RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1, 6: 2.5, 7: 4.5}
 _FORMAT_ALIASES = {
     "JPG": "JPEG",
     "JPEGXL": "JXL",
@@ -183,9 +220,11 @@ class Resampling(IntEnum):
     BICUBIC = 3
     BOX = 4
     HAMMING = 5
+    MKS2013 = 6
+    MKS2021 = 7
 
 
-NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, HAMMING = Resampling
+NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, HAMMING, MKS2013, MKS2021 = Resampling
 
 
 class Quantize(IntEnum):
@@ -308,9 +347,9 @@ class PixelAccess:
         coordinates = self._coordinates(xy)
         if isinstance(value, tuple) and len(value) == 1:
             mode = self._native.mode
-            if mode in ("1", "L", "I", "I;16", "I;16L", "I;16B"):
+            if mode in ("1", "L", "I", "I;16", "I;16L", "I;16B", "I;16N"):
                 value = value[0]
-            elif mode in ("LA", "PA"):
+            elif mode in ("LA", "La", "PA"):
                 value = (value[0], 0)
         self._native.putpixel(coordinates, value)
 
@@ -318,8 +357,8 @@ class PixelAccess:
 class Image:
     """An image whose pixels and supported operations live in Rust.
 
-    Modes include `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`,
-    `YCbCr`, `LAB`, `I`, `I;16` variants, and `F`. Indexed, integer, and float
+    Modes include `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGBX`, `HSV`, `CMYK`,
+    `YCbCr`, `LAB`, `I`, `I;16` variants, and `F`. Indexed, premultiplied, integer, and float
     modes support a smaller operation set than 8-bit color modes.
     """
 
@@ -340,6 +379,7 @@ class Image:
         self._native = native
         self._bands = _BANDS[native.mode]
         self.filename: str | bytes = ""
+        self.readonly = 0
         self.palette: ImagePalette | None = None
         self._info: dict[object, object] = {}
         self._frames: list[Image] | None = None
@@ -535,7 +575,7 @@ class Image:
             print(image.has_transparency_data)
             ```
         """
-        return self.mode in ("LA", "PA", "RGBA", "RGBA;F") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
+        return self.mode in ("LA", "La", "PA", "RGBA", "RGBa", "RGBA;F") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
     def load(self) -> PixelAccess:
         """Return a pixel accessor for the current raster.
@@ -576,7 +616,7 @@ class Image:
                 typestr = "<f4"
             elif mode == "I":
                 typestr = "<i4"
-            elif mode == "I;16B":
+            elif mode == "I;16B" or (mode == "I;16N" and sys.byteorder == "big"):
                 typestr = ">u2"
             elif self.bit_depth > 8:
                 typestr = "<u2"
@@ -729,6 +769,17 @@ class Image:
             result = image.convert("L")
             ```
         """
+        transparency = self.info.get("transparency")
+        if self.mode == "P" and mode in ("LA", "RGBA") and isinstance(transparency, (int, bytes)):
+            source = self.copy()
+            if isinstance(transparency, int):
+                source._native.set_palette_alpha(index=transparency)
+            else:
+                source._native.set_palette_alpha(alpha=transparency)
+            result = Image(source._native.convert(mode, bit_depth))
+            result.info.update(self._metadata_info())
+            result.info.pop("transparency", None)
+            return result
         if mode == "PA" and self.mode != "PA":
             source = self if self.mode == "P" else self.convert("RGB").quantize()
             if self.mode in ("LA", "RGBA"):
@@ -746,6 +797,7 @@ class Image:
             result = frombytes("PA", source.size, pixels)
             if source.palette is not None:
                 result.putpalette(source.palette)
+            result.info.update(self._metadata_info())
             return result
         if mode == "PA" and self.mode == "PA":
             return self.copy()
@@ -755,7 +807,7 @@ class Image:
                 result.putpalette(self.palette)
             return result
         if mode == "P" and self.mode != "P":
-            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B") else self).quantize()
+            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B", "I;16N") else self).quantize()
         self._sync_palette()
         result = Image(self._native.convert(mode, bit_depth))
         result.info.update(self._metadata_info())
@@ -780,6 +832,16 @@ class Image:
         self._sync_palette()
         result = Image(self._native.copy())
         result.info.update(self._metadata_info())
+        return result
+
+    def __copy__(self) -> Image:
+        return self.copy()
+
+    def __deepcopy__(self, memo: dict[int, object]) -> Image:
+        self._sync_palette()
+        result = Image(self._native.copy())
+        memo[id(self)] = result
+        result.info.update(self._metadata_info(memo))
         return result
 
     def getexif(self) -> Exif:
@@ -818,9 +880,9 @@ class Image:
             return raw
         return self.info.get(key, self.info.get("XML:com.adobe.xmp") if key == "xmp" else None)
 
-    def _metadata_info(self) -> dict[object, object]:
+    def _metadata_info(self, memo: dict[int, object] | None = None) -> dict[object, object]:
         """Copy image metadata with any cached EXIF edits serialized."""
-        info = self.info.copy()
+        info = deepcopy(self.info, memo) if memo is not None else {key: value.copy() if isinstance(value, list) else value for key, value in self.info.items()}
         if self._exif is not None:
             info["exif"] = self._metadata_value("exif")
         return info
@@ -1184,7 +1246,7 @@ class Image:
         if not hasattr(filter, "filter"):
             raise TypeError("filter argument should be ImageFilter.Filter instance or class")
         neighborhood_filter = isinstance(filter, (RankFilter, ModeFilter)) and getattr(filter.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
-        if self.mode in ("L", "I;16", "I;16L", "I;16B") or isinstance(filter, MultibandFilter) or neighborhood_filter:
+        if self.mode in ("L", "I;16", "I;16L", "I;16B", "I;16N") or isinstance(filter, MultibandFilter) or neighborhood_filter:
             result = Image(filter.filter(self._native))
             result.info.update(self._metadata_info())
             return result
@@ -1294,9 +1356,11 @@ class Image:
         self.paste(alpha_composite(background, overlay), box)
 
     def putalpha(self, alpha: Image | int) -> None:
-        """Replace alpha in place; RGB images become RGBA.
+        """Replace alpha in place, promoting 1/L, P, and RGB to LA, PA, and RGBA.
 
-        Only RGB and RGBA are accepted. LA and PA images are not supported.
+        LA, PA, and RGBA retain their color channels. La/RGBa and RGBX convert
+        to straight alpha before replacement. High-depth alpha
+        replacement requires RGB or RGBA.
 
         Args:
             alpha: L image matching the image size, or a constant in the image's sample range. High-depth images accept matching-depth or scaled 8-bit alpha images.
@@ -1310,10 +1374,10 @@ class Image:
             ```
         """
 
-        if self.mode not in ("RGB", "RGBA"):
-            raise ValueError("putalpha requires RGB or RGBA; LA and PA modes are not supported")
+        if self.mode not in ("1", "L", "LA", "La", "P", "PA", "RGB", "RGBA", "RGBa", "RGBX"):
+            raise ValueError("image has wrong mode")
         if isinstance(alpha, Image):
-            band = alpha
+            band = alpha.convert("L") if alpha.mode == "1" else alpha
         elif self.bit_depth > 8:
             value = max(0, min((1 << self.bit_depth) - 1, index(alpha)))
             band = Image(image_new("L", self.size, value.to_bytes(2, "little"), self.bit_depth))
@@ -1322,8 +1386,8 @@ class Image:
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
         image_putalpha(self._native, band._native)
-        self.palette = None
-        self._bands = _BANDS["RGBA"]
+        self.readonly = 0
+        self._bands = _BANDS[self.mode]
 
     def split(self) -> tuple[Image, ...]:
         """Return independent single-band images in channel order.
@@ -1337,7 +1401,7 @@ class Image:
             ```
         """
 
-        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
+        if self.mode in ("1", "P", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
         info = self._metadata_info()
@@ -1381,18 +1445,18 @@ class Image:
         channel = index(channel)
         if not 0 <= channel < len(self.getbands()):
             raise ValueError("band index out of range")
-        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B"):
+        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             return self.copy()
         result = Image(self._native.getchannel(channel))
         result.info.update(self._metadata_info())
         return result
 
     def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:
-        """Return 256 bins per band for 8-bit modes; extrema is ignored.
+        """Return 256 bins per band; extrema controls I and F binning.
 
         Args:
-            mask: Optional L mask; pixels with a zero mask value are excluded.
-            extrema: Accepted for Pillow compatibility; ignored.
+            mask: Optional 1 or L mask; pixels with a zero mask value are excluded.
+            extrema: Optional I/F lower and upper bounds; ignored for 8-bit modes.
 
         Examples:
             ```python
@@ -1406,8 +1470,12 @@ class Image:
         self.load()
         if mask is not None:
             mask.load()
-            if mask.mode != "L":
+            if self.mode in ("I", "F"):
+                raise ValueError("image has wrong mode")
+            if mask.mode not in ("1", "L"):
                 raise ValueError("bad transparency mask")
+        if self.mode in ("I", "F"):
+            return wide_histogram(self._native, None, extrema)
         return ops_histogram(self._native, None if mask is None else mask._native)
 
     def getextrema(self) -> tuple[int | float, int | float] | tuple[tuple[int | float, int | float], ...] | None:
@@ -1423,7 +1491,7 @@ class Image:
         """
         if self.mode in ("RGB;F", "RGBA;F"):
             return tuple(cast("tuple[float, float]", self.getchannel(c).getextrema()) for c in self.getbands()) if self.width * self.height else None
-        if self.mode in ("I", "F", "I;16", "I;16L", "I;16B"):
+        if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             return self._native.getextrema_scalar()
         ranges = self._native.getextrema()
         if not ranges:
@@ -1436,7 +1504,7 @@ class Image:
         """Return the nonzero bounding box, using alpha for LA, PA, and RGBA by default.
 
         Args:
-            alpha_only: For LA, PA, and RGBA images, inspect only alpha when true; otherwise inspect all channels.
+            alpha_only: For LA, La, PA, RGBA, and RGBa images, inspect only alpha when true; otherwise inspect all channels.
 
         Examples:
             ```python
@@ -1759,7 +1827,7 @@ class Image:
         """
 
         method = Resampling.BICUBIC if resample is None else resample
-        if method not in range(6):
+        if method not in range(8):
             raise ValueError(f"Unknown resampling filter ({method})")
         if self.mode in ("1", "P", "PA"):
             method = Resampling.NEAREST
@@ -1779,6 +1847,11 @@ class Image:
         native = self._native
         if transfer not in ("srgb", "linear"):
             raise ValueError("transfer must be 'srgb' or 'linear'")
+        if not linear_light and self.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
+            crop_box = tuple(int(value) for value in box)
+            if method != Resampling.NEAREST and self.mode in ("LA", "RGBA") and box != (0, 0, self.width, self.height):
+                return self.convert("La" if self.mode == "LA" else "RGBa").crop(crop_box).convert(self.mode)
+            return self.crop(crop_box)
         if linear_light or self.mode in ("RGB;F", "RGBA;F"):
             result = Image(ops_color_resize(native, size, method, box, linear_light and transfer == "srgb", premultiply_alpha))
             result.info.update(self._metadata_info())
@@ -1786,7 +1859,7 @@ class Image:
         if size == self.size and box == (0, 0, self.width, self.height):
             native = ops_transpose(native, 1)
         else:
-            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("LA", "RGBA", "I", "F", "I;16", "I;16L", "I;16B"):
+            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("LA", "RGBA", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
                 fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
                 fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
                 if fx > 1 or fy > 1:
@@ -1887,7 +1960,7 @@ class Image:
             pillow_image = image.to_pillow()
             ```
         """
-        if self.bit_depth != 8 and self.mode not in ("I", "F", "I;16", "I;16L", "I;16B"):
+        if self.bit_depth != 8 and self.mode not in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             raise ValueError("to_pillow requires 8-bit pixels; use convert(..., bit_depth=8) explicitly")
 
         try:
@@ -1903,6 +1976,7 @@ class Image:
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save in a supported raster format or PDF; see the formats guide.
 
+        La, RGBa, and RGBX require explicit conversion before saving.
         HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` writes
         JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
         convert to `L` for encoding.
@@ -1975,6 +2049,8 @@ class Image:
                 raise UnsupportedCodecError(f"cannot write mode {self.mode} as {output_format}", format=output_format, operation="encode")
             if self.mode == "CMYK" and compressor is not None:
                 raise ValueError("compression optimization is not supported for CMYK images")
+        if self.mode in ("La", "RGBa", "RGBX"):
+            raise UnsupportedCodecError(f"cannot write mode {self.mode} as {output_format}; convert to LA, RGBA, or RGB first", format=output_format, operation="encode")
         if self.mode == "HSV":
             raise UnsupportedCodecError(f"cannot write mode HSV as {output_format}", format=output_format, operation="encode")
         if self.mode == "F":
@@ -1982,7 +2058,7 @@ class Image:
                 raise UnsupportedCodecError(f"cannot write mode F as {output_format}", format=output_format, operation="encode")
             if compressor is not None:
                 raise ValueError("compression optimization is not supported for F images")
-        if self.mode in ("I", "I;16", "I;16L", "I;16B"):
+        if self.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             if self.mode == "I":
                 depth = 16 if output_format in ("PNG", "TIFF", "JXL", "JPEG2000", "PPM", "PAM") else 8
                 return self.convert("L", bit_depth=depth)._save(fp, output_format, compressor=compressor, **options)
@@ -2055,6 +2131,22 @@ class Image:
         """
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
+    def __eq__(self, other: object) -> bool:
+        return (
+            type(self) is type(other)
+            and self.mode == other.mode
+            and self.size == other.size
+            and self.bit_depth == other.bit_depth
+            and self.info == other.info
+            and self.getpalette() == other.getpalette()
+            and self.tobytes() == other.tobytes()
+        )
+
+
+def linear_gradient(mode: str) -> Image:
+    """Return a 256 by 256 vertical L or F gradient."""
+    return Image(ops_linear_gradient(mode))
+
 
 def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] | None = 0) -> Image:
     """Create a supported-mode image filled with color.
@@ -2077,14 +2169,18 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     dimensions = size if type(size) is tuple and type(size[0]) is int and type(size[1]) is int else tuple(index(v) for v in size)
     if dimensions[0] < 0 or dimensions[1] < 0:
         raise ValueError("Width and height must be >= 0")
-    if mode in ("I", "I;16", "I;16L", "I;16B"):
+    if mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
+        if isinstance(color, tuple) and len(color) == 1:
+            color = color[0]
         value = 0 if color is None else index(color)
         if mode == "I":
             pixel = (value & 0xFFFFFFFF).to_bytes(4, "little")
         else:
-            pixel = (value & 0xFFFF).to_bytes(2, "big" if mode == "I;16B" else "little")
+            pixel = (value & 0xFFFF).to_bytes(2, sys.byteorder if mode == "I;16N" else "big" if mode == "I;16B" else "little")
         return Image(image_new(mode, dimensions, pixel))
     if mode == "F":
+        if isinstance(color, tuple) and len(color) == 1:
+            color = color[0]
         value = 0.0 if color is None else float(color)
         return Image(image_new(mode, dimensions, struct.pack("<f", value)))
     if mode in ("RGB;F", "RGBA;F"):
@@ -2096,7 +2192,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     native_mode = "L" if mode == "P" else mode
     if mode == "HSV" and isinstance(color, str):
         color = frombytes("RGB", (1, 1), bytes(color_pixel(color, "RGB"))).convert("HSV").getpixel((0, 0))
-    if mode not in ("1", "L", "LA", "RGB", "RGBA", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
+    if mode not in ("1", "L", "LA", "La", "RGB", "RGBA", "RGBa", "RGBX", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
@@ -2106,7 +2202,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
 
 
 def merge(mode: str, bands: Sequence[Image]) -> Image:
-    """Interleave L bands into an independent image.
+    """Interleave L bands, or copy a matching single-band image.
 
     The destination mode may be `1`, `L`, `LA`, `PA`, `RGB`, `RGBA`, `HSV`,
     `CMYK`, `YCbCr`, or `LAB`.
@@ -2126,6 +2222,8 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
     """
 
     bands = tuple(bands)
+    if len(bands) == 1 and bands[0].mode == mode and getmodebands(mode) == 1:
+        return bands[0].copy()
     if any(band.mode != "L" for band in bands):
         raise ValueError("mode mismatch")
     return Image(filter_merge(mode, [band._native for band in bands]))
@@ -2391,7 +2489,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
 
-    metadata = read_tiff_metadata(data, len(frames)) if image.format == "TIFF" else None
+    metadata = read_tiff_metadata(data, len(frames), decoded=True) if image.format == "TIFF" else None
     if metadata is None:
         image.info.update(read_metadata(data, image.format))
     decoded = [Image(frame) for frame in frames]
@@ -2609,6 +2707,9 @@ __all__ = [
     "HAMMING",
     "LANCZOS",
     "MESH",
+    "MKS2013",
+    "MKS2021",
+    "MODES",
     "NEAREST",
     "PERSPECTIVE",
     "QUAD",
@@ -2629,5 +2730,10 @@ __all__ = [
     "decode",
     "fromarray",
     "frombytes",
+    "getmodebandnames",
+    "getmodebands",
+    "getmodebase",
+    "getmodetype",
+    "linear_gradient",
     "open",
 ]

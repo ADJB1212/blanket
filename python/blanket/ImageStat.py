@@ -15,7 +15,7 @@ class Stat:
 
     Supported image modes include `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`,
     `HSV`, `CMYK`, `YCbCr`, and `LAB`. A mask selects pixels with any nonzero
-    L value. Histograms contain 256 nonnegative integer counts per band, each
+    1 or L value. Histograms contain 256 nonnegative integer counts per band, each
     fitting in an unsigned 64-bit integer. Results are computed lazily and
     cached, as in Pillow.
 
@@ -30,7 +30,7 @@ class Stat:
 
         Args:
             image_or_list: An image or a histogram with 256 nonnegative integer counts per band.
-            mask: Optional 8-bit L mask; pixels with a zero mask value are excluded.
+            mask: Optional 1 or 8-bit L mask; zero mask values are excluded.
 
         Examples:
             ```python
@@ -103,7 +103,7 @@ class Stat:
         return stat_count(self.h, self._bins)
 
     @cached_property
-    def sum(self) -> list[float]:
+    def sum(self) -> list[int | float]:
         """Sum of pixel values in each band.
 
         Examples:
@@ -118,7 +118,7 @@ class Stat:
         return stat_sum(self.h, False, self._bins)
 
     @cached_property
-    def sum2(self) -> list[float]:
+    def sum2(self) -> list[int | float]:
         """Sum of squared pixel values in each band.
 
         Examples:

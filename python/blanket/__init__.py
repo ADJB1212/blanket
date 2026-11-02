@@ -2,6 +2,7 @@
 
 from . import (
     Compressor,
+    ExifTags,
     Image,
     ImageChops,
     ImageCms,
@@ -33,6 +34,7 @@ __all__ = [
     "CodecResourceLimitError",
     "Compressor",
     "CorruptImageError",
+    "ExifTags",
     "Image",
     "ImageChops",
     "ImageCms",

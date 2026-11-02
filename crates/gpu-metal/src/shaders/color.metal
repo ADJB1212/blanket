@@ -87,6 +87,8 @@ template <typename S, typename D> void convert_image(device const S *src, device
     float value;
     if (output_alpha && band == dc - 1)
         value = source_alpha ? float(src[base + c - 1]) : (is_same_v<S, uchar> ? 255.0f : 1.0f);
+    else if (mode == 4 && is_same_v<S, uchar> && c >= 3)
+        value = float(uint(src[base]) * 299 + uint(src[base + 1]) * 587 + uint(src[base + 2]) * 114) / 1000.0f;
     else if (dc < 3)
         value = luminance(src, base, c);
     else

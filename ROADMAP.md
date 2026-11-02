@@ -40,7 +40,7 @@ support for eleven image formats.
 
 ### Core Capabilities
 
-- [x] Resize with all six `Resampling` filters
+- [x] CPU resize with all eight Pillow 13 `Resampling` filters, including MKS2013/MKS2021
 - [x] Affine, perspective, quad, extent, and mesh transforms
 - [x] Arbitrary-angle rotation
 - [x] Alpha compositing, paste with mask, blend
@@ -61,7 +61,9 @@ pixel access, and compatibility across existing operations.
 - [x] `LA` — grayscale with alpha
 - [x] `PA` — indexed palette with alpha
 - [x] `I` — 32-bit signed integer pixels
-- [x] `I;16` / `I;16L` / `I;16B` — 16-bit integer (consolidate with existing high-bit-depth)
+- [x] `I;16` / `I;16L` / `I;16B` / `I;16N` — 16-bit integer with explicit or native byte order
+- [x] `La` / `RGBa` — premultiplied alpha storage, conversion, and channel operations
+- [x] `RGBX` — four-channel RGB storage with Pillow-compatible X-channel conversion
 - [x] `F` — 32-bit floating-point pixels
 - [x] `CMYK` — 4-channel print color (no ICC transform required; raw channel storage)
 - [x] `YCbCr` — luma/chroma (used internally by JPEG; expose for user code)

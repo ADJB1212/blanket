@@ -37,6 +37,32 @@ fn kernel(x: f64, method: u8) -> f64 {
     }
     let x = x.abs();
     match method {
+        6 => {
+            if x < 0.5 {
+                17.0 / 16.0 - 7.0 / 4.0 * x.powi(2)
+            } else if x < 1.5 {
+                (1.0 - x) * (7.0 / 4.0 - x)
+            } else if x < 2.5 {
+                -1.0 / 8.0 * (x - 5.0 / 2.0).powi(2)
+            } else {
+                0.0
+            }
+        }
+        7 => {
+            if x < 0.5 {
+                577.0 / 576.0 - 239.0 / 144.0 * x.powi(2)
+            } else if x < 1.5 {
+                35.0 / 36.0 * (x - 1.0) * (x - 239.0 / 140.0)
+            } else if x < 2.5 {
+                1.0 / 6.0 * (x - 2.0) * (65.0 / 24.0 - x)
+            } else if x < 3.5 {
+                1.0 / 36.0 * (x - 3.0) * (x - 15.0 / 4.0)
+            } else if x < 4.5 {
+                -1.0 / 288.0 * (x - 9.0 / 2.0).powi(2)
+            } else {
+                0.0
+            }
+        }
         2 => (1.0 - x).max(0.0),
         5 => {
             if x == 0.0 {
@@ -111,6 +137,8 @@ fn compute_weights(input: u32, output: u32, start: f64, end: f64, method: u8) ->
     let scale = f64::from(end as f32 - start as f32) / f64::from(output);
     let filter_scale = scale.max(1.0);
     let support = match method {
+        6 => 2.5,
+        7 => 4.5,
         1 => 3.0,
         3 => 2.0,
         4 => 0.5,
@@ -226,11 +254,11 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
     py.detach(|| -> PyResult<()> {
         match image.mode {
             PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width, size, factor, bounds),
-            PixelMode::Pa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
+            PixelMode::Pa | PixelMode::PremulLa => reduce_pixels::<2>(source, &mut pixels, image.width, size, factor, bounds),
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                 reduce_pixels::<3>(source, &mut pixels, image.width, size, factor, bounds)
             }
-            PixelMode::Cmyk => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
+            PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => reduce_pixels::<4>(source, &mut pixels, image.width, size, factor, bounds),
             PixelMode::La | PixelMode::Rgba => {
                 let mut source = reduction_crop(source, image.width, bounds, c)?;
                 premultiply_image(image.mode, &mut source);
@@ -392,7 +420,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
 #[pyfunction(signature = (image, size, method, bounds, reducing_gap=None))]
 pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>) -> PyResult<Image> {
     let source = image.raw_data()?;
-    if method > 5 {
+    if method > 7 {
         return Err(PyValueError::new_err("unknown resampling filter"));
     }
     if size.0 == 0 || size.1 == 0 {
@@ -461,11 +489,13 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             let ys = positions(b[1], dy, size.1, image.height);
             match image.mode {
                 PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width, &xs, &ys),
-                PixelMode::La | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width, &xs, &ys),
                 PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                     resize_nearest::<3>(source, &mut result, image.width, &xs, &ys)
                 }
-                PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(source, &mut result, image.width, &xs, &ys),
+                PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                    resize_nearest::<4>(source, &mut result, image.width, &xs, &ys)
+                }
                 _ => unreachable!(),
             }
             return Ok(());
@@ -480,6 +510,8 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             let fy = (((bounds.3 - bounds.1) / f64::from(size.1) / gap) as u32).max(1);
             if fx > 1 || fy > 1 {
                 let support = match method {
+                    6 => 2.5,
+                    7 => 4.5,
                     1 => 3.0,
                     3 => 2.0,
                     4 => 0.5,
@@ -516,9 +548,11 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         }
         match image.mode {
             PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
-            PixelMode::La | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, &mut result, image, size, b, method)?,
-            PixelMode::Rgba | PixelMode::Cmyk => resample::<4>(&source, &mut result, image, size, b, method)?,
+            PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                resample::<4>(&source, &mut result, image, size, b, method)?
+            }
             _ => unreachable!(),
         }
         unpremultiply_image(image.mode, &mut result);
@@ -640,9 +674,11 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
         let (xs, ys) = nearest_positions(bounds, size, image.width, image.height);
         match image.mode {
             PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width, &xs, &ys),
-            PixelMode::La | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width, &xs, &ys),
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resize_nearest::<6>(bytes, &mut pixels, image.width, &xs, &ys),
-            PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys),
+            PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                resize_nearest::<8>(bytes, &mut pixels, image.width, &xs, &ys)
+            }
             _ => unreachable!(),
         }
         return output(image, size, pixels);
@@ -1174,9 +1210,11 @@ pub fn ops_affine(
                     PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                         resize_nearest::<3>(&source, &mut pixels, image.width, &xs, &ys)
                     }
-                    PixelMode::Rgba | PixelMode::Cmyk => resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                        resize_nearest::<4>(&source, &mut pixels, image.width, &xs, &ys)
+                    }
                     PixelMode::One | PixelMode::L => unreachable!(),
-                    PixelMode::La | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width, &xs, &ys),
+                    PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width, &xs, &ys),
                     _ => unreachable!(),
                 }
                 return;
@@ -1204,9 +1242,11 @@ pub fn ops_affine(
                     }
                     match image.mode {
                         PixelMode::One | PixelMode::L => nearest_columns::<1>(source_row, row, columns, &fill),
-                        PixelMode::La | PixelMode::Pa => nearest_columns::<2>(source_row, row, columns, &fill),
+                        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => nearest_columns::<2>(source_row, row, columns, &fill),
                         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => nearest_columns::<3>(source_row, row, columns, &fill),
-                        PixelMode::Rgba | PixelMode::Cmyk => nearest_columns::<4>(source_row, row, columns, &fill),
+                        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                            nearest_columns::<4>(source_row, row, columns, &fill)
+                        }
                         _ => unreachable!(),
                     }
                     continue;
@@ -1218,11 +1258,13 @@ pub fn ops_affine(
                     let size = (image.width, image.height);
                     match image.mode {
                         PixelMode::One | PixelMode::L => nearest_fixed::<1>(&source, row, size, origin, steps, &fill),
-                        PixelMode::La | PixelMode::Pa => nearest_fixed::<2>(&source, row, size, origin, steps, &fill),
+                        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => nearest_fixed::<2>(&source, row, size, origin, steps, &fill),
                         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
                             nearest_fixed::<3>(&source, row, size, origin, steps, &fill)
                         }
-                        PixelMode::Rgba | PixelMode::Cmyk => nearest_fixed::<4>(&source, row, size, origin, steps, &fill),
+                        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                            nearest_fixed::<4>(&source, row, size, origin, steps, &fill)
+                        }
                         _ => unreachable!(),
                     }
                     continue;
@@ -1383,9 +1425,11 @@ fn ops_warp(
                         let dst = &mut row[start * c..end * c];
                         match image.mode {
                             PixelMode::One | PixelMode::L => warp_nearest_row::<1>(&source, dst, &warp, v),
-                            PixelMode::La | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
+                            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => warp_nearest_row::<2>(&source, dst, &warp, v),
                             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => warp_nearest_row::<3>(&source, dst, &warp, v),
-                            PixelMode::Rgba | PixelMode::Cmyk => warp_nearest_row::<4>(&source, dst, &warp, v),
+                            PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
+                                warp_nearest_row::<4>(&source, dst, &warp, v)
+                            }
                             _ => unreachable!(),
                         }
                         continue;
@@ -1443,7 +1487,7 @@ mod tests {
 
     #[test]
     fn cached_weights_reuse_tables_and_preserve_exact_coefficients() {
-        for method in 1..=5 {
+        for method in 1..=7 {
             for (input, output, start, end) in [(67, 11, 0.0, 67.0), (67, 101, 2.3, 59.2), (49, 7, 1.7, 43.8)] {
                 let actual = super::weights(input, output, start, end, method);
                 let cached = super::weights(input, output, start, end, method);
@@ -1490,5 +1534,19 @@ mod tests {
     fn box_filter_has_half_open_support() {
         assert_eq!(kernel(-0.5, 4), 0.0);
         assert_eq!(kernel(0.5, 4), 1.0);
+    }
+
+    #[test]
+    fn magic_kernels_preserve_support_lobes_and_symmetry() {
+        for (method, points) in [
+            (6, [(0.0, 17.0 / 16.0), (0.5, 0.625), (1.0, 0.0), (1.5, -0.125), (2.5, 0.0)]),
+            (7, [(0.0, 577.0 / 576.0), (1.0, 0.0), (2.0, 0.0), (4.0, -1.0 / 1152.0), (4.5, 0.0)]),
+        ] {
+            for (x, expected) in points {
+                assert_eq!(kernel(x, method), expected);
+                assert_eq!(kernel(-x, method), expected);
+            }
+            assert_eq!(kernel(10.0, method), 0.0);
+        }
     }
 }

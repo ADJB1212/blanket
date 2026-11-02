@@ -24,7 +24,7 @@ _GAMUT_EPSILON = 0.0001
 _GAMUT_EDGE_EPSILON = 1e-7
 _GAMUT_MAX_ITERATIONS = 64
 
-_NUMBER = re.compile(r"([+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)(%|deg|grad|rad|turn)?")
+_NUMBER = re.compile(r"([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:e[+-]?[0-9]+)?)(%|deg|grad|rad|turn)?")
 _FUNCTION = re.compile(r"([a-z]+)\((.*)\)", re.DOTALL)
 _XYZ_TO_RGB = ((3.2409699419, -1.5373831776, -0.4986107603), (-0.9692436363, 1.8759675015, 0.0415550574), (0.0556300797, -0.2039769589, 1.0569715142))
 _D50_TO_D65 = ((0.9554734215, -0.0230984549, 0.0632592432), (-0.0283697093, 1.0099953981, 0.0210414412), (0.0123140149, -0.0205076493, 1.3303659262))
@@ -201,6 +201,10 @@ def functional_rgb(value: str) -> tuple[int, ...]:
         if "/" in body or model not in ("rgb", "rgba", "hsl", "hsla", "hsv", "hsb"):
             raise ValueError("invalid comma syntax")
         tokens = [v.strip() for v in body.split(",")]
+        if model == "rgba" and len(tokens) != 4:
+            raise ValueError("legacy rgba requires four components")
+        if model == "rgb" and len(tokens) == 4 and all(token.isdecimal() for token in tokens):
+            raise ValueError("integer alpha requires rgba")
         if len(tokens) == 4 and model in ("rgb", "rgba", "hsl", "hsla"):
             alpha = tokens.pop()
         if "none" in tokens or alpha == "none":

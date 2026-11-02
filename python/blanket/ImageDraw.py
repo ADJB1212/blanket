@@ -102,7 +102,7 @@ class ImageDraw:
         """Normalize an ink to native pixel values in the drawing mode."""
         if fill is None:
             fill = 1 if self.mode in ("I", "F") else (0 if self.mode in ("1", "L", "P") else -1)
-        if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "P"):
+        if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N", "P"):
             if isinstance(fill, str):
                 raise ValueError("drawing in this mode requires a numeric ink")
             return fill

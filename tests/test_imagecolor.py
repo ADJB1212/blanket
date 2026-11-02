@@ -6,6 +6,31 @@ from PIL import ImageColor as PillowColor
 from blanket import Image, ImageColor, ImageDraw, ImageOps
 
 
+@pytest.mark.parametrize("color", ["red ", " red", "#f00 ", "#ff0000\n", "rgb(1,2,3,4)", "rgba(1,2,3)", "hsl(" + "1" * 40 + "," + "1" * 40 + "%," + "1" * 40 + "%)"])
+def test_pillow_color_validation(color: str) -> None:
+    with pytest.raises(ValueError):
+        ImageColor.getrgb(color)
+
+
+@pytest.mark.parametrize("color", ["hsl(360.,100.0%,50%)", "hsv(360.,100.0%,100%)", "rgb( 100% , 0% , 0% )"])
+def test_pillow_numeric_color_forms(color: str) -> None:
+    assert ImageColor.getrgb(color) == PillowColor.getrgb(color)
+
+
+@pytest.mark.parametrize("color", ["#123456", "#ff000080", "black", "white", "hsv(240,100%,100%)", "rebeccapurple", "#808080"])
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "I", "F", "I;16", "I;16L", "I;16B", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
+def test_supported_getcolor_matches_pillow(color: str, mode: str) -> None:
+    assert ImageColor.getcolor(color, mode) == PillowColor.getcolor(color, mode)
+
+
+def test_public_colormap_accepts_custom_hex_and_tuple_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(ImageColor.colormap, "blanket-hex-color", "#123456")
+    monkeypatch.setitem(ImageColor.colormap, "blanket-tuple-color", (23, 45, 67))
+    assert ImageColor.getrgb("blanket-hex-color") == (18, 52, 86)
+    assert ImageColor.getrgb("BLANKET-TUPLE-COLOR") == (23, 45, 67)
+    assert set(PillowColor.colormap) <= set(ImageColor.colormap)
+
+
 @pytest.mark.parametrize(("rgb", "expected"), [((2, 2, 2), (1, 1, 1)), ((-1, -1, -1), (0, 0, 0)), ((1.001, 0, 0), (1, 0, 0))])
 def test_gamut_mapping_extreme_lightness_and_small_excursions(rgb, expected) -> None:
     from blanket._css_color import _gamut_map
@@ -47,21 +72,21 @@ def test_getcolor_converts_to_requested_mode() -> None:
     assert ImageColor.getcolor("white", "L") == 255
     assert ImageColor.getcolor("black", "LA") == (0, 255)
     assert ImageColor.getcolor("white", "1") == 255
-    assert ImageColor.getcolor("red", "CMYK") == (0, 255, 255, 0)
+    assert ImageColor.getcolor("red", "CMYK") == (255, 0, 0)
 
 
 @pytest.mark.parametrize(
     ("color", "mode", "expected"),
     [
-        ("#7f7f7f", "1", 0),
-        ("#808080", "1", 255),
+        ("#7f7f7f", "1", 127),
+        ("#808080", "1", 128),
         ("red", "I", 76),
         ("red", "F", 76),
         ("#ff000080", "LA", (76, 128)),
         ("red", "RGBA", (255, 0, 0, 255)),
         ("#10203080", "RGB", (16, 32, 48)),
-        ("black", "CMYK", (0, 0, 0, 255)),
-        ("#4080ff", "CMYK", (191, 127, 0, 0)),
+        ("black", "CMYK", (0, 0, 0)),
+        ("#4080ff", "CMYK", (64, 128, 255)),
     ],
 )
 def test_getcolor_native_conversions(color: str, mode: str, expected: int | tuple[int, ...]) -> None:
@@ -74,7 +99,7 @@ def test_invalid_colors_and_modes_raise() -> None:
     with pytest.raises(TypeError):
         ImageColor.getrgb(123)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
-        ImageColor.getcolor("red", "P")
+        ImageColor.getcolor("red", "invalid")
 
 
 @pytest.mark.parametrize(

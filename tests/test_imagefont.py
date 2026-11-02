@@ -10,7 +10,7 @@ import pytest
 from PIL import Image as PILImage, ImageFont as PILFont
 from PIL.FontFile import FontFile
 
-from blanket import Image, ImageDraw, ImageFont
+from blanket import Image, ImageDraw, ImageFont, ImageSequence
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -101,6 +101,56 @@ def test_truetype_paths_streams_metrics_and_variants(font_data: bytes, tmp_path:
     assert font.font_variant(size=40).getlength("AV") == pytest.approx(2 * font.getlength("AV"))
     assert ImageFont.truetype(bytes(path), 20).getlength("AV") == font.getlength("AV")
     assert ImageFont.truetype(BytesIO(font_data), 20, layout_engine=ImageFont.Layout.BASIC).getlength("AV") == font.getlength("AV")
+
+
+@pytest.mark.parametrize("size", [20, 40, 1000])
+@pytest.mark.parametrize("text", ["A", "i", "A i\u03a9"])
+def test_generated_font_public_metrics_match_pillow_without_freetype_gate(font_data: bytes, size: int, text: str) -> None:
+    font = ImageFont.truetype(BytesIO(font_data), size)
+    reference = PILFont.truetype(BytesIO(font_data), size, layout_engine=PILFont.Layout.BASIC)
+    assert font.getname() == reference.getname()
+    assert font.getmetrics() == reference.getmetrics()
+    assert font.getlength(text, features=["-kern", "-liga"]) == reference.getlength(text)
+
+
+@pytest.mark.parametrize("format", ["PNG", "GIF", "WEBP"])
+def test_drawn_sequence_interchange_preserves_frames_positions_and_metadata(font_data: bytes, format: str) -> None:
+    frames = [Image.new("RGBA", (64, 32), (i * 60, 30, 40, 255)) for i in range(3)]
+    source = Image.decode(frames[0].encode("PNG", save_all=True, append_images=frames[1:]))
+    source.seek(1)
+    draw = ImageDraw.Draw(source)
+    draw.fontmode = "1"
+    draw.text((1, 1), "AVfi", font=ImageFont.truetype(BytesIO(font_data), 20), fill="white")
+    snapshots = ImageSequence.all_frames(source)
+    assert source.tell() == 1
+    assert snapshots[1].tobytes() != frames[1].tobytes()
+    extra = Image.new("RGBA", source.size, "blue")
+    durations = [20, 40, 60, 80]
+    exif = Image.Exif()
+    exif[270] = "Generated font animation"
+    metadata = {"exif": exif.tobytes(), "icc_profile": b"test ICC profile"} if format != "GIF" else {}
+    data = source.encode(format, save_all=True, append_images=[extra], duration=durations, loop=2, **({"lossless": True} if format == "WEBP" else {}), **metadata)
+    assert source.tell() == 1
+    assert source.tobytes() == snapshots[1].tobytes()
+    for module in (Image, PILImage):
+        decoded = module.open(BytesIO(data))
+        assert decoded.n_frames == 4
+        assert decoded.info["loop"] == 2
+        for i, frame in enumerate([*snapshots, extra]):
+            decoded.seek(i)
+            decoded.load()
+            assert decoded.convert("RGBA").tobytes() == frame.tobytes()
+            assert decoded.info["duration"] == durations[i]
+            if metadata:
+                assert decoded.getexif()[270] == "Generated font animation"
+                assert decoded.info["icc_profile"] == metadata["icc_profile"]
+        decoded.close()
+    tiff = snapshots[1].encode("TIFF", exif=exif, icc_profile=b"test ICC profile")
+    for module in (Image, PILImage):
+        with module.open(BytesIO(tiff)) as decoded:
+            assert decoded.convert("RGBA").tobytes() == snapshots[1].tobytes()
+            assert decoded.getexif()[270] == "Generated font animation"
+            assert decoded.info["icc_profile"] == b"test ICC profile"
 
 
 def test_otf_cff_loading() -> None:
