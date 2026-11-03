@@ -432,15 +432,17 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
     }
     // The public Pillow resize API passes its box through C floats.
     let mut b = <[_; 4]>::from(bounds).map(|x| f64::from(x as f32));
-    if b.iter().any(|x| !x.is_finite())
-        || b[0] < 0.0
-        || b[1] < 0.0
-        || b[2] > f64::from(image.width)
-        || b[3] > f64::from(image.height)
-        || b[2] < b[0]
-        || b[3] < b[1]
-    {
+    if b.iter().any(|x| !x.is_finite()) {
         return Err(PyValueError::new_err("invalid resize box"));
+    }
+    if b[0] < 0.0 || b[1] < 0.0 {
+        return Err(PyValueError::new_err("box offset can't be negative"));
+    }
+    if b[2] < b[0] || b[3] < b[1] {
+        return Err(PyValueError::new_err("box can't be empty"));
+    }
+    if b[2] > f64::from(image.width) || b[3] > f64::from(image.height) {
+        return Err(PyValueError::new_err("box can't exceed original image size"));
     }
     if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
         let bands = (0..image.mode.channels())

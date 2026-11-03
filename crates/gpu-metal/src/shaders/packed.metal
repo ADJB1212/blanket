@@ -23,7 +23,7 @@ kernel void color_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buff
 kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buffer(1)]], device const uchar *o [[buffer(2)]],
                       constant uint *p [[buffer(3)]], device const float *v [[buffer(4)]], uint i [[thread_position_in_grid]]) {
     constexpr uint PACKED_SAMPLES = 4;
-    uint first = i * PACKED_SAMPLES, count = p[3] * p[4] * p[2];
+    uint first = i << 2, count = p[3] * p[4] * SPECIALIZED_CHANNELS;
     if (first + PACKED_SAMPLES > count) {
         for (uint sample = first; sample < count; sample++)
             process_sample(s, d, o, p, v, sample);
@@ -34,9 +34,10 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         uchar4 result;
         if (rank == 0 || rank == size * size - 1) {
             result = uchar4(rank == 0 ? 255 : 0);
+            int half_s = int(size >> 1);
             for (uint y = 0; y < size; y++)
                 for (uint x = 0; x < size; x++) {
-                    uchar4 value = rank_samples(s, first, p[0], p[1], int(x) - int(size / 2), int(y) - int(size / 2));
+                    uchar4 value = rank_samples(s, first, p[0], p[1], int(x) - half_s, int(y) - half_s);
                     result = rank == 0 ? min(result, value) : max(result, value);
                 }
         } else if (size == 3) {
@@ -53,13 +54,13 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
 #pragma unroll
                 for (uint phase = 0; phase < 9; phase++) {
 #pragma unroll
-                    for (uint j = phase % 2; j < 8; j += 2) {
+                    for (uint j = phase & 1u; j < 8; j += 2)
                         rank_swap(samples[j], samples[j + 1]);
-                    }
                 }
                 result = samples[rank];
             }
         } else {
+#pragma unroll
             for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
                 process_sample(s, d, o, p, v, first + lane);
             return;
@@ -67,19 +68,19 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         reinterpret_cast<device uchar4 *>(d)[i] = result;
         return;
     }
-    if (SPECIALIZED_OPERATION == OP_RESIZE) {
+    if (SPECIALIZED_OPERATION == OP_RESIZE || SPECIALIZED_OPERATION == OP_CONVOLVE) {
         filter_pixels<uchar4, int4, float4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
         return;
     }
     if (SPECIALIZED_OPERATION == OP_BOX_BLUR) {
         if (SPECIALIZED_CHANNELS != 4) {
             int radius = int(p[6]);
-            bool horizontal = p[7] == 0;
+            bool horizontal = (p[7] == 0);
             uint4 sum = uint4(0);
             for (int delta = -radius; delta <= radius; delta++)
                 sum += uint4(rank_samples(s, first, p[0], p[1], horizontal ? delta : 0, horizontal ? 0 : delta));
             uint4 fixed = sum * uint(v[0]) + BOX_ROUND;
-            if (v[1] != 0) {
+            if (v[1] != 0.0f) {
                 uint4 left = uint4(rank_samples(s, first, p[0], p[1], horizontal ? -radius - 1 : 0, horizontal ? 0 : -radius - 1));
                 uint4 right = uint4(rank_samples(s, first, p[0], p[1], horizontal ? radius + 1 : 0, horizontal ? 0 : radius + 1));
                 fixed += (left + right) * uint(v[1]);
@@ -90,15 +91,15 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         box_pixels<uchar4, uint4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
         return;
     }
-    if (SPECIALIZED_OPERATION == OP_CONVOLVE) {
-        filter_pixels<uchar4, int4, float4>(reinterpret_cast<device const uchar4 *>(s), reinterpret_cast<device uchar4 *>(d), p, v, i);
-        return;
-    }
     uchar4 bytes = reinterpret_cast<device const uchar4 *>(s)[i];
     if (SPECIALIZED_OPERATION == OP_POINT) {
         uchar4 result;
-        for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
-            result[lane] = uchar(v[((first + lane) % SPECIALIZED_CHANNELS) * 256 + uint(bytes[lane])]);
+#pragma unroll
+        for (uint lane = 0; lane < PACKED_SAMPLES; lane++) {
+            uint band = ((SPECIALIZED_CHANNELS & (SPECIALIZED_CHANNELS - 1)) == 0) ? ((first + lane) & (SPECIALIZED_CHANNELS - 1))
+                                                                                   : ((first + lane) % SPECIALIZED_CHANNELS);
+            result[lane] = uchar(v[(band << 8) + uint(bytes[lane])]);
+        }
         reinterpret_cast<device uchar4 *>(d)[i] = result;
         return;
     }
@@ -111,10 +112,10 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
             result = float4(max(a, b) - min(a, b));
             break;
         case 1:
-            result = float4(a * b / 255);
+            result = float4((a * b) / 255u);
             break;
         case 2:
-            result = float4(255 - (255 - a) * (255 - b) / 255);
+            result = float4(255u - ((255u - a) * (255u - b)) / 255u);
             break;
         case 3:
             result = float4(max(a, b));
@@ -124,9 +125,10 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
             break;
         default:
             result = (kind == 5 ? float4(a + b) : float4(int4(a) - int4(b))) / v[0] + v[1];
+#pragma unroll
             for (uint lane = 0; lane < PACKED_SAMPLES; lane++)
                 if (!isfinite(result[lane]) || result[lane] >= 2147483648.0f || result[lane] < -2147483648.0f)
-                    result[lane] = 0;
+                    result[lane] = 0.0f;
             result = floor(result);
         }
         reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(result, 0.0f, 255.0f));
@@ -143,7 +145,7 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
     float4 a = float4(bytes), result;
     if (SPECIALIZED_OPERATION == OP_BLEND) {
         float4 b = float4(reinterpret_cast<device const uchar4 *>(o)[i]);
-        result = a + (b - a) * v[0];
+        result = fma(b - a, v[0], a);
     } else {
         result = a * v[0];
         if (SPECIALIZED_CHANNELS == 4)

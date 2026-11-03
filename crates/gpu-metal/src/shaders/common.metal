@@ -61,17 +61,42 @@ enum Operation : uint {
     OP_QUANTIZE = 30,
 };
 
+// Decompose 1D index into (x, y) using 1 division instead of 1 division + 1 modulo.
+inline void decompose_2d(uint i, uint width, thread uint &x, thread uint &y) {
+    y = i / width;
+    x = i - y * width;
+}
+
+// Decompose 1D sample index into (band, pixel_idx) using bitops when c is a power of 2.
+inline void decompose_channel(uint i, uint c, thread uint &pixel_idx, thread uint &band) {
+    if ((c & (c - 1)) == 0) {
+        uint shift = (c == 4) ? 2u : ((c == 2) ? 1u : 0u);
+        pixel_idx = i >> shift;
+        band = i & (c - 1);
+    } else {
+        pixel_idx = i / c;
+        band = i - pixel_idx * c;
+    }
+}
+
+// Decompose 1D sample index into (band, x, y).
+inline void decompose_3d(uint i, uint c, uint width, thread uint &band, thread uint &x, thread uint &y) {
+    uint pixel_idx;
+    decompose_channel(i, c, pixel_idx, band);
+    decompose_2d(pixel_idx, width, x, y);
+}
+
 // Read a byte or float sample in the arithmetic working type.
-template <typename T> float read_sample(device const T *p, uint i) {
+template <typename T> inline float read_sample(device const T *p, uint i) {
     return float(p[i]);
 }
 
 // Store a float sample without changing its working range.
-template <typename T> T store_sample(float v) {
+template <typename T> inline T store_sample(float v) {
     return T(v);
 }
 
 // Round and saturate a computed sample to an unsigned byte.
-template <> uchar store_sample<uchar>(float v) {
-    return uchar(clamp(floor(v + 0.5f), 0.0f, 255.0f));
+template <> inline uchar store_sample<uchar>(float v) {
+    return uchar(saturate(floor(v + 0.5f) * (1.0f / 255.0f)) * 255.0f);
 }

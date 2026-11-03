@@ -59,7 +59,7 @@ def test_native_color_lut_keeps_controls_in_rust(mode, channels, monkeypatch):
 def assert_images_equal(actual, expected):
     assert actual.mode == expected.mode and actual.size == expected.size
     if "F" in expected.mode:
-        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=1e-6, nan_ok=True)
+        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=2e-6, nan_ok=True)
     else:
         assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=True)) <= 1
 

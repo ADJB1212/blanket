@@ -1,33 +1,28 @@
 // Sum a scalar across the SIMD group.
-template <typename S> S blur_sum(S value) {
+template <typename S> inline S blur_sum(S value) {
     return simd_sum(value);
 }
-// Sum two packed channels independently across the SIMD group.
-template <> uint2 blur_sum(uint2 value) {
+template <> inline uint2 blur_sum(uint2 value) {
     return uint2(simd_sum(value.x), simd_sum(value.y));
 }
-// Sum three packed channels independently across the SIMD group.
-template <> uint3 blur_sum(uint3 value) {
+template <> inline uint3 blur_sum(uint3 value) {
     return uint3(simd_sum(value.x), simd_sum(value.y), simd_sum(value.z));
 }
-// Sum four packed channels independently across the SIMD group.
-template <> uint4 blur_sum(uint4 value) {
+template <> inline uint4 blur_sum(uint4 value) {
     return uint4(simd_sum(value.x), simd_sum(value.y), simd_sum(value.z), simd_sum(value.w));
 }
+
 // Compute the exclusive SIMD-group sum preceding each lane.
-template <typename S> S blur_prefix(S value) {
+template <typename S> inline S blur_prefix(S value) {
     return simd_prefix_exclusive_sum(value);
 }
-// Scan two packed channels independently across the SIMD group.
-template <> uint2 blur_prefix(uint2 value) {
+template <> inline uint2 blur_prefix(uint2 value) {
     return uint2(simd_prefix_exclusive_sum(value.x), simd_prefix_exclusive_sum(value.y));
 }
-// Scan three packed channels independently across the SIMD group.
-template <> uint3 blur_prefix(uint3 value) {
+template <> inline uint3 blur_prefix(uint3 value) {
     return uint3(simd_prefix_exclusive_sum(value.x), simd_prefix_exclusive_sum(value.y), simd_prefix_exclusive_sum(value.z));
 }
-// Scan four packed channels independently across the SIMD group.
-template <> uint4 blur_prefix(uint4 value) {
+template <> inline uint4 blur_prefix(uint4 value) {
     return uint4(simd_prefix_exclusive_sum(value.x),
                  simd_prefix_exclusive_sum(value.y),
                  simd_prefix_exclusive_sum(value.z),
@@ -42,34 +37,39 @@ void scan_box_blur(device const T *src, device T *dst, constant uint *p, device 
         return;
     }
     uint width = p[0], radius = p[6];
-    uint length = width;
-    uint blocks = (length + lanes - 1) / lanes, lane = i % lanes, group = i / lanes;
+    uint lane_mask = lanes - 1;
+    uint lane_shift = ctz(lanes);
+    uint blocks = (width + lane_mask) >> lane_shift;
+    uint lane = i & lane_mask;
+    uint group = i >> lane_shift;
     uint line = group / blocks;
-    uint first = (group % blocks) * lanes;
-    uint last = length - 1, position = first + lane;
-    uint base = line * width;
-    uint stride = 1;
+    uint first = (group - line * blocks) << lane_shift;
+    uint last = width - 1, position = first + lane;
+    device const T *row_src = src + line * width;
+
     uint low = first > radius ? first - radius : 0, high = min(last, first + radius);
     S sum = S(0);
     for (uint t = low + lane; t <= high; t += lanes)
-        sum += S(src[base + t * stride]);
+        sum += S(row_src[t]);
     if (lane == 0) {
-        sum += S(src[base]) * (radius > first ? radius - first : 0);
-        sum += S(src[base + last * stride]) * (first + radius > last ? first + radius - last : 0);
+        if (radius > first)
+            sum += S(row_src[0]) * (radius - first);
+        if (first + radius > last)
+            sum += S(row_src[last]) * (first + radius - last);
     }
     sum = blur_sum(sum);
-    uint outgoing = base + min(position > radius ? position - radius : 0, last) * stride;
-    uint right = base + min(position + radius + 1, last) * stride;
-    sum += blur_prefix(S(src[right]) - S(src[outgoing]));
-    if (position < length) {
-        uint left = base + (position > radius ? position - radius - 1 : 0) * stride;
-        S fixed = sum * uint(v[0]) + (S(src[left]) + S(src[right])) * uint(v[1]) + BOX_ROUND;
-        dst[base + position * stride] = T(fixed >> BOX_BITS);
+    uint outgoing_idx = min(position > radius ? position - radius : 0, last);
+    uint right_idx = min(position + radius + 1, last);
+    S right_val = S(row_src[right_idx]);
+    sum += blur_prefix(right_val - S(row_src[outgoing_idx]));
+    if (position < width) {
+        uint left_idx = position > radius ? position - radius - 1 : 0;
+        S fixed = sum * uint(v[0]) + (S(row_src[left_idx]) + right_val) * uint(v[1]) + BOX_ROUND;
+        dst[line * width + position] = T(fixed >> BOX_BITS);
     }
 }
 
 #define SCAN_BLUR_KERNEL(NAME, PIXEL, SUM)                                                                                                           \
-    /* Dispatch the box blur for the selected byte pixel type. */                                                                                    \
     kernel void NAME(device const PIXEL *src [[buffer(0)]],                                                                                          \
                      device PIXEL *dst [[buffer(1)]],                                                                                                \
                      constant uint *p [[buffer(3)]],                                                                                                 \

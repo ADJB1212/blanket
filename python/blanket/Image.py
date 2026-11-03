@@ -1947,9 +1947,15 @@ class Image:
             raise ValueError("height and width must be > 0")
         box = (0, 0, self.width, self.height) if box is None else tuple(box)
         if len(box) != 4:
-            raise TypeError("box must be sequence of length 4")
-        if not all(math.isfinite(value) for value in box) or box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height or box[2] < box[0] or box[3] < box[1]:
+            raise TypeError(f"argument 3 must be sequence of length 4, not {len(box)}")
+        if not all(math.isfinite(value) for value in box):
             raise ValueError("invalid resize box")
+        if box[0] < 0 or box[1] < 0:
+            raise ValueError("box offset can't be negative")
+        if box[2] < box[0] or box[3] < box[1]:
+            raise ValueError("box can't be empty")
+        if box[2] > self.width or box[3] > self.height:
+            raise ValueError("box can't exceed original image size")
         self.load()
         native = self._native
         if transfer not in ("srgb", "linear"):

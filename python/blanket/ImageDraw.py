@@ -9,7 +9,7 @@ from __future__ import annotations
 
 __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font"}
 
-from math import atan2, ceil, cos, degrees, floor, isfinite, pi, sin
+from math import atan2, ceil, cos, degrees, floor, isfinite, pi, radians, sin
 from operator import index
 from typing import TYPE_CHECKING
 
@@ -29,6 +29,49 @@ if TYPE_CHECKING:
 __all__ = ["Draw", "ImageDraw", "floodfill"]
 
 _BINARY_TABLE = bytes([0] + [255] * 255)
+
+
+def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] | float], n_sides: int, rotation: float) -> list[tuple[float, float]]:
+    """Generate a list of vertices for a 2D regular polygon."""
+    if not isinstance(n_sides, int) or isinstance(n_sides, bool):
+        raise TypeError("n_sides should be an int")
+    if n_sides < 3:
+        raise ValueError("n_sides should be an int > 2")
+    if not isinstance(bounding_circle, (list, tuple)):
+        raise TypeError("bounding_circle should be a sequence")
+    if len(bounding_circle) == 3:
+        if not all(isinstance(i, (int, float)) and not isinstance(i, bool) for i in bounding_circle):
+            raise ValueError("bounding_circle should only contain numeric data")
+        centroid_x, centroid_y, polygon_radius = (float(v) for v in bounding_circle)
+    elif len(bounding_circle) == 2 and isinstance(bounding_circle[0], (list, tuple)):
+        if len(bounding_circle[0]) != 2:
+            raise ValueError("bounding_circle centre should contain 2D coordinates (e.g. (x, y))")
+        if not all(isinstance(i, (int, float)) and not isinstance(i, bool) for i in bounding_circle[0]) or not isinstance(bounding_circle[1], (int, float)) or isinstance(bounding_circle[1], bool):
+            raise ValueError("bounding_circle should only contain numeric data")
+        centroid_x, centroid_y = (float(v) for v in bounding_circle[0])
+        polygon_radius = float(bounding_circle[1])
+    else:
+        raise ValueError("bounding_circle should contain 2D coordinates and a radius (e.g. (x, y, r) or ((x, y), r) )")
+
+    if polygon_radius <= 0:
+        raise ValueError("bounding_circle radius should be > 0")
+    if not isinstance(rotation, (int, float)) or isinstance(rotation, bool):
+        raise ValueError("rotation should be an int or float")
+
+    def _apply_rotation(point: tuple[float, float], deg: float) -> tuple[float, float]:
+        rad = radians(360 - deg)
+        return (round(point[0] * cos(rad) - point[1] * sin(rad) + centroid_x, 2), round(point[1] * cos(rad) + point[0] * sin(rad) + centroid_y, 2))
+
+    degrees = 360 / n_sides
+    current_angle = (270 - 0.5 * degrees) + rotation
+    angles = []
+    for _ in range(n_sides):
+        angles.append(current_angle)
+        current_angle += degrees
+        if current_angle > 360:
+            current_angle -= 360
+
+    return [_apply_rotation((polygon_radius, 0.0), angle) for angle in angles]
 
 
 class ImageDraw:
@@ -443,17 +486,8 @@ class ImageDraw:
             ValueError: If the circle, rotation, or side count is invalid,
                 the image is closed, or drawing in the image mode is unsupported.
         """
-        n_sides = index(n_sides)
-        if n_sides < 3:
-            raise ValueError("n_sides must be at least 3")
-        if len(bounding_circle) == 3:
-            x, y, radius = bounding_circle
-        else:
-            (x, y), radius = bounding_circle
-        if radius <= 0 or not all(isfinite(v) for v in (x, y, radius, rotation)):
-            raise ValueError("invalid bounding circle or rotation")
-        angles = [(270 - 180 / n_sides + rotation + i * 360 / n_sides) * pi / 180 for i in range(n_sides)]
-        self.polygon([(round(x + radius * cos(angle), 2), round(y - radius * sin(angle), 2)) for angle in angles], fill, outline, width)
+        points = _compute_regular_polygon_vertices(bounding_circle, n_sides, rotation)
+        self.polygon(points, fill, outline, width)
 
     def rectangle(self, xy: Coords, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw a rectangle with optional fill and outline in place.

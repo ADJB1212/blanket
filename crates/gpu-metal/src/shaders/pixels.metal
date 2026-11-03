@@ -3,10 +3,12 @@ template <typename P> void geometry_pixels(device const P *src, device P *dst, c
     uint sw = p[0], sh = p[1], width = p[3], height = p[4];
     if (i >= width * height)
         return;
-    uint x = i % width, y = i / width, sx = x, sy = y;
+    uint x, y;
+    decompose_2d(i, width, x, y);
+    uint sx = x, sy = y;
     if (SPECIALIZED_OPERATION == OP_CROP) {
-        long cx = long(x) + as_type<int>(p[6]), cy = long(y) + as_type<int>(p[7]);
-        dst[i] = cx >= 0 && cy >= 0 && cx < sw && cy < sh ? src[uint(cy) * sw + uint(cx)] : P(0);
+        int cx = int(x) + as_type<int>(p[6]), cy = int(y) + as_type<int>(p[7]);
+        dst[i] = (cx >= 0 && cy >= 0 && uint(cx) < sw && uint(cy) < sh) ? src[uint(cy) * sw + uint(cx)] : P(0);
         return;
     }
     if (SPECIALIZED_OPERATION == OP_TRANSPOSE) {
@@ -39,8 +41,9 @@ template <typename P> void geometry_pixels(device const P *src, device P *dst, c
             break;
         }
     } else {
-        sx = x >= p[6] ? x - p[6] : x + sw - p[6];
-        sy = y >= p[7] ? y - p[7] : y + sh - p[7];
+        uint p6 = p[6], p7 = p[7];
+        sx = x >= p6 ? x - p6 : x + sw - p6;
+        sy = y >= p7 ? y - p7 : y + sh - p7;
     }
     dst[i] = src[sy * sw + sx];
 }
@@ -51,23 +54,25 @@ void alpha_pixels(device const P *src, device P *dst, device const P *other, con
     if (i >= p[3] * p[4])
         return;
     F a = F(src[i]), result;
-    float maxval = Floating ? 1.0f : 255.0f;
+    constexpr float maxval = Floating ? 1.0f : 255.0f;
+    constexpr float inv_maxval = 1.0f / maxval;
     float raw = float(a[Channels - 1]);
-    float da = isnan(raw) ? 0.0f : clamp(raw / maxval, 0.0f, 1.0f);
+    float da = isnan(raw) ? 0.0f : saturate(raw * inv_maxval);
     if (SPECIALIZED_OPERATION == OP_ALPHA_COMPOSITE) {
         F b = F(other[i]);
-        float sa = float(b[Channels - 1]) / maxval;
-        sa = isnan(sa) ? 0.0f : clamp(sa, 0.0f, 1.0f);
-        if (!Floating && sa == 0) {
+        float sa = float(b[Channels - 1]) * inv_maxval;
+        sa = isnan(sa) ? 0.0f : saturate(sa);
+        if (!Floating && sa == 0.0f) {
             dst[i] = src[i];
             return;
         }
-        float alpha = sa + da * (1 - sa);
-        result = sa == 1 ? b : (alpha == 0 ? F(0) : ((sa == 0 ? F(0) : b * sa) + (da == 0 ? F(0) : a * da) * (1 - sa)) / alpha);
+        float inv_sa = 1.0f - sa;
+        float alpha = fma(da, inv_sa, sa);
+        result = (sa == 1.0f) ? b : (alpha == 0.0f ? F(0) : ((sa == 0.0f ? F(0) : b * sa) + (da == 0.0f ? F(0) : a * da) * inv_sa) / alpha);
         result[Channels - 1] = alpha * maxval;
     } else {
-        result = da == 0 ? ((SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating) ? a : F(0))
-                         : (SPECIALIZED_OPERATION == OP_PREMULTIPLY ? a * da : (Floating ? a / da : a * maxval / raw));
+        result = (da == 0.0f) ? ((SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating) ? a : F(0))
+                              : (SPECIALIZED_OPERATION == OP_PREMULTIPLY ? a * da : (Floating ? a / da : (a * maxval) / raw));
         result[Channels - 1] = da * maxval;
         if (SPECIALIZED_OPERATION == OP_UNPREMULTIPLY && !Floating)
             result = floor(result);
@@ -95,7 +100,8 @@ kernel void filter_f32(device const float *src [[buffer(0)]], device float *dst 
 // Share coordinates and interpolation weights across a float pixel.
 template <typename P, typename F, uint Channels>
 void warp_pixels(device const P *src, device P *dst, device const P *other, constant uint *p, device const float *v, uint i) {
-    if (i >= p[3] * p[4])
+    uint dw = p[3], dh = p[4];
+    if (i >= dw * dh)
         return;
     uint sw = p[0], sh = p[1];
     float sx, sy;
@@ -104,52 +110,66 @@ void warp_pixels(device const P *src, device P *dst, device const P *other, cons
         sx = coordinates[i * 3];
         sy = coordinates[i * 3 + 1];
     } else {
-        float px = float(i % p[3]) + 0.5f, py = float(i / p[3]) + 0.5f;
-        float denominator = v[6] * px + v[7] * py + 1;
-        sx = (v[0] * px + v[1] * py + v[2]) / denominator;
-        sy = (v[3] * px + v[4] * py + v[5]) / denominator;
+        uint x, y;
+        decompose_2d(i, dw, x, y);
+        float px = float(x) + 0.5f, py = float(y) + 0.5f;
+        float inv_denom = 1.0f / fma(v[6], px, fma(v[7], py, 1.0f));
+        sx = fma(v[0], px, fma(v[1], py, v[2])) * inv_denom;
+        sy = fma(v[3], px, fma(v[4], py, v[5])) * inv_denom;
     }
-    if (!isfinite(sx) || !isfinite(sy) || sx < 0 || sy < 0 || sx >= sw || sy >= sh) {
+    if (!isfinite(sx) || !isfinite(sy) || sx < 0.0f || sy < 0.0f || sx >= float(sw) || sy >= float(sh)) {
         F fill;
+#pragma unroll
         for (uint band = 0; band < Channels; band++)
             fill[band] = v[8 + band];
         dst[i] = P(fill);
         return;
     }
-    if (p[6] == 0) {
+    uint k = p[6];
+    if (k == 0) {
         dst[i] = src[uint(sy) * sw + uint(sx)];
         return;
     }
     sx -= 0.5f;
     sy -= 0.5f;
-    int ix = int(floor(sx)), iy = int(floor(sy));
-    float fx = sx - floor(sx), fy = sy - floor(sy);
+    float fl_x = floor(sx), fl_y = floor(sy);
+    int ix = int(fl_x), iy = int(fl_y);
+    float fx = sx - fl_x, fy = sy - fl_y;
+    int max_x = int(sw) - 1, max_y = int(sh) - 1;
     F result = F(0);
-    // Retain the scalar interpolation order for nonfinite samples.
-    for (uint band = 0; band < Channels; band++) {
-        float out = 0;
-        if (p[6] == 2) {
-            float4 rows;
-            for (int ky = -1; ky <= 2; ky++) {
-                float4 taps;
-                for (int kx = -1; kx <= 2; kx++)
-                    taps[kx + 1] = float(src[uint(clamp(iy + ky, 0, int(sh) - 1)) * sw + uint(clamp(ix + kx, 0, int(sw) - 1))][band]);
-                rows[ky + 1] = warp_cubic(taps, fx);
-            }
-            out = warp_cubic(rows, fy);
-        } else {
-            for (int ky = 0; ky <= 1; ky++) {
-                float wy = ky == 0 ? 1 - fy : fy;
-                float row = 0;
-                for (int kx = 0; kx <= 1; kx++) {
-                    float wx = kx == 0 ? 1 - fx : fx;
-                    uint index = uint(clamp(iy + ky, 0, int(sh) - 1)) * sw + uint(clamp(ix + kx, 0, int(sw) - 1));
-                    row += float(src[index][band]) * wx;
-                }
-                out += row * wy;
-            }
+
+    if (k == 2) {
+        uint x_off[4] = {uint(clamp(ix - 1, 0, max_x)), uint(clamp(ix, 0, max_x)), uint(clamp(ix + 1, 0, max_x)), uint(clamp(ix + 2, 0, max_x))};
+        F samples[4][4];
+#pragma unroll
+        for (int ky = 0; ky < 4; ky++) {
+            device const P *row_ptr = src + uint(clamp(iy + ky - 1, 0, max_y)) * sw;
+#pragma unroll
+            for (int kx = 0; kx < 4; kx++)
+                samples[ky][kx] = F(row_ptr[x_off[kx]]);
         }
-        result[band] = out;
+#pragma unroll
+        for (uint band = 0; band < Channels; band++) {
+            float4 rows;
+#pragma unroll
+            for (int ky = 0; ky < 4; ky++) {
+                float4 taps = float4(samples[ky][0][band], samples[ky][1][band], samples[ky][2][band], samples[ky][3][band]);
+                rows[ky] = warp_cubic(taps, fx);
+            }
+            result[band] = warp_cubic(rows, fy);
+        }
+    } else {
+        uint x0 = uint(clamp(ix, 0, max_x)), x1 = uint(clamp(ix + 1, 0, max_x));
+        uint y0 = uint(clamp(iy, 0, max_y)) * sw, y1 = uint(clamp(iy + 1, 0, max_y)) * sw;
+        F s00 = F(src[y0 + x0]), s01 = F(src[y0 + x1]);
+        F s10 = F(src[y1 + x0]), s11 = F(src[y1 + x1]);
+        float wx0 = 1.0f - fx, wy0 = 1.0f - fy;
+#pragma unroll
+        for (uint band = 0; band < Channels; band++) {
+            float r0 = s00[band] * wx0 + s01[band] * fx;
+            float r1 = s10[band] * wx0 + s11[band] * fx;
+            result[band] = r0 * wy0 + r1 * fy;
+        }
     }
     dst[i] = P(result);
 }
@@ -166,7 +186,6 @@ void process_pixel(device const P *src, device P *dst, device const P *other, co
 }
 
 #define PIXEL_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR, FLOATING)                                                                                       \
-    /* Dispatch geometry, resampling, or alpha processing for the selected pixel type. */                                                            \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      device const SAMPLE *other [[buffer(2)]],                                                                                       \
@@ -215,13 +234,15 @@ void transpose_pixels(device const P *src, device P *dst, constant uint *p, thre
         geometry_pixels(src, dst, p, i);
         return;
     }
-    uint columns = (width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE;
-    uint left = (group % columns) * TRANSPOSE_TILE, top = (group / columns) * TRANSPOSE_TILE;
-    uint x = member % TRANSPOSE_TILE, y = member / TRANSPOSE_TILE;
+    uint columns = (width + TRANSPOSE_TILE - 1) >> 4; // TRANSPOSE_TILE == 16
+    uint group_y, group_x;
+    decompose_2d(group, columns, group_x, group_y);
+    uint left = group_x << 4, top = group_y << 4;
+    uint x = member & 15u, y = member >> 4;
     uint load_x = left + y, load_y = top + x;
     if (load_x < width && load_y < height) {
-        uint sx = method == 2 || method == 6 ? p[0] - 1 - load_y : load_y;
-        uint sy = method == 4 || method == 6 ? p[1] - 1 - load_x : load_x;
+        uint sx = (method == 2 || method == 6) ? p[0] - 1 - load_y : load_y;
+        uint sy = (method == 4 || method == 6) ? p[1] - 1 - load_x : load_x;
         tile[y * TRANSPOSE_STRIDE + x] = src[sy * p[0] + sx];
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -230,7 +251,6 @@ void transpose_pixels(device const P *src, device P *dst, constant uint *p, thre
 }
 
 #define TRANSPOSE_KERNEL(NAME, SAMPLE, TWO, THREE, FOUR)                                                                                             \
-    /* Dispatch tiled transpose with storage matching the image channel count. */                                                                    \
     kernel void NAME(device const SAMPLE *src [[buffer(0)]],                                                                                         \
                      device SAMPLE *dst [[buffer(1)]],                                                                                               \
                      constant uint *p [[buffer(3)]],                                                                                                 \

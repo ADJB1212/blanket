@@ -15,7 +15,7 @@ from ._blanket import _feature_info
 if TYPE_CHECKING:
     from typing import TextIO
 
-__all__ = ["EncodingCapabilities", "blanketinfo", "check", "encoding_capabilities", "get_supported", "version"]
+__all__ = ["EncodingCapabilities", "blanketinfo", "check", "check_module", "encoding_capabilities", "get_supported", "pilinfo", "version"]
 
 
 @dataclass(frozen=True)
@@ -303,3 +303,20 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
                 write = False
             capabilities = [name for name, available in (("open", read), ("save", write)) if available]
             print(f"  {label}: {', '.join(capabilities) or 'unavailable'}", file=out)
+
+
+pilinfo = blanketinfo
+
+
+def check_module(feature: str) -> bool:
+    """Check if an optional module backend is available."""
+    canonical = feature.lower().replace("-", "_")
+    if canonical in ("pil", "tkinter", "tk", "freetype2", "freetype", "raqm", "fribidi"):
+        return False
+    if canonical in ("littlecms2", "lcms2", "littlecms"):
+        return check("lcms2")
+    if canonical in ("webp", "libwebp"):
+        return check("webp")
+    if canonical in ("avif", "libavif"):
+        return check("avif")
+    raise ValueError(f"Unknown module {feature}")

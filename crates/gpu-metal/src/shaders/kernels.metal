@@ -1,13 +1,26 @@
-// Shared scalar entry points and operation dispatch.
+// Helper for fast channel/pixel decomposition when c is often 1, 2, or 4
+inline void decompose_index(uint i, uint c, thread uint &pixel_idx, thread uint &band) {
+    if ((c & (c - 1)) == 0) {
+        uint shift = c == 4 ? 2u : (c == 2 ? 1u : 0u);
+        pixel_idx = i >> shift;
+        band = i & (c - 1);
+    } else {
+        pixel_idx = i / c;
+        band = i - pixel_idx * c;
+    }
+}
 
 // Route a scalar sample to its operation-specific implementation.
 template <typename T>
 void process_sample(device const T *src, device T *dst, device const T *other, constant uint *p, device const float *v, uint i) {
-    uint c = p[2], dw = p[3], dh = p[4], op = p[5], k = p[6];
 #ifdef BLANKET_METAL_SPECIALIZE
-    op = SPECIALIZED_OPERATION;
-    c = SPECIALIZED_CHANNELS;
+    const uint op = SPECIALIZED_OPERATION;
+    const uint c = SPECIALIZED_CHANNELS;
+#else
+    const uint c = p[2], op = p[5];
 #endif
+    uint dw = p[3], dh = p[4], k = p[6];
+
     if (op == OP_BOX_BLUR && is_same_v<T, uchar> && k >= SLIDING_BLUR_RADIUS) {
         sliding_box_blur<T, uint>(src, dst, p, v, i, c);
         return;
@@ -16,8 +29,10 @@ void process_sample(device const T *src, device T *dst, device const T *other, c
         channel_statistics_scalar(src, dst, p, i, c);
         return;
     }
+
+    uint num_pixels = dw * dh;
     if (op == OP_CHANNEL) {
-        if (i < dw * dh)
+        if (i < num_pixels)
             dst[i] = src[i * c + k];
         return;
     }
@@ -25,44 +40,61 @@ void process_sample(device const T *src, device T *dst, device const T *other, c
         map_color_lut(src, dst, p, v, i);
         return;
     }
-    if (i >= dw * dh * c)
+    if (i >= num_pixels * c)
         return;
-    uint band = i % c;
+
     switch (op) {
     case OP_QUANTIZE: {
         float value = float(src[i]);
-        value = isnan(value) ? 0.0f : clamp(value, 0.0f, 1.0f);
-        dst[i] = T(floor(value * v[0] + 0.5f) / v[0]);
+        value = isnan(value) ? 0.0f : saturate(value);
+        float scale = v[0];
+        dst[i] = T(floor(fma(value, scale, 0.5f)) / scale);
         return;
     }
     case OP_MASK: {
-        float mask = float(other[i / c]) / v[0];
-        mask = isnan(mask) ? 0.0f : clamp(mask, 0.0f, 1.0f);
+        uint pixel_idx = ((c & (c - 1)) == 0) ? (i >> (c == 4 ? 2u : (c == 2 ? 1u : 0u))) : (i / c);
+        float mask = float(other[pixel_idx]) / v[0];
+        mask = isnan(mask) ? 0.0f : saturate(mask);
         if (p[7] == 1)
             mask = 1.0f - mask;
-        dst[i] = mask == 0 ? T(0) : T(float(src[i]) * mask);
+        dst[i] = (mask == 0.0f) ? T(0) : T(float(src[i]) * mask);
         return;
     }
     case OP_WARP:
     case OP_REMAP:
         warp_sample(src, dst, other, p, v, i, op, c);
         return;
-    case OP_TRANSFER:
-    case OP_CLAMP_ALPHA: {
+    case OP_TRANSFER: {
+        uint band = ((c & (c - 1)) == 0) ? (i & (c - 1)) : (i % c);
         float value = float(src[i]);
-        if (op == OP_TRANSFER && band < 3)
+        if (band < 3)
             value = color_transfer(value, k == 0);
-        if (op == OP_CLAMP_ALPHA && band == c - 1)
-            value = isnan(value) ? 0.0f : clamp(value, 0.0f, 1.0f);
         dst[i] = T(value);
+        return;
+    }
+    case OP_CLAMP_ALPHA: {
+        uint band = ((c & (c - 1)) == 0) ? (i & (c - 1)) : (i % c);
+        T raw = src[i];
+        if (band == c - 1) {
+            float value = float(raw);
+            dst[i] = T(isnan(value) ? 0.0f : saturate(value));
+        } else {
+            dst[i] = raw;
+        }
         return;
     }
     case OP_ENHANCE:
         enhance_sample(src, dst, other, p, v, i, c);
         return;
-    case OP_REPLACE_CHANNEL:
+    case OP_REPLACE_CHANNEL: {
+        uint pixel_idx, band;
+        decompose_index(i, c, pixel_idx, band);
+        dst[i] = (band == k) ? other[pixel_idx] : src[i];
+        return;
+    }
     case OP_SET_ALPHA: {
-        dst[i] = op == OP_REPLACE_CHANNEL ? (band == k ? other[i / c] : src[i]) : (band == c - 1 ? store_sample<T>(v[0]) : src[i]);
+        uint band = ((c & (c - 1)) == 0) ? (i & (c - 1)) : (i % c);
+        dst[i] = (band == c - 1) ? store_sample<T>(v[0]) : src[i];
         return;
     }
     case OP_BOX_BLUR:
@@ -76,17 +108,16 @@ void process_sample(device const T *src, device T *dst, device const T *other, c
     case OP_OFFSET:
         geometry_sample(src, dst, p, i, op, c);
         return;
+    case OP_RESIZE:
+        dst[i] = store_sample<T>(resize_sample(src, p, v, i, c));
+        return;
+    case OP_CONVOLVE:
+        dst[i] = store_sample<T>(convolve_sample(src, p, v, i, c));
+        return;
     default:
-        break;
+        dst[i] = store_sample<T>(arithmetic_sample(src, other, p, v, i, op, c));
+        return;
     }
-    float value;
-    if (op == OP_RESIZE)
-        value = resize_sample(src, p, v, i, c);
-    else if (op == OP_CONVOLVE)
-        value = convolve_sample(src, p, v, i, c);
-    else
-        value = arithmetic_sample(src, other, p, v, i, op, c);
-    dst[i] = store_sample<T>(value);
 }
 
 // Dispatch one byte sample through the shared scalar operation path.
