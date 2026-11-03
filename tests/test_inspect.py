@@ -193,12 +193,27 @@ def test_paths_streams_and_allowlists(tmp_path):
     assert Image.inspect(BytesIO(encode(format="JPEG")), formats=["jpg"]).format == "JPEG"
 
 
-def test_nonseekable_stream():
+@pytest.mark.parametrize("operation", [Image.inspect, Image.open])
+def test_nonseekable_stream(operation):
     class Stream:
         def read(self):
             return encode()
 
-    assert Image.inspect(Stream()).size == (17, 9)
+    assert operation(Stream()).size == (17, 9)
+
+
+@pytest.mark.parametrize(("unit", "resolution", "expected"), [(2, 150, 150), (3, 100, 254), (None, None, 72)])
+def test_jpeg_exif_dpi_inspection(unit, resolution, expected):
+    exif = Image.Exif()
+    exif[270] = "inspection"
+    if unit is not None:
+        exif[296] = unit
+        exif[282] = resolution
+    data = encode(format="JPEG", exif=exif)
+    header = Image.inspect(BytesIO(data))
+    image = Image.open(BytesIO(data))
+    assert header.info == image.info
+    assert header.info["dpi"] == (expected, expected)
 
 
 @pytest.mark.parametrize("data", [b"", b"garbage", b"GIF89a", b"\x89PNG\r\n\x1a\n", b"BM", b"qoif", b"II*\0", b"\xff\xd8\xff", b"\x01\xda", b"\0\0\x01\0"])

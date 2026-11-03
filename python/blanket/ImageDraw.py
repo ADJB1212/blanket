@@ -17,6 +17,7 @@ from . import Image
 from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
 from ._color import color_pixel
 from ._draw_font import BitmapFont
+from .ImageFont import load_default
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -26,7 +27,54 @@ if TYPE_CHECKING:
     Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
     Color = int | float | str | tuple[int, ...] | None
 
-__all__ = ["Draw", "ImageDraw", "floodfill"]
+__all__ = ["Draw", "ImageDraw", "Outline", "floodfill"]
+
+
+class Outline:
+    """Flattened cubic Bezier and line segments for ImageDraw.shape()."""
+
+    def __init__(self) -> None:
+        self.x = self.x0 = 0.0
+        self.y = self.y0 = 0.0
+        self.edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
+
+    def move(self, x0: float, y0: float) -> None:
+        self.x = self.x0 = float(x0)
+        self.y = self.y0 = float(y0)
+
+    def line(self, x1: float, y1: float) -> None:
+        x1, y1 = float(x1), float(y1)
+        self.edges.append(((int(self.x), int(self.y)), (int(x1), int(y1))))
+        self.x, self.y = x1, y1
+
+    def curve(self, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float) -> None:
+        x1, y1, x2, y2, x3, y3 = float(x1), float(y1), float(x2), float(y2), float(x3), float(y3)
+        xo, yo = self.x, self.y
+        for step in range(1, 33):
+            t = step / 32.0
+            t2 = t * t
+            t3 = t2 * t
+            u = 1.0 - t
+            u2 = u * u
+            u3 = u2 * u
+            x = self.x * u3 + 3.0 * (x1 * t * u2 + x2 * t2 * u) + x3 * t3 + 0.5
+            y = self.y * u3 + 3.0 * (y1 * t * u2 + y2 * t2 * u) + y3 * t3 + 0.5
+            self.edges.append(((int(xo), int(yo)), (int(x), int(y))))
+            xo, yo = x, y
+        self.x, self.y = xo, yo
+
+    def close(self) -> None:
+        if self.x == self.x0 and self.y == self.y0:
+            return
+        self.line(self.x0, self.y0)
+
+    def transform(self, matrix: Sequence[float]) -> None:
+        if len(matrix) != 6:
+            raise TypeError("transform matrix must contain six values")
+        for value in matrix:
+            float(value)
+        self.edges.clear()
+
 
 _BINARY_TABLE = bytes([0] + [255] * 255)
 
@@ -102,6 +150,8 @@ class ImageDraw:
             and `L` otherwise. Set to `1` to request binary font masks.
     """
 
+    font: object | None = None
+
     def __init__(self, im: Image.Image, mode: str | None = None, *, antialias: bool = False) -> None:
         """Configure a drawing context for `im`.
 
@@ -139,8 +189,27 @@ class ImageDraw:
         self.mode = mode
         self.blend = blend
         self.fontmode = "1" if mode in ("1", "P") else "L"
-        self.font = None
         self.antialias = antialias
+
+    def getfont(self) -> object:
+        """Return the active default font, initializing it on first access."""
+        if not self.font:
+            self.font = load_default()
+        return self.font
+
+    def shape(self, shape: Outline, fill: Color = None, outline: Color = None) -> None:
+        """Close and rasterize an Outline using the scanline polygon filler."""
+        shape.close()
+        points = [edge[0] for edge in shape.edges]
+        if shape.edges:
+            points.append(shape.edges[-1][1])
+        if fill is None and outline is None:
+            outline = 1 if self.mode in ("I", "F") else -1
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        for ink in (fill_ink, None if outline_ink == fill_ink else outline_ink):
+            if ink is not None and points:
+                draw_polygon(self.im._native, points, 1, True, True, ink, bool(self.blend))
 
     def _ink(self, fill: Color) -> int | float | tuple[int, ...]:
         """Normalize an ink to native pixel values in the drawing mode."""
@@ -275,10 +344,12 @@ class ImageDraw:
         """
         bounds = self._bounds(xy)
         width = index(width)
-        if fill is not None:
-            draw_ellipse(self.im._native, bounds, self._ink(fill), 0, bool(self.blend), bool(self.antialias))
-        if outline is not None and outline != fill and width > 0:
-            draw_ellipse(self.im._native, bounds, self._ink(outline), width, bool(self.blend), bool(self.antialias))
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        if fill_ink is not None:
+            draw_ellipse(self.im._native, bounds, fill_ink, 0, bool(self.blend), bool(self.antialias))
+        if outline_ink is not None and outline_ink != fill_ink and width > 0:
+            draw_ellipse(self.im._native, bounds, outline_ink, width, bool(self.blend), bool(self.antialias))
 
     def line(self, xy: Coords, fill: Color = None, width: int = 0, joint: str | None = None) -> None:
         """Draw connected line segments through a sequence of coordinates.
@@ -371,10 +442,12 @@ class ImageDraw:
 
     def _native_curve(self, xy: Coords, start: float, end: float, style: str, fill: Color, outline: Color, width: int) -> None:
         bounds = self._bounds(xy)
-        if fill is not None:
-            draw_curve(self.im._native, bounds, start, end, 0, style, True, self._ink(fill), bool(self.blend))
-        if outline is not None and outline != fill and width > 0:
-            draw_curve(self.im._native, bounds, start, end, index(width), style, False, self._ink(outline), bool(self.blend))
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        if fill_ink is not None:
+            draw_curve(self.im._native, bounds, start, end, 0, style, True, fill_ink, bool(self.blend))
+        if outline_ink is not None and outline_ink != fill_ink and width > 0:
+            draw_curve(self.im._native, bounds, start, end, index(width), style, False, outline_ink, bool(self.blend))
 
     def _bounds(self, xy: Coords) -> tuple[int, int, int, int]:
         """Return two truncated, ordered bounding endpoints as four integers."""
@@ -407,10 +480,12 @@ class ImageDraw:
     def _shape(self, points: Sequence[tuple[float, float]], fill: Color, outline: Color, width: int) -> None:
         """Fill a closed path, then draw its distinct positive-width outline."""
         width = index(width)
-        if fill is not None:
-            self._path(points, fill, closed=True, filled=True)
-        if outline is not None and outline != fill and width > 0:
-            self._path(points, outline, width=width, closed=True)
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        if fill_ink is not None:
+            self._path(points, fill_ink, closed=True, filled=True)
+        if outline_ink is not None and outline_ink != fill_ink and width > 0:
+            self._path(points, outline_ink, width=width, closed=True)
 
     def point(self, xy: Coords, fill: Color = None) -> None:
         """Draw one or more points in place.
@@ -472,10 +547,12 @@ class ImageDraw:
         if len(points) < 2:
             raise ValueError("polygon requires at least two coordinates")
         if not self.antialias:
-            if fill is not None:
-                draw_polygon(self.im._native, points, 1, True, True, self._ink(fill), bool(self.blend))
-            if outline is not None and outline != fill and width > 0:
-                draw_polygon(self.im._native, points, index(width), False, True, self._ink(outline), bool(self.blend))
+            fill_ink = None if fill is None else self._ink(fill)
+            outline_ink = None if outline is None else self._ink(outline)
+            if fill_ink is not None:
+                draw_polygon(self.im._native, points, 1, True, True, fill_ink, bool(self.blend))
+            if outline_ink is not None and outline_ink != fill_ink and width > 0:
+                draw_polygon(self.im._native, points, index(width), False, True, outline_ink, bool(self.blend))
             return
         self._shape(points, fill, outline, width)
 
@@ -557,10 +634,12 @@ class ImageDraw:
         if self.antialias:
             self._shape([(x0, y0), (x1, y0), (x1, y1), (x0, y1)], fill, outline, width)
             return
-        if fill is not None:
-            draw_rectangle(self.im._native, bounds, self._ink(fill), 0, bool(self.blend))
-        if outline is not None and outline != fill and width > 0:
-            draw_rectangle(self.im._native, bounds, self._ink(outline), width, bool(self.blend))
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        if fill_ink is not None:
+            draw_rectangle(self.im._native, bounds, fill_ink, 0, bool(self.blend))
+        if outline_ink is not None and outline_ink != fill_ink and width > 0:
+            draw_rectangle(self.im._native, bounds, outline_ink, width, bool(self.blend))
 
     def rounded_rectangle(self, xy: Coords, radius: float = 0, fill: Color = None, outline: Color = None, width: int = 1, corners: tuple[bool, bool, bool, bool] | None = None) -> None:
         """Draw a rectangle with individually selectable rounded corners.
@@ -654,11 +733,13 @@ class ImageDraw:
         def rectangle(bounds: tuple[int, int, int, int], ink: Color) -> None:
             draw_rectangle(self.im._native, bounds, self._ink(ink), 0, bool(self.blend))
 
-        for ink, filled in ((fill, True), (outline, False)):
-            if ink is None or (not filled and (ink == fill or width <= 0)):
+        fill_ink = None if fill is None else self._ink(fill)
+        outline_ink = None if outline is None else self._ink(outline)
+        for ink, filled in ((fill_ink, True), (outline_ink, False)):
+            if ink is None or (not filled and (ink == fill_ink or width <= 0)):
                 continue
             for bounds, start, end in parts:
-                draw_curve(self.im._native, tuple(int(v) for v in bounds), start, end, 0 if filled else width, "pie" if filled else "arc", filled, self._ink(ink), bool(self.blend))
+                draw_curve(self.im._native, tuple(int(v) for v in bounds), start, end, 0 if filled else width, "pie" if filled else "arc", filled, ink, bool(self.blend))
             if filled:
                 if full_x:
                     rectangle((x0, y0 + r + 1, x1, y1 - r - 1), ink)

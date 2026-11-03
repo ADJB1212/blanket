@@ -15,7 +15,7 @@ from ._blanket import _feature_info
 if TYPE_CHECKING:
     from typing import TextIO
 
-__all__ = ["EncodingCapabilities", "blanketinfo", "check", "check_codec", "check_module", "encoding_capabilities", "get_supported", "pilinfo", "version", "version_codec"]
+__all__ = ["EncodingCapabilities", "blanketinfo", "check", "check_codec", "check_feature", "check_module", "encoding_capabilities", "get_supported", "pilinfo", "version", "version_codec"]
 
 
 @dataclass(frozen=True)
@@ -320,6 +320,13 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
 
 
 pilinfo = blanketinfo
+
+
+def check_feature(feature: str) -> bool | None:
+    """Check whether an optional Pillow feature flag is enabled."""
+    if feature not in ("raqm", "fribidi", "harfbuzz", "libjpeg_turbo", "mozjpeg", "zlib_ng", "libimagequant", "xcb"):
+        raise ValueError(f"Unknown feature {feature}")
+    return feature == "libjpeg_turbo" and check("libjpeg_turbo")
 
 
 def check_module(feature: str) -> bool:

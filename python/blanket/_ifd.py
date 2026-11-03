@@ -146,10 +146,10 @@ class Exif(MutableMapping[int, object]):
                 continue
             start = pos + 8 if size <= 4 else field
             if start > len(data) or size > len(data) - start:
-                raise ValueError("truncated EXIF value")
+                continue
             if kind == 2:
                 value = data[start : start + size].rstrip(b"\0").decode("ascii", "replace")
-            elif kind == 7 or (kind == 1 and tag in (700, 34675)):
+            elif kind == 7 or (kind == 1 and (tag in (700, 34675) or key == 34853)):
                 value = data[start : start + size]
             elif kind in (5, 10):
                 fmt = endian + ("II" if kind == 5 else "ii")

@@ -16,6 +16,7 @@ from ._blanket import PngStreamWriter, StreamingDecoder, UnidentifiedImageError
 from .Image import Image
 
 MAXBLOCK = 65536
+LOAD_TRUNCATED_IMAGES = False
 
 if TYPE_CHECKING:
     import os

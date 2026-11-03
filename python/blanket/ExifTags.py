@@ -51,6 +51,10 @@ class Base(IntEnum):
     ExifImageWidth = 0xA002
     ExifImageHeight = 0xA003
     ExifInteroperabilityOffset = 0xA005
+    RelatedImageWidth = 0x1001
+    RelatedImageLength = 0x1002
+    ImageResources = 0x8649
+    SubIFDs = 0x014A
 
 
 class IFD(IntEnum):

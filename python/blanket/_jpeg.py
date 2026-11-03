@@ -76,6 +76,58 @@ _ZIGZAG = (
 )
 
 
+def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
+    """Strip inter-marker junk and duplicate post-SOF ICC markers; detect missing EOI."""
+    if not data.startswith(b"\xff\xd8"):
+        return data, False
+    view = memoryview(data)
+    output: bytearray | None = None
+    seen_sof = False
+    position = 2
+    while position < len(data):
+        start = position
+        if data[position] != 255:
+            while position < len(data) and data[position] != 255:
+                position += 1
+            if output is None:
+                output = bytearray(view[:start])
+            continue
+        while position < len(data) and data[position] == 255:
+            position += 1
+        if position == len(data):
+            break
+        marker = data[position]
+        position += 1
+        if marker in (0, 1):
+            if output is None:
+                output = bytearray(view[:start])
+            continue
+        if marker in (0xDA, 0xD9):
+            if output is not None:
+                output.extend(view[start:])
+            break
+        if 0xD0 <= marker <= 0xD8:
+            if output is not None:
+                output.extend(view[start:position])
+            continue
+        if position + 2 > len(data):
+            break
+        length = int.from_bytes(view[position : position + 2], "big")
+        if length < 2 or position + length > len(data):
+            break
+        if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+            seen_sof = True
+        skip = seen_sof and marker == 0xE2 and view[position + 2 : position + 14] == b"ICC_PROFILE\0"
+        if skip and output is None:
+            output = bytearray(view[:start])
+        elif not skip and output is not None:
+            output.extend(view[start : position + length])
+        position += length
+    cleaned = bytes(output) if output is not None else data
+    truncated = not cleaned.rstrip(b"\x00\xff").endswith(b"\xd9") and b"\xff\xd9" not in cleaned[-32:]
+    return cleaned, truncated
+
+
 def segments(data: bytes) -> Iterator[tuple[int, memoryview]]:
     """Yield bounded header segments without copying unknown payloads."""
     view = memoryview(data)
@@ -115,6 +167,36 @@ def read_metadata(data: bytes) -> dict[object, object]:
                 info["dpi"] = density
             elif payload[7] == 2:
                 info["dpi"] = tuple(value * 2.54 for value in density)
+        elif marker == 0xED and payload[:14] == b"Photoshop 3.0\0":
+            offset = 14
+            photoshop = info.setdefault("photoshop", {})
+            if not isinstance(photoshop, dict):
+                continue
+            try:
+                while payload[offset : offset + 4] == b"8BIM":
+                    offset += 4
+                    code = struct.unpack_from(">H", payload, offset)[0]
+                    offset += 2
+                    name_len = payload[offset]
+                    offset += 1 + name_len
+                    offset += offset & 1
+                    size = struct.unpack_from(">I", payload, offset)[0]
+                    offset += 4
+                    block = bytes(payload[offset : offset + size])
+                    if code == 0x03ED:
+                        photoshop[code] = {
+                            "XResolution": struct.unpack_from(">I", block, 0)[0] / 65536,
+                            "DisplayedUnitsX": struct.unpack_from(">H", block, 4)[0],
+                            "YResolution": struct.unpack_from(">I", block, 8)[0] / 65536,
+                            "DisplayedUnitsY": struct.unpack_from(">H", block, 12)[0],
+                        }
+                    else:
+                        photoshop[code] = block
+                    offset += size + (offset + size & 1)
+            except (IndexError, struct.error):
+                pass
+        elif marker == 0xE2 and payload[:4] == b"MPF\0":
+            info["mp"] = bytes(payload[4:])
         elif marker == 0xEE and payload[:5] == b"Adobe" and len(payload) >= 7:
             info["adobe"] = int.from_bytes(payload[5:7], "big")
             if len(payload) >= 12:

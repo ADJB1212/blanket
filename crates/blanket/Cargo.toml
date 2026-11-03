@@ -20,6 +20,7 @@ blanket-resample.workspace = true
 blanket-codec-extended.workspace = true
 blanket-codec-jpeg2000.workspace = true
 pyo3.workspace = true
+roxmltree = {version = "0.21", default-features = false, features = ["std", "positions"]}
 blanket-core.workspace = true
 blanket-cms.workspace = true
 blanket-codecs.workspace = true

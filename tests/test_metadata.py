@@ -38,5 +38,5 @@ def test_metadata_skips_large_pixel_payloads(format: str) -> None:
         _, peak = tracemalloc.get_traced_memory()
     finally:
         tracemalloc.stop()
-    assert info == {"exif": exif}
+    assert info == ({"exif": exif, "dpi": (72, 72)} if format == "JPEG" else {"exif": exif})
     assert peak < 32 * 1024

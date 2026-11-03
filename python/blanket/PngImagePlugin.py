@@ -16,6 +16,117 @@ from ._io import write_all
 from ._plugin import PluginImage
 
 _MAGIC = b"\x89PNG\r\n\x1a\n"
+_SYNTAX_ERROR = SyntaxError
+
+
+def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]:
+    """Strip invalid APNG control chunks and classify deferred frame errors."""
+    if not data.startswith(_MAGIC):
+        return data, None, None
+    pos = 8
+    chunks: list[tuple[int, int, bytes, memoryview]] = []
+    actl_indices: list[int] = []
+    idat_seen = False
+    view = memoryview(data)
+    while pos + 12 <= len(data):
+        length = int.from_bytes(view[pos : pos + 4], "big")
+        if pos + 12 + length > len(data):
+            return data, None, None
+        cid = bytes(view[pos + 4 : pos + 8])
+        payload = view[pos + 8 : pos + 8 + length]
+        if cid == b"acTL" and not idat_seen:
+            actl_indices.append(len(chunks))
+        elif cid == b"IDAT":
+            idat_seen = True
+        chunks.append((pos, pos + 12 + length, cid, payload))
+        pos += 12 + length
+        if cid == b"IEND":
+            break
+    if not actl_indices:
+        return data, None, None
+    actl_payload = chunks[actl_indices[0]][3]
+    if len(actl_payload) < 8:
+        return data, None, None
+    num_frames = int.from_bytes(actl_payload[:4], "big")
+    if len(actl_indices) > 1 or num_frames == 0 or num_frames > 0x80000000:
+        import warnings
+
+        warnings.warn("Invalid APNG, will use default PNG image if possible", UserWarning, stacklevel=3)
+        output = bytearray(_MAGIC)
+        for start, end, cid, _ in chunks:
+            if cid == b"IEND" and not idat_seen:
+                ihdr = chunks[0][3]
+                width, height = int.from_bytes(ihdr[:4], "big"), int.from_bytes(ihdr[4:8], "big")
+                putchunk(_Buffer(output), b"IDAT", zlib.compress(bytes((width * 8 + 1) * height)))
+            if cid not in (b"acTL", b"fcTL", b"fdAT"):
+                output.extend(view[start:end])
+        return bytes(output), None if idat_seen else OSError("IDAT or fdAT chunk is missing"), None
+    expected_seq = 0
+    fctl_count = 0
+    need_data = False
+    has_idat = False
+    has_fctl_before_idat = False
+    for index, (_, _, cid, payload) in enumerate(chunks):
+        if cid == b"fcTL":
+            if index < actl_indices[0] and not has_idat:
+                return data, None, None
+            if not has_idat:
+                has_fctl_before_idat = True
+            if need_data:
+                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG missing frame data"), num_frames + int(has_idat and not has_fctl_before_idat)
+            if len(payload) < 26 or int.from_bytes(payload[:4], "big") != expected_seq:
+                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
+            expected_seq += 1
+            fctl_count += 1
+            need_data = True
+        elif cid == b"IDAT":
+            has_idat = True
+            need_data = False
+        elif cid == b"fdAT":
+            if not fctl_count or len(payload) < 4 or int.from_bytes(payload[:4], "big") != expected_seq:
+                return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG contains frame sequence errors"), num_frames + int(has_idat and not has_fctl_before_idat)
+            expected_seq += 1
+            need_data = False
+    total_frames = num_frames + int(has_idat and not has_fctl_before_idat)
+    ihdr = chunks[0][3]
+    if len(ihdr) >= 8 and int.from_bytes(ihdr[:4], "big") * int.from_bytes(ihdr[4:8], "big") * total_frames > 178_956_970:
+        return data, None, None
+    if need_data or fctl_count == 0:
+        return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG missing frame data"), total_frames
+    if fctl_count < num_frames:
+        return bytes(_strip_apng(view, chunks)), OSError("no more images in APNG file"), total_frames
+    if fctl_count > num_frames and has_idat:
+        output = bytearray(_MAGIC)
+        for start, end, cid, payload in chunks:
+            if cid == b"acTL":
+                putchunk(output_stream := _Buffer(output), b"acTL", o32(fctl_count), bytes(payload[4:8]))
+                del output_stream
+            else:
+                output.extend(view[start:end])
+        return bytes(output), None, None
+    return data, None, None
+
+
+class _Buffer:
+    def __init__(self, target: bytearray) -> None:
+        self.target = target
+
+    def write(self, data: bytes) -> int:
+        self.target.extend(data)
+        return len(data)
+
+
+def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview]]) -> bytearray:
+    output = bytearray(_MAGIC)
+    seen_idat = False
+    for start, end, cid, _ in chunks:
+        if cid == b"IDAT":
+            seen_idat = True
+            output.extend(view[start:end])
+        elif cid not in (b"acTL", b"fcTL", b"fdAT") or (not seen_idat and cid == b"fcTL"):
+            if cid != b"fcTL":
+                output.extend(view[start:end])
+    return output
 
 
 class PngImageFile(PluginImage):

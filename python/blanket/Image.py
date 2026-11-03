@@ -11,6 +11,7 @@ __lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections
 import contextlib
 import math
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -37,9 +38,11 @@ if TYPE_CHECKING:
     from .ImagePalette import ImagePalette
 
 from ._blanket import (
+    UnidentifiedImageError,
     _decode_region,
     _draft_jpeg,
     _encode,
+    _getxmp,
     _index_sequence,
     _inspect,
     _open_sequence,
@@ -436,6 +439,8 @@ class Image:
         self._exif: Exif | None = None
         self._exif_source: object = None
         self._draft_source: bytes | None = None
+        self._seek_error: BaseException | None = None
+        self._declared_frames: int | None = None
         palette_data = native.palette_data()
         if palette_data is not None:
             from .ImagePalette import ImagePalette
@@ -567,6 +572,8 @@ class Image:
         """
         if self._lazy_frames is not None:
             return self._lazy_frames.count
+        if self._declared_frames is not None:
+            return self._declared_frames
         return len(self._frames) if self._frames is not None else 1
 
     def tell(self) -> int:
@@ -600,6 +607,8 @@ class Image:
         frame = index(frame)
         if not 0 <= frame < self.n_frames:
             raise EOFError("attempt to seek outside sequence")
+        if self._seek_error is not None and frame > 0:
+            raise self._seek_error
         if frame == self._frame or (self._frames is None and self._lazy_frames is None):
             return
         self._sync_palette()
@@ -611,6 +620,12 @@ class Image:
         self._exif, self._exif_source = selected._exif, selected._exif_source
         self._bands = _BANDS[self._native.mode]
         self._frame = frame
+
+    def _seek(self, frame: int) -> None:
+        self._native.load()
+        if frame != 0 and frame != self._frame + 1:
+            raise ValueError(f"cannot seek to frame {frame}")
+        self.seek(frame)
 
     @property
     def has_transparency_data(self) -> bool:
@@ -643,6 +658,14 @@ class Image:
             ```
         """
         self._native.load()
+        if self._seek_error == "truncated_jpeg":
+            from . import ImageFile
+
+            if not ImageFile.LOAD_TRUNCATED_IMAGES:
+                raise OSError("broken data stream when reading image file")
+            self._seek_error = None
+        elif self._seek_error is not None and self._frame == 0 and self._declared_frames is None:
+            raise self._seek_error
         self._draft_source = None
         self._sync_palette()
         return PixelAccess(self._native)
@@ -724,6 +747,10 @@ class Image:
             image.verify()
             ```
         """
+        self.load()
+
+    def load_djpeg(self) -> None:
+        warnings.warn("load_djpeg is deprecated and will be removed in Pillow 14 (2027-10-15). Use the built-in JPEG decoder instead, or call djpeg yourself.", DeprecationWarning, stacklevel=2)
         self.load()
 
     def draft(self, mode: str | None, size: tuple[int, int] | None) -> tuple[str, tuple[int, int, float, float]] | None:
@@ -1035,6 +1062,100 @@ class Image:
         if 34853 in exif:
             result[34853] = exif.get_ifd(34853)
         return result
+
+    def _getmp(self) -> dict[int, object] | None:
+        raw = self.info.get("mp")
+        if not isinstance(raw, bytes):
+            return None
+        if len(raw) < 8 or raw[:4] not in (b"II*\0", b"MM\0*"):
+            raise SyntaxError("malformed MP Index (unreadable directory)")
+        endian = "<" if raw[:2] == b"II" else ">"
+        try:
+            exif = Exif()
+            exif.load(raw)
+            mp = dict(exif)
+        except Exception as error:
+            raise SyntaxError("malformed MP Index (unreadable directory)") from error
+        if 0xB001 not in mp:
+            raise SyntaxError("malformed MP Index (no number of images)")
+        entries = []
+        try:
+            raw_entries = mp[0xB002]
+            if not isinstance(raw_entries, bytes):
+                raise TypeError("bad MP Entry")
+            for index_num in range(cast("int", mp[0xB001])):
+                attr, size, offset, dep1, dep2 = struct.unpack_from(f"{endian}LLLHH", raw_entries, index_num * 16)
+                fmt = (attr & (7 << 24)) >> 24
+                if fmt != 0:
+                    raise SyntaxError("unsupported picture format in MPO")
+                mp_type = attr & 0x00FFFFFF
+                type_name = {
+                    0x000000: "Undefined",
+                    0x010001: "Large Thumbnail (VGA Equivalent)",
+                    0x010002: "Large Thumbnail (Full HD Equivalent)",
+                    0x020001: "Multi-Frame Image (Panorama)",
+                    0x020002: "Multi-Frame Image: (Disparity)",
+                    0x020003: "Multi-Frame Image: (Multi-Angle)",
+                    0x030000: "Baseline MP Primary Image",
+                }.get(mp_type, "Unknown")
+                entries.append(
+                    {
+                        "Attribute": {
+                            "DependentParentImageFlag": bool(attr & (1 << 31)),
+                            "DependentChildImageFlag": bool(attr & (1 << 30)),
+                            "RepresentativeImageFlag": bool(attr & (1 << 29)),
+                            "Reserved": (attr & (3 << 27)) >> 27,
+                            "ImageDataFormat": "JPEG",
+                            "MPType": type_name,
+                        },
+                        "Size": size,
+                        "DataOffset": offset,
+                        "EntryNo1": dep1,
+                        "EntryNo2": dep2,
+                    }
+                )
+            mp[0xB002] = entries
+        except (KeyError, struct.error, TypeError) as error:
+            raise SyntaxError("malformed MP Index (bad MP Entry)") from error
+        return mp
+
+    def get_child_images(self) -> list[Image]:
+        """Return embedded thumbnail or child images referenced in EXIF."""
+        exif = self.getexif()
+        if exif.thumbnail is not None:
+            child = open(BytesIO(exif.thumbnail))
+            child.load()
+            return [child]
+        return []
+
+    def getxmp(self, *, strip_namespaces: bool = True) -> dict[str, object]:
+        """Parse XMP XML into nested dictionaries.
+
+        Args:
+            strip_namespaces: Strip namespace URIs from tag and attribute names.
+        """
+        raw = self.info.get("xmp")
+        if not isinstance(raw, bytes):
+            return {}
+
+        try:
+            return _getxmp(raw, strip_namespaces)
+        except ValueError as error:
+            from xml.etree.ElementTree import ParseError
+
+            raise ParseError(str(error)) from error
+
+    def _repr_png_(self) -> bytes | None:
+        try:
+            return self.encode("PNG", compress_level=1)
+        except Exception:
+            return None
+
+    def _repr_jpeg_(self) -> bytes | None:
+        try:
+            return self.encode("JPEG")
+        except Exception:
+            return None
 
     def get_format_mimetype(self) -> str | None:
         """Return the detected format's MIME type, or None when unknown."""
@@ -2270,7 +2391,7 @@ class Image:
                 else:
                     native.set_palette_alpha(alpha=transparency)
         metadata = save_metadata(self, output_format, options)
-        values = _save_options(output_format, options)
+        values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
         encoded = _encode(
@@ -2684,6 +2805,20 @@ def _decode_options(formats: list[str] | tuple[str, ...] | None, lazy: bool, fra
 
 def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int) -> Image:
     """Build images and frame metadata from an immutable encoded buffer."""
+    seek_error = None
+    declared_frames = None
+    if data.startswith(b"\x89PNG\r\n\x1a\n") and (formats is None or any(str(f).upper() == "PNG" for f in formats)):
+        from .PngImagePlugin import sanitize_apng
+
+        data, seek_error, declared_frames = sanitize_apng(data)
+    elif data.startswith(b"\xff\xd8") and (formats is None or any(str(f).upper() in ("JPEG", "JPG") for f in formats)):
+        from . import ImageFile
+        from ._jpeg import sanitize_jpeg
+
+        data, truncated = sanitize_jpeg(data)
+        if truncated and b"\xff\xda" in data:
+            data = data + b"\xff\xd9"
+            seek_error = "truncated_jpeg"
     if lazy:
         from ._lazy_frames import LazyFrames
 
@@ -2699,6 +2834,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         return image
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
+    image._seek_error = seek_error
+    image._declared_frames = declared_frames
 
     metadata = read_tiff_metadata(data, len(frames), decoded=True) if image.format == "TIFF" else None
     if metadata is None:
@@ -2723,6 +2860,11 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
 
         image.__dict__.update(read_attributes(data))
         image._draft_source = data
+        if "mp" in image.info:
+            try:
+                image._getmp()
+            except SyntaxError:
+                warnings.warn("Image appears to be a malformed MPO file, it will be interpreted as a base JPEG file", UserWarning, stacklevel=2)
     return image
 
 
@@ -2887,10 +3029,21 @@ def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
         stream = fp
         with contextlib.suppress(AttributeError, OSError):
             stream.seek(0)
-        data = stream.read()
-        if not isinstance(data, bytes):
+        try:
+            head = stream.read(16)
+        except TypeError:
+            data = stream.read()
+            if not isinstance(data, bytes):
+                raise ValueError("binary data must be used to open an image") from None
+            return data
+        if not isinstance(head, bytes):
             raise ValueError("binary data must be used to open an image")
-        return data
+        if head.startswith(b"\xff\xff"):
+            raise UnidentifiedImageError("cannot identify image file")
+        rest = stream.read()
+        if not isinstance(rest, bytes):
+            raise ValueError("binary data must be used to open an image")
+        return head + rest
     return Path(os.fsdecode(os.fspath(fp))).read_bytes()
 
 
@@ -2911,8 +3064,9 @@ def _output_format(fp: object, requested: str | None) -> str:
         raise ValueError(f"unknown file extension: {extension}") from error
 
 
-def _save_options(format: str, supplied: dict[str, object]) -> dict[str, object]:
+def _save_options(format: str, supplied: dict[str, object], image: Image | None = None) -> dict[str, object]:
     """Validate format-specific save options and supply native encoder defaults."""
+    del image
     unknown = supplied.keys() - _SAVE_OPTIONS[format]
     if unknown:
         names = ", ".join(sorted(unknown))

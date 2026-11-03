@@ -43,7 +43,7 @@ jobs:
       - name: Install wheel builder
         run: |
           uv python install 3.14
-          uv tool install 'maturin[patchelf]>=1.15,<2'
+          uv tool install 'maturin[patchelf]>=1.16,<2'
           cargo clean -p lcms2-sys
           cargo clean -p lcms2
           cargo clean -p libheif-sys

@@ -96,16 +96,13 @@ jobs:
       - name: Install Deps and Setup PATH (Linux)
         if: runner.os == 'Linux'
         run: |
-          curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | sudo tee /usr/share/keyrings/llvm.asc > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/llvm.asc] https://apt.llvm.org/resolute/ llvm-toolchain-resolute-23 main" | sudo tee /etc/apt/sources.list.d/llvm-23.list > /dev/null
           sudo apt-get update
-          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev clang-23 llvm-23 lld-23 ninja-build mold nasm liblcms2-dev
-          echo "/usr/lib/llvm-23/bin" >> "$GITHUB_PATH"
+          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build mold nasm liblcms2-dev
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
-          echo "CC=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
-          echo "CXX=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=/usr/lib/llvm-23/bin/clang-23" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=/usr/lib/llvm-23/bin/clang++" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif,use-system-lcms2,gpu-cuda" >> "$GITHUB_ENV"
           echo "N_THREADS=4" >> "$GITHUB_ENV"
       - name: Install CUDA compiler (Linux)
@@ -114,21 +111,23 @@ jobs:
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d libheif aom x265 libde265 llvm lld cmake ninja nasm webp jpeg-xl little-cms2
+          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp jpeg-xl little-cms2
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix llvm)/bin" >> "$GITHUB_PATH"
-          echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
-          echo "FUSE_LINKER=lld" >> "$GITHUB_ENV"
-          echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+          echo "FUSE_LINKER=ld" >> "$GITHUB_ENV"
+          echo "CC=clang" >> "$GITHUB_ENV"
+          echo "CXX=clang++" >> "$GITHUB_ENV"
+          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
+          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=no-vendored-webp,use-system-lcms2,gpu-metal" >> "$GITHUB_ENV"
           echo "N_THREADS=3" >> "$GITHUB_ENV"
       - name: Run Clippy
-        run: cargo clippy --lib --workspace --profile ci --locked --features $BUILD_FEATURES -- -Z threads=$N_THREADS
-      - name: Run Rust Tests
+        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES -- -Z threads=$N_THREADS
+      - name: Run Rust Tests (Linux)
+        if: runner.os == 'Linux'
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
+      - name: Run Rust Tests (MacOS)
+        if: runner.os == 'macOS'
+        run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
       - name: Install project and test dependencies
         id: build-project
         run: |

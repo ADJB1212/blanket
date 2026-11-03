@@ -140,16 +140,12 @@ def test_exif_mapping_stream_loading_and_signed_rationals() -> None:
     assert loaded[65000] == -0.5
 
 
-@pytest.mark.parametrize(("kind", "length", "field", "expected"), [(0, 1, 0, {}), (7, 10, 1000, None)])
+@pytest.mark.parametrize(("kind", "length", "field", "expected"), [(0, 1, 0, {}), (7, 10, 1000, {})])
 def test_exif_unknown_types_and_truncated_values(kind, length, field, expected) -> None:
     raw = b"II*\0\x08\0\0\0" + struct.pack("<HHHII", 1, 65000, kind, length, field) + bytes(4)
     exif = Image.Exif()
-    if expected is None:
-        with pytest.raises(ValueError, match="truncated EXIF value"):
-            exif.load(raw)
-    else:
-        exif.load(raw)
-        assert dict(exif) == expected
+    exif.load(raw)
+    assert dict(exif) == expected
 
 
 def test_exif_rejects_cycles_and_excessive_tags() -> None:

@@ -1,5 +1,6 @@
 mod encode;
 mod features;
+mod xmp;
 
 use blanket_codecs::open_bytes;
 use blanket_core::raster::{fromarray, frombytes};
@@ -34,6 +35,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_container_previews, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_native_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
+    module.add_function(wrap_pyfunction!(xmp::_getxmp, module)?)?;
     blanket_enhance::enhance::register(module)?;
     blanket_enhance::hdr::register(module)?;
     blanket_composite::chops::register(module)?;

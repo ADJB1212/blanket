@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "zlib", "contextlib"}
+__lazy_modules__ = {"collections.abc", "zlib", "contextlib", "math"}
 
 import contextlib
+import math
 import re
 import struct
 import zlib
@@ -159,9 +160,32 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                     valid_profile = False
                 profile_count = count
                 profiles[part] = data[pos + 16 : pos + length]
+            elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                if valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
+                    info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
+                profiles.clear()
+                profile_count = 0
+                valid_profile = True
             pos += length
-        if valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
+        if "icc_profile" not in info and valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
             info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
+        if "dpi" not in info and "exif" in info:
+            try:
+                exif = Exif()
+                exif.load(cast("bytes", info["exif"]))
+                unit = exif[0x0128]
+                x_res = exif[0x011A]
+                try:
+                    dpi = float(x_res[0]) / x_res[1]  # type: ignore[index]
+                except TypeError:
+                    dpi = float(x_res)  # type: ignore[arg-type]
+                if math.isnan(dpi):
+                    raise ValueError("DPI is not a number")
+                if unit == 3:
+                    dpi *= 2.54
+                info["dpi"] = (dpi, dpi)
+            except (KeyError, SyntaxError, TypeError, ValueError, ZeroDivisionError, struct.error):
+                info["dpi"] = (72, 72)
     elif format == "GIF" and len(data) >= 13:
         info["version"] = data[:6]
         info["background"] = data[11]
@@ -288,6 +312,17 @@ def read_tiff_metadata(data: bytes, count: int, *, decoded: bool = False) -> Ite
                 value = exif.get(tag)
                 if value is not None:
                     info[key] = value if isinstance(value, bytes) else bytes(value if isinstance(value, tuple) else (value,))
+            xres, yres = exif.get(282), exif.get(283)
+            if xres and yres:
+                unit = exif.get(296)
+                if unit == 2:
+                    info["dpi"] = (xres, yres)
+                elif unit == 3:
+                    info["dpi"] = (xres * 2.54, yres * 2.54)
+                elif unit is None:
+                    info["dpi"] = info["resolution"] = (xres, yres)
+                else:
+                    info["resolution"] = (xres, yres)
             if decoded and Base.Orientation in exif:
                 exif.pop(Base.Orientation, None)
                 xmp = info.get("xmp")
@@ -379,6 +414,10 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
     if not supported:
         return b"", b"", b"", []
     exif_supplied = "exif" in options
+    if format == "JPEG" and "dpi" in options:
+        dpi_val = options["dpi"]
+        if isinstance(dpi_val, (tuple, list)) and len(dpi_val) == 2 and not all(round(v) for v in dpi_val) and not exif_supplied:
+            options["exif"] = b""
     values = []
     for key in ("exif", "xmp", "icc_profile"):
         value = options.pop(key) if key in options else image._metadata_value(key)
