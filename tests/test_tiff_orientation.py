@@ -51,15 +51,9 @@ def test_tiff_orientation_preserves_high_depth(mode: str, orientation: int) -> N
     exif[274] = orientation
     raw = source.encode("TIFF", exif=exif)
     actual = Image.open(BytesIO(raw))
-    method = {
-        2: Image.Transpose.FLIP_LEFT_RIGHT,
-        3: Image.Transpose.ROTATE_180,
-        4: Image.Transpose.FLIP_TOP_BOTTOM,
-        5: Image.Transpose.TRANSPOSE,
-        6: Image.Transpose.ROTATE_270,
-        7: Image.Transpose.TRANSVERSE,
-        8: Image.Transpose.ROTATE_90,
-    }[orientation]
+    method = {2: Image.Transpose.FLIP_LEFT_RIGHT, 3: Image.Transpose.ROTATE_180, 4: Image.Transpose.FLIP_TOP_BOTTOM, 5: Image.Transpose.TRANSPOSE, 6: Image.Transpose.ROTATE_270, 7: Image.Transpose.TRANSVERSE, 8: Image.Transpose.ROTATE_90}[
+        orientation
+    ]
     expected = source.transpose(method)
     assert actual.size == expected.size
     assert actual.bit_depth == 16

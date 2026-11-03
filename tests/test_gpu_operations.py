@@ -117,15 +117,7 @@ def test_float_arithmetic(runtime, mode):
     count = image.width * image.height * CHANNELS[mode]
     a = struct.unpack(f"{count}f", image.tobytes())
     b = struct.unpack(f"{count}f", other.tobytes())
-    operations = {
-        "difference": lambda x, y: abs(x - y),
-        "multiply": lambda x, y: x * y,
-        "screen": lambda x, y: 1 - (1 - x) * (1 - y),
-        "lighter": max,
-        "darker": min,
-        "add": lambda x, y: x + y,
-        "subtract": lambda x, y: x - y,
-    }
+    operations = {"difference": lambda x, y: abs(x - y), "multiply": lambda x, y: x * y, "screen": lambda x, y: 1 - (1 - x) * (1 - y), "lighter": max, "darker": min, "add": lambda x, y: x + y, "subtract": lambda x, y: x - y}
     for name, operation in operations.items():
         actual = struct.unpack(f"{count}f", getattr(gpu, name)(rhs).to_image().tobytes())
         expected = [operation(x, y) for x, y in zip(a, b, strict=True)]

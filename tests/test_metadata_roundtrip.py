@@ -36,12 +36,7 @@ def test_png_chunk_writer_interoperability(short_writes: bool) -> None:
     reference = BytesIO()
     BytesIO.write(output, PngImagePlugin._MAGIC)
     reference.write(b"\x89PNG\r\n\x1a\n")
-    chunks = [
-        (b"IHDR", PngImagePlugin.o32(2), PngImagePlugin.o32(1), b"\x08\x02\x00\x00\x00"),
-        (b"tEXt", b"Note\0", b"generated metadata"),
-        (b"IDAT", zlib.compress(b"\0\xff\0\0\0\0\xff")),
-        (b"IEND", b""),
-    ]
+    chunks = [(b"IHDR", PngImagePlugin.o32(2), PngImagePlugin.o32(1), b"\x08\x02\x00\x00\x00"), (b"tEXt", b"Note\0", b"generated metadata"), (b"IDAT", zlib.compress(b"\0\xff\0\0\0\0\xff")), (b"IEND", b"")]
     for cid, *data in chunks:
         PngImagePlugin.putchunk(output, cid, *data)
         PILPng.putchunk(reference, cid, *data)
@@ -56,14 +51,7 @@ def test_png_chunk_writer_interoperability(short_writes: bool) -> None:
 def test_apng_public_control_enums_interoperate_with_pillow() -> None:
     first = Image.new("RGBA", (3, 2), "red")
     second = Image.new("RGBA", first.size, "blue")
-    data = first.encode(
-        "PNG",
-        save_all=True,
-        append_images=[second],
-        duration=[20, 40],
-        disposal=[PngImagePlugin.Disposal.OP_BACKGROUND, PngImagePlugin.Disposal.OP_PREVIOUS],
-        blend=[PngImagePlugin.Blend.OP_SOURCE, PngImagePlugin.Blend.OP_OVER],
-    )
+    data = first.encode("PNG", save_all=True, append_images=[second], duration=[20, 40], disposal=[PngImagePlugin.Disposal.OP_BACKGROUND, PngImagePlugin.Disposal.OP_PREVIOUS], blend=[PngImagePlugin.Blend.OP_SOURCE, PngImagePlugin.Blend.OP_OVER])
     for module in (Image, PILImage):
         with module.open(BytesIO(data)) as decoded:
             for i, frame in enumerate((first, second)):
@@ -104,29 +92,7 @@ def test_string_user_comment_roundtrips_like_pillow(endian: str, nested: bool) -
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
-@pytest.mark.parametrize(
-    "operation",
-    [
-        "mirror",
-        "flip",
-        "grayscale",
-        "expand",
-        "pad",
-        "scale",
-        "autocontrast",
-        "equalize",
-        "invert",
-        "posterize",
-        "solarize",
-        "Brightness",
-        "Contrast",
-        "Color",
-        "Sharpness",
-        "difference",
-        "chops_invert",
-        "offset",
-    ],
-)
+@pytest.mark.parametrize("operation", ["mirror", "flip", "grayscale", "expand", "pad", "scale", "autocontrast", "equalize", "invert", "posterize", "solarize", "Brightness", "Contrast", "Color", "Sharpness", "difference", "chops_invert", "offset"])
 def test_processing_preserves_metadata_and_cached_exif_edits(mode, operation, profile):
     source = Image.new(mode, (3, 2), 73)
     image = Image.decode(source.encode("PNG", exif=exif_tags(), icc_profile=profile, xmp=b"<metadata/>"))
@@ -193,7 +159,8 @@ def test_metadata_preserved_and_editable(format: str, profile: bytes, tmp_path) 
     loaded.getexif()[305] = "Edited"
     loaded.getexif().get_ifd(34665)[36867] = "2026:10:24 10:00:00"
     path = tmp_path / "image"
-    loaded.save(path, format)
+    options = {"xmp": loaded.info["xmp"]} if format == "JPEG" else {}
+    loaded.save(path, format, **options)
     reopened = Image.open(path)
     assert reopened.getexif()[305] == "Edited"
     assert reopened.getexif().get_ifd(34665)[36867] == "2026:10:24 10:00:00"
@@ -409,7 +376,7 @@ def test_jpeg_multisegment_icc_and_size_limits() -> None:
     profile = bytes(range(256)) * 700
     opened = Image.open(BytesIO(encode(image, "JPEG", icc_profile=profile)))
     assert opened.info["icc_profile"] == profile
-    with pytest.raises(ValueError, match="65533"):
+    with pytest.raises(ValueError, match="XMP data is too long"):
         encode(image, "JPEG", xmp=b"x" * 65534)
 
 
@@ -480,8 +447,9 @@ def test_tiff_compression_and_external_metadata(compression: str, profile: bytes
 def test_compression_preserves_metadata(format: str, compressor: object, profile: bytes) -> None:
     image = Image.new("RGB", (16, 16), (20, 50, 80))
     image.info.update(exif=exif_tags().tobytes(), xmp=b"packet", icc_profile=profile)
-    normal = Image.open(BytesIO(encode(image, format)))
-    optimized = Image.open(BytesIO(encode(image, format, compressor=compressor)))
+    options = {"xmp": image.info["xmp"]} if format == "JPEG" else {}
+    normal = Image.open(BytesIO(encode(image, format, **options)))
+    optimized = Image.open(BytesIO(encode(image, format, compressor=compressor, **options)))
     assert optimized.getexif()[305] == "Blanket"
     assert optimized.info["xmp"] == b"packet"
     assert optimized.info["icc_profile"] == profile

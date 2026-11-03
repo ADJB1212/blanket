@@ -29,6 +29,7 @@ impl Decoder {
     }
 
     pub(super) fn header(&mut self, data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
+        let data = super::markers::combine(data);
         // SAFETY: the decoder is live and input remains borrowed through decoding.
         if unsafe { raw::tj3DecompressHeader(self.0, data.as_ptr(), data.len() as raw::size_t) } != 0 {
             return Err(self.error());
@@ -58,7 +59,8 @@ impl Decoder {
     }
 
     pub(super) fn decode_scaled(&mut self, data: &[u8], scale: u32, grayscale: bool) -> Result<Image, String> {
-        let header = self.header(data)?;
+        let data = super::markers::combine(data);
+        let header = self.header(&data)?;
         validate_dimensions(header.width, header.height)?;
         if !matches!(scale, 1 | 2 | 4 | 8) {
             return Err("invalid JPEG scale".into());

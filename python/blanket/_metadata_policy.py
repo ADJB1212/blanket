@@ -169,10 +169,6 @@ class MetadataPolicy:
         for key, value in list(result.items()):
             if key in (*_XMP_ALIASES, *_EXIF_ALIASES, "icc_profile"):
                 continue
-            if (
-                isinstance(key, str)
-                and (isinstance(value, str) or key == "comment")
-                and (not self.text or (self.text_keys is not None and key not in self.text_keys) or (not self.location and _location(key)))
-            ):
+            if isinstance(key, str) and (isinstance(value, str) or key == "comment") and (not self.text or (self.text_keys is not None and key not in self.text_keys) or (not self.location and _location(key))):
                 del result[key]
         return result

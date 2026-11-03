@@ -18,13 +18,7 @@ def png_chunk(kind: bytes, payload: bytes) -> bytes:
 def test_png_metadata_ignores_chunks_after_iend(kind: bytes) -> None:
     output = BytesIO()
     Image.new("L", (1, 1)).save(output, "PNG")
-    payload = {
-        b"tEXt": b"key\0value",
-        b"zTXt": b"key\0\0" + zlib.compress(b"value"),
-        b"iTXt": b"key\0\1\0\0\0" + zlib.compress(b"value"),
-        b"iCCP": b"key\0\0" + zlib.compress(b"value"),
-        b"eXIf": b"II*\0\x08\0\0\0" + bytes(6),
-    }[kind]
+    payload = {b"tEXt": b"key\0value", b"zTXt": b"key\0\0" + zlib.compress(b"value"), b"iTXt": b"key\0\1\0\0\0" + zlib.compress(b"value"), b"iCCP": b"key\0\0" + zlib.compress(b"value"), b"eXIf": b"II*\0\x08\0\0\0" + bytes(6)}[kind]
     data = output.getvalue() + png_chunk(kind, payload)
     assert read_metadata(data, "PNG") == {}
     assert Image.open(BytesIO(data)).info == {}
@@ -40,13 +34,7 @@ def test_png_metadata_has_a_cumulative_budget(monkeypatch, kind: bytes, repeated
     for i in range(10):
         key = b"key" if repeated else f"key{i}".encode()
         value = bytes([65 + i]) * 40
-        payload = {
-            b"tEXt": key + b"\0" + value,
-            b"zTXt": key + b"\0\0" + zlib.compress(value),
-            b"iTXt": key + b"\0\1\0\0\0" + zlib.compress(value),
-            b"iCCP": key + b"\0\0" + zlib.compress(value),
-            b"eXIf": value,
-        }[kind]
+        payload = {b"tEXt": key + b"\0" + value, b"zTXt": key + b"\0\0" + zlib.compress(value), b"iTXt": key + b"\0\1\0\0\0" + zlib.compress(value), b"iCCP": key + b"\0\0" + zlib.compress(value), b"eXIf": value}[kind]
         chunks.append(png_chunk(kind, payload))
     data = output.getvalue()
     data = data[:33] + b"".join(chunks) + data[33:]

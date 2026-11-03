@@ -56,7 +56,7 @@ blanket-kernels = { path = "crates/kernels" }
 blanket-resample = { path = "crates/resample" }
 blanket-font = { path = "crates/font" }
 blanket-bench-support = { path = "crates/bench-support" }
-criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "plotters", "html_reports"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }
 blanket-codec-common = { path = "crates/codec-common" }
 blanket-codec-avif = { path = "crates/codec-avif" }
 blanket-codec-bmp-ico = { path = "crates/codec-bmp-ico" }

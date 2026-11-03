@@ -121,6 +121,11 @@ class BitmapFont:
         scale: Positive integer enlargement factor for the glyph grid.
     """
 
+    height = 7
+    advance = 6
+    glyphs = _GLYPHS
+    uppercase = True
+
     def __init__(self, size: float | None = None) -> None:
         """Choose an integer scale for the requested glyph height.
 
@@ -131,10 +136,10 @@ class BitmapFont:
         Raises:
             ValueError: If size is nonfinite or nonpositive.
         """
-        size = 7 if size is None else size
+        size = self.height if size is None else size
         if not isfinite(size) or size <= 0:
             raise ValueError("font_size must be finite and positive")
-        self.scale = max(1, ceil(size / 7))
+        self.scale = max(1, ceil(size / self.height))
 
     def getlength(self, text: str, **_kwargs: object) -> float:
         """Return the fixed advance length of a string.
@@ -146,7 +151,7 @@ class BitmapFont:
         Returns:
             Character count multiplied by six scaled pixels, as a float.
         """
-        return float(len(text) * 6 * self.scale)
+        return float(len(text) * self.advance * self.scale)
 
     def getbbox(self, text: str, *, anchor: str | None = None, stroke_width: float = 0, **_kwargs: object) -> tuple[float, float, float, float]:
         """Return anchored bounds for a single line, including advance spacing.
@@ -168,7 +173,7 @@ class BitmapFont:
             ValueError: If the anchor is invalid.
         """
         width = self.getlength(text)
-        height = 7 * self.scale if text else 0
+        height = self.height * self.scale if text else 0
         anchor = "la" if anchor is None else anchor
         if len(anchor) != 2 or anchor[0] not in "lmr" or anchor[1] not in "atmbsd":
             raise ValueError("invalid text anchor")
@@ -195,6 +200,16 @@ class BitmapFont:
                 its allocation limit.
         """
         left, top = self.getbbox(text, anchor=anchor)[:2]
-        glyphs = [_GLYPHS.get(char.upper(), _GLYPHS["?"]) for char in text]
+        glyphs = [self.glyphs.get(char.upper() if self.uppercase else char, self.glyphs["?"]) for char in text]
         width, height, data = raster_font_mask(glyphs, self.scale)
         return BitmapMask((width, height), data), (left, top)
+
+
+class PublicDomainFont(BitmapFont):
+    """Readable fixed-width 8x8 Basic Latin font, scaled by whole pixels."""
+
+    from ._font8x8 import GLYPHS as glyphs
+
+    height = 8
+    advance = 8
+    uppercase = False

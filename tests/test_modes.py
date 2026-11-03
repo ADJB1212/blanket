@@ -174,16 +174,17 @@ def test_integer_modes_pixel_storage_and_geometry(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("count", [15, 16, 17, 37, 16387, 262147, 1400001])
-def test_integer_mode_conversion_simd_boundaries(mode: str, count: int) -> None:
-    values = [-65536, -1, 0, 1, 254, 255, 256, 65535, 65536] if mode == "I" else [0, 1, 254, 255, 256, 32767, 32768, 65534, 65535]
-    values = (values * ((count + len(values) - 1) // len(values)))[:count]
-    format = "i" if mode == "I" else "H"
-    raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *values)
-    blanket = Image.frombytes(mode, (count, 1), raw)
-    pillow = PillowImage.frombytes(mode, (count, 1), raw)
-    for destination in ("L", "RGB", "RGBA", "I"):
-        assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+def test_integer_mode_conversion_simd_boundaries(mode: str, subtests: pytest.Subtests) -> None:
+    for count in [15, 16, 17, 37, 16387, 262147, 1400001]:
+        with subtests.test(mode=mode, count=count):
+            values = [-65536, -1, 0, 1, 254, 255, 256, 65535, 65536] if mode == "I" else [0, 1, 254, 255, 256, 32767, 32768, 65534, 65535]
+            values = (values * ((count + len(values) - 1) // len(values)))[:count]
+            format = "i" if mode == "I" else "H"
+            raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *values)
+            blanket = Image.frombytes(mode, (count, 1), raw)
+            pillow = PillowImage.frombytes(mode, (count, 1), raw)
+            for destination in ("L", "RGB", "RGBA", "I"):
+                assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
@@ -207,29 +208,31 @@ def test_big_endian_integer_bilinear_resize_matches_pillow_byte_order() -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "F", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("resample", [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
-@pytest.mark.parametrize(("box", "crop"), [((1.25, 129.5, 8.25, 133.75), (0, 113, 9, 153)), ((0, 0, 9, 3), (0, 0, 9, 40)), ((0, 254, 9, 257), (0, 217, 9, 257)), ((2, 130, 2, 130), (0, 113, 9, 153))])
-def test_scalar_resize_uses_only_crop_rows(mode: str, resample: Image.Resampling, box: tuple[float, ...], crop: tuple[int, ...]) -> None:
-    values = [((y * 103 + x * 29) % 65536) for y in range(257) for x in range(9)]
-    code = "i" if mode == "I" else "f" if mode == "F" else "H"
-    raw = struct.pack((">" if mode == "I;16B" else "<") + f"{len(values)}{code}", *values)
-    image = Image.frombytes(mode, (9, 257), raw)
-    actual = image.resize((13, 7), resample, box=box)
-    local_box = (box[0], box[1] - crop[1], box[2], box[3] - crop[1])
-    expected = image.crop(crop).resize((13, 7), resample, box=local_box)
-    assert actual.tobytes() == expected.tobytes()
-    assert image.tobytes() == raw
+def test_scalar_resize_uses_only_crop_rows(mode: str, subtests: pytest.Subtests) -> None:
+    for resample in [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS]:
+        for box, crop in [((1.25, 129.5, 8.25, 133.75), (0, 113, 9, 153)), ((0, 0, 9, 3), (0, 0, 9, 40)), ((0, 254, 9, 257), (0, 217, 9, 257)), ((2, 130, 2, 130), (0, 113, 9, 153))]:
+            with subtests.test(mode=mode, resample=resample, box=box, crop=crop):
+                values = [((y * 103 + x * 29) % 65536) for y in range(257) for x in range(9)]
+                code = "i" if mode == "I" else "f" if mode == "F" else "H"
+                raw = struct.pack((">" if mode == "I;16B" else "<") + f"{len(values)}{code}", *values)
+                image = Image.frombytes(mode, (9, 257), raw)
+                actual = image.resize((13, 7), resample, box=box)
+                local_box = (box[0], box[1] - crop[1], box[2], box[3] - crop[1])
+                expected = image.crop(crop).resize((13, 7), resample, box=local_box)
+                assert actual.tobytes() == expected.tobytes()
+                assert image.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
-@pytest.mark.parametrize("factor", [2, 7, 37])
-def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, factor: int) -> None:
-    size = (13, 137)
-    channels = 3 if mode == "YCbCr" else len(mode)
-    raw = bytes((i * 71 + i // 13) % 256 for i in range(size[0] * size[1] * channels))
-    actual = Image.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
-    expected = PillowImage.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
-    assert actual.tobytes() == expected.tobytes()
+def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, subtests: pytest.Subtests) -> None:
+    for factor in [2, 7, 37]:
+        with subtests.test(mode=mode, factor=factor):
+            size = (13, 137)
+            channels = 3 if mode == "YCbCr" else len(mode)
+            raw = bytes((i * 71 + i // 13) % 256 for i in range(size[0] * size[1] * channels))
+            actual = Image.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
+            expected = PillowImage.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
+            assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize(("mode", "value"), [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
@@ -250,27 +253,28 @@ def test_integer_mode_fromarray(dtype: str) -> None:
     assert blanket.getdata() == list(pillow.get_flattened_data())
 
 
-@pytest.mark.parametrize("dtype", ["<i4", "<u2", ">u2"])
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("layout", ["contiguous", "strided", "fortran", "readonly", "empty"])
-def test_integer_array_conversion_owns_pixels(dtype: str, mode: str, layout: str) -> None:
-    import numpy as np
+def test_integer_array_conversion_owns_pixels(mode: str, subtests: pytest.Subtests) -> None:
+    for dtype in ["<i4", "<u2", ">u2"]:
+        for layout in ["contiguous", "strided", "fortran", "readonly", "empty"]:
+            with subtests.test(dtype=dtype, mode=mode, layout=layout):
+                import numpy as np
 
-    values = (np.arange(323).reshape(17, 19) * 197).astype(dtype)
-    if layout == "strided":
-        values = values[::-1, ::2]
-    elif layout == "fortran":
-        values = np.asfortranarray(values)
-    elif layout == "readonly":
-        values.flags.writeable = False
-    elif layout == "empty":
-        values = values[:0]
-    expected = Image.new(mode, (values.shape[1], values.shape[0]))
-    expected.putdata(values.ravel().tolist())
-    image = Image.fromarray(values, mode)
-    if values.flags.writeable:
-        values[:] = 0
-    assert image.tobytes() == expected.tobytes()
+                values = (np.arange(323).reshape(17, 19) * 197).astype(dtype)
+                if layout == "strided":
+                    values = values[::-1, ::2]
+                elif layout == "fortran":
+                    values = np.asfortranarray(values)
+                elif layout == "readonly":
+                    values.flags.writeable = False
+                elif layout == "empty":
+                    values = values[:0]
+                expected = Image.new(mode, (values.shape[1], values.shape[0]))
+                expected.putdata(values.ravel().tolist())
+                image = Image.fromarray(values, mode)
+                if values.flags.writeable:
+                    values[:] = 0
+                assert image.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
@@ -292,21 +296,22 @@ def test_signed_integer_to_uint16_clips_out_of_range_values() -> None:
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
-@pytest.mark.parametrize("count", [0, 1, 7, 8, 15, 16, 17, 131073])
-def test_scalar_to_wide_grayscale_keeps_saturation_and_byte_order(mode: str, count: int) -> None:
-    values = [-100, -0.5, 0, 1.5, 255, 256, 65535, 65536, float("nan"), float("inf"), -float("inf")] if mode == "F" else [-100, 0, 1, 255, 256, 65535, 65536]
-    if mode not in ("I", "F"):
-        values = [value & 65535 for value in values]
-    values = [values[i % len(values)] for i in range(count)]
-    code = "f" if mode == "F" else "i" if mode == "I" else "H"
-    raw = struct.pack((">" if mode == "I;16B" else "<") + str(count) + code, *values)
-    image = Image.frombytes(mode, (count, 1), raw)
-    converted = image.convert("L", bit_depth=16)
-    expected = [0 if isnan(value) else 65535 if value >= 65535 else 0 if value <= 0 else int(value) for value in values]
-    assert converted.mode == "L"
-    assert converted.bit_depth == 16
-    assert converted.tobytes() == struct.pack(f"<{count}H", *expected)
-    assert image.tobytes() == raw
+def test_scalar_to_wide_grayscale_keeps_saturation_and_byte_order(mode: str, subtests: pytest.Subtests) -> None:
+    for count in [0, 1, 7, 8, 15, 16, 17, 131073]:
+        with subtests.test(mode=mode, count=count):
+            values = [-100, -0.5, 0, 1.5, 255, 256, 65535, 65536, float("nan"), float("inf"), -float("inf")] if mode == "F" else [-100, 0, 1, 255, 256, 65535, 65536]
+            if mode not in ("I", "F"):
+                values = [value & 65535 for value in values]
+            values = [values[i % len(values)] for i in range(count)]
+            code = "f" if mode == "F" else "i" if mode == "I" else "H"
+            raw = struct.pack((">" if mode == "I;16B" else "<") + str(count) + code, *values)
+            image = Image.frombytes(mode, (count, 1), raw)
+            converted = image.convert("L", bit_depth=16)
+            expected = [0 if isnan(value) else 65535 if value >= 65535 else 0 if value <= 0 else int(value) for value in values]
+            assert converted.mode == "L"
+            assert converted.bit_depth == 16
+            assert converted.tobytes() == struct.pack(f"<{count}H", *expected)
+            assert image.tobytes() == raw
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA", "P", "PA"])
@@ -326,15 +331,16 @@ def test_color_and_indexed_to_integer_owns_grayscale_samples(source_mode: str, d
 
 
 @pytest.mark.parametrize("destination", ["I", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("depth", [10, 12, 16])
-@pytest.mark.parametrize("count", [5, 15, 16, 17, 16387, 262147])
-def test_wide_grayscale_to_integer_preserves_full_samples(destination: str, depth: int, count: int) -> None:
-    values = [0, 1, 255, 256, (1 << depth) - 1]
-    values = (values * ((count + 4) // 5))[:count]
-    raw = struct.pack(f"<{count}H", *values)
-    image = Image.frombytes("L", (count, 1), raw, bit_depth=depth)
-    assert image.convert(destination).getdata() == values
-    assert image.tobytes() == raw
+def test_wide_grayscale_to_integer_preserves_full_samples(destination: str, subtests: pytest.Subtests) -> None:
+    for depth in [10, 12, 16]:
+        for count in [5, 15, 16, 17, 16387, 262147]:
+            with subtests.test(destination=destination, depth=depth, count=count):
+                values = [0, 1, 255, 256, (1 << depth) - 1]
+                values = (values * ((count + 4) // 5))[:count]
+                raw = struct.pack(f"<{count}H", *values)
+                image = Image.frombytes("L", (count, 1), raw, bit_depth=depth)
+                assert image.convert(destination).getdata() == values
+                assert image.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16B"])
@@ -402,17 +408,18 @@ def test_float_to_uint16_saturation_and_byte_order(mode: str, count: int) -> Non
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("count", [6, 15, 16, 17, 16387, 262147])
-def test_integer_to_float_owns_converted_samples(mode: str, count: int) -> None:
-    values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 65535] if mode == "I" else [0, 1, 255, 256, 32768, 65535]
-    samples = (values * ((count + len(values) - 1) // len(values)))[:count]
-    format = "i" if mode == "I" else "H"
-    raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *samples)
-    image = Image.frombytes(mode, (count, 1), raw)
-    converted = image.convert("F")
-    assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
-    image.putpixel((0, 0), 42)
-    assert converted.tobytes() == struct.pack(f"<{count}f", *samples)
+def test_integer_to_float_owns_converted_samples(mode: str, subtests: pytest.Subtests) -> None:
+    for count in [6, 15, 16, 17, 16387, 262147]:
+        with subtests.test(mode=mode, count=count):
+            values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 65535] if mode == "I" else [0, 1, 255, 256, 32768, 65535]
+            samples = (values * ((count + len(values) - 1) // len(values)))[:count]
+            format = "i" if mode == "I" else "H"
+            raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *samples)
+            image = Image.frombytes(mode, (count, 1), raw)
+            converted = image.convert("F")
+            assert converted.tobytes() == image.to_pillow().convert("F").tobytes()
+            image.putpixel((0, 0), 42)
+            assert converted.tobytes() == struct.pack(f"<{count}f", *samples)
 
 
 @pytest.mark.parametrize("count", [1, 15, 16, 17, 257, 16387, 262147])
@@ -531,15 +538,16 @@ def test_float_mode_reduce_transform_and_tiff_roundtrip() -> None:
 
 
 @pytest.mark.parametrize(("source", "destination"), [("RGB", "HSV"), ("RGBA", "HSV"), ("L", "HSV"), ("LA", "HSV"), ("HSV", "RGB"), ("HSV", "RGBA"), ("HSV", "L")])
-@pytest.mark.parametrize("count", [15, 16, 17, 257, 1800007])
-def test_hsv_conversion_chunks_match_pillow(source: str, destination: str, count: int) -> None:
-    import random
+def test_hsv_conversion_chunks_match_pillow(source: str, destination: str, subtests: pytest.Subtests) -> None:
+    for count in [15, 16, 17, 257, 1800007]:
+        with subtests.test(source=source, destination=destination, count=count):
+            import random
 
-    channels = len(source)
-    raw = random.Random(42).randbytes(count * channels)
-    blanket = Image.frombytes(source, (count, 1), raw)
-    pillow = PillowImage.frombytes(source, (count, 1), raw)
-    assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
+            channels = len(source)
+            raw = random.Random(42).randbytes(count * channels)
+            blanket = Image.frombytes(source, (count, 1), raw)
+            pillow = PillowImage.frombytes(source, (count, 1), raw)
+            assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
 
 def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:

@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 from . import Image
 from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
 from ._color import color_pixel
-from ._draw_font import BitmapFont
+from ._draw_font import BitmapFont, PublicDomainFont
 from .ImageFont import load_default
 
 if TYPE_CHECKING:
@@ -71,9 +71,17 @@ class Outline:
     def transform(self, matrix: Sequence[float]) -> None:
         if len(matrix) != 6:
             raise TypeError("transform matrix must contain six values")
-        for value in matrix:
-            float(value)
-        self.edges.clear()
+        a, b, c, d, e, f = (float(value) for value in matrix)
+        if not all(isfinite(value) for value in (a, b, c, d, e, f)):
+            raise ValueError("transform matrix must be finite")
+
+        def point(x: float, y: float) -> tuple[int, int]:
+            return int(a * x + b * y + c), int(d * x + e * y + f)
+
+        edges = [(point(*start), point(*end)) for start, end in self.edges]
+        self.x, self.y = point(self.x, self.y)
+        self.x0, self.y0 = point(self.x0, self.y0)
+        self.edges = edges
 
 
 _BINARY_TABLE = bytes([0] + [255] * 255)
@@ -556,9 +564,7 @@ class ImageDraw:
             return
         self._shape(points, fill, outline, width)
 
-    def regular_polygon(
-        self, bounding_circle: tuple[float, float, float] | tuple[tuple[float, float], float], n_sides: int, rotation: float = 0, fill: Color = None, outline: Color = None, width: int = 1
-    ) -> None:
+    def regular_polygon(self, bounding_circle: tuple[float, float, float] | tuple[tuple[float, float], float], n_sides: int, rotation: float = 0, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw a regular polygon inscribed in a bounding circle.
 
         Vertices are rounded to two decimal places before their coordinates
@@ -675,11 +681,7 @@ class ImageDraw:
             return
         radius = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
         points = []
-        for enabled, (cx, cy, start, corner) in zip(
-            corners,
-            [(x0 + radius, y0 + radius, 180, (x0, y0)), (x1 - radius, y0 + radius, 270, (x1, y0)), (x1 - radius, y1 - radius, 0, (x1, y1)), (x0 + radius, y1 - radius, 90, (x0, y1))],
-            strict=True,
-        ):
+        for enabled, (cx, cy, start, corner) in zip(corners, [(x0 + radius, y0 + radius, 180, (x0, y0)), (x1 - radius, y0 + radius, 270, (x1, y0)), (x1 - radius, y1 - radius, 0, (x1, y1)), (x0 + radius, y1 - radius, 90, (x0, y1))], strict=True):
             if enabled and radius:
                 count = max(1, min(16384, ceil(radius * pi)))
                 points.extend((cx + radius * cos((start + 90 * i / count) * pi / 180), cy + radius * sin((start + 90 * i / count) * pi / 180)) for i in range(count + 1))
@@ -718,14 +720,7 @@ class ImageDraw:
             parts = [
                 part
                 for enabled, part in zip(
-                    corners,
-                    [
-                        ((x0, y0, x0 + diameter, y0 + diameter), 180, 270),
-                        ((x1 - diameter, y0, x1, y0 + diameter), 270, 360),
-                        ((x1 - diameter, y1 - diameter, x1, y1), 0, 90),
-                        ((x0, y1 - diameter, x0 + diameter, y1), 90, 180),
-                    ],
-                    strict=True,
+                    corners, [((x0, y0, x0 + diameter, y0 + diameter), 180, 270), ((x1 - diameter, y0, x1, y0 + diameter), 270, 360), ((x1 - diameter, y1 - diameter, x1, y1), 0, 90), ((x0, y1 - diameter, x0 + diameter, y1), 90, 180)], strict=True
                 )
                 if enabled
             ]
@@ -799,8 +794,8 @@ class ImageDraw:
                 a whole pixel for rendering.
             stroke_fill: Stroke ink. `None` uses the text ink.
             embedded_color: Embedded-color font request. Currently unsupported.
-            font_size: Requested bitmap fallback height. Defaults to seven
-                pixels and scales in whole multiples of seven. Ignored when
+            font_size: Requested bitmap fallback height. Defaults to eight
+                pixels and scales in whole multiples of eight. Ignored when
                 an explicit or context font is used.
 
         Raises:
@@ -810,8 +805,8 @@ class ImageDraw:
             NotImplementedError: If `embedded_color` is true.
 
         Notes:
-            The bitmap fallback uses uppercase glyphs for lowercase letters
-            and `?` for unsupported characters. It ignores font shaping options.
+            The public-domain bitmap font includes Basic Latin lowercase letters
+            and uses `?` for unsupported characters. It ignores font shaping options.
             Its appearance and metrics differ from Pillow's default font.
 
         Examples:
@@ -894,7 +889,7 @@ class ImageDraw:
                 to a whole pixel for rendering.
             stroke_fill: Stroke ink. `None` uses the text ink.
             embedded_color: Embedded-color font request. Currently unsupported.
-            font_size: Bitmap fallback height, scaled in multiples of seven
+            font_size: Bitmap fallback height, scaled in multiples of eight
                 pixels. Ignored when an explicit or context font is used.
 
         Raises:
@@ -915,7 +910,7 @@ class ImageDraw:
             return font
         if self.font is not None:
             return self.font
-        return BitmapFont(font_size)
+        return PublicDomainFont(font_size)
 
     @staticmethod
     def _font_options(direction: str | None, features: Sequence[str] | None, language: str | None) -> dict[str, object]:
@@ -929,17 +924,7 @@ class ImageDraw:
             raise NotImplementedError("embedded color fonts are not supported")
 
     def _text_layout(
-        self,
-        xy: tuple[float, float],
-        text: str,
-        font: object,
-        anchor: str | None,
-        spacing: float,
-        align: str,
-        direction: str | None,
-        features: Sequence[str] | None,
-        language: str | None,
-        stroke_width: float,
+        self, xy: tuple[float, float], text: str, font: object, anchor: str | None, spacing: float, align: str, direction: str | None, features: Sequence[str] | None, language: str | None, stroke_width: float
     ) -> list[tuple[tuple[float, float], str]]:
         """Return anchored line positions using font advances and line spacing."""
         if align not in ("left", "center", "right"):
@@ -965,16 +950,7 @@ class ImageDraw:
             positions.append(((x + shift, y + i * line_height), line))
         return positions
 
-    def textlength(
-        self,
-        text: str,
-        font: object | None = None,
-        direction: str | None = None,
-        features: Sequence[str] | None = None,
-        language: str | None = None,
-        embedded_color: bool = False,
-        font_size: float | None = None,
-    ) -> float:
+    def textlength(self, text: str, font: object | None = None, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, embedded_color: bool = False, font_size: float | None = None) -> float:
         """Return the single-line advance length in pixels.
 
         Font kerning is included when provided by the font. The advance

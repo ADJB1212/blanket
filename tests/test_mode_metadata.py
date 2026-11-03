@@ -13,9 +13,10 @@ def test_mode_catalog_matches_pillow() -> None:
 
 
 @pytest.mark.parametrize("mode", [*PillowImage.MODES, *PACKED_MODES])
-@pytest.mark.parametrize("helper", ["getmodebase", "getmodetype", "getmodebands", "getmodebandnames"])
-def test_mode_metadata_matches_pillow(mode: str, helper: str) -> None:
-    assert getattr(Image, helper)(mode) == getattr(PillowImage, helper)(mode)
+def test_mode_metadata_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
+    for helper in ["getmodebase", "getmodetype", "getmodebands", "getmodebandnames"]:
+        with subtests.test(mode=mode, helper=helper):
+            assert getattr(Image, helper)(mode) == getattr(PillowImage, helper)(mode)
 
 
 @pytest.mark.parametrize("mode", ["", "invalid", "RGB;16"])

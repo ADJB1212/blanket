@@ -20,14 +20,7 @@ pytestmark = pytest.mark.skipif(not sysconfig.get_config_var("Py_GIL_DISABLED"),
 def test_import_keeps_gil_disabled() -> None:
     environment = os.environ.copy()
     environment.pop("PYTHON_GIL", None)
-    subprocess.run(
-        [sys.executable, "-W", "error::RuntimeWarning", "-c", "import sys; assert not sys._is_gil_enabled(); import blanket; assert not sys._is_gil_enabled()"],
-        env=environment,
-        check=True,
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    subprocess.run([sys.executable, "-W", "error::RuntimeWarning", "-c", "import sys; assert not sys._is_gil_enabled(); import blanket; assert not sys._is_gil_enabled()"], env=environment, check=True, capture_output=True, text=True, timeout=30)
 
 
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "GIF", "AVIF", "HEIF", "JPEG2000"])

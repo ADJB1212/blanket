@@ -10,6 +10,9 @@ license on Blanket's original source. The GPL and LGPL texts are included in
 
 Pillow-derived raster geometry and median-cut quantization are covered by the MIT-CMU terms and copyright
 notices in `licenses/Pillow-LICENSE`.
+Copied Pillow compatibility tests, helpers, and image fixtures are also covered
+by those terms. Their source revision and local adaptations are recorded in
+`tests/PILLOW_TESTS.md`.
 Pillow-derived octree quantization is covered by the MIT terms and copyright
 notice in `licenses/Pillow-QuantOctree-LICENSE`.
 
@@ -47,6 +50,10 @@ container parsing uses mp4parse (MPL-2.0). The generated notice directory and
 Cargo metadata in the corresponding-source archive provide the full inventory.
 
 Outline font rendering and layout also use these Rust dependencies:
+
+The default bitmap font is font8x8 Basic Latin by Daniel Hepper, based on
+Marcel Sondaar's public-domain IBM VGA fonts. It is in the public domain.
+Source: https://github.com/dhepper/font8x8/blob/master/font8x8_basic.h
 
 - ab_glyph and ab_glyph_rasterizer: Apache-2.0
 - rustybuzz: MIT

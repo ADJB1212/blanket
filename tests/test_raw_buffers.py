@@ -8,7 +8,6 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
-@pytest.mark.parametrize("width", [1, 7, 8, 9, 16, 17, 33])
 @pytest.mark.parametrize(
     "mode,rawmode",
     [
@@ -45,17 +44,18 @@ from blanket import Image
         ("F", "F;32NF"),
     ],
 )
-def test_extended_raw_encoders_preserve_rows(mode: str, rawmode: str, width: int) -> None:
-    expected = PillowImage.new(mode, (width, 3))
-    channels = len(expected.getbands())
-    expected.putdata([i * 7 if channels == 1 else tuple((i * 7 + c * 31) % 256 for c in range(channels)) for i in range(width * 3)])
-    actual = Image.frombytes(mode, expected.size, expected.tobytes())
-    row = len(expected.tobytes("raw", rawmode)) // 3
-    for orientation in (1, -1):
-        assert actual.tobytes("raw", rawmode, row + 3, orientation) == expected.tobytes("raw", rawmode, row + 3, orientation)
+def test_extended_raw_encoders_preserve_rows(mode: str, rawmode: str, subtests: pytest.Subtests) -> None:
+    for width in [1, 7, 8, 9, 16, 17, 33]:
+        with subtests.test(width=width, mode=mode, rawmode=rawmode):
+            expected = PillowImage.new(mode, (width, 3))
+            channels = len(expected.getbands())
+            expected.putdata([i * 7 if channels == 1 else tuple((i * 7 + c * 31) % 256 for c in range(channels)) for i in range(width * 3)])
+            actual = Image.frombytes(mode, expected.size, expected.tobytes())
+            row = len(expected.tobytes("raw", rawmode)) // 3
+            for orientation in (1, -1):
+                assert actual.tobytes("raw", rawmode, row + 3, orientation) == expected.tobytes("raw", rawmode, row + 3, orientation)
 
 
-@pytest.mark.parametrize("width", [1, 7, 8, 9, 16, 17, 33])
 @pytest.mark.parametrize(
     "mode,rawmode,bits",
     [
@@ -82,16 +82,18 @@ def test_extended_raw_encoders_preserve_rows(mode: str, rawmode: str, width: int
         ("I;16", "I;12", 12),
     ],
 )
-def test_extended_raw_decoders_clip_to_rows(mode: str, rawmode: str, bits: int, width: int) -> None:
-    row = ((width + 7) // 8 * bits) if rawmode in ("P;2L", "P;4L") else (width * bits + 7) // 8
-    stride = row + 3
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(stride * 3 - 3))
-    for orientation in (1, -1):
-        expected = PillowImage.frombytes(mode, (width, 3), raw, "raw", rawmode, stride, orientation)
-        actual = Image.frombytes(mode, expected.size, raw, "raw", rawmode, stride, orientation)
-        assert actual.tobytes() == expected.tobytes()
-        with pytest.raises(ValueError, match="not enough image data"):
-            Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation)
+def test_extended_raw_decoders_clip_to_rows(mode: str, rawmode: str, bits: int, subtests: pytest.Subtests) -> None:
+    for width in [1, 7, 8, 9, 16, 17, 33]:
+        with subtests.test(width=width, mode=mode, rawmode=rawmode, bits=bits):
+            row = ((width + 7) // 8 * bits) if rawmode in ("P;2L", "P;4L") else (width * bits + 7) // 8
+            stride = row + 3
+            raw = bytes((i * 37 + i // 7) % 256 for i in range(stride * 3 - 3))
+            for orientation in (1, -1):
+                expected = PillowImage.frombytes(mode, (width, 3), raw, "raw", rawmode, stride, orientation)
+                actual = Image.frombytes(mode, expected.size, raw, "raw", rawmode, stride, orientation)
+                assert actual.tobytes() == expected.tobytes()
+                with pytest.raises(ValueError, match="not enough image data"):
+                    Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation)
 
 
 @pytest.mark.parametrize("decoder,data", [("hex", b"01 02\n03ff"), ("packbits", bytes([2, 1, 2, 3, 0, 255]))])
@@ -112,39 +114,41 @@ def test_layered_raw_decoders_reject_truncated_planes(decoder: str, data: bytes)
 
 
 @pytest.mark.parametrize("mode,rawmode", [("RGB", "RGB"), ("RGB", "BGR"), ("RGB", "BGRX"), ("RGBA", "RGBA"), ("RGBA", "BGRA")])
-@pytest.mark.parametrize("width", [1, 3, 15, 16, 17, 33])
-@pytest.mark.parametrize("padding", [0, 1, 5])
-@pytest.mark.parametrize("orientation", [1, -1])
-def test_raw_buffers_match_pillow(mode, rawmode, width, padding, orientation):
-    size = (width, 3)
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(width * 3 * len(mode)))
-    actual = Image.frombytes(mode, size, raw)
-    expected = PillowImage.frombytes(mode, size, raw)
-    stride = width * len(rawmode) + padding
-    args = (rawmode, stride, orientation)
-    encoded = actual.tobytes("raw", *args)
-    assert encoded == expected.tobytes("raw", *args)
-    assert actual.tobytes("raw", args) == encoded
-    assert Image.frombytes(mode, size, encoded, "raw", *args).tobytes() == raw
-    assert Image.frombytes(mode, size, encoded, "raw", args).tobytes() == raw
-    assert PillowImage.frombytes(mode, size, encoded, "raw", *args).tobytes() == raw
-    assert actual.tobytes() == raw
+def test_raw_buffers_match_pillow(mode, rawmode, subtests: pytest.Subtests):
+    for width in [1, 3, 15, 16, 17, 33]:
+        for padding in [0, 1, 5]:
+            for orientation in [1, -1]:
+                with subtests.test(mode=mode, rawmode=rawmode, width=width, padding=padding, orientation=orientation):
+                    size = (width, 3)
+                    raw = bytes((i * 37 + i // 7) % 256 for i in range(width * 3 * len(mode)))
+                    actual = Image.frombytes(mode, size, raw)
+                    expected = PillowImage.frombytes(mode, size, raw)
+                    stride = width * len(rawmode) + padding
+                    args = (rawmode, stride, orientation)
+                    encoded = actual.tobytes("raw", *args)
+                    assert encoded == expected.tobytes("raw", *args)
+                    assert actual.tobytes("raw", args) == encoded
+                    assert Image.frombytes(mode, size, encoded, "raw", *args).tobytes() == raw
+                    assert Image.frombytes(mode, size, encoded, "raw", args).tobytes() == raw
+                    assert PillowImage.frombytes(mode, size, encoded, "raw", *args).tobytes() == raw
+                    assert actual.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
-@pytest.mark.parametrize("orientation", [1, -1])
-def test_native_raw_modes_preserve_stride_and_orientation(mode, orientation):
-    reference = PillowImage.new(mode, (9, 3))
-    channels = len(reference.getbands())
-    reference.putdata([i * 7 if channels == 1 else tuple((i * 7 + c * 31) % 256 for c in range(channels)) for i in range(27)])
-    raw = reference.tobytes()
-    actual = Image.frombytes(mode, reference.size, raw)
-    stride = len(raw) // 3 + 3
-    args = (mode, stride, orientation)
-    encoded = actual.tobytes("raw", *args)
-    assert encoded == reference.tobytes("raw", *args)
-    assert Image.frombytes(mode, actual.size, encoded, "raw", *args).tobytes() == raw
-    assert PillowImage.frombytes(mode, actual.size, encoded, "raw", *args).tobytes() == raw
+def test_native_raw_modes_preserve_stride_and_orientation(mode, subtests: pytest.Subtests):
+    for orientation in [1, -1]:
+        with subtests.test(mode=mode, orientation=orientation):
+            reference = PillowImage.new(mode, (9, 3))
+            channels = len(reference.getbands())
+            reference.putdata([i * 7 if channels == 1 else tuple((i * 7 + c * 31) % 256 for c in range(channels)) for i in range(27)])
+            raw = reference.tobytes()
+            actual = Image.frombytes(mode, reference.size, raw)
+            stride = len(raw) // 3 + 3
+            args = (mode, stride, orientation)
+            encoded = actual.tobytes("raw", *args)
+            assert encoded == reference.tobytes("raw", *args)
+            assert Image.frombytes(mode, actual.size, encoded, "raw", *args).tobytes() == raw
+            assert PillowImage.frombytes(mode, actual.size, encoded, "raw", *args).tobytes() == raw
 
 
 @pytest.mark.parametrize("mode,channels,depth", [("L", 1, 10), ("RGB", 3, 12), ("RGBA", 4, 16), ("RGB;F", 3, 32), ("RGBA;F", 4, 32)])

@@ -109,6 +109,10 @@ impl JpegStreamDecoder {
             return Ok(Some(offset + 1));
         }
         if marker == 0xd9 {
+            if self.coefficients.is_none() && self.quant.iter().any(Option::is_some) {
+                self.started = false;
+                return Ok(Some(offset + 1));
+            }
             let coefficients = self.coefficients.as_ref().ok_or("JPEG stream has no frame")?;
             if !self.seen_scan || self.progression[..coefficients.components.len()].iter().any(|bits| bits[0] < 0) {
                 return Err("JPEG stream has incomplete components".into());

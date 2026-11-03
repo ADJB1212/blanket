@@ -28,57 +28,59 @@ def patterned(mode: str, size: tuple[int, int] = (13, 7)) -> Image.Image:
 
 
 @pytest.mark.parametrize(("format", "mode"), [("PCX", "1"), ("PCX", "L"), ("PCX", "P"), ("PCX", "RGB"), ("SGI", "L"), ("SGI", "RGB"), ("SGI", "RGBA"), ("XBM", "1"), ("MSP", "1")])
-@pytest.mark.parametrize("size", [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)])
-def test_legacy_interoperability(format: str, mode: str, size: tuple[int, int]) -> None:
-    source = patterned(mode, size)
-    for writer in (source, source.to_pillow()):
-        stream = BytesIO()
-        writer.save(stream, format)
-        actual = Image.open(stream, formats=[format])
-        expected = PillowImage.open(stream)
-        assert (actual.format, actual.mode, actual.size) == (format, mode, source.size)
-        assert actual.tobytes() == source.tobytes() == expected.tobytes()
-        assert actual.convert("RGB").tobytes() == expected.convert("RGB").tobytes()
-        with pytest.raises(UnidentifiedImageError, match="not in formats"):
-            Image.open(stream, formats=["PNG"])
+def test_legacy_interoperability(format: str, mode: str, subtests: pytest.Subtests) -> None:
+    for size in [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)]:
+        with subtests.test(format=format, mode=mode, size=size):
+            source = patterned(mode, size)
+            for writer in (source, source.to_pillow()):
+                stream = BytesIO()
+                writer.save(stream, format)
+                actual = Image.open(stream, formats=[format])
+                expected = PillowImage.open(stream)
+                assert (actual.format, actual.mode, actual.size) == (format, mode, source.size)
+                assert actual.tobytes() == source.tobytes() == expected.tobytes()
+                assert actual.convert("RGB").tobytes() == expected.convert("RGB").tobytes()
+                with pytest.raises(UnidentifiedImageError, match="not in formats"):
+                    Image.open(stream, formats=["PNG"])
 
 
-@pytest.mark.parametrize("width", [1, 31, 32, 33, 63, 64, 65, 129])
 @pytest.mark.parametrize("mode", ["L", "P", "RGB"])
-@pytest.mark.parametrize("encoded", [False, True])
-def test_pcx_literal_spans_and_runs(width: int, mode: str, encoded: bool) -> None:
-    planes = 3 if mode == "RGB" else 1
-    stride = (width + 1) // 2 * 2
-    palette = bytes(value for i in range(256) for value in (i, 255 - i, i // 2)) if mode == "P" else bytes(value for i in range(256) for value in (i, i, i))
-    header = bytearray(128)
-    header[:4] = bytes((10, 5, int(encoded), 8))
-    struct.pack_into("<4H", header, 4, 0, 0, width - 1, 2)
-    header[65] = planes
-    struct.pack_into("<H", header, 66, stride)
-    output = bytearray(header)
-    expected = bytearray()
-    for y in range(3):
-        bands = [bytes((x + c * 31) % 192 if y == 0 else 220 if y == 1 else 7 for x in range(width)) for c in range(planes)]
-        expected.extend(band[x] for x in range(width) for band in bands)
-        row = b"".join(band + b"\xff" * (stride - width) for band in bands)
-        if not encoded:
-            output.extend(row)
-            continue
-        pos = 0
-        while pos < len(row):
-            count = 1
-            while count < 63 and pos + count < len(row) and row[pos + count] == row[pos]:
-                count += 1
-            output.extend(bytes((0xC0 | count, row[pos])) if count > 1 or row[pos] >= 192 else row[pos : pos + 1])
-            pos += count
-    if planes == 1:
-        output.extend(b"\x0c" + palette)
-    actual = Image.open(BytesIO(output))
-    assert (actual.mode, actual.size) == (mode, (width, 3))
-    assert actual.tobytes() == expected
-    if encoded:
-        pillow = PillowImage.open(BytesIO(output))
-        assert actual.convert("RGB").tobytes() == pillow.convert("RGB").tobytes()
+def test_pcx_literal_spans_and_runs(mode: str, subtests: pytest.Subtests) -> None:
+    for width in [1, 31, 32, 33, 63, 64, 65, 129]:
+        for encoded in [False, True]:
+            with subtests.test(width=width, mode=mode, encoded=encoded):
+                planes = 3 if mode == "RGB" else 1
+                stride = (width + 1) // 2 * 2
+                palette = bytes(value for i in range(256) for value in (i, 255 - i, i // 2)) if mode == "P" else bytes(value for i in range(256) for value in (i, i, i))
+                header = bytearray(128)
+                header[:4] = bytes((10, 5, int(encoded), 8))
+                struct.pack_into("<4H", header, 4, 0, 0, width - 1, 2)
+                header[65] = planes
+                struct.pack_into("<H", header, 66, stride)
+                output = bytearray(header)
+                expected = bytearray()
+                for y in range(3):
+                    bands = [bytes((x + c * 31) % 192 if y == 0 else 220 if y == 1 else 7 for x in range(width)) for c in range(planes)]
+                    expected.extend(band[x] for x in range(width) for band in bands)
+                    row = b"".join(band + b"\xff" * (stride - width) for band in bands)
+                    if not encoded:
+                        output.extend(row)
+                        continue
+                    pos = 0
+                    while pos < len(row):
+                        count = 1
+                        while count < 63 and pos + count < len(row) and row[pos + count] == row[pos]:
+                            count += 1
+                        output.extend(bytes((0xC0 | count, row[pos])) if count > 1 or row[pos] >= 192 else row[pos : pos + 1])
+                        pos += count
+                if planes == 1:
+                    output.extend(b"\x0c" + palette)
+                actual = Image.open(BytesIO(output))
+                assert (actual.mode, actual.size) == (mode, (width, 3))
+                assert actual.tobytes() == expected
+                if encoded:
+                    pillow = PillowImage.open(BytesIO(output))
+                    assert actual.convert("RGB").tobytes() == pillow.convert("RGB").tobytes()
 
 
 @pytest.mark.parametrize("payload", [b"", b"\xc0\x01", b"\xc3\x01", b"\xc1", b"\x01", b"\x01\xc1"])
@@ -129,17 +131,18 @@ def test_spider_float_and_first_stack_image(big: bool) -> None:
 
 
 @pytest.mark.parametrize("bits", [8, 16, 32, -32, -64])
-@pytest.mark.parametrize("width", [3, 15, 16, 17, 33, 129])
-def test_fits_sample_depth_and_orientation(bits: int, width: int) -> None:
-    values = [0, 1, 17, 255, 31, 42] * width
-    cards = ["SIMPLE  =                    T", f"BITPIX  = {bits:20}", "NAXIS   =                    2", f"NAXIS1  = {width:20}", "NAXIS2  =                    6", "END"]
-    header = b"".join(card.encode().ljust(80) for card in cards).ljust(2880)
-    code = {8: "B", 16: "H", 32: "i", -32: "f", -64: "d"}[bits]
-    data = header + struct.pack(f">{len(values)}{code}", *values).ljust(2880, b"\0")
-    actual = Image.open(BytesIO(data), formats=["FITS"])
-    expected = PillowImage.open(BytesIO(data))
-    assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "FITS")
-    assert actual.tobytes() == expected.tobytes()
+def test_fits_sample_depth_and_orientation(bits: int, subtests: pytest.Subtests) -> None:
+    for width in [3, 15, 16, 17, 33, 129]:
+        with subtests.test(bits=bits, width=width):
+            values = [0, 1, 17, 255, 31, 42] * width
+            cards = ["SIMPLE  =                    T", f"BITPIX  = {bits:20}", "NAXIS   =                    2", f"NAXIS1  = {width:20}", "NAXIS2  =                    6", "END"]
+            header = b"".join(card.encode().ljust(80) for card in cards).ljust(2880)
+            code = {8: "B", 16: "H", 32: "i", -32: "f", -64: "d"}[bits]
+            data = header + struct.pack(f">{len(values)}{code}", *values).ljust(2880, b"\0")
+            actual = Image.open(BytesIO(data), formats=["FITS"])
+            expected = PillowImage.open(BytesIO(data))
+            assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "FITS")
+            assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -170,19 +173,20 @@ def test_pixar_rgb() -> None:
 
 
 @pytest.mark.parametrize("depth", [1, 4, 8, 24, 32])
-@pytest.mark.parametrize("kind", [1, 2, 3])
-@pytest.mark.parametrize("w", [1, 7, 16, 17, 33, 129])
-def test_sun_stride_channels_and_rle(depth: int, kind: int, w: int) -> None:
-    h = 3
-    stride = ((w * depth + 15) // 16) * 2
-    raw = bytes((i * 37) % 256 for i in range(stride * h))
-    payload = raw.replace(b"\x80", b"\x80\0") if kind == 2 else raw
-    data = struct.pack(">8I", 0x59A66A95, w, h, depth, len(payload), kind, 0, 0) + payload
-    actual = Image.open(BytesIO(data), formats=["SUN"])
-    reference = struct.pack(">8I", 0x59A66A95, w, h, depth, len(raw), 1 if kind == 2 else kind, 0, 0) + raw
-    expected = PillowImage.open(BytesIO(reference))
-    assert (actual.mode, actual.size) == (expected.mode, expected.size)
-    assert actual.tobytes() == expected.tobytes()
+def test_sun_stride_channels_and_rle(depth: int, subtests: pytest.Subtests) -> None:
+    for kind in [1, 2, 3]:
+        for w in [1, 7, 16, 17, 33, 129]:
+            with subtests.test(depth=depth, kind=kind, w=w):
+                h = 3
+                stride = ((w * depth + 15) // 16) * 2
+                raw = bytes((i * 37) % 256 for i in range(stride * h))
+                payload = raw.replace(b"\x80", b"\x80\0") if kind == 2 else raw
+                data = struct.pack(">8I", 0x59A66A95, w, h, depth, len(payload), kind, 0, 0) + payload
+                actual = Image.open(BytesIO(data), formats=["SUN"])
+                reference = struct.pack(">8I", 0x59A66A95, w, h, depth, len(raw), 1 if kind == 2 else kind, 0, 0) + raw
+                expected = PillowImage.open(BytesIO(reference))
+                assert (actual.mode, actual.size) == (expected.mode, expected.size)
+                assert actual.tobytes() == expected.tobytes()
 
 
 def test_sgi_rle_planes() -> None:

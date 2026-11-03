@@ -179,9 +179,7 @@ def rewrite(
         info["exif"] = values.tobytes() if values or values.thumbnail is not None else b""
     if policy is not None:
         info = policy.apply(info)
-    exif_changed = (
-        not isinstance(exif, _Unchanged) or not isinstance(dpi, _Unchanged) or (policy is not None and (not policy.exif or not policy.location or not policy.previews or policy.exif_tags is not None))
-    )
+    exif_changed = not isinstance(exif, _Unchanged) or not isinstance(dpi, _Unchanged) or (policy is not None and (not policy.exif or not policy.location or not policy.previews or policy.exif_tags is not None))
     xmp_changed = not isinstance(xmp, _Unchanged) or (policy is not None and (not policy.xmp or not policy.location or policy.xmp_fields is not None))
     icc_changed = not isinstance(icc_profile, _Unchanged) or (policy is not None and not policy.icc_profile)
     replace_text |= policy is not None and (not policy.text or not policy.location or policy.text_keys is not None)

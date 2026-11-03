@@ -26,25 +26,26 @@ def assert_equal(actual: Image.Image | PillowImage.Image, expected: PillowImage.
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("width", [0, 1, 15, 16, 17, 33])
-def test_storage_and_geometry(mode: str, width: int) -> None:
-    actual, expected = images(mode, width)
-    assert_equal(actual, expected)
-    assert actual.getdata() == list(expected.get_flattened_data())
-    assert_equal(copy.copy(actual), expected.copy())
-    assert_equal(copy.deepcopy(actual), expected.copy())
-    assert_equal(actual.crop((-1, 1, width + 1, 7)), expected.crop((-1, 1, width + 1, 7)))
-    for method in range(7):
-        assert_equal(actual.transpose(method), expected.transpose(method))
-    for alpha_only in (False, True):
-        assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
-    if width:
-        reference = expected.convert("I") if mode == "I;16N" else expected
-        assert actual.getextrema() == reference.getextrema()
-        assert_equal(ImageChops.offset(actual, -3, 2), PillowChops.offset(expected, -3, 2))
-    for band, reference in zip(actual.split(), expected.split(), strict=True):
-        assert_equal(band, reference)
-    assert_equal(Image.merge(mode, actual.split()), expected)
+def test_storage_and_geometry(mode: str, subtests: pytest.Subtests) -> None:
+    for width in [0, 1, 15, 16, 17, 33]:
+        with subtests.test(mode=mode, width=width):
+            actual, expected = images(mode, width)
+            assert_equal(actual, expected)
+            assert actual.getdata() == list(expected.get_flattened_data())
+            assert_equal(copy.copy(actual), expected.copy())
+            assert_equal(copy.deepcopy(actual), expected.copy())
+            assert_equal(actual.crop((-1, 1, width + 1, 7)), expected.crop((-1, 1, width + 1, 7)))
+            for method in range(7):
+                assert_equal(actual.transpose(method), expected.transpose(method))
+            for alpha_only in (False, True):
+                assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
+            if width:
+                reference = expected.convert("I") if mode == "I;16N" else expected
+                assert actual.getextrema() == reference.getextrema()
+                assert_equal(ImageChops.offset(actual, -3, 2), PillowChops.offset(expected, -3, 2))
+            for band, reference in zip(actual.split(), expected.split(), strict=True):
+                assert_equal(band, reference)
+            assert_equal(Image.merge(mode, actual.split()), expected)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -106,13 +107,14 @@ def test_conversions(source: str, destination: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
-@pytest.mark.parametrize("name", ["BLUR", "SMOOTH", "FIND_EDGES", "MinFilter", "MaxFilter", "MedianFilter", "ModeFilter", "BoxBlur", "GaussianBlur", "UnsharpMask"])
-def test_filters(mode: str, name: str) -> None:
-    actual, expected = images(mode)
-    if name == "BoxBlur":
-        assert_equal(actual.filter(ImageFilter.BoxBlur(2)), expected.filter(PillowFilter.BoxBlur(2)))
-        return
-    assert_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
+def test_filters(mode: str, subtests: pytest.Subtests) -> None:
+    for name in ["BLUR", "SMOOTH", "FIND_EDGES", "MinFilter", "MaxFilter", "MedianFilter", "ModeFilter", "BoxBlur", "GaussianBlur", "UnsharpMask"]:
+        with subtests.test(mode=mode, name=name):
+            actual, expected = images(mode)
+            if name == "BoxBlur":
+                assert_equal(actual.filter(ImageFilter.BoxBlur(2)), expected.filter(PillowFilter.BoxBlur(2)))
+                return
+            assert_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])

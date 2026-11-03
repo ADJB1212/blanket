@@ -37,20 +37,7 @@ def test_pixel_access_single_component_tuple(mode):
     assert pixels[0, 0] == reference[0, 0]
 
 
-@pytest.mark.parametrize(
-    "xy,error",
-    [
-        ((3, 0), IndexError),
-        ((0, 2), IndexError),
-        ((-4, 0), IndexError),
-        ((0, -3), IndexError),
-        ((0,), TypeError),
-        ((0, 0, 0), TypeError),
-        ([0, 0], TypeError),
-        ("ab", TypeError),
-        (("0", 0), TypeError),
-    ],
-)
+@pytest.mark.parametrize("xy,error", [((3, 0), IndexError), ((0, 2), IndexError), ((-4, 0), IndexError), ((0, -3), IndexError), ((0,), TypeError), ((0, 0, 0), TypeError), ([0, 0], TypeError), ("ab", TypeError), (("0", 0), TypeError)])
 def test_pixel_access_invalid_coordinates(xy, error):
     actual, expected = Image.new("L", (3, 2)), PIL.new("L", (3, 2))
     for pixels in (actual.load(), expected.load()):
@@ -72,10 +59,7 @@ def test_pixel_access_index_protocol():
     assert pixels[Coordinate(), Coordinate()] == image.getpixel((1, 1)) == 42
 
 
-@pytest.mark.parametrize(
-    "mode,depth,value",
-    [("L", 10, 1023), ("RGB", 12, (0, 2048, 4095)), ("RGB", 16, (0, 32768, 65535)), ("RGBA", 16, (1, 2, 3, 65535)), ("RGB;F", 32, (-1.5, 2.0, 3.0)), ("RGBA;F", 32, (-1.5, 2.0, 3.0, 0.5))],
-)
+@pytest.mark.parametrize("mode,depth,value", [("L", 10, 1023), ("RGB", 12, (0, 2048, 4095)), ("RGB", 16, (0, 32768, 65535)), ("RGBA", 16, (1, 2, 3, 65535)), ("RGB;F", 32, (-1.5, 2.0, 3.0)), ("RGBA;F", 32, (-1.5, 2.0, 3.0, 0.5))])
 def test_pixel_access_retains_sample_precision(mode, depth, value):
     channels = len(value) if isinstance(value, tuple) else 1
     image = Image.frombytes(mode, (2, 2), bytes(4 * channels * (4 if depth == 32 else 2)), bit_depth=depth)

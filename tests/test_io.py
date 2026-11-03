@@ -84,7 +84,7 @@ def test_metadata_file_save_matches_stream_and_preserves_file_on_error(tmp_path:
     assert decoded.getexif()[305] == exif[305]
     assert decoded.info["xmp"] == options["xmp"]
     if format == "JPEG":
-        with pytest.raises(ValueError, match="exceeds"):
+        with pytest.raises(ValueError, match="XMP data is too long"):
             source.save(path_type(path), format, xmp=b"x" * 65536)
         assert path.read_bytes() == stream.getvalue()
 

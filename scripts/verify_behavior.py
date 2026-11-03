@@ -558,14 +558,7 @@ def check_imageops() -> int:
         fill = 0 if mode == "HSV" else "rebeccapurple"
         cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": fill}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
         if mode in ("L", "RGB"):
-            cases += [
-                ("autocontrast", {}),
-                ("autocontrast", {"cutoff": (2, 5), "ignore": [0, 255], "preserve_tone": True}),
-                ("equalize", {}),
-                ("invert", {}),
-                ("posterize", {"bits": 4}),
-                ("solarize", {"threshold": 100}),
-            ]
+            cases += [("autocontrast", {}), ("autocontrast", {"cutoff": (2, 5), "ignore": [0, 255], "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 4}), ("solarize", {"threshold": 100})]
             mask = pixels("L")
             b_mask = BlanketImage.frombytes("L", blanket.size, mask)
             p_mask = PillowImage.frombytes("L", pillow.size, mask)
@@ -864,11 +857,7 @@ def check_imagestat() -> int:
         reference = PillowImage.frombytes(mode, image.size, pixels(mode))
         mask = BlanketImage.frombytes("L", image.size, pixels("L"))
         reference_mask = PillowImage.frombytes("L", image.size, pixels("L"))
-        pairs = [
-            (BlanketStat.Stat(image), PillowStat.Stat(reference)),
-            (BlanketStat.Stat(image, mask), PillowStat.Stat(reference, reference_mask)),
-            (BlanketStat.Stat(image.histogram()), PillowStat.Stat(reference.histogram())),
-        ]
+        pairs = [(BlanketStat.Stat(image), PillowStat.Stat(reference)), (BlanketStat.Stat(image, mask), PillowStat.Stat(reference, reference_mask)), (BlanketStat.Stat(image.histogram()), PillowStat.Stat(reference.histogram()))]
         for actual, expected in pairs:
             for name in ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev"):
                 assert np.allclose(getattr(actual, name), getattr(expected, name), rtol=1e-14, atol=1e-12), (mode, name)

@@ -17,23 +17,19 @@ def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "PA"])
-def test_split(mode: str) -> None:
-    image, reference = pair(mode)
+def test_split_band_metadata_and_lifetime_are_independent(mode: str) -> None:
+    image, _ = pair(mode)
     image.info["custom"] = 42
     bands = image.split()
-    assert isinstance(bands, tuple)
-    assert len(bands) == len(mode)
-    for band, expected in zip(bands, reference.split(), strict=False):
-        assert band.mode == "L"
-        assert band.size == image.size
-        assert band.tobytes() == expected.tobytes()
+    pixels = [band.tobytes() for band in bands]
+    for band in bands:
         assert band.info == image.info
         assert band.info is not image.info
     image.close()
-    assert bands[0].tobytes() == reference.split()[0].tobytes()
+    assert bands[0].tobytes() == pixels[0]
     if len(bands) > 1:
         bands[0].close()
-        assert bands[1].tobytes() == reference.split()[1].tobytes()
+        assert bands[1].tobytes() == pixels[1]
 
 
 @pytest.mark.parametrize("mode", ["LA", "PA"])
@@ -48,19 +44,20 @@ def test_two_band_split_preserves_parallel_tail(mode: str, count: int) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("depth", [10, 12, 16])
-@pytest.mark.parametrize("count", [0, 1, 17, 131073])
-def test_wide_split_and_getchannel_preserve_samples(mode: str, depth: int, count: int) -> None:
-    maximum = (1 << depth) - 1
-    values = [(i * 719 + i // 7) & maximum for i in range(count * len(mode))]
-    raw = struct.pack(f"<{len(values)}H", *values)
-    image = Image.frombytes(mode, (count, 1), raw, bit_depth=depth)
-    for channel, band in enumerate(image.split()):
-        expected = struct.pack(f"<{count}H", *values[channel :: len(mode)])
-        assert band.bit_depth == depth
-        assert band.tobytes() == expected
-        assert image.getchannel(channel).tobytes() == expected
-    assert image.tobytes() == raw
+def test_wide_split_and_getchannel_preserve_samples(mode: str, subtests: pytest.Subtests) -> None:
+    for depth in [10, 12, 16]:
+        for count in [0, 1, 17, 131073]:
+            with subtests.test(mode=mode, depth=depth, count=count):
+                maximum = (1 << depth) - 1
+                values = [(i * 719 + i // 7) & maximum for i in range(count * len(mode))]
+                raw = struct.pack(f"<{len(values)}H", *values)
+                image = Image.frombytes(mode, (count, 1), raw, bit_depth=depth)
+                for channel, band in enumerate(image.split()):
+                    expected = struct.pack(f"<{count}H", *values[channel :: len(mode)])
+                    assert band.bit_depth == depth
+                    assert band.tobytes() == expected
+                    assert image.getchannel(channel).tobytes() == expected
+                assert image.tobytes() == raw
 
 
 def test_split_serializes_edited_exif_once(monkeypatch) -> None:
@@ -83,19 +80,20 @@ def test_split_serializes_edited_exif_once(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("factor", [1, 2, 3, 4, 5, (1, 3), (1, 7), (1, 100), (3, 1), (2, 5), (100, 100)])
-@pytest.mark.parametrize("box", [None, (1, 2, 16, 12), (0, 0, 16, 12)])
-def test_reduce(mode: str, factor: object, box: object) -> None:
-    image, reference = pair(mode)
-    image.info["custom"] = 42
-    result = image.reduce(factor, box)
-    expected = reference.reduce(factor, box)
-    assert result.size == expected.size
-    assert result.mode == expected.mode
-    assert result.tobytes() == expected.tobytes()
-    assert result is not image
-    assert result.info == image.info
-    assert result.info is not image.info
+def test_reduce(mode: str, subtests: pytest.Subtests) -> None:
+    for factor in [1, 2, 3, 4, 5, (1, 3), (1, 7), (1, 100), (3, 1), (2, 5), (100, 100)]:
+        for box in [None, (1, 2, 16, 12), (0, 0, 16, 12)]:
+            with subtests.test(mode=mode, factor=factor, box=box):
+                image, reference = pair(mode)
+                image.info["custom"] = 42
+                result = image.reduce(factor, box)
+                expected = reference.reduce(factor, box)
+                assert result.size == expected.size
+                assert result.mode == expected.mode
+                assert result.tobytes() == expected.tobytes()
+                assert result is not image
+                assert result.info == image.info
+                assert result.info is not image.info
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

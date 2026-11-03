@@ -182,14 +182,7 @@ def test_legacy_png_exif_survives_save_and_cached_edits(format, edited, profile_
 
 
 @pytest.mark.parametrize(
-    "policy",
-    [
-        ImageMetadata.MetadataPolicy(),
-        ImageMetadata.MetadataPolicy(text=False),
-        ImageMetadata.MetadataPolicy(location=False),
-        ImageMetadata.MetadataPolicy(exif=False),
-        ImageMetadata.MetadataPolicy(exif_tags=frozenset({305})),
-    ],
+    "policy", [ImageMetadata.MetadataPolicy(), ImageMetadata.MetadataPolicy(text=False), ImageMetadata.MetadataPolicy(location=False), ImageMetadata.MetadataPolicy(exif=False), ImageMetadata.MetadataPolicy(exif_tags=frozenset({305}))]
 )
 @pytest.mark.parametrize("opened", [False, True])
 def test_save_policy_filters_legacy_png_exif(policy, opened):
@@ -326,7 +319,7 @@ def test_save_policy_filters_explicit_metadata_and_cached_exif(format):
     image.info["xmp"] = XMP
     profile = ImageCms.createProfile("sRGB").tobytes()
     stream = BytesIO()
-    image.save(stream, format, metadata_policy=ImageMetadata.MetadataPolicy(location=False), icc_profile=profile)
+    image.save(stream, format, metadata_policy=ImageMetadata.MetadataPolicy(location=False), icc_profile=profile, xmp=image.info["xmp"])
     result = Image.open(stream)
     assert 34853 not in result.getexif() and b"private-gps" not in result.info["xmp"]
     assert 34853 in image.getexif() and image.info["xmp"] == XMP

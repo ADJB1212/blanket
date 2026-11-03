@@ -21,17 +21,7 @@ def cuda():
 
 
 @pytest.mark.parametrize(
-    "mode,channels,depth",
-    [
-        ("L", 1, 8),
-        ("LA", 2, 8),
-        ("RGB", 3, 8),
-        ("RGBA", 4, 8),
-        ("F", 1, 32),
-        ("RGB;F", 3, 32),
-        ("RGBA;F", 4, 32),
-        *[(mode, channels, depth) for mode, channels in [("L", 1), ("RGB", 3), ("RGBA", 4)] for depth in (10, 12, 16)],
-    ],
+    "mode,channels,depth", [("L", 1, 8), ("LA", 2, 8), ("RGB", 3, 8), ("RGBA", 4, 8), ("F", 1, 32), ("RGB;F", 3, 32), ("RGBA;F", 4, 32), *[(mode, channels, depth) for mode, channels in [("L", 1), ("RGB", 3), ("RGBA", 4)] for depth in (10, 12, 16)]]
 )
 def test_cuda_tiled_plans_match_eager_rounding(cuda, mode, channels, depth):
     size = (37, 29)

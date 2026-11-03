@@ -249,11 +249,7 @@ def test_rank_filter_every_rank(runtime, mode, window):
     data = bytes(samples) if mode == "L" else struct.pack(f"{len(samples)}f", *samples)
     gpu = ImageGpu.from_image(Image.frombytes(mode, (width, height), data), runtime=runtime)
     radius = window // 2
-    neighborhoods = [
-        sorted(samples[min(max(y + dy, 0), height - 1) * width + min(max(x + dx, 0), width - 1)] for dy in range(-radius, radius + 1) for dx in range(-radius, radius + 1))
-        for y in range(height)
-        for x in range(width)
-    ]
+    neighborhoods = [sorted(samples[min(max(y + dy, 0), height - 1) * width + min(max(x + dx, 0), width - 1)] for dy in range(-radius, radius + 1) for dx in range(-radius, radius + 1)) for y in range(height) for x in range(width)]
     for rank in range(window * window):
         actual = gpu.rank_filter(window, rank).to_image()
         expected = [values[rank] for values in neighborhoods]

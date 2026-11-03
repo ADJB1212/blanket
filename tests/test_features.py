@@ -23,9 +23,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-@pytest.mark.parametrize(
-    "feature", ["blanket", "png", "jpg", "jxl", "libtiff", "webp", "avif", "libheif", "bmp", "gif", "ico", "pdf", "littlecms2", "libjpeg_turbo", "ppm", "pam", "tga", "dds", "qoi", "jpg_2000"]
-)
+@pytest.mark.parametrize("feature", ["blanket", "png", "jpg", "jxl", "libtiff", "webp", "avif", "libheif", "bmp", "gif", "ico", "pdf", "littlecms2", "libjpeg_turbo", "ppm", "pam", "tga", "dds", "qoi", "jpg_2000"])
 def test_available_features(feature: str) -> None:
     assert features.check(feature) is True
     assert feature in features.get_supported()
@@ -34,9 +32,7 @@ def test_available_features(feature: str) -> None:
         assert features.version(feature)
 
 
-@pytest.mark.parametrize(
-    "format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "AVIF", "HEIF", "BMP", "GIF", "ICO", "PDF", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "XPM", "MSP", "PALM"]
-)
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "AVIF", "HEIF", "BMP", "GIF", "ICO", "PDF", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "XPM", "MSP", "PALM"])
 def test_encoding_capabilities_can_encode(format: str) -> None:
     capability = features.encoding_capabilities(format)
     if capability is None:
@@ -139,9 +135,7 @@ def test_feature_name_requires_string(function: Callable, value: object) -> None
         function(value)
 
 
-@pytest.mark.parametrize(
-    ("feature", "format"), [("png", "PNG"), ("jpg", "JPEG"), ("jxl", "JXL"), ("libtiff", "TIFF"), ("webp", "WEBP"), ("avif", "AVIF"), ("bmp", "BMP"), ("gif", "GIF"), ("ico", "ICO")]
-)
+@pytest.mark.parametrize(("feature", "format"), [("png", "PNG"), ("jpg", "JPEG"), ("jxl", "JXL"), ("libtiff", "TIFF"), ("webp", "WEBP"), ("avif", "AVIF"), ("bmp", "BMP"), ("gif", "GIF"), ("ico", "ICO")])
 def test_reported_codecs_can_save_and_open(feature: str, format: str) -> None:
     assert features.check(feature)
     stream = BytesIO()

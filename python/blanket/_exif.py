@@ -420,7 +420,7 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
             options["exif"] = b""
     values = []
     for key in ("exif", "xmp", "icc_profile"):
-        value = options.pop(key) if key in options else image._metadata_value(key)
+        value = options.pop(key) if key in options else b"" if format == "JPEG" and key == "xmp" else image._metadata_value(key)
         if key == "exif" and hasattr(value, "tobytes"):
             value = value.tobytes()
         if key == "xmp" and isinstance(value, str):
@@ -435,6 +435,8 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
         raise TypeError("pnginfo must be a PngInfo object or None")
     chunks = [] if pnginfo is None else list(pnginfo.chunks)
     if format == "JPEG":
+        if len(values[1]) > 65504:
+            raise ValueError("XMP data is too long")
         if len(values[0]) > 65533:
             raise ValueError("EXIF data is too long")
         comment = options.pop("comment", image.info.get("comment"))

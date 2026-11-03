@@ -285,10 +285,10 @@ def test_default_font_public_api_and_no_pillow_import() -> None:
 
     font = ImageFont.load_default()
     assert isinstance(font, ImageFont.ImageFont)
-    assert font.getmetrics() == (7, 0)
-    assert font.getlength("Hello") == 30
-    assert font.getbbox("Hello") == (0, 0, 30, 7)
-    assert ImageFont.load_default(14).getmetrics() == (14, 0)
+    assert font.getmetrics() == (8, 0)
+    assert font.getlength("Hello") == 40
+    assert font.getbbox("Hello") == (0, 0, 40, 8)
+    assert ImageFont.load_default(14).getmetrics() == (16, 0)
     image = Image.new("L", (60, 20))
     ImageDraw.Draw(image).text((0, 0), "Hello", font=font, fill=255)
     implicit = Image.new("L", image.size)
@@ -303,9 +303,9 @@ def test_default_font_repeated_and_fallback_glyphs(size: int) -> None:
     text = "aA\u00df\u03a9" * 10
     actual = font.getmask(text)
     expected = Image.new("L", actual.size)
-    for position, char in enumerate("AA??" * 10):
+    for position, char in enumerate("aA??" * 10):
         glyph = font.getmask(char)
-        expected.paste(Image.frombytes("L", glyph.size, bytes(glyph)), (position * 6 * (size // 7), 0))
+        expected.paste(Image.frombytes("L", glyph.size, bytes(glyph)), (position * 8 * ((size + 7) // 8), 0))
     assert bytes(actual) == expected.tobytes()
 
 

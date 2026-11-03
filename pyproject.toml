@@ -78,7 +78,7 @@ xfail_strict = true
 
 [tool.ruff]
 fix = true
-line-length = 200
+line-length = 250
 target-version = "py312"
 
 [tool.ruff.lint]

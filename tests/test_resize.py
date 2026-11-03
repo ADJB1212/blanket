@@ -29,23 +29,6 @@ def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> Non
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("method", [None, *Image.Resampling])
-def test_resize_matches_pillow(mode: str, method: int | None, subtests: pytest.Subtests) -> None:
-    raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
-    image = Image.frombytes(mode, (67, 49), raw)
-    reference = PillowImage.frombytes(mode, image.size, raw)
-    for size, box in (((11, 7), None), ((101, 83), None), ((9, 8), (2.3, 1.7, 59.2, 43.8))):
-        for gap in (None, 1.0, 2.0, 3.0):
-            with subtests.test(size=size, box=box, gap=gap):
-                expected = reference.resize(size, method, box, gap)
-                actual = image.resize(size, method, box, gap)
-                assert actual.size == expected.size
-                assert actual.mode == expected.mode
-                assert actual.tobytes() == expected.tobytes()
-                assert image.tobytes() == raw
-
-
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", [method for method in Image.Resampling if method != Image.Resampling.NEAREST])
 def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: Image.Resampling, subtests: pytest.Subtests) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))

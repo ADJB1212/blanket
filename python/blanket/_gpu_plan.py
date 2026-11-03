@@ -51,17 +51,7 @@ class ProcessingPlan:
         >>> result = plan.run(resident_image)
     """
 
-    def __init__(
-        self,
-        size: tuple[int, int],
-        mode: str,
-        operations: Sequence[tuple[str, dict[str, Any]]],
-        *,
-        memory_limit: int = 64 * 1024 * 1024,
-        bit_depth: int | None = None,
-        backend: str = "metal",
-        device: int = 0,
-    ) -> None:
+    def __init__(self, size: tuple[int, int], mode: str, operations: Sequence[tuple[str, dict[str, Any]]], *, memory_limit: int = 64 * 1024 * 1024, bit_depth: int | None = None, backend: str = "metal", device: int = 0) -> None:
         """Validate and prepare a resident processing plan.
 
         Args:

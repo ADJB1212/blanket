@@ -103,10 +103,7 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
         for v in candidates
         if v is not selected
         and v.source is not None
-        and (
-            not math.isclose(v.pixel_aspect, selected.pixel_aspect, rel_tol=1e-3)
-            or (v.dpi is not None and selected.dpi is not None and any(not math.isclose(a, b, rel_tol=1e-3) for a, b in zip(v.dpi, selected.dpi, strict=True)))
-        )
+        and (not math.isclose(v.pixel_aspect, selected.pixel_aspect, rel_tol=1e-3) or (v.dpi is not None and selected.dpi is not None and any(not math.isclose(a, b, rel_tol=1e-3) for a, b in zip(v.dpi, selected.dpi, strict=True))))
     )
     if conflicts and conflict == "error":
         raise ValueError("conflicting resolution metadata")

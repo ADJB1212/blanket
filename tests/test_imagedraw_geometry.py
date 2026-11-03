@@ -29,62 +29,61 @@ def test_sorted_path_edges_match_independently_clipped_bands(style: str, antiali
 
 
 @pytest.mark.parametrize("style", ["fill", "outline", "line"])
-@pytest.mark.parametrize("antialias", [False, True])
-@pytest.mark.parametrize("width", [3, 7])
-@pytest.mark.parametrize(
-    "points",
-    [
-        [(3.0, 4.0)],
-        [(1.0, 2.0), (12.0, 2.0)],
-        [(-100.5, -80.0), (100.0, -80.0), (100.0, 80.0), (-100.5, 80.0)],
-        [(1.25, 1.5), (13.5, 10.25), (1.25, 10.25), (13.5, 1.5)],
-        [(2.0, 2.0), (12.0, 2.0), (12.0, 2.0), (7.0, 6.0), (12.0, 10.0), (2.0, 10.0)],
-        [((i * 71 % 23) - 4.375, (i * 53 % 19) - 3.125) for i in range(73)],
-        [((i * 71 % 61) - 24.375, (i * 53 % 19) - 3.125) for i in range(97)],
-    ],
-)
-def test_path_scanlines_match_scalar_coverage(style, antialias, width, points) -> None:
-    actual = Image.new("L", (15, 13), 23)
-    draw_path(actual._native, points, 193, width, style, False, antialias)
-    edges = list(pairwise(points))
-    if style != "line":
-        edges.append((points[-1], points[0]))
+def test_path_scanlines_match_scalar_coverage(style, subtests: pytest.Subtests) -> None:
+    for antialias in [False, True]:
+        for width in [3, 7]:
+            for points in [
+                [(3.0, 4.0)],
+                [(1.0, 2.0), (12.0, 2.0)],
+                [(-100.5, -80.0), (100.0, -80.0), (100.0, 80.0), (-100.5, 80.0)],
+                [(1.25, 1.5), (13.5, 10.25), (1.25, 10.25), (13.5, 1.5)],
+                [(2.0, 2.0), (12.0, 2.0), (12.0, 2.0), (7.0, 6.0), (12.0, 10.0), (2.0, 10.0)],
+                [((i * 71 % 23) - 4.375, (i * 53 % 19) - 3.125) for i in range(73)],
+                [((i * 71 % 61) - 24.375, (i * 53 % 19) - 3.125) for i in range(97)],
+            ]:
+                with subtests.test(style=style, antialias=antialias, width=width, points=points):
+                    actual = Image.new("L", (15, 13), 23)
+                    draw_path(actual._native, points, 193, width, style, False, antialias)
+                    edges = list(pairwise(points))
+                    if style != "line":
+                        edges.append((points[-1], points[0]))
 
-    def distance_squared(point, a, b):
-        dx, dy = b[0] - a[0], b[1] - a[1]
-        length = dx * dx + dy * dy
-        t = max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length)) if length else 0.0
-        return (point[0] - a[0] - t * dx) ** 2 + (point[1] - a[1] - t * dy) ** 2
+                    def distance_squared(point, a, b):
+                        dx, dy = b[0] - a[0], b[1] - a[1]
+                        length = dx * dx + dy * dy
+                        t = max(0.0, min(1.0, ((point[0] - a[0]) * dx + (point[1] - a[1]) * dy) / length)) if length else 0.0
+                        return (point[0] - a[0] - t * dx) ** 2 + (point[1] - a[1] - t * dy) ** 2
 
-    def hit(point):
-        if style != "fill":
-            return any(distance_squared(point, a, b) < (width / 2) ** 2 + 1e-12 for a, b in edges)
-        inside = False
-        for a, b in edges:
-            if distance_squared(point, a, b) < 1e-12:
-                return True
-            if (b[1] > point[1]) != (a[1] > point[1]) and point[0] < (a[0] - b[0]) * (point[1] - b[1]) / (a[1] - b[1]) + b[0]:
-                inside = not inside
-        return inside
+                    def hit(point):
+                        if style != "fill":
+                            return any(distance_squared(point, a, b) < (width / 2) ** 2 + 1e-12 for a, b in edges)
+                        inside = False
+                        for a, b in edges:
+                            if distance_squared(point, a, b) < 1e-12:
+                                return True
+                            if (b[1] > point[1]) != (a[1] > point[1]) and point[0] < (a[0] - b[0]) * (point[1] - b[1]) / (a[1] - b[1]) + b[0]:
+                                inside = not inside
+                        return inside
 
-    samples = 4 if antialias else 1
-    expected = bytearray()
-    for y in range(13):
-        for x in range(15):
-            count = sum(hit((x + (sx + 0.5) / samples - 0.5, y + (sy + 0.5) / samples - 0.5)) for sy in range(samples) for sx in range(samples))
-            coverage = (count * 255 + samples * samples // 2) // (samples * samples)
-            expected.append((23 * (255 - coverage) + 193 * coverage + 127) // 255)
-    assert actual.tobytes() == expected
+                    samples = 4 if antialias else 1
+                    expected = bytearray()
+                    for y in range(13):
+                        for x in range(15):
+                            count = sum(hit((x + (sx + 0.5) / samples - 0.5, y + (sy + 0.5) / samples - 0.5)) for sy in range(samples) for sx in range(samples))
+                            coverage = (count * 255 + samples * samples // 2) // (samples * samples)
+                            expected.append((23 * (255 - coverage) + 193 * coverage + 127) // 255)
+                    assert actual.tobytes() == expected
 
 
-@pytest.mark.parametrize("points", [[(1, 2), (12, 9)], [(12, 9), (1, 2)], [(-4, -3), (20, 10)], [(0, 0), (7, 14)], [(7, 14), (0, 0)], [(2, 2), (2, 2)], [(2, 2), (2, 9), (8, 9)]])
 @pytest.mark.parametrize(("mode", "ink"), [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16", 500)])
-def test_thin_lines_match_pillow(points: list[tuple[int, int]], mode: str, ink: object) -> None:
-    actual = Image.new(mode, (15, 15))
-    expected = PILImage.new(mode, actual.size)
-    ImageDraw.Draw(actual).line(points, fill=ink)
-    PILDraw.Draw(expected).line(points, fill=ink)
-    assert actual.tobytes() == expected.tobytes()
+def test_thin_lines_match_pillow(mode: str, ink: object, subtests: pytest.Subtests) -> None:
+    for points in [[(1, 2), (12, 9)], [(12, 9), (1, 2)], [(-4, -3), (20, 10)], [(0, 0), (7, 14)], [(7, 14), (0, 0)], [(2, 2), (2, 2)], [(2, 2), (2, 9), (8, 9)]]:
+        with subtests.test(points=points, mode=mode, ink=ink):
+            actual = Image.new(mode, (15, 15))
+            expected = PILImage.new(mode, actual.size)
+            ImageDraw.Draw(actual).line(points, fill=ink)
+            PILDraw.Draw(expected).line(points, fill=ink)
+            assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("vertical", [False, True])
@@ -103,7 +102,6 @@ def test_short_line_segments_on_large_canvas(vertical: bool, reverse: bool) -> N
     assert actual.tobytes() == expected.tobytes()
 
 
-@pytest.mark.parametrize("operation", ["line", "polygon", "ellipse", "arc", "chord", "pieslice", "rounded_rectangle", "regular_polygon"])
 @pytest.mark.parametrize(
     ("mode", "ink"),
     [
@@ -125,21 +123,23 @@ def test_short_line_segments_on_large_canvas(vertical: bool, reverse: bool) -> N
         ("I;16B", 12000),
     ],
 )
-def test_geometry_supports_modes(operation: str, mode: str, ink: object) -> None:
-    image = Image.new(mode, (19, 17))
-    draw = ImageDraw.Draw(image)
-    args = [(2, 2, 15, 13)]
-    if operation in ("arc", "chord", "pieslice"):
-        args += [20, 280]
-    elif operation == "regular_polygon":
-        args = [((9, 8), 6), 5]
-    elif operation == "polygon":
-        args = [[(2, 2), (15, 2), (9, 13)]]
-    before = image.tobytes()
-    getattr(draw, operation)(*args, fill=ink, width=2)
-    assert image.tobytes() != before
-    assert image.mode == mode
-    assert image.size == (19, 17)
+def test_geometry_supports_modes(mode: str, ink: object, subtests: pytest.Subtests) -> None:
+    for operation in ["line", "polygon", "ellipse", "arc", "chord", "pieslice", "rounded_rectangle", "regular_polygon"]:
+        with subtests.test(operation=operation, mode=mode, ink=ink):
+            image = Image.new(mode, (19, 17))
+            draw = ImageDraw.Draw(image)
+            args = [(2, 2, 15, 13)]
+            if operation in ("arc", "chord", "pieslice"):
+                args += [20, 280]
+            elif operation == "regular_polygon":
+                args = [((9, 8), 6), 5]
+            elif operation == "polygon":
+                args = [[(2, 2), (15, 2), (9, 13)]]
+            before = image.tobytes()
+            getattr(draw, operation)(*args, fill=ink, width=2)
+            assert image.tobytes() != before
+            assert image.mode == mode
+            assert image.size == (19, 17)
 
 
 @pytest.mark.parametrize("operation", ["ellipse", "chord", "pieslice", "polygon", "rounded_rectangle", "regular_polygon"])
@@ -315,11 +315,11 @@ def test_default_bitmap_text(mode: str) -> None:
     draw = ImageDraw.Draw(image)
     draw.text((2, 2), "Hello 123!", fill=1 if mode in ("1", "I", "F", "P") else "white")
     assert any(image.tobytes())
-    assert draw.textlength("Hello") == 30
-    assert draw.textbbox((2, 2), "Hello") == (2, 2, 32, 9)
-    assert draw.textbbox((20, 20), "A", anchor="mm") == (17, 16.5, 23, 23.5)
+    assert draw.textlength("Hello") == 40
+    assert draw.textbbox((2, 2), "Hello") == (2, 2, 42, 10)
+    assert draw.textbbox((20, 20), "A", anchor="mm") == (16, 16, 24, 24)
     draw.multiline_text((2, 15), "A\nBB", fill=1, align="right")
-    assert draw.multiline_textbbox((2, 15), "A\nBB", align="right") == (2, 15, 14, 33)
+    assert draw.multiline_textbbox((2, 15), "A\nBB", align="right") == (2, 15, 18, 35)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -349,13 +349,11 @@ def test_multiline_text_layout_and_stroke_bounds(anchor: str | None, align: str)
     draw.multiline_text((40, 25), "Hello\nWorld!", fill=255, font=font, align=align, anchor=anchor, spacing=6)
     reference.multiline_text((40, 25), "Hello\nWorld!", fill=255, font=font, align=align, anchor=anchor, spacing=6)
     assert actual.tobytes() == expected.tobytes()
-    assert draw.multiline_textbbox((40, 25), "Hello\nWorld!", font=font, align=align, anchor=anchor, spacing=6) == reference.multiline_textbbox(
-        (40, 25), "Hello\nWorld!", font=font, align=align, anchor=anchor, spacing=6
-    )
+    assert draw.multiline_textbbox((40, 25), "Hello\nWorld!", font=font, align=align, anchor=anchor, spacing=6) == reference.multiline_textbbox((40, 25), "Hello\nWorld!", font=font, align=align, anchor=anchor, spacing=6)
     default = Image.new("L", (30, 20))
     ImageDraw.Draw(default).text((3, 3), "A", fill=100, stroke_width=2, stroke_fill=255)
     assert {0, 100, 255} <= set(default.tobytes())
-    assert ImageDraw.Draw(default).textbbox((3, 3), "A", stroke_width=2) == (1, 1, 11, 12)
+    assert ImageDraw.Draw(default).textbbox((3, 3), "A", stroke_width=2) == (1, 1, 13, 13)
 
 
 @pytest.mark.parametrize(("mode", "draw_mode"), [("L", None), ("RGB", None), ("RGBA", None), ("RGB", "RGBA")])

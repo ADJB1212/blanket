@@ -55,14 +55,7 @@ def _png_regions(
                 base = previous.image
             bbox = subtract_modulo(frame.convert("RGBA"), base.convert("RGBA")).getbbox(alpha_only=False)
             combined = previous.duration + duration
-            if (
-                bbox is None
-                and previous_disposal == disposal
-                and previous.blend == blend
-                and duration_known
-                and math.isfinite(combined)
-                and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535
-            ):
+            if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
                 previous.duration = combined
                 continue
         records.append(_PngFrame(frame, bbox, duration, disposal, blend))
@@ -75,13 +68,7 @@ def _png_regions(
         offsets.append((0, 0) if record.bbox is None else record.bbox[:2])
     if prepared[0].size != canvas:
         prepared[0] = prepared[0].crop((0, 0, *canvas))
-    return (
-        prepared,
-        [0.0] * int(default_image) + [record.duration for record in records],
-        [0] * int(default_image) + [record.disposal for record in records],
-        [0] * int(default_image) + [record.blend for record in records],
-        (canvas, offsets),
-    )
+    return (prepared, [0.0] * int(default_image) + [record.duration for record in records], [0] * int(default_image) + [record.disposal for record in records], [0] * int(default_image) + [record.blend for record in records], (canvas, offsets))
 
 
 def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:
@@ -182,9 +169,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             frame = frame.convert("L", bit_depth=16)
         if format == "PDF":
-            target = (
-                frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
-            )
+            target = frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
         elif format == "PNG":
             target = png_mode
         else:
@@ -194,9 +179,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         prepared.append(frame.convert(target) if frame.mode != target else frame)
     regions = None
     if format == "PNG" and prepared[0].bit_depth == 8:
-        prepared, durations, disposals, blends, regions = _png_regions(
-            prepared, durations, disposals, blends, default_image, "duration" in controls or any("duration" in frame.info for frame in frames)
-        )
+        prepared, durations, disposals, blends, regions = _png_regions(prepared, durations, disposals, blends, default_image, "duration" in controls or any("duration" in frame.info for frame in frames))
         if png_mode == "P" and png_palette is not None:
             prepared[0] = prepared[0].copy()
             prepared[0].putpalette(png_palette)
@@ -205,9 +188,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 prepared[0]._native.set_palette_alpha(index=transparency)
             elif isinstance(transparency, bytes):
                 prepared[0]._native.set_palette_alpha(alpha=transparency)
-    encoded = bytes(
-        _encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions)
-    )
+    encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions))
     if any(metadata):
         encoded = _write_metadata(encoded, format, *metadata)
     if fp is None:

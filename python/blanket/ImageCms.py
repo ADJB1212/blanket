@@ -305,17 +305,7 @@ class ImageCmsTransform:
         output_mode: Destination pixel mode; also exposed as outputMode.
     """
 
-    def __init__(
-        self,
-        input: _Profile,
-        output: _Profile,
-        input_mode: str,
-        output_mode: str,
-        intent: int = Intent.PERCEPTUAL,
-        proof: _Profile | None = None,
-        proof_intent: int = Intent.ABSOLUTE_COLORIMETRIC,
-        flags: int = Flags.NONE,
-    ) -> None:
+    def __init__(self, input: _Profile, output: _Profile, input_mode: str, output_mode: str, intent: int = Intent.PERCEPTUAL, proof: _Profile | None = None, proof_intent: int = Intent.ABSOLUTE_COLORIMETRIC, flags: int = Flags.NONE) -> None:
         """Build a conversion, optionally simulating a proofing device.
 
         Args:
@@ -340,16 +330,7 @@ class ImageCmsTransform:
         if not isinstance(flags, int) or not 0 <= flags <= 0xFFFFFFFF:
             raise PyCMSError("flags must be an unsigned 32-bit integer")
         try:
-            self.transform = _CmsTransform(
-                self.input_profile.tobytes(),
-                self.output_profile.tobytes(),
-                input_mode,
-                output_mode,
-                _intent(intent),
-                flags,
-                None if proof is None else _profile(proof).tobytes(),
-                _intent(proof_intent),
-            )
+            self.transform = _CmsTransform(self.input_profile.tobytes(), self.output_profile.tobytes(), input_mode, output_mode, _intent(intent), flags, None if proof is None else _profile(proof).tobytes(), _intent(proof_intent))
         except (ValueError, TypeError, OverflowError) as error:
             raise PyCMSError(str(error)) from error
 
@@ -446,14 +427,7 @@ def buildTransform(inputProfile: _Profile, outputProfile: _Profile, inMode: str,
 
 
 def buildProofTransform(
-    inputProfile: _Profile,
-    outputProfile: _Profile,
-    proofProfile: _Profile,
-    inMode: str,
-    outMode: str,
-    renderingIntent: int = Intent.PERCEPTUAL,
-    proofRenderingIntent: int = Intent.ABSOLUTE_COLORIMETRIC,
-    flags: int = Flags.SOFTPROOFING,
+    inputProfile: _Profile, outputProfile: _Profile, proofProfile: _Profile, inMode: str, outMode: str, renderingIntent: int = Intent.PERCEPTUAL, proofRenderingIntent: int = Intent.ABSOLUTE_COLORIMETRIC, flags: int = Flags.SOFTPROOFING
 ) -> ImageCmsTransform:
     """Build a conversion that simulates a proofing device's color response.
 
@@ -503,9 +477,7 @@ def applyTransform(im: Image.Image, transform: ImageCmsTransform, inPlace: bool 
     return None if inPlace else result
 
 
-def profileToProfile(
-    im: Image.Image, inputProfile: _Profile, outputProfile: _Profile, renderingIntent: int = Intent.PERCEPTUAL, outputMode: str | None = None, inPlace: bool = False, flags: int = Flags.NONE
-) -> Image.Image | None:
+def profileToProfile(im: Image.Image, inputProfile: _Profile, outputProfile: _Profile, renderingIntent: int = Intent.PERCEPTUAL, outputMode: str | None = None, inPlace: bool = False, flags: int = Flags.NONE) -> Image.Image | None:
     """Convert the current frame between ICC profiles in a single call.
 
     Args:

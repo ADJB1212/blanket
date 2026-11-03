@@ -8,17 +8,7 @@ from ._blanket import hdr_tone_map
 __all__ = ["tone_map"]
 
 
-def tone_map(
-    image: Image.Image,
-    operator: str = "reinhard",
-    *,
-    transfer: str | None = None,
-    primaries: str | None = None,
-    exposure: float = 0.0,
-    reference_white: float = 203.0,
-    peak_luminance: float = 1000.0,
-    bit_depth: int = 8,
-) -> Image.Image:
+def tone_map(image: Image.Image, operator: str = "reinhard", *, transfer: str | None = None, primaries: str | None = None, exposure: float = 0.0, reference_white: float = 203.0, peak_luminance: float = 1000.0, bit_depth: int = 8) -> Image.Image:
     """Render the current frame to SDR using Reinhard, ACES, or filmic curves.
 
     Args:
@@ -58,9 +48,7 @@ def tone_map(
                 raise ValueError("unsupported cICP primaries; specify primaries explicitly")
     if not 400 <= peak_luminance <= 10000:
         raise ValueError("peak_luminance must be between 400 and 10000 nits")
-    result = Image.Image(
-        hdr_tone_map(image._native, operator, "linear" if transfer is None else transfer, "srgb" if primaries is None else primaries, exposure, reference_white, peak_luminance, bit_depth)
-    )
+    result = Image.Image(hdr_tone_map(image._native, operator, "linear" if transfer is None else transfer, "srgb" if primaries is None else primaries, exposure, reference_white, peak_luminance, bit_depth))
     stale = {"cicp", "mastering_display", "content_light_level", "icc_profile", "gamma", "chromaticity", "srgb"}
     result.info.update({key: value for key, value in image._metadata_info().items() if key not in stale})
     result.info["cicp"] = (1, 13, 0, 1)

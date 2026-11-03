@@ -1,7 +1,9 @@
 #![feature(default_field_values, portable_simd)]
 
 mod decode;
+mod encode;
 mod entropy;
+mod markers;
 pub mod stream;
 
 use std::cell::RefCell;
@@ -14,7 +16,6 @@ use turbojpeg::{Colorspace, Compressor, Decompressor, PixelFormat, Subsamp};
 
 thread_local! {
     static JPEG_ENCODER: RefCell<Option<Compressor>> = const { RefCell::new(None) };
-    static JPEG_DECODER: RefCell<Option<decode::Decoder>> = const { RefCell::new(None) };
 }
 
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
@@ -83,10 +84,13 @@ pub fn transform_jpeg(
 }
 
 pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
-    JPEG_DECODER.with(|cache| with_codec(cache, decode::Decoder::new, |decoder| decoder.decode(data)))
+    // Abbreviated streams must not inherit another image's tables.
+    decode::Decoder::new()?.decode(data)
 }
 
 pub fn decode_scaled(data: &[u8], scale: u32, mode: &str) -> Result<Image, String> {
+    let data = markers::combine(data);
+    let data = data.as_ref();
     if mode == "YCbCr" {
         let header = inspect(data)?;
         validate_dimensions(header.width, header.height)?;
@@ -100,7 +104,7 @@ pub fn decode_scaled(data: &[u8], scale: u32, mode: &str) -> Result<Image, Strin
         return Image::from_pixels(decoded.width as u32, decoded.height as u32, PixelMode::YCbCr, decoded.data, Some("JPEG".into()))
             .map_err(|error| error.to_string());
     }
-    JPEG_DECODER.with(|cache| with_codec(cache, decode::Decoder::new, |decoder| decoder.decode_scaled(data, scale, mode == "L")))
+    decode::Decoder::new()?.decode_scaled(data, scale, mode == "L")
 }
 
 #[cfg(test)]
@@ -144,7 +148,7 @@ pub fn encode_jpeg(image: &Image, pixels: &[u8], quality: u8) -> PyResult<Vec<u8
 
 pub fn encode_jpeg_options(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
     let coding = JpegCoding { optimize: options.jpeg_optimize, progressive: options.jpeg_progressive };
-    encode_jpeg_configured(image, pixels, options.quality, options.jpeg_subsampling, coding)
+    encode_jpeg_configured(image, pixels, options, coding)
 }
 
 /// Encode with the normal save's validation, quality, and subsampling, but
@@ -159,25 +163,40 @@ pub fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCodi
         ));
     }
     let coding = JpegCoding { optimize: coding.optimize || options.jpeg_optimize, progressive: coding.progressive || options.jpeg_progressive };
-    encode_jpeg_configured(image, image.pixel_data()?, options.quality, options.jpeg_subsampling, coding)
+    encode_jpeg_configured(image, image.pixel_data()?, options, coding)
 }
 
 fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCoding) -> PyResult<Vec<u8>> {
-    encode_jpeg_configured(image, pixels, quality, -1, coding)
+    encode_jpeg_configured(image, pixels, SaveOptions { quality, .. }, coding)
 }
 
-fn encode_jpeg_configured(image: &Image, pixels: &[u8], quality: u8, subsampling: i8, coding: JpegCoding) -> PyResult<Vec<u8>> {
-    JPEG_ENCODER.with(|cache| {
-        with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, quality, subsampling, coding))
-    })
+fn encode_jpeg_configured(image: &Image, pixels: &[u8], options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
+    let encoded = if !options.jpeg_qtables.is_empty()
+        || options.jpeg_smooth != 0
+        || options.jpeg_restart_marker_blocks != 0
+        || options.jpeg_restart_marker_rows != 0
+        || (matches!(image.mode, PixelMode::L | PixelMode::Cmyk) && options.jpeg_subsampling > 0)
+    {
+        encode::configured(image, pixels, options, coding)?
+    } else {
+        JPEG_ENCODER.with(|cache| {
+            with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, options, coding))
+        })?
+    };
+    markers::separate(encoded, options.jpeg_streamtype, coding.optimize || coding.progressive)
 }
 
-fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], quality: u8, subsampling: i8, coding: JpegCoding) -> PyResult<Vec<u8>> {
+fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
     if image.mode == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
 
-    let subsampling = match subsampling {
+    let keep_rgb = options.jpeg_keep_rgb && image.mode == PixelMode::Rgb;
+    if keep_rgb && !matches!(options.jpeg_subsampling, -1 | 0) {
+        return Err(PyOSError::new_err("RGB JPEG does not support chroma subsampling"));
+    }
+    let subsampling = match options.jpeg_subsampling {
+        -1 if keep_rgb => Subsamp::None,
         -1 | 2 => Subsamp::Sub2x2,
         0 => Subsamp::None,
         1 => Subsamp::Sub2x1,
@@ -191,7 +210,7 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], qual
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
         _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
     };
-    encoder.set_quality(i32::from(quality)).map_err(codec_error)?;
+    encoder.set_quality(i32::from(options.quality)).map_err(codec_error)?;
     encoder.set_subsamp(subsampling).map_err(codec_error)?;
     encoder.set_optimize(coding.optimize).map_err(codec_error)?;
     encoder.set_progressive(coding.progressive).map_err(codec_error)?;
@@ -199,6 +218,7 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], qual
         .set_colorspace(match image.mode {
             PixelMode::L => Colorspace::Gray,
             PixelMode::Cmyk => Colorspace::CMYK,
+            PixelMode::Rgb if keep_rgb => Colorspace::RGB,
             _ => Colorspace::YCbCr,
         })
         .map_err(codec_error)?;
@@ -376,8 +396,14 @@ mod tests {
                 for quality in [25, 100, 85] {
                     for coding in [JpegCoding { progressive: true, optimize: true }, JpegCoding::BASELINE] {
                         let actual = encode_jpeg_coded(&image, image.pixel_data().unwrap(), quality, coding).unwrap();
-                        let expected =
-                            encode_jpeg_with(&mut Compressor::new().unwrap(), &image, image.pixel_data().unwrap(), quality, -1, coding).unwrap();
+                        let expected = encode_jpeg_with(
+                            &mut Compressor::new().unwrap(),
+                            &image,
+                            image.pixel_data().unwrap(),
+                            SaveOptions { quality, .. },
+                            coding,
+                        )
+                        .unwrap();
                         assert_eq!(actual, expected);
                         let expected = decode_jpeg_with(&mut Decompressor::new().unwrap(), &actual).unwrap();
                         let decoded = decode_jpeg(&actual).unwrap();

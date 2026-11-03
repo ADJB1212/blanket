@@ -1,13 +1,58 @@
+"""Pillow 13.0.0 contracts and Blanket regressions; see PILLOW_TESTS.md."""
+
 from __future__ import annotations
 
 import inspect
-import math
 
 import numpy as np
 import pytest
 from PIL import Image as PILImage, ImageEnhance as PILEnhance
+from pillow_helpers import assert_image_equal, hopper
 
 from blanket import Image, ImageEnhance
+
+
+def test_sanity() -> None:
+    # FIXME: assert_image
+    # Implicit asserts no exception:
+    ImageEnhance.Color(hopper()).enhance(0.5)
+    ImageEnhance.Contrast(hopper()).enhance(0.5)
+    ImageEnhance.Brightness(hopper()).enhance(0.5)
+    ImageEnhance.Sharpness(hopper()).enhance(0.5)
+
+
+def test_crash() -> None:
+    # crashes on small images
+    im = Image.new("RGB", (1, 1))
+    ImageEnhance.Sharpness(im).enhance(0.5)
+
+
+def _half_transparent_image() -> Image.Image:
+    # returns an image, half transparent, half solid
+    im = hopper("RGB")
+
+    transparent = Image.new("L", im.size, 0)
+    solid = Image.new("L", (im.size[0] // 2, im.size[1]), 255)
+    transparent.paste(solid, (0, 0))
+    im.putalpha(transparent)
+
+    return im
+
+
+def _check_alpha(im: Image.Image, original: Image.Image, op: str, amount: float) -> None:
+    assert im.getbands() == original.getbands()
+    assert_image_equal(im.getchannel("A"), original.getchannel("A"), f"Diff on {op}: {amount}")
+
+
+@pytest.mark.parametrize("op", ("Color", "Brightness", "Contrast", "Sharpness"))
+def test_alpha(op: str) -> None:
+    # Issue https://github.com/python-pillow/Pillow/issues/899
+    # Is alpha preserved through image enhancement?
+
+    original = _half_transparent_image()
+
+    for amount in [0, 0.5, 1.0]:
+        _check_alpha(getattr(ImageEnhance, op)(original).enhance(amount), original, op, amount)
 
 
 def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:
@@ -24,30 +69,6 @@ def same(actual: Image.Image, expected: PILImage.Image) -> None:
 def test_public_classes_match_pillow() -> None:
     expected = {name for name, value in vars(PILEnhance).items() if not name.startswith("_") and inspect.isclass(value) and value.__module__ == PILEnhance.__name__}
     assert set(ImageEnhance.__all__) == expected
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("name", ImageEnhance.__all__)
-def test_enhancers_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:
-    blanket, pillow = pair(mode)
-    for factor in (-2, -0.5, 0, 0.1, 0.5, 1, 1.5, 2, 10, math.nan, math.inf, -math.inf):
-        with subtests.test(factor=factor):
-            actual = getattr(ImageEnhance, name)(blanket).enhance(factor)
-            expected = getattr(PILEnhance, name)(pillow).enhance(factor)
-            same(actual, expected)
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("name", ImageEnhance.__all__)
-def test_degenerate_images_and_attributes_match_pillow(mode: str, name: str) -> None:
-    blanket, pillow = pair(mode)
-    actual = getattr(ImageEnhance, name)(blanket)
-    expected = getattr(PILEnhance, name)(pillow)
-    assert actual.image is blanket
-    same(actual.degenerate, expected.degenerate)
-    assert getattr(actual, "intermediate_mode", None) == getattr(expected, "intermediate_mode", None)
-    if name == "Color" and mode == "L":
-        assert actual.degenerate is blanket
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

@@ -11,6 +11,7 @@ from blanket import Image
 
 @pytest.mark.parametrize("bits", [1, 2, 4, 8])
 @pytest.mark.parametrize("transparency", [None, 0, b"\x00\x7f\xff\xff"])
+@pytest.mark.filterwarnings("ignore::UserWarning")
 def test_indexed_png_preserves_palette_and_alpha(bits: int, transparency: int | bytes | None) -> None:
     source = PillowImage.new("P", (13, 5))
     source.putpalette(bytes(value % 256 for value in range(768)))

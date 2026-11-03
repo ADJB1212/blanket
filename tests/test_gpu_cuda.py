@@ -23,14 +23,16 @@ def contract_cases():
                 continue
             marks = [mark for mark in getattr(function, "pytestmark", []) if mark.name == "parametrize"]
             combinations = itertools.product(*(mark.args[1] for mark in marks))
-            for index, combination in enumerate(combinations):
+            cases = []
+            for combination in combinations:
                 arguments = {}
                 for mark, values in zip(marks, combination, strict=True):
                     names = mark.args[0]
                     names = [name.strip() for name in names.split(",")] if isinstance(names, str) else list(names)
                     values = (values,) if len(names) == 1 else values
                     arguments.update(zip(names, values, strict=True))
-                yield pytest.param(function, arguments, id=f"{module.__name__}/{name}/{index}")
+                cases.append(arguments)
+            yield pytest.param(function, cases, id=f"{module.__name__}/{name}")
 
 
 @pytest.fixture
@@ -49,9 +51,11 @@ def cuda(monkeypatch):
     return cuda_runtime.cupy()
 
 
-@pytest.mark.parametrize(("function", "arguments"), list(contract_cases()))
-def test_shared_metal_contracts_on_cuda(cuda, function, arguments):
-    function(runtime="cuda", **arguments)
+@pytest.mark.parametrize(("function", "cases"), list(contract_cases()))
+def test_shared_metal_contracts_on_cuda(cuda, function, cases, subtests):
+    for arguments in cases:
+        with subtests.test(**arguments):
+            function(runtime="cuda", **arguments)
 
 
 def test_capability_diagnostics_without_cuda(monkeypatch):

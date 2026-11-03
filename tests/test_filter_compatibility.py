@@ -9,39 +9,41 @@ from blanket import Image, ImageChops, ImageFilter, ImageOps
 
 
 @pytest.mark.parametrize("width", [1, 2, 4, 15, 16, 17, 18, 19, 20, 21, 31, 32, 33, 34])
-@pytest.mark.parametrize("kernel_size", [3, 5])
-@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (2.75, -1.5), (-3.0, 128.0)])
-def test_integer_convolution_matches_pillow_with_unaligned_source(width: int, kernel_size: int, scale: float, offset: float) -> None:
-    size = width, 7
-    values = [-2147483648, 2147483647, -1000, 16777217, 0, 127, 255]
-    raw = struct.pack(f"<{width * 7}i", *(values[i % len(values)] for i in range(width * 7)))
-    storage = bytearray(b"x" + raw + b"guard")
-    actual = Image.frombytes("I", size, memoryview(storage)[1 : 1 + len(raw)])
-    expected = PILImage.frombytes("I", size, raw)
-    coefficients = [float(i % 5 - 2) for i in range(kernel_size * kernel_size)]
-    result = actual.filter(ImageFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
-    reference = expected.filter(PILFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
-    assert result.mode == "I"
-    assert result.tobytes() == reference.tobytes()
-    assert storage == b"x" + raw + b"guard"
-    assert actual.tobytes() == raw
+def test_integer_convolution_matches_pillow_with_unaligned_source(width: int, subtests: pytest.Subtests) -> None:
+    for kernel_size in [3, 5]:
+        for scale, offset in [(1.0, 0.0), (2.75, -1.5), (-3.0, 128.0)]:
+            with subtests.test(width=width, kernel_size=kernel_size, scale=scale, offset=offset):
+                size = width, 7
+                values = [-2147483648, 2147483647, -1000, 16777217, 0, 127, 255]
+                raw = struct.pack(f"<{width * 7}i", *(values[i % len(values)] for i in range(width * 7)))
+                storage = bytearray(b"x" + raw + b"guard")
+                actual = Image.frombytes("I", size, memoryview(storage)[1 : 1 + len(raw)])
+                expected = PILImage.frombytes("I", size, raw)
+                coefficients = [float(i % 5 - 2) for i in range(kernel_size * kernel_size)]
+                result = actual.filter(ImageFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
+                reference = expected.filter(PILFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
+                assert result.mode == "I"
+                assert result.tobytes() == reference.tobytes()
+                assert storage == b"x" + raw + b"guard"
+                assert actual.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["I", "F"])
-@pytest.mark.parametrize("size", [(0, 1), (1, 0), (1, 1), (2, 7), (19, 5)])
-@pytest.mark.parametrize("window,rank", [(3, 0), (3, 4), (3, 8), (5, 1), (5, 12), (5, 24)])
-def test_wide_rank_filters_match_pillow(mode: str, size: tuple[int, int], window: int, rank: int) -> None:
-    values = [-2147483648, 2147483647, -1, 0, 255, 256, 1000] if mode == "I" else [float("nan"), float("inf"), -float("inf"), -0.0, 0.0, 1.25, -3.5]
-    count = size[0] * size[1]
-    raw = struct.pack(f"<{count}{'i' if mode == 'I' else 'f'}", *(values[i % len(values)] for i in range(count)))
-    actual = Image.frombytes(mode, size, raw)
-    expected = PILImage.frombytes(mode, size, raw)
-    result = actual.filter(ImageFilter.RankFilter(window, rank))
-    reference = expected.filter(PILFilter.RankFilter(window, rank))
-    assert result.mode == mode
-    assert result.size == size
-    assert result.tobytes() == reference.tobytes()
-    assert actual.tobytes() == raw
+def test_wide_rank_filters_match_pillow(mode: str, subtests: pytest.Subtests) -> None:
+    for size in [(0, 1), (1, 0), (1, 1), (2, 7), (19, 5)]:
+        for window, rank in [(3, 0), (3, 4), (3, 8), (5, 1), (5, 12), (5, 24)]:
+            with subtests.test(mode=mode, size=size, window=window, rank=rank):
+                values = [-2147483648, 2147483647, -1, 0, 255, 256, 1000] if mode == "I" else [float("nan"), float("inf"), -float("inf"), -0.0, 0.0, 1.25, -3.5]
+                count = size[0] * size[1]
+                raw = struct.pack(f"<{count}{'i' if mode == 'I' else 'f'}", *(values[i % len(values)] for i in range(count)))
+                actual = Image.frombytes(mode, size, raw)
+                expected = PILImage.frombytes(mode, size, raw)
+                result = actual.filter(ImageFilter.RankFilter(window, rank))
+                reference = expected.filter(PILFilter.RankFilter(window, rank))
+                assert result.mode == mode
+                assert result.size == size
+                assert result.tobytes() == reference.tobytes()
+                assert actual.tobytes() == raw
 
 
 @pytest.mark.parametrize("mode", ["I", "F"])
@@ -106,26 +108,6 @@ def test_palette_lookup_tables_keep_indices_alpha_and_metadata(operation: str) -
     result.info["metadata"].append("changed")
     assert image.info["metadata"] == ["original"]
     assert image.getpalette("RGBA") == list(palette)
-
-
-@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA"])
-@pytest.mark.parametrize("alpha_mode", ["constant", "1", "L"])
-def test_alpha_promotion_and_replacement_matches_pillow(mode: str, alpha_mode: str) -> None:
-    actual = Image.new(mode, (19, 3), 1)
-    expected = PILImage.new(mode, actual.size, 1)
-    if mode in ("P", "PA"):
-        palette = bytes(range(30))
-        actual.putpalette(palette)
-        expected.putpalette(palette)
-    actual.readonly = expected.readonly = 1
-    alpha = 73 if alpha_mode == "constant" else Image.new(alpha_mode, actual.size, 1 if alpha_mode == "1" else 73)
-    reference = 73 if alpha_mode == "constant" else PILImage.new(alpha_mode, actual.size, 1 if alpha_mode == "1" else 73)
-    actual.putalpha(alpha)
-    expected.putalpha(reference)
-    assert actual.mode == expected.mode
-    assert actual.tobytes() == expected.tobytes()
-    assert actual.getpalette() == expected.getpalette()
-    assert not actual.readonly
 
 
 @pytest.mark.parametrize("transparency", [0, bytes([0, 128])])

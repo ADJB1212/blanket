@@ -122,19 +122,7 @@ def test_bt2020_primaries_and_srgb_input():
 
 
 @pytest.mark.parametrize(
-    "options",
-    [
-        {"operator": "invalid"},
-        {"transfer": ""},
-        {"primaries": "p3"},
-        {"bit_depth": 12},
-        {"exposure": math.nan},
-        {"exposure": 2000},
-        {"reference_white": 0},
-        {"reference_white": math.inf},
-        {"peak_luminance": 0},
-        {"peak_luminance": math.nan},
-    ],
+    "options", [{"operator": "invalid"}, {"transfer": ""}, {"primaries": "p3"}, {"bit_depth": 12}, {"exposure": math.nan}, {"exposure": 2000}, {"reference_white": 0}, {"reference_white": math.inf}, {"peak_luminance": 0}, {"peak_luminance": math.nan}]
 )
 def test_invalid_options(options):
     with pytest.raises(ValueError):

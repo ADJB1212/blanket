@@ -61,7 +61,7 @@ jobs:
       - name: Install CUDA compiler
         run: bash scripts/setup_cuda.sh
       - name: Compile kernels and build development wheel
-        run: maturin build --profile dev -i python3.14 --out dist --auditwheel=repair --features gpu-cuda,no-vendored-webp,jxl-vendored,embedded-libheif --compression-level 9 -- -C link-arg=-fuse-ld=mold -Z threads=4
+        run: maturin build --profile ci -i python3.14 --out dist --auditwheel=repair --features gpu-cuda,no-vendored-webp,jxl-vendored,embedded-libheif --compression-level 9 -- -C link-arg=-fuse-ld=mold -Z threads=4
       - name: Upload wheel
         uses: actions/upload-artifact@v7
         with:

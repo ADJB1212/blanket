@@ -29,9 +29,8 @@ def same(actual: Image.Image, expected: PILImage.Image) -> None:
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
-@pytest.mark.parametrize(
-    "expression",
-    [
+def test_arithmetic_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
+    for expression in [
         "+a",
         "-a",
         "abs(a)",
@@ -63,19 +62,19 @@ def same(actual: Image.Image, expected: PILImage.Image) -> None:
         "convert(a + b, 'L')",
         "a and b",
         "a or b",
-    ],
-)
-def test_arithmetic_matches_pillow(mode: str, expression: str) -> None:
-    a, pa = pair(mode)
-    b, pb = pair(mode, (2, 3))
-    same(ImageMath.unsafe_eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
+    ]:
+        with subtests.test(mode=mode, expression=expression):
+            a, pa = pair(mode)
+            b, pb = pair(mode, (2, 3))
+            same(ImageMath.unsafe_eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "I"])
-@pytest.mark.parametrize("expression", ["~a", "a & 3", "3 & a", "a | 3", "3 | a", "a ^ 3", "3 ^ a", "a << 2", "a >> 2"])
-def test_bitwise_matches_pillow(mode: str, expression: str) -> None:
-    a, pa = pair(mode)
-    same(ImageMath.eval(expression, a=a), PILMath.unsafe_eval(expression, a=pa))
+def test_bitwise_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
+    for expression in ["~a", "a & 3", "3 & a", "a | 3", "3 | a", "a ^ 3", "3 ^ a", "a << 2", "a >> 2"]:
+        with subtests.test(mode=mode, expression=expression):
+            a, pa = pair(mode)
+            same(ImageMath.eval(expression, a=a), PILMath.unsafe_eval(expression, a=pa))
 
 
 @pytest.mark.parametrize("expression", ["a + b", "b - a", "a / b", "a < b", "equal(a, b)"])
@@ -140,10 +139,7 @@ def test_closed_image(mode: str) -> None:
 
 
 @pytest.mark.parametrize("value", [17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf")])
-@pytest.mark.parametrize(
-    "expression",
-    ["a + n", "n + a", "a - n", "n - a", "a * n", "n * a", "a / n", "n / a", "a % n", "n % a", "a ** n", "n ** a", "a < n", "n < a", "min(a, n)", "max(a, n)", "equal(a, n)", "notequal(a, n)"],
-)
+@pytest.mark.parametrize("expression", ["a + n", "n + a", "a - n", "n - a", "a * n", "n * a", "a / n", "n / a", "a % n", "n % a", "a ** n", "n ** a", "a < n", "n < a", "min(a, n)", "max(a, n)", "equal(a, n)", "notequal(a, n)"])
 def test_float_scalars_without_constant_images(expression: str, value: float, monkeypatch: pytest.MonkeyPatch) -> None:
     a, pa = pair("F", (17, 1))
     expected = PILMath.unsafe_eval(expression, a=pa, n=value)
@@ -226,12 +222,13 @@ def test_integer_boundaries_and_zero_divisors() -> None:
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
-@pytest.mark.parametrize("sizes", [((257, 259), (257, 259)), ((263, 259), (257, 263)), ((257, 263), (263, 259)), ((17003, 5), (17001, 4))])
-@pytest.mark.parametrize("expression", ["-a", "a + b", "a / b", "a < b", "min(a, b)", "equal(a, b)"])
-def test_chunk_boundaries_and_operand_strides(mode: str, sizes: tuple[tuple[int, int], tuple[int, int]], expression: str) -> None:
-    a, pa = pair(mode, sizes[0])
-    b, pb = pair(mode, sizes[1])
-    same(ImageMath.eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
+def test_chunk_boundaries_and_operand_strides(mode: str, subtests: pytest.Subtests) -> None:
+    for sizes in [((257, 259), (257, 259)), ((263, 259), (257, 263)), ((257, 263), (263, 259)), ((17003, 5), (17001, 4))]:
+        for expression in ["-a", "a + b", "a / b", "a < b", "min(a, b)", "equal(a, b)"]:
+            with subtests.test(mode=mode, sizes=sizes, expression=expression):
+                a, pa = pair(mode, sizes[0])
+                b, pb = pair(mode, sizes[1])
+                same(ImageMath.eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
 
 
 @pytest.mark.parametrize("expression", ["-a", "abs(a)", "a + b", "a / b", "min(a, b)", "max(a, b)", "a == b", "equal(a, b)"])

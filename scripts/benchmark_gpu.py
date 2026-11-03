@@ -93,18 +93,7 @@ def statistics(image: Image.Image) -> list[dict[str, object]]:
     for band, count in enumerate(stats.count):
         bins = histogram[band * 256 : (band + 1) * 256]
         moments = (stats.mean[band], stats.sum2[band] / count, *(sum(n * value**order for value, n in enumerate(bins)) / count for order in (3, 4)))
-        result.append(
-            {
-                "count": count,
-                "extrema": stats.extrema[band],
-                "sum": stats.sum[band],
-                "sum2": stats.sum2[band],
-                "moments": moments,
-                "mean": stats.mean[band],
-                "variance": stats.var[band],
-                "stddev": stats.stddev[band],
-            }
-        )
+        result.append({"count": count, "extrema": stats.extrema[band], "sum": stats.sum[band], "sum2": stats.sum2[band], "moments": moments, "mean": stats.mean[band], "variance": stats.var[band], "stddev": stats.stddev[band]})
     return result
 
 
@@ -169,13 +158,9 @@ def operations(size: tuple[int, int], mode: str = "RGB") -> dict[str, Operation]
         "contrast": Operation(lambda a: ImageEnhance.Contrast(a).enhance(1.2), lambda a: a.contrast(1.2)),
         "sharpness": Operation(lambda a: ImageEnhance.Sharpness(a).enhance(1.2), lambda a: a.sharpness(1.2)),
         "color_lut": Operation(lambda a: a.filter(lut), lambda a: a.color_lut(lut), modes=("RGB", "RGBA")),
-        "linear_light_resize": Operation(
-            lambda a: a.resize(target, Image.Resampling.BICUBIC, linear_light=True), lambda a: a.resize(target, Image.Resampling.BICUBIC, linear_light=True), modes=("RGB", "RGBA")
-        ),
+        "linear_light_resize": Operation(lambda a: a.resize(target, Image.Resampling.BICUBIC, linear_light=True), lambda a: a.resize(target, Image.Resampling.BICUBIC, linear_light=True), modes=("RGB", "RGBA")),
         "linear_light_composite": Operation(lambda a, b: Image.alpha_composite(a, b, linear_light=True), lambda a, b: a.alpha_composite(b, linear_light=True), binary_inputs, ("RGBA",)),
-        "transform": Operation(
-            lambda a: a.transform(size, Image.Transform.AFFINE, affine, Image.Resampling.BILINEAR), lambda a: a.transform(size, Image.Transform.AFFINE, affine, Image.Resampling.BILINEAR)
-        ),
+        "transform": Operation(lambda a: a.transform(size, Image.Transform.AFFINE, affine, Image.Resampling.BILINEAR), lambda a: a.transform(size, Image.Transform.AFFINE, affine, Image.Resampling.BILINEAR)),
         "rotate": Operation(lambda a: a.rotate(17, Image.Resampling.BILINEAR), lambda a: a.rotate(17, Image.Resampling.BILINEAR)),
         "remap": Operation(
             lambda a, _map: a.transform(size, Image.Transform.AFFINE, (1, 0, 1.25, 0, 1, 0.75), Image.Resampling.BILINEAR),
@@ -187,10 +172,7 @@ def operations(size: tuple[int, int], mode: str = "RGB") -> dict[str, Operation]
         "statistics": Operation(statistics, lambda a: a.statistics(), cpu_reference="ImageStat plus histogram moments of orders 3 and 4"),
         "histogram": Operation(histogram, lambda a: a.histogram()),
         "copy": Operation(lambda a: a.copy(), lambda a: a.convert(a.mode)),
-        "pipeline": Operation(
-            lambda a: ImageEnhance.Brightness(a.resize(target, Image.Resampling.BICUBIC).filter(blur)).enhance(1.2),
-            lambda a: a.resize(target, Image.Resampling.BICUBIC).gaussian_blur(2).brightness(1.2),
-        ),
+        "pipeline": Operation(lambda a: ImageEnhance.Brightness(a.resize(target, Image.Resampling.BICUBIC).filter(blur)).enhance(1.2), lambda a: a.resize(target, Image.Resampling.BICUBIC).gaussian_blur(2).brightness(1.2)),
     }
 
 
@@ -352,16 +334,7 @@ def main() -> int:
     emit(f"Blanket {__version__} | {platform.platform()} | {args.backend}, runtime={args.runtime}, device={args.device}")
     if baseline is not None:
         emit(f"Previous GPU run: {compare_path}")
-        current = {
-            "platform": platform.platform(),
-            "backend": args.backend,
-            "runtime": args.runtime,
-            "device": args.device,
-            "unified_memory": args.unified_memory,
-            "warmups": args.warmups,
-            "repeats": args.repeats,
-            "iterations": args.iterations,
-        }
+        current = {"platform": platform.platform(), "backend": args.backend, "runtime": args.runtime, "device": args.device, "unified_memory": args.unified_memory, "warmups": args.warmups, "repeats": args.repeats, "iterations": args.iterations}
         for field, value in current.items():
             if field in baseline and baseline[field] != value:
                 emit(f"Comparison warning: {field} differs: {baseline[field]} -> {value}")

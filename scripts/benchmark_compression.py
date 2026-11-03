@@ -193,9 +193,7 @@ def compare_results(path_a: Path, path_b: Path) -> int:
 
     table = Table(
         title=f"Comparison: [bold]{label_a}[/bold] vs [bold]{label_b}[/bold]",
-        caption=(
-            f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)\nB: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)"
-        ),
+        caption=(f"A: {data_a.get('platform', '?')} / Python {data_a.get('python', '?')} ({data_a.get('repeats', '?')} repeats)\nB: {data_b.get('platform', '?')} / Python {data_b.get('python', '?')} ({data_b.get('repeats', '?')} repeats)"),
         show_lines=True,
     )
     table.add_column("Fixture", style="cyan")
@@ -227,20 +225,7 @@ def compare_results(path_a: Path, path_b: Path) -> int:
         check_b = "[green]✓[/green]" if b_pass else "[red]x[/red]"
 
         table.add_row(
-            key[0],
-            key[1],
-            str(key[2]),
-            key[3],
-            str(key[4]) if key[3] == "lossy" else "-",
-            f"{a_opt:.0f}",
-            f"{b_opt:.0f}",
-            _delta(a_opt, b_opt),
-            f"{a_pct:.2f}",
-            f"{b_pct:.2f}",
-            f"{a_ms:.2f}",
-            f"{b_ms:.2f}",
-            _delta(a_ms, b_ms),
-            f"{check_a} {check_b}",
+            key[0], key[1], str(key[2]), key[3], str(key[4]) if key[3] == "lossy" else "-", f"{a_opt:.0f}", f"{b_opt:.0f}", _delta(a_opt, b_opt), f"{a_pct:.2f}", f"{b_pct:.2f}", f"{a_ms:.2f}", f"{b_ms:.2f}", _delta(a_ms, b_ms), f"{check_a} {check_b}"
         )
 
     console = Console()
@@ -287,12 +272,7 @@ def _compare_results_plain(
         a_pass = "P" if passed(a) else "F"
         b_pass = "P" if passed(b) else "F"
         rmse_col = str(key[4]) if key[3] == "lossy" else "-"
-        print(
-            f"{key[0]:<12} {key[1]:<5} {key[2]:>3} {key[3]:<10} {rmse_col:>5}"
-            f" {a_opt:>8.0f} {b_opt:>8.0f} {_delta_plain(a_opt, b_opt):>10}"
-            f" {a_pct:>7.2f} {b_pct:>7.2f} {a_ms:>8.2f} {b_ms:>8.2f}"
-            f" {_delta_plain(a_ms, b_ms):>10} {a_pass}/{b_pass}"
-        )
+        print(f"{key[0]:<12} {key[1]:<5} {key[2]:>3} {key[3]:<10} {rmse_col:>5} {a_opt:>8.0f} {b_opt:>8.0f} {_delta_plain(a_opt, b_opt):>10} {a_pct:>7.2f} {b_pct:>7.2f} {a_ms:>8.2f} {b_ms:>8.2f} {_delta_plain(a_ms, b_ms):>10} {a_pass}/{b_pass}")
     print(f"\n{len(overlap)} overlapping tests compared.")
     skipped_a = len(lookup_a) - len(overlap)
     skipped_b = len(lookup_b) - len(overlap)
@@ -318,9 +298,7 @@ def main() -> int:
     kinds = ("lossless", "lossy") if args.compressor == "both" else (args.compressor,)
     print(f"Checks compare to each normal save: exact RGBA for lossless; RGB RMSE <= {args.max_rmse:g} and exact alpha for lossy.")
     print("JXL/HEIF baselines use lossless=True for lossless compression and quality=90 for lossy compression.")
-    print(
-        f"{'Fixture':<12} {'Size':<11} {'Format':<8} {'Compressor':<10} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'RMSE':>8} {'Check':>6}"
-    )
+    print(f"{'Fixture':<12} {'Size':<11} {'Format':<8} {'Compressor':<10} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'RMSE':>8} {'Check':>6}")
     rows: list[dict[str, object]] = []
     failed = False
     for name, original in fixtures():

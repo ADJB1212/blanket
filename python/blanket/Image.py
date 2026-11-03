@@ -176,20 +176,7 @@ def getmodetype(mode: str) -> str:
 
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
 _RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1, 6: 2.5, 7: 4.5}
-_FORMAT_ALIASES = {
-    "JPG": "JPEG",
-    "JPEGXL": "JXL",
-    "TIF": "TIFF",
-    "HEIC": "HEIF",
-    "PNM": "PPM",
-    "PBM": "PPM",
-    "PGM": "PPM",
-    "TARGA": "TGA",
-    "JP2": "JPEG2000",
-    "J2K": "JPEG2000",
-    "J2C": "JPEG2000",
-    "JPC": "JPEG2000",
-}
+_FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
 _SAVE_OPTIONS = {
     "PCX": frozenset(),
     "SGI": frozenset(),
@@ -206,7 +193,7 @@ _SAVE_OPTIONS = {
     "GIF": frozenset(),
     "ICO": frozenset(),
     "PNG": frozenset({"compress_level"}),
-    "JPEG": frozenset({"quality", "subsampling", "progressive", "optimize"}),
+    "JPEG": frozenset({"quality", "subsampling", "progressive", "progression", "optimize", "keep_rgb", "smooth", "qtables", "restart_marker_blocks", "restart_marker_rows", "streamtype"}),
     "JXL": frozenset({"quality", "lossless", "effort"}),
     "TIFF": frozenset({"compression", "quality"}),
     "PDF": frozenset(),
@@ -849,9 +836,7 @@ class Image:
             self._native = self._native.copy()
             self.readonly = 0
 
-    def convert(
-        self, mode: str | None = None, matrix: Sequence[float] | None = None, dither: int | None = None, palette: int = Palette.WEB, colors: int = 256, *, bit_depth: int | None = None
-    ) -> Image:
+    def convert(self, mode: str | None = None, matrix: Sequence[float] | None = None, dither: int | None = None, palette: int = Palette.WEB, colors: int = 256, *, bit_depth: int | None = None) -> Image:
         """Return a new image converted to a supported mode.
 
         Args:
@@ -881,10 +866,7 @@ class Image:
             result.info.update(self._metadata_info())
             transparency = self.info.get("transparency")
             if isinstance(transparency, tuple) and len(transparency) == 3:
-                values = [
-                    max(0, min(255, int(matrix[offset] * transparency[0] + matrix[offset + 1] * transparency[1] + matrix[offset + 2] * transparency[2] + matrix[offset + 3] * 0.5)))
-                    for offset in range(0, 4 if mode == "L" else 12, 4)
-                ]
+                values = [max(0, min(255, int(matrix[offset] * transparency[0] + matrix[offset + 1] * transparency[1] + matrix[offset + 2] * transparency[2] + matrix[offset + 3] * 0.5))) for offset in range(0, 4 if mode == "L" else 12, 4)]
                 result.info["transparency"] = values[0] if mode == "L" else tuple(values)
             return result
         dither = Dither.FLOYDSTEINBERG if dither is None else index(dither)
@@ -948,11 +930,7 @@ class Image:
                 self._conversion_transparency(result)
                 return result
             reference = new("P", (1, 1))
-            entries = (
-                _GRAY_PALETTE
-                if source.mode == "L"
-                else bytes(30) + bytes(component for blue in range(0, 256, 51) for green in range(0, 256, 51) for red in range(0, 256, 51) for component in (red, green, blue))
-            )
+            entries = _GRAY_PALETTE if source.mode == "L" else bytes(30) + bytes(component for blue in range(0, 256, 51) for green in range(0, 256, 51) for red in range(0, 256, 51) for component in (red, green, blue))
             reference.putpalette(entries)
             result = source.quantize(palette=reference, dither=dither)
             self._conversion_transparency(result)
@@ -1981,13 +1959,7 @@ class Image:
         return result
 
     def transform(
-        self,
-        size: tuple[int, int],
-        method: int | ImageTransformHandler | SupportsGetData,
-        data: Sequence[object] | None = None,
-        resample: int = Resampling.NEAREST,
-        fill: int = 1,
-        fillcolor: str | int | tuple[int, ...] | None = None,
+        self, size: tuple[int, int], method: int | ImageTransformHandler | SupportsGetData, data: Sequence[object] | None = None, resample: int = Resampling.NEAREST, fill: int = 1, fillcolor: str | int | tuple[int, ...] | None = None
     ) -> Image:
         """Map source pixels to a new canvas using a ``Transform`` method.
 
@@ -2098,15 +2070,7 @@ class Image:
         return result
 
     def resize(
-        self,
-        size: tuple[int, int],
-        resample: int | None = None,
-        box: tuple[float, float, float, float] | None = None,
-        reducing_gap: float | None = None,
-        *,
-        linear_light: bool = False,
-        transfer: str = "srgb",
-        premultiply_alpha: bool = True,
+        self, size: tuple[int, int], resample: int | None = None, box: tuple[float, float, float, float] | None = None, reducing_gap: float | None = None, *, linear_light: bool = False, transfer: str = "srgb", premultiply_alpha: bool = True
     ) -> Image:
         """Return a resized copy, using BICUBIC unless a filter is specified.
 
@@ -2185,15 +2149,7 @@ class Image:
         result.info.update(self._metadata_info())
         return result
 
-    def rotate(
-        self,
-        angle: float,
-        resample: int = Resampling.NEAREST,
-        expand: bool = False,
-        center: tuple[float, float] | None = None,
-        translate: tuple[float, float] | None = None,
-        fillcolor: str | int | tuple[int, ...] | None = None,
-    ) -> Image:
+    def rotate(self, angle: float, resample: int = Resampling.NEAREST, expand: bool = False, center: tuple[float, float] | None = None, translate: tuple[float, float] | None = None, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:
         """Return a copy rotated counterclockwise by an angle in degrees.
 
         Supports NEAREST (default), BILINEAR, and BICUBIC. The default center
@@ -2364,7 +2320,7 @@ class Image:
                 raise UnsupportedCodecError(f"cannot write mode {self.mode} as {output_format}", format=output_format, operation="encode")
             if self.mode == "CMYK" and compressor is not None:
                 raise ValueError("compression optimization is not supported for CMYK images")
-        if self.mode in ("La", "RGBa", "RGBX"):
+        if self.mode in ("La", "RGBa") or (self.mode == "RGBX" and output_format != "JPEG"):
             raise UnsupportedCodecError(f"cannot write mode {self.mode} as {output_format}; convert to LA, RGBA, or RGB first", format=output_format, operation="encode")
         if self.mode == "HSV":
             raise UnsupportedCodecError(f"cannot write mode HSV as {output_format}", format=output_format, operation="encode")
@@ -2382,6 +2338,8 @@ class Image:
             return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
         native = self._native
+        if self.mode == "RGBX" and output_format == "JPEG":
+            native = native.convert("RGB")
         if output_format in ("PNG", "GIF") and self.mode == "P":
             transparency = options.pop("transparency", self.info.get("transparency"))
             if isinstance(transparency, (int, bytes)):
@@ -2455,15 +2413,7 @@ class Image:
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
     def __eq__(self, other: object) -> bool:
-        return (
-            type(self) is type(other)
-            and self.mode == other.mode
-            and self.size == other.size
-            and self.bit_depth == other.bit_depth
-            and self.info == other.info
-            and self.getpalette() == other.getpalette()
-            and self.tobytes() == other.tobytes()
-        )
+        return type(self) is type(other) and self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self.tobytes() == other.tobytes()
 
 
 def linear_gradient(mode: str) -> Image:
@@ -2716,9 +2666,7 @@ def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, 
     return ImageHeader(format, size, mode, bit_depth, info)
 
 
-def open(
-    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1
-) -> Image:
+def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1) -> Image:
     """Open an image, optionally decoding sequence frames on demand.
 
     Args:
@@ -2868,9 +2816,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     return image
 
 
-def open_region(
-    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, box: tuple[int, int, int, int], *, fallback: str = "error", formats: list[str] | tuple[str, ...] | None = None
-) -> Image:
+def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, box: tuple[int, int, int, int], *, fallback: str = "error", formats: list[str] | tuple[str, ...] | None = None) -> Image:
     """Decode a nonempty region of the first image/page.
 
     TIFF unsigned 8/16-bit chunky L/RGB/straight RGBA reads only intersecting
@@ -3066,7 +3012,6 @@ def _output_format(fp: object, requested: str | None) -> str:
 
 def _save_options(format: str, supplied: dict[str, object], image: Image | None = None) -> dict[str, object]:
     """Validate format-specific save options and supply native encoder defaults."""
-    del image
     unknown = supplied.keys() - _SAVE_OPTIONS[format]
     if unknown:
         names = ", ".join(sorted(unknown))
@@ -3075,28 +3020,85 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
     lossless = supplied.get("lossless", False)
     if not isinstance(lossless, bool):
         raise TypeError("lossless must be a bool")
-    quality = 100 if lossless else _bounded_int("quality", supplied.get("quality", 90), 1, 100)
+    jpeg_tables = supplied.get("qtables")
+    jpeg_sampling = supplied.get("subsampling", -1)
+    if format == "JPEG":
+        from ._jpeg import validate_qtables
+        from .JpegPresets import presets
+
+        requested_quality = supplied.get("quality", -1)
+        if requested_quality == "keep":
+            if image is None or image.format != "JPEG":
+                raise ValueError("Cannot use 'keep' when original image is not a JPEG")
+            from .JpegImagePlugin import get_sampling
+
+            jpeg_sampling = get_sampling(image)
+            jpeg_tables = "keep"
+            quality = 75
+        elif isinstance(requested_quality, str) and requested_quality in presets:
+            preset = presets[requested_quality]
+            jpeg_sampling = preset["subsampling"]
+            jpeg_tables = preset["quantization"]
+            quality = 75
+        elif isinstance(requested_quality, int):
+            quality = 75 if requested_quality == -1 else max(1, min(100, requested_quality))
+        else:
+            raise ValueError("Invalid quality setting")
+    else:
+        quality = 100 if lossless else _bounded_int("quality", supplied.get("quality", 90), 1, 100)
     compress_level = _bounded_int("compress_level", supplied.get("compress_level", 6), 0, 9)
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
     values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
     if format == "JPEG":
-        subsampling = supplied.get("subsampling", -1)
+        subsampling = jpeg_sampling
+        if isinstance(subsampling, str) and subsampling in presets:
+            subsampling = presets[subsampling]["subsampling"]
+        if subsampling == "keep":
+            if image is None or image.format != "JPEG":
+                raise ValueError("Cannot use 'keep' when original image is not a JPEG")
+            from .JpegImagePlugin import get_sampling
+
+            subsampling = get_sampling(image)
         if isinstance(subsampling, str):
             try:
                 subsampling = {"4:4:4": 0, "4:2:2": 1, "4:2:0": 2, "4:1:1": 2}[subsampling]
             except KeyError as error:
-                raise ValueError("unsupported JPEG subsampling") from error
-        if isinstance(subsampling, bool) or not isinstance(subsampling, int):
-            raise TypeError("subsampling must be an int or sampling ratio")
-        if subsampling not in (-1, 0, 1, 2):
-            raise ValueError("subsampling must be -1, 0, 1, or 2")
-        values["jpeg_subsampling"] = subsampling
+                raise TypeError("unsupported JPEG subsampling") from error
+        subsampling = index(subsampling)
+        if not -(2**31) <= subsampling < 2**31:
+            raise OverflowError("subsampling does not fit in a C int")
+        if supplied.get("keep_rgb") and image is not None and image.mode in ("RGB", "RGBX") and subsampling not in (-1, 0):
+            raise OSError("RGB JPEG does not support chroma subsampling")
+        values["jpeg_subsampling"] = subsampling if subsampling in (0, 1, 2) else -1
+        if isinstance(jpeg_tables, str) and jpeg_tables in presets:
+            jpeg_tables = presets[jpeg_tables]["quantization"]
+        if jpeg_tables == "keep":
+            if image is None or image.format != "JPEG":
+                raise ValueError("Cannot use 'keep' when original image is not a JPEG")
+            jpeg_tables = getattr(image, "quantization", None)
+        values["jpeg_qtables"] = validate_qtables(jpeg_tables) or []
+        values["jpeg_qtable_quality"] = quality if isinstance(requested_quality, int) and requested_quality != -1 else -1
+        values["jpeg_keep_rgb"] = bool(supplied.get("keep_rgb", False))
+        for name in ("restart_marker_blocks", "restart_marker_rows"):
+            values[f"jpeg_{name}"] = index(supplied.get(name, 0)) & 0xFFFFFFFF
+        streamtype = index(supplied.get("streamtype", 0))
+        if not -(2**31) <= streamtype < 2**31:
+            raise OverflowError("streamtype does not fit in a C int")
+        values["jpeg_streamtype"] = streamtype
+        smooth = supplied.get("smooth", 0)
+        if not isinstance(smooth, int):
+            raise TypeError("smooth must be an int")
+        if not -(2**31) <= smooth < 2**31:
+            raise OverflowError("smooth does not fit in a C int")
+        values["jpeg_smooth"] = smooth
         for name in ("progressive", "optimize"):
             value = supplied.get(name, False)
-            if not isinstance(value, bool):
-                raise TypeError(f"{name} must be a bool")
-            values[f"jpeg_{name}"] = value
+            if name == "progressive":
+                value = value or supplied.get("progression", False)
+            if not isinstance(value, int):
+                raise TypeError(f"{name} must be an int")
+            values[f"jpeg_{name}"] = bool(value)
     if format == "TIFF":
         compression = supplied.get("compression", "raw")
         methods = {"raw": 0, "tiff_lzw": 1, "tiff_adobe_deflate": 2, "tiff_deflate": 2, "deflate": 2, "jpeg": 3}

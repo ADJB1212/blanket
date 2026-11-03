@@ -13,48 +13,51 @@ def assert_same(actual: Image.Image, expected: PIL.Image) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
-@pytest.mark.parametrize("size", [(0, 0), (0, 4), (7, 5)])
-@pytest.mark.parametrize("color", [0, 128, None, "red"])
-def test_new(mode, size, color):
-    actual, expected = Image.new(mode, size, color), PIL.new(mode, size, color)
-    if color is not None:
-        assert_same(actual, expected)
-        if mode == "P":
-            assert_same(actual.convert("RGB"), expected.convert("RGB"))
-    assert actual.size == size
+def test_new(mode, subtests: pytest.Subtests):
+    for size in [(0, 0), (0, 4), (7, 5)]:
+        for color in [0, 128, None, "red"]:
+            with subtests.test(mode=mode, size=size, color=color):
+                actual, expected = Image.new(mode, size, color), PIL.new(mode, size, color)
+                if color is not None:
+                    assert_same(actual, expected)
+                    if mode == "P":
+                        assert_same(actual.convert("RGB"), expected.convert("RGB"))
+                assert actual.size == size
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("mask_mode", [None, "L", "RGBA"])
-@pytest.mark.parametrize("position", [(0, 0), (-2, -1), (5, 4), (20, 20)])
-def test_paste(mode, source_mode, mask_mode, position):
-    rng = random.Random(71)
-    background = PIL.frombytes(mode, (7, 6), rng.randbytes(42 * len(mode)))
-    foreground = PIL.frombytes(source_mode, (4, 3), rng.randbytes(12 * len(source_mode)))
-    mask = PIL.frombytes(mask_mode, (4, 3), rng.randbytes(12 * len(mask_mode))) if mask_mode else None
-    actual = Image.frombytes(mode, background.size, background.tobytes())
-    source = Image.frombytes(source_mode, foreground.size, foreground.tobytes())
-    bmask = Image.frombytes(mask_mode, mask.size, mask.tobytes()) if mask else None
-    assert actual.paste(source, position, bmask) is None
-    background.paste(foreground, position, mask)
-    assert_same(actual, background)
+def test_paste(mode, subtests: pytest.Subtests):
+    for source_mode in ["L", "RGB", "RGBA"]:
+        for mask_mode in [None, "L", "RGBA"]:
+            for position in [(0, 0), (-2, -1), (5, 4), (20, 20)]:
+                with subtests.test(mode=mode, source_mode=source_mode, mask_mode=mask_mode, position=position):
+                    rng = random.Random(71)
+                    background = PIL.frombytes(mode, (7, 6), rng.randbytes(42 * len(mode)))
+                    foreground = PIL.frombytes(source_mode, (4, 3), rng.randbytes(12 * len(source_mode)))
+                    mask = PIL.frombytes(mask_mode, (4, 3), rng.randbytes(12 * len(mask_mode))) if mask_mode else None
+                    actual = Image.frombytes(mode, background.size, background.tobytes())
+                    source = Image.frombytes(source_mode, foreground.size, foreground.tobytes())
+                    bmask = Image.frombytes(mask_mode, mask.size, mask.tobytes()) if mask else None
+                    assert actual.paste(source, position, bmask) is None
+                    background.paste(foreground, position, mask)
+                    assert_same(actual, background)
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
-@pytest.mark.parametrize("source_size", [(7, 5), (4, 3)])
-@pytest.mark.parametrize("position", [(0, 0), (0, 2), (0, -2), (2, 1), (-2, -1), (40, 0), (-40, 0), (0, 40)])
-def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, source_size: tuple[int, int], position: tuple[int, int]) -> None:
-    sample_bytes = 4 if mode in ("I", "F") else 2
-    rng = random.Random(71)
-    raw = rng.randbytes(7 * 6 * sample_bytes)
-    source_raw = rng.randbytes(source_size[0] * source_size[1] * sample_bytes)
-    actual, expected = Image.frombytes(mode, (7, 6), raw), PIL.frombytes(mode, (7, 6), raw)
-    source = Image.frombytes(mode, source_size, source_raw)
-    actual.paste(source, position)
-    expected.paste(PIL.frombytes(mode, source_size, source_raw), position)
-    assert_same(actual, expected)
-    assert source.tobytes() == source_raw
+def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, subtests: pytest.Subtests) -> None:
+    for source_size in [(7, 5), (4, 3)]:
+        for position in [(0, 0), (0, 2), (0, -2), (2, 1), (-2, -1), (40, 0), (-40, 0), (0, 40)]:
+            with subtests.test(mode=mode, source_size=source_size, position=position):
+                sample_bytes = 4 if mode in ("I", "F") else 2
+                rng = random.Random(71)
+                raw = rng.randbytes(7 * 6 * sample_bytes)
+                source_raw = rng.randbytes(source_size[0] * source_size[1] * sample_bytes)
+                actual, expected = Image.frombytes(mode, (7, 6), raw), PIL.frombytes(mode, (7, 6), raw)
+                source = Image.frombytes(mode, source_size, source_raw)
+                actual.paste(source, position)
+                expected.paste(PIL.frombytes(mode, source_size, source_raw), position)
+                assert_same(actual, expected)
+                assert source.tobytes() == source_raw
 
 
 @pytest.mark.parametrize(("mode", "color"), [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
@@ -180,29 +183,30 @@ def test_empty_and_alias_alpha():
     assert image.getpixel((0, 0)) == (42, 42, 42, 42)
 
 
-@pytest.mark.parametrize("width", [15, 16, 17, 31, 32, 33, 257])
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
-def test_masked_paste_vector_boundaries(width, mode, mask_mode):
-    rng = random.Random(492)
-    size = (width, 5)
-    source = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
-    background = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
-    mask = PIL.frombytes(mask_mode, size, rng.randbytes(width * 5 * len(mask_mode)))
-    actual = Image.frombytes(mode, size, background.tobytes())
-    bsource = Image.frombytes(mode, size, source.tobytes())
-    bmask = Image.frombytes(mask_mode, size, mask.tobytes())
-    for position in [(0, 0), (-1, 1)]:
-        actual.paste(bsource, position, bmask)
-        background.paste(source, position, mask)
-        assert_same(actual, background)
-    # Test the distinct color-fill rule on transparent RGBA pixels in vectors
-    # and tails, including zero mask values.
-    actual = Image.new(mode, size)
-    background = PIL.new(mode, size)
-    actual.paste("red", mask=bmask)
-    background.paste("red", mask=mask)
-    assert_same(actual, background)
+def test_masked_paste_vector_boundaries(mode, subtests: pytest.Subtests):
+    for width in [15, 16, 17, 31, 32, 33, 257]:
+        for mask_mode in ["L", "RGBA"]:
+            with subtests.test(width=width, mode=mode, mask_mode=mask_mode):
+                rng = random.Random(492)
+                size = (width, 5)
+                source = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
+                background = PIL.frombytes(mode, size, rng.randbytes(width * 5 * len(mode)))
+                mask = PIL.frombytes(mask_mode, size, rng.randbytes(width * 5 * len(mask_mode)))
+                actual = Image.frombytes(mode, size, background.tobytes())
+                bsource = Image.frombytes(mode, size, source.tobytes())
+                bmask = Image.frombytes(mask_mode, size, mask.tobytes())
+                for position in [(0, 0), (-1, 1)]:
+                    actual.paste(bsource, position, bmask)
+                    background.paste(source, position, mask)
+                    assert_same(actual, background)
+                # Test the distinct color-fill rule on transparent RGBA pixels in vectors
+                # and tails, including zero mask values.
+                actual = Image.new(mode, size)
+                background = PIL.new(mode, size)
+                actual.paste("red", mask=bmask)
+                background.paste("red", mask=mask)
+                assert_same(actual, background)
 
 
 def test_paste_mask_alias_and_failed_mutation():

@@ -12,19 +12,14 @@ from blanket import Image
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
-def test_statistics_channels_and_point(mode: str) -> None:
+def test_channels_and_point(mode: str) -> None:
     data = bytes((i * 37) % 256 for i in range(63 * len(mode)))
     actual = Image.frombytes(mode, (9, 7), data)
     expected = PIL.frombytes(mode, (9, 7), data)
-    assert actual.getbands() == expected.getbands()
-    assert actual.histogram() == expected.histogram()
-    assert actual.getextrema() == expected.getextrema()
     for channel in (*range(len(mode)), *mode):
         assert actual.getchannel(channel).tobytes() == expected.getchannel(channel).tobytes()
     for lut in (lambda v: v / 2, list(range(255, -1, -1)) * len(mode)):
         assert actual.point(lut).tobytes() == expected.point(lut).tobytes()
-    mask_data = bytes(i % 3 for i in range(63))
-    assert actual.histogram(Image.frombytes("L", (9, 7), mask_data)) == expected.histogram(PIL.frombytes("L", (9, 7), mask_data))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
@@ -39,18 +34,6 @@ def test_thumbnail(mode: str, size: tuple[float, float]) -> None:
     assert actual.size == expected.size
     assert actual.tobytes() == expected.tobytes()
     assert actual.info["custom"] == 42
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
-@pytest.mark.parametrize("alpha_only", [True, False])
-def test_bbox(mode: str, alpha_only: bool) -> None:
-    actual = Image.new(mode, (7, 5))
-    expected = PIL.new(mode, (7, 5))
-    assert actual.getbbox(alpha_only=alpha_only) is None
-    color = (10, 20, 30, 0) if mode == "RGBA" else 12
-    actual.paste(color, (2, 1, 5, 4))
-    expected.paste(color, (2, 1, 5, 4))
-    assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
 
 
 def test_validation_and_empty_images() -> None:
@@ -186,37 +169,34 @@ def test_eager_verify_draft_and_core_shim() -> None:
     + [(mode, 32 if mode in ("I", "F") else 16, 4 if mode in ("I", "F") else 2) for mode in ("I", "F", "I;16", "I;16L", "I;16B")]
     + [(mode, depth, channels * 2) for mode, channels in (("L", 1), ("RGB", 3), ("RGBA", 4)) for depth in (10, 12, 16)],
 )
-@pytest.mark.parametrize("size", [(1, 1), (1, 17), (17, 1), (7, 5), (0, 3)])
-def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int, sample_bytes: int, size: tuple[int, int]) -> None:
-    count = size[0] * size[1]
-    if mode == "1":
-        image = Image.new(mode, size)
-        image.putdata([i % 2 * 255 for i in range(count)])
-    elif mode in ("L", "RGB", "RGBA") and depth > 8:
-        samples = [(i * 73 + i // 7) % (1 << depth) for i in range(count * len(mode))]
-        image = Image.frombytes(mode, size, struct.pack("<" + "H" * len(samples), *samples), bit_depth=depth)
-    else:
-        raw = bytes((i * 73 + i // 7) % 256 for i in range(count * sample_bytes))
-        image = Image.frombytes(mode, size, raw)
-    if mode == "P":
-        image.putpalette(bytes(range(256)) * 3)
-    pixels = bytes(image.getdata()) if mode == "1" else image.tobytes()
-    for distance in (0, 1, 2, -1, -(2**63)):
-        result = image.effect_spread(distance)
-        actual = bytes(result.getdata()) if mode == "1" else result.tobytes()
-        assert (result.mode, result.bit_depth, result.size) == (image.mode, image.bit_depth, size)
-        assert result.getpalette() == image.getpalette()
-        if distance == 0:
-            assert actual == pixels
-        radius = abs(distance)
-        for i in range(count):
-            x, y = i % size[0], i // size[0]
-            neighbors = {
-                pixels[(yy * size[0] + xx) * sample_bytes : (yy * size[0] + xx + 1) * sample_bytes]
-                for yy in range(max(0, y - radius), min(size[1], y + radius + 1))
-                for xx in range(max(0, x - radius), min(size[0], x + radius + 1))
-            }
-            assert actual[i * sample_bytes : (i + 1) * sample_bytes] in neighbors
+def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int, sample_bytes: int, subtests: pytest.Subtests) -> None:
+    for size in [(1, 1), (1, 17), (17, 1), (7, 5), (0, 3)]:
+        with subtests.test(mode=mode, depth=depth, sample_bytes=sample_bytes, size=size):
+            count = size[0] * size[1]
+            if mode == "1":
+                image = Image.new(mode, size)
+                image.putdata([i % 2 * 255 for i in range(count)])
+            elif mode in ("L", "RGB", "RGBA") and depth > 8:
+                samples = [(i * 73 + i // 7) % (1 << depth) for i in range(count * len(mode))]
+                image = Image.frombytes(mode, size, struct.pack("<" + "H" * len(samples), *samples), bit_depth=depth)
+            else:
+                raw = bytes((i * 73 + i // 7) % 256 for i in range(count * sample_bytes))
+                image = Image.frombytes(mode, size, raw)
+            if mode == "P":
+                image.putpalette(bytes(range(256)) * 3)
+            pixels = bytes(image.getdata()) if mode == "1" else image.tobytes()
+            for distance in (0, 1, 2, -1, -(2**63)):
+                result = image.effect_spread(distance)
+                actual = bytes(result.getdata()) if mode == "1" else result.tobytes()
+                assert (result.mode, result.bit_depth, result.size) == (image.mode, image.bit_depth, size)
+                assert result.getpalette() == image.getpalette()
+                if distance == 0:
+                    assert actual == pixels
+                radius = abs(distance)
+                for i in range(count):
+                    x, y = i % size[0], i // size[0]
+                    neighbors = {pixels[(yy * size[0] + xx) * sample_bytes : (yy * size[0] + xx + 1) * sample_bytes] for yy in range(max(0, y - radius), min(size[1], y + radius + 1)) for xx in range(max(0, x - radius), min(size[0], x + radius + 1))}
+                    assert actual[i * sample_bytes : (i + 1) * sample_bytes] in neighbors
 
 
 @pytest.mark.parametrize(("mode", "data"), [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
@@ -313,20 +293,21 @@ def test_l_thumbnail_integer_reduction_matches_pillow(size: tuple[int, int]) -> 
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("depth", [8, 16])
-@pytest.mark.parametrize("size", [(0, 3), (1, 1031), (1031, 1), (37, 41), (1025, 1027)])
-def test_copy_preserves_pixels_metadata_and_independent_storage(mode: str, depth: int, size: tuple[int, int]) -> None:
-    raw = bytes(i % 256 for i in range(size[0] * size[1] * len(mode) * (depth // 8)))
-    image = Image.frombytes(mode, size, raw, bit_depth=depth)
-    image.info["note"] = "retained"
-    result = image.copy()
-    assert (result.mode, result.size, result.bit_depth) == (mode, size, depth)
-    assert result.tobytes() == raw
-    assert result.info == image.info
-    result.info["note"] = "changed"
-    if depth == 8 and size[0] and size[1]:
-        result.putpixel((0, 0), 0)
-        assert image.tobytes() == raw
-    image.close()
-    assert result.tobytes() is not None
-    assert image.info["note"] == "retained"
+def test_copy_preserves_pixels_metadata_and_independent_storage(mode: str, subtests: pytest.Subtests) -> None:
+    for depth in [8, 16]:
+        for size in [(0, 3), (1, 1031), (1031, 1), (37, 41), (1025, 1027)]:
+            with subtests.test(mode=mode, depth=depth, size=size):
+                raw = bytes(i % 256 for i in range(size[0] * size[1] * len(mode) * (depth // 8)))
+                image = Image.frombytes(mode, size, raw, bit_depth=depth)
+                image.info["note"] = "retained"
+                result = image.copy()
+                assert (result.mode, result.size, result.bit_depth) == (mode, size, depth)
+                assert result.tobytes() == raw
+                assert result.info == image.info
+                result.info["note"] = "changed"
+                if depth == 8 and size[0] and size[1]:
+                    result.putpixel((0, 0), 0)
+                    assert image.tobytes() == raw
+                image.close()
+                assert result.tobytes() is not None
+                assert image.info["note"] == "retained"

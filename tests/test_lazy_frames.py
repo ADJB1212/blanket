@@ -23,17 +23,7 @@ def sequence_data(format="PNG", **options):
 
 
 @pytest.mark.parametrize(
-    ("format", "options"),
-    [
-        ("GIF", {"disposal": 1}),
-        ("GIF", {"disposal": 2}),
-        ("GIF", {"disposal": 3}),
-        ("PNG", {"disposal": 0}),
-        ("PNG", {"disposal": 1}),
-        ("PNG", {"disposal": 2}),
-        ("PNG", {"blend": 1}),
-        ("WEBP", {"lossless": True}),
-    ],
+    ("format", "options"), [("GIF", {"disposal": 1}), ("GIF", {"disposal": 2}), ("GIF", {"disposal": 3}), ("PNG", {"disposal": 0}), ("PNG", {"disposal": 1}), ("PNG", {"disposal": 2}), ("PNG", {"blend": 1}), ("WEBP", {"lossless": True})]
 )
 def test_lazy_composition_matches_eager_and_pillow(format, options):
     data = sequence_data(format, **options)
@@ -169,9 +159,7 @@ def test_lazy_webp_alpha_matches_eager():
 @pytest.mark.parametrize("default", [False, True])
 def test_lazy_apng_precision_and_default_image(depth, default):
     maximum = (1 << depth) - 1
-    frames = [
-        Image.frombytes("RGBA", (2, 3), bytes([i * 17, 29, 51, 255]) * 6 if depth == 8 else struct.pack("<4H", i * 17, maximum // 2, maximum - 1, maximum) * 6, bit_depth=depth) for i in (1, 2, 3)
-    ]
+    frames = [Image.frombytes("RGBA", (2, 3), bytes([i * 17, 29, 51, 255]) * 6 if depth == 8 else struct.pack("<4H", i * 17, maximum // 2, maximum - 1, maximum) * 6, bit_depth=depth) for i in (1, 2, 3)]
     stream = BytesIO()
     frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], default_image=default, duration=40)
     lazy = Image.open(stream, lazy=True)
@@ -327,6 +315,7 @@ def test_lazy_cumulative_limit_before_frame_decode():
         Image.open(BytesIO(data), lazy=True)
 
 
+@pytest.mark.filterwarnings("ignore:")
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "TIFF"])
 def test_lazy_other_formats_cumulative_limit_before_decode(format, monkeypatch):
     from blanket import _lazy_frames

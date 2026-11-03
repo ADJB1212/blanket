@@ -481,12 +481,7 @@ class GpuImage:
         resident_mean = op == 22 and k == 1 and other.mode == "RGBA;F" and other.size == (1, 1)
         coordinate_map = op == 27 and other.mode == "RGB;F" and other.size == size
         mask_band = op == 28 and other.mode == "F"
-        if (
-            not (compatible_mode or resident_mean or coordinate_map or mask_band)
-            or not (self.size == other.size or resident_mean or coordinate_map)
-            or self.runtime != other.runtime
-            or self.device != other.device
-        ):
+        if not (compatible_mode or resident_mean or coordinate_map or mask_band) or not (self.size == other.size or resident_mean or coordinate_map) or self.runtime != other.runtime or self.device != other.device:
             raise ValueError("GPU images must have matching size, mode, and execution context")
         size = self.size if size is None else size
         mode = self.mode if mode is None else mode
@@ -1522,16 +1517,5 @@ class GpuReduction:
             mean = total / count
             variance = squared / count - mean * mean
             variance = variance if math.isnan(variance) else max(0.0, variance)
-            result.append(
-                {
-                    "count": count,
-                    "extrema": (low, high),
-                    "sum": total,
-                    "sum2": squared,
-                    "moments": (mean, squared / count, cubed / count, fourth / count),
-                    "mean": mean,
-                    "variance": variance,
-                    "stddev": math.sqrt(variance),
-                }
-            )
+            result.append({"count": count, "extrema": (low, high), "sum": total, "sum2": squared, "moments": (mean, squared / count, cubed / count, fourth / count), "mean": mean, "variance": variance, "stddev": math.sqrt(variance)})
         return result

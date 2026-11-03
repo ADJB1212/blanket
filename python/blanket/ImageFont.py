@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from . import Image
 from ._blanket import NativeFont, _font_stroke
-from ._draw_font import BitmapFont, BitmapMask
+from ._draw_font import BitmapFont, BitmapMask, PublicDomainFont
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -67,16 +67,16 @@ def _stroke_width(value: float) -> int:
 class ImageFont:
     """Bitmap font returned by :func:`load` and :func:`load_default`.
 
-    The built-in fallback retains the fixed-width 5 by 7 glyphs used by
+    The built-in public-domain fallback uses fixed-width 8 by 8 glyphs for
     ImageDraw. Loaded PIL fonts contain up to 256 Latin-1 glyphs.
     """
 
     def __init__(self, size: float | None = None) -> None:
-        """Create the built-in bitmap fallback, optionally scaled to a pixel size."""
-        self._fallback = BitmapFont(size)
+        """Create the public-domain bitmap font, optionally scaled to a pixel size."""
+        self._fallback = PublicDomainFont(size)
         self._atlas: Image.Image | None = None
         self._glyphs: list[tuple[int, ...]] = []
-        self._ascent = 7 * self._fallback.scale
+        self._ascent = self._fallback.height * self._fallback.scale
         self._descent = 0
         self.size = self._ascent
 
@@ -84,9 +84,7 @@ class ImageFont:
         """Return the ascent and positive descent in pixels."""
         return self._ascent, self._descent
 
-    def _layout(
-        self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)
-    ) -> tuple[float, tuple[int, int, int, int], bytes]:
+    def _layout(self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)) -> tuple[float, tuple[int, int, int, int], bytes]:
         """Measure bitmap text and optionally render its coverage mask."""
         del start
         if direction not in (None, "ltr") or features or language:
@@ -150,9 +148,7 @@ class ImageFont:
         del mode
         return self._layout(_text(text), direction, features, language, False)[0]
 
-    def getbbox(
-        self, text: str | bytes, mode: str = "", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, stroke_width: float = 0, anchor: str | None = None
-    ) -> tuple[int, int, int, int]:
+    def getbbox(self, text: str | bytes, mode: str = "", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, stroke_width: float = 0, anchor: str | None = None) -> tuple[int, int, int, int]:
         """Return anchored bounds, expanded by the rounded-up stroke width.
 
         Horizontal anchors combine `l`, `m`, or `r` with `a` (ascender), `t`
@@ -200,9 +196,7 @@ class ImageFont:
             data = data.translate(_BINARY_TABLE)
         return BitmapMask((width, height), data), (bounds[0] + x - stroke, bounds[1] + y - stroke)
 
-    def getmask(
-        self, text: str | bytes, mode: str = "L", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, stroke_width: float = 0, anchor: str | None = None
-    ) -> BitmapMask:
+    def getmask(self, text: str | bytes, mode: str = "L", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, stroke_width: float = 0, anchor: str | None = None) -> BitmapMask:
         """Return the font coverage mask; see :meth:`getmask2` for options."""
         return self.getmask2(text, mode, direction, features, language, stroke_width, anchor)[0]
 
@@ -241,9 +235,7 @@ class TrueTypeFont(ImageFont):
         ascent, descent = self._native.metrics(size)
         self._ascent, self._descent = ceil(ascent), ceil(descent)
 
-    def _layout(
-        self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)
-    ) -> tuple[float, tuple[int, int, int, int], bytes]:
+    def _layout(self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)) -> tuple[float, tuple[int, int, int, int], bytes]:
         """Shape outline text and optionally rasterize it through the native font."""
         return self._native.layout(text, self.size, direction, [] if features is None else list(features), language, render, start)
 
@@ -256,9 +248,7 @@ class TrueTypeFont(ImageFont):
         del mode
         return self._native.layout(_text(text), self.size, direction, [] if features is None else list(features), language, False, (0, 0), True)[0]
 
-    def font_variant(
-        self, font: str | bytes | os.PathLike[str] | BinaryIO | None = None, size: float | None = None, index: int | None = None, encoding: str | None = None, layout_engine: Layout | int | None = None
-    ) -> TrueTypeFont:
+    def font_variant(self, font: str | bytes | os.PathLike[str] | BinaryIO | None = None, size: float | None = None, index: int | None = None, encoding: str | None = None, layout_engine: Layout | int | None = None) -> TrueTypeFont:
         """Create another face, reusing the loaded bytes unless `font` is set."""
         from io import BytesIO
 
@@ -281,7 +271,7 @@ def truetype(font: str | bytes | os.PathLike[str] | BinaryIO, size: float = 10, 
 
 
 def load_default(size: float | None = None) -> ImageFont:
-    """Return the built-in bitmap fallback, optionally scaled in multiples of seven."""
+    """Return the public-domain 8x8 font, scaled in whole multiples of eight."""
     return ImageFont(size)
 
 

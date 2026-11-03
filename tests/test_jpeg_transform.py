@@ -24,25 +24,26 @@ def decoded(data):
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "CMYK"])
-@pytest.mark.parametrize("progressive", [False, True])
-@pytest.mark.parametrize("subsampling", [0, 1, 2])
-@pytest.mark.parametrize("method", list(Image.Transpose))
-def test_transform_inverse_preserves_decoded_source_and_quantization(mode, progressive, subsampling, method):
-    data = jpeg(mode, progressive=progressive, subsampling=subsampling)
-    output = JpegImagePlugin.transform(data, method)
-    inverse = {Image.ROTATE_90: Image.ROTATE_270, Image.ROTATE_270: Image.ROTATE_90}.get(method, method)
-    restored = JpegImagePlugin.transform(output, inverse)
-    original = decoded(data)
-    transformed = decoded(output)
-    expected_size = original.size[::-1] if method in (Image.ROTATE_90, Image.ROTATE_270, Image.TRANSPOSE, Image.TRANSVERSE) else original.size
-    assert transformed.size == expected_size
-    assert transformed.mode == original.mode
-    assert decoded(restored).tobytes() == original.tobytes()
-    assert decoded(restored).quantization == original.quantization
-    assert bool(transformed.info.get("progressive")) == progressive
-    with Image.open(BytesIO(output)) as blanket:
-        assert blanket.size == transformed.size
-        assert blanket.mode == transformed.mode
+def test_transform_inverse_preserves_decoded_source_and_quantization(mode, subtests: pytest.Subtests):
+    for progressive in [False, True]:
+        for subsampling in [0, 1, 2]:
+            for method in list(Image.Transpose):
+                with subtests.test(mode=mode, progressive=progressive, subsampling=subsampling, method=method):
+                    data = jpeg(mode, progressive=progressive, subsampling=subsampling)
+                    output = JpegImagePlugin.transform(data, method)
+                    inverse = {Image.ROTATE_90: Image.ROTATE_270, Image.ROTATE_270: Image.ROTATE_90}.get(method, method)
+                    restored = JpegImagePlugin.transform(output, inverse)
+                    original = decoded(data)
+                    transformed = decoded(output)
+                    expected_size = original.size[::-1] if method in (Image.ROTATE_90, Image.ROTATE_270, Image.TRANSPOSE, Image.TRANSVERSE) else original.size
+                    assert transformed.size == expected_size
+                    assert transformed.mode == original.mode
+                    assert decoded(restored).tobytes() == original.tobytes()
+                    assert decoded(restored).quantization == original.quantization
+                    assert bool(transformed.info.get("progressive")) == progressive
+                    with Image.open(BytesIO(output)) as blanket:
+                        assert blanket.size == transformed.size
+                        assert blanket.mode == transformed.mode
 
 
 @pytest.mark.parametrize("method", list(Image.Transpose))
@@ -81,14 +82,7 @@ def test_imperfect_edges_rejected_or_explicitly_trimmed(method):
     with pytest.raises(OSError):
         JpegImagePlugin.transform(data, method)
     result = decoded(JpegImagePlugin.transform(data, method, trim=True))
-    box = {
-        Image.FLIP_LEFT_RIGHT: (0, 0, 24, 39),
-        Image.FLIP_TOP_BOTTOM: (0, 0, 31, 32),
-        Image.ROTATE_90: (0, 0, 24, 39),
-        Image.ROTATE_180: (0, 0, 24, 32),
-        Image.ROTATE_270: (0, 0, 31, 32),
-        Image.TRANSVERSE: (0, 0, 24, 32),
-    }[method]
+    box = {Image.FLIP_LEFT_RIGHT: (0, 0, 24, 39), Image.FLIP_TOP_BOTTOM: (0, 0, 31, 32), Image.ROTATE_90: (0, 0, 24, 39), Image.ROTATE_180: (0, 0, 24, 32), Image.ROTATE_270: (0, 0, 31, 32), Image.TRANSVERSE: (0, 0, 24, 32)}[method]
     expected = decoded(data).crop(box).transpose(method)
     assert result.size == expected.size
     assert max(abs(a - b) for a, b in zip(result.tobytes(), expected.tobytes(), strict=True)) <= 1

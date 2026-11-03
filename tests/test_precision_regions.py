@@ -131,19 +131,7 @@ def test_tiled_region_edges_and_unrequested_corrupt_tile(channels: int, depth: i
         for cx in range(3):
             values = [((cy * tile + y) * width + cx * tile + x) * channels + c for y in range(tile) for x in range(tile) for c in range(channels)]
             chunks.append(bytes(values) if depth == 8 else struct.pack("<" + "H" * len(values), *values))
-    tags = [
-        (256, 4, 1, width),
-        (257, 4, 1, height),
-        (258, 3, channels, depth),
-        (259, 3, 1, 1),
-        (262, 3, 1, 1 if channels == 1 else 2),
-        (277, 3, 1, channels),
-        (284, 3, 1, 1),
-        (322, 4, 1, tile),
-        (323, 4, 1, tile),
-        (324, 4, 6, 0),
-        (325, 4, 6, 0),
-    ]
+    tags = [(256, 4, 1, width), (257, 4, 1, height), (258, 3, channels, depth), (259, 3, 1, 1), (262, 3, 1, 1 if channels == 1 else 2), (277, 3, 1, channels), (284, 3, 1, 1), (322, 4, 1, tile), (323, 4, 1, tile), (324, 4, 6, 0), (325, 4, 6, 0)]
     if channels == 4:
         tags.append((338, 3, 1, 2))
     extra = 8 + 2 + len(tags) * 12 + 4

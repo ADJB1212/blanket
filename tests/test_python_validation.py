@@ -69,15 +69,7 @@ def test_rejects_compressor_for_special_modes(mode: str) -> None:
 
 @pytest.mark.parametrize(
     ("mode", "color", "expected", "error"),
-    [
-        ("L", [], None, TypeError),
-        ("L", (1, 2), None, TypeError),
-        ("LA", (7,), [7, 255], None),
-        ("RGB", (1, 2, 3, 4), [1, 2, 3], None),
-        ("RGB", (1,), None, TypeError),
-        ("RGB", (1, 2, 0.5), None, TypeError),
-        ("1", (300,), [255], None),
-    ],
+    [("L", [], None, TypeError), ("L", (1, 2), None, TypeError), ("LA", (7,), [7, 255], None), ("RGB", (1, 2, 3, 4), [1, 2, 3], None), ("RGB", (1,), None, TypeError), ("RGB", (1, 2, 0.5), None, TypeError), ("1", (300,), [255], None)],
 )
 def test_fill_color_validation(mode, color, expected, error) -> None:
     if error:

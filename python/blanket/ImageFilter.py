@@ -685,10 +685,7 @@ class Color3DLUT(MultibandFilter):
                     flattened.extend(pixel)
                 table = flattened
         if wrong_size or len(table) != items * channels:
-            raise ValueError(
-                "The table should have either channels * size**3 float items or size**3 items of channels-sized tuples with floats. "
-                f"Table should be: {channels}x{self.size[0]}x{self.size[1]}x{self.size[2]}. Actual length: {len(table)}"
-            )
+            raise ValueError(f"The table should have either channels * size**3 float items or size**3 items of channels-sized tuples with floats. Table should be: {channels}x{self.size[0]}x{self.size[1]}x{self.size[2]}. Actual length: {len(table)}")
         self.table = table
 
     @staticmethod

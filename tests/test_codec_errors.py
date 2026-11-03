@@ -144,5 +144,5 @@ def test_non_codec_failures_keep_existing_types(tmp_path: Path) -> None:
         Image.open(BytesIO(b"not an image"))
     assert not isinstance(caught.value, CodecError)
     with pytest.raises(ValueError) as caught:
-        Image.new("RGB", (1, 1)).save(BytesIO(), "JPEG", quality=101)
+        Image.new("RGB", (1, 1)).save(BytesIO(), "JPEG", quality="invalid")
     assert not isinstance(caught.value, CodecError)

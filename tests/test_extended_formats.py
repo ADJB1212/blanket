@@ -15,22 +15,7 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(
-    ("format", "mode"),
-    [
-        ("PPM", "1"),
-        ("PPM", "L"),
-        ("PPM", "RGB"),
-        ("TGA", "L"),
-        ("TGA", "LA"),
-        ("TGA", "RGB"),
-        ("TGA", "RGBA"),
-        ("QOI", "RGB"),
-        ("QOI", "RGBA"),
-        ("JPEG2000", "L"),
-        ("JPEG2000", "LA"),
-        ("JPEG2000", "RGB"),
-        ("JPEG2000", "RGBA"),
-    ],
+    ("format", "mode"), [("PPM", "1"), ("PPM", "L"), ("PPM", "RGB"), ("TGA", "L"), ("TGA", "LA"), ("TGA", "RGB"), ("TGA", "RGBA"), ("QOI", "RGB"), ("QOI", "RGBA"), ("JPEG2000", "L"), ("JPEG2000", "LA"), ("JPEG2000", "RGB"), ("JPEG2000", "RGBA")]
 )
 def test_extended_interoperability(format: str, mode: str) -> None:
     size = (13, 7)
@@ -63,10 +48,7 @@ def test_pam_roundtrip(mode: str) -> None:
         assert actual.tobytes() == raw
 
 
-@pytest.mark.parametrize(
-    ("data", "mode", "raw"),
-    [(b"P1\n# comment\n3 2\n0 1 0 1 0 1\n", "1", b"\xff\0\xff\0\xff\0"), (b"P2\n3 1\n255\n0 127 255\n", "L", b"\0\x7f\xff"), (b"P3\n1 1\n255\n5 25 250\n", "RGB", b"\x05\x19\xfa")],
-)
+@pytest.mark.parametrize(("data", "mode", "raw"), [(b"P1\n# comment\n3 2\n0 1 0 1 0 1\n", "1", b"\xff\0\xff\0\xff\0"), (b"P2\n3 1\n255\n0 127 255\n", "L", b"\0\x7f\xff"), (b"P3\n1 1\n255\n5 25 250\n", "RGB", b"\x05\x19\xfa")])
 def test_ascii_netpbm(data: bytes, mode: str, raw: bytes) -> None:
     actual = Image.open(BytesIO(data))
     assert actual.mode == mode
@@ -200,17 +182,7 @@ def test_jpeg2000_parallel_lossy_decode_matches_serial_and_pillow(monkeypatch: p
 
 @pytest.mark.parametrize(
     ("extension", "format", "mode"),
-    [
-        ("ppm", "PPM", "RGB"),
-        ("pgm", "PPM", "L"),
-        ("pbm", "PPM", "1"),
-        ("pnm", "PPM", "RGB"),
-        ("pam", "PPM", "RGBA"),
-        ("tga", "TGA", "RGBA"),
-        ("qoi", "QOI", "RGB"),
-        ("jp2", "JPEG2000", "RGB"),
-        ("j2k", "JPEG2000", "RGB"),
-    ],
+    [("ppm", "PPM", "RGB"), ("pgm", "PPM", "L"), ("pbm", "PPM", "1"), ("pnm", "PPM", "RGB"), ("pam", "PPM", "RGBA"), ("tga", "TGA", "RGBA"), ("qoi", "QOI", "RGB"), ("jp2", "JPEG2000", "RGB"), ("j2k", "JPEG2000", "RGB")],
 )
 def test_extended_extension_inference(tmp_path: Path, extension: str, format: str, mode: str) -> None:
     path = tmp_path / f"image.{extension}"

@@ -56,49 +56,50 @@ def test_sample_pixel_writes(mode, depth):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize("operation", ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"])
-def test_sample_chops_arithmetic(mode, depth, operation):
-    maximum = (1 << depth) - 1
-    channels = {"RGB": 3, "RGBA": 4}.get(mode, 1)
-    a = [0, 1, maximum // 2, maximum // 2 + 1, maximum - 1, maximum] * (6 * channels)
-    b = [maximum, maximum // 2 + 1, maximum // 2, 1, maximum, 0] * (6 * channels)
-    first = make_image(mode, depth, (9, 4), a)
-    second = make_image(mode, depth, (6, 6), b)
-    first.info["test"] = "metadata"
+def test_sample_chops_arithmetic(mode, depth, subtests: pytest.Subtests):
+    for operation in ["difference", "multiply", "screen", "lighter", "darker", "add", "subtract", "add_modulo", "subtract_modulo", "soft_light", "hard_light", "overlay"]:
+        with subtests.test(mode=mode, depth=depth, operation=operation):
+            maximum = (1 << depth) - 1
+            channels = {"RGB": 3, "RGBA": 4}.get(mode, 1)
+            a = [0, 1, maximum // 2, maximum // 2 + 1, maximum - 1, maximum] * (6 * channels)
+            b = [maximum, maximum // 2 + 1, maximum // 2, 1, maximum, 0] * (6 * channels)
+            first = make_image(mode, depth, (9, 4), a)
+            second = make_image(mode, depth, (6, 6), b)
+            first.info["test"] = "metadata"
 
-    def reference(x, y):
-        if operation == "difference":
-            return abs(x - y)
-        if operation == "multiply":
-            return x * y // maximum
-        if operation == "screen":
-            return maximum - (maximum - x) * (maximum - y) // maximum
-        if operation == "lighter":
-            return max(x, y)
-        if operation == "darker":
-            return min(x, y)
-        if operation == "add":
-            return min(maximum, x + y)
-        if operation == "subtract":
-            return max(0, x - y)
-        if operation == "add_modulo":
-            return (x + y) & maximum
-        if operation == "subtract_modulo":
-            return (x - y) & maximum
-        if operation == "soft_light":
-            return (maximum - x) * x * y // (maximum + 1) ** 2 + x * (maximum - (maximum - x) * (maximum - y) // maximum) // maximum
-        selector = y if operation == "hard_light" else x
-        return x * y // (maximum // 2) if selector < (maximum + 1) // 2 else maximum - (maximum - x) * (maximum - y) // (maximum // 2)
+            def reference(x, y):
+                if operation == "difference":
+                    return abs(x - y)
+                if operation == "multiply":
+                    return x * y // maximum
+                if operation == "screen":
+                    return maximum - (maximum - x) * (maximum - y) // maximum
+                if operation == "lighter":
+                    return max(x, y)
+                if operation == "darker":
+                    return min(x, y)
+                if operation == "add":
+                    return min(maximum, x + y)
+                if operation == "subtract":
+                    return max(0, x - y)
+                if operation == "add_modulo":
+                    return (x + y) & maximum
+                if operation == "subtract_modulo":
+                    return (x - y) & maximum
+                if operation == "soft_light":
+                    return (maximum - x) * x * y // (maximum + 1) ** 2 + x * (maximum - (maximum - x) * (maximum - y) // maximum) // maximum
+                selector = y if operation == "hard_light" else x
+                return x * y // (maximum // 2) if selector < (maximum + 1) // 2 else maximum - (maximum - x) * (maximum - y) // (maximum // 2)
 
-    result = getattr(ImageChops, operation)(first, second)
-    expected = [reference(a[(y * 9 + x) * channels + c], b[(y * 6 + x) * channels + c]) for y in range(4) for x in range(6) for c in range(channels)]
-    assert (result.size, result.mode, result.bit_depth, result.info) == ((6, 4), mode, depth, first.info)
-    assert samples(result) == expected
-    assert samples(first) == a
-    assert samples(ImageChops.invert(first)) == [maximum - v for v in a]
-    if mode in ("L", "RGB"):
-        assert samples(ImageOps.invert(first)) == [maximum - v for v in a]
-    assert samples(ImageChops.add(first, first, scale=2, offset=-1)) == [max(0, v - 1) for v in a]
+            result = getattr(ImageChops, operation)(first, second)
+            expected = [reference(a[(y * 9 + x) * channels + c], b[(y * 6 + x) * channels + c]) for y in range(4) for x in range(6) for c in range(channels)]
+            assert (result.size, result.mode, result.bit_depth, result.info) == ((6, 4), mode, depth, first.info)
+            assert samples(result) == expected
+            assert samples(first) == a
+            assert samples(ImageChops.invert(first)) == [maximum - v for v in a]
+            if mode in ("L", "RGB"):
+                assert samples(ImageOps.invert(first)) == [maximum - v for v in a]
+            assert samples(ImageChops.add(first, first, scale=2, offset=-1)) == [max(0, v - 1) for v in a]
 
 
 def test_sample_chops_rejects_mismatched_depths():
@@ -107,28 +108,25 @@ def test_sample_chops_rejects_mismatched_depths():
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize(("window", "rank"), [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 0), (9, 40), (9, 80)])
-@pytest.mark.parametrize("size", [(7, 5), (65, 3)])
-def test_rank_filters_use_samples_and_extend_edges(mode, depth, window, rank, size):
-    image = make_image(mode, depth, size)
-    image.info["test"] = "metadata"
-    original = samples(image)
-    channels = len(image.getbands())
-    radius = window // 2
-    expected = []
-    for y in range(image.height):
-        for x in range(image.width):
-            for c in range(channels):
-                neighborhood = [
-                    original[(min(max(yy, 0), image.height - 1) * image.width + min(max(xx, 0), image.width - 1)) * channels + c]
-                    for yy in range(y - radius, y + radius + 1)
-                    for xx in range(x - radius, x + radius + 1)
-                ]
-                expected.append(sorted(neighborhood)[rank])
-    result = image.filter(ImageFilter.RankFilter(window, rank))
-    assert (result.mode, result.bit_depth, result.size, result.info) == (mode, depth, image.size, image.info)
-    assert samples(result) == expected
-    assert samples(image) == original
+def test_rank_filters_use_samples_and_extend_edges(mode, depth, subtests: pytest.Subtests):
+    for window, rank in [(1, 0), (3, 0), (3, 4), (3, 8), (5, 7), (9, 0), (9, 40), (9, 80)]:
+        for size in [(7, 5), (65, 3)]:
+            with subtests.test(mode=mode, depth=depth, window=window, rank=rank, size=size):
+                image = make_image(mode, depth, size)
+                image.info["test"] = "metadata"
+                original = samples(image)
+                channels = len(image.getbands())
+                radius = window // 2
+                expected = []
+                for y in range(image.height):
+                    for x in range(image.width):
+                        for c in range(channels):
+                            neighborhood = [original[(min(max(yy, 0), image.height - 1) * image.width + min(max(xx, 0), image.width - 1)) * channels + c] for yy in range(y - radius, y + radius + 1) for xx in range(x - radius, x + radius + 1)]
+                            expected.append(sorted(neighborhood)[rank])
+                result = image.filter(ImageFilter.RankFilter(window, rank))
+                assert (result.mode, result.bit_depth, result.size, result.info) == (mode, depth, image.size, image.info)
+                assert samples(result) == expected
+                assert samples(image) == original
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
@@ -147,21 +145,22 @@ def test_mode_filter_clips_edges_and_keeps_original_for_low_counts(mode, depth):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize("scale", [1, 4])
-def test_kernel_uses_sample_offsets_saturation_and_unchanged_borders(mode, depth, scale):
-    image = make_image(mode, depth)
-    values = samples(image)
-    channels = len(image.getbands())
-    result = image.filter(ImageFilter.Kernel((3, 3), [0, 0, 0, 0, 2, 0, 0, 0, 0], scale=scale, offset=-17))
-    expected = values.copy()
-    for y in range(1, image.height - 1):
-        for x in range(1, image.width - 1):
-            for c in range(channels):
-                i = (y * image.width + x) * channels + c
-                expected[i] = min((1 << depth) - 1, max(0, int(values[i] * 2 / scale - 17 + 0.5)))
-    assert samples(result) == expected
-    flipped = image.filter(ImageFilter.Kernel((3, 3), [1, 0, 0, 0, 0, 0, 0, 0, 0], scale=1))
-    assert flipped.getpixel((1, 1)) == image.getpixel((0, 2))
+def test_kernel_uses_sample_offsets_saturation_and_unchanged_borders(mode, depth, subtests: pytest.Subtests):
+    for scale in [1, 4]:
+        with subtests.test(mode=mode, depth=depth, scale=scale):
+            image = make_image(mode, depth)
+            values = samples(image)
+            channels = len(image.getbands())
+            result = image.filter(ImageFilter.Kernel((3, 3), [0, 0, 0, 0, 2, 0, 0, 0, 0], scale=scale, offset=-17))
+            expected = values.copy()
+            for y in range(1, image.height - 1):
+                for x in range(1, image.width - 1):
+                    for c in range(channels):
+                        i = (y * image.width + x) * channels + c
+                        expected[i] = min((1 << depth) - 1, max(0, int(values[i] * 2 / scale - 17 + 0.5)))
+            assert samples(result) == expected
+            flipped = image.filter(ImageFilter.Kernel((3, 3), [1, 0, 0, 0, 0, 0, 0, 0, 0], scale=1))
+            assert flipped.getpixel((1, 1)) == image.getpixel((0, 2))
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
@@ -187,76 +186,79 @@ def test_blur_and_unsharp_sample_reference(mode, depth):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize(("radius", "percent", "threshold"), [(20, 0, -1), (20, 150, 65535), (0, 150, -1)])
-def test_unsharp_identity_preserves_samples(mode, depth, radius, percent, threshold):
-    image = make_image(mode, depth)
-    image.info["test"] = "metadata"
-    result = image.filter(ImageFilter.UnsharpMask(radius, percent, threshold))
-    assert (result.mode, result.bit_depth, result.info) == (mode, depth, image.info)
-    assert result.tobytes() == image.tobytes()
-    result.close()
-    assert samples(image)[0] == 257
+def test_unsharp_identity_preserves_samples(mode, depth, subtests: pytest.Subtests):
+    for radius, percent, threshold in [(20, 0, -1), (20, 150, 65535), (0, 150, -1)]:
+        with subtests.test(mode=mode, depth=depth, radius=radius, percent=percent, threshold=threshold):
+            image = make_image(mode, depth)
+            image.info["test"] = "metadata"
+            result = image.filter(ImageFilter.UnsharpMask(radius, percent, threshold))
+            assert (result.mode, result.bit_depth, result.info) == (mode, depth, image.info)
+            assert result.tobytes() == image.tobytes()
+            result.close()
+            assert samples(image)[0] == 257
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize("name", ImageEnhance.__all__)
-def test_enhancements_retain_precision_and_alpha(mode, depth, name):
-    image = make_image(mode, depth)
-    original = samples(image)
-    channels = len(image.getbands())
-    enhancer = getattr(ImageEnhance, name)(image)
-    degenerate = samples(enhancer.degenerate)
-    luma = [original[i] if channels == 1 else (original[i] * 19595 + original[i + 1] * 38470 + original[i + 2] * 7471 + 32768) >> 16 for i in range(0, len(original), channels)]
-    mean = int(sum(luma) / len(luma) + 0.5)
-    for i, value in enumerate(degenerate):
-        if mode == "RGBA" and i % 4 == 3:
-            assert value == original[i]
-        elif name == "Brightness":
-            assert value == 0
-        elif name == "Color":
-            assert value == luma[i // channels]
-        elif name == "Contrast":
-            assert value == mean
-        elif name == "Sharpness":
-            pixel, c = divmod(i, channels)
-            y, x = divmod(pixel, image.width)
-            if x in (0, image.width - 1) or y in (0, image.height - 1):
-                assert value == original[i]
-            else:
-                total = sum(original[(yy * image.width + xx) * channels + c] for yy in range(y - 1, y + 2) for xx in range(x - 1, x + 2)) + 4 * original[i]
-                assert value == (total + 6) // 13
-    for factor in (0, 0.5, 1, 2, -1):
-        result = enhancer.enhance(factor)
-        assert (result.mode, result.bit_depth) == (mode, depth)
-        assert samples(result) == [min((1 << depth) - 1, max(0, int(a + factor * (b - a)))) for a, b in zip(degenerate, original, strict=True)]
+def test_enhancements_retain_precision_and_alpha(mode, depth, subtests: pytest.Subtests):
+    for name in ImageEnhance.__all__:
+        with subtests.test(mode=mode, depth=depth, name=name):
+            image = make_image(mode, depth)
+            original = samples(image)
+            channels = len(image.getbands())
+            enhancer = getattr(ImageEnhance, name)(image)
+            degenerate = samples(enhancer.degenerate)
+            luma = [original[i] if channels == 1 else (original[i] * 19595 + original[i + 1] * 38470 + original[i + 2] * 7471 + 32768) >> 16 for i in range(0, len(original), channels)]
+            mean = int(sum(luma) / len(luma) + 0.5)
+            for i, value in enumerate(degenerate):
+                if mode == "RGBA" and i % 4 == 3:
+                    assert value == original[i]
+                elif name == "Brightness":
+                    assert value == 0
+                elif name == "Color":
+                    assert value == luma[i // channels]
+                elif name == "Contrast":
+                    assert value == mean
+                elif name == "Sharpness":
+                    pixel, c = divmod(i, channels)
+                    y, x = divmod(pixel, image.width)
+                    if x in (0, image.width - 1) or y in (0, image.height - 1):
+                        assert value == original[i]
+                    else:
+                        total = sum(original[(yy * image.width + xx) * channels + c] for yy in range(y - 1, y + 2) for xx in range(x - 1, x + 2)) + 4 * original[i]
+                        assert value == (total + 6) // 13
+            for factor in (0, 0.5, 1, 2, -1):
+                result = enhancer.enhance(factor)
+                assert (result.mode, result.bit_depth) == (mode, depth)
+                assert samples(result) == [min((1 << depth) - 1, max(0, int(a + factor * (b - a)))) for a, b in zip(degenerate, original, strict=True)]
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize("masked", [False, True])
-def test_statistics_use_full_sample_values_and_mask(mode, depth, masked):
-    image = make_image(mode, depth)
-    mask = Image.frombytes("L", image.size, bytes(i % 3 for i in range(image.width * image.height))) if masked else None
-    original = samples(image)
-    channels = len(image.getbands())
-    statistics = ImageStat.Stat(image, mask)
-    for c in range(channels):
-        values = [v for i, v in enumerate(original[c::channels]) if not masked or i % 3]
-        counts = Counter(values)
-        assert statistics.h[c * (1 << depth) : (c + 1) * (1 << depth)] == [counts[v] for v in range(1 << depth)]
-        mean = sum(values) / len(values)
-        assert statistics.count[c] == len(values)
-        assert statistics.extrema[c] == (min(values), max(values))
-        assert statistics.sum[c] == sum(values)
-        assert statistics.sum2[c] == sum(v * v for v in values)
-        assert statistics.mean[c] == mean
-        assert statistics.median[c] == sorted(values)[len(values) // 2]
-        variance = sum((v - mean) ** 2 for v in values) / len(values)
-        assert statistics.var[c] == pytest.approx(variance)
-        assert statistics.stddev[c] == pytest.approx(math.sqrt(variance))
-        assert statistics.rms[c] == pytest.approx(math.sqrt(sum(v * v for v in values) / len(values)))
-    assert len(statistics.h) == (1 << depth) * channels
-    image.close()
-    assert statistics.count == [len(values)] * channels
+def test_statistics_use_full_sample_values_and_mask(mode, depth, subtests: pytest.Subtests):
+    for masked in [False, True]:
+        with subtests.test(mode=mode, depth=depth, masked=masked):
+            image = make_image(mode, depth)
+            mask = Image.frombytes("L", image.size, bytes(i % 3 for i in range(image.width * image.height))) if masked else None
+            original = samples(image)
+            channels = len(image.getbands())
+            statistics = ImageStat.Stat(image, mask)
+            for c in range(channels):
+                values = [v for i, v in enumerate(original[c::channels]) if not masked or i % 3]
+                counts = Counter(values)
+                assert statistics.h[c * (1 << depth) : (c + 1) * (1 << depth)] == [counts[v] for v in range(1 << depth)]
+                mean = sum(values) / len(values)
+                assert statistics.count[c] == len(values)
+                assert statistics.extrema[c] == (min(values), max(values))
+                assert statistics.sum[c] == sum(values)
+                assert statistics.sum2[c] == sum(v * v for v in values)
+                assert statistics.mean[c] == mean
+                assert statistics.median[c] == sorted(values)[len(values) // 2]
+                variance = sum((v - mean) ** 2 for v in values) / len(values)
+                assert statistics.var[c] == pytest.approx(variance)
+                assert statistics.stddev[c] == pytest.approx(math.sqrt(variance))
+                assert statistics.rms[c] == pytest.approx(math.sqrt(sum(v * v for v in values) / len(values)))
+            assert len(statistics.h) == (1 << depth) * channels
+            image.close()
+            assert statistics.count == [len(values)] * channels
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
@@ -462,23 +464,24 @@ def test_high_depth_variance_avoids_cancellation(count):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
-@pytest.mark.parametrize("width", [15, 16, 17, 31, 32, 33])
-def test_simd_enhancements_and_convolution_match_scalar_images(mode, depth, width):
-    image = make_image(mode, depth, (width, 5))
-    for cls in (ImageEnhance.Color, ImageEnhance.Brightness, ImageEnhance.Contrast, ImageEnhance.Sharpness):
-        enhancer = cls(image)
-        degenerate = enhancer.degenerate
-        result = enhancer.enhance(0.5)
-        assert samples(result) == [(a + b) // 2 for a, b in zip(samples(image), samples(degenerate), strict=True)]
-    for kernel_size in (3, 5):
-        weights = [1 if i % 3 == 0 else -0.5 for i in range(kernel_size**2)]
-        operation = ImageFilter.Kernel((kernel_size, kernel_size), weights, scale=2, offset=0.25)
-        result = image.filter(operation)
-        radius = kernel_size // 2
-        for x in range(radius, width - radius):
-            region = image.crop((x - radius, 0, x + radius + 1, 5))
-            expected = region.filter(operation)
-            assert result.getpixel((x, 2)) == expected.getpixel((radius, 2))
+def test_simd_enhancements_and_convolution_match_scalar_images(mode, depth, subtests: pytest.Subtests):
+    for width in [15, 16, 17, 31, 32, 33]:
+        with subtests.test(mode=mode, depth=depth, width=width):
+            image = make_image(mode, depth, (width, 5))
+            for cls in (ImageEnhance.Color, ImageEnhance.Brightness, ImageEnhance.Contrast, ImageEnhance.Sharpness):
+                enhancer = cls(image)
+                degenerate = enhancer.degenerate
+                result = enhancer.enhance(0.5)
+                assert samples(result) == [(a + b) // 2 for a, b in zip(samples(image), samples(degenerate), strict=True)]
+            for kernel_size in (3, 5):
+                weights = [1 if i % 3 == 0 else -0.5 for i in range(kernel_size**2)]
+                operation = ImageFilter.Kernel((kernel_size, kernel_size), weights, scale=2, offset=0.25)
+                result = image.filter(operation)
+                radius = kernel_size // 2
+                for x in range(radius, width - radius):
+                    region = image.crop((x - radius, 0, x + radius + 1, 5))
+                    expected = region.filter(operation)
+                    assert result.getpixel((x, 2)) == expected.getpixel((radius, 2))
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])

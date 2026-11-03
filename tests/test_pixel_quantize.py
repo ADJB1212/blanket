@@ -120,16 +120,7 @@ def test_fixed_palette(mode: str, dither: int) -> None:
 
 
 @pytest.mark.parametrize(
-    ("kwargs", "exception"),
-    [
-        ({"colors": 0}, ValueError),
-        ({"colors": 257}, ValueError),
-        ({"colors": 1.5}, TypeError),
-        ({"method": -1}, ValueError),
-        ({"method": 4}, ValueError),
-        ({"method": 3}, RuntimeError),
-        ({"kmeans": -1}, ValueError),
-    ],
+    ("kwargs", "exception"), [({"colors": 0}, ValueError), ({"colors": 257}, ValueError), ({"colors": 1.5}, TypeError), ({"method": -1}, ValueError), ({"method": 4}, ValueError), ({"method": 3}, RuntimeError), ({"kmeans": -1}, ValueError)]
 )
 def test_quantize_validation(kwargs: dict[str, object], exception: type[Exception]) -> None:
     with pytest.raises(exception):

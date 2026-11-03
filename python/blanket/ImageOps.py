@@ -25,27 +25,7 @@ from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_s
 from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
-__all__ = [
-    "SupportsGetMesh",
-    "autocontrast",
-    "colorize",
-    "contain",
-    "cover",
-    "crop",
-    "deform",
-    "equalize",
-    "exif_transpose",
-    "expand",
-    "fit",
-    "flip",
-    "grayscale",
-    "invert",
-    "mirror",
-    "pad",
-    "posterize",
-    "scale",
-    "solarize",
-]
+__all__ = ["SupportsGetMesh", "autocontrast", "colorize", "contain", "cover", "crop", "deform", "equalize", "exif_transpose", "expand", "fit", "flip", "grayscale", "invert", "mirror", "pad", "posterize", "scale", "solarize"]
 
 Color = str | int | tuple[int, ...]
 Border = int | tuple[int, ...]
@@ -147,12 +127,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     source = image.convert("L") if preserve_tone else image
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
-    if (
-        len(tails) == 2
-        and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails)
-        and isinstance(ignored, (tuple, list))
-        and all(isinstance(value, int) and -256 <= value < 256 for value in ignored)
-    ):
+    if len(tails) == 2 and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails) and isinstance(ignored, (tuple, list)) and all(isinstance(value, int) and -256 <= value < 256 for value in ignored):
         return _result(image, ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored))
     # Retain Python's permissive cutoff and index semantics outside the native fast path.
     histogram = ops_histogram(source._native, None if mask is None else mask._native)

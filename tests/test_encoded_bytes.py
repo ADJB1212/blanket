@@ -75,7 +75,10 @@ def test_encoded_bytes_preserve_and_override_metadata(format):
     exif = Image.Exif()
     exif[305] = "Blanket bytes"
     source.info.update(exif=exif.tobytes(), xmp=b"packet", icc_profile=b"profile")
-    decoded = Image.decode(source.encode(format))
+    options = {"xmp": source.info["xmp"]} if format == "JPEG" else {}
+    if format == "JPEG":
+        assert "xmp" not in Image.decode(source.encode(format)).info
+    decoded = Image.decode(source.encode(format, **options))
     assert decoded.getexif()[305] == "Blanket bytes"
     assert decoded.info["xmp"] == b"packet"
     assert decoded.info["icc_profile"] == b"profile"
@@ -171,15 +174,7 @@ def test_decode_rejects_invalid_encoded_data(data):
 
 
 @pytest.mark.parametrize(
-    "options,error",
-    [
-        ({"formats": "PNG"}, TypeError),
-        ({"lazy": 1}, TypeError),
-        ({"frame_cache_size": True}, TypeError),
-        ({"frame_cache_size": 1.5}, TypeError),
-        ({"frame_cache_size": 0}, ValueError),
-        ({"frame_cache_size": -1}, ValueError),
-    ],
+    "options,error", [({"formats": "PNG"}, TypeError), ({"lazy": 1}, TypeError), ({"frame_cache_size": True}, TypeError), ({"frame_cache_size": 1.5}, TypeError), ({"frame_cache_size": 0}, ValueError), ({"frame_cache_size": -1}, ValueError)]
 )
 def test_decode_validates_options(options, error):
     encoded = Image.new("L", (1, 1)).encode("PNG")

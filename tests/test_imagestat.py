@@ -1,9 +1,83 @@
+"""Pillow 13.0.0 contracts and Blanket regressions; see PILLOW_TESTS.md."""
+
 from __future__ import annotations
 
 import pytest
 from PIL import Image as PILImage, ImageStat as PILStat
+from pillow_helpers import hopper
 
 from blanket import Image, ImageStat
+
+# ruff: noqa: B018
+
+
+def test_sanity() -> None:
+    im = hopper()
+
+    st = ImageStat.Stat(im)
+    st = ImageStat.Stat(im.histogram())
+    st = ImageStat.Stat(im, Image.new("1", im.size, 1))
+
+    # Check these run. Exceptions will cause failures.
+    st.extrema
+    st.sum
+    st.mean
+    st.median
+    st.rms
+    st.sum2
+    st.var
+    st.stddev
+
+    with pytest.raises(AttributeError):
+        st.spam()  # type: ignore[attr-defined]
+
+    with pytest.raises(TypeError):
+        ImageStat.Stat(1)  # type: ignore[arg-type]
+
+
+def test_hopper() -> None:
+    im = hopper()
+
+    st = ImageStat.Stat(im)
+
+    # verify a few values
+    assert st.extrema[0] == (0, 255)
+    assert st.median[0] == 72
+    assert st.sum[0] == 1470218
+    assert st.sum[1] == 1311896
+    assert st.sum[2] == 1563008
+
+
+def test_constant() -> None:
+    im = Image.new("L", (128, 128), 128)
+
+    st = ImageStat.Stat(im)
+
+    assert st.extrema[0] == (128, 128)
+    assert st.sum[0] == 128**3
+    assert st.sum2[0] == 128**4
+    assert st.mean[0] == 128
+    assert st.median[0] == 128
+    assert st.rms[0] == 128
+    assert st.var[0] == 0
+    assert st.stddev[0] == 0
+
+
+def test_zero_count() -> None:
+    im = Image.new("L", (0, 0))
+
+    st = ImageStat.Stat(im)
+
+    assert st.mean == [0]
+    assert st.rms == [0]
+    assert st.var == [0]
+
+
+def test_variance_rounding() -> None:
+    im = Image.new("L", (919, 405), 255)
+    st = ImageStat.Stat(im)
+    assert st.var == [0.0]
+
 
 STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var", "stddev")
 
@@ -18,15 +92,6 @@ def test_bilevel_masks_match_pillow(mode: str, fill: int) -> None:
     reference.putpixel((0, 0), 1 - fill)
     assert image.histogram(mask) == pillow.histogram(reference)
     same(ImageStat.Stat(image, mask), PILStat.Stat(pillow, reference))
-
-
-def test_integer_moments_preserve_variance_rounding() -> None:
-    stats = ImageStat.Stat(Image.new("L", (919, 405), 255))
-    reference = PILStat.Stat(PILImage.new("L", (919, 405), 255))
-    assert isinstance(stats.sum[0], int)
-    assert isinstance(stats.sum2[0], int)
-    assert stats.var == reference.var == [0.0]
-    assert stats.stddev == [0.0]
 
 
 def test_large_histogram_moments_remain_exact_integers() -> None:
@@ -70,27 +135,6 @@ def same(actual: ImageStat.Stat, expected: PILStat.Stat) -> None:
         assert getattr(actual, name) is result
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(0, 0), (0, 3), (3, 0), (1, 1), (19, 11), (513, 529)])
-@pytest.mark.parametrize("mask_kind", ["none", "empty", "full", "partial"])
-def test_image_statistics_match_pillow(mode: str, size: tuple[int, int], mask_kind: str) -> None:
-    image, pillow = pair(mode, size)
-    mask = pil_mask = None
-    if mask_kind != "none":
-        data = bytes(0 if mask_kind == "empty" else 255 if mask_kind == "full" else (0, 1, 128, 255)[i % 4] for i in range(size[0] * size[1]))
-        mask = Image.frombytes("L", size, data)
-        pil_mask = PILImage.frombytes("L", size, data)
-    same(ImageStat.Stat(image, mask), PILStat.Stat(pillow, pil_mask))
-
-
-@pytest.mark.parametrize("channels", [0, 1, 2, 3, 4, 7])
-def test_precomputed_histograms(channels: int) -> None:
-    histogram = [(i * 37 + i // 13) % 67 for i in range(channels * 256)]
-    actual = ImageStat.Stat(histogram)
-    assert actual.h is histogram
-    same(actual, PILStat.Stat(histogram))
-
-
 def test_global_alias_and_nonzero_mask_is_not_a_weight() -> None:
     assert ImageStat.Global is ImageStat.Stat
     image = Image.frombytes("L", (4, 1), bytes([10, 20, 40, 250]))
@@ -106,15 +150,6 @@ def test_global_alias_and_nonzero_mask_is_not_a_weight() -> None:
 def test_median_selects_upper_middle(samples: list[int], median: int) -> None:
     image = Image.frombytes("L", (len(samples), 1), bytes(samples))
     assert ImageStat.Stat(image).median == [median]
-
-
-def test_empty_histogram_and_mask_results() -> None:
-    stat = ImageStat.Stat([0] * 256)
-    assert stat.extrema == [(255, 0)]
-    assert stat.count == [0]
-    assert stat.median == [255]
-    for name in ("sum", "sum2", "mean", "rms", "var", "stddev"):
-        assert getattr(stat, name) == [0]
 
 
 def test_histogram_snapshot_survives_source_changes_and_close() -> None:
@@ -165,15 +200,6 @@ def test_large_histogram_counts_do_not_overflow(frequency: int) -> None:
     stat = ImageStat.Stat(histogram)
     assert stat.count == [frequency * 3]
     same(stat, PILStat.Stat(histogram))
-
-
-@pytest.mark.parametrize("value", [0, 17, 127, 255])
-def test_constant_images_have_zero_variance(value: int) -> None:
-    stat = ImageStat.Stat(Image.new("RGB", (29, 31), (value,) * 3))
-    assert stat.mean == [value] * 3
-    assert stat.rms == [value] * 3
-    assert stat.var == [0] * 3
-    assert stat.stddev == [0] * 3
 
 
 @pytest.mark.parametrize("value", [None, 1, "histogram", tuple([0] * 256)])

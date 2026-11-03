@@ -8,13 +8,14 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
     attach_metadata: bool, metadata_chunks: Vec<blanket_codecs::metadata::PngChunk>, jpeg_subsampling: i8, jpeg_optimize: bool,
-    jpeg_progressive: bool,
+    jpeg_progressive: bool, jpeg_keep_rgb: bool, jpeg_qtables: Vec<[u16; 64]>, jpeg_smooth: i32, jpeg_qtable_quality: i16,
+    jpeg_restart_marker_blocks: u32, jpeg_restart_marker_rows: u32, jpeg_streamtype: i32,
 ) -> PyResult<Option<Py<PyBytes>>> {
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
@@ -26,14 +27,23 @@ pub(crate) fn _encode(
         jpeg_subsampling,
         jpeg_optimize,
         jpeg_progressive,
+        jpeg_keep_rgb,
+        jpeg_smooth,
+        jpeg_qtables: &jpeg_qtables,
+        jpeg_qtable_quality,
+        jpeg_restart_marker_blocks,
+        jpeg_restart_marker_rows,
+        jpeg_streamtype,
         icc_profile: icc_profile.unwrap_or_default(),
         exif: metadata_exif.unwrap_or_default(),
         xmp: metadata_xmp.unwrap_or_default(),
     };
     let encoded = encode_image(py, image, format, options, compressor).map_err(|error| blanket_codecs::encode_error(error, format.as_str()))?;
-    let encoded = if attach_metadata {
+    let encoded = if attach_metadata && !(format == ImageFormat::Jpeg && jpeg_streamtype == 1) {
         py.detach(|| {
-            blanket_codecs::metadata::encode_metadata(encoded, format.as_str(), options.exif, options.xmp, options.icc_profile, &metadata_chunks)
+            let (xmp, icc) =
+                if format == ImageFormat::Jpeg && jpeg_streamtype == 2 { (&[][..], &[][..]) } else { (options.xmp, options.icc_profile) };
+            blanket_codecs::metadata::encode_metadata(encoded, format.as_str(), options.exif, xmp, icc, &metadata_chunks)
         })?
     } else {
         encoded
@@ -59,6 +69,9 @@ pub(crate) fn _encode(
 }
 
 fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: SaveOptions, compressor: Option<Compressor>) -> PyResult<Vec<u8>> {
+    if format == ImageFormat::Jpeg && matches!(options.jpeg_streamtype, 1 | 2) && compressor.is_some() {
+        return Err(PyValueError::new_err("compression optimization requires a complete JPEG stream"));
+    }
     let compress_level = options.compress_level;
     if image.mode == PixelMode::One && format == ImageFormat::Png {
         return py.detach(|| codecs::encode_one_png(image, compress_level));

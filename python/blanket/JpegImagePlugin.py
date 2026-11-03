@@ -30,14 +30,7 @@ def get_sampling(image: Image.Image) -> int:
     return {(1, 1, 1, 1, 1, 1): 0, (2, 1, 1, 1, 1, 1): 1, (2, 2, 1, 1, 1, 1): 2}.get(sampling, -1)
 
 
-def transform(
-    data: bytes | bytearray | memoryview,
-    method: Image.Transpose | int | None = None,
-    *,
-    crop: tuple[int, int, int, int] | None = None,
-    trim: bool = False,
-    metadata: Literal["strip", "preserve"] = "strip",
-) -> bytes:
+def transform(data: bytes | bytearray | memoryview, method: Image.Transpose | int | None = None, *, crop: tuple[int, int, int, int] | None = None, trim: bool = False, metadata: Literal["strip", "preserve"] = "strip") -> bytes:
     """Return transformed JPEG bytes, preserving quantized DCT coefficients.
 
     ``method`` uses Image.Transpose values (ROTATE_90 is counterclockwise).

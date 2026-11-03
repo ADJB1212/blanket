@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import array
 import struct
-from typing import TYPE_CHECKING
+from operator import index
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -76,6 +78,30 @@ _ZIGZAG = (
 )
 
 
+def validate_qtables(value: object) -> list[list[int]] | None:
+    """Copy and validate Pillow's JPEG quantization table representations."""
+    if isinstance(value, str):
+        try:
+            numbers = [int(number) for line in value.splitlines() for number in line.split("#", 1)[0].split()]
+        except ValueError as error:
+            raise ValueError("Invalid quantization table") from error
+        value = [numbers[start : start + 64] for start in range(0, len(numbers), 64)]
+    if not isinstance(value, (tuple, list, dict)):
+        return None
+    tables = [value[key] for key in range(len(value)) if key in value] if isinstance(value, dict) else list(value)
+    if not 0 < len(tables) < 5:
+        raise ValueError("None or too many quantization tables")
+    result = []
+    try:
+        for table in tables:
+            if len(table) != 64:
+                raise TypeError("Invalid quantization table")
+            result.append(list(array.array("H", (index(item) for item in cast("list[int]", table)))))
+    except TypeError as error:
+        raise ValueError("Invalid quantization table") from error
+    return result
+
+
 def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
     """Strip inter-marker junk and duplicate post-SOF ICC markers; detect missing EOI."""
     if not data.startswith(b"\xff\xd8"):
@@ -142,6 +168,9 @@ def segments(data: bytes) -> Iterator[tuple[int, memoryview]]:
             return
         marker = data[position]
         position += 1
+        if marker == 0xD9 and view[position : position + 2] == b"\xff\xd8":
+            position += 2
+            continue
         if marker in (0xDA, 0xD9):
             return
         if marker in (0, 1) or 0xD0 <= marker <= 0xD8:

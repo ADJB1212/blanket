@@ -541,21 +541,26 @@ fn raster_font_mask(py: Python<'_>, glyphs: Vec<Vec<u8>>, scale: usize) -> PyRes
 }
 
 fn font_mask(glyphs: &[Vec<u8>], scale: usize) -> PyResult<(usize, usize, Vec<u8>)> {
-    if scale == 0 || glyphs.iter().any(|rows| rows.len() != 7) {
+    let rows = glyphs.first().map_or(7, Vec::len);
+    if scale == 0 || !matches!(rows, 7 | 8) || glyphs.iter().any(|glyph| glyph.len() != rows) {
         return Err(PyValueError::new_err("invalid bitmap glyph or scale"));
     }
-    let width =
-        glyphs.len().checked_mul(6).and_then(|value| value.checked_mul(scale)).ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
-    let height = if glyphs.is_empty() { 0 } else { 7usize.checked_mul(scale).ok_or_else(|| PyValueError::new_err("font mask is too large"))? };
+    let (columns, advance) = if rows == 8 { (8, 8) } else { (5, 6) };
+    let width = glyphs
+        .len()
+        .checked_mul(advance)
+        .and_then(|value| value.checked_mul(scale))
+        .ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
+    let height = if glyphs.is_empty() { 0 } else { rows.checked_mul(scale).ok_or_else(|| PyValueError::new_err("font mask is too large"))? };
     let length =
         width.checked_mul(height).filter(|&length| length <= MAX_MASK_PIXELS).ok_or_else(|| PyValueError::new_err("font mask is too large"))?;
     let mut mask = vec![0; length];
     for (i, rows) in glyphs.iter().enumerate() {
         for (y, &row) in rows.iter().enumerate() {
-            for x in 0..5 {
-                if row & (1 << (4 - x)) != 0 {
+            for x in 0..columns {
+                if row & (1 << (columns - 1 - x)) != 0 {
                     for dy in 0..scale {
-                        let offset = (y * scale + dy) * width + (i * 6 + x) * scale;
+                        let offset = (y * scale + dy) * width + (i * advance + x) * scale;
                         mask[offset..offset + scale].fill(255);
                     }
                 }
