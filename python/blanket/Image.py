@@ -25,7 +25,7 @@ from operator import index
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol, cast
 
-from .errors import UnsupportedCodecError
+from .errors import CodecResourceLimitError, UnsupportedCodecError
 
 if TYPE_CHECKING:
     from collections.abc import Buffer, Callable, Sequence
@@ -38,6 +38,7 @@ if TYPE_CHECKING:
 
 from ._blanket import (
     _decode_region,
+    _draft_jpeg,
     _encode,
     _index_sequence,
     _inspect,
@@ -210,6 +211,44 @@ _SAVE_OPTIONS = {
     "HEIF": frozenset({"quality", "lossless"}),
     "AVIF": frozenset({"quality", "effort"}),
 }
+_MIME_TYPES = {
+    "PNG": "image/png",
+    "JPEG": "image/jpeg",
+    "GIF": "image/gif",
+    "TIFF": "image/tiff",
+    "BMP": "image/bmp",
+    "ICO": "image/x-icon",
+    "WEBP": "image/webp",
+    "JXL": "image/jxl",
+    "AVIF": "image/avif",
+    "HEIF": "image/heic",
+    "JPEG2000": "image/jp2",
+    "EPS": "application/postscript",
+    "PDF": "application/pdf",
+    "PPM": "image/x-portable-anymap",
+    "PCX": "image/x-pcx",
+    "SGI": "image/sgi",
+}
+MAX_IMAGE_PIXELS: int | None = 1024 * 1024 * 1024 // 4 // 3
+
+
+class DecompressionBombWarning(RuntimeWarning):
+    """An image exceeds the configured decoded-pixel warning threshold."""
+
+
+class DecompressionBombError(CodecResourceLimitError):
+    """An image exceeds twice the configured decoded-pixel threshold."""
+
+
+def _decompression_bomb_check(size: tuple[int, int], *, error_only: bool = False, format: str | None = None) -> None:
+    """Apply Pillow's configurable pixel threshold before raster allocation."""
+    if MAX_IMAGE_PIXELS is None:
+        return
+    pixels = max(1, size[0]) * max(1, size[1])
+    if pixels > 2 * MAX_IMAGE_PIXELS:
+        raise DecompressionBombError(f"Image size ({pixels} pixels) exceeds limit of {2 * MAX_IMAGE_PIXELS} pixels, could be decompression bomb DOS attack.", format=format, operation="decode")
+    if not error_only and pixels > MAX_IMAGE_PIXELS:
+        warnings.warn(f"Image size ({pixels} pixels) exceeds limit of {MAX_IMAGE_PIXELS} pixels, could be decompression bomb DOS attack.", DecompressionBombWarning, stacklevel=2)
 
 
 class Resampling(IntEnum):
@@ -396,6 +435,7 @@ class Image:
         self._frame = 0
         self._exif: Exif | None = None
         self._exif_source: object = None
+        self._draft_source: bytes | None = None
         palette_data = native.palette_data()
         if palette_data is not None:
             from .ImagePalette import ImagePalette
@@ -603,6 +643,7 @@ class Image:
             ```
         """
         self._native.load()
+        self._draft_source = None
         self._sync_palette()
         return PixelAccess(self._native)
 
@@ -685,12 +726,12 @@ class Image:
         """
         self.load()
 
-    def draft(self, mode: str | None, size: tuple[int, int] | None) -> None:
-        """Return ``None`` because Blanket decodes images when opening them.
+    def draft(self, mode: str | None, size: tuple[int, int] | None) -> tuple[str, tuple[int, int, float, float]] | None:
+        """Configure reduced JPEG decoding before loading pixels.
 
         Args:
-            mode: Requested decoder mode; accepted for Pillow compatibility.
-            size: Requested decoder size; accepted for Pillow compatibility.
+            mode: Requested decoder mode, including L or YCbCr for RGB JPEGs.
+            size: Requested minimum decoder dimensions, or None for full size.
 
         Examples:
             ```python
@@ -700,7 +741,19 @@ class Image:
             image.draft("L", (4, 4))
             ```
         """
-        self.load()
+        self._native.load()
+        data = self._draft_source
+        if data is None:
+            return None
+        width, height = self.size
+        ratio = 1 if not size else min(width // size[0], height // size[1])
+        scale = next(value for value in (8, 4, 2, 1) if ratio >= value or value == 1)
+        target = mode if self.mode == "RGB" and mode in ("L", "YCbCr") else self.mode
+        result = Image(_draft_jpeg(data, scale, target))
+        self._native = result._native
+        self._bands = result._bands
+        self._draft_source = None
+        return self.mode, (0, 0, width / scale, height / scale)
 
     def show(self, title: str | None = None) -> None:
         """Save a temporary PNG and launch the system image viewer.
@@ -757,6 +810,7 @@ class Image:
             ```
         """
         self._native.close()
+        self._draft_source = None
         if self._frames is not None:
             for frame in self._frames:
                 frame._native.close()
@@ -964,6 +1018,29 @@ class Image:
                     self._exif[274] = int(match[1] or match[2])
             self._exif_source = raw
         return self._exif
+
+    def _reload_exif(self) -> None:
+        """Reload cached EXIF tags from the current metadata."""
+        self._exif = None
+        self.getexif()
+
+    def _getexif(self) -> dict[int, object] | None:
+        """Return legacy merged EXIF and GPS tags, or None when absent."""
+        exif = self.getexif()
+        if not exif:
+            return None
+        result = dict(exif)
+        if 34665 in exif:
+            result.update(exif.get_ifd(34665))
+        if 34853 in exif:
+            result[34853] = exif.get_ifd(34853)
+        return result
+
+    def get_format_mimetype(self) -> str | None:
+        """Return the detected format's MIME type, or None when unknown."""
+        if self.format == "PNG" and "loop" in self.info:
+            return "image/apng"
+        return _MIME_TYPES.get(self.format or "")
 
     def _metadata_value(self, key: str) -> object:
         """Resolve a metadata value, including cached EXIF edits and the XMP alias."""
@@ -2145,12 +2222,16 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if output_format == "JPEG" and (self.width == 0 or self.height == 0):
+            raise ValueError("cannot write empty image as JPEG")
         if {"save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image"} & options.keys():
             from ._sequence import save_sequence
 
             encoded = save_sequence(self, fp, output_format, options, compressor)
             if encoded is not None:
                 return encoded if fp is None else None
+        if output_format == "GIF" and compressor is None and self.mode in ("RGB", "RGBA"):
+            return self.quantize()._save(fp, output_format, **options)
         if self.mode == "LAB":
             if output_format != "TIFF":
                 raise UnsupportedCodecError(f"cannot write mode LAB as {output_format}", format=output_format, operation="encode")
@@ -2179,12 +2260,21 @@ class Image:
                 return self.convert("L")._save(fp, output_format, compressor=compressor, **options)
             return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, **options)
         self._sync_palette()
+        native = self._native
+        if output_format in ("PNG", "GIF") and self.mode == "P":
+            transparency = options.pop("transparency", self.info.get("transparency"))
+            if isinstance(transparency, (int, bytes)):
+                native = native.copy()
+                if isinstance(transparency, int):
+                    native.set_palette_alpha(index=transparency)
+                else:
+                    native.set_palette_alpha(alpha=transparency)
         metadata = save_metadata(self, output_format, options)
         values = _save_options(output_format, options)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
         encoded = _encode(
-            self._native,
+            native,
             output_format,
             **values,
             compressor=None if compressor is None else compressor._native,
@@ -2212,7 +2302,7 @@ class Image:
                 print(image.size)
             ```
         """
-        self.load()
+        self._native.load()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -2539,7 +2629,14 @@ def open(
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
-    image = _decode(_read_bytes(fp), formats, lazy, frame_cache_size)
+    data = _read_bytes(fp)
+    try:
+        format, size, _, _ = _inspect(data, formats)
+    except (OSError, ValueError):
+        pass
+    else:
+        _decompression_bomb_check(size, format=format)
+    image = _decode(data, formats, lazy, frame_cache_size)
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
     return image
@@ -2597,6 +2694,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         image._info = first._info
         image.palette = first.palette
         image._lazy_frames = storage
+        if image.format == "JPEG":
+            image._draft_source = data
         return image
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
@@ -2619,6 +2718,11 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
             frame._info.update(disposal=disposal, blend=blend)
     image._frames = decoded if len(decoded) > 1 else None
     image._info = decoded[0]._info
+    if image.format == "JPEG":
+        from ._jpeg import read_attributes
+
+        image.__dict__.update(read_attributes(data))
+        image._draft_source = data
     return image
 
 

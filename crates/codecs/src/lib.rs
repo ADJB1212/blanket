@@ -9,6 +9,11 @@ pub use blanket_codec_webp::backend_version as webp_backend_version;
 pub use codecs::{ImageFormat, SaveOptions, open_bytes};
 
 #[pyo3::pyfunction]
+pub fn _draft_jpeg(py: pyo3::Python<'_>, data: &[u8], scale: u32, mode: &str) -> pyo3::PyResult<blanket_core::Image> {
+    py.detach(|| blanket_codec_jpeg::decode_scaled(data, scale, mode)).map_err(|message| decode_error(message, Some("JPEG"), "decode"))
+}
+
+#[pyo3::pyfunction]
 #[pyo3(signature = (data, method, crop, trim, preserve_metadata))]
 pub fn _transform_jpeg<'py>(
     py: pyo3::Python<'py>, data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,

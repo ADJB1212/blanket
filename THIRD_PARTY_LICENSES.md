@@ -8,8 +8,10 @@ these combined distribution requirements. This does not replace the MIT
 license on Blanket's original source. The GPL and LGPL texts are included in
 `licenses/libheif-COPYING`.
 
-Pillow-derived raster geometry is covered by the MIT-CMU terms and copyright
+Pillow-derived raster geometry and median-cut quantization are covered by the MIT-CMU terms and copyright
 notices in `licenses/Pillow-LICENSE`.
+Pillow-derived octree quantization is covered by the MIT terms and copyright
+notice in `licenses/Pillow-QuantOctree-LICENSE`.
 
 The binary wheels include complete third-party license and notice files under
 their `.dist-info/licenses/licenses/third-party/` directory. This includes

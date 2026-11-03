@@ -6,11 +6,28 @@ from typing import TYPE_CHECKING
 
 from . import Image
 from ._blanket import _transform_jpeg
+from ._plugin import PluginImage
 
 if TYPE_CHECKING:
     from typing import Literal
 
-__all__ = ["transform"]
+__all__ = ["JpegImageFile", "get_sampling", "transform"]
+
+
+class JpegImageFile(PluginImage):
+    """Open a JPEG using the native decoder."""
+
+    _format = "JPEG"
+    _error_message = "not identified by this driver"
+
+
+def get_sampling(image: Image.Image) -> int:
+    """Return the JPEG chroma subsampling identifier, or -1 when unknown."""
+    layer = getattr(image, "layer", ())
+    if len(layer) != 3:
+        return -1
+    sampling = tuple(value for channel in layer for value in channel[1:3])
+    return {(1, 1, 1, 1, 1, 1): 0, (2, 1, 1, 1, 1, 1): 1, (2, 2, 1, 1, 1, 1): 2}.get(sampling, -1)
 
 
 def transform(

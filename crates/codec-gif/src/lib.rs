@@ -1,9 +1,8 @@
 use std::borrow::{Borrow, Cow};
 
 use blanket_codec_common::codec_error;
-use blanket_codec_image::{color_type, decode_rust_image};
+use blanket_codec_image::color_type;
 use blanket_core::{Image, PixelMode};
-use image::ImageFormat as RustFormat;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
@@ -56,6 +55,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
     let mut total = 0;
     let mut previous = Vec::new();
     let mut frame_index = 0;
+    let mut transparent_background = false;
     while let Some(frame) = decoder.read_next_frame().map_err(|e| e.to_string())? {
         validate_frame_budget(&mut total, width, height)?;
         let (x, y, w, h) = (u32::from(frame.left), u32::from(frame.top), u32::from(frame.width), u32::from(frame.height));
@@ -73,6 +73,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             background
         };
         if frame_index == 0 {
+            transparent_background = frame.transparent.is_some();
             for pixel in canvas.as_chunks_mut::<4>().0 {
                 *pixel = clear;
             }
@@ -90,12 +91,15 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             blanket_core::pixels::paste_nontransparent_rgba(&mut canvas[dst..dst + w as usize * 4], &frame.buffer[src..src + w as usize * 4]);
         }
         if target.is_none_or(|target| target == frame_index) {
-            sequence.frames.push(Frame {
-                image: Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|e| e.to_string())?,
-                duration: Some(f64::from(frame.delay) * 10.0),
-                disposal: frame.dispose as u8,
-                blend: 0,
-            });
+            let image = if frame_index == 0 {
+                decode_gif(data)?
+            } else if transparent_background {
+                Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|error| error.to_string())?
+            } else {
+                let pixels = canvas.as_chunks::<4>().0.iter().flat_map(|pixel| pixel[..3].iter().copied()).collect();
+                Image::from_pixels(width, height, PixelMode::Rgb, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
+            };
+            sequence.frames.push(Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 });
         }
         if target == Some(frame_index) {
             return Ok(sequence);
@@ -127,9 +131,6 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
     if sequence.frames.is_empty() {
         return Err("GIF contains no frames".into());
     }
-    if sequence.frames.len() == 1 {
-        sequence.frames[0].image = decode_gif(data)?;
-    }
     Ok(sequence)
 }
 
@@ -158,7 +159,31 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
 }
 
 pub fn decode_gif(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, RustFormat::Gif, "GIF")
+    let mut decoder = gif::DecodeOptions::new().read_info(std::io::Cursor::new(data)).map_err(|error| error.to_string())?;
+    let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
+    blanket_codec_common::validate_dimensions(width, height)?;
+    let global_palette = decoder.global_palette().map(<[u8]>::to_vec);
+    let background = decoder.bg_color().unwrap_or(0) as u8;
+    let frame = decoder.read_next_frame().map_err(|error| error.to_string())?.ok_or("GIF contains no frames")?;
+    if u32::from(frame.left) + u32::from(frame.width) > width || u32::from(frame.top) + u32::from(frame.height) > height {
+        return Err("GIF frame outside canvas".into());
+    }
+    let palette = frame.palette.as_ref().or(global_palette.as_ref()).cloned();
+    let mut pixels = blanket_core::raster::alloc_pixels(width as usize * height as usize).map_err(|error| error.to_string())?;
+    pixels.fill(frame.transparent.unwrap_or(background));
+    for row in 0..usize::from(frame.height) {
+        let offset = row * usize::from(frame.width);
+        let source = &frame.buffer[offset..offset + usize::from(frame.width)];
+        let start = (usize::from(frame.top) + row) * width as usize + usize::from(frame.left);
+        pixels[start..start + source.len()].copy_from_slice(source);
+    }
+    let mut image = Image::from_pixels(width, height, PixelMode::L, pixels, Some("GIF".into())).map_err(|error| error.to_string())?;
+    if let Some(palette) = palette
+        && palette.as_chunks::<3>().0.iter().enumerate().any(|(index, color)| *color != [index as u8; 3])
+    {
+        image.palette = Some((PixelMode::Rgb, palette));
+    }
+    Ok(image)
 }
 
 pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
@@ -169,7 +194,26 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
     let mut output = Vec::new();
-    if image.mode == PixelMode::L {
+    if let Some((mode, entries)) = &image.palette {
+        let mut palette = Vec::with_capacity(entries.len());
+        let mut transparent = None;
+        for (index, entry) in entries.chunks_exact(mode.channels()).enumerate() {
+            palette.extend_from_slice(&entry[..3]);
+            if *mode == PixelMode::Rgba && entry[3] == 0 && transparent.is_none() {
+                transparent = Some(index as u8);
+            }
+        }
+        let required = usize::from(pixels.iter().copied().max().unwrap_or(0)) + 1;
+        palette.resize(palette.len().max(required * 3), 0);
+        let frame = gif::Frame {
+            width: image.width as u16,
+            height: image.height as u16,
+            transparent,
+            buffer: Cow::Borrowed(pixels),
+            ..gif::Frame::default()
+        };
+        gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
+    } else if image.mode == PixelMode::L {
         let mut used = [false; 256];
         for &value in pixels {
             used[usize::from(value)] = true;

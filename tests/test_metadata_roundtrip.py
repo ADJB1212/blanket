@@ -486,7 +486,8 @@ def test_compression_preserves_metadata(format: str, compressor: object, profile
     assert optimized.info["xmp"] == b"packet"
     assert optimized.info["icc_profile"] == profile
     if isinstance(compressor, LosslessImageCompressor):
-        assert optimized.tobytes() == normal.tobytes()
+        assert optimized.size == normal.size
+        assert optimized.convert(normal.mode).tobytes() == normal.tobytes()
 
 
 def test_multiframe_tiff_exif_is_frame_local() -> None:

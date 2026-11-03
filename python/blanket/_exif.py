@@ -15,8 +15,8 @@ if TYPE_CHECKING:
 
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
+from ._jpeg import read_metadata as read_jpeg_metadata
 from .ExifTags import Base
-from .PngImagePlugin import PngInfo, iTXt
 
 # Limit expansion of compressed PNG text while reading metadata.
 _MAX_TEXT_BYTES = 1024 << 10
@@ -124,6 +124,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
     """Read metadata independently of pixel decoding."""
     info: dict[object, object] = {}
     if format == "JPEG":
+        info.update(read_jpeg_metadata(data))
         profiles: dict[int, bytes] = {}
         profile_count = 0
         valid_profile = True
@@ -148,7 +149,8 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
             if marker == 0xE1:
                 payload = data[pos + 2 : pos + length]
                 if payload.startswith(b"Exif\0\0"):
-                    info.setdefault("exif", payload)
+                    previous = info.get("exif", b"")
+                    info["exif"] = previous + payload[6:] if previous else payload
                 elif payload.startswith(b"http://ns.adobe.com/xap/1.0/\0"):
                     info["xmp"] = payload.split(b"\0", 1)[1]
             elif marker == 0xE2 and data[pos + 2 : pos + 14] == b"ICC_PROFILE\0" and length >= 16:
@@ -160,6 +162,18 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
             pos += length
         if valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
             info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
+    elif format == "GIF" and len(data) >= 13:
+        info["version"] = data[:6]
+        info["background"] = data[11]
+        pos = 13 + (3 * (1 << ((data[10] & 7) + 1)) if data[10] & 128 else 0)
+        while pos + 2 <= len(data) and data[pos] == 33:
+            label = data[pos + 1]
+            pos += 2
+            if label == 249 and data[pos : pos + 1] == b"\x04" and pos + 5 <= len(data) and data[pos + 1] & 1:
+                info["transparency"] = data[pos + 4]
+            while pos < len(data) and data[pos]:
+                pos += data[pos] + 1
+            pos += 1
     elif format == "PNG":
         pos = 8
         remaining = _MAX_PNG_METADATA_BYTES
@@ -170,14 +184,23 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 break
             if kind == b"IEND":
                 break
-            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP", *HDR_KEYS):
+            if kind not in (b"eXIf", b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"tRNS", *HDR_KEYS):
                 pos += length + 12
                 continue
             if kind in HDR_KEYS and length != {b"cICP": 4, b"mDCV": 24, b"cLLI": 8}[kind]:
                 pos += length + 12
                 continue
             payload = data[pos + 8 : pos + 8 + length]
-            if kind in HDR_KEYS:
+            if kind == b"tRNS" and data[25:26] == b"\x03" and length <= 256:
+                if payload.count(0) == 1 and all(value in (0, 255) for value in payload):
+                    info["transparency"] = payload.index(0)
+                else:
+                    info["transparency"] = payload
+            elif kind == b"tRNS" and data[25:26] == b"\x00" and length == 2:
+                info["transparency"] = int.from_bytes(payload, "big")
+            elif kind == b"tRNS" and data[25:26] == b"\x02" and length == 6:
+                info["transparency"] = struct.unpack(">3H", payload)
+            elif kind in HDR_KEYS:
                 value = decode_chunk(kind, payload)
                 if value is not None:
                     info[HDR_KEYS[kind]] = value
@@ -290,6 +313,8 @@ def _decompress(raw: bytes, maximum: int = _MAX_TEXT_BYTES) -> bytes:
 
 def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maximum: int = _MAX_PNG_METADATA_BYTES) -> int:
     """Extract a PNG text or ICC chunk into info, ignoring malformed metadata."""
+    from .PngImagePlugin import iTXt
+
     try:
         key, raw = payload.split(b"\0", 1)
         if not 1 <= len(key) <= 79 or len(key) + 1 > maximum:
@@ -335,6 +360,8 @@ def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maxim
 
 def save_metadata(image: object, format: str, options: dict[str, object]) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
     """Remove metadata options and resolve source defaults before encoding."""
+    from .PngImagePlugin import PngInfo
+
     policy = options.pop("metadata_policy", None)
     if policy is not None:
         from ._metadata_policy import MetadataPolicy
@@ -368,6 +395,28 @@ def save_metadata(image: object, format: str, options: dict[str, object]) -> tup
     if pnginfo is not None and not isinstance(pnginfo, PngInfo):
         raise TypeError("pnginfo must be a PngInfo object or None")
     chunks = [] if pnginfo is None else list(pnginfo.chunks)
+    if format == "JPEG":
+        if len(values[0]) > 65533:
+            raise ValueError("EXIF data is too long")
+        comment = options.pop("comment", image.info.get("comment"))
+        if isinstance(comment, str):
+            comment = comment.encode("utf-8")
+        if comment is not None and not isinstance(comment, (bytes, bytearray, memoryview)):
+            raise TypeError("comment must be bytes or text")
+        if comment:
+            if len(comment) > 65533:
+                raise ValueError("Comment is too long")
+            if policy is None or "comment" in policy.apply({"comment": comment}):
+                chunks.append((b"COM", bytes(comment), False))
+        dpi = options.pop("dpi", None)
+        if dpi is not None:
+            if not isinstance(dpi, (tuple, list)) or len(dpi) != 2:
+                raise TypeError("dpi must contain two numbers")
+            density = tuple(round(value) for value in dpi)
+            if any(value < 0 or value > 65535 for value in density):
+                raise ValueError("DPI is outside the container's density range")
+            if all(density):
+                chunks.append((b"JFIF", struct.pack(">HH", *density), False))
     if format == "PNG" and pnginfo is None:
         text = PngInfo()
         for key, value in image.info.items():

@@ -10,6 +10,39 @@ from PIL import Image as PillowImage
 from blanket import Image, ImageCms, PngImagePlugin, UnidentifiedImageError, features
 
 
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "GIF", "TIFF", "BMP", "WEBP", "JPEG2000"])
+def test_format_mimetype_matches_pillow(format: str) -> None:
+    encoded = Image.new("RGB", (3, 2), "red").encode(format)
+    actual = Image.open(BytesIO(encoded))
+    expected = PillowImage.open(BytesIO(encoded))
+    assert actual.get_format_mimetype() == expected.get_format_mimetype()
+
+
+def test_png_image_file_constructor_and_type() -> None:
+    encoded = Image.new("RGB", (3, 2), "red").encode("PNG")
+    image = PngImagePlugin.PngImageFile(BytesIO(encoded))
+    assert isinstance(image, Image.Image)
+    assert isinstance(image, PngImagePlugin.PngImageFile)
+    assert image.tobytes() == Image.open(BytesIO(encoded)).tobytes()
+    assert not isinstance(Image.new("RGB", (3, 2)), PngImagePlugin.PngImageFile)
+    with pytest.raises(SyntaxError):
+        PngImagePlugin.PngImageFile(BytesIO(Image.new("RGB", (3, 2)).encode("JPEG")))
+
+
+def test_apng_mimetype_includes_single_frame_animation() -> None:
+    image = Image.new("RGBA", (3, 2), "red")
+    encoded = image.encode("PNG", save_all=True, duration=20)
+    animated = BytesIO()
+    animated.write(encoded[:33])
+    PngImagePlugin.putchunk(animated, b"acTL", struct.pack(">II", 1, 0))
+    PngImagePlugin.putchunk(animated, b"fcTL", struct.pack(">IIIIIHHBB", 0, 3, 2, 0, 0, 1, 100, 0, 0))
+    animated.write(encoded[33:])
+    actual = Image.open(BytesIO(animated.getvalue()))
+    expected = PillowImage.open(BytesIO(animated.getvalue()))
+    assert actual.get_format_mimetype() == expected.get_format_mimetype() == "image/apng"
+    assert Image.new("RGB", (3, 2)).get_format_mimetype() is None
+
+
 def encode(mode="RGB", format="PNG", depth=8, **options):
     image = Image.new(mode, (17, 9))
     if depth != 8:

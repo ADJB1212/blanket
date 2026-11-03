@@ -94,6 +94,9 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
         }
     }
     if let Some((palette_mode, _)) = image.palette {
+        if format == ImageFormat::Gif && compressor.is_none() {
+            return py.detach(|| codecs::encode(image, format, options));
+        }
         if matches!(format, ImageFormat::Pcx | ImageFormat::Palm) && palette_mode == PixelMode::Rgb {
             return py.detach(|| codecs::encode(image, format, options));
         }

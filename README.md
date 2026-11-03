@@ -542,8 +542,9 @@ compression can still change RGB values during RGB/YUV conversion.
   default; `lazy=True` enables on-demand access with a bounded frame cache.
   Use `seek()`, `tell()`, `n_frames`, and `ImageSequence` to navigate them.
   GIF, WebP, APNG, and PDF support `save_all=True, append_images=[...]`.
-  Pixel operations and copies apply to the current frame. Animated GIF frames
-  use composited RGBA canvases rather than Pillow's palette mode transitions.
+  Pixel operations and copies apply to the current frame. GIFs retain the first
+  frame's palette and use RGB or RGBA for subsequent composited frames.
+  APNG retains supported 8-bit modes, frame regions, and palette transparency.
 - **High bit depth:** sample retention is supported for selected operations
   and formats. ICC transforms require 8-bit images; HEIF HDR metadata is not retained.
 - **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is

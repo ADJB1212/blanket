@@ -127,7 +127,7 @@ users expect.
 - [x] `effect_spread(distance)` — randomly displace pixels
 - [x] `remap_palette(dest_map, source_palette=None)` — reorder palette indices
 - [x] `verify()` — validate eagerly decoded pixels
-- [x] `draft(mode, size)` — no-op after eager decoding
+- [x] `draft(mode, size)` — reduced JPEG decoding before pixel access
 - [x] `getim()` / `im` — internal image core access (compatibility shim)
 - [x] `tobitmap(name="image")` — X11 bitmap string (mode `1`)
 - [x] `entropy(mask, extrema)` on high-bit-depth images
@@ -164,8 +164,9 @@ Support reading and writing animated and multi-page images. This is a large
 architectural change that touches codecs, the `Image` struct, and the Python
 API.
 
-Frames decode eagerly by default, with opt-in lazy access described below. Animated GIFs expose composited
-RGBA canvases. Navigation retains frame edits; copies and transforms operate on
+Frames decode eagerly by default, with opt-in lazy access described below. GIFs retain
+the first frame's palette and expose later composited frames as RGB or RGBA.
+Navigation retains frame edits; copies and transforms operate on
 the current frame. Sequence saving uses `save_all` and `append_images`, with
 format-specific timing and composition controls. See the formats guide for
 memory limits, APNG sample precision and blending, and compatibility details.

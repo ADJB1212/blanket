@@ -127,6 +127,22 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
     let mut decoder = decoder(data);
     let header = decoder.read_header_info().map_err(|error| error.to_string())?;
     validate_dimensions(header.width, header.height)?;
+    if header.color_type == png::ColorType::Indexed {
+        let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+        let palette = reader.info().palette.as_deref().ok_or("missing PNG palette")?.to_vec();
+        let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
+        let frame = reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
+        let bits = frame.bit_depth as usize;
+        let mut pixels = Vec::with_capacity(frame.width as usize * frame.height as usize);
+        for row in packed[..frame.buffer_size()].chunks_exact(frame.line_size) {
+            for x in 0..frame.width as usize {
+                pixels.push((row[x * bits / 8] >> (8 - bits - x * bits % 8)) & ((1u16 << bits) - 1) as u8);
+            }
+        }
+        let mut image = Image::from_pixels(frame.width, frame.height, PixelMode::L, pixels, Some("PNG".into())).map_err(|error| error.to_string())?;
+        image.palette = Some((PixelMode::Rgb, palette));
+        return Ok(image);
+    }
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|error| error.to_string())?;
@@ -199,4 +215,4 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
     Ok(output)
 }
 mod sequence;
-pub use sequence::{decode_frame, decode_sequence, encode_sequence, index_sequence};
+pub use sequence::{decode_frame, decode_sequence, encode_sequence, encode_sequence_regions, index_sequence};

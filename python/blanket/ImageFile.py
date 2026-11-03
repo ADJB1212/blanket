@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING
 from ._blanket import PngStreamWriter, StreamingDecoder, UnidentifiedImageError
 from .Image import Image
 
+MAXBLOCK = 65536
+
 if TYPE_CHECKING:
     import os
     from types import TracebackType

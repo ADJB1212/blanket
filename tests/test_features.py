@@ -8,6 +8,17 @@ from PIL import features as pillow_features
 
 from blanket import Image, __version__, features
 
+
+@pytest.mark.parametrize("codec,feature", [("jpg", "jpg"), ("jpg_2000", "jpg_2000"), ("zip", "png"), ("libtiff", "libtiff")])
+def test_pillow_codec_queries(codec: str, feature: str) -> None:
+    assert features.check_codec(codec) == features.check(feature)
+    assert features.version_codec(codec) == features.version(feature)
+    with pytest.raises(ValueError, match="Unknown codec"):
+        features.check_codec("unknown")
+    with pytest.raises(ValueError, match="Unknown codec"):
+        features.version_codec("unknown")
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 

@@ -13,8 +13,15 @@ if TYPE_CHECKING:
     from typing import BinaryIO, Self
 
 from ._io import write_all
+from ._plugin import PluginImage
 
 _MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class PngImageFile(PluginImage):
+    """Open a PNG or APNG using the native decoder."""
+
+    _format = "PNG"
 
 
 class Disposal(IntEnum):

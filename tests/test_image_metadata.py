@@ -473,5 +473,5 @@ def test_malformed_containers_and_metadata_are_rejected_without_output(tmp_path)
     with pytest.raises(OSError, match="CRC"):
         ImageMetadata.rewrite(BytesIO(data), output, xmp=XMP)
     with pytest.raises((ValueError, UnidentifiedImageError)):
-        ImageMetadata.rewrite(BytesIO(encode("JPEG", exif=b"invalid")), output, policy=ImageMetadata.MetadataPolicy(location=False))
+        ImageMetadata.rewrite(BytesIO(encode("JPEG", exif=b"Exif\0\0invalid")), output, policy=ImageMetadata.MetadataPolicy(location=False))
     assert output.read_bytes() == b"unchanged"

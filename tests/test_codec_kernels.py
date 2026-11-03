@@ -71,8 +71,11 @@ def test_png_single_decoder_preserves_layout_and_transparency(color: int, depth:
     if depth < 16:
         assert actual.bit_depth == 8
         assert actual.convert("RGBA").tobytes() == external.convert("RGBA").tobytes()
-        modes = {0: "LA" if transparent else "1" if depth == 1 else "L", 2: "RGBA" if transparent else "RGB", 3: "RGBA" if transparent else "RGB", 4: "LA", 6: "RGBA"}
+        modes = {0: "LA" if transparent else "1" if depth == 1 else "L", 2: "RGBA" if transparent else "RGB", 3: "P", 4: "LA", 6: "RGBA"}
         assert actual.mode == modes[color]
+        if color == 3:
+            assert actual.tobytes() == external.tobytes()
+            assert actual.getpalette() == external.getpalette()
     else:
         expected = []
         for pixel in pixels:

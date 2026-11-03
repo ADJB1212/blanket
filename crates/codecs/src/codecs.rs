@@ -250,6 +250,7 @@ pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> Py
 }
 
 type OpenSequence = (Vec<Image>, Vec<(Option<f64>, u8, u8)>, Option<u32>, bool);
+type AnimationRegions = ((u32, u32), Vec<(u32, u32)>);
 
 #[pyfunction]
 pub fn _index_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<(usize, Option<u32>, bool)> {
@@ -292,9 +293,10 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
 
 #[pyfunction]
 #[allow(clippy::too_many_arguments)]
+#[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None))]
 pub fn _encode_sequence(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
-    default_image: bool, quality: u8, compress_level: u8, lossless: bool,
+    default_image: bool, quality: u8, compress_level: u8, lossless: bool, regions: Option<AnimationRegions>,
 ) -> PyResult<Py<PyBytes>> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let format = ImageFormat::parse(format)?;
@@ -303,14 +305,21 @@ pub fn _encode_sequence(
     }
     let mut total = 0;
     let first = &images[0];
+    let canvas = regions.as_ref().map_or((first.width, first.height), |(size, _)| *size);
+    if regions.as_ref().is_some_and(|(_, offsets)| offsets.len() != images.len()) {
+        return Err(PyValueError::new_err("invalid animation regions"));
+    }
     for (i, image) in images.iter().enumerate() {
-        validate_frame_budget(&mut total, image.width, image.height)
+        let (width, height) = if format == ImageFormat::Png { canvas } else { (image.width, image.height) };
+        validate_frame_budget(&mut total, width, height)
             .map_err(|message| CodecErrorKind::ResourceLimit.into_pyerr(message, Some(format.as_str()), "encode"))?;
         image.raw_data()?;
         if image.width == 0 || image.height == 0 {
             return Err(PyValueError::new_err("cannot encode empty image"));
         }
-        let valid_mode = if format == ImageFormat::Pdf {
+        let valid_mode = if format == ImageFormat::Png {
+            matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+        } else if format == ImageFormat::Pdf {
             matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::Cmyk)
         } else {
             image.mode == PixelMode::Rgba
@@ -322,7 +331,17 @@ pub fn _encode_sequence(
                 "encode",
             ));
         }
-        if format != ImageFormat::Pdf && (image.width != first.width || image.height != first.height || image.bit_depth != first.bit_depth) {
+        let offset = regions.as_ref().map_or((0, 0), |(_, offsets)| offsets[i]);
+        if format == ImageFormat::Png
+            && (offset.0.checked_add(image.width).is_none_or(|right| right > canvas.0)
+                || offset.1.checked_add(image.height).is_none_or(|bottom| bottom > canvas.1)
+                || image.bit_depth != first.bit_depth)
+        {
+            return Err(PyValueError::new_err("animation frames must fit the canvas and have matching sample depths"));
+        }
+        if !matches!(format, ImageFormat::Pdf | ImageFormat::Png)
+            && (image.width != first.width || image.height != first.height || image.bit_depth != first.bit_depth)
+        {
             return Err(PyValueError::new_err("animation frames must have matching dimensions and sample depths"));
         }
         let maximum = match format {
@@ -360,7 +379,24 @@ pub fn _encode_sequence(
         .detach(|| match format {
             ImageFormat::Gif => blanket_codec_gif::encode_sequence(&sequence),
             ImageFormat::Webp => blanket_codec_webp::encode_sequence(&sequence, options),
-            ImageFormat::Png => blanket_codec_png::encode_sequence(&sequence, options),
+            ImageFormat::Png => {
+                if sequence.frames.len() == 1 && !default_image {
+                    let image = sequence.frames[0].image;
+                    if image.bit_depth > 8 {
+                        blanket_codec_png::encode_wide_png(image, image.raw_data()?, options)
+                    } else if image.palette.is_some() {
+                        blanket_codec_png::encode_palette_png(image, options.compress_level)
+                    } else if image.mode == PixelMode::One {
+                        blanket_codec_png::encode_one_png(image, options.compress_level)
+                    } else {
+                        blanket_codec_png::encode_png(image, image.pixel_data()?, options.compress_level)
+                    }
+                } else if let Some((size, offsets)) = &regions {
+                    blanket_codec_png::encode_sequence_regions(&sequence, options, *size, offsets)
+                } else {
+                    blanket_codec_png::encode_sequence(&sequence, options)
+                }
+            }
             ImageFormat::Pdf => {
                 let pages = sequence.frames.iter().map(|frame| Ok((frame.image, frame.image.pixel_data()?))).collect::<PyResult<Vec<_>>>()?;
                 blanket_codec_pdf::encode_pages(&pages)

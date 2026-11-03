@@ -1,4 +1,6 @@
 //! Color palette generation and mapping. All pixel work runs without the GIL.
+// Quantization follows Pillow's Quant.c and QuantOctree.c; see licenses/Pillow-*LICENSE.
+#[cfg(test)]
 use std::cmp::Reverse;
 
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
@@ -6,7 +8,7 @@ use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::quantize_simd::PaletteSearch;
 
@@ -242,43 +244,125 @@ fn sort_channel(histogram: &mut [(Color, u64)], channel: usize, scratch: &mut Hi
     histogram.copy_from_slice(scratch);
 }
 
-fn median_cut(histogram: &mut [(Color, u64)], colors: usize) -> Vec<Color> {
-    let population = |b: &[(Color, u64)]| b.iter().map(|(_, n)| n).sum::<u64>();
-    // Carry each box's population so choosing the next split is O(boxes).
-    let mut boxes = vec![(population(histogram), histogram)];
-    let mut scratch = Vec::new();
-    while boxes.len() < colors {
-        let Some(i) = boxes.iter().enumerate().filter(|(_, (_, b))| b.len() > 1).max_by_key(|(_, (n, _))| *n).map(|(i, _)| i) else {
-            break;
-        };
-        let (total, b) = &mut boxes[i];
-        let mut low = [255; 3];
-        let mut high = [0; 3];
-        for (color, _) in b.iter() {
-            for c in 0..3 {
-                low[c] = low[c].min(color[c]);
-                high[c] = high[c].max(color[c]);
+fn median_cut(histogram: &mut [(Color, u64)], colors: usize, preferred: &mut Vec<u8>) -> Vec<Color> {
+    struct Node {
+        start: usize,
+        end: usize,
+        population: u64,
+        children: Option<(usize, usize)>,
+    }
+    fn push(heap: &mut Vec<usize>, nodes: &[Node], value: usize) {
+        let mut index = heap.len();
+        heap.push(value);
+        while index > 0 {
+            let parent = (index - 1) / 2;
+            if nodes[value].population <= nodes[heap[parent]].population {
+                break;
             }
+            heap[index] = heap[parent];
+            index = parent;
         }
-        let channel = (0..3).max_by_key(|&c| (high[c] - low[c], 3 - c)).unwrap();
-        sort_channel(b, channel, &mut scratch);
-        let half = total.div_ceil(2);
-        let mut count = 0;
-        let mut split = 1;
-        for (j, (_, n)) in b.iter().enumerate().take(b.len() - 1) {
-            count += n;
-            split = j + 1;
-            if count >= half {
+        heap[index] = value;
+    }
+    fn pop(heap: &mut Vec<usize>, nodes: &[Node]) -> Option<usize> {
+        let first = *heap.first()?;
+        let value = heap.pop().unwrap();
+        if !heap.is_empty() {
+            let mut index = 0;
+            while index * 2 + 1 < heap.len() {
+                let mut child = index * 2 + 1;
+                if child + 1 < heap.len() && nodes[heap[child]].population < nodes[heap[child + 1]].population {
+                    child += 1;
+                }
+                if nodes[value].population > nodes[heap[child]].population {
+                    break;
+                }
+                heap[index] = heap[child];
+                index = child;
+            }
+            heap[index] = value;
+        }
+        Some(first)
+    }
+    let mut scale = 0;
+    while histogram.len() > 65536 && scale < 8 {
+        let mut cells = FxHashSet::default();
+        for (color, _) in histogram.iter() {
+            cells.insert([color[0] >> scale, color[1] >> scale, color[2] >> scale]);
+            if cells.len() > 65536 {
                 break;
             }
         }
-        let (left, right) = std::mem::take(b).split_at_mut(split);
-        *b = left;
-        let moved = *total - count;
-        *total = count;
-        boxes.push((moved, right));
+        if cells.len() <= 65536 {
+            break;
+        }
+        scale += 1;
     }
-    boxes.iter().map(|(_, b)| average(b)).collect()
+    let mut nodes = vec![Node { start: 0, end: histogram.len(), population: histogram.iter().map(|(_, n)| n).sum(), children: None }];
+    let mut heap = vec![0];
+    let mut scratch = Vec::new();
+    let mut leaves = 1;
+    while leaves < colors {
+        let Some(index) = pop(&mut heap, &nodes) else { break };
+        let node = &nodes[index];
+        let (start, end, population) = (node.start, node.end, node.population);
+        let data = &mut histogram[start..end];
+        let mut low = [255; 3];
+        let mut high = [0; 3];
+        for (color, _) in data.iter() {
+            for channel in 0..3 {
+                low[channel] = low[channel].min(color[channel] >> scale);
+                high[channel] = high[channel].max(color[channel] >> scale);
+            }
+        }
+        if low == high {
+            continue;
+        }
+        let channel = (0..3).max_by_key(|&c| (u32::from(high[c] - low[c]) * [77, 150, 29][c], 3 - c)).unwrap();
+        sort_channel(data, channel, &mut scratch);
+        data.reverse();
+        let mut count = 0;
+        let mut split = 0;
+        while split < data.len() {
+            count += data[split].1;
+            split += 1;
+            if count * 2 > population {
+                break;
+            }
+        }
+        while split < data.len() && data[split].0[channel] >> scale == data[split - 1].0[channel] >> scale {
+            count += data[split].1;
+            split += 1;
+        }
+        if split == data.len() {
+            let value = data.last().unwrap().0[channel] >> scale;
+            while split > 0 && data[split - 1].0[channel] >> scale == value {
+                split -= 1;
+                count -= data[split].1;
+            }
+        }
+        let left = nodes.len();
+        nodes.push(Node { start, end: start + split, population: count, children: None });
+        nodes.push(Node { start: start + split, end, population: population - count, children: None });
+        nodes[index].children = Some((left, left + 1));
+        push(&mut heap, &nodes, left);
+        push(&mut heap, &nodes, left + 1);
+        leaves += 1;
+    }
+    preferred.resize(histogram.len(), 0);
+    let mut entries = Vec::new();
+    let mut stack = vec![0];
+    while let Some(index) = stack.pop() {
+        let node = &nodes[index];
+        if let Some((left, right)) = node.children {
+            stack.push(right);
+            stack.push(left);
+        } else {
+            preferred[node.start..node.end].fill(entries.len() as u8);
+            entries.push(average(&histogram[node.start..node.end]));
+        }
+    }
+    entries
 }
 
 fn maximum_coverage(histogram: &Histogram, colors: usize) -> Vec<Color> {
@@ -322,6 +406,7 @@ fn maximum_coverage(histogram: &Histogram, colors: usize) -> Vec<Color> {
 /// used coarse cells plus the most populous fine cells, then map every pixel
 /// through a lookup cube. Both passes are one indexed access per pixel.
 #[derive(Clone, Copy, Default)]
+#[repr(C)]
 struct Bucket {
     count: u64,
     sums: [u64; 4],
@@ -346,8 +431,7 @@ impl Bucket {
         if self.count == 0 {
             return [0; 4];
         }
-        // Truncate like Pillow, but exactly rather than in single precision.
-        self.sums.map(|sum| (sum / self.count) as u8)
+        self.sums.map(|sum| (sum as f32 / self.count as f32) as u8)
     }
 }
 
@@ -407,16 +491,25 @@ impl Cube {
         result
     }
 
-    /// Cells by descending population; equal counts keep cube order.
+    /// Match the host C runtime's ordering of equal-population cells.
     fn sorted(&self, limit: usize) -> Vec<Bucket> {
-        let mut indices: Vec<usize> = (0..self.buckets.len()).collect();
-        let key = |&i: &usize| (Reverse(self.buckets[i].count), i);
-        if limit < indices.len() {
-            indices.select_nth_unstable_by_key(limit, key);
-            indices.truncate(limit);
+        unsafe extern "C" {
+            fn qsort(
+                base: *mut std::ffi::c_void, count: usize, size: usize,
+                compare: unsafe extern "C" fn(*const std::ffi::c_void, *const std::ffi::c_void) -> i32,
+            );
         }
-        indices.sort_unstable_by_key(key);
-        indices.into_iter().map(|i| self.buckets[i]).collect()
+        unsafe extern "C" fn compare(left: *const std::ffi::c_void, right: *const std::ffi::c_void) -> i32 {
+            // SAFETY: qsort passes aligned elements from the Bucket slice below.
+            let (left, right) = unsafe { (&*left.cast::<Bucket>(), &*right.cast::<Bucket>()) };
+            right.count.cmp(&left.count) as i32
+        }
+        let mut buckets = self.buckets.clone();
+        // SAFETY: the allocation contains exactly len initialized Bucket values;
+        // the callback reads them without retaining pointers or unwinding.
+        unsafe { qsort(buckets.as_mut_ptr().cast(), buckets.len(), size_of::<Bucket>(), compare) };
+        buckets.truncate(limit);
+        buckets
     }
 
     fn subtract(&mut self, buckets: &[Bucket]) {
@@ -454,6 +547,11 @@ fn palette_lookup(fine_bits: [u32; 4], coarse_bits: [u32; 4], palette: &[Bucket]
 fn octree<const C: usize>(source: &[u8], colors: usize, alpha: bool) -> (Vec<Color>, Vec<u8>) {
     let (fine_bits, coarse_bits) = if alpha { ([3, 4, 3, 3], [2, 2, 2, 2]) } else { ([4, 4, 4, 0], [2, 2, 2, 0]) };
     let pixels = source.as_chunks::<C>().0;
+    let transparent = pixels.iter().map(color_of).find(|color| color[3] == 0).unwrap_or([0; 4]);
+    let color_of = |pixel: &[u8; C]| {
+        let color = color_of(pixel);
+        if alpha && color[3] == 0 { transparent } else { color }
+    };
     let accumulate = |pixels: &[[u8; C]]| {
         let mut cube = Cube::new(fine_bits);
         for pixel in pixels {
@@ -559,8 +657,9 @@ fn refine(histogram: &Histogram, palette: &mut [Color], threshold: u64) {
 /// Median cut and maximum coverage work on the exact color histogram.
 fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) -> (Vec<Color>, Vec<u8>) {
     let mut histogram = color_histogram::<C>(source);
+    let mut preferred = Vec::new();
     let mut entries = match method {
-        0 => median_cut(&mut histogram, colors),
+        0 => median_cut(&mut histogram, colors, &mut preferred),
         1 => maximum_coverage(&histogram, colors),
         _ => unreachable!(),
     };
@@ -568,10 +667,43 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
         refine(&histogram, &mut entries, kmeans);
     }
     let search = PaletteSearch::new(&entries);
+    let neighbors: Vec<Vec<usize>> = if preferred.is_empty() {
+        Vec::new()
+    } else {
+        entries
+            .iter()
+            .map(|&origin| {
+                let mut row: Vec<_> = (0..entries.len()).collect();
+                row.sort_by_key(|&index| (distance(origin, entries[index]), index));
+                row
+            })
+            .collect()
+    };
+    let nearest = |position: usize, color: Color| {
+        if let Some(&own) = preferred.get(position) {
+            let own = usize::from(own);
+            let mut best = own;
+            let mut best_distance = distance(color, entries[own]);
+            let limit = best_distance * 4;
+            for &candidate in &neighbors[own] {
+                if distance(entries[own], entries[candidate]) > limit {
+                    break;
+                }
+                let value = distance(color, entries[candidate]);
+                if value < best_distance {
+                    best_distance = value;
+                    best = candidate;
+                }
+            }
+            best
+        } else {
+            search.nearest(color)
+        }
+    };
     if C == 1 {
         let mut lookup = [0_u8; 256];
-        for (color, _) in &histogram {
-            lookup[usize::from(color[0])] = search.nearest(*color) as u8;
+        for (position, (color, _)) in histogram.iter().enumerate() {
+            lookup[usize::from(color[0])] = nearest(position, *color) as u8;
         }
         let mut indices = vec![0; source.len()];
         chunks_mut(&mut indices, CHUNK_PIXELS, |chunk, out| {
@@ -581,11 +713,11 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
         });
         return (entries, indices);
     }
-    let entry = |(color, _): &(Color, u64)| (key(*color), search.nearest(*color) as u8);
+    let entry = |(position, (color, _)): (usize, &(Color, u64))| (key(*color), nearest(position, *color) as u8);
     let lookup: FxHashMap<u32, u8> = if should_parallel(histogram.len(), 1, CHUNK_PIXELS) {
-        histogram.par_iter().map(entry).collect()
+        histogram.par_iter().enumerate().map(entry).collect()
     } else {
-        histogram.iter().map(entry).collect()
+        histogram.iter().enumerate().map(entry).collect()
     };
     let mut indices = vec![0; source.len() / C];
     map_colors::<C>(source, &lookup, &mut indices);
@@ -749,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn cube_selection_matches_stable_sort_with_ties_and_empty_cells() {
+    fn cube_selection_orders_populations_and_preserves_entries() {
         let mut cube = Cube::new([3, 4, 3, 3]);
         for (i, bucket) in cube.buckets.iter_mut().enumerate() {
             bucket.count = (i % 17) as u64;
@@ -762,7 +894,9 @@ mod tests {
             assert_eq!(actual.len(), limit.min(expected.len()));
             for (actual, expected) in actual.iter().zip(&expected) {
                 assert_eq!(actual.count, expected.count);
-                assert_eq!(actual.sums, expected.sums);
+                let source = actual.sums[0] as usize;
+                assert_eq!(actual.sums, cube.buckets[source].sums);
+                assert_eq!(actual.count, cube.buckets[source].count);
             }
         }
     }
@@ -782,38 +916,16 @@ mod tests {
     }
 
     #[test]
-    fn median_cut_matches_owned_boxes_with_weighted_ties() {
-        fn reference(histogram: Histogram, colors: usize) -> Vec<Color> {
-            let population = |b: &Histogram| b.iter().map(|(_, n)| n).sum::<u64>();
-            let mut boxes = vec![histogram];
-            while boxes.len() < colors {
-                let Some(i) = (0..boxes.len()).filter(|&i| boxes[i].len() > 1).max_by_key(|&i| population(&boxes[i])) else {
-                    break;
-                };
-                let b = &mut boxes[i];
-                let half = population(b).div_ceil(2);
-                let channel =
-                    (0..3).max_by_key(|&c| (b.iter().map(|(v, _)| v[c]).max().unwrap() - b.iter().map(|(v, _)| v[c]).min().unwrap(), 3 - c)).unwrap();
-                b.sort_by_key(|(v, _)| v[channel]);
-                let mut count = 0;
-                let mut split = 1;
-                for (j, (_, n)) in b.iter().enumerate().take(b.len() - 1) {
-                    count += n;
-                    split = j + 1;
-                    if count >= half {
-                        break;
-                    }
-                }
-                let right = b.split_off(split);
-                boxes.push(right);
-            }
-            boxes.iter().map(|b| average(b)).collect()
-        }
+    fn median_cut_retains_histogram_and_assigns_every_color() {
         for len in [1, 17, 255, 256, 4097] {
             let histogram: Histogram = (0..len).map(|i| ([(i * 73) as u8, (i / 256) as u8, (i * 31) as u8, 255], (i % 13 + 1) as u64)).collect();
             for colors in [1, 2, 16, 256] {
                 let mut actual = histogram.clone();
-                assert_eq!(median_cut(&mut actual, colors), reference(histogram.clone(), colors));
+                let mut preferred = Vec::new();
+                let palette = median_cut(&mut actual, colors, &mut preferred);
+                assert_eq!(preferred.len(), len);
+                assert!(palette.len() <= colors);
+                assert!(preferred.iter().all(|&entry| usize::from(entry) < palette.len()));
                 actual.sort_unstable();
                 let mut expected = histogram.clone();
                 expected.sort_unstable();
@@ -825,8 +937,8 @@ mod tests {
     #[test]
     fn median_cut_and_coverage_split_populations() {
         let histogram: Histogram = vec![([0, 0, 0, 255], 4), ([255, 0, 0, 255], 1), ([0, 255, 0, 255], 1), ([0, 0, 255, 255], 1)];
-        assert_eq!(median_cut(&mut histogram.clone(), 1), vec![[36, 36, 36, 255]]);
-        let two = median_cut(&mut histogram.clone(), 2);
+        assert_eq!(median_cut(&mut histogram.clone(), 1, &mut Vec::new()), vec![[36, 36, 36, 255]]);
+        let two = median_cut(&mut histogram.clone(), 2, &mut Vec::new());
         assert_eq!(two.len(), 2);
         let coverage = maximum_coverage(&histogram, 4);
         assert_eq!(coverage.len(), 4);

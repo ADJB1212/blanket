@@ -6,6 +6,22 @@ from PIL import Image as PILImage, ImageDraw as PILDraw
 from blanket import Image, ImageDraw
 
 
+def test_palette_drawing_reuses_unused_ink_after_single_point_line() -> None:
+    palette = bytes(value for i in range(249) for value in (i, i, i)) + bytes(21)
+    actual = Image.frombytes("P", (249, 1), bytes(range(249)))
+    expected = PILImage.frombytes("P", (249, 1), bytes(range(249)))
+    for module, image in ((ImageDraw, actual), (PILDraw, expected)):
+        image.putpalette(palette)
+        draw = module.Draw(image)
+        draw.line((0, 0), fill=(255, 0, 0))
+        assert len(image.palette.colors) == 250
+        draw.point((0, 0), fill=(0, 0, 255))
+        assert len(image.palette.colors) == 250
+        assert (255, 0, 0) not in image.palette.colors
+    assert actual.getpalette() == expected.getpalette()
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("blend", [False, True])
 @pytest.mark.parametrize("width", [1, 2, 5, 11])

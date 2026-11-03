@@ -157,10 +157,31 @@ fn write_metadata_buffer(data: Cow<'_, [u8]>, format: &str, exif: &[u8], xmp: &[
     let tiff = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
     match format {
         "JPEG" => {
+            let data = if let Some((_, density, _)) = chunks.iter().find(|(kind, _, _)| kind == b"JFIF") {
+                if density.len() != 4 {
+                    return Err(PyValueError::new_err("invalid JPEG density"));
+                }
+                let x = u16::from_be_bytes([density[0], density[1]]);
+                let y = u16::from_be_bytes([density[2], density[3]]);
+                Cow::Owned(rewrite::jpeg(&data, false, false, false, false, Some((f64::from(x), f64::from(y))), false)?)
+            } else {
+                data
+            };
             let mut output = Vec::with_capacity(data.len() + exif.len() + xmp.len() + icc.len() + 64 + icc.len().div_ceil(65519) * 18);
             output.extend_from_slice(&data[..2]);
             if !exif.is_empty() {
-                jpeg_segment(&mut output, 0xe1, b"Exif\0\0", tiff)?;
+                if exif.starts_with(b"Exif\0\0") || exif.starts_with(b"II") || exif.starts_with(b"MM") {
+                    jpeg_segment(&mut output, 0xe1, b"Exif\0\0", tiff)?;
+                } else {
+                    jpeg_segment(&mut output, 0xe1, &[], exif)?;
+                }
+            }
+            for (kind, payload, _) in chunks {
+                match kind.as_slice() {
+                    b"COM" => jpeg_segment(&mut output, 0xfe, &[], payload)?,
+                    b"JFIF" => {}
+                    _ => return Err(PyValueError::new_err("invalid JPEG metadata chunk")),
+                }
             }
             if !xmp.is_empty() {
                 jpeg_segment(&mut output, 0xe1, b"http://ns.adobe.com/xap/1.0/\0", xmp)?;

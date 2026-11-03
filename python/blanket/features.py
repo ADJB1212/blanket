@@ -15,7 +15,7 @@ from ._blanket import _feature_info
 if TYPE_CHECKING:
     from typing import TextIO
 
-__all__ = ["EncodingCapabilities", "blanketinfo", "check", "check_module", "encoding_capabilities", "get_supported", "pilinfo", "version"]
+__all__ = ["EncodingCapabilities", "blanketinfo", "check", "check_codec", "check_module", "encoding_capabilities", "get_supported", "pilinfo", "version", "version_codec"]
 
 
 @dataclass(frozen=True)
@@ -248,6 +248,20 @@ def version(feature: str) -> str | None:
     """
     info = _info(feature)
     return info[1] if info is not None and info[0] else None
+
+
+def check_codec(codec: str) -> bool:
+    """Return availability for a Pillow codec identifier."""
+    if codec not in ("jpg", "jpg_2000", "zip", "libtiff"):
+        raise ValueError(f"Unknown codec {codec}")
+    return check("png" if codec == "zip" else codec)
+
+
+def version_codec(codec: str) -> str | None:
+    """Return the native backend version for a Pillow codec identifier."""
+    if not check_codec(codec):
+        return None
+    return version("png" if codec == "zip" else codec)
 
 
 def get_supported() -> list[str]:

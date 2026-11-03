@@ -31,12 +31,9 @@ impl CanvasSample for u8 {
     }
     fn over(src: [Self; 4], dst: &mut [Self; 4]) {
         let sa = u32::from(src[3]);
-        let da = u32::from(dst[3]);
-        let alpha = sa * 255 + da * (255 - sa);
-        for c in 0..3 {
-            dst[c] = (u32::from(src[c]) * sa * 255 + u32::from(dst[c]) * da * (255 - sa) + alpha / 2).checked_div(alpha).unwrap_or(0) as u8;
+        for c in 0..4 {
+            dst[c] = ((u32::from(src[c]) * sa + u32::from(dst[c]) * (255 - sa) + 127) / 255) as u8;
         }
-        dst[3] = ((alpha + 127) / 255) as u8;
     }
 }
 
@@ -105,11 +102,17 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, String>
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(|e| e.to_string())?;
     let Some(animation) = reader.info().animation_control else {
-        if reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One {
+        if reader.info().color_type == png::ColorType::Indexed
+            || reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One
+        {
             return super::decode_png(data).map(Sequence::single);
         }
         return super::decode_png_reader(reader, false).map(Sequence::single);
     };
+    if reader.info().color_type == png::ColorType::Indexed {
+        let reader = super::decoder(data).read_info().map_err(|error| error.to_string())?;
+        return decode_animation::<u8>(reader, animation, target);
+    }
     if reader.info().bit_depth == png::BitDepth::Sixteen {
         decode_animation::<u16>(reader, animation, target)
     } else {
@@ -121,6 +124,10 @@ fn decode_animation<T: CanvasSample>(
     mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl, target: Option<usize>,
 ) -> Result<Sequence, String> {
     let (width, height) = (reader.info().width, reader.info().height);
+    let color_type = reader.info().color_type;
+    let bit_depth = reader.info().bit_depth;
+    let palette = reader.info().palette.as_deref().map(<[u8]>::to_vec);
+    let alpha = reader.info().trns.as_deref().map(<[u8]>::to_vec);
     let default_image = reader.info().frame_control.is_none();
     let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
     if count == 0 {
@@ -155,7 +162,7 @@ fn decode_animation<T: CanvasSample>(
         let channels = output.color_type.samples();
         let max = T::MAX_SAMPLE;
         let bytes = size_of::<T>();
-        let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over);
+        let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over) && frame_index != u32::from(default_image);
         for row in 0..output.height as usize {
             if !over && output.color_type == png::ColorType::Rgba {
                 let start = row * output.width as usize * 4 * bytes;
@@ -171,13 +178,19 @@ fn decode_animation<T: CanvasSample>(
                     png::ColorType::GrayscaleAlpha => [sample(0), sample(0), sample(0), sample(1)],
                     png::ColorType::Rgb => [sample(0), sample(1), sample(2), T::value(max)],
                     png::ColorType::Rgba => [sample(0), sample(1), sample(2), sample(3)],
-                    png::ColorType::Indexed => return Err("unexpanded APNG palette".into()),
+                    png::ColorType::Indexed => {
+                        let bits = output.bit_depth as usize;
+                        let index = (buffer[row * output.line_size + col * bits / 8] >> (8 - bits - col * bits % 8)) & ((1u16 << bits) - 1) as u8;
+                        let value = T::value(u64::from(index));
+                        let alpha = alpha.as_deref().and_then(|values| values.get(usize::from(index))).copied().unwrap_or(255);
+                        [value, value, value, T::value(u64::from(alpha))]
+                    }
                 };
                 let dst = &mut canvas[(y as usize + row) * width as usize + x as usize + col];
-                if !over || src[3].into() == max || (dst[3].into() == 0 && src[3].into() != 0) {
+                if !over || src[3].into() == max || (bytes == 2 && dst[3].into() == 0 && src[3].into() != 0) {
                     *dst = src;
                 } else if src[3].into() == 0 {
-                    if dst[3].into() == 0 {
+                    if bytes == 2 && dst[3].into() == 0 {
                         *dst = [zero; 4];
                     }
                 } else {
@@ -186,13 +199,35 @@ fn decode_animation<T: CanvasSample>(
             }
         }
         if target.is_none_or(|target| target == frame_index as usize) {
-            let pixels = T::pack(&canvas);
-            let image = if bytes == 2 {
+            let mut pixels = T::pack(&canvas);
+            let mode = if bytes == 2 {
+                PixelMode::Rgba
+            } else {
+                match color_type {
+                    png::ColorType::Grayscale if bit_depth == png::BitDepth::One => PixelMode::One,
+                    png::ColorType::Grayscale | png::ColorType::Indexed => PixelMode::L,
+                    png::ColorType::GrayscaleAlpha => PixelMode::La,
+                    png::ColorType::Rgb => PixelMode::Rgb,
+                    png::ColorType::Rgba => PixelMode::Rgba,
+                }
+            };
+            if mode != PixelMode::Rgba {
+                let channels: &[usize] = match mode {
+                    PixelMode::La => &[0, 3],
+                    PixelMode::Rgb => &[0, 1, 2],
+                    _ => &[0],
+                };
+                pixels = pixels.as_chunks::<4>().0.iter().flat_map(|pixel| channels.iter().map(move |&channel| pixel[channel])).collect();
+            }
+            let mut image = if bytes == 2 {
                 Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
             } else {
-                Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("PNG".into()))
+                Image::from_pixels(width, height, mode, pixels, Some("PNG".into()))
             }
             .map_err(|e| e.to_string())?;
+            if color_type == png::ColorType::Indexed {
+                image.palette = Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?));
+            }
             sequence.frames.push(Frame {
                 image,
                 duration: control.map(|c| f64::from(c.delay_num) / f64::from(if c.delay_den == 0 { 100 } else { c.delay_den }) * 1000.0),
@@ -261,12 +296,60 @@ fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
 }
 
 pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
+    let size = (
+        sequence.frames.iter().map(|frame| frame.image.borrow().width).max().unwrap(),
+        sequence.frames.iter().map(|frame| frame.image.borrow().height).max().unwrap(),
+    );
+    encode_sequence_regions(sequence, options, size, &vec![(0, 0); sequence.frames.len()])
+}
+
+pub fn encode_sequence_regions(
+    sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions, size: (u32, u32), offsets: &[(u32, u32)],
+) -> PyResult<Vec<u8>> {
     let first = sequence.frames[0].image.borrow();
     let mut output = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut output, first.width, first.height);
-        encoder.set_color(png::ColorType::Rgba);
-        encoder.set_depth(if first.bit_depth > 8 { png::BitDepth::Sixteen } else { png::BitDepth::Eight });
+        let mut encoder = png::Encoder::new(&mut output, size.0, size.1);
+        encoder.set_color(if first.palette.is_some() {
+            png::ColorType::Indexed
+        } else {
+            match first.mode {
+                PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
+                PixelMode::La => png::ColorType::GrayscaleAlpha,
+                PixelMode::Rgb => png::ColorType::Rgb,
+                _ => png::ColorType::Rgba,
+            }
+        });
+        if let Some((mode, entries)) = &first.palette {
+            let mut rgb = Vec::new();
+            let mut alpha = Vec::new();
+            for entry in entries.chunks_exact(mode.channels()) {
+                rgb.extend_from_slice(&entry[..3]);
+                if *mode == PixelMode::Rgba {
+                    alpha.push(entry[3]);
+                }
+            }
+            let required = sequence
+                .frames
+                .iter()
+                .map(|frame| frame.image.borrow().pixel_data().map(|pixels| pixels.iter().copied().max().unwrap_or(0)))
+                .collect::<PyResult<Vec<_>>>()?
+                .into_iter()
+                .max()
+                .unwrap_or(0);
+            rgb.resize(rgb.len().max((usize::from(required) + 1) * 3), 0);
+            encoder.set_palette(rgb);
+            if !alpha.is_empty() {
+                encoder.set_trns(alpha);
+            }
+        }
+        encoder.set_depth(if first.bit_depth > 8 {
+            png::BitDepth::Sixteen
+        } else if first.mode == PixelMode::One {
+            png::BitDepth::One
+        } else {
+            png::BitDepth::Eight
+        });
         encoder
             .set_animated(
                 u32::try_from(sequence.frames.len() - usize::from(sequence.default_image)).map_err(codec_error)?,
@@ -283,6 +366,9 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
         let mut pixels = Vec::new();
         for (i, frame) in sequence.frames.iter().enumerate() {
             let image = frame.image.borrow();
+            writer.reset_frame_position().map_err(codec_error)?;
+            writer.set_frame_dimension(image.width, image.height).map_err(codec_error)?;
+            writer.set_frame_position(offsets[i].0, offsets[i].1).map_err(codec_error)?;
             if !(sequence.default_image && i == 0) {
                 let duration = frame.duration.unwrap_or(0.0);
                 let (num, den) = frame_delay(duration)?;
@@ -299,6 +385,9 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
                 pixels.resize(raw.len(), 0);
                 blanket_core::simd::samples_to_be16(raw, &mut pixels, image.bit_depth);
                 writer.write_image_data(&pixels).map_err(codec_error)?;
+            } else if image.mode == PixelMode::One {
+                let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, image.width as usize, image.height as usize);
+                writer.write_image_data(&packed).map_err(codec_error)?;
             } else {
                 writer.write_image_data(image.pixel_data()?).map_err(codec_error)?;
             }
@@ -313,7 +402,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn animated_sources_expand_at_each_sample_width() {
+    fn animated_sources_preserve_modes_and_sample_widths() {
         for wide in [false, true] {
             let samples = if wide { [0x1234_u16, 0x4567, 0x89ab, 0xcdef] } else { [17, 81, 157, 239] };
             let max = if wide { 65535 } else { 255 };
@@ -338,10 +427,20 @@ mod tests {
                     _ => samples,
                 }
                 .repeat(17 * 3);
-                let expected: Vec<u8> =
-                    if wide { expected.iter().flat_map(|v| v.to_le_bytes()).collect() } else { expected.iter().map(|&v| v as u8).collect() };
+                let expected: Vec<u8> = if wide { expected.iter().flat_map(|v| v.to_le_bytes()).collect() } else { pixels };
                 let sequence = decode_sequence(&encoded).unwrap();
                 for frame in sequence.frames {
+                    let mode = if wide {
+                        PixelMode::Rgba
+                    } else {
+                        match color {
+                            png::ColorType::Grayscale => PixelMode::L,
+                            png::ColorType::GrayscaleAlpha => PixelMode::La,
+                            png::ColorType::Rgb => PixelMode::Rgb,
+                            _ => PixelMode::Rgba,
+                        }
+                    };
+                    assert_eq!(frame.image.mode, mode);
                     assert_eq!(frame.image.raw_data().unwrap(), expected);
                 }
             }

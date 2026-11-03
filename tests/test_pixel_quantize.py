@@ -3,11 +3,44 @@
 from __future__ import annotations
 
 from io import BytesIO
+from random import Random
 
 import pytest
 from PIL import Image as PillowImage
 
 from blanket import Image
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize("colors", [1, 2, 7, 16, 256])
+@pytest.mark.parametrize("size", [(17, 13), (129, 131)])
+def test_median_cut_matches_pillow(mode: str, colors: int, size: tuple[int, int]) -> None:
+    raw = Random(913).randbytes(size[0] * size[1] * len(mode))
+    actual = Image.frombytes(mode, size, raw).quantize(colors, method=0)
+    expected = PillowImage.frombytes(mode, size, raw).quantize(colors, method=0)
+    assert actual.getpalette() == expected.getpalette()
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("colors", [7, 256])
+def test_median_cut_reduces_large_color_histogram(colors: int) -> None:
+    size = (257, 263)
+    raw = Random(917).randbytes(size[0] * size[1] * 3)
+    actual = Image.frombytes("RGB", size, raw).quantize(colors, method=0)
+    expected = PillowImage.frombytes("RGB", size, raw).quantize(colors, method=0)
+    assert actual.getpalette() == expected.getpalette()
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("colors", [1, 2, 7, 16, 256])
+def test_octree_matches_pillow(mode: str, colors: int) -> None:
+    size = (129, 131)
+    raw = Random(914).randbytes(size[0] * size[1] * len(mode))
+    actual = Image.frombytes(mode, size, raw).quantize(colors, method=2)
+    expected = PillowImage.frombytes(mode, size, raw).quantize(colors, method=2)
+    assert actual.getpalette("RGBA") == expected.getpalette("RGBA")
+    assert actual.tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -126,7 +159,10 @@ def test_palette_roundtrip_and_geometry() -> None:
     decoded = PillowImage.open(BytesIO(output.getvalue()))
     assert decoded.mode == "P"
     assert decoded.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
-    assert Image.open(BytesIO(output.getvalue())).tobytes() == image.convert("RGBA").tobytes()
+    reloaded = Image.open(BytesIO(output.getvalue()))
+    assert reloaded.mode == decoded.mode == "P"
+    assert reloaded.tobytes() == decoded.tobytes()
+    assert reloaded.convert("RGBA").tobytes() == decoded.convert("RGBA").tobytes()
     with pytest.raises(ValueError):
         image.reduce(2)
     assert image.reduce(1).mode == "P"

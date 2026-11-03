@@ -145,7 +145,16 @@ class ImageDraw:
     def _ink(self, fill: Color) -> int | float | tuple[int, ...]:
         """Normalize an ink to native pixel values in the drawing mode."""
         if fill is None:
-            fill = 1 if self.mode in ("I", "F") else (0 if self.mode in ("1", "L", "P") else -1)
+            fill = 1 if self.mode in ("I", "F") else -1
+        if self.mode == "P" and not isinstance(fill, int):
+            palette = self.im.palette
+            if palette is None:
+                raise ValueError("image has no palette")
+            if isinstance(fill, str):
+                fill = tuple(color_pixel(fill, palette.mode))
+            ink = palette.getcolor(fill, self.im)
+            self.im._sync_palette()
+            return ink
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N", "P"):
             if isinstance(fill, str):
                 raise ValueError("drawing in this mode requires a numeric ink")
@@ -274,8 +283,8 @@ class ImageDraw:
     def line(self, xy: Coords, fill: Color = None, width: int = 0, joint: str | None = None) -> None:
         """Draw connected line segments through a sequence of coordinates.
 
-        Pixels outside the image are ignored. A one-coordinate sequence draws
-        a point; an empty sequence draws nothing. Wide strokes use rounded
+        Pixels outside the image are ignored. Fewer than two coordinates draw
+        nothing. Wide strokes use rounded
         caps and joins for both supported `joint` values.
 
         Args:
@@ -299,7 +308,11 @@ class ImageDraw:
             width = 1
         if not self.antialias:
             points = self._coords(xy)
-            draw_polygon(self.im._native, points, max(1, width), False, False, self._ink(fill), bool(self.blend))
+            ink = self._ink(fill)
+            if len(points) < 2:
+                self.im._native.load()
+                return
+            draw_polygon(self.im._native, points, max(1, width), False, False, ink, bool(self.blend))
             if joint == "curve" and width > 4:
                 for previous, point, following in zip(points, points[1:], points[2:], strict=False):
                     angles = [degrees(atan2(end[0] - start[0], start[1] - end[1])) % 360 for start, end in ((previous, point), (point, following))]
@@ -316,7 +329,12 @@ class ImageDraw:
                             gap.append((point[0] + (floor(dx) if dx > 0 else ceil(dx)), point[1] + (floor(dy) if dy > 0 else ceil(dy))))
                         self.line([gap[0], point, gap[1]], fill, 3)
             return
-        self._path(self._coords(xy), fill, width=max(1, width))
+        points = self._coords(xy)
+        if len(points) < 2:
+            self._ink(fill)
+            self.im._native.load()
+            return
+        self._path(points, fill, width=max(1, width))
 
     def pieslice(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an elliptical sector bounded by an arc and two radii.

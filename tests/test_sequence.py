@@ -42,7 +42,7 @@ def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     image.seek(0)
     assert "custom" not in image.info
     image.seek(2)
-    assert image.getpixel((0, 0)) == (50, 60, 70, 255)
+    assert image.convert("RGBA").getpixel((0, 0)) == (50, 60, 70, 255)
     assert image.info["custom"] == "third"
     for frame in (-1, 3, 100):
         with pytest.raises(EOFError):
@@ -54,7 +54,7 @@ def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     for operation in (lambda: image.seek(0), image.tell, image.load):
         with pytest.raises(ValueError, match="closed"):
             operation()
-    assert copied.getpixel((0, 0)) == (50, 60, 70, 255)
+    assert copied.convert("RGBA").getpixel((0, 0)) == (50, 60, 70, 255)
 
 
 def test_static_navigation_and_sequence_protocol() -> None:
@@ -108,7 +108,7 @@ def test_animation_interoperability(format: str, writer: str) -> None:
         expected.load()
         assert actual.info["duration"] == expected.info["duration"]
         if writer == "blanket":
-            assert actual.tobytes() == frames[i].tobytes()
+            assert actual.convert("RGBA").tobytes() == frames[i].convert("RGBA").tobytes()
 
 
 @pytest.mark.parametrize(("format", "disposal"), [("GIF", 1), ("GIF", 2), ("GIF", 3), ("PNG", 0), ("PNG", 1), ("PNG", 2)])
@@ -123,7 +123,7 @@ def test_partial_frames_and_disposal(format: str, disposal: int) -> None:
     for i in range(3):
         actual.seek(i)
         expected.seek(i)
-        assert actual.tobytes() == expected.convert("RGBA").tobytes()
+        assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 
 
 @pytest.mark.parametrize("writer", ["pillow", "blanket"])
@@ -310,7 +310,7 @@ def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -
         reopened = Image.open(stream)
         assert reopened.n_frames == 6
         for actual, frame in zip(ImageSequence.Iterator(reopened), expected * 2, strict=True):
-            assert actual.tobytes() == frame.tobytes()
+            assert actual.convert("RGBA").tobytes() == frame.convert("RGBA").tobytes()
             assert actual.info["duration"] == frame.info["duration"]
     for actual, frame in zip(ImageSequence.Iterator(source), expected, strict=True):
         assert actual.tobytes() == frame.tobytes()
@@ -372,12 +372,60 @@ def test_invalid_sequence_options_do_not_write(format: str, options: dict[str, o
     assert image.tell() == 1
 
 
-@pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])
+@pytest.mark.parametrize("format", ["GIF", "WEBP"])
 def test_animation_requires_matching_dimensions(format: str) -> None:
     output = BytesIO()
     with pytest.raises(ValueError, match="matching dimensions"):
         Image.new("RGB", (3, 2)).save(output, format, save_all=True, append_images=[Image.new("RGB", (2, 3))])
     assert not output.getvalue()
+
+
+@pytest.mark.parametrize("size", [(3, 2), (13, 11), (3, 11)])
+@pytest.mark.parametrize("disposal", [0, 1, 2])
+@pytest.mark.parametrize("blend", [0, 1])
+def test_apng_partial_frame_sizes_and_info_controls_match_pillow(size: tuple[int, int], disposal: int, blend: int) -> None:
+    streams = []
+    for module in (Image, PillowImage):
+        first = module.new("RGBA", (9, 7), "red")
+        first.info.update(disposal=disposal, blend=blend)
+        following = module.new("RGBA", size, (0, 255, 0, 127))
+        stream = BytesIO()
+        first.save(stream, "PNG", save_all=True, append_images=[following], duration=30)
+        streams.append(stream.getvalue())
+    actual = Image.open(BytesIO(streams[0]))
+    expected = PillowImage.open(BytesIO(streams[1]))
+    assert actual.n_frames == expected.n_frames == 2
+    canvas = (max(9, size[0]), max(7, size[1]))
+    for position in (0, 1, 0):
+        actual.seek(position)
+        expected.seek(position)
+        assert actual.size == expected.size == canvas
+        assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA"])
+@pytest.mark.parametrize("blend", [0, 1])
+def test_apng_modes_and_transparency_match_pillow(mode: str, blend: int) -> None:
+    colors = {"1": (0, 1), "L": (37, 191), "LA": ((37, 127), (191, 201)), "P": (0, 1), "RGB": ((37, 71, 113), (191, 17, 29)), "RGBA": ((37, 71, 113, 127), (191, 17, 29, 201))}[mode]
+    streams = []
+    for module in (Image, PillowImage):
+        frames = [module.new(mode, (13, 7), color) for color in colors]
+        if mode == "P":
+            for frame in frames:
+                frame.putpalette(bytes(range(256)) * 3)
+                frame.info["transparency"] = b"\x00\x7f"
+        stream = BytesIO()
+        frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], blend=blend, duration=30)
+        streams.append(stream.getvalue())
+    actual = Image.open(BytesIO(streams[0]))
+    expected = PillowImage.open(BytesIO(streams[1]))
+    for position in (0, 1, 0):
+        actual.seek(position)
+        expected = PillowImage.open(BytesIO(streams[1]))
+        expected.seek(position)
+        assert actual.mode == expected.mode == mode
+        assert actual.tobytes() == expected.tobytes()
+        assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 
 
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "TIFF"])
@@ -400,6 +448,11 @@ def test_apng_over_blending_retains_sample_precision(depth: int) -> None:
     image = Image.open(stream)
     image.seek(1)
     assert image.info["blend"] == 1
+    if depth == 8:
+        expected = PillowImage.open(BytesIO(stream.getvalue()))
+        expected.seek(1)
+        assert image.tobytes() == expected.tobytes()
+        return
     expected = (maximum // 2, 0, (maximum + 1) // 2, maximum)
     assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack("<4H", *expected))
 
@@ -421,6 +474,11 @@ def test_apng_over_blending_alpha_boundaries(depth: int) -> None:
     reopened = Image.open(stream)
     assert reopened.tobytes() == pack(background)
     reopened.seek(1)
+    if depth == 8:
+        expected = PillowImage.open(BytesIO(stream.getvalue()))
+        expected.seek(1)
+        assert reopened.tobytes() == expected.tobytes()
+        return
     expected = []
     for dst, src in zip(background, foreground, strict=True):
         alpha = src[3] * maximum + dst[3] * (maximum - src[3])

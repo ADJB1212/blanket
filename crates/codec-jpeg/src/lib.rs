@@ -86,6 +86,23 @@ pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
     JPEG_DECODER.with(|cache| with_codec(cache, decode::Decoder::new, |decoder| decoder.decode(data)))
 }
 
+pub fn decode_scaled(data: &[u8], scale: u32, mode: &str) -> Result<Image, String> {
+    if mode == "YCbCr" {
+        let header = inspect(data)?;
+        validate_dimensions(header.width, header.height)?;
+        let factor = libjpeg_turbo_rs::ScalingFactor::try_new(1, scale).map_err(|error| error.to_string())?;
+        let decoded = libjpeg_turbo_rs::Decoder::new(data)
+            .map_err(|error| error.to_string())?
+            .with_scale(factor)
+            .with_output_colorspace(libjpeg_turbo_rs::ColorSpace::YCbCr)
+            .decode_image()
+            .map_err(|error| error.to_string())?;
+        return Image::from_pixels(decoded.width as u32, decoded.height as u32, PixelMode::YCbCr, decoded.data, Some("JPEG".into()))
+            .map_err(|error| error.to_string());
+    }
+    JPEG_DECODER.with(|cache| with_codec(cache, decode::Decoder::new, |decoder| decoder.decode_scaled(data, scale, mode == "L")))
+}
+
 #[cfg(test)]
 fn decode_jpeg_with(decoder: &mut Decompressor, data: &[u8]) -> Result<Image, String> {
     let header = decoder.read_header(data).map_err(|error| error.to_string())?;

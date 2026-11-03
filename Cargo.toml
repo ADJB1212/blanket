@@ -124,6 +124,15 @@ strip = true
 codegen-units = 1
 incremental = true
 
+[profile.ci]
+inherits = "dev"
+incremental = false
+opt-level = 1
+debug = false
+split-debuginfo = "unpacked"
+lto = "off"
+codegen-units = 32
+
 [workspace.lints.rust]
 warnings = { level = "deny", priority = -1 }
 unused_mut = "deny"

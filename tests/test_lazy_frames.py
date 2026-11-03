@@ -46,7 +46,7 @@ def test_lazy_composition_matches_eager_and_pillow(format, options):
         eager.seek(i)
         pillow.seek(i)
         assert lazy.tobytes() == eager.tobytes()
-        assert lazy.tobytes() == pillow.convert("RGBA").tobytes()
+        assert lazy.convert("RGBA").tobytes() == pillow.convert("RGBA").tobytes()
         assert lazy.info == eager.info
         assert lazy.tell() == i
         assert list(lazy._lazy_frames.cache) == [i]
@@ -199,7 +199,7 @@ def test_lazy_iteration_saving_and_position_restoration(format):
         assert len(PdfParser.PdfParser(buf=stream.getvalue()).pages) == 3
     else:
         reopened = Image.open(stream)
-        assert [frame.tobytes() for frame in ImageSequence.Iterator(reopened)] == [frame.tobytes() for frame in frames]
+        assert [frame.convert("RGBA").tobytes() for frame in ImageSequence.Iterator(reopened)] == [frame.convert("RGBA").tobytes() for frame in frames]
 
     def fail(frame):
         raise RuntimeError("callback")

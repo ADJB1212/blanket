@@ -55,7 +55,7 @@ fn rewrite(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dpi: Option<(f64, f64)>, remove_resolution: bool) -> PyResult<Vec<u8>> {
+pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dpi: Option<(f64, f64)>, remove_resolution: bool) -> PyResult<Vec<u8>> {
     if !data.starts_with(b"\xff\xd8") {
         return Err(codec_error("invalid JPEG container"));
     }

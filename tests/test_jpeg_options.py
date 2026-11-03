@@ -9,6 +9,39 @@ from blanket import Image
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "CMYK"])
+@pytest.mark.parametrize("progressive", [False, True])
+def test_jpeg_header_attributes_match_pillow(mode: str, progressive: bool) -> None:
+    from blanket import JpegImagePlugin as BlanketJpeg
+
+    encoded = Image.new(mode, (17, 13), 37).encode("JPEG", quality=85, progressive=progressive)
+    actual = Image.open(BytesIO(encoded))
+    expected = PillowImage.open(BytesIO(encoded))
+    assert isinstance(actual, BlanketJpeg.JpegImageFile)
+    assert actual.__dict__["applist"] == expected.applist
+    assert actual.__dict__["app"] == expected.app
+    assert actual.__dict__["layer"] == expected.layer
+    assert actual.__dict__["quantization"] == expected.quantization
+    assert BlanketJpeg.get_sampling(actual) == JpegImagePlugin.get_sampling(expected)
+    for key in ("jfif", "jfif_version", "jfif_unit", "jfif_density", "adobe", "adobe_transform", "progressive", "progression"):
+        assert actual.info.get(key) == expected.info.get(key)
+
+
+@pytest.mark.parametrize("comment", [b"", None, "sample comment", b"sample comment", b"x" * 65533])
+@pytest.mark.parametrize("dpi", [(0, 0), (72.2, 300.4)])
+def test_jpeg_comment_and_density_roundtrip(comment: str | bytes | None, dpi: tuple[float, float]) -> None:
+    encoded = Image.new("RGB", (17, 13), "red").encode("JPEG", comment=comment, dpi=dpi)
+    actual = Image.open(BytesIO(encoded))
+    expected = PillowImage.open(BytesIO(encoded))
+    assert actual.info.get("comment") == expected.info.get("comment")
+    assert actual.info.get("dpi") == expected.info.get("dpi")
+    if comment:
+        output = actual.encode("JPEG")
+        assert PillowImage.open(BytesIO(output)).info["comment"] == expected.info["comment"]
+    with pytest.raises(ValueError, match="Comment is too long"):
+        Image.new("RGB", (1, 1)).encode("JPEG", comment=b"x" * 65534)
+
+
 def encode(image, **options):
     stream = BytesIO()
     image.save(stream, "JPEG", quality=85, **options)

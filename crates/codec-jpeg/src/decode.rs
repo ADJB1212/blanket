@@ -54,12 +54,24 @@ impl Decoder {
     }
 
     pub(super) fn decode(&mut self, data: &[u8]) -> Result<Image, String> {
+        self.decode_scaled(data, 1, false)
+    }
+
+    pub(super) fn decode_scaled(&mut self, data: &[u8], scale: u32, grayscale: bool) -> Result<Image, String> {
         let header = self.header(data)?;
-        let (width, height) = (header.width, header.height);
-        validate_dimensions(width, height)?;
+        validate_dimensions(header.width, header.height)?;
+        if !matches!(scale, 1 | 2 | 4 | 8) {
+            return Err("invalid JPEG scale".into());
+        }
+        // SAFETY: the decoder is live and the factor is supported by TurboJPEG.
+        if unsafe { raw::tj3SetScalingFactor(self.0, raw::tjscalingfactor { num: 1, denom: scale as i32 }) } != 0 {
+            return Err(self.error());
+        }
+        let (width, height) = (header.width.div_ceil(scale), header.height.div_ceil(scale));
         let (mode, format) = match header.mode {
             "L" => (PixelMode::L, raw::TJPF_TJPF_GRAY),
             "CMYK" => (PixelMode::Cmyk, raw::TJPF_TJPF_CMYK),
+            _ if grayscale => (PixelMode::L, raw::TJPF_TJPF_GRAY),
             _ => (PixelMode::Rgb, raw::TJPF_TJPF_RGB),
         };
         let pitch = (width as usize).checked_mul(mode.channels()).ok_or("JPEG row size overflow")?;

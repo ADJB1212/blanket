@@ -68,4 +68,4 @@ jobs:
           name: blanket-cuda-dev-linux-x86_64
           path: dist/*.whl
           if-no-files-found: error
-          retention-days: 2
+          retention-days: 1

@@ -4,7 +4,17 @@ import tracemalloc
 
 import pytest
 
+from blanket import Image, ImageOps
 from blanket._exif import read_metadata
+
+
+def test_exif_transpose_reload_uses_updated_metadata() -> None:
+    image = Image.new("RGB", (3, 2), "red")
+    image.info["xmp"] = b'<rdf:Description tiff:Orientation="3"/>'
+    assert image.getexif()[274] == 3
+    result = ImageOps.exif_transpose(image)
+    result._reload_exif()
+    assert 274 not in result.getexif()
 
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "JXL"])

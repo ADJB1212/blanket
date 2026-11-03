@@ -6,6 +6,8 @@ __lazy_modules__ = {"os", "collections.abc"}
 
 import math
 from collections.abc import Iterable
+from dataclasses import dataclass
+from fractions import Fraction
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -17,6 +19,69 @@ from ._exif import save_metadata
 from ._io import write_all
 from .errors import UnsupportedCodecError
 from .Image import Image, _bounded_int, _save_options
+
+
+@dataclass
+class _PngFrame:
+    image: Image
+    bbox: tuple[int, int, int, int] | None
+    duration: float
+    disposal: int
+    blend: int
+
+
+def _png_regions(
+    frames: list[Image], durations: list[float | int], disposals: list[float | int], blends: list[float | int], default_image: bool, duration_known: bool
+) -> tuple[list[Image], list[float], list[int], list[int], tuple[tuple[int, int], list[tuple[int, int]]]]:
+    """Adapt APNG deltas and repeated frames using native raster operations."""
+    from .ImageChops import subtract_modulo
+
+    canvas = (max(frame.width for frame in frames), max(frame.height for frame in frames))
+    records: list[_PngFrame] = []
+    for position in range(int(default_image), len(frames)):
+        frame = frames[position]
+        bbox = None
+        duration = float(durations[position])
+        disposal, blend = int(disposals[position]), int(blends[position])
+        if records:
+            previous = records[-1]
+            previous_disposal = 1 if previous.disposal == 2 and len(records) < 2 else previous.disposal
+            if previous_disposal == 1:
+                base = previous.image.copy()
+                base.paste(0, previous.bbox or (0, 0, *frames[0].size))
+            elif previous_disposal == 2:
+                base = records[-2].image
+            else:
+                base = previous.image
+            bbox = subtract_modulo(frame.convert("RGBA"), base.convert("RGBA")).getbbox(alpha_only=False)
+            combined = previous.duration + duration
+            if (
+                bbox is None
+                and previous_disposal == disposal
+                and previous.blend == blend
+                and duration_known
+                and math.isfinite(combined)
+                and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535
+            ):
+                previous.duration = combined
+                continue
+        records.append(_PngFrame(frame, bbox, duration, disposal, blend))
+    prepared = frames[: int(default_image)]
+    if default_image and prepared[0].size != canvas:
+        prepared[0] = prepared[0].crop((0, 0, *canvas))
+    offsets = [(0, 0)] * int(default_image)
+    for record in records:
+        prepared.append(record.image if record.bbox is None else record.image.crop(record.bbox))
+        offsets.append((0, 0) if record.bbox is None else record.bbox[:2])
+    if prepared[0].size != canvas:
+        prepared[0] = prepared[0].crop((0, 0, *canvas))
+    return (
+        prepared,
+        [0.0] * int(default_image) + [record.duration for record in records],
+        [0] * int(default_image) + [record.disposal for record in records],
+        [0] * int(default_image) + [record.blend for record in records],
+        (canvas, offsets),
+    )
 
 
 def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:
@@ -73,7 +138,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
 
     def array(name: str, default: int, maximum: int | None = None) -> list[float | int]:
         """Normalize a frame control, padding a separate APNG default image with zero."""
-        supplied = controls.get(name)
+        supplied = controls.get(name, image.info.get(name) if format == "PNG" and name != "duration" else None)
         if isinstance(supplied, (list, tuple)):
             if len(supplied) != count:
                 raise ValueError(f"{name} must have one value per animation frame")
@@ -101,6 +166,16 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     if loop is not None:
         loop = _bounded_int("loop", loop, 0, 65535 if format in ("GIF", "WEBP") else 0x7FFFFFFF)
     prepared: list[Image] = []
+    png_mode = "RGBA"
+    png_palette = None
+    if format == "PNG" and all(frame.bit_depth == 8 for frame in frames):
+        modes = {frame.mode for frame in frames}
+        png_mode = next((mode for mode in ("RGBA", "RGB", "P", "LA", "L", "1") if mode in modes), "RGBA")
+        indexed = [frame for frame in frames if frame.mode == "P"]
+        if indexed:
+            png_palette = indexed[0].palette
+            if any(frame.getpalette() != indexed[0].getpalette() for frame in indexed[1:]):
+                png_mode = "RGBA" if any(frame.palette is not None and frame.palette.mode == "RGBA" for frame in indexed) else "RGB"
     for frame in frames:
         if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):
             raise UnsupportedCodecError(f"cannot write mode {frame.mode} as {format}", format=format, operation="encode")
@@ -110,12 +185,29 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             target = (
                 frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
             )
+        elif format == "PNG":
+            target = png_mode
         else:
             target = "RGBA"
         if frame.bit_depth != 8 and format != "PNG" and frame.mode not in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             raise UnsupportedCodecError("high-bit-depth images require explicit conversion for this format", format=format, operation="encode")
         prepared.append(frame.convert(target) if frame.mode != target else frame)
-    encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"]))
+    regions = None
+    if format == "PNG" and prepared[0].bit_depth == 8:
+        prepared, durations, disposals, blends, regions = _png_regions(
+            prepared, durations, disposals, blends, default_image, "duration" in controls or any("duration" in frame.info for frame in frames)
+        )
+        if png_mode == "P" and png_palette is not None:
+            prepared[0] = prepared[0].copy()
+            prepared[0].putpalette(png_palette)
+            transparency = image.info.get("transparency")
+            if isinstance(transparency, int):
+                prepared[0]._native.set_palette_alpha(index=transparency)
+            elif isinstance(transparency, bytes):
+                prepared[0]._native.set_palette_alpha(alpha=transparency)
+    encoded = bytes(
+        _encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions)
+    )
     if any(metadata):
         encoded = _write_metadata(encoded, format, *metadata)
     if fp is None:

@@ -27,7 +27,7 @@ def test_jxl_rejects_oversized_header_before_pixel_decoding(container: bool) -> 
     data = bytes.fromhex("ff0afc7601fef90022")
     if container:
         data = b"\0\0\0\x0cJXL \r\n\x87\n\0\0\0\x14ftypjxl \0\0\0\0jxl " + (len(data) + 8).to_bytes(4, "big") + b"jxlc" + data
-    with pytest.raises(UnidentifiedImageError, match=r"192000000 pixels.*exceeds Blanket limit"):
+    with pytest.raises(UnidentifiedImageError, match=r"192000000 pixels.*exceeds (Blanket )?limit"):
         Image.open(BytesIO(data))
     with pytest.raises(OSError, match=r"192000000 pixels.*exceeds Blanket limit"):
         ImageFile.Parser().feed(data)
