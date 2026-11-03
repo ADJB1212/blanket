@@ -12,26 +12,13 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def test_split() -> None:
-    def split(mode: str) -> list[tuple[str, int, int]]:
-        layers = hopper(mode).split()
-        return [(i.mode, i.size[0], i.size[1]) for i in layers]
-
-    assert split("1") == [("1", 128, 128)]
-    assert split("L") == [("L", 128, 128)]
-    assert split("I") == [("I", 128, 128)]
-    assert split("F") == [("F", 128, 128)]
-    assert split("P") == [("P", 128, 128)]
-    assert split("RGB") == [("L", 128, 128), ("L", 128, 128), ("L", 128, 128)]
-    assert split("RGBA") == [("L", 128, 128), ("L", 128, 128), ("L", 128, 128), ("L", 128, 128)]
-    assert split("CMYK") == [("L", 128, 128), ("L", 128, 128), ("L", 128, 128), ("L", 128, 128)]
-    assert split("YCbCr") == [("L", 128, 128), ("L", 128, 128), ("L", 128, 128)]
-
-
 @pytest.mark.parametrize("mode", ("1", "L", "I", "F", "P", "RGB", "RGBA", "CMYK", "YCbCr"))
 def test_split_merge(mode: str) -> None:
-    expected = Image.merge(mode, hopper(mode).split())
-    assert_image_equal(hopper(mode), expected)
+    source = hopper(mode)
+    bands = source.split()
+    assert len(bands) == len(source.getbands())
+    assert all(band.mode == (mode if len(bands) == 1 else "L") and band.size == source.size for band in bands)
+    assert_image_equal(source, Image.merge(mode, bands))
 
 
 def test_split_open(tmp_path: Path) -> None:

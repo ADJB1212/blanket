@@ -10,6 +10,35 @@ from PIL import Image as Pillow
 from blanket import Image, UnidentifiedImageError
 
 
+@pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("method", [0, 1, 2, 3, 4, 5, 6, 7])
+@pytest.mark.parametrize("target", [(1, 1), (17, 9), (257, 65)])
+def test_float_color_resize_matches_independent_bands(mode: str, channels: int, method: int, target: tuple[int, int]) -> None:
+    values = [0.5 if i % channels == 3 else ((i * 17) % 97 - 48) / 13 for i in range(19 * 7 * channels)]
+    if method == 0:
+        values[:7] = [math.nan, math.inf, -math.inf, 0.5 if channels == 4 else -0.0, 0.0, 2.0, -1.0]
+    raw = struct.pack(f"<{len(values)}f", *values)
+    image = Image.frombytes(mode, (19, 7), raw)
+    box = (0.75, 1.25, 18.5, 6.75)
+    result = image.resize(target, method, box=box, premultiply_alpha=False)
+    bands = [band.resize(target, method, box=box).tobytes() for band in image.split()]
+    expected = b"".join(band[i : i + 4] for i in range(0, target[0] * target[1] * 4, 4) for band in bands)
+    assert result.tobytes() == expected
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("width", [2, 30, 32, 34, 66])
+def test_float_nearest_half_preserves_samples(mode: str, channels: int, width: int) -> None:
+    raw = struct.pack(f"<{width * 5 * channels}f", *(0.5 if i % channels == 3 else i / 17 for i in range(width * 5 * channels)))
+    image = Image.frombytes(mode, (width, 5), raw)
+    result = image.resize((width // 2, 10), Image.Resampling.NEAREST)
+    stride = channels * 4
+    expected = b"".join(raw[((y // 2) * width + x * 2 + 1) * stride : ((y // 2) * width + x * 2 + 2) * stride] for y in range(10) for x in range(width // 2))
+    assert result.tobytes() == expected
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
 @pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
 def test_float_masked_paste_clips_rows(mode: str, channels: int, mask_mode: str) -> None:

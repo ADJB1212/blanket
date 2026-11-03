@@ -126,6 +126,7 @@ def test_raw_buffers_match_pillow(mode, rawmode, subtests: pytest.Subtests):
                     stride = width * len(rawmode) + padding
                     args = (rawmode, stride, orientation)
                     encoded = actual.tobytes("raw", *args)
+                    assert isinstance(encoded, bytes)
                     assert encoded == expected.tobytes("raw", *args)
                     assert actual.tobytes("raw", args) == encoded
                     assert Image.frombytes(mode, size, encoded, "raw", *args).tobytes() == raw

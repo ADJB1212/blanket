@@ -22,6 +22,27 @@ def animation(format: str = "PNG", **options: object) -> Image.Image:
     return Image.open(stream)
 
 
+def test_apng_rgba_deltas_preserve_transparent_colors_and_sources() -> None:
+    first = Image.new("RGBA", (17, 9), (10, 20, 30, 0))
+    second = first.copy()
+    second.putpixel((16, 8), (40, 50, 60, 0))
+    third = second.copy()
+    third.putpixel((0, 0), (70, 80, 90, 128))
+    frames = [first, second, third, third.copy()]
+    originals = [frame.tobytes() for frame in frames]
+    stream = BytesIO()
+    first.save(stream, "PNG", save_all=True, append_images=frames[1:], duration=[10, 20, 30, 40], disposal=0, blend=0)
+    actual = Image.open(stream)
+    reference = PillowImage.open(stream)
+    assert actual.n_frames == reference.n_frames == 3
+    for position, duration in enumerate([10, 20, 70]):
+        actual.seek(position)
+        reference.seek(position)
+        assert actual.tobytes() == reference.tobytes() == originals[position]
+        assert actual.info["duration"] == reference.info["duration"] == duration
+    assert [frame.tobytes() for frame in frames] == originals
+
+
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])
 def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     image = animation(format, **({"lossless": True} if format == "WEBP" else {}))

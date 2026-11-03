@@ -22,6 +22,33 @@ def sequence_data(format="PNG", **options):
     return stream.getvalue()
 
 
+@pytest.mark.parametrize("format", ["PNG", "GIF", "WEBP"])
+def test_lazy_metadata_is_parsed_once_and_isolated_between_frames(format, monkeypatch):
+    import blanket._lazy_frames as module
+
+    original = module.read_metadata
+    calls = []
+
+    def read(data, format):
+        calls.append(format)
+        return {**original(data, format), "nested": {"values": [1, 2]}}
+
+    monkeypatch.setattr(module, "read_metadata", read)
+    image = Image.open(BytesIO(sequence_data(format)), lazy=True, frame_cache_size=2)
+    image.info["nested"]["values"].append(3)
+    image.seek(1)
+    assert image.info["nested"] == {"values": [1, 2]}
+    image.info["nested"]["values"].append(4)
+    image.seek(0)
+    assert image.info["nested"] == {"values": [1, 2, 3]}
+    image.seek(2)
+    image.seek(1)
+    assert image.info["nested"] == {"values": [1, 2]}
+    assert calls == [format]
+    image.close()
+    assert image._lazy_frames._metadata is None
+
+
 @pytest.mark.parametrize(
     ("format", "options"), [("GIF", {"disposal": 1}), ("GIF", {"disposal": 2}), ("GIF", {"disposal": 3}), ("PNG", {"disposal": 0}), ("PNG", {"disposal": 1}), ("PNG", {"disposal": 2}), ("PNG", {"blend": 1}), ("WEBP", {"lossless": True})]
 )

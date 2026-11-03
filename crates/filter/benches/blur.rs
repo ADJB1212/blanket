@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use blanket_bench_support::{fixture, sizes};
-use blanket_core::PixelMode;
+use blanket_core::{Image, PixelMode};
 use blanket_filter::filter::{filter_blur, filter_rank, filter_unsharp};
 use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use pyo3::Python;
@@ -46,5 +46,22 @@ fn high_depth_filters(c: &mut Criterion) {
     });
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = blur, high_depth_filters }
+fn integer_extrema(c: &mut Criterion) {
+    Python::attach(|py| {
+        let pixels = (0..512 * 512).flat_map(|i| ((i * 7919 % 4093) - 2046_i32).to_le_bytes()).collect();
+        let image = Image::from_integer_bytes(512, 512, PixelMode::I, pixels).unwrap();
+        let mut group = c.benchmark_group("integer-extrema");
+        group.throughput(Throughput::Elements(512 * 512));
+        for size in [3, 9, 31, 129] {
+            for (name, rank) in [("minimum", 0), ("maximum", size * size - 1)] {
+                group.bench_function(format!("{name}-{size}"), |b| {
+                    b.iter(|| filter_rank(py, black_box(&image), size, rank).unwrap());
+                });
+            }
+        }
+        group.finish();
+    });
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = blur, high_depth_filters, integer_extrema }
 criterion_main!(benches);

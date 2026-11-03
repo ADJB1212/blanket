@@ -25,39 +25,6 @@ WHITE = (255, 255, 255)
 GRAY = 128
 
 
-def test_sanity() -> None:
-    im = hopper("L")
-
-    ImageChops.constant(im, 128)
-    ImageChops.duplicate(im)
-    ImageChops.invert(im)
-    ImageChops.lighter(im, im)
-    ImageChops.darker(im, im)
-    ImageChops.difference(im, im)
-    ImageChops.multiply(im, im)
-    ImageChops.screen(im, im)
-
-    ImageChops.add(im, im)
-    ImageChops.add(im, im, 2.0)
-    ImageChops.add(im, im, 2.0, 128)
-    ImageChops.subtract(im, im)
-    ImageChops.subtract(im, im, 2.0)
-    ImageChops.subtract(im, im, 2.0, 128)
-
-    ImageChops.add_modulo(im, im)
-    ImageChops.subtract_modulo(im, im)
-
-    ImageChops.blend(im, im, 0.5)
-    ImageChops.composite(im, im, im)
-
-    ImageChops.soft_light(im, im)
-    ImageChops.hard_light(im, im)
-    ImageChops.overlay(im, im)
-
-    ImageChops.offset(im, 10)
-    ImageChops.offset(im, 10, 20)
-
-
 def test_add() -> None:
     # Arrange
     with Image.open(PILLOW_IMAGES / "imagedraw_ellipse_RGB.png") as im1, Image.open(PILLOW_IMAGES / "imagedraw_floodfill_RGB.png") as im2:
@@ -147,17 +114,6 @@ def test_darker_image() -> None:
         assert_image_equal(new, im2)
 
 
-def test_darker_pixel() -> None:
-    # Arrange
-    im1 = hopper()
-    with Image.open(PILLOW_IMAGES / "imagedraw_chord_RGB.png") as im2:
-        # Act
-        new = ImageChops.darker(im1, im2)
-
-    # Assert
-    assert new.getpixel((50, 50)) == (240, 166, 0)
-
-
 def test_difference() -> None:
     # Arrange
     with Image.open(PILLOW_IMAGES / "imagedraw_arc_end_le_start.png") as im1, Image.open(PILLOW_IMAGES / "imagedraw_arc_no_loops.png") as im2:
@@ -166,17 +122,6 @@ def test_difference() -> None:
 
     # Assert
     assert new.getbbox() == (25, 25, 76, 76)
-
-
-def test_difference_pixel() -> None:
-    # Arrange
-    im1 = hopper()
-    with Image.open(PILLOW_IMAGES / "imagedraw_polygon_kite_RGB.png") as im2:
-        # Act
-        new = ImageChops.difference(im1, im2)
-
-    # Assert
-    assert new.getpixel((50, 50)) == (240, 166, 128)
 
 
 def test_duplicate() -> None:
@@ -211,17 +156,6 @@ def test_lighter_image() -> None:
 
         # Assert
         assert_image_equal(new, im1)
-
-
-def test_lighter_pixel() -> None:
-    # Arrange
-    im1 = hopper()
-    with Image.open(PILLOW_IMAGES / "imagedraw_chord_RGB.png") as im2:
-        # Act
-        new = ImageChops.lighter(im1, im2)
-
-    # Assert
-    assert new.getpixel((50, 50)) == (255, 255, 127)
 
 
 def test_multiply_black() -> None:

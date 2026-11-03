@@ -53,7 +53,9 @@ def _png_regions(
                 base = records[-2].image
             else:
                 base = previous.image
-            bbox = subtract_modulo(frame.convert("RGBA"), base.convert("RGBA")).getbbox(alpha_only=False)
+            current_rgba = frame if frame.mode == "RGBA" else frame.convert("RGBA")
+            base_rgba = base if base.mode == "RGBA" else base.convert("RGBA")
+            bbox = subtract_modulo(current_rgba, base_rgba).getbbox(alpha_only=False)
             combined = previous.duration + duration
             if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
                 previous.duration = combined

@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use blanket_core::{Image, PixelMode};
 use rustc_hash::FxHashMap;
 
@@ -84,11 +86,11 @@ pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn strings(data: &[u8]) -> Result<Vec<Vec<u8>>, String> {
+fn strings(data: &[u8]) -> Result<Vec<Cow<'_, [u8]>>, String> {
     strings_until(data, usize::MAX)
 }
 
-fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
+fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Cow<'_, [u8]>>, String> {
     let mut result = Vec::new();
     let mut pos = 0;
     while pos < data.len() {
@@ -102,22 +104,26 @@ fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Vec<u8>>, String> {
             continue;
         }
         pos += 1;
-        let mut value = Vec::new();
+        let start = pos;
+        let mut value = None;
         while pos < data.len() && data[pos] != b'"' {
             if data[pos] == b'\\' {
+                value.get_or_insert_with(|| data[start..pos].to_vec());
                 pos += 1;
                 if pos == data.len() {
                     return Err("truncated XPM escape".into());
                 }
             }
-            value.push(data[pos]);
+            if let Some(value) = &mut value {
+                value.push(data[pos]);
+            }
             pos += 1;
         }
         if pos == data.len() {
             return Err("unterminated XPM string".into());
         }
+        result.push(value.map_or_else(|| Cow::Borrowed(&data[start..pos]), Cow::Owned));
         pos += 1;
-        result.push(value);
         if result.len() == limit {
             break;
         }

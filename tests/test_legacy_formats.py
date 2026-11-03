@@ -27,6 +27,53 @@ def patterned(mode: str, size: tuple[int, int] = (13, 7)) -> Image.Image:
     return result
 
 
+@pytest.mark.parametrize("depth", [8, 16])
+@pytest.mark.parametrize("channels", [1, 3, 4])
+@pytest.mark.parametrize("compressed", [False, True])
+def test_sgi_multiple_rows_and_planes(depth: int, channels: int, compressed: bool) -> None:
+    width, height = 17, 5
+    bpc = depth // 8
+    maximum = (1 << depth) - 1
+    header = bytearray(512)
+    struct.pack_into(">HBB4H", header, 0, 474, int(compressed), bpc, 2 if channels == 1 else 3, width, height, channels)
+    rows = []
+    expected = []
+    for c in range(channels):
+        for y in range(height):
+            values = [(c * 7919 + y * 997 + x * 31) & maximum for x in range(width)]
+            code = "B" if bpc == 1 else "H"
+            literal = struct.pack(f">{width}{code}", *values)
+            rows.append(struct.pack(f">{code}", 128 | width) + literal + bytes(bpc) if compressed else literal)
+    for y in range(height - 1, -1, -1):
+        for x in range(width):
+            expected.extend((c * 7919 + y * 997 + x * 31) & maximum for c in range(channels))
+    table = b""
+    if compressed:
+        offsets = []
+        offset = 512 + len(rows) * 8
+        for row in rows:
+            offsets.append(offset)
+            offset += len(row)
+        table = struct.pack(f">{len(rows) * 2}I", *offsets, *(len(row) for row in rows))
+    data = bytes(header) + table + b"".join(rows)
+    image = Image.open(BytesIO(data))
+    assert (image.mode, image.size) == ({1: "L", 3: "RGB", 4: "RGBA"}[channels], (width, height))
+    assert image.bit_depth == depth
+    assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack(f"<{len(expected)}H", *expected))
+    if depth == 8:
+        assert image.tobytes() == PillowImage.open(BytesIO(data)).tobytes()
+    with pytest.raises(UnidentifiedImageError):
+        Image.open(BytesIO(data[:-2]))
+
+
+def test_xpm_escaped_keys_comments_and_rows() -> None:
+    data = b'/* XPM */\nstatic char *im[] = {"3 2 2 1", /* "ignored" */ "\\\\ c #ff0000", "\\" c #0022ff", "\\\\\\"\\\\", "\\"\\\\\\""};'
+    image = Image.open(BytesIO(data))
+    assert image.mode == "RGB"
+    assert image.size == (3, 2)
+    assert image.getdata() == [(255, 0, 0), (0, 34, 255), (255, 0, 0), (0, 34, 255), (255, 0, 0), (0, 34, 255)]
+
+
 @pytest.mark.parametrize(("format", "mode"), [("PCX", "1"), ("PCX", "L"), ("PCX", "P"), ("PCX", "RGB"), ("SGI", "L"), ("SGI", "RGB"), ("SGI", "RGBA"), ("XBM", "1"), ("MSP", "1")])
 def test_legacy_interoperability(format: str, mode: str, subtests: pytest.Subtests) -> None:
     for size in [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)]:
@@ -83,7 +130,7 @@ def test_pcx_literal_spans_and_runs(mode: str, subtests: pytest.Subtests) -> Non
                     assert actual.convert("RGB").tobytes() == pillow.convert("RGB").tobytes()
 
 
-@pytest.mark.parametrize("payload", [b"", b"\xc0\x01", b"\xc3\x01", b"\xc1", b"\x01", b"\x01\xc1"])
+@pytest.mark.parametrize("payload", [b"", b"\xc0\x01", b"\xc3\x01", b"\xff\x07", b"\xc1", b"\x01", b"\x01\xc1"])
 def test_pcx_rejects_invalid_runs_and_truncated_literals(payload: bytes) -> None:
     header = bytearray(128)
     header[:4] = b"\x0a\x05\x01\x08"
@@ -189,25 +236,6 @@ def test_sun_stride_channels_and_rle(depth: int, subtests: pytest.Subtests) -> N
                 assert actual.tobytes() == expected.tobytes()
 
 
-def test_sgi_rle_planes() -> None:
-    header = bytearray(512)
-    struct.pack_into(">HBB4H", header, 0, 474, 1, 1, 3, 3, 2, 3)
-    rows = [bytes([0x83, i, i + 1, i + 2, 0]) for i in range(6)]
-    data = bytes(header) + struct.pack(">6I", *[560 + i * 5 for i in range(6)]) + struct.pack(">6I", *[5] * 6) + b"".join(rows)
-    actual = Image.open(BytesIO(data))
-    assert actual.tobytes() == PillowImage.open(BytesIO(data)).tobytes()
-
-
-def test_sgi_16bit_samples() -> None:
-    header = bytearray(512)
-    struct.pack_into(">HBB4H", header, 0, 474, 0, 2, 3, 3, 2, 3)
-    values = [i * 3001 for i in range(18)]
-    actual = Image.open(BytesIO(bytes(header) + struct.pack(">18H", *values)))
-    expected = [values[c * 6 + y * 3 + x] for y in (1, 0) for x in range(3) for c in range(3)]
-    assert (actual.mode, actual.bit_depth) == ("RGB", 16)
-    assert actual.tobytes() == struct.pack("<18H", *expected)
-
-
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "L"])
 def test_xpm_write_and_read(mode: str) -> None:
     source = patterned(mode)
@@ -273,16 +301,6 @@ def test_pcx_uncompressed_rows(bits: int, planes: int) -> None:
     else:
         expected = bytes(raw[(y * planes + c) * stride + x] for y in range(h) for x in range(w) for c in range(planes))
         assert (actual.mode, actual.size, actual.tobytes()) == ("RGB" if planes == 3 else "L", (w, h), expected)
-
-
-@pytest.mark.parametrize("run", [b"\xc0\x07", b"\xff\x07", b"\xc1"])
-def test_pcx_invalid_run(run: bytes) -> None:
-    header = bytearray(128)
-    header[:4] = bytes([10, 5, 1, 8])
-    header[65] = 1
-    struct.pack_into("<H", header, 66, 2)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(bytes(header) + run))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "P"])

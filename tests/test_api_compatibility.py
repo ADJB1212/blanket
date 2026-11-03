@@ -12,8 +12,7 @@ from blanket import Image, ImageDraw
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
-@pytest.mark.parametrize("target", ["1", "P", "L", "RGB", "LA", "La", "RGBA", "RGBa"])
-@pytest.mark.parametrize("dither", [Image.Dither.NONE, Image.Dither.FLOYDSTEINBERG])
+@pytest.mark.parametrize(("target", "dither"), [(target, dither) for target in ("1", "P", "L", "RGB", "LA", "La", "RGBA", "RGBa") for dither in ((Image.Dither.NONE, Image.Dither.FLOYDSTEINBERG) if target in ("1", "P") else (Image.Dither.NONE,))])
 def test_conversion_palette_dither_and_transparency(mode: str, target: str, dither: Image.Dither) -> None:
     channels = len(mode)
     raw = bytes((i * 37 + i // 11) % 256 for i in range(19 * 7 * channels))

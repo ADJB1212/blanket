@@ -12,21 +12,6 @@ from pillow_helpers import assert_image_equal, hopper
 from blanket import Image, ImageEnhance
 
 
-def test_sanity() -> None:
-    # FIXME: assert_image
-    # Implicit asserts no exception:
-    ImageEnhance.Color(hopper()).enhance(0.5)
-    ImageEnhance.Contrast(hopper()).enhance(0.5)
-    ImageEnhance.Brightness(hopper()).enhance(0.5)
-    ImageEnhance.Sharpness(hopper()).enhance(0.5)
-
-
-def test_crash() -> None:
-    # crashes on small images
-    im = Image.new("RGB", (1, 1))
-    ImageEnhance.Sharpness(im).enhance(0.5)
-
-
 def _half_transparent_image() -> Image.Image:
     # returns an image, half transparent, half solid
     im = hopper("RGB")

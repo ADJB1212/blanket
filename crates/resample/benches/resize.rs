@@ -32,5 +32,24 @@ fn resize(c: &mut Criterion) {
     });
 }
 
-criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = resize }
+fn float_resize(c: &mut Criterion) {
+    Python::attach(|py| {
+        for mode in [PixelMode::Rgb, PixelMode::Rgba] {
+            let target_mode = if mode == PixelMode::Rgb { "RGB;F" } else { "RGBA;F" };
+            let image = fixture(800, 600, mode, 8, 12345, true).convert(py, target_mode, Some(32)).unwrap();
+            let mut group = c.benchmark_group(format!("float-resize/{target_mode}"));
+            group.throughput(Throughput::Elements(800 * 600));
+            for (name, method) in [("nearest", 0), ("bilinear", 2), ("lanczos", 1)] {
+                for (case, target) in [("half", (400, 300)), ("upscale", (1200, 900))] {
+                    group.bench_with_input(BenchmarkId::new(case, name), &method, |b, &method| {
+                        b.iter(|| ops_resize(py, black_box(&image), black_box(target), method, (0.0, 0.0, 800.0, 600.0), None).unwrap());
+                    });
+                }
+            }
+            group.finish();
+        }
+    });
+}
+
+criterion_group! { name = benches; config = blanket_bench_support::criterion(); targets = resize, float_resize }
 criterion_main!(benches);

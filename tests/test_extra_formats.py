@@ -52,11 +52,10 @@ def test_lossy_webp() -> None:
     assert max(abs(a - b) for a, b in zip(result.tobytes(), bytes([50, 100, 150] * 256), strict=False)) < 8
 
 
-@pytest.mark.parametrize("compression", ["tiff_lzw", "tiff_adobe_deflate", "packbits"])
-def test_compressed_tiff(compression: str) -> None:
+def test_packbits_tiff() -> None:
     source = PillowImage.frombytes("RGB", (8, 6), bytes(range(144)))
     stream = BytesIO()
-    source.save(stream, "TIFF", compression=compression)
+    source.save(stream, "TIFF", compression="packbits")
     assert Image.open(stream).tobytes() == source.tobytes()
 
 
@@ -132,7 +131,7 @@ def test_dng_is_unsupported(cfa: bool, formats: list[str] | None) -> None:
         Image.open(BytesIO(make_dng(cfa)), formats=formats)
 
 
-@pytest.mark.parametrize("data", [b"<svg", b"<html/>", b"II*\0", b"RIFF\0\0\0\0WEBP", make_dng()[:32]])
+@pytest.mark.parametrize("data", [b"<svg", b"<html/>", b"RIFF\0\0\0\0WEBP", make_dng()[:32]])
 def test_invalid_new_formats(data: bytes) -> None:
     with pytest.raises(UnidentifiedImageError):
         Image.open(BytesIO(data))

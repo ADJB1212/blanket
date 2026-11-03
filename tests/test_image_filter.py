@@ -13,40 +13,43 @@ MODES = ("L", "LA", "La", "I", "I;16", "I;16B", "I;16L", "I;16N", "RGB", "RGBA",
 
 
 @pytest.mark.parametrize(
-    "filter_to_apply",
-    (
-        ImageFilter.BLUR,
-        ImageFilter.CONTOUR,
-        ImageFilter.DETAIL,
-        ImageFilter.EDGE_ENHANCE,
-        ImageFilter.EDGE_ENHANCE_MORE,
-        ImageFilter.EMBOSS,
-        ImageFilter.FIND_EDGES,
-        ImageFilter.SMOOTH,
-        ImageFilter.SMOOTH_MORE,
-        ImageFilter.SHARPEN,
-        ImageFilter.MaxFilter,
-        ImageFilter.MedianFilter,
-        ImageFilter.MinFilter,
-        ImageFilter.ModeFilter,
-        ImageFilter.GaussianBlur,
-        ImageFilter.GaussianBlur(0),
-        ImageFilter.GaussianBlur(5),
-        ImageFilter.GaussianBlur((2, 5)),
-        ImageFilter.BoxBlur(0),
-        ImageFilter.BoxBlur(5),
-        ImageFilter.BoxBlur((2, 5)),
-        ImageFilter.UnsharpMask,
-        ImageFilter.UnsharpMask(10),
-    ),
+    ("filter_to_apply", "mode"),
+    [
+        (filter_to_apply, mode)
+        for filter_to_apply in (
+            ImageFilter.BLUR,
+            ImageFilter.CONTOUR,
+            ImageFilter.DETAIL,
+            ImageFilter.EDGE_ENHANCE,
+            ImageFilter.EDGE_ENHANCE_MORE,
+            ImageFilter.EMBOSS,
+            ImageFilter.FIND_EDGES,
+            ImageFilter.SMOOTH,
+            ImageFilter.SMOOTH_MORE,
+            ImageFilter.SHARPEN,
+            ImageFilter.MaxFilter,
+            ImageFilter.MedianFilter,
+            ImageFilter.MinFilter,
+            ImageFilter.ModeFilter,
+            ImageFilter.GaussianBlur,
+            ImageFilter.GaussianBlur(0),
+            ImageFilter.GaussianBlur(5),
+            ImageFilter.GaussianBlur((2, 5)),
+            ImageFilter.BoxBlur(0),
+            ImageFilter.BoxBlur(5),
+            ImageFilter.BoxBlur((2, 5)),
+            ImageFilter.UnsharpMask,
+            ImageFilter.UnsharpMask(10),
+        )
+        for mode in MODES
+        if not mode.startswith("I") or (isinstance(filter_to_apply, type) and issubclass(filter_to_apply, ImageFilter.BuiltinFilter))
+    ],
 )
-@pytest.mark.parametrize("mode", MODES)
 def test_sanity(filter_to_apply: ImageFilter.Filter | type[ImageFilter.Filter], mode: str) -> None:
     im = hopper(mode)
-    if mode[0] != "I" or (callable(filter_to_apply) and issubclass(filter_to_apply, ImageFilter.BuiltinFilter)):
-        out = im.filter(filter_to_apply)
-        assert out.mode == im.mode
-        assert out.size == im.size
+    out = im.filter(filter_to_apply)
+    assert out.mode == im.mode
+    assert out.size == im.size
 
 
 @pytest.mark.parametrize("mode", MODES)

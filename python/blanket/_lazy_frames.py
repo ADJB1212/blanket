@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"itertools", "blanket.Image"}
+__lazy_modules__ = {"copy", "itertools", "blanket.Image"}
 
+from copy import deepcopy
 from itertools import islice
 from typing import TYPE_CHECKING
 
@@ -29,6 +30,7 @@ class LazyFrames:
         self.cache: dict[int, Image] = {}
         self._tiff_metadata: Iterator[dict[object, object]] | None = None
         self._tiff_frame = 0
+        self._metadata: dict[object, object] | None = None
 
     def get(self, frame: int) -> Image:
         """Decode or retrieve a cached frame by its zero-based index."""
@@ -46,7 +48,9 @@ class LazyFrames:
                 selected.info.update(next(islice(self._tiff_metadata, frame - self._tiff_frame, None)))
                 self._tiff_frame = frame + 1
             else:
-                selected.info.update(read_metadata(self.data, selected.format))
+                if self._metadata is None:
+                    self._metadata = read_metadata(self.data, selected.format)
+                selected.info.update(deepcopy(self._metadata))
             duration, disposal, blend = controls[0]
             if duration is not None:
                 selected.info["duration"] = duration
@@ -69,4 +73,5 @@ class LazyFrames:
             frame.close()
         self.cache.clear()
         self._tiff_metadata = None
+        self._metadata = None
         self.data = b""

@@ -15,7 +15,6 @@ Pillow's MIT-CMU license and copyright notices are retained in
 | `test_imagestat.py` | `test_imagestat.py` |
 | `test_imagechops.py` | `test_imagechops.py` |
 | `test_imageenhance.py` | `test_imageenhance.py` |
-| `test_image_getbands.py` | `test_image_getbands.py` |
 | `test_image_getbbox.py` | `test_image_getbbox.py` |
 | `test_image_crop.py` | `test_image_crop.py` |
 | `test_image_transpose.py` | `test_image_transpose.py` |
@@ -33,10 +32,11 @@ Pillow's MIT-CMU license and copyright notices are retained in
 | `test_image_copy.py` | `test_image_copy.py` |
 | `test_image_putalpha.py` | `test_image_putalpha.py` |
 | `test_image_array.py` | `test_image_array.py` |
-| `test_image_tobytes.py` | `test_image_tobytes.py` |
 
-Copied tests retain upstream test bodies, assertions, tolerances, and
-parameterization. Imports target `blanket`, helper imports target
+Retained copied tests preserve upstream assertions and tolerances. Redundant
+smoke cases may be omitted or consolidated with stronger regressions, and
+filter parameterization excludes combinations whose bodies performed no checks.
+Imports target `blanket`, helper imports target
 `pillow_helpers`, and fixture paths target `pillow_images`. Import cleanup and
 lint suppressions accommodate this repository. `pillow_helpers.py` supplies
 the required upstream assertion and hopper helpers without Pillow at runtime;
@@ -59,6 +59,10 @@ narrowed to the contracts absent from the copied upstream tests. Tests with addi
 coverage remain alongside the copied tests, including SIMD boundaries, native
 sample depths, metadata ownership, larger inputs, extended color syntax, and
 the public-domain font. These regressions are not claimed to be upstream tests.
+
+Band-name checks are covered by `test_mode_metadata.py`; raw byte return types
+are covered by `test_raw_buffers.py`. The standalone getbands and tobytes smoke
+modules were removed. Split shape assertions now share the split/merge tests.
 
 Run any module normally, for example:
 

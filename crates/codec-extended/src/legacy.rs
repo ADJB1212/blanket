@@ -333,15 +333,17 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
         return image(w, h, mode, pixels, "SGI");
     }
     let mut pixels = vec![0; w * h * channels * bpc];
+    let mut decoded_row = Vec::new();
     for c in 0..channels {
         for y in 0..h {
             let row = if data[2] == 0 {
-                bytes(data, 512 + (c * h + y) * w * bpc, w * bpc)?.to_vec()
+                bytes(data, 512 + (c * h + y) * w * bpc, w * bpc)?
             } else {
                 let offset = long(data, 512 + (c * h + y) * 4, true)? as usize;
                 let length = long(data, 512 + h * channels * 4 + (c * h + y) * 4, true)? as usize;
                 let source = bytes(data, offset, length)?;
-                let mut row = Vec::with_capacity(w * bpc);
+                decoded_row.clear();
+                let row = &mut decoded_row;
                 let mut pos = 0;
                 loop {
                     let control = if bpc == 1 { u16::from(bytes(source, pos, 1)?[0]) } else { word(source, pos, true)? };
@@ -367,7 +369,7 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
                 if row.len() != w * bpc {
                     return Err("truncated SGI row".into());
                 }
-                row
+                row.as_slice()
             };
             for x in 0..w {
                 let dst = ((h - 1 - y) * w * channels + x * channels + c) * bpc;

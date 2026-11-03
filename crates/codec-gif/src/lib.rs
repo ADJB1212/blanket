@@ -40,6 +40,9 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
 
 fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, String> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+    if target == Some(0) {
+        return Ok(Sequence { frames: vec![decode_first_frame(data)?], ..Sequence::default() });
+    }
     let mut options = gif::DecodeOptions::new();
     options.set_color_output(gif::ColorOutput::RGBA);
     options.check_frame_consistency(true);
@@ -159,7 +162,14 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
 }
 
 pub fn decode_gif(data: &[u8]) -> Result<Image, String> {
-    let mut decoder = gif::DecodeOptions::new().read_info(std::io::Cursor::new(data)).map_err(|error| error.to_string())?;
+    Ok(decode_first_frame(data)?.image)
+}
+
+fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String> {
+    let mut options = gif::DecodeOptions::new();
+    options.check_frame_consistency(true);
+    options.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap()));
+    let mut decoder = options.read_info(std::io::Cursor::new(data)).map_err(|error| error.to_string())?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
     blanket_codec_common::validate_dimensions(width, height)?;
     let global_palette = decoder.global_palette().map(<[u8]>::to_vec);
@@ -183,7 +193,7 @@ pub fn decode_gif(data: &[u8]) -> Result<Image, String> {
     {
         image.palette = Some((PixelMode::Rgb, palette));
     }
-    Ok(image)
+    Ok(blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 })
 }
 
 pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {

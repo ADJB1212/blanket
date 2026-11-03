@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::simd::Simd;
 use std::simd::cmp::SimdOrd;
 use std::simd::num::{SimdFloat, SimdInt};
@@ -58,12 +59,39 @@ pub(crate) fn rank(image: &Image, size: usize, rank: usize) -> PyResult<Image> {
     let bytes = image.raw_data()?.as_chunks::<4>().0;
     let pixels = if image.mode == PixelMode::I {
         let source: Vec<i32> = bytes.iter().map(|&value| i32::from_le_bytes(value)).collect();
-        rank_values(&source, image.width as usize, image.height as usize, size, rank)?.into_iter().flat_map(i32::to_le_bytes).collect()
+        integer_rank(source, image.width as usize, image.height as usize, size, rank)?.into_iter().flat_map(i32::to_le_bytes).collect()
     } else {
         let source: Vec<f32> = bytes.iter().map(|&value| f32::from_le_bytes(value)).collect();
         rank_values(&source, image.width as usize, image.height as usize, size, rank)?.into_iter().flat_map(f32::to_le_bytes).collect()
     };
     blanket_core::buffers::output(image, (image.width, image.height), pixels)
+}
+
+fn integer_rank(mut source: Vec<i32>, width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<i32>> {
+    if source.is_empty() || size == 1 {
+        return Ok(source);
+    }
+    if rank != 0 && rank != size * size - 1 {
+        return rank_values(&source, width, height, size, rank);
+    }
+    let radius = size / 2;
+    let maximum = rank != 0;
+    let mut horizontal = vec![0; source.len()];
+    blanket_core::parallel::chunks_mut_above(&mut horizontal, width * 16, 256 * 1024, |band, rows| {
+        let mut queue = VecDeque::new();
+        for (i, row) in rows.chunks_exact_mut(width).enumerate() {
+            let input = &source[(band * 16 + i) * width..][..width];
+            super::filter::extrema_line(input, row, 1, 0, radius, maximum, &mut queue);
+        }
+    });
+    let band_rows = 64.max(radius.min(height));
+    blanket_core::parallel::chunks_mut_above(&mut source, width * band_rows, 256 * 1024, |band, rows| {
+        let mut queue = VecDeque::new();
+        for column in 0..width {
+            super::filter::extrema_line(&horizontal[column..], &mut rows[column..], width, band * band_rows, radius, maximum, &mut queue);
+        }
+    });
+    Ok(source)
 }
 
 fn rank_values<T: Copy + PartialOrd>(source: &[T], width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<T>> {
@@ -124,6 +152,37 @@ fn select<T: Copy + PartialOrd>(values: &mut [T], rank: usize) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integer_extrema_match_square_windows() {
+        for (width, height) in [(0, 1), (1, 0), (1, 1), (2, 7), (19, 5), (65, 67), (513, 521)] {
+            for size in [3, 5, 9, 31, 129] {
+                if width > 100 && size > 9 {
+                    continue;
+                }
+                let storage: Vec<i32> = (0..width * height + 3)
+                    .map(|i| match i % 7 {
+                        0 => i32::MIN,
+                        1 => i32::MAX,
+                        _ => (i * 7919 % 4093) as i32 - 2046,
+                    })
+                    .collect();
+                let source = &storage[3..];
+                for rank in [0, size * size - 1] {
+                    let actual = integer_rank(source.to_vec(), width, height, size, rank).unwrap();
+                    let radius = size / 2;
+                    for y in 0..height {
+                        for x in 0..width {
+                            let window = (y.saturating_sub(radius)..=(y + radius).min(height - 1))
+                                .flat_map(|yy| (x.saturating_sub(radius)..=(x + radius).min(width - 1)).map(move |xx| source[yy * width + xx]));
+                            let expected = if rank == 0 { window.min() } else { window.max() }.unwrap();
+                            assert_eq!(actual[y * width + x], expected, "size={size}, x={x}, y={y}");
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn integer_convolution_covers_unaligned_vectors_tails_borders_and_guards() {

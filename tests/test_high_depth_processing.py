@@ -31,6 +31,33 @@ def samples(image):
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("position", [(-2, -1), (47, 31), (100, 100)])
+def test_small_sample_paste_preserves_unaffected_rows(mode, depth, masked, position):
+    image = make_image(mode, depth, (51, 35))
+    source = make_image(mode, depth, (5, 3))
+    original, source_original = image.tobytes(), source.tobytes()
+    expected = samples(image)
+    incoming = samples(source)
+    channels = len(image.getbands())
+    mask = Image.frombytes("L", source.size, bytes((i * 37) % 256 for i in range(15))) if masked else None
+    for sy in range(3):
+        for sx in range(5):
+            x, y = position[0] + sx, position[1] + sy
+            if not (0 <= x < 51 and 0 <= y < 35):
+                continue
+            alpha = ((sy * 5 + sx) * 37) % 256 if masked else 255
+            for c in range(channels):
+                dst, src = (y * 51 + x) * channels + c, (sy * 5 + sx) * channels + c
+                expected[dst] = (expected[dst] * (255 - alpha) + incoming[src] * alpha + 127) // 255
+    image.paste(source, position, mask)
+    assert samples(image) == expected
+    assert source.tobytes() == source_original
+    if position == (100, 100):
+        assert image.tobytes() == original
+
+
+@pytest.mark.parametrize(("mode", "depth"), FORMATS)
 def test_sample_pixel_writes(mode, depth):
     image = make_image(mode, depth)
     channels = len(image.getbands())

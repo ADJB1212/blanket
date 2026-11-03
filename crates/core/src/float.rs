@@ -166,10 +166,15 @@ fn transfer_colors(values: &mut [f32], channels: usize, decode: bool) {
         } else {
             (0.0031308, a * Simd::splat(12.92), a, 1.0_f32 / 2.4)
         };
-        let power = (base.cast::<f64>().ln() * Simd::splat(f64::from(exponent))).exp().cast::<f32>();
-        let curved = if decode { power } else { Simd::splat(1.055) * power - Simd::splat(0.055) };
-        let result = v.signum() * a.simd_le(Simd::splat(threshold)).select(linear, curved);
         let colors = Simd::<u32, 8>::from_array(std::array::from_fn(|c| u32::from((i + c) % channels < 3))).simd_ne(Simd::splat(0));
+        let linear_range = a.simd_le(Simd::splat(threshold));
+        let result = if (linear_range | !colors).all() {
+            v.signum() * linear
+        } else {
+            let power = (base.cast::<f64>().ln() * Simd::splat(f64::from(exponent))).exp().cast::<f32>();
+            let curved = if decode { power } else { Simd::splat(1.055) * power - Simd::splat(0.055) };
+            v.signum() * linear_range.select(linear, curved)
+        };
         colors.select(result, v).copy_to_slice(&mut values[i..i + 8]);
     }
     for (i, v) in values.iter_mut().enumerate().skip(end) {
@@ -221,6 +226,28 @@ pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linear_transfer_preserves_alpha_and_signed_zero() {
+        for channels in [3, 4] {
+            for decode in [false, true] {
+                for count in 0..35 {
+                    for offset in 0..8 {
+                        let mut storage = vec![123.0; offset + count * channels + 7];
+                        let values = &mut storage[offset..offset + count * channels];
+                        for (i, value) in values.iter_mut().enumerate() {
+                            *value = if i % channels == 3 { f32::NAN } else { [-0.0, 0.0, -0.001, 0.003][i % 4] };
+                        }
+                        let expected: Vec<_> =
+                            values.iter().enumerate().map(|(i, &v)| if i % channels < 3 { transfer(v, decode) } else { v }).collect();
+                        transfer_colors(values, channels, decode);
+                        equal(values, &expected);
+                        assert!(storage[..offset].iter().chain(&storage[offset + count * channels..]).all(|&v| v == 123.0));
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn finish_matches_materialized_float_conversion() {

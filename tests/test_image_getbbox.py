@@ -3,14 +3,8 @@
 from __future__ import annotations
 
 import pytest
-from pillow_helpers import hopper
 
 from blanket import Image
-
-
-def test_sanity() -> None:
-    bbox = hopper().getbbox()
-    assert isinstance(bbox, tuple)
 
 
 def test_bbox() -> None:

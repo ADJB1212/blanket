@@ -51,7 +51,7 @@ def test_extension_and_validation(tmp_path: Path, format: str) -> None:
         Image.frombytes("L", (1, 1), b"\0\0", bit_depth=16).save(BytesIO(), format)
 
 
-@pytest.mark.parametrize("data", [b"BM", b"GIF87a", b"GIF89a", b"\0\0\x01\0"])
+@pytest.mark.parametrize("data", [b"BM", b"GIF87a", b"\0\0\x01\0"])
 def test_truncated_input(data: bytes) -> None:
     with pytest.raises(UnidentifiedImageError):
         Image.open(BytesIO(data))

@@ -56,6 +56,33 @@ def test_wide_rank_one_is_an_independent_copy(mode: str) -> None:
     assert image.tobytes() == raw
 
 
+@pytest.mark.parametrize("size", [(1, 1), (2, 7), (19, 5), (67, 65)])
+@pytest.mark.parametrize("window", [3, 9, 31])
+@pytest.mark.parametrize("maximum", [False, True])
+def test_integer_extrema_match_pillow(size: tuple[int, int], window: int, maximum: bool) -> None:
+    values = [-2147483648, 2147483647, -1000, 16777217, 0, 127, 255]
+    count = size[0] * size[1]
+    raw = struct.pack(f"<{count}i", *(values[(i * 3 + i // size[0]) % len(values)] for i in range(count)))
+    image = Image.frombytes("I", size, raw)
+    reference = PILImage.frombytes("I", size, raw)
+    operation = ImageFilter.MaxFilter if maximum else ImageFilter.MinFilter
+    pillow_operation = PILFilter.MaxFilter if maximum else PILFilter.MinFilter
+    result = image.filter(operation(window))
+    assert result.tobytes() == reference.filter(pillow_operation(window)).tobytes()
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("maximum", [False, True])
+def test_integer_extrema_with_largest_window(maximum: bool) -> None:
+    raw = struct.pack("<3i", -2147483648, 17, 2147483647)
+    image = Image.frombytes("I", (3, 1), raw)
+    operation = ImageFilter.MaxFilter if maximum else ImageFilter.MinFilter
+    result = image.filter(operation(23169))
+    expected = 2147483647 if maximum else -2147483648
+    assert result.getdata() == [expected] * 3
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("radius", [float("nan"), float("inf"), -float("inf"), 2**31, pytest.param(2**10000, id="huge_integer"), -1])
 @pytest.mark.parametrize("shape", ["scalar", "horizontal", "vertical"])
 def test_box_blur_checks_constructor_and_mutated_radii(radius: float, shape: str) -> None:

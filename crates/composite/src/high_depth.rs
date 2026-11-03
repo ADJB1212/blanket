@@ -16,8 +16,9 @@ fn matching(first: &Image, second: &Image) -> PyResult<()> {
 
 pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     matching(image, source)?;
-    let source_values = samples::view(source)?;
-    let mut values = samples::read(image)?;
+    let source_bytes = source.raw_data()?;
+    let source_values = if mask.is_some() { samples::view(source)? } else { std::borrow::Cow::Borrowed(&[][..]) };
+    image.raw_data()?;
     let mask_values = mask
         .map(|mask| {
             if mask.palette.is_some()
@@ -41,11 +42,24 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
     if right <= left || bottom <= top {
         return Ok(());
     }
+    let big_endian = image.mode.is_big_endian();
+    let width = image.width as usize;
+    image.ensure_owned();
+    let pixels = image.pixels.as_mut().unwrap();
+    let count = (right - left) as usize;
+    let mut values = if mask.is_some() { vec![0_u16; count * channels] } else { Vec::new() };
     for y in top..bottom {
-        let count = (right - left) as usize;
         let src_start = ((y - position.1) as usize * source.width as usize + (left - position.0) as usize) * channels;
-        let dst_start = (y as usize * image.width as usize + left as usize) * channels;
-        let dst = &mut values[dst_start..dst_start + count * channels];
+        let dst_start = (y as usize * width + left as usize) * channels * 2;
+        let destination = &mut pixels[dst_start..dst_start + count * channels * 2];
+        if mask.is_none() {
+            destination.copy_from_slice(&source_bytes[src_start * 2..(src_start + count * channels) * 2]);
+            continue;
+        }
+        for (value, &bytes) in values.iter_mut().zip(destination.as_chunks::<2>().0) {
+            *value = if big_endian { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
+        }
+        let dst = &mut values;
         let src = &source_values[src_start..src_start + count * channels];
         let end = if let Some((mask, mc, maximum)) = &mask_values {
             let mask = &mask[src_start / channels * mc..];
@@ -61,7 +75,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
         };
         for x in left + end as i64..right {
             let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * channels;
-            let dst = (y as usize * image.width as usize + x as usize) * channels;
+            let dst = (x - left) as usize * channels;
             let (alpha, maximum) = mask_values
                 .as_ref()
                 .map_or((1, 1), |(values, channels_mask, maximum)| (u64::from(values[(src / channels + 1) * channels_mask - 1]), *maximum));
@@ -73,8 +87,10 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
                     ((u64::from(values[dst + c]) * (maximum - alpha) + u64::from(source_values[src + c]) * alpha + maximum / 2) / maximum) as u16;
             }
         }
+        for (&value, bytes) in values.iter().zip(destination.as_chunks_mut::<2>().0) {
+            *bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+        }
     }
-    image.pixels = samples::output(image, &values)?.pixels;
     Ok(())
 }
 

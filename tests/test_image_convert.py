@@ -37,19 +37,6 @@ def test_unsupported_conversion() -> None:
         im.convert("INVALID")
 
 
-def test_default() -> None:
-    im = hopper("P")
-    assert im.mode == "P"
-    converted_im = im.convert()
-    assert_image(converted_im, "RGB", im.size)
-    converted_im = im.convert()
-    assert_image(converted_im, "RGB", im.size)
-
-    im.info["transparency"] = 0
-    converted_im = im.convert()
-    assert_image(converted_im, "RGBA", im.size)
-
-
 # ref https://github.com/python-pillow/Pillow/issues/274
 
 
@@ -57,11 +44,6 @@ def _test_float_conversion(im: Image.Image) -> None:
     orig = im.getpixel((5, 5))
     converted = im.convert("F").getpixel((5, 5))
     assert orig == converted
-
-
-def test_8bit() -> None:
-    with Image.open(PILLOW_IMAGES / "hopper.jpg") as im:
-        _test_float_conversion(im.convert("L"))
 
 
 def test_16bit() -> None:

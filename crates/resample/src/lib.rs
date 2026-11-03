@@ -445,16 +445,33 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         return Err(PyValueError::new_err("box can't exceed original image size"));
     }
     if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
-        let bands = (0..image.mode.channels())
-            .map(|c| {
-                let band = image.getchannel(py, c)?;
-                ops_resize(py, &band, size, method, bounds, reducing_gap)
-            })
-            .collect::<PyResult<Vec<_>>>()?;
         let mut pixels = buffer(size, image.raw_bytes_per_pixel())?;
-        for (i, p) in pixels.chunks_exact_mut(image.raw_bytes_per_pixel()).enumerate() {
-            for (c, band) in bands.iter().enumerate() {
-                p[c * 4..c * 4 + 4].copy_from_slice(&band.raw_data()?[i * 4..i * 4 + 4]);
+        if image.width == 0 || image.height == 0 {
+            return output(image, size, pixels);
+        }
+        if method == 0 {
+            py.detach(|| {
+                let (xs, ys) = nearest_positions(b, size, image.width, image.height);
+                if image.mode == PixelMode::RgbF {
+                    resize_nearest::<12>(source, &mut pixels, image.width, &xs, &ys);
+                } else {
+                    resize_nearest::<16>(source, &mut pixels, image.width, &xs, &ys);
+                }
+            });
+        } else {
+            let stride = image.raw_bytes_per_pixel();
+            for c in 0..image.mode.channels() {
+                let band = image.getchannel(py, c)?;
+                let resized = ops_resize(py, &band, size, method, bounds, reducing_gap)?;
+                let samples = resized.raw_data()?;
+                py.detach(|| {
+                    chunks_mut_above(&mut pixels, size.0 as usize * stride * 16, MIN_PARALLEL_BYTES, |band, rows| {
+                        let first = band * 16 * size.0 as usize;
+                        for (i, pixel) in rows.chunks_exact_mut(stride).enumerate() {
+                            pixel[c * 4..c * 4 + 4].copy_from_slice(&samples[(first + i) * 4..(first + i + 1) * 4]);
+                        }
+                    });
+                });
             }
         }
         return output(image, size, pixels);
@@ -789,7 +806,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
             let dst = row.as_chunks_mut::<C>().0;
             if double_rgb {
                 crate::ops_simd::nearest_double_rgb(src.as_flattened(), dst.as_flattened_mut());
-            } else if half_width {
+            } else if half_width && C <= 8 {
                 // Contiguous pairs expose the common 2:1 gather to SIMD.
                 crate::ops_simd::nearest_half::<C>(src.as_flattened(), dst.as_flattened_mut());
             } else if let Some(map) = &map {
