@@ -6,9 +6,9 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 [![Source license: MIT](https://img.shields.io/badge/source_license-MIT-green)](LICENSE)
 
-Blanket is a Rust-backed image library with a familiar, Pillow-shaped Python
-API. Open, transform, and save images using native pixel kernels, with no
-Pillow or other Python packages required at runtime.
+Blanket is a Rust-backed image library with a Pillow-shaped Python API.
+Open, transform, and save images with native SIMD and parallel processing,
+with no runtime Python dependencies for CPU use.
 
 ```python
 from blanket import Image, ImageOps
@@ -19,589 +19,86 @@ with Image.open("photo.jpg") as image:
     thumbnail.save("thumbnail.webp", quality=85)
 ```
 
-[Installation](#installation) · [Examples](#examples) ·
-[Formats](#supported-formats) · [API notes](https://adjb1212.github.io/blanket-docs/) ·
-[Contributing](#contributing)
-
-## Why Blanket?
-
-- **Familiar image APIs.** Work with `Image`, `ImageOps`, `ImageChops`, `ImageColor`, `ImageCms`,
-  `ImageDraw`, `ImageEnhance`, `ImageFilter`, `ImageFont`, `ImageMath`, `ImagePalette`,
-  `ImagePath`, and `ImageStat`.
-- **Native processing.** Rust kernels use SIMD and parallel execution for
-  supported operations, with small-image fast paths.
-- **Optional GPU processing.** Explicit Metal and CUDA images support resident resize,
-  convolution, compositing, and PyTorch MPS pipelines. GPU operations do not
-  guarantee byte-exact results with Pillow. See [GPU images](GPU.md).
-- **ICC color management.** Convert and soft proof 8-bit images with LittleCMS,
-  using device profiles or built-in sRGB, Adobe RGB, and Display P3 profiles.
-- **Image hashing.** Find visually similar images using native aHash, dHash,
-  and pHash kernels, with no NumPy or SciPy runtime dependency.
-- **Header inspection.** Use `Image.inspect(path_or_stream)` to read dimensions,
-  mode, sample depth, and available metadata without allocating decoded rasters.
-- **Metadata workflows.** Edit supported containers without recompressing pixels,
-  apply retention policies, normalize resolution, and extract previews with
-  `ImageMetadata`. See the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
-- **Modern formats.** Read and write JPEG XL, WebP, AVIF, and HEIC/HEIF alongside
-  PNG, JPEG, TIFF, BMP, GIF, and ICO. Export single- or multi-page PDFs.
-- **Explicit precision.** Keep 10-, 12-, and 16-bit samples in supported
-  workflows, and choose when to convert to 8 bits.
-- **Python interoperability.** Import array data, work with binary streams,
-  and convert explicitly to Pillow when you need it.
-
-Blanket is currently **alpha software**. It implements a focused subset of
-Pillow's API, centered on images in the `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`,
-`CMYK`, `YCbCr`, and `LAB` modes. It also supports premultiplied `La`/`RGBa`,
-`RGBX`, integer `I` and `I;16` (including native-endian `I;16N`)
-modes, floating-point `F`, and indexed `P` and `PA` images to a limited
-extent. It is not yet a drop-in replacement for `PIL`.
-
-See [ImageChops](https://adjb1212.github.io/blanket-docs/ImageChops/) for
-arithmetic and blend modes, and
-[ImageStat](https://adjb1212.github.io/blanket-docs/ImageStat/) for per-band
-statistics.
+[Documentation](https://adjb1212.github.io/blanket-docs/) ·
+[API reference](https://adjb1212.github.io/blanket-docs/Image/) ·
+[Roadmap](ROADMAP.md) ·
+[Issues](https://github.com/ADJB1212/blanket/issues)
 
 ## Installation
 
-Blanket requires **Python 3.12+**. Install it with pip:
+Requires **Python 3.12+**:
 
 ```sh
 pip install pyblanket
 ```
 
-There is one distribution: release wheels include CPU processing and the
-platform's GPU backend (Metal on macOS, CUDA on Linux). CPU processing needs no
-GPU hardware or GPU Python dependencies. Native Metal needs macOS 26+ and a
-supported Apple Silicon GPU. For CUDA processing, install its optional runtime
-packages and use a compatible NVIDIA GPU and driver:
-
-```sh
-pip install "cupy-cuda13x[ctk]>=14.0"
-```
-
-PyTorch interoperability additionally needs `pip install "torch>=2.13"`.
-Install them separately or use `pip install "pyblanket[gpu]"`. The `gpu`
-extra includes PyTorch and, on Linux/Windows with Python below 3.15, CuPy.
-CuPy availability on other Python versions depends on upstream support.
-An explicit GPU request raises `RuntimeError` if the backend, hardware, driver,
-or runtime dependency is unavailable; it never silently runs on the CPU.
-Check `ImageGpu.capabilities("metal")` or `ImageGpu.capabilities("cuda")` for
-availability and a diagnostic before selecting a backend. See
-[GPU installation and availability](GPU.md).
-
-See the [development notes](https://adjb1212.github.io/blanket-docs/development/)
-for information on building from source.
-
-## Examples
-
-### Float color and linear light
-
-`RGB;F` and `RGBA;F` store interleaved little-endian float32 samples. Float32
-and float64 color arrays infer these modes; float64 inputs narrow to float32.
-Color conversion to/from unsigned RGB/RGBA normalizes by the sample maximum.
-Converting back clamps to [0, 1], rounds to nearest, maps NaN to zero, and
-maps infinities to the corresponding endpoint. Storage preserves negative
-values, NaNs, and infinities. Arithmetic follows IEEE floating-point rules;
-negative colors and values above one remain unclipped in float outputs.
-
-Float color supports pixel access, channel extraction, extrema (ignoring NaNs),
-copy, crop, transpose, resize, paste, source-over compositing, and TIFF I/O
-(raw, LZW, Deflate). Other operations retain their existing mode restrictions.
-Float alpha is straight, normalized to [0, 1] during resize/compositing, with
-NaN alpha treated as zero. Premultiplication zeros color at zero alpha;
-unpremultiplication returns zero color at zero alpha.
-
-```python
-linear_thumbnail = image.resize((256, 256), linear_light=True)
-combined = Image.alpha_composite(background, overlay, linear_light=True)
-```
-
-These options support RGB/RGBA at 8/10/12/16 bits and float color. Set
-`transfer="srgb"` (default) to decode sRGB before processing and encode it
-afterward, or `transfer="linear"` for samples already in linear light.
-The sRGB transfer extends symmetrically to negative samples. Alpha never
-passes through the transfer function. Resize premultiplies alpha by default;
-`premultiply_alpha=False` explicitly filters straight color and alpha instead.
-Float resize and float compositing also support the ordinary sample domain
-with `linear_light=False`. Filter overshoot remains in float color, while
-alpha is clamped. These options do not interpret ICC profiles or HDR metadata.
-
-### Decode a region
-
-```python
-region = Image.open_region("large.tiff", (100, 200, 612, 712))
-region = Image.open_region("photo.png", (0, 0, 128, 128), fallback="full")
-```
-
-Region decoding reads only intersecting strips or tiles of the first TIFF page
-for unsigned 8/16-bit chunky L, RGB, and straight RGBA. Requests must be nonempty
-and inside the source bounds. Other codecs/layouts raise `NotImplementedError`
-unless `fallback="full"` explicitly permits eager decoding followed by cropping.
-`info["decode_fallback"]` reports whether fallback occurred. Encoded input is
-still read into memory, and source dimension limits apply. Unrequested TIFF
-chunks and later pages are not decoded or validated. A single large strip may
-require decoding the whole first page. Fallback uses normal eager frame decoding
-and its cumulative limits.
-
-### Decode frames on demand
-
-```python
-with Image.open("animation.webp", lazy=True, frame_cache_size=2) as image:
-    image.seek(10)
-    frame = image.copy()
-```
-
-Lazy access supports GIF, WebP, PNG/APNG, and TIFF. Opening scans frame headers
-and decodes frame zero; later frames decode on `seek()`. The cache holds at most
-`frame_cache_size` decoded frames, including the current frame (default 1),
-and evicts the least recently selected frame. Pixel, palette, EXIF, and metadata
-edits survive only while their frame stays cached. Use `copy()` to retain an
-independent edited raster. Eager opening remains the default and retains edits
-across every seek.
-
-Animation cache misses replay preceding original frames with bounded canvas
-storage; seeking far ahead can be slow. Edits do not affect other frames'
-composition. TIFF page rasters decode independently. Encoded input stays in
-memory until `close()`; caller streams can be closed after opening. Decoder
-working buffers and temporary rasters are additional to the cache. The existing
-178,956,970-pixel cumulative sequence limit still applies, including uncached
-frames. Header errors fail at open; compressed pixel errors in later frames may
-be deferred until seeking. Failed seeks preserve the current frame and position.
-Iteration and multi-frame saving can evict edits; saving still materializes
-the output frames and is not a bounded-memory streaming operation.
-
-### Compare image fingerprints
-
-```python
-from blanket import Image, ImageHash
-
-with Image.open("first.jpg") as first, Image.open("second.jpg") as second:
-    first_hash = ImageHash.phash(first)
-    second_hash = ImageHash.phash(second)
-    print(first_hash - second_hash)  # Hamming distance: smaller is more similar.
-    restored = ImageHash.hex_to_hash(str(first_hash))
-```
-
-`average_hash`, `dhash`, and `phash` produce immutable 64-bit values by default.
-Pass `hash_size` (2 to 64) for a square of that many bits per side. Compare only
-hashes using the same algorithm and settings. Hashing uses the current frame,
-converts to 8-bit grayscale, discards alpha, and resizes with Lanczos. Apply
-`ImageOps.exif_transpose` first if orientation should affect the fingerprint.
-Perceptual hashes are approximate visual fingerprints; choose a distance
-threshold for your data and confirm duplicates separately.
-
-### Transform JPEGs without recompression
-
-```python
-from pathlib import Path
-from blanket import Image, JpegImagePlugin
-
-data = Path("photo.jpg").read_bytes()
-rotated = JpegImagePlugin.transform(data, Image.Transpose.ROTATE_90)
-Path("rotated.jpg").write_bytes(rotated)
-```
-
-This transforms quantized JPEG coefficients without decoding pixels or adding
-JPEG generation loss. Rotations follow `Image.Transpose` conventions. Pass
-`crop=(left, top, right, bottom)` to crop in source coordinates before rotating
-or flipping. The crop origin must align to the JPEG's MCU grid; right and bottom
-edges need not align. Invalid boxes are rejected. Transforms that cannot move
-partial edge blocks perfectly raise `OSError`; `trim=True` explicitly permits
-discarding those blocks.
-
-Metadata defaults to `metadata="strip"`, removing EXIF, XMP, ICC profiles, and
-comments. `metadata="preserve"` retains ancillary metadata. Libjpeg may update
-EXIF pixel dimensions, but EXIF orientation is not applied or reset, and other
-dimensions, density, and embedded thumbnails may become stale. Color
-interpretation markers remain.
-The result is encoded JPEG bytes; IDCT rounding and chroma upsampling can cause
-small decoded-pixel differences despite lossless coefficient transforms.
-
-### Convert between formats
-
-```python
-from blanket import Image
-
-with Image.open("input.png") as image:
-    image.convert("RGB").save("output.jpg", quality=85)
-    image.save("output.jxl", lossless=True)
-```
-
-File extensions select the output format. For binary streams, pass it explicitly:
-
-```python
-from io import BytesIO
-from blanket import Image
-
-with Image.open("input.png") as image:
-    buffer = BytesIO()
-    image.save(buffer, format="PNG")
-    png_bytes = buffer.getvalue()
-```
-
-### Stream image input and output
-
-Feed JPEG or JPEG XL chunks to `ImageFile.Parser`. Its `image` property returns
-an independent preview when a progressive pass is available; `close()`
-requires a complete image. Decoding retains a full raster and codec working
-memory, while consumed encoded input is discarded.
-
-```python
-from blanket import ImageFile
-
-parser = ImageFile.Parser()
-with open("input.jxl", "rb") as source:
-    while chunk := source.read(64 * 1024):
-        parser.feed(chunk)
-image = parser.close()
-
-with ImageFile.PngWriter("gradient.png", "L", (1024, 1024)) as writer:
-    for y in range(1024):
-        writer.write(bytes([y % 256]) * 1024)
-```
-
-`PngWriter` accepts complete raw rows and keeps row buffers and compression
-state instead of a full raster or encoded output. It supports bilevel, grayscale,
-RGB, and alpha, with 10/12/16-bit samples for L/RGB/RGBA. Streaming does not
-retain container metadata or support animation. See the
-[ImageFile reference](https://adjb1212.github.io/blanket-docs/ImageFile/) for details.
-
-### Inspect an image without decoding pixels
-
-```python
-from blanket import Image
-
-header = Image.inspect("photo.jpg")
-print(header.format, header.size, header.mode, header.bit_depth)
-print(header.info.get("exif"))
-```
-
-Inspection reads the encoded file into memory and restores seekable stream
-positions. It describes the primary image, first TIFF page, GIF canvas, or
-largest ICO entry. Header modes and depths can differ from decoded images
-(for example, indexed PNG reports `P` and its packed sample depth). It reads
-available metadata using the same keys as `Image.info`, without collecting
-frame controls or validating compressed pixels and later frames. Codec header
-and metadata limits apply; decoded-pixel limits apply when opening the image.
-
-### Optimize a save without additional loss
-
-```python
-from blanket import Image
-from blanket.Compressor import LosslessImageCompressor
-
-compressor = LosslessImageCompressor(effort=7)
-with Image.open("input.png") as image:
-    image.save("optimized.png", compressor=compressor)
-    image.convert("RGB").save("optimized.jpg", quality=90, compressor=compressor)
-    image.save("optimized.jxl", lossless=True, compressor=compressor)
-    image.save("optimized.heic", lossless=True, compressor=compressor)
-```
-
-The compressor keeps the smallest encoding that preserves the normal save's
-decoded pixels. It supports PNG, JPEG, JPEG XL, and HEIF/HEIC; higher effort
-tries more settings and takes longer. JPEG optimization preserves DCT
-coefficients. This optimizes the requested save, not the original source file:
-lossy save settings still introduce their normal loss. See the
-[Compressor module](https://adjb1212.github.io/blanket-docs/Compressor/) for the API, format-specific behavior,
-and compression benchmarks.
-
-For smaller output with bounded additional pixel error, pass
-`LossyImageCompressor(max_rmse=2.0, effort=7)` from `blanket.Compressor`.
-It searches PNG color precision or lower JPEG, WebP, JPEG XL, AVIF, and
-HEIF/HEIC quality settings, preserving alpha and checking decoded RGB error
-against the normal save. The result never exceeds the normal save's size.
-
-### Resize, enhance, and filter
-
-```python
-from blanket import Image, ImageEnhance, ImageFilter, ImageOps
-
-with Image.open("photo.jpg") as image:
-    resized = ImageOps.contain(image, (1200, 800))
-    enhanced = ImageEnhance.Contrast(resized).enhance(1.2)
-    sharpened = enhanced.filter(ImageFilter.UnsharpMask(radius=2, percent=150))
-    sharpened.save("edited.png")
-```
-
-`resize()` supports all eight Pillow 13 `Image.Resampling` filters, including
-MKS2013 and MKS2021. `ImageOps` includes
-cropping, padding, flips, color adjustments, and EXIF orientation correction.
-`ImageFilter` provides blur, convolution, and rank filters, as well as 3D color
-LUTs.
-
-### Convert ICC color profiles
-
-```python
-from io import BytesIO
-from blanket import Image, ImageCms
-
-with Image.open("photo.jpg") as image:
-    source = ImageCms.ImageCmsProfile(BytesIO(image.info["icc_profile"]))
-    target = ImageCms.createProfile("sRGB")
-    converted = ImageCms.profileToProfile(image, source, target, outputMode="RGB")
-    converted.save("srgb.jpg", quality=90)
-```
-
-Profiles can also load from a filename. Use `buildTransform()` and
-`applyTransform()` to reuse a conversion, or `buildProofTransform()` for soft
-proofing. Transforms require 8-bit `L`, `RGB`, `RGBA`, `CMYK`, or `LAB` pixels
-and compatible profiles. `applyTransform(..., inPlace=True)` changes only the
-current frame and requires identical input/output modes. The output ICC
-profile is attached to the transformed image for saving.
-
-### Build an image with transparency
-
-```python
-from blanket import Image
-
-background = Image.new("RGBA", (640, 480), "white")
-overlay = Image.new("RGBA", (160, 160), (30, 100, 220, 128))
-background.alpha_composite(overlay, dest=(40, 40))
-background.save("composite.png")
-```
-
-Use `paste()` for masked placement, `putalpha()` to set transparency, and
-`split()` / `Image.merge()` to work with individual channels.
-
-### Work with NumPy and high-bit-depth images
-
-NumPy is optional. `fromarray()` accepts array-interface objects, including
-strided arrays:
-
-```python
-import numpy as np
-from blanket import Image
-
-samples = np.full((64, 64, 3), 713, dtype=np.uint16)
-image = Image.fromarray(samples, bit_depth=10)
-image.save("exact.png")
-image.convert("RGB", bit_depth=8).save("preview.jpg")
-```
-
-`image.bit_depth` reports sample precision. Copying, conversion, pixel access,
-splitting/merging, cropping, transposition, resizing, filters, enhancements,
-blending, masked paste, alpha compositing, and statistics preserve high-bit-depth
-samples. Processing supports 10/12/16-bit `L`/`RGB`/`RGBA` and the `I;16`
-variants; alpha compositing requires RGBA. Kernel offsets, unsharp thresholds,
-and numeric fill/alpha values use the input sample range. Compositing masks may be 8-bit or
-match the image depth. `ImageStat` computes full-range sample statistics,
-including alpha, with `2 ** bit_depth` histogram bins per band; histogram-list
-input retains 256 bins per band. ImageOps and ImageChops channel arithmetic
-still require 8-bit conversion where documented.
-See [high-bit-depth images](https://adjb1212.github.io/blanket-docs/high-bit-depth/)
-for storage and format-specific behavior.
-
-### Render HDR images
-
-```python
-from blanket import Image, ImageHdr
-
-with Image.open("hdr.png") as image:
-    ImageHdr.tone_map(image, "aces", exposure=-0.5).save("preview.png")
-```
-
-`ImageHdr.tone_map` offers `reinhard`, `aces` (Narkowicz fit), and `filmic`
-(Hable, white point 11.2) curves. It accepts L, LA, RGB, RGBA, F, and I;16
-images, including 10/12/16-bit samples. Integer samples are normalized to
-their depth; linear F samples use 1.0 as reference white. The operators work
-per channel in linear light and produce sRGB-encoded 8-bit or 16-bit SDR
-pixels (LA supports 8-bit output). Alpha is preserved with depth scaling.
-Negative/NaN colors become black; positive infinity becomes white.
-
-Transfer decoding supports `linear`, `srgb`, `pq`, and `hlg`. PQ uses
-absolute luminance, normalized by `reference_white` (203 nits by default).
-HLG applies the BT.2100 display OOTF using `peak_luminance` (1000 nits by
-default, supported range 400 to 10000). `exposure` adjusts linear light in
-stops. Primaries may be `srgb` or `bt2020`; BT.2020 is converted to linear
-sRGB, with negative out-of-gamut channels clipped before the curves. No ICC
-transform is applied. Transfer and primaries default to cICP when present,
-otherwise linear and sRGB; unsupported cICP values require explicit overrides.
-Rendering removes stale HDR, ICC, and gamma metadata and tags output as sRGB.
-
-PNG/APNG reads and saves HDR metadata in `image.info`, with matching save
-keyword overrides (`None` removes a field):
-
-- `cicp`: `(primaries, transfer, matrix, full_range)` integer code points;
-  BT.2020/PQ is `(9, 16, 0, 1)`, BT.2020/HLG is `(9, 18, 0, 1)`.
-  PNG requires identity matrix coefficients and full range.
-- `mastering_display`: `(rx, ry, gx, gy, bx, by, wx, wy, max_nits, min_nits)`;
-  requires `cicp`. Chromaticities are encoded in steps of 0.00002 and
-  luminance in steps of 0.0001 nit.
-- `content_light_level`: `(max_cll_nits, max_fall_nits)`, in steps of 0.0001 nit.
-
-These use the standard PNG `cICP`, `mDCV`, and `cLLI` chunks. Malformed optional
-metadata is ignored on read and rejected on save. Metadata describes pixels;
-tagging an image does not change its transfer function or create HDR samples.
-HDR metadata embedding in other containers is not supported by this API;
-pass transfer and primaries explicitly when rendering those images.
+Release wheels include CPU processing and the platform's GPU backend:
+Metal on macOS and CUDA on Linux. CPU use needs no GPU dependencies.
+GPU processing requires compatible hardware and runtime support; explicit
+GPU requests raise an error when unavailable. See the
+[GPU guide](https://adjb1212.github.io/blanket-docs/gpu/) for setup and diagnostics.
+
+## Capabilities
+
+- **Familiar APIs:** resize, crop, draw, filter, enhance, composite, quantize,
+  and compute image statistics with Pillow-shaped modules.
+- **Sample precision:** selected operations support 10/12/16-bit samples,
+  float color, and linear-light resize and compositing.
+- **Frames and pages:** read GIF, WebP, APNG, and TIFF with eager or lazy
+  access; write animations and multi-page PDFs.
+- **Color and metadata:** ICC transforms, HDR tone mapping, editable EXIF,
+  XMP parsing, and metadata-only container rewrites.
+- **Encoding:** JPEG controls, coefficient transforms without recompression,
+  and save-time compression searches.
+- **Interoperability:** array imports, binary streams, perceptual hashes,
+  an optional Pillow bridge, and explicit Metal/CUDA pipelines.
+
+Blanket is **alpha software**, with operation-specific mode and precision
+restrictions. It implements a subset of Pillow's API and is not yet a drop-in
+replacement for `PIL`. GPU operations do not guarantee byte-exact Pillow results.
+See [getting started](https://adjb1212.github.io/blanket-docs/usage/),
+[sample precision](https://adjb1212.github.io/blanket-docs/high-bit-depth/), and
+[Pillow interoperability](https://adjb1212.github.io/blanket-docs/pillow-interop/).
 
 ## Supported formats
 
-Use `from blanket import features` to inspect the installed build:
-`features.check("heif_decoder")` reports runtime codec availability,
-`features.version("jxl")` reports its backend version, and
-`features.blanketinfo()` prints backend and format diagnostics. See the
-[features module](https://adjb1212.github.io/blanket-docs/features/) for feature names.
+| Support | Formats |
+| ------- | ------- |
+| Read and write | PNG/APNG, JPEG, JPEG XL, TIFF, WebP, AVIF, HEIC/HEIF, BMP, GIF, ICO, Netpbm/PAM, TGA, QOI, JPEG 2000, PCX, SGI, XBM, XPM, MSP |
+| Read only | DDS, EPS, FITS, SPIDER, Pixar, Sun raster |
+| Write only | PDF, PALM |
 
-`features.encoding_capabilities("PNG")` returns an immutable
-`EncodingCapabilities` record with `mode_depths` (input modes and significant
-sample depths), `compression_methods`, `animation_options`,
-`animation_mode_depths`, and `multipage`. Names are case insensitive and accept
-format aliases such as `jpg`, `tif`, and `jp2`. Known read-only formats and
-unavailable encoders return `None`; unknown names raise `ValueError`. HEIF
-availability follows the installed HEVC encoder plugin. Queries do not allocate
-or encode images. Integer-mode conversion and palette expansion are excluded
-from the direct encoding mode list. Compression names describe methods; only
-TIFF selects them with `compression=`. TIFF JPEG compression requires 8-bit L/RGB;
-10/12-bit PNG, TIFF, and PNM input uses 16-bit output containers. Animation uses
-RGBA frames; PDF supports multiple pages rather than animation.
+Support varies by mode, depth, and installed codec backend. EPS requires
+Ghostscript. TIFF writes single pages; PDF supports multiple pages.
+Use `features.blanketinfo()` to inspect an installed build and see the
+[format guide](https://adjb1212.github.io/blanket-docs/formats/) for encoder
+settings and restrictions.
 
-Codec failures from `Image.open`, `Image.inspect`, `Image.save`, and streaming
-decoders expose `format` and `operation` (`decode`, `inspect`, or `encode`).
-Catch `blanket.CodecError` for codec failures, or its subclasses
-`UnsupportedCodecError`, `CorruptImageError`, `MissingBackendError`, and
-`CodecResourceLimitError` for unsupported layouts/features, malformed data,
-unavailable runtime backends, and resource limits respectively. These are
-`OSError` subclasses. Corrupt input and resource limits also retain
-`UnidentifiedImageError` compatibility, as do missing backends; unsupported requests also inherit
-`ValueError`. Unknown signatures retain `UnidentifiedImageError`, while file
-access errors and ordinary argument validation retain their usual Python types.
-Backend diagnostics that provide no specific category use `CodecError` for
-encoding and `CorruptImageError` for recognized input that cannot be decoded.
+JPEG saves retain EXIF and ICC profiles; pass `xmp=image.info.get("xmp")`
+explicitly to retain XMP. See the
+[metadata guide](https://adjb1212.github.io/blanket-docs/metadata/) for retention
+rules and editing without recompressing pixels.
 
-| Format      | Read | Write | Notes                                                                   |
-| ----------- | :--: | :---: | ----------------------------------------------------------------------- |
-| PNG         | Yes  |  Yes  | Lossless; APNG animation, high-bit-depth and indexed output             |
-| JPEG        | Yes  |  Yes  | 8-bit output; convert RGBA to RGB before saving                         |
-| JPEG XL     | Yes  |  Yes  | Lossy or lossless; high-bit-depth support                               |
-| TIFF        | Yes  |  Yes  | Multi-page read; single-page raw, LZW, Deflate, or JPEG output          |
-| WebP        | Yes  |  Yes  | Lossy or lossless; animation read/write                                 |
-| AVIF        | Yes  |  Yes  | Primary image only; 8-bit, lossy output                                 |
-| HEIC / HEIF | Yes  |  Yes  | HEVC; retains 8-, 10-, or 12-bit source depth                           |
-| PDF         |  —   |  Yes  | Multi-page, lossless 8-bit output with transparency                     |
-| BMP         | Yes  |  Yes  | 8-bit output; uncompressed                                              |
-| GIF         | Yes  |  Yes  | Animation read/write; 256 colors and binary transparency                |
-| ICO         | Yes  |  Yes  | Largest icon on read; one PNG icon on write, 1–256 pixels per dimension |
-| Netpbm      | Yes  |  Yes  | PBM/PGM/PPM/PAM; bilevel, grayscale, RGB, and PAM alpha; 16-bit support |
-| TGA         | Yes  |  Yes  | Indexed/RLE input; uncompressed grayscale, RGB, and alpha output        |
-| DDS         | Yes  |  No   | DXT1/DXT3/DXT5; first surface only                                      |
-| EPS         | Yes  |  No   | Requires Ghostscript (`gs`); RGB rasterization at 72 DPI                |
-| QOI         | Yes  |  Yes  | Lossless 8-bit RGB/RGBA                                                 |
-| JPEG 2000   | Yes  |  Yes  | Grayscale/RGB with optional alpha; JP2/J2K input; lossless JP2 output   |
-| PCX         | Yes  |  Yes  | Bilevel, indexed, grayscale, and RGB; RLE output                        |
-| SGI         | Yes  |  Yes  | Raw/RLE 8/16-bit input; uncompressed 8-bit output                       |
-| XBM / XPM   | Yes  |  Yes  | Bilevel XBM; RGB/RGBA XPM with binary transparency                      |
-| FITS        | Yes  |  No   | Primary image, first plane; integer/float samples                       |
-| SPIDER      | Yes  |  No   | 2D float images and first image of a stack                              |
-| Pixar       | Yes  |  No   | Uncompressed RGB raster                                                 |
-| MSP         | Yes  |  Yes  | Bilevel; raw/RLE input, uncompressed output                             |
-| PALM        |  No  |  Yes  | Bilevel or 8-bit indexed output                                         |
-| Sun raster  | Yes  |  No   | Raw/RLE, packed grayscale, indexed, and RGB input                       |
+## Development
 
-Netpbm opens with `image.format == "PPM"`, including PAM. Saving selects
-PBM, PGM, or PPM from modes `1`, `L`, or `RGB`; use `format="PAM"` or `.pam`
-for alpha. Netpbm writes high-bit-depth samples as normalized 16-bit values.
-JPEG 2000 accepts unsigned, equally sampled grayscale/RGB components up to
-16 bits, with optional alpha; signed samples, subsampling, and other color
-spaces are unsupported. All JPEG 2000 save extensions write JP2 containers.
-Larger JPEG 2000 jobs use up to eight codec workers; `OPJ_NUM_THREADS`
-overrides automatic worker selection.
-EPS requires Ghostscript (`gs`) on `PATH` and a numeric DSC `BoundingBox`;
-it rasterizes to RGB at 72 DPI with a 30-second timeout.
-
-Encoder settings and their defaults are listed in the
-[format guide](https://adjb1212.github.io/blanket-docs/formats/). HEIF lossless
-compression can still change RGB values during RGB/YUV conversion.
-
-## Compatibility and scope
-
-- **Image modes:** 8-bit processing supports `1`, `L`, `LA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`.
-  Premultiplied `La`/`RGBa` and four-channel `RGBX` support raw channel operations,
-  filters, and geometry; convert explicitly to LA/RGBA/RGB before encoding.
-  Integer `I`, `I;16`, `I;16L`, `I;16B`, and native-endian `I;16N` and floating-point `F` support pixel access,
-  conversion, copying, cropping, transposition, and resizing. `F` also supports
-  transforms and TIFF interchange.
-  Indexed `P` and `PA` images have a smaller supported operation set.
-- **Print and luma/chroma modes:** CMYK uses raw channels without ICC transforms;
-  JPEG and 8-bit TIFF retain CMYK on read, and JPEG, TIFF, and PDF support CMYK
-  output. CMYK save-time compression optimization is unsupported. YCbCr saves
-  to JPEG through RGB and opens back as RGB. Convert either mode to RGB for
-  other output formats or direct quantization.
-- **LAB:** 8-bit CIE L*a*b* supports pixel operations and TIFF interchange.
-  Native, statically linked LittleCMS converts between sRGB and D50 LAB;
-  other conversions pass through RGB. LAB save-time compression optimization
-  is unsupported.
-- **Metadata:** JPEG, PNG, WebP, JPEG XL, HEIF, and TIFF retain EXIF, XMP,
-  and ICC profiles on save. `getexif()` provides editable EXIF IFDs and JPEG
-  thumbnails. `PngImagePlugin.PngInfo` supplies custom PNG text chunks.
-  Explicit `exif`, `xmp`, and `icc_profile` save arguments override source
-  metadata; `None` or empty bytes remove it. Profiles are retained without
-  applying a color transform.
-- **Multiple frames:** GIF, WebP, APNG, and TIFF decode all frames eagerly by
-  default; `lazy=True` enables on-demand access with a bounded frame cache.
-  Use `seek()`, `tell()`, `n_frames`, and `ImageSequence` to navigate them.
-  GIF, WebP, APNG, and PDF support `save_all=True, append_images=[...]`.
-  Pixel operations and copies apply to the current frame. GIFs retain the first
-  frame's palette and use RGB or RGBA for subsequent composited frames.
-  APNG retains supported 8-bit modes, frame regions, and palette transparency.
-- **High bit depth:** sample retention is supported for selected operations
-  and formats. ICC transforms require 8-bit images; HEIF HDR metadata is not retained.
-- **Pillow interop:** `image.to_pillow()` creates a Pillow image when Pillow is
-  installed. High-bit-depth images must first be converted to 8 bits.
-
-See the [usage and API notes](https://adjb1212.github.io/blanket-docs/) for
-operation-specific restrictions, palette support, and interoperability examples.
-
-## Performance
-
-Native Rust benchmarks live in each crate's `benches/` directory. Run
-`cargo bench -p blanket-resample --bench resize` for resize benchmarks or
-`cargo bench -p blanket-codec-jxl --features jxl-vendored --bench codec` for JPEG XL. See the
-[native benchmark guide](crates/BENCHMARKS.md) for all targets, file I/O,
-streaming decoding, filters, and baseline comparisons.
-Defaults use a short run on 800x600 images; set `BLANKET_BENCH_FULL=1` for
-the full matrix and longer statistical measurements.
-
-The benchmark suite compares Blanket and Pillow using equal in-memory inputs
-and eager decoding. After completing the development setup below, run it with
-a release build:
-
-```sh
-uv run --no-sync maturin develop --release -G dev --uv
-uv run --no-sync scripts/benchmark.py --sizes web
-```
-
-Use `--all` for the full suite or `--sections Resize ImageOps` to select
-operations. Use `--sections "Codec I/O" --formats PNG JPEG TIFF` to benchmark
-selected image formats. Format names are case-insensitive; the filter only
-affects Codec I/O. Results depend on image size, operation, codec settings, and
-hardware. The [benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/)
-explains baseline comparisons and reproducible runs.
-
-## Contributing
-
-Source builds require the Rust nightly pinned in `rust-toolchain.toml` for
-portable SIMD.
-
-With the [build prerequisites](https://adjb1212.github.io/blanket-docs/development/) installed, set up a development
-environment and run the checks:
+Source builds use the nightly Rust toolchain pinned in `rust-toolchain.toml`
+for portable SIMD. Install the
+[native prerequisites](https://adjb1212.github.io/blanket-docs/development/), then:
 
 ```sh
 uv sync --no-install-project --dev
-uv tool install maturin
-maturin develop -G dev --uv
-cargo clippy --profile dev --locked --all-targets --workspace -- -D warnings
-cargo test
-uv run --no-sync ty check
-uv run --no-sync pytest -q
+uv run --no-sync maturin develop -G dev --uv
+uv run --no-sync pytest tests/test_api.py
 uv run --no-sync scripts/verify_behavior.py
 ```
 
 The native core lives in [`crates/`](crates/), the Python API in
-[`python/blanket/`](python/blanket/), and compatibility tests in [`tests/`](tests/).
-Include a focused regression test when fixing a bug or adding a feature. To
-report a problem, [open an issue](https://github.com/ADJB1212/blanket/issues).
+[`python/blanket/`](python/blanket/), and tests in [`tests/`](tests/).
+Include a focused regression test for fixes and features. See the
+[development guide](https://adjb1212.github.io/blanket-docs/development/) for
+build options and checks, and the
+[benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/) for
+performance comparisons. Benchmarks require a release build.
 
 ## License
 
