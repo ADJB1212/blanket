@@ -16,7 +16,7 @@ mod float_resize_tests {
 
     #[test]
     fn float_passes_preserve_order_and_guards() {
-        let weights = [123456, -654321, 4725169];
+        let weights = [0.125, -0.25, 1.125];
         let samples = [-2.0_f32, 0.0, 0.25, 1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
         for width in 1..19 {
             for offset in 0..4 {
@@ -25,11 +25,7 @@ mod float_resize_tests {
                 let mut output = vec![123; offset + width * 4 + 4];
                 vertical_float(source, &mut output[offset..offset + width * 4], width, &weights);
                 for x in 0..width {
-                    let expected = weights
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &w)| source[i * width + x] * f64::from(w) / f64::from(crate::ops::RESAMPLE_SCALE))
-                        .sum::<f64>() as f32;
+                    let expected = weights.iter().enumerate().map(|(i, &w)| source[i * width + x] * w).sum::<f64>() as f32;
                     let actual = f32::from_le_bytes(output[offset + x * 4..offset + x * 4 + 4].try_into().unwrap());
                     assert!(actual.to_bits() == expected.to_bits() || actual.is_nan() && expected.is_nan());
                 }
@@ -41,10 +37,7 @@ mod float_resize_tests {
                     let expected: f64 = weights
                         .iter()
                         .enumerate()
-                        .map(|(i, &w)| {
-                            f64::from(f32::from_le_bytes(rows[r][i * 4..i * 4 + 4].try_into().unwrap())) * f64::from(w)
-                                / f64::from(crate::ops::RESAMPLE_SCALE)
-                        })
+                        .map(|(i, &w)| f64::from(f32::from_le_bytes(rows[r][i * 4..i * 4 + 4].try_into().unwrap())) * w)
                         .sum();
                     assert!(actual[r].to_bits() == expected.to_bits() || actual[r].is_nan() && expected.is_nan());
                 }
@@ -342,29 +335,29 @@ pub fn vertical_wide(source: &[f64], output: &mut [f64], stride: usize, weights:
 }
 
 #[inline]
-pub fn horizontal_float_four(source: [&[u8]; 4], weights: &[i32]) -> [f64; 4] {
+pub fn horizontal_float_four(source: [&[u8]; 4], weights: &[f64]) -> [f64; 4] {
     let mut sum = Simd::<f64, 4>::splat(0.0);
     for (i, &weight) in weights.iter().enumerate() {
         let values = Simd::from_array(source.map(|row| f64::from(f32::from_le_bytes(row[i * 4..i * 4 + 4].try_into().unwrap()))));
-        sum += values * Simd::splat(f64::from(weight)) / Simd::splat(f64::from(crate::ops::RESAMPLE_SCALE));
+        sum += values * Simd::splat(weight);
     }
     sum.to_array()
 }
 
-pub fn vertical_float(source: &[f64], output: &mut [u8], stride: usize, weights: &[i32]) {
+pub fn vertical_float(source: &[f64], output: &mut [u8], stride: usize, weights: &[f64]) {
     let count = output.len() / 4;
     let end = count / 4 * 4;
     for x in (0..end).step_by(4) {
         let mut sum = Simd::<f64, 4>::splat(0.0);
         for (i, &weight) in weights.iter().enumerate() {
-            sum += Simd::from_slice(&source[i * stride + x..]) * Simd::splat(f64::from(weight)) / Simd::splat(f64::from(crate::ops::RESAMPLE_SCALE));
+            sum += Simd::from_slice(&source[i * stride + x..]) * Simd::splat(weight);
         }
         for (c, v) in sum.cast::<f32>().to_array().iter().enumerate() {
             output[(x + c) * 4..(x + c + 1) * 4].copy_from_slice(&v.to_le_bytes());
         }
     }
     for x in end..count {
-        let sum: f64 = weights.iter().enumerate().map(|(i, &w)| source[i * stride + x] * f64::from(w) / f64::from(crate::ops::RESAMPLE_SCALE)).sum();
+        let sum: f64 = weights.iter().enumerate().map(|(i, &w)| source[i * stride + x] * w).sum();
         output[x * 4..x * 4 + 4].copy_from_slice(&(sum as f32).to_le_bytes());
     }
 }

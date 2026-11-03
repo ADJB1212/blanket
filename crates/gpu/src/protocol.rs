@@ -132,7 +132,7 @@ pub mod weights {
     pub const START: usize = 0;
     pub const COUNT: usize = 1;
     pub const HEADER_LEN: usize = 2;
-    // CPU resampling uses 22 fractional bits in its signed coefficients.
+    // Byte resampling uses 22 fractional bits in its signed coefficients.
     pub const SCALE: f64 = (1_u32 << 22) as f64;
 }
 

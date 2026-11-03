@@ -29,7 +29,8 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
         return Ok(None);
     }
     let (mode, depth) = match decoder.colortype().map_err(|e| e.to_string())? {
-        tiff::ColorType::Gray(d @ (8 | 16)) => (PixelMode::L, d),
+        tiff::ColorType::Gray(8) => (PixelMode::L, 8),
+        tiff::ColorType::Gray(16) => (PixelMode::I16, 16),
         tiff::ColorType::RGB(d @ (8 | 16)) => (PixelMode::Rgb, d),
         tiff::ColorType::RGBA(d @ (8 | 16)) => (PixelMode::Rgba, d),
         _ => return Ok(None),
@@ -66,6 +67,11 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
     }
     let result = if depth == 8 {
         Image::from_pixels(right - left, bottom - top, mode, pixels, Some("TIFF".into()))
+    } else if mode == PixelMode::I16 {
+        Image::from_integer_bytes(right - left, bottom - top, mode, pixels).map(|mut image| {
+            image.format = Some("TIFF".into());
+            image
+        })
     } else {
         Image::from_sample_bytes(right - left, bottom - top, mode, pixels, depth, Some("TIFF".into()))
     };
@@ -94,6 +100,7 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
         (2, 3, 32, 3) => "RGB;F",
         (2, 4, 32, 3) => "RGBA;F",
         (0 | 1, 1, 32, _) => "I",
+        (0 | 1, 1, 16, 1) => "I;16",
         (0 | 1, 1, _, _) => "L",
         (0 | 1, 2, _, _) => "LA",
         (2 | 6, 3, _, _) => "RGB",
@@ -394,7 +401,10 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|error| error.to_string())?;
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let image = decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    let mut image = decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    if image.mode == PixelMode::L && image.bit_depth == 16 {
+        image.mode = PixelMode::I16;
+    }
     if !(2..=8).contains(&orientation) {
         return Ok(image);
     }

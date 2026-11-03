@@ -406,6 +406,7 @@ class ImageCmsTransform:
         if self.input_mode != self.output_mode:
             raise PyCMSError("in-place transforms require identical input and output modes")
         try:
+            image._ensure_mutable()
             self.transform.apply_in_place(image._native)
         except (ValueError, TypeError) as error:
             raise PyCMSError(str(error)) from error

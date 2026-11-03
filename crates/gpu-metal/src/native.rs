@@ -165,6 +165,7 @@ pub struct Context {
     max_buffer_length: usize,
     queue: Queue,
     library: Retained<ProtocolObject<dyn MTLLibrary>>,
+    precise_library: OnceLock<Result<Retained<ProtocolObject<dyn MTLLibrary>>, String>>,
     pipelines: [[OnceLock<Result<Pipeline, String>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
     pool: Arc<Mutex<BufferPool>>,
     controls: Mutex<ControlCache>,
@@ -538,6 +539,7 @@ impl Context {
                 max_buffer_length,
                 queue,
                 library,
+                precise_library: OnceLock::new(),
                 pipelines,
                 conversions,
                 reductions,
@@ -584,10 +586,24 @@ impl Context {
                 } else {
                     "image_u8"
                 };
-                let function = self
-                    .library
-                    .newFunctionWithName_constantValues_error(&NSString::from_str(name), &constants)
-                    .map_err(|error| error.to_string())?;
+                let library = if floating && matches!(operation, operation::RESIZE | operation::TRANSFER) {
+                    self.precise_library
+                        .get_or_init(|| {
+                            let options = objc2_metal::MTLCompileOptions::new();
+                            options.setLanguageVersion(MTLLanguageVersion::Version4_0);
+                            options.setMathMode(MTLMathMode::Safe);
+                            options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
+                            let source =
+                                NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
+                            self.device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())
+                        })
+                        .as_ref()
+                        .map_err(Clone::clone)?
+                } else {
+                    &self.library
+                };
+                let function =
+                    library.newFunctionWithName_constantValues_error(&NSString::from_str(name), &constants).map_err(|error| error.to_string())?;
                 self.device.newComputePipelineStateWithFunction_error(&function).map_err(|error| error.to_string())
             })
             .as_ref()

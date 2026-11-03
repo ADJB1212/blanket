@@ -175,6 +175,15 @@ def test_resize_without_alpha_premultiplication(runtime, linear):
     assert_images_equal(actual, expected)
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("method", [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC])
+def test_resize_vertical_first_cpu_parity(runtime, mode, method):
+    image = source(mode, size=(17, 31))
+    actual = ImageGpu.from_image(image, runtime=runtime).resize((13, 9), method).to_image()
+    expected = image.resize((13, 9), method)
+    assert_images_equal(actual, expected)
+
+
 @pytest.mark.parametrize("mode", ["RGBA", "RGBA;F"])
 @pytest.mark.parametrize("transfer", ["srgb", "linear"])
 def test_linear_composite_cpu_parity(runtime, mode, transfer):

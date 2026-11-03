@@ -116,11 +116,14 @@ pub(crate) fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: u
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     image.ensure_owned();
+    if fill && image.mode.is_integer() {
+        return paste_integer(py, image, source, position, mask, true);
+    }
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::paste(image, source, position, mask, fill));
     }
     if image.mode.is_wide_scalar() {
-        return paste_integer(py, image, source, position, mask);
+        return paste_integer(py, image, source, position, mask, fill);
     }
     image.pixel_data()?;
     let source_pixels = source.pixel_data()?;
@@ -171,11 +174,18 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
     Ok(())
 }
 
-fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>) -> PyResult<()> {
+fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     if image.mode != source.mode {
         return Err(PyValueError::new_err("images do not match"));
     }
     let source_pixels = source.raw_data()?;
+    let filled;
+    let source_pixels = if fill && matches!(source.mode, PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
+        filled = source_pixels.as_chunks::<2>().0.iter().flat_map(|pixel| [pixel[usize::from(source.mode.is_big_endian())]; 2]).collect::<Vec<_>>();
+        &filled
+    } else {
+        source_pixels
+    };
     let mask_pixels = paste_mask(mask, source)?;
     let stride = image.raw_bytes_per_pixel();
     let width = image.width as i64;

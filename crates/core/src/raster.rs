@@ -462,7 +462,7 @@ fn float_value(bytes: &[u8]) -> f32 {
     f32::from_le_bytes(bytes.try_into().unwrap())
 }
 
-fn integer_value(mode: PixelMode, bytes: &[u8]) -> i64 {
+pub(crate) fn integer_value(mode: PixelMode, bytes: &[u8]) -> i64 {
     match mode {
         PixelMode::I => i64::from(i32::from_le_bytes(bytes.try_into().unwrap())),
         PixelMode::I16B => i64::from(u16::from_be_bytes(bytes.try_into().unwrap())),
@@ -472,7 +472,7 @@ fn integer_value(mode: PixelMode, bytes: &[u8]) -> i64 {
     }
 }
 
-fn integer_bytes(mode: PixelMode, value: i64) -> [u8; 4] {
+pub(crate) fn integer_bytes(mode: PixelMode, value: i64) -> [u8; 4] {
     let mut bytes = [0; 4];
     match mode {
         PixelMode::I => bytes.copy_from_slice(&(value as i32).to_le_bytes()),
@@ -1132,8 +1132,10 @@ impl Image {
         if alpha.as_ref().is_some_and(|alpha| alpha.len() > 256) {
             return Err(PyValueError::new_err("invalid transparency table"));
         }
-        let mut output = Vec::with_capacity(entries.len() / mode.channels() * 4);
-        for (i, entry) in entries.chunks_exact(mode.channels()).enumerate() {
+        let mut output = Vec::with_capacity(256 * 4);
+        for i in 0..256 {
+            let start = i * mode.channels();
+            let entry = entries.get(start..start + mode.channels()).unwrap_or_else(|| &[0, 0, 0, 255][..mode.channels()]);
             let a = if let Some(index) = index {
                 if i == usize::from(index) { 0 } else { entry.get(3).copied().unwrap_or(255) }
             } else {
@@ -1148,6 +1150,90 @@ impl Image {
     pub fn close(&mut self) {
         self.pixels = None;
         self.shared_pixels = None;
+    }
+
+    pub fn convert_matrix(&self, py: Python<'_>, mode: &str, matrix: Vec<f32>) -> PyResult<Self> {
+        if !matches!(mode, "L" | "RGB") {
+            return Err(PyValueError::new_err("illegal conversion"));
+        }
+        if !matches!(matrix.len(), 4 | 12) {
+            return Err(PyTypeError::new_err("matrix must be tuple of length 4 or 12"));
+        }
+        if self.mode != PixelMode::Rgb || self.bit_depth != 8 {
+            return Err(PyValueError::new_err("image has wrong mode"));
+        }
+        let destination = PixelMode::parse(mode)?;
+        let channels = destination.channels();
+        if matrix.len() < channels * 4 {
+            return Err(PyTypeError::new_err("matrix must be tuple of length 12"));
+        }
+        let source = self.pixel_data()?;
+        let mut pixels = alloc_pixels(source.len() / 3 * channels)?;
+        py.detach(|| {
+            for (pixel, output) in source.as_chunks::<3>().0.iter().zip(pixels.chunks_exact_mut(channels)) {
+                for (channel, value) in output.iter_mut().enumerate() {
+                    let m = &matrix[channel * 4..channel * 4 + 4];
+                    *value = (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5)
+                        .clamp(0.0, 255.0) as u8;
+                }
+            }
+        });
+        Self::from_pixels(self.width, self.height, destination, pixels, None)
+    }
+
+    pub fn convert_transparent_alpha(&self, py: Python<'_>, mode: &str, key: Vec<u8>) -> PyResult<Self> {
+        if !matches!(self.mode, PixelMode::L | PixelMode::Rgb) || key.len() != self.mode.channels() || self.bit_depth != 8 {
+            return Err(PyValueError::new_err("invalid transparency color"));
+        }
+        let destination = if matches!(mode, "LA" | "La") { "LA" } else { "RGBA" };
+        let mut image = self.convert(py, destination, None)?;
+        let channels = image.mode.channels();
+        let source = self.pixel_data()?;
+        let output = image.pixels.as_mut().unwrap();
+        py.detach(|| {
+            for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(channels)) {
+                output[channels - 1] = if pixel == key { 0 } else { 255 };
+                if pixel == key && self.mode == PixelMode::Rgb && destination == "LA" {
+                    output[0] = key[0];
+                }
+            }
+        });
+        if mode == destination { Ok(image) } else { image.convert(py, mode, None) }
+    }
+
+    pub fn convert_dithered_bilevel(&self, py: Python<'_>) -> PyResult<Self> {
+        if !matches!(self.mode, PixelMode::L | PixelMode::Rgb) || self.bit_depth != 8 {
+            return Err(PyValueError::new_err("conversion not supported"));
+        }
+        let source = self.pixel_data()?;
+        let channels = self.mode.channels();
+        let width = self.width as usize;
+        let mut pixels = alloc_pixels(width * self.height as usize)?;
+        let mut errors = vec![0i32; width + 1];
+        py.detach(|| {
+            if width == 0 {
+                return;
+            }
+            for (row, output) in source.chunks_exact(width * channels).zip(pixels.chunks_exact_mut(width)) {
+                let (mut right, mut below, mut below_right) = (0, 0, 0);
+                for (x, (pixel, out)) in row.chunks_exact(channels).zip(output).enumerate() {
+                    let gray = if channels == 1 {
+                        i32::from(pixel[0])
+                    } else {
+                        (299 * i32::from(pixel[0]) + 587 * i32::from(pixel[1]) + 114 * i32::from(pixel[2])) / 1000
+                    };
+                    let adjusted = (gray + (right + errors[x + 1]) / 16).clamp(0, 255);
+                    *out = if adjusted > 128 { 255 } else { 0 };
+                    let error = adjusted - i32::from(*out);
+                    errors[x] = 3 * error + below;
+                    below = 5 * error + below_right;
+                    below_right = error;
+                    right = 7 * error;
+                }
+                errors[width] = below;
+            }
+        });
+        Self::from_pixels(self.width, self.height, PixelMode::One, pixels, None)
     }
 
     #[pyo3(signature = (mode, bit_depth=None))]
@@ -1275,7 +1361,7 @@ impl Image {
                     return self.copy(py);
                 }
                 let converted;
-                let source = if self.mode.is_integer() {
+                let source = if self.mode.is_integer() || self.mode == PixelMode::L && self.bit_depth > 8 {
                     self
                 } else {
                     converted = self.convert(py, "L", Some(8))?;
@@ -1283,7 +1369,13 @@ impl Image {
                 };
                 let data = source.raw_data()?;
                 let pixels = py.detach(|| {
-                    if source.mode.is_integer() { crate::simd::integer_to_float(data, source.mode) } else { crate::simd::gray_to_float(data) }
+                    if source.mode.is_integer() {
+                        crate::simd::integer_to_float(data, source.mode)
+                    } else if source.bit_depth > 8 {
+                        crate::simd::integer_to_float(data, PixelMode::I16)
+                    } else {
+                        crate::simd::gray_to_float(data)
+                    }
                 });
                 return Self::from_float_bytes(self.width, self.height, pixels);
             }
@@ -1391,9 +1483,10 @@ impl Image {
                 return Self::from_integer_bytes(self.width, self.height, destination, output);
             }
             let data = self.raw_data()?;
-            if destination == PixelMode::L && bit_depth == Some(16) {
+            if destination == PixelMode::L && bit_depth.is_some_and(|depth| depth > 8) {
                 let pixels = py.detach(|| crate::simd::convert_integer(data, self.mode, PixelMode::I16));
-                return Self::from_sample_bytes(self.width, self.height, PixelMode::L, pixels, 16, None);
+                let gray = Self::from_sample_bytes(self.width, self.height, PixelMode::L, pixels, 16, None)?;
+                return gray.convert(py, mode, bit_depth);
             }
             if matches!(destination, PixelMode::Rgb | PixelMode::Rgba) {
                 let pixels = py.detach(|| crate::simd::integer_to_color(data, self.mode, destination.channels()));
@@ -1499,12 +1592,14 @@ impl Image {
     }
 }
 
-#[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1))]
+#[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1, decoder="raw"))]
 #[allow(clippy::too_many_arguments)]
 pub fn frombytes(
-    py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
+    py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, decoder: &str,
 ) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
+    let input = py.detach(|| crate::raw::decode(data, decoder))?;
+    let data = input.as_ref();
     let decoded = py.detach(|| crate::raw::transform(data, mode, size, bit_depth, rawmode, stride, orientation, false))?;
     let data = decoded.as_ref();
     if mode.is_float() {

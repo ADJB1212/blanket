@@ -57,6 +57,8 @@ pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>
                 alpha.push(color[3]);
             }
         }
+        let entries = usize::from(pixels.iter().copied().max().unwrap_or(0)) + 1;
+        rgb.resize(rgb.len().max(entries * 3), 0);
         encoder.set_palette(rgb);
         if !alpha.is_empty() {
             encoder.set_trns(alpha);

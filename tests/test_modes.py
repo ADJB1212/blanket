@@ -142,6 +142,16 @@ def test_bilevel_logical_operations_with_different_widths(widths: tuple[int, int
         assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["I", "F"])
+@pytest.mark.parametrize("resample", [Image.Resampling.BILINEAR, Image.Resampling.BICUBIC, Image.Resampling.LANCZOS])
+def test_scalar_resize_preserves_constant_precision(mode: str, resample: Image.Resampling) -> None:
+    values = [-2147483648, -123456789, 0, 123456789, 2147483647] if mode == "I" else [-1e20, -123.125, 0.0, 1.0, 1e20]
+    for value in values:
+        actual = Image.new(mode, (19, 13), value).resize((7, 23), resample)
+        expected = PillowImage.new(mode, (19, 13), value).resize((7, 23), resample)
+        assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
 def test_integer_modes_pixel_storage_and_geometry(mode: str) -> None:
     values = [-42, 258, 65535] if mode == "I" else [0, 258, 65535]
@@ -334,7 +344,10 @@ def test_integer_mode_paste(mode: str) -> None:
     target.paste(source, (1, 0))
     assert target.getdata() == [10, 1000, 1000]
     target.paste(42, (0, 0, 1, 1))
-    assert target.getdata() == [42, 1000, 1000]
+    reference = PillowImage.new(mode, (3, 1), 10)
+    reference.paste(PillowImage.new(mode, (2, 1), 1000), (1, 0))
+    reference.paste(42, (0, 0, 1, 1))
+    assert target.tobytes() == reference.tobytes()
 
 
 def test_signed_integer_masked_paste_matches_pillow() -> None:

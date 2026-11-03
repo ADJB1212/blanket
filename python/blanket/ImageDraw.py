@@ -9,12 +9,12 @@ from __future__ import annotations
 
 __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font"}
 
-from math import ceil, cos, isfinite, pi, sin
+from math import atan2, ceil, cos, degrees, floor, isfinite, pi, sin
 from operator import index
 from typing import TYPE_CHECKING
 
 from . import Image
-from ._blanket import draw_ellipse, draw_floodfill, draw_mask, draw_path, draw_points, draw_rectangle
+from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
 from ._color import color_pixel
 from ._draw_font import BitmapFont
 
@@ -84,6 +84,7 @@ class ImageDraw:
         if not isinstance(im, Image.Image):
             raise TypeError("image must be a Blanket Image")
         im.load()
+        im._ensure_mutable()
         if mode is None:
             mode = im.mode
         blend = 0
@@ -141,6 +142,9 @@ class ImageDraw:
             ValueError: If bounds or angles are invalid, the image is closed,
                 or the ink, sample depth, or anti-aliasing mode is unsupported.
         """
+        if not self.antialias:
+            draw_curve(self.im._native, self._bounds(xy), start, end, index(width), "arc", False, self._ink(fill), bool(self.blend))
+            return
         self._path(self._curve(xy, start, end), fill, width=index(width))
 
     def chord(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
@@ -165,7 +169,30 @@ class ImageDraw:
             ValueError: If bounds or angles are invalid, the image is closed,
                 or the ink, sample depth, or anti-aliasing mode is unsupported.
         """
+        if not self.antialias:
+            self._native_curve(xy, start, end, "chord", fill, outline, width)
+            return
         self._shape(self._curve(xy, start, end), fill, outline, width)
+
+    def bitmap(self, xy: Sequence[float], bitmap: Image.Image, fill: Color = None) -> None:
+        """Draw ink through a bilevel, grayscale, or RGBA alpha mask."""
+        x, y = xy
+        mask = bitmap.getchannel("A") if bitmap.mode == "RGBA" else bitmap
+        if mask.mode == "1":
+            mask = mask.convert("L")
+        if mask.mode != "L":
+            raise ValueError("bad transparency mask")
+        if bitmap.mode != "RGBA":
+            draw_mask(self.im._native, (int(x), int(y)), mask.size, mask.tobytes(), self._ink(fill), bool(self.blend), 0)
+            return
+        position = (int(x), int(y), int(x) + mask.width, int(y) + mask.height)
+        ink = Image.new(self.im.mode, mask.size, self._ink(fill))
+        self.im.paste(ink, position, mask)
+
+    def circle(self, xy: Sequence[float], radius: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
+        """Draw a circle centered at xy using the ellipse rasterizer."""
+        x, y = xy
+        self.ellipse((x - radius, y - radius, x + radius, y + radius), fill, outline, width)
 
     def ellipse(self, xy: Coords, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an ellipse inside an inclusive bounding box.
@@ -224,7 +251,29 @@ class ImageDraw:
         """
         if joint not in (None, "curve"):
             raise ValueError("joint must be None or 'curve'")
-        self._path(self._coords(xy), fill, width=max(1, index(width)))
+        width = index(width)
+        if width == 0:
+            width = 1
+        if not self.antialias:
+            points = self._coords(xy)
+            draw_polygon(self.im._native, points, max(1, width), False, False, self._ink(fill), bool(self.blend))
+            if joint == "curve" and width > 4:
+                for previous, point, following in zip(points, points[1:], points[2:], strict=False):
+                    angles = [degrees(atan2(end[0] - start[0], start[1] - end[1])) % 360 for start, end in ((previous, point), (point, following))]
+                    if angles[0] == angles[1]:
+                        continue
+                    flipped = (angles[1] > angles[0] and angles[1] - 180 > angles[0]) or (angles[1] < angles[0] and angles[1] + 180 > angles[0])
+                    start, end = (angles[1] + 90, angles[0] + 90) if flipped else (angles[0] - 90, angles[1] - 90)
+                    self.pieslice((point[0] - width / 2 + 1, point[1] - width / 2 + 1, point[0] + width / 2 - 1, point[1] + width / 2 - 1), start - 90, end - 90, fill=fill)
+                    if width > 8:
+                        gap = []
+                        for angle in angles:
+                            radians = (angle + (90 if flipped else -90) - 90) * pi / 180
+                            dx, dy = (width / 2 - 1) * cos(radians), (width / 2 - 1) * sin(radians)
+                            gap.append((point[0] + (floor(dx) if dx > 0 else ceil(dx)), point[1] + (floor(dy) if dy > 0 else ceil(dy))))
+                        self.line([gap[0], point, gap[1]], fill, 3)
+            return
+        self._path(self._coords(xy), fill, width=max(1, width))
 
     def pieslice(self, xy: Coords, start: float, end: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw an elliptical sector bounded by an arc and two radii.
@@ -248,6 +297,9 @@ class ImageDraw:
             ValueError: If bounds or angles are invalid, the image is closed,
                 or the ink, sample depth, or anti-aliasing mode is unsupported.
         """
+        if not self.antialias:
+            self._native_curve(xy, start, end, "pie", fill, outline, width)
+            return
         bounds = self._bounds(xy)
         points = self._curve(xy, start, end)
         if not points:
@@ -255,6 +307,13 @@ class ImageDraw:
         if abs(end - start) < 360:
             points.append(((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2))
         self._shape(points, fill, outline, width)
+
+    def _native_curve(self, xy: Coords, start: float, end: float, style: str, fill: Color, outline: Color, width: int) -> None:
+        bounds = self._bounds(xy)
+        if fill is not None:
+            draw_curve(self.im._native, bounds, start, end, 0, style, True, self._ink(fill), bool(self.blend))
+        if outline is not None and outline != fill and width > 0:
+            draw_curve(self.im._native, bounds, start, end, index(width), style, False, self._ink(outline), bool(self.blend))
 
     def _bounds(self, xy: Coords) -> tuple[int, int, int, int]:
         """Return two truncated, ordered bounding endpoints as four integers."""
@@ -351,6 +410,12 @@ class ImageDraw:
         points = self._coords(xy)
         if len(points) < 2:
             raise ValueError("polygon requires at least two coordinates")
+        if not self.antialias:
+            if fill is not None:
+                draw_polygon(self.im._native, points, 1, True, True, self._ink(fill), bool(self.blend))
+            if outline is not None and outline != fill and width > 0:
+                draw_polygon(self.im._native, points, index(width), False, True, self._ink(outline), bool(self.blend))
+            return
         self._shape(points, fill, outline, width)
 
     def regular_polygon(
@@ -471,10 +536,13 @@ class ImageDraw:
         x0, y0, x1, y1 = self._bounds(xy)
         if not isfinite(radius) or radius < 0:
             raise ValueError("radius must be finite and nonnegative")
-        radius = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
         corners = (True, True, True, True) if corners is None else corners
         if len(corners) != 4:
             raise ValueError("corners must contain four flags")
+        if not self.antialias:
+            self._rounded_rectangle(xy, radius, fill, outline, index(width), corners)
+            return
+        radius = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
         points = []
         for enabled, (cx, cy, start, corner) in zip(
             corners,
@@ -487,6 +555,73 @@ class ImageDraw:
             else:
                 points.append(corner)
         self._shape(points, fill, outline, width)
+
+    def _rounded_rectangle(self, xy: Coords, radius: float, fill: Color, outline: Color, width: int, corners: tuple[bool, bool, bool, bool]) -> None:
+        coordinates = list(xy)
+        if len(coordinates) == 2:
+            (x0, y0), (x1, y1) = coordinates
+        else:
+            x0, y0, x1, y1 = coordinates
+        diameter = min(x1 - x0, y1 - y0, radius * 2)
+        x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
+        full_x = full_y = False
+        if all(corners):
+            full_x = diameter >= x1 - x0 - 1
+            if full_x:
+                diameter = x1 - x0
+            full_y = diameter >= y1 - y0 - 1
+            if full_y:
+                diameter = y1 - y0
+            if full_x and full_y:
+                self.ellipse(xy, fill, outline, width)
+                return
+        if diameter == 0 or not any(corners):
+            self.rectangle(xy, fill, outline, width)
+            return
+        r = int(diameter // 2)
+        if full_x:
+            parts = [((x0, y0, x0 + diameter, y0 + diameter), 180, 360), ((x0, y1 - diameter, x0 + diameter, y1), 0, 180)]
+        elif full_y:
+            parts = [((x0, y0, x0 + diameter, y0 + diameter), 90, 270), ((x1 - diameter, y0, x1, y0 + diameter), 270, 90)]
+        else:
+            parts = [
+                part
+                for enabled, part in zip(
+                    corners,
+                    [
+                        ((x0, y0, x0 + diameter, y0 + diameter), 180, 270),
+                        ((x1 - diameter, y0, x1, y0 + diameter), 270, 360),
+                        ((x1 - diameter, y1 - diameter, x1, y1), 0, 90),
+                        ((x0, y1 - diameter, x0 + diameter, y1), 90, 180),
+                    ],
+                    strict=True,
+                )
+                if enabled
+            ]
+
+        def rectangle(bounds: tuple[int, int, int, int], ink: Color) -> None:
+            draw_rectangle(self.im._native, bounds, self._ink(ink), 0, bool(self.blend))
+
+        for ink, filled in ((fill, True), (outline, False)):
+            if ink is None or (not filled and (ink == fill or width <= 0)):
+                continue
+            for bounds, start, end in parts:
+                draw_curve(self.im._native, tuple(int(v) for v in bounds), start, end, 0 if filled else width, "pie" if filled else "arc", filled, self._ink(ink), bool(self.blend))
+            if filled:
+                if full_x:
+                    rectangle((x0, y0 + r + 1, x1, y1 - r - 1), ink)
+                elif x1 - r - 1 >= x0 + r + 1:
+                    rectangle((x0 + r + 1, y0, x1 - r - 1, y1), ink)
+                if not full_x and not full_y:
+                    rectangle((x0, y0 + (r + 1 if corners[0] else 0), x0 + r, y1 - (r + 1 if corners[3] else 0)), ink)
+                    rectangle((x1 - r, y0 + (r + 1 if corners[1] else 0), x1, y1 - (r + 1 if corners[2] else 0)), ink)
+            else:
+                if not full_x:
+                    rectangle((x0 + (r + 1 if corners[0] else 0), y0, x1 - (r + 1 if corners[1] else 0), y0 + width - 1), ink)
+                    rectangle((x0 + (r + 1 if corners[3] else 0), y1 - width + 1, x1 - (r + 1 if corners[2] else 0), y1), ink)
+                if not full_y:
+                    rectangle((x0, y0 + (r + 1 if corners[0] else 0), x0 + width - 1, y1 - (r + 1 if corners[3] else 0)), ink)
+                    rectangle((x1 - width + 1, y0 + (r + 1 if corners[1] else 0), x1, y1 - (r + 1 if corners[2] else 0)), ink)
 
     def text(
         self,

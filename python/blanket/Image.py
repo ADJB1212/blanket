@@ -6,7 +6,7 @@ Supported modes are `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGB
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "contextlib", "pathlib", "blanket._lazy_frames", "blanket.ImagePalette"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "contextlib", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette"}
 
 import contextlib
 import math
@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import warnings
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import IntEnum
@@ -245,8 +246,16 @@ class Dither(IntEnum):
     FLOYDSTEINBERG = 3
 
 
+class Palette(IntEnum):
+    """Palette selection for mode conversion."""
+
+    WEB = 0
+    ADAPTIVE = 1
+
+
 MEDIANCUT, MAXCOVERAGE, FASTOCTREE, LIBIMAGEQUANT = Quantize
 NONE, ORDERED, RASTERIZE, FLOYDSTEINBERG = Dither
+WEB, ADAPTIVE = Palette
 
 
 class Transpose(IntEnum):
@@ -754,11 +763,22 @@ class Image:
         if self._lazy_frames is not None:
             self._lazy_frames.close()
 
-    def convert(self, mode: str, *, bit_depth: int | None = None) -> Image:
+    def _ensure_mutable(self) -> None:
+        if self.readonly:
+            self._native = self._native.copy()
+            self.readonly = 0
+
+    def convert(
+        self, mode: str | None = None, matrix: Sequence[float] | None = None, dither: int | None = None, palette: int = Palette.WEB, colors: int = 256, *, bit_depth: int | None = None
+    ) -> Image:
         """Return a new image converted to a supported mode.
 
         Args:
             mode: Destination mode: `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, or an `I;16` variant.
+            matrix: Optional 4- or 12-value color conversion matrix for `L` or `RGB` output.
+            dither: Dithering method for bilevel or fixed-palette conversion; None defaults to Floyd-Steinberg.
+            palette: Palette selection for `P` output: `Palette.WEB` or `Palette.ADAPTIVE`.
+            colors: Maximum number of colors for adaptive palette conversion, from 1 through 256.
             bit_depth: Output sample depth for high-bit-depth storage, or None to retain the input depth. `I` and `F` use 32-bit samples.
 
         Examples:
@@ -769,7 +789,37 @@ class Image:
             result = image.convert("L")
             ```
         """
+        if mode is None or mode == "":
+            mode = ("RGBA" if self.has_transparency_data else "RGB") if self.mode == "P" else self.mode
+        if not isinstance(mode, str):
+            raise TypeError("mode must be a string")
+        if mode not in _BANDS:
+            raise ValueError("image has wrong mode")
+        if matrix is not None:
+            result = Image(self._native.convert_matrix(mode, list(matrix)))
+            result.info.update(self._metadata_info())
+            transparency = self.info.get("transparency")
+            if isinstance(transparency, tuple) and len(transparency) == 3:
+                values = [
+                    max(0, min(255, int(matrix[offset] * transparency[0] + matrix[offset + 1] * transparency[1] + matrix[offset + 2] * transparency[2] + matrix[offset + 3] * 0.5)))
+                    for offset in range(0, 4 if mode == "L" else 12, 4)
+                ]
+                result.info["transparency"] = values[0] if mode == "L" else tuple(values)
+            return result
+        dither = Dither.FLOYDSTEINBERG if dither is None else index(dither)
+        if mode == "1" and self.mode == "LAB":
+            return self.convert("RGB").convert(mode, dither=dither)
+        if mode == "1" and self.mode in ("L", "RGB") and self.bit_depth == 8 and dither:
+            result = Image(self._native.convert_dithered_bilevel())
+            result.info.update(self._metadata_info())
+            return result
         transparency = self.info.get("transparency")
+        if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None and self.bit_depth == 8:
+            key = [transparency] if isinstance(transparency, int) else list(transparency)
+            result = Image(self._native.convert_transparent_alpha(mode, key))
+            result.info.update(self._metadata_info())
+            result.info.pop("transparency", None)
+            return result
         if self.mode == "P" and mode in ("LA", "RGBA") and isinstance(transparency, (int, bytes)):
             source = self.copy()
             if isinstance(transparency, int):
@@ -784,6 +834,9 @@ class Image:
             source = self if self.mode == "P" else self.convert("RGB").quantize()
             if self.mode in ("LA", "RGBA"):
                 alpha = self.getchannel("A").tobytes()
+            elif self.mode == "P" and isinstance(transparency, (int, bytes)):
+                table = bytes(0 if slot == transparency else 255 for slot in range(256)) if isinstance(transparency, int) else transparency.ljust(256, b"\xff")
+                alpha = source.tobytes().translate(table)
             elif self.mode == "P" and self.palette is not None and self.palette.mode == "RGBA":
                 entries = self.palette.tobytes()
                 table = bytes(entries[slot * 4 + 3] if slot * 4 + 3 < len(entries) else 255 for slot in range(256))
@@ -798,6 +851,7 @@ class Image:
             if source.palette is not None:
                 result.putpalette(source.palette)
             result.info.update(self._metadata_info())
+            result.info.pop("transparency", None)
             return result
         if mode == "PA" and self.mode == "PA":
             return self.copy()
@@ -807,11 +861,51 @@ class Image:
                 result.putpalette(self.palette)
             return result
         if mode == "P" and self.mode != "P":
-            return (self.convert("RGB") if self.mode in ("1", "LA", "HSV", "CMYK", "YCbCr", "LAB", "F", "I", "I;16", "I;16L", "I;16B", "I;16N") else self).quantize()
+            source = self if self.mode in ("L", "RGB", "RGBA") else self.convert("RGB")
+            if palette == Palette.ADAPTIVE or source.mode == "RGBA":
+                result = source.quantize(colors=colors)
+                self._conversion_transparency(result)
+                return result
+            reference = new("P", (1, 1))
+            entries = (
+                _GRAY_PALETTE
+                if source.mode == "L"
+                else bytes(30) + bytes(component for blue in range(0, 256, 51) for green in range(0, 256, 51) for red in range(0, 256, 51) for component in (red, green, blue))
+            )
+            reference.putpalette(entries)
+            result = source.quantize(palette=reference, dither=dither)
+            self._conversion_transparency(result)
+            return result
         self._sync_palette()
         result = Image(self._native.convert(mode, bit_depth))
         result.info.update(self._metadata_info())
+        self._conversion_transparency(result)
         return result
+
+    def _conversion_transparency(self, result: Image) -> None:
+        transparency = self.info.get("transparency")
+        if transparency is None or self.mode == result.mode:
+            return
+        if self.mode not in ("L", "RGB", "P") or result.mode not in ("L", "RGB", "P"):
+            return
+        if not isinstance(transparency, (int, tuple)):
+            result.info.pop("transparency", None)
+            return
+        key = new(self.mode, (1, 1), transparency)
+        if self.palette is not None:
+            key.putpalette(self.palette)
+        if result.mode != "P":
+            result.info["transparency"] = key.convert(result.mode).getpixel((0, 0))
+        elif self.mode == "L":
+            result.info["transparency"] = transparency
+        elif result.palette is not None:
+            color = key.convert("RGB").getpixel((0, 0))
+            try:
+                result.info["transparency"] = result.palette.getcolor(color, result)
+                result._sync_palette()
+            except ValueError:
+                warnings.warn("Couldn't allocate palette entry for transparency", UserWarning, stacklevel=3)
+                result.info.pop("transparency", None)
 
     def _sync_palette(self) -> None:
         """Copy the Python palette to the native indexed raster when present."""
@@ -1014,6 +1108,7 @@ class Image:
             raise ValueError("palette putpixel requires an index")
         if type(xy) is not tuple or len(xy) != 2 or type(xy[0]) is not int or type(xy[1]) is not int:
             xy = tuple(index(v) for v in xy)
+        self._ensure_mutable()
         self._native.putpixel(xy, value)
 
     def getdata(self, band: int | None = None) -> list[int | float | tuple[int, ...]]:
@@ -1066,6 +1161,7 @@ class Image:
             image.putdata([(255, 0, 0)] * 64)
             ```
         """
+        self._ensure_mutable()
         self._native.putdata(data, scale, offset)
 
     def getcolors(self, maxcolors: int = 256) -> list[tuple[int, int | float | tuple[int, ...]]] | None:
@@ -1181,6 +1277,13 @@ class Image:
             ```
         """
         return self._native.tobytes(*_raw_args(self.mode, encoder_name, args))
+
+    def frombytes(self, data: object, decoder_name: str = "raw", *args: object) -> None:
+        """Replace pixels from a raw buffer while retaining image metadata."""
+        self.load()
+        replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
+        self.paste(replacement)
+        self.readonly = 0
 
     def tobitmap(self, name: str = "image") -> bytes:
         """Return a mode ``1`` image as X11 bitmap source bytes.
@@ -1308,9 +1411,10 @@ class Image:
             else:
                 source = new(self.mode, size, im)
         # Snapshot aliases before acquiring the native mutable destination borrow.
-        source = source.copy() if source._native is self._native else source
-        if mask is not None and mask._native is self._native:
+        source = source.copy() if source is self or source._native is self._native else source
+        if mask is not None and (mask is self or mask._native is self._native):
             mask = mask.copy()
+        self._ensure_mutable()
         image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
 
     def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0), *, linear_light: bool = False, transfer: str = "srgb") -> None:
@@ -1349,7 +1453,8 @@ class Image:
             self.paste(alpha_composite(background, overlay, linear_light=linear_light, transfer=transfer), box)
             return
         if box == (0, 0, *self.size):
-            overlay = overlay.copy() if overlay._native is self._native else overlay
+            overlay = overlay.copy() if overlay is self or overlay._native is self._native else overlay
+            self._ensure_mutable()
             image_alpha_composite_inplace(self._native, overlay._native)
             return
         background = self if box == (0, 0, *self.size) else self.crop(box)
@@ -1385,6 +1490,7 @@ class Image:
             band = new("L", self.size, index(alpha))
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
+        self._ensure_mutable()
         image_putalpha(self._native, band._native)
         self.readonly = 0
         self._bands = _BANDS[self.mode]
@@ -1583,6 +1689,7 @@ class Image:
             y = max(1, min(math.floor(value), math.ceil(value), key=lambda n: 0 if n == 0 else abs(aspect - x / n)))
         resized = self.resize((x, y), resample, reducing_gap=reducing_gap)
         self._native = resized._native
+        self.readonly = 0
         self.palette = resized.palette
 
     def reduce(self, factor: int | tuple[int, int], box: tuple[int, int, int, int] | None = None) -> Image:
@@ -1840,7 +1947,7 @@ class Image:
             raise ValueError("height and width must be > 0")
         box = (0, 0, self.width, self.height) if box is None else tuple(box)
         if len(box) != 4:
-            raise TypeError("box must contain four coordinates")
+            raise TypeError("box must be sequence of length 4")
         if not all(math.isfinite(value) for value in box) or box[0] < 0 or box[1] < 0 or box[2] > self.width or box[3] > self.height or box[2] < box[0] or box[3] < box[1]:
             raise ValueError("invalid resize box")
         self.load()
@@ -2103,7 +2210,7 @@ class Image:
         return self
 
     def __exit__(self, *exc_info: object) -> None:
-        """Close the image when leaving a context manager.
+        """Leave the context manager, retaining the decoded image pixels.
 
         Args:
             *exc_info: Exception type, value, and traceback supplied by the context manager.
@@ -2116,7 +2223,6 @@ class Image:
                 result = image.copy()
             ```
         """
-        self.close()
 
     def __repr__(self) -> str:
         """Return a representation containing the image mode and dimensions.
@@ -2197,7 +2303,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
     if mode in ("P", "PA"):
-        result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else bytes(768))
+        result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else b"")
     return result
 
 
@@ -2589,10 +2695,47 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         raw = bytes(data)
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
-    rawmode, stride, orientation = _raw_args(mode, decoder_name, args)
-    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation))
+    rawmode, stride, orientation = _raw_args(mode, "raw" if decoder_name in ("hex", "packbits") else decoder_name, args)
+    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation, decoder_name))
     if mode in ("P", "PA"):
-        result.putpalette(_GRAY_PALETTE)
+        result.putpalette(b"")
+    return result
+
+
+def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str = "raw", *args: object) -> Image:
+    """Create an image referencing a buffer when its raw layout can be mapped.
+
+    L, P, RGBX, RGBA, CMYK, I;16, I;16L, and I;16B buffers remain shared.
+    Source changes remain visible until an image mutation detaches its pixels.
+    Instance frombytes writes through writable mappings. Other raw layouts and
+    decoders create an independent image.
+    """
+    if len(args) == 1 and isinstance(args[0], tuple):
+        args = args[0]
+    if decoder_name != "raw":
+        return frombytes(mode, size, data, decoder_name, *args)
+    rawmode, stride, orientation = _raw_args(mode, decoder_name, args)
+    if rawmode not in ("L", "P", "RGBX", "RGBA", "CMYK", "I;16", "I;16L", "I;16B"):
+        return frombytes(mode, size, data, decoder_name, *args)
+    if mode not in _BANDS:
+        raise ValueError("unrecognized image mode")
+    size = tuple(index(value) for value in size)
+    if len(size) != 2:
+        raise ValueError("size must be a sequence of length 2")
+    if min(size) < 0:
+        raise ValueError("Width and height must be >= 0")
+    view = memoryview(data).cast("B")
+    pixel_bytes = 2 if rawmode.startswith("I;16") else len(_BANDS[rawmode])
+    stride = max(stride, size[0] * pixel_bytes)
+    required = stride * size[1]
+    if len(view) < required:
+        raise ValueError("buffer is not large enough")
+    from ._buffer import BufferMap, MappedImage
+
+    mapping = BufferMap(view[:required], rawmode, size, stride, orientation)
+    initial = frombytes(rawmode, size, view[:required], "raw", rawmode, stride, orientation)
+    result = MappedImage(initial._native, mapping)
+    result.palette = initial.palette
     return result
 
 
@@ -2613,7 +2756,19 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
         image = Image.fromarray(pixels)
         ```
     """
-    return Image(_native_fromarray(obj, mode, bit_depth))
+    interface = getattr(obj, "__array_interface__", None)
+    if interface is not None:
+        if "typestr" not in interface:
+            raise TypeError("array interface must provide typestr")
+        if interface.get("strides") is not None and not callable(getattr(obj, "tobytes", None)):
+            try:
+                memoryview(obj)
+            except TypeError as error:
+                raise ValueError("strided array interface requires a buffer or tobytes()") from error
+    result = Image(_native_fromarray(obj, "L" if mode == "P" else mode, bit_depth))
+    if mode == "P":
+        result.putpalette(b"")
+    return result
 
 
 def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
@@ -2729,6 +2884,7 @@ __all__ = [
     "composite",
     "decode",
     "fromarray",
+    "frombuffer",
     "frombytes",
     "getmodebandnames",
     "getmodebands",

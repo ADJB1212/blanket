@@ -203,8 +203,8 @@ def functional_rgb(value: str) -> tuple[int, ...]:
         tokens = [v.strip() for v in body.split(",")]
         if model == "rgba" and len(tokens) != 4:
             raise ValueError("legacy rgba requires four components")
-        if model == "rgb" and len(tokens) == 4 and all(token.isdecimal() for token in tokens):
-            raise ValueError("integer alpha requires rgba")
+        if model in ("rgb", "hsl", "hsv", "hsb") and len(tokens) == 4:
+            raise ValueError("legacy alpha requires rgba")
         if len(tokens) == 4 and model in ("rgb", "rgba", "hsl", "hsla"):
             alpha = tokens.pop()
         if "none" in tokens or alpha == "none":

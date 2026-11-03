@@ -99,18 +99,18 @@ fn kernel(x: f64, method: u8) -> f64 {
 
 // Pillow's 8-bit resampler rounds signed coefficients to 22-bit fixed point,
 // and rounds/clamps pixels after each of its two separable passes.
-struct ResampleWeights {
+struct ResampleWeights<T = i32> {
     bounds: Vec<(usize, std::ops::Range<usize>)>,
-    coefficients: Vec<i32>,
+    coefficients: Vec<T>,
 }
 
-impl ResampleWeights {
-    fn get(&self, index: usize) -> (usize, &[i32]) {
+impl<T> ResampleWeights<T> {
+    fn get(&self, index: usize) -> (usize, &[T]) {
         let (start, range) = &self.bounds[index];
         (*start, &self.coefficients[range.clone()])
     }
 
-    fn iter(&self) -> impl ExactSizeIterator<Item = (usize, &[i32])> {
+    fn iter(&self) -> impl ExactSizeIterator<Item = (usize, &[T])> {
         self.bounds.iter().map(|(start, range)| (*start, &self.coefficients[range.clone()]))
     }
 }
@@ -134,6 +134,10 @@ fn weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> Arc<Res
 }
 
 fn compute_weights(input: u32, output: u32, start: f64, end: f64, method: u8) -> ResampleWeights {
+    normalized_weights(input, output, start, end, method, |v| (v * f64::from(RESAMPLE_SCALE)).round() as i32)
+}
+
+fn normalized_weights<T>(input: u32, output: u32, start: f64, end: f64, method: u8, convert: impl Fn(f64) -> T) -> ResampleWeights<T> {
     let scale = f64::from(end as f32 - start as f32) / f64::from(output);
     let filter_scale = scale.max(1.0);
     let support = match method {
@@ -154,7 +158,7 @@ fn compute_weights(input: u32, output: u32, start: f64, end: f64, method: u8) ->
         raw.extend((left..right).map(|x| kernel((x as f64 - center + 0.5) * (1.0 / filter_scale), method)));
         let sum: f64 = raw.iter().sum();
         let offset = weights.coefficients.len();
-        weights.coefficients.extend(raw.iter().map(|&v| if sum == 0.0 { 0 } else { (v / sum * f64::from(RESAMPLE_SCALE)).round() as i32 }));
+        weights.coefficients.extend(raw.iter().map(|&v| convert(if sum == 0.0 { 0.0 } else { v / sum })));
         weights.bounds.push((left, offset..weights.coefficients.len()));
     }
     weights
@@ -453,18 +457,20 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         }
         return output(image, size, pixels);
     }
+    if method != 0
+        && i64::from(image.height) - i64::from(size.1) > 0
+        && i64::from(image.height) - i64::from(size.1) > (i64::from(image.width) - i64::from(size.0)) * 2
+        && image.width > 0
+    {
+        let transposed = ops_transpose(py, image, 5)?;
+        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap)?;
+        return ops_transpose(py, &resized, 5);
+    }
     if image.mode.is_wide_scalar() {
         return py.detach(|| resize_integer(image, size, b, method));
     }
     if image.bit_depth > 8 {
         return py.detach(|| resize_wide(image, size, b, method));
-    }
-    // Pillow resamples very tall images vertically first to limit temporary
-    // storage. Pass order affects 8-bit rounding, so retain it as well.
-    if u64::from(image.height) > u64::from(image.width) * 100 && size.1 < image.height && image.width > 0 {
-        let transposed = ops_transpose(py, image, 5)?;
-        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap)?;
-        return ops_transpose(py, &resized, 5);
     }
     let c = image.mode.channels();
     let mut result = buffer(size, c)?;
@@ -595,8 +601,8 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
             resize_nearest::<2>(source, &mut pixels, image.width, &xs, &ys);
         }
     } else {
-        let horizontal = weights(image.width, size.0, bounds[0], bounds[2], method);
-        let vertical = weights(image.height, size.1, bounds[1], bounds[3], method);
+        let horizontal = normalized_weights(image.width, size.0, bounds[0], bounds[2], method, |v| v);
+        let vertical = normalized_weights(image.height, size.1, bounds[1], bounds[3], method, |v| v);
         let first = vertical.get(0).0;
         let (last, tail) = vertical.get(size.1 as usize - 1);
         let mut rows = vec![0.0; (last + tail.len() - first) * size.0 as usize];
@@ -609,18 +615,19 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     let source_rows = std::array::from_fn(|r| &source[((sy + r) * image.width as usize + start) * 4..]);
                     let values = crate::ops_simd::horizontal_float_four(source_rows, coefficients);
                     for r in 0..4 {
-                        chunk[(row + r) * row_width + x] = values[r];
+                        chunk[(row + r) * row_width + x] = f64::from(values[r] as f32);
                     }
                 }
             }
             for (row, dst) in chunk.chunks_exact_mut(row_width).enumerate().skip(vector_rows) {
                 let sy = first + band * 16 + row;
                 for (x, (start, coefficients)) in horizontal.iter().enumerate() {
-                    dst[x] = coefficients
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &weight)| value(sy * image.width as usize + start + i) * f64::from(weight) / f64::from(RESAMPLE_SCALE))
-                        .sum();
+                    dst[x] = coefficients.iter().enumerate().map(|(i, &weight)| value(sy * image.width as usize + start + i) * weight).sum();
+                    dst[x] = match image.mode {
+                        PixelMode::F => f64::from(dst[x] as f32),
+                        PixelMode::I => f64::from(dst[x].round().clamp(i32::MIN as f64, i32::MAX as f64) as i32),
+                        _ => dst[x].round().clamp(0.0, 65535.0),
+                    };
                 }
             }
         });
@@ -632,11 +639,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     continue;
                 }
                 for x in 0..row_width {
-                    let sample: f64 = coefficients
-                        .iter()
-                        .enumerate()
-                        .map(|(i, &weight)| rows[(start - first + i) * row_width + x] * f64::from(weight) / f64::from(RESAMPLE_SCALE))
-                        .sum();
+                    let sample: f64 = coefficients.iter().enumerate().map(|(i, &weight)| rows[(start - first + i) * row_width + x] * weight).sum();
                     let offset = x * stride;
                     match image.mode {
                         PixelMode::I => {

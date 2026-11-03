@@ -146,7 +146,13 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
         raw.extend((left..right).map(|x| kernel((x as f64 - center + 0.5) * inverse_scale, method)));
         let sum: f64 = raw.iter().sum();
         for (dst, &value) in row[weights::HEADER_LEN..weights::HEADER_LEN + right - left].iter_mut().zip(&raw) {
-            *dst = if sum == 0.0 { 0.0 } else { ((value / sum * weights::SCALE).round() / weights::SCALE) as f32 };
+            *dst = if sum == 0.0 {
+                0.0
+            } else if floating {
+                (value / sum) as f32
+            } else {
+                ((value / sum * weights::SCALE).round() / weights::SCALE) as f32
+            };
         }
     }
     Ok((stride as u32, result))
@@ -204,6 +210,15 @@ mod tests {
             assert!(rows.as_chunks::<3>().0.iter().all(|row| *row == [0.0, 1.0, 1.0]));
         }
     }
+    #[test]
+    fn float_resize_weights_retain_fractional_precision() {
+        let (stride, floats) = resize_weights(3, 5, resampling::BILINEAR, true).unwrap();
+        let (_, bytes) = resize_weights(3, 5, resampling::BILINEAR, false).unwrap();
+        let offset = stride as usize + weights::HEADER_LEN;
+        assert_eq!(&floats[offset..offset + 2], &[0.6f32, 0.4f32]);
+        assert_ne!(&floats[offset..offset + 2], &bytes[offset..offset + 2]);
+    }
+
     #[test]
     fn nearest_positions_preserve_byte_and_float_evaluation_order() {
         let (_, bytes) = resize_weights(24, 11, resampling::NEAREST, false).unwrap();

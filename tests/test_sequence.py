@@ -210,12 +210,27 @@ def test_tiff_special_mode_on_later_page(mode: str) -> None:
     first.save(stream, "TIFF", save_all=True, append_images=[second])
     actual = Image.open(stream)
     actual.seek(1)
+    assert actual.mode == mode
     if mode == "I;16":
         assert actual.bit_depth == 16
-    else:
-        assert actual.mode == mode
     assert actual.size == second.size
     assert actual.tobytes() == second.tobytes()
+
+
+@pytest.mark.parametrize("duration", [0.0, 0.5, 1.25, 1000 / 3, 32768000, 65535000])
+def test_apng_fractional_duration_matches_pillow(duration: float) -> None:
+    frames = [Image.new("RGBA", (3, 2), color) for color in ("red", "blue")]
+    reference = [PillowImage.new("RGBA", (3, 2), color) for color in ("red", "blue")]
+    actual_data, expected_data = BytesIO(), BytesIO()
+    frames[0].save(actual_data, "PNG", save_all=True, append_images=frames[1:], duration=duration)
+    reference[0].save(expected_data, "PNG", save_all=True, append_images=reference[1:], duration=duration)
+    actual = Image.open(BytesIO(actual_data.getvalue()))
+    expected = PillowImage.open(BytesIO(expected_data.getvalue()))
+    for index in range(2):
+        actual.seek(index)
+        expected.seek(index)
+        assert actual.info["duration"] == expected.info["duration"]
+        assert actual.tobytes() == expected.tobytes()
 
 
 def test_tiff_lzw_large_pages_preserve_strip_order() -> None:

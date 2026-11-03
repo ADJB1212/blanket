@@ -16,7 +16,12 @@ def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> Non
     expected = PillowImage.frombytes(mode, size, raw)
     if mode in ("LA", "RGBA"):
         expected = expected.convert("La" if mode == "LA" else "RGBa")
-    expected = expected.resize((width, 34), PillowImage.Resampling.BOX).resize((width, 17), PillowImage.Resampling.BOX)
+    direct = expected.resize((width, 17), PillowImage.Resampling.BOX)
+    if size[1] - 17 > (size[0] - width) * 2:
+        expected = expected.resize((size[0], 17), PillowImage.Resampling.BOX).resize((width, 17), PillowImage.Resampling.BOX)
+    else:
+        expected = expected.resize((width, 34), PillowImage.Resampling.BOX).resize((width, 17), PillowImage.Resampling.BOX)
+    assert expected.tobytes() == direct.tobytes()
     if mode in ("LA", "RGBA"):
         expected = expected.convert(mode)
     assert actual.resize((width, 17), Image.Resampling.BOX).tobytes() == expected.tobytes()

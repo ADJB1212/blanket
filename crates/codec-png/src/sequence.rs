@@ -195,7 +195,7 @@ fn decode_animation<T: CanvasSample>(
             .map_err(|e| e.to_string())?;
             sequence.frames.push(Frame {
                 image,
-                duration: control.map(|c| f64::from(c.delay_num) * 1000.0 / f64::from(if c.delay_den == 0 { 100 } else { c.delay_den })),
+                duration: control.map(|c| f64::from(c.delay_num) / f64::from(if c.delay_den == 0 { 100 } else { c.delay_den }) * 1000.0),
                 disposal: control.map_or(0, |c| c.dispose_op as u8),
                 blend: control.map_or(0, |c| c.blend_op as u8),
             });
@@ -228,6 +228,38 @@ fn decode_animation<T: CanvasSample>(
     Ok(sequence)
 }
 
+fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
+    if !duration.is_finite() || !(0.0..=65_535_000.0).contains(&duration) {
+        return Err(PyValueError::new_err("cannot write duration"));
+    }
+    let value = duration / 1000.0;
+    let mut remaining = value;
+    let (mut p0, mut q0, mut p1, mut q1) = (0u64, 1u64, 1u64, 0u64);
+    loop {
+        let a = remaining.floor() as u64;
+        if q1 != 0 && a > (65535 - q0) / q1 {
+            break;
+        }
+        let (p2, q2) = (p0 + a * p1, q0 + a * q1);
+        (p0, q0, p1, q1) = (p1, q1, p2, q2);
+        let fraction = remaining - a as f64;
+        if fraction == 0.0 {
+            break;
+        }
+        remaining = 1.0 / fraction;
+    }
+    if q1 == 0 {
+        return Err(PyValueError::new_err("cannot write duration"));
+    }
+    let k = (65535 - q0) / q1;
+    let (p2, q2) = (p0 + k * p1, q0 + k * q1);
+    if q2 > 0 && (p2 as f64 / q2 as f64 - value).abs() < (p1 as f64 / q1 as f64 - value).abs() {
+        (p1, q1) = (p2, q2);
+    }
+    let numerator = u16::try_from(p1).map_err(|_| PyValueError::new_err("cannot write duration"))?;
+    Ok((numerator, q1 as u16))
+}
+
 pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
     let first = sequence.frames[0].image.borrow();
     let mut output = Vec::new();
@@ -253,7 +285,7 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
             let image = frame.image.borrow();
             if !(sequence.default_image && i == 0) {
                 let duration = frame.duration.unwrap_or(0.0);
-                let (num, den) = if duration <= 65535.0 { (duration.round() as u16, 1000) } else { ((duration / 1000.0).round() as u16, 1) };
+                let (num, den) = frame_delay(duration)?;
                 writer.set_frame_delay(num, den).map_err(codec_error)?;
                 writer
                     .set_dispose_op(png::DisposeOp::from_u8(frame.disposal).ok_or_else(|| PyValueError::new_err("invalid APNG disposal"))?)

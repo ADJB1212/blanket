@@ -8,6 +8,9 @@ these combined distribution requirements. This does not replace the MIT
 license on Blanket's original source. The GPL and LGPL texts are included in
 `licenses/libheif-COPYING`.
 
+Pillow-derived raster geometry is covered by the MIT-CMU terms and copyright
+notices in `licenses/Pillow-LICENSE`.
+
 The binary wheels include complete third-party license and notice files under
 their `.dist-info/licenses/licenses/third-party/` directory. This includes
 the Rust dependency notices and notices for nested native dependencies.

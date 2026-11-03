@@ -6,6 +6,35 @@ from PIL import Image as PILImage, ImageDraw as PILDraw
 from blanket import Image, ImageDraw
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("blend", [False, True])
+@pytest.mark.parametrize("width", [1, 2, 5, 11])
+@pytest.mark.parametrize("operation", ["ellipse", "arc", "chord", "pieslice", "polygon", "line", "rounded_rectangle"])
+def test_integer_geometry_matches_pillow(mode: str, blend: bool, width: int, operation: str) -> None:
+    if blend and mode != "RGB":
+        return
+    actual = Image.new(mode, (37, 29), 61)
+    expected = PILImage.new(mode, actual.size, 61)
+    draw_mode = "RGBA" if blend else None
+    ink = (177, 93, 211, 127) if blend else 177
+    edge = (39, 181, 73, 83) if blend else 39
+    for module, image in ((ImageDraw, actual), (PILDraw, expected)):
+        draw = module.Draw(image, draw_mode)
+        if operation == "polygon":
+            draw.polygon([(-3, 4), (27, 1), (32, 18), (14, 10), (2, 26)], fill=ink, outline=edge, width=width)
+        elif operation == "line":
+            draw.line([(-3, 4), (27, 1), (32, 18), (14, 10), (2, 26)], fill=ink, width=width, joint="curve")
+        elif operation == "rounded_rectangle":
+            draw.rounded_rectangle((-2.5, 1.5, 33.5, 26.5), radius=7.5, fill=ink, outline=edge, width=width, corners=(True, False, True, True))
+        elif operation == "arc":
+            draw.arc((-4, 2, 31, 30), 43, 287, fill=ink, width=width)
+        elif operation == "ellipse":
+            draw.ellipse((-4, 2, 31, 30), fill=ink, outline=edge, width=width)
+        else:
+            getattr(draw, operation)((-4, 2, 31, 30), 43, 287, fill=ink, outline=edge, width=width)
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize(
     "operation",
     [

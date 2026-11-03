@@ -165,11 +165,7 @@ def test_single_band_fills_split_and_merge_match_pillow(mode: str) -> None:
     expected = PILImage.new(mode, actual.size, (37,))
     actual.paste((71,), (1, 1, 5, 4))
     expected.paste((71,), (1, 1, 5, 4))
-    if mode.startswith("I;16"):
-        assert actual.getpixel((0, 0)) == 37
-        assert actual.getpixel((1, 1)) == 71
-    else:
-        assert actual.tobytes() == expected.tobytes()
+    assert actual.tobytes() == expected.tobytes()
     (band,) = actual.split()
     assert band.mode == mode
     merged = Image.merge(mode, (band,))

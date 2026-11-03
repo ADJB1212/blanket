@@ -12,6 +12,7 @@ const STROKE_EPSILON: f64 = 1e-12;
 const MAX_MASK_PIXELS: usize = 100_000_000;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::pillow::register(module)?;
     crate::path::register(module)?;
     module.add_function(wrap_pyfunction!(draw_points, module)?)?;
     module.add_function(wrap_pyfunction!(draw_rectangle, module)?)?;
@@ -23,7 +24,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<Vec<u8>> {
+pub(crate) fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<Vec<u8>> {
     if blend && image.mode != PixelMode::Rgb {
         return Err(PyValueError::new_err("mode mismatch"));
     }
@@ -46,7 +47,7 @@ fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<Vec<u8>
     Ok(pixel.pixels.unwrap())
 }
 
-fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
+pub(crate) fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
     image.ensure_owned();
     if x < 0 || y < 0 || x >= i64::from(image.width) || y >= i64::from(image.height) {
         return;
@@ -121,7 +122,7 @@ fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) ->
     ranges
 }
 
-fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bool) {
+pub(crate) fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bool) {
     image.ensure_owned();
     if y < 0 || y >= i64::from(image.height) {
         return;
@@ -248,7 +249,7 @@ fn advance_edges<'a>(edges: &[&'a PathEdge], next: &mut usize, active: &mut Vec<
     }
 }
 
-fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) {
+pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[u8], blend: bool) {
     let dx = b.0 - a.0;
     let dy = b.1 - a.1;
     let horizontal = dx.abs() > dy.abs();
@@ -277,6 +278,11 @@ fn draw_ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'
     let ink = ink(image, value, blend)?;
     if antialias {
         check_coverage(image)?;
+    }
+    if !antialias && bounds.2 - bounds.0 <= 1_000_000 && bounds.3 - bounds.1 <= 1_000_000 {
+        image.ensure_owned();
+        value.py().detach(|| crate::pillow::ellipse(image, bounds, width, &ink, blend));
+        return Ok(());
     }
     let (left, top, right, bottom) = bounds;
     let rx = (right as f64 - left as f64 + 1.0) / 2.0;

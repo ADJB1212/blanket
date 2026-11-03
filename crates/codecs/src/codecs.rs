@@ -331,7 +331,7 @@ pub fn _encode_sequence(
             _ => f64::from(i32::MAX),
         };
         if !durations[i].is_finite() || !(0.0..=maximum).contains(&durations[i]) {
-            return Err(PyValueError::new_err("invalid frame duration"));
+            return Err(PyValueError::new_err(if format == ImageFormat::Png { "cannot write duration" } else { "invalid frame duration" }));
         }
     }
     if format == ImageFormat::Gif && loop_count.is_some_and(|n| n > 65535) {

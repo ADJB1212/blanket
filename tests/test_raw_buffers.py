@@ -8,6 +8,109 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("width", [1, 7, 8, 9, 16, 17, 33])
+@pytest.mark.parametrize(
+    "mode,rawmode",
+    [
+        ("1", "1;IR"),
+        ("1", "L"),
+        ("L", "L;16"),
+        ("L", "L;16B"),
+        ("LA", "LA;L"),
+        ("P", "P;1"),
+        ("P", "P;2"),
+        ("P", "P;4"),
+        ("PA", "PA;L"),
+        ("RGB", "RGBX"),
+        ("RGB", "XRGB"),
+        ("RGB", "XBGR"),
+        ("RGB", "RGB;L"),
+        ("RGB", "G"),
+        ("RGBA", "RGBA;L"),
+        ("RGBA", "RGB"),
+        ("RGBA", "ABGR"),
+        ("RGBA", "BGRa"),
+        ("RGBa", "BGRa"),
+        ("RGBa", "aBGR"),
+        ("RGBX", "RGBX;L"),
+        ("RGBX", "BGRX"),
+        ("CMYK", "CMYK;I"),
+        ("CMYK", "CMYK;L"),
+        ("YCbCr", "YCbCrX"),
+        ("YCbCr", "YCbCrK"),
+        ("LAB", "A"),
+        ("HSV", "V"),
+        ("I", "I;16B"),
+        ("I", "I;32NS"),
+        ("F", "F;32NF"),
+    ],
+)
+def test_extended_raw_encoders_preserve_rows(mode: str, rawmode: str, width: int) -> None:
+    expected = PillowImage.new(mode, (width, 3))
+    channels = len(expected.getbands())
+    expected.putdata([i * 7 if channels == 1 else tuple((i * 7 + c * 31) % 256 for c in range(channels)) for i in range(width * 3)])
+    actual = Image.frombytes(mode, expected.size, expected.tobytes())
+    row = len(expected.tobytes("raw", rawmode)) // 3
+    for orientation in (1, -1):
+        assert actual.tobytes("raw", rawmode, row + 3, orientation) == expected.tobytes("raw", rawmode, row + 3, orientation)
+
+
+@pytest.mark.parametrize("width", [1, 7, 8, 9, 16, 17, 33])
+@pytest.mark.parametrize(
+    "mode,rawmode,bits",
+    [
+        ("1", "1;8", 8),
+        ("L", "L;2IR", 2),
+        ("L", "L;4R", 4),
+        ("P", "P;2L", 2),
+        ("P", "P;4L", 4),
+        ("RGB", "RGB;15", 16),
+        ("RGB", "BGR;16", 16),
+        ("RGB", "RGB;4B", 16),
+        ("RGB", "YCC;P", 24),
+        ("RGB", "CMYK", 32),
+        ("RGBA", "LA;16B", 32),
+        ("RGBA", "YCCA;P", 32),
+        ("RGBA", "RGBa;16L", 64),
+        ("RGBX", "RGBXXX", 48),
+        ("RGBX", "XRGB", 32),
+        ("LAB", "B", 8),
+        ("I", "I;8S", 8),
+        ("I", "I;16BS", 16),
+        ("F", "F;32BS", 32),
+        ("F", "F;64BF", 64),
+        ("I;16", "I;12", 12),
+    ],
+)
+def test_extended_raw_decoders_clip_to_rows(mode: str, rawmode: str, bits: int, width: int) -> None:
+    row = ((width + 7) // 8 * bits) if rawmode in ("P;2L", "P;4L") else (width * bits + 7) // 8
+    stride = row + 3
+    raw = bytes((i * 37 + i // 7) % 256 for i in range(stride * 3 - 3))
+    for orientation in (1, -1):
+        expected = PillowImage.frombytes(mode, (width, 3), raw, "raw", rawmode, stride, orientation)
+        actual = Image.frombytes(mode, expected.size, raw, "raw", rawmode, stride, orientation)
+        assert actual.tobytes() == expected.tobytes()
+        with pytest.raises(ValueError, match="not enough image data"):
+            Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation)
+
+
+@pytest.mark.parametrize("decoder,data", [("hex", b"01 02\n03ff"), ("packbits", bytes([2, 1, 2, 3, 0, 255]))])
+def test_raw_byte_decoders(decoder: str, data: bytes) -> None:
+    expected = PillowImage.frombytes("L", (4, 1), data, decoder, "L")
+    actual = Image.frombytes("L", expected.size, data, decoder, "L")
+    assert actual.tobytes() == expected.tobytes()
+    actual.frombytes(data, decoder, "L")
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("decoder,data", [("hex", b"010203"), ("packbits", bytes([2, 1, 2, 3]))])
+def test_layered_raw_decoders_reject_truncated_planes(decoder: str, data: bytes) -> None:
+    image = Image.new("P", (9, 1))
+    with pytest.raises(ValueError, match="not enough image data"):
+        image.frombytes(data, decoder, "P;2L")
+    assert image.tobytes() == bytes(9)
+
+
 @pytest.mark.parametrize("mode,rawmode", [("RGB", "RGB"), ("RGB", "BGR"), ("RGB", "BGRX"), ("RGBA", "RGBA"), ("RGBA", "BGRA")])
 @pytest.mark.parametrize("width", [1, 3, 15, 16, 17, 33])
 @pytest.mark.parametrize("padding", [0, 1, 5])
@@ -92,7 +195,7 @@ def test_invalid_raw_layouts_fail(args, error):
         Image.frombytes("RGB", (2, 2), bytes(12), "raw", *args)
 
 
-@pytest.mark.parametrize("codec", ["png", "jpeg", "hex", ""])
+@pytest.mark.parametrize("codec", ["png", "jpeg", ""])
 def test_raw_methods_reject_other_codecs(codec):
     with pytest.raises(ValueError, match="only the raw"):
         Image.new("L", (1, 1)).tobytes(codec)

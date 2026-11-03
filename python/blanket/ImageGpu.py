@@ -930,7 +930,7 @@ class GpuImage:
         alpha = has_alpha and (resample != 0 or floating) and (premultiply_alpha or not floating)
         clamp_alpha = has_alpha and floating and not premultiply_alpha
         result = self._run(4) if alpha else (self._run(24) if clamp_alpha else self)
-        axes = (1, 0) if not _MODES[self.mode][1] and self.size[1] > self.size[0] * 100 and size[1] < self.size[1] else (0, 1)
+        axes = (1, 0) if resample != 0 and self.size[1] - size[1] > 0 and self.size[1] - size[1] > (self.size[0] - size[0]) * 2 else (0, 1)
         if size[axes[0]] * self.size[axes[1]] > _MAX_PIXELS:
             axes = axes[::-1]
         for axis in axes:

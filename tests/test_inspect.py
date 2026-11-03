@@ -76,7 +76,8 @@ def test_wide_samples(format, depth, mode):
         format = "PAM"
     data = encode(mode, format, depth)
     header = Image.inspect(BytesIO(data))
-    assert (header.mode, header.size) == (mode, (17, 9))
+    expected_mode = "I;16" if format == "TIFF" and mode == "L" else mode
+    assert (header.mode, header.size) == (expected_mode, (17, 9))
     assert header.bit_depth == (depth if format == "JPEG2000" else 16)
 
 
@@ -268,7 +269,7 @@ def test_jpeg_header_precision():
 
 
 def test_tiff_float_and_integer_depths():
-    for mode, depth, expected in [("1", 1, "1"), ("I;16", 16, "L"), ("I", 32, "I"), ("F", 32, "F")]:
+    for mode, depth, expected in [("1", 1, "1"), ("I;16", 16, "I;16"), ("I", 32, "I"), ("F", 32, "F")]:
         stream = BytesIO()
         PillowImage.new(mode, (4, 3)).save(stream, "TIFF")
         header = Image.inspect(stream)

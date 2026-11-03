@@ -59,6 +59,8 @@ def test_context_manager() -> None:
     source = Image.frombytes("RGBA", (17, 13), pixels("RGBA"))
     with source as entered:
         assert entered is source
+    assert source.tobytes() == pixels("RGBA")
+    source.close()
     with pytest.raises(ValueError, match="closed image"):
         source.tobytes()
 
