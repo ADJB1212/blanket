@@ -16,9 +16,11 @@ class PluginImageMeta(type):
     """Recognize native images by format and construct them through open()."""
 
     def __instancecheck__(cls, instance: object) -> bool:
+        """Check if instance is an Image with matching format."""
         return isinstance(instance, Image) and instance.format == cls._format
 
     def __call__(cls, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, filename: str | bytes | None = None) -> Image:
+        """Open an image using the class format."""
         try:
             image = open(fp, formats=[cls._format])
         except UnidentifiedImageError as error:

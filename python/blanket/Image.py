@@ -369,19 +369,62 @@ class PixelAccess:
     """Read and write pixels in the raster selected by Image.load()."""
 
     def __init__(self, native: _Image) -> None:
+        """Initialize pixel access for a native image.
+
+        Args:
+            native: Image storage supplied by the Rust extension.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (4, 4), "black")
+            pixels = image.load()
+            ```
+        """
         self._native = native
 
     @staticmethod
     def _coordinates(xy: tuple[int, int]) -> tuple[int, int]:
+        """Validate and convert coordinates into integer pair."""
         if not isinstance(xy, tuple) or len(xy) != 2:
             raise TypeError("argument must be sequence of length 2")
         x, y = (int(v) if isinstance(v, float) else index(v) for v in xy)
         return x, y
 
     def __getitem__(self, xy: tuple[int, int]) -> int | float | tuple[int | float, ...]:
+        """Return the pixel value at the given coordinates.
+
+        Args:
+            xy: The (x, y) coordinate tuple.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (4, 4), (255, 0, 0))
+            pixels = image.load()
+            color = pixels[0, 0]
+            ```
+        """
         return self._native.getpixel(self._coordinates(xy))
 
     def __setitem__(self, xy: tuple[int, int], value: float | tuple[int | float, ...]) -> None:
+        """Set the pixel value at the given coordinates.
+
+        Args:
+            xy: The (x, y) coordinate tuple.
+            value: Pixel value matching the image mode.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (4, 4), "black")
+            pixels = image.load()
+            pixels[1, 1] = (255, 255, 255)
+            ```
+        """
         coordinates = self._coordinates(xy)
         if isinstance(value, tuple) and len(value) == 1:
             mode = self._native.mode
@@ -609,6 +652,7 @@ class Image:
         self._frame = frame
 
     def _seek(self, frame: int) -> None:
+        """Internal seek ensuring sequential frame access."""
         self._native.load()
         if frame != 0 and frame != self._frame + 1:
             raise ValueError(f"cannot seek to frame {frame}")
@@ -737,6 +781,16 @@ class Image:
         self.load()
 
     def load_djpeg(self) -> None:
+        """Deprecated compatibility method that loads the image raster.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            image.load_djpeg()
+            ```
+        """
         warnings.warn("load_djpeg is deprecated and will be removed in Pillow 14 (2027-10-15). Use the built-in JPEG decoder instead, or call djpeg yourself.", DeprecationWarning, stacklevel=2)
         self.load()
 
@@ -832,6 +886,7 @@ class Image:
             self._lazy_frames.close()
 
     def _ensure_mutable(self) -> None:
+        """Make a writable copy of the native image raster if readonly."""
         if self.readonly:
             self._native = self._native.copy()
             self.readonly = 0
@@ -942,6 +997,7 @@ class Image:
         return result
 
     def _conversion_transparency(self, result: Image) -> None:
+        """Update transparency metadata across compatible mode conversions."""
         transparency = self.info.get("transparency")
         if transparency is None or self.mode == result.mode:
             return
@@ -988,9 +1044,34 @@ class Image:
         return result
 
     def __copy__(self) -> Image:
+        """Return a shallow copy of the image.
+
+        Examples:
+            ```python
+            import copy
+            from blanket import Image
+
+            image = Image.new("RGB", (4, 4), "red")
+            copied = copy.copy(image)
+            ```
+        """
         return self.copy()
 
     def __deepcopy__(self, memo: dict[int, object]) -> Image:
+        """Return a deep copy of the image and its metadata.
+
+        Args:
+            memo: Dictionary tracking copied objects.
+
+        Examples:
+            ```python
+            import copy
+            from blanket import Image
+
+            image = Image.new("RGB", (4, 4), "red")
+            copied = copy.deepcopy(image)
+            ```
+        """
         self._sync_palette()
         result = Image(self._native.copy())
         memo[id(self)] = result
@@ -1042,6 +1123,7 @@ class Image:
         return result
 
     def _getmp(self) -> dict[int, object] | None:
+        """Parse Multi-Picture Format (MPO) metadata if present."""
         raw = self.info.get("mp")
         if not isinstance(raw, bytes):
             return None
@@ -1098,7 +1180,16 @@ class Image:
         return mp
 
     def get_child_images(self) -> list[Image]:
-        """Return embedded thumbnail or child images referenced in EXIF."""
+        """Return embedded thumbnail or child images referenced in EXIF.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8))
+            children = image.get_child_images()
+            ```
+        """
         exif = self.getexif()
         if exif.thumbnail is not None:
             child = open(BytesIO(exif.thumbnail))
@@ -1111,6 +1202,14 @@ class Image:
 
         Args:
             strip_namespaces: Strip namespace URIs from tag and attribute names.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8))
+            xmp = image.getxmp()
+            ```
         """
         raw = self.info.get("xmp")
         if not isinstance(raw, bytes):
@@ -1124,19 +1223,48 @@ class Image:
             raise ParseError(str(error)) from error
 
     def _repr_png_(self) -> bytes | None:
+        """Return PNG encoded bytes for Jupyter rich display, or None if unavailable.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), "white")
+            png_bytes = image._repr_png_()
+            ```
+        """
         try:
             return self.encode("PNG", compress_level=1)
         except Exception:
             return None
 
     def _repr_jpeg_(self) -> bytes | None:
+        """Return JPEG encoded bytes for Jupyter rich display, or None if unavailable.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), "white")
+            jpeg_bytes = image._repr_jpeg_()
+            ```
+        """
         try:
             return self.encode("JPEG")
         except Exception:
             return None
 
     def get_format_mimetype(self) -> str | None:
-        """Return the detected format's MIME type, or None when unknown."""
+        """Return the detected format's MIME type, or None when unknown.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8))
+            mimetype = image.get_format_mimetype()
+            ```
+        """
         if self.format == "PNG" and "loop" in self.info:
             return "image/apng"
         return _MIME_TYPES.get(self.format or "")
@@ -1455,7 +1583,21 @@ class Image:
         return self._native.tobytes(*_raw_args(self.mode, encoder_name, args))
 
     def frombytes(self, data: object, decoder_name: str = "raw", *args: object) -> None:
-        """Replace pixels from a raw buffer while retaining image metadata."""
+        """Replace pixels from a raw buffer while retaining image metadata.
+
+        Args:
+            data: Buffer or byte sequence containing packed pixel values.
+            decoder_name: Decoder name, default is "raw".
+            *args: Additional decoder arguments such as rawmode and stride.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (2, 2))
+            image.frombytes(b"\xff\x00\x00" * 4)
+            ```
+        """
         self.load()
         replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
         self.paste(replacement)
@@ -2413,6 +2555,20 @@ class Image:
         return f"<blanket.Image.Image image mode={self.mode} size={self.width}x{self.height}>"
 
     def __eq__(self, other: object) -> bool:
+        """Check equality of mode, size, bit depth, info, palette, and pixel bytes.
+
+        Args:
+            other: Object to compare against.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            a = Image.new("RGB", (4, 4), "black")
+            b = Image.new("RGB", (4, 4), "black")
+            print(a == b)
+            ```
+        """
         return type(self) is type(other) and self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self.tobytes() == other.tobytes()
 
 

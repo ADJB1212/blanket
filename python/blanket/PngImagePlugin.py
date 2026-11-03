@@ -109,14 +109,17 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
 
 class _Buffer:
     def __init__(self, target: bytearray) -> None:
+        """Initialize the buffer wrapper around a bytearray."""
         self.target = target
 
     def write(self, data: bytes) -> int:
+        """Append data to the bytearray target and return bytes written."""
         self.target.extend(data)
         return len(data)
 
 
 def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview]]) -> bytearray:
+    """Strip APNG animation chunks to produce a static PNG."""
     output = bytearray(_MAGIC)
     seen_idat = False
     for start, end, cid, _ in chunks:
@@ -147,10 +150,34 @@ class Blend(IntEnum):
 
 
 def o16(value: int) -> bytes:
+    """Pack an integer as a 16-bit unsigned big-endian bytes object.
+
+    Args:
+        value: Integer value in range 0 to 65535.
+
+    Examples:
+        ```python
+        from blanket.PngImagePlugin import o16
+
+        packed = o16(42)
+        ```
+    """
     return struct.pack(">H", value)
 
 
 def o32(value: int) -> bytes:
+    """Pack an integer as a 32-bit unsigned big-endian bytes object.
+
+    Args:
+        value: Integer value in range 0 to 4294967295.
+
+    Examples:
+        ```python
+        from blanket.PngImagePlugin import o32
+
+        packed = o32(1000)
+        ```
+    """
     return struct.pack(">I", value)
 
 

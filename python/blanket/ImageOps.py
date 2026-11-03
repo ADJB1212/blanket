@@ -585,11 +585,31 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
 
 
 @overload
-def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None: ...
+def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None:
+    """Apply EXIF orientation in-place and return None.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        ImageOps.exif_transpose(image, in_place=True)
+        ```
+    """
 
 
 @overload
-def exif_transpose(image: Image.Image, *, in_place: Literal[False] = False) -> Image.Image: ...
+def exif_transpose(image: Image.Image, *, in_place: Literal[False] = False) -> Image.Image:
+    """Apply EXIF orientation and return a transformed copy.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 100, 180))
+        result = ImageOps.exif_transpose(image)
+        ```
+    """
 
 
 def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image | None:

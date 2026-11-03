@@ -34,20 +34,77 @@ class Outline:
     """Flattened cubic Bezier and line segments for ImageDraw.shape()."""
 
     def __init__(self) -> None:
+        """Initialize an empty Outline.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            ```
+        """
         self.x = self.x0 = 0.0
         self.y = self.y0 = 0.0
         self.edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
 
     def move(self, x0: float, y0: float) -> None:
+        """Move the current position to (x0, y0) without drawing an edge.
+
+        Args:
+            x0: Target x-coordinate.
+            y0: Target y-coordinate.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            outline.move(10.0, 10.0)
+            ```
+        """
         self.x = self.x0 = float(x0)
         self.y = self.y0 = float(y0)
 
     def line(self, x1: float, y1: float) -> None:
+        """Add a line segment from the current position to (x1, y1).
+
+        Args:
+            x1: Ending x-coordinate.
+            y1: Ending y-coordinate.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            outline.move(0.0, 0.0)
+            outline.line(10.0, 10.0)
+            ```
+        """
         x1, y1 = float(x1), float(y1)
         self.edges.append(((int(self.x), int(self.y)), (int(x1), int(y1))))
         self.x, self.y = x1, y1
 
     def curve(self, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float) -> None:
+        """Add a cubic Bezier curve segment to (x3, y3).
+
+        Args:
+            x1: First control point x-coordinate.
+            y1: First control point y-coordinate.
+            x2: Second control point x-coordinate.
+            y2: Second control point y-coordinate.
+            x3: Destination endpoint x-coordinate.
+            y3: Destination endpoint y-coordinate.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            outline.move(0.0, 0.0)
+            outline.curve(5.0, 0.0, 10.0, 5.0, 10.0, 10.0)
+            ```
+        """
         x1, y1, x2, y2, x3, y3 = float(x1), float(y1), float(x2), float(y2), float(x3), float(y3)
         xo, yo = self.x, self.y
         for step in range(1, 33):
@@ -64,11 +121,38 @@ class Outline:
         self.x, self.y = xo, yo
 
     def close(self) -> None:
+        """Close the outline by connecting the current position back to the origin.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            outline.move(0.0, 0.0)
+            outline.line(10.0, 0.0)
+            outline.line(10.0, 10.0)
+            outline.close()
+            ```
+        """
         if self.x == self.x0 and self.y == self.y0:
             return
         self.line(self.x0, self.y0)
 
     def transform(self, matrix: Sequence[float]) -> None:
+        """Transform all points in the outline using an affine matrix.
+
+        Args:
+            matrix: Sequence of 6 transformation coefficients `(a, b, c, d, e, f)`.
+
+        Examples:
+            ```python
+            from blanket.ImageDraw import Outline
+
+            outline = Outline()
+            outline.move(1.0, 1.0)
+            outline.transform([1.0, 0.0, 5.0, 0.0, 1.0, 5.0])
+            ```
+        """
         if len(matrix) != 6:
             raise TypeError("transform matrix must contain six values")
         a, b, c, d, e, f = (float(value) for value in matrix)
@@ -76,6 +160,7 @@ class Outline:
             raise ValueError("transform matrix must be finite")
 
         def point(x: float, y: float) -> tuple[int, int]:
+            """Apply the affine matrix to coordinates (x, y)."""
             return int(a * x + b * y + c), int(d * x + e * y + f)
 
         edges = [(point(*start), point(*end)) for start, end in self.edges]
@@ -115,6 +200,7 @@ def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] 
         raise ValueError("rotation should be an int or float")
 
     def _apply_rotation(point: tuple[float, float], deg: float) -> tuple[float, float]:
+        """Rotate a 2D point around the centroid by given degrees."""
         rad = radians(360 - deg)
         return (round(point[0] * cos(rad) - point[1] * sin(rad) + centroid_x, 2), round(point[1] * cos(rad) + point[0] * sin(rad) + centroid_y, 2))
 
@@ -449,6 +535,7 @@ class ImageDraw:
         self._shape(points, fill, outline, width)
 
     def _native_curve(self, xy: Coords, start: float, end: float, style: str, fill: Color, outline: Color, width: int) -> None:
+        """Render a filled or outlined arc, chord, or pie slice natively."""
         bounds = self._bounds(xy)
         fill_ink = None if fill is None else self._ink(fill)
         outline_ink = None if outline is None else self._ink(outline)
@@ -690,6 +777,7 @@ class ImageDraw:
         self._shape(points, fill, outline, width)
 
     def _rounded_rectangle(self, xy: Coords, radius: float, fill: Color, outline: Color, width: int, corners: tuple[bool, bool, bool, bool]) -> None:
+        """Render a rounded rectangle with specified corner radii."""
         coordinates = list(xy)
         if len(coordinates) == 2:
             (x0, y0), (x1, y1) = coordinates
@@ -726,6 +814,7 @@ class ImageDraw:
             ]
 
         def rectangle(bounds: tuple[int, int, int, int], ink: Color) -> None:
+            """Draw a filled rectangle within the given bounds."""
             draw_rectangle(self.im._native, bounds, self._ink(ink), 0, bool(self.blend))
 
         fill_ink = None if fill is None else self._ink(fill)

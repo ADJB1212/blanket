@@ -80,10 +80,30 @@ class Path:
         return iter(self._points)
 
     @overload
-    def __getitem__(self, key: int) -> tuple[float, float]: ...
+    def __getitem__(self, key: int) -> tuple[float, float]:
+        """Return the coordinate pair at the specified index.
+
+        Examples:
+            ```python
+            from blanket.ImagePath import Path
+
+            path = Path([(0, 0), (10, 20)])
+            point = path[1]
+            ```
+        """
 
     @overload
-    def __getitem__(self, key: slice) -> Path: ...
+    def __getitem__(self, key: slice) -> Path:
+        """Return a new Path containing a slice of vertices.
+
+        Examples:
+            ```python
+            from blanket.ImagePath import Path
+
+            path = Path([(0, 0), (10, 20), (30, 40)])
+            subpath = path[1:]
+            ```
+        """
 
     def __getitem__(self, key: int | slice) -> tuple[float, float] | Path:
         """Return a coordinate pair or an independent path for a contiguous slice."""
