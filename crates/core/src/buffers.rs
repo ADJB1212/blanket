@@ -15,8 +15,18 @@ pub fn reserved_buffer(size: (u32, u32), channels: usize) -> PyResult<Vec<u8>> {
         .checked_mul(size.1 as usize)
         .and_then(|n| n.checked_mul(channels))
         .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+    reserved(len)
+}
+
+pub fn reserved<T>(len: usize) -> PyResult<Vec<T>> {
     let mut result = Vec::new();
     result.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    Ok(result)
+}
+
+pub fn copy<T: Copy>(source: &[T]) -> PyResult<Vec<T>> {
+    let mut result = reserved(source.len())?;
+    result.extend_from_slice(source);
     Ok(result)
 }
 
@@ -51,4 +61,25 @@ pub fn copy_rows<'a>(pixels: &mut Vec<u8>, row_bytes: usize, height: usize, sour
     // SAFETY: every byte in the reserved image was initialized above. If a
     // worker panics, the vector remains empty and exposes no unwritten bytes.
     unsafe { pixels.set_len(len) };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn copies_preserve_values_and_have_independent_storage() {
+        let mut source = [0_u16, 1023, 4095, 65535];
+        let result = copy(&source).unwrap();
+        source.fill(1);
+        assert_eq!(result, [0, 1023, 4095, 65535]);
+        assert!(copy::<u8>(&[]).unwrap().is_empty());
+    }
+
+    #[test]
+    fn reservation_overflow_is_a_memory_error() {
+        pyo3::Python::initialize();
+        let error = reserved::<u16>(usize::MAX).unwrap_err();
+        Python::attach(|py| assert!(error.is_instance_of::<PyMemoryError>(py)));
+    }
 }

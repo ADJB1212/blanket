@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 from ._blanket import _encode_sequence, _write_metadata
 from ._exif import save_metadata
-from ._io import write_all
+from ._io import write_bytes
 from .errors import UnsupportedCodecError
 from .Image import Image, _bounded_int, _save_options
 
@@ -195,9 +195,5 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         encoded = _write_metadata(encoded, format, *metadata)
     if fp is None:
         return encoded
-    if hasattr(fp, "write"):
-        write_all(fp, encoded)
-    else:
-        with open(fp, "wb") as output:
-            output.write(encoded)
+    write_bytes(fp, encoded)
     return encoded

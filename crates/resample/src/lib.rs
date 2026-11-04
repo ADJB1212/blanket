@@ -714,8 +714,7 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
     let rows = last + tail.len() - first;
     let stride = size.0 as usize * channels;
     let length = rows.checked_mul(stride).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
-    let mut temp = Vec::new();
-    temp.try_reserve_exact(length).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut temp = blanket_core::buffers::reserved(length)?;
     temp.resize(length, 0.0);
     let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
     chunks_mut_above(&mut temp, stride * 8, MIN_PARALLEL_BYTES, |band, rows| {

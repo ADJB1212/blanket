@@ -8,12 +8,50 @@ from typing import TYPE_CHECKING
 import pytest
 from PIL import Image as PillowImage
 
-from blanket import Image
+from blanket import Image, ImageMetadata
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path
+
+
+@pytest.mark.parametrize("operation", [Image.inspect, ImageMetadata.rewrite, ImageMetadata.get_resolution, ImageMetadata.get_previews])
+def test_read_failures_restore_source_position(operation) -> None:
+    class FailingStream(BytesIO):
+        def read(self, size: int = -1) -> bytes:
+            if size == -1:
+                raise OSError("read failed")
+            return super().read(size)
+
+    stream = FailingStream(Image.new("L", (3, 2), 7).encode("PNG"))
+    stream.seek(5)
+    with pytest.raises(OSError, match="read failed"):
+        operation(stream)
+    assert stream.tell() == 5
+    assert not stream.closed
+
+
+@pytest.mark.parametrize("operation", [Image.inspect, ImageMetadata.rewrite, ImageMetadata.get_resolution, ImageMetadata.get_previews])
+def test_unsized_reads_restore_source_position(operation) -> None:
+    class UnsizedStream(BytesIO):
+        def read(self) -> bytes:
+            return super().read()
+
+    encoded = Image.new("L", (3, 2), 7).encode("PNG")
+    stream = UnsizedStream(encoded)
+    stream.seek(5)
+    result = operation(stream)
+    if operation is Image.inspect:
+        assert result.size == (3, 2)
+    elif operation is ImageMetadata.rewrite:
+        assert result == encoded
+    elif operation is ImageMetadata.get_resolution:
+        assert result.dpi is None
+    else:
+        assert result == ()
+    assert stream.tell() == 5
+    assert not stream.closed
 
 
 @pytest.mark.parametrize(

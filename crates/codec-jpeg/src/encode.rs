@@ -140,7 +140,7 @@ fn smooth_planes(image: &Image, pixels: &[u8], horizontal: usize, vertical: usiz
         if image.mode == PixelMode::Rgb && !keep_rgb {
             let [r, g, b] = [i32::from(pixel[0]), i32::from(pixel[1]), i32::from(pixel[2])];
             let values = [
-                ((19595 * r + 38470 * g + 7471 * b + 32768) >> 16) as u8,
+                blanket_core::simd::pillow_luma(pixel[0], pixel[1], pixel[2]),
                 ((-11059 * r - 21709 * g + 32768 * b + 8421375) >> 16) as u8,
                 ((32768 * r - 27439 * g - 5329 * b + 8421375) >> 16) as u8,
             ];

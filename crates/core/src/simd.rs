@@ -2,7 +2,7 @@ use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
-use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
+use crate::color::{luminance, luminance_simd};
 use crate::parallel::{CHUNK_PIXELS, chunks_mut};
 use crate::pixels::{Bytes, load, load_sample_bytes, load_u16, store, store_sample_bytes};
 use crate::raster::PixelMode;
@@ -136,9 +136,7 @@ fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARG
                 if source_bytes == 1 { load::<S>(input).map(|v| v.cast()) } else { load_sample_bytes::<S>(input).map(|v| v.cast()) };
             let values: [Simd<u32, 16>; D] = std::array::from_fn(|c| {
                 let v = if D == 1 {
-                    // The maximum rounded sum fits u32, including 16-bit white.
-                    (p[0] * Simd::splat(LUMA_RED) + p[1] * Simd::splat(LUMA_GREEN) + p[2] * Simd::splat(LUMA_BLUE) + Simd::splat(LUMA_ROUND))
-                        >> LUMA_BITS
+                    luminance_simd(p[0], p[1], p[2])
                 } else if c == 3 {
                     Simd::splat(MAX)
                 } else {
@@ -160,7 +158,7 @@ fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARG
                 |c: usize| if source_bytes == 1 { u32::from(input[c]) } else { u32::from(u16::from_le_bytes([input[c * 2], input[c * 2 + 1]])) };
             for (c, out) in output.chunks_exact_mut(target_bytes).enumerate() {
                 let v = if D == 1 {
-                    (sample(0) * LUMA_RED + sample(1) * LUMA_GREEN + sample(2) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS
+                    u32::from(luminance(sample(0) as u16, sample(1) as u16, sample(2) as u16))
                 } else if c == 3 {
                     MAX
                 } else {
@@ -879,7 +877,7 @@ fn rgba_to_rgb(source: &[u8]) -> Vec<u8> {
 
 #[inline(always)]
 pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
-    ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8
+    luminance(u16::from(r), u16::from(g), u16::from(b)) as u8
 }
 
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve

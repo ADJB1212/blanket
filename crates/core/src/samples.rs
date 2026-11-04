@@ -40,9 +40,8 @@ fn view_bytes(source: &[u8], big_endian: bool) -> PyResult<Cow<'_, [u16]>> {
 
 fn decode(source: &[u8], big_endian: bool) -> PyResult<Vec<u16>> {
     let len = source.len() / 2;
-    let mut values = Vec::new();
-    values.try_reserve_exact(len).map_err(|_| pyo3::exceptions::PyMemoryError::new_err("cannot allocate image"))?;
-    let chunk = 128 * 1024;
+    let mut values = crate::buffers::reserved::<u16>(len)?;
+    let chunk = 128 << 10;
     crate::parallel::chunks_mut_above(&mut values.spare_capacity_mut()[..len], chunk, 4 << 20, |index, output| {
         let source = &source[index * chunk * 2..][..output.len() * 2];
         let end = output.len() / 16 * 16;
@@ -62,9 +61,8 @@ fn decode(source: &[u8], big_endian: bool) -> PyResult<Vec<u16>> {
 
 pub(crate) fn encode(values: &[u16], big_endian: bool) -> PyResult<Vec<u8>> {
     let len = values.len().checked_mul(2).ok_or_else(|| pyo3::exceptions::PyMemoryError::new_err("cannot allocate image"))?;
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(len).map_err(|_| pyo3::exceptions::PyMemoryError::new_err("cannot allocate image"))?;
-    let chunk = 256 * 1024;
+    let mut pixels = crate::buffers::reserved::<u8>(len)?;
+    let chunk = 256 << 10;
     crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], chunk, 4 << 20, |index, output| {
         let source = &values[index * chunk / 2..][..output.len() / 2];
         let end = source.len() / 16 * 16;

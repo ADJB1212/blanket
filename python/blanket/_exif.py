@@ -76,12 +76,8 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
     raw = info.get("exif")
     profile = False
     if raw is None and isinstance(info.get("Raw profile type exif"), str):
-        try:
-            value = info["Raw profile type exif"]
-            raw = bytes.fromhex("".join(value.split("\n")[3:]) if "\n" in value else value)
-            profile = True
-        except ValueError:
-            pass
+        raw = exif_source(info)
+        profile = isinstance(raw, bytes)
     orientation, cleaned = _orientation(raw) if isinstance(raw, bytes) else (None, b"")
     if orientation is None:
         for key in ("XML:com.adobe.xmp", "xmp"):

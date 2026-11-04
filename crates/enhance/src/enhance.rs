@@ -3,11 +3,11 @@
 use std::simd::Simd;
 use std::simd::num::SimdUint;
 
-use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
+use blanket_core::color::luminance_simd;
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
-use pyo3::exceptions::{PyMemoryError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -25,9 +25,7 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 }
 
 fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    pixels.extend_from_slice(source);
+    let pixels = blanket_core::buffers::copy(source)?;
     output(image, pixels)
 }
 
@@ -50,8 +48,7 @@ pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32)
     }
 
     let len = first_pixels.len();
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut pixels = blanket_core::buffers::reserved(len)?;
     py.detach(|| {
         chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK_PIXELS * first.mode.channels(), MIN_PARALLEL_BYTES, |i, dst| {
             let start = i * CHUNK_PIXELS * first.mode.channels();
@@ -150,12 +147,7 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
 
 #[inline]
 fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
-    ((r.cast::<u32>() * Simd::splat(LUMA_RED)
-        + g.cast::<u32>() * Simd::splat(LUMA_GREEN)
-        + b.cast::<u32>() * Simd::splat(LUMA_BLUE)
-        + Simd::splat(LUMA_ROUND))
-        >> LUMA_BITS)
-        .cast()
+    luminance_simd(r.cast(), g.cast(), b.cast()).cast()
 }
 
 #[pyfunction]
@@ -265,12 +257,7 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return crate::high_depth::degenerate(py, image, "sharpness");
     }
     let source = image.pixel_data()?;
-    let mut pixels = py.detach(|| -> PyResult<Vec<u8>> {
-        let mut pixels = Vec::new();
-        pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-        pixels.extend_from_slice(source);
-        Ok(pixels)
-    })?;
+    let mut pixels = py.detach(|| blanket_core::buffers::copy(source))?;
     if image.width < 3 || image.height < 3 {
         return output(image, pixels);
     }

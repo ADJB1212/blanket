@@ -46,8 +46,7 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_d
         .checked_mul(size.1 as usize)
         .and_then(|n| n.checked_mul(color.len()))
         .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
-    let mut pixels = Vec::<u8>::new();
-    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut pixels = blanket_core::buffers::reserved::<u8>(len)?;
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..len];
         match mode {

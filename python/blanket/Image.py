@@ -6,9 +6,8 @@ Supported modes are `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGB
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "contextlib", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette"}
 
-import contextlib
 import math
 import os
 import re
@@ -78,7 +77,7 @@ from ._blanket import (
 from ._color import color_pixel
 from ._exif import ORIENTATION_RE, exif_source, read_metadata, read_tiff_metadata, save_metadata
 from ._ifd import Exif
-from ._io import write_all
+from ._io import read_bytes as _read_bytes, write_all
 from .Compressor import LosslessImageCompressor, LossyImageCompressor
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
@@ -364,6 +363,16 @@ class ImageTransformHandler:
             ```
         """
         raise NotImplementedError
+
+
+def _pixel_coordinates(xy: tuple[int, int] | list[int]) -> tuple[int, int]:
+    """Validate getpixel coordinates and truncate floating-point components."""
+    if not isinstance(xy, (tuple, list)):
+        raise TypeError("argument must be a sequence")
+    if len(xy) != 2:
+        raise TypeError("argument must be sequence of length 2")
+    x, y = (int(value) if isinstance(value, float) else index(value) for value in xy)
+    return x, y
 
 
 class PixelAccess:
@@ -1292,12 +1301,7 @@ class Image:
             # Native access already validates the image and coordinates.
             return self._native.getpixel((xy[0], xy[1]))
         self.load()
-        if not isinstance(xy, (tuple, list)):
-            raise TypeError("argument must be a sequence")
-        if len(xy) != 2:
-            raise TypeError("argument must be sequence of length 2")
-        coordinates = tuple(int(v) if isinstance(v, float) else index(v) for v in xy)
-        return self._native.getpixel(coordinates)
+        return self._native.getpixel(_pixel_coordinates(xy))
 
     def getpalette(self, rawmode: str | None = "RGB") -> list[int] | None:
         """Return interleaved palette entries, or None for non-palette images.
@@ -2797,16 +2801,7 @@ def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, 
     """
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
-    position = None
-    if hasattr(fp, "read"):
-        with contextlib.suppress(AttributeError, OSError):
-            position = fp.tell()
-    try:
-        data = _read_bytes(fp)
-    finally:
-        if position is not None:
-            with contextlib.suppress(AttributeError, OSError):
-                cast("BinaryIO", fp).seek(position)
+    data = _read_bytes(fp, restore_position=True)
     format, size, mode, bit_depth = _inspect(data, formats)
     info = read_metadata(data, "HEIF" if format == "AVIF" else format)
     return ImageHeader(format, size, mode, bit_depth, info)
@@ -3113,30 +3108,6 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
     if mode == "P":
         result.putpalette(b"")
     return result
-
-
-def _read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO) -> bytes:
-    """Read encoded bytes from a path or stream, rewinding when supported."""
-    if hasattr(fp, "read"):
-        stream = fp
-        with contextlib.suppress(AttributeError, OSError):
-            stream.seek(0)
-        try:
-            head = stream.read(16)
-        except TypeError:
-            data = stream.read()
-            if not isinstance(data, bytes):
-                raise ValueError("binary data must be used to open an image") from None
-            return data
-        if not isinstance(head, bytes):
-            raise ValueError("binary data must be used to open an image")
-        if head.startswith(b"\xff\xff"):
-            raise UnidentifiedImageError("cannot identify image file")
-        rest = stream.read()
-        if not isinstance(rest, bytes):
-            raise ValueError("binary data must be used to open an image")
-        return head + rest
-    return Path(os.fsdecode(os.fspath(fp))).read_bytes()
 
 
 def _output_format(fp: object, requested: str | None) -> str:

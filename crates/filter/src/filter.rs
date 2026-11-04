@@ -663,10 +663,7 @@ pub fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, 
             if !source.is_empty() {
                 blur_radii((radius, radius), true)?;
             }
-            let mut pixels = Vec::new();
-            pixels.try_reserve_exact(source.len()).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-            pixels.extend_from_slice(source);
-            return Ok(pixels);
+            return blanket_core::buffers::copy(source);
         }
         let mut pixels = blur(image, source, (radius, radius), true)?;
         chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {

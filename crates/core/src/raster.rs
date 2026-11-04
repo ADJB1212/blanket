@@ -4,8 +4,6 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyMemoryView, PySlice, PyTuple};
 use rustc_hash::FxHashMap;
 
-use crate::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
-
 // Golden-ratio multipliers spread packed pixel keys across the high hash bits.
 const PIXEL_HASH_MULTIPLIER: u32 = 0x9e37_79b9;
 const COLOR_HASH_MULTIPLIER: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -1931,7 +1929,7 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         if to == PixelMode::L {
             return map_pixels::<3, 1>(source, |p| {
                 let [r, g, b] = hsv_to_rgb(p[0], p[1], p[2]);
-                [((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8]
+                [crate::simd::pillow_luma(r, g, b)]
             });
         }
         if to == PixelMode::Rgba {
@@ -2129,7 +2127,7 @@ fn convert_pixel_generic(pixel: &[u8], out: &mut [u8], from: PixelMode, to: Pixe
         PixelMode::Pa => (pixel[0], pixel[0], pixel[0], pixel[1]),
         _ => unreachable!("integer modes handled before byte conversion"),
     };
-    let gray = ((u32::from(r) * LUMA_RED + u32::from(g) * LUMA_GREEN + u32::from(b) * LUMA_BLUE + LUMA_ROUND) >> LUMA_BITS) as u8;
+    let gray = crate::simd::pillow_luma(r, g, b);
     match to {
         PixelMode::One => out[0] = if gray >= 128 { 255 } else { 0 },
         PixelMode::L => out[0] = gray,

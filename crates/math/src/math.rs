@@ -329,8 +329,7 @@ fn float_pixels(
 fn float_pixels_impl<const OP: usize>(
     len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, reverse: bool,
 ) -> PyResult<Vec<u8>> {
-    let mut output = Vec::<[u8; 4]>::new();
-    output.try_reserve_exact(len / 4).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut output = blanket_core::buffers::reserved::<[u8; 4]>(len / 4)?;
     let a = a.as_chunks::<4>().0;
     let b = b.map(|b| b.as_chunks::<4>().0);
     const CHUNK: usize = 64 << 10;
@@ -410,8 +409,7 @@ fn math_apply(
             Image::from_float_bytes(width as u32, height as u32, output)
         };
     }
-    let mut output = Vec::new();
-    output.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut output = blanket_core::buffers::reserved(len)?;
     output.resize(len, 0);
     py.detach(|| {
         let dimensions = [width, left.width as usize, right.map_or(0, |r| r.width as usize)];

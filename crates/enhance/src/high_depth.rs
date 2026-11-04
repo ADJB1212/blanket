@@ -2,7 +2,9 @@ use std::simd::cmp::SimdOrd;
 use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
+#[cfg(test)]
 use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
+use blanket_core::color::{luminance as sample_luminance, luminance_simd};
 use blanket_core::pixels::{Samples, load_samples, store_sample_bytes};
 use blanket_core::{Image, samples};
 use pyo3::prelude::*;
@@ -10,17 +12,7 @@ use pyo3::prelude::*;
 pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyResult<Image> {
     let source = samples::view(image)?;
     let channels = image.mode.channels();
-    let luma = |pixel: &[u16]| -> u16 {
-        if channels == 1 {
-            pixel[0]
-        } else {
-            ((u64::from(pixel[0]) * u64::from(LUMA_RED)
-                + u64::from(pixel[1]) * u64::from(LUMA_GREEN)
-                + u64::from(pixel[2]) * u64::from(LUMA_BLUE)
-                + u64::from(LUMA_ROUND))
-                >> LUMA_BITS) as u16
-        }
-    };
+    let luma = |pixel: &[u16]| -> u16 { if channels == 1 { pixel[0] } else { sample_luminance(pixel[0], pixel[1], pixel[2]) } };
     if operation == "sharpness" {
         let values = py.detach(|| {
             let mut values = source.to_vec();
@@ -81,12 +73,7 @@ pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) 
 }
 
 fn luminance<const C: usize>(pixel: [Samples; C]) -> Samples {
-    ((pixel[0].cast::<u32>() * Simd::splat(LUMA_RED)
-        + pixel[1].cast::<u32>() * Simd::splat(LUMA_GREEN)
-        + pixel[2].cast::<u32>() * Simd::splat(LUMA_BLUE)
-        + Simd::splat(LUMA_ROUND))
-        >> LUMA_BITS)
-        .cast()
+    luminance_simd(pixel[0].cast(), pixel[1].cast(), pixel[2].cast()).cast()
 }
 
 fn degenerate_bytes<const C: usize>(source: &[u16], output: &mut [u8], operation: &str, mean: u16, big_endian: bool) {
@@ -108,15 +95,7 @@ fn degenerate_bytes<const C: usize>(source: &[u16], output: &mut [u8], operation
     }
     for (pixel, dst) in source[end..].as_chunks::<C>().0.iter().zip(output[end * 2..].chunks_exact_mut(C * 2)) {
         let gray = if operation == "color" {
-            if C == 1 {
-                pixel[0]
-            } else {
-                ((u64::from(pixel[0]) * u64::from(LUMA_RED)
-                    + u64::from(pixel[1]) * u64::from(LUMA_GREEN)
-                    + u64::from(pixel[2]) * u64::from(LUMA_BLUE)
-                    + u64::from(LUMA_ROUND))
-                    >> LUMA_BITS) as u16
-            }
+            if C == 1 { pixel[0] } else { sample_luminance(pixel[0], pixel[1], pixel[2]) }
         } else if operation == "brightness" {
             0
         } else {

@@ -12,6 +12,27 @@ from blanket import Image, ImageDraw
 MAPPED_MODES = ["L", "P", "RGBX", "RGBA", "CMYK", "I;16", "I;16L", "I;16B"]
 
 
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize("xy", [(1.9, 0.2), [-1.2, -1.0], [True, False]])
+def test_getpixel_coordinate_conversion_matches_owned_images(mapped, xy) -> None:
+    data = bytearray(range(6))
+    image = Image.frombuffer("L", (3, 2), data) if mapped else Image.frombytes("L", (3, 2), data)
+    reference = PillowImage.frombytes("L", (3, 2), data)
+    assert image.getpixel(xy) == reference.getpixel(xy)
+    data[1] = 99
+    if mapped:
+        assert image.getpixel((1.9, 0.2)) == 99
+
+
+@pytest.mark.parametrize("mapped", [False, True])
+@pytest.mark.parametrize(("xy", "message"), [(None, "argument must be a sequence"), ("00", "argument must be a sequence"), ([0], "argument must be sequence of length 2")])
+def test_getpixel_coordinate_errors_match_owned_images(mapped, xy, message) -> None:
+    data = bytearray(range(6))
+    image = Image.frombuffer("L", (3, 2), data) if mapped else Image.frombytes("L", (3, 2), data)
+    with pytest.raises(TypeError, match=message):
+        image.getpixel(xy)
+
+
 @pytest.mark.parametrize("mode", MAPPED_MODES)
 @pytest.mark.parametrize("orientation", [1, -1])
 def test_mapped_pixel_reads_use_bounded_memory(mode: str, orientation: int) -> None:

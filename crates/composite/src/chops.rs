@@ -5,10 +5,11 @@ use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
+use blanket_core::buffers::reserved as reserved_buffer;
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut_above};
 use blanket_core::pixels::{Bytes, Samples};
 use blanket_core::raster::{Image, PixelMode};
-use pyo3::exceptions::{PyMemoryError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -16,12 +17,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chops_invert, module)?)?;
     module.add_function(wrap_pyfunction!(chops_offset, module)?)?;
     Ok(())
-}
-
-fn reserved_buffer(len: usize) -> PyResult<Vec<u8>> {
-    let mut pixels = Vec::new();
-    pixels.try_reserve_exact(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    Ok(pixels)
 }
 
 #[derive(Clone, Copy)]

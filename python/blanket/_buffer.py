@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from operator import index
 from typing import TYPE_CHECKING
 
 from ._blanket import frombytes as _native_frombytes, mapped_getpixel
-from .Image import Image, PixelAccess
+from .Image import Image, PixelAccess, _pixel_coordinates
 
 if TYPE_CHECKING:
     from ._blanket import _Image
@@ -94,12 +93,7 @@ class MappedImage(Image):
         mapping = self._mapping
         if mapping is None:
             return super().getpixel(xy)
-        if not isinstance(xy, (tuple, list)):
-            raise TypeError("argument must be a sequence")
-        if len(xy) != 2:
-            raise TypeError("argument must be sequence of length 2")
-        coordinates = tuple(int(value) if isinstance(value, float) else index(value) for value in xy)
-        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, coordinates)
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy))
 
     def close(self) -> None:
         """Release buffer mapping and close native raster."""

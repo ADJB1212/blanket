@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"contextlib", "os", "io", "pathlib", "collections.abc"}
+__lazy_modules__ = {"io", "collections.abc"}
 
-import contextlib
 import math
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
-from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    import os
     from typing import BinaryIO, Literal
 
 from . import Image
 from ._blanket import _container_previews, _inspect, _rewrite_metadata
-from ._exif import read_metadata
+from ._exif import exif_source, read_metadata
 from ._ifd import Exif
-from ._io import write_all
+from ._io import read_bytes, write_bytes
 from ._metadata_policy import MetadataPolicy
 from ._resolution import Resolution, parse_resolution
 from .PngImagePlugin import PngInfo
@@ -39,29 +37,15 @@ class _Unchanged:
 _UNCHANGED = _Unchanged()
 
 
-def _read(fp: _File) -> bytes:
-    """Read encoded file bytes, restoring seekable stream positions."""
-    position = None
-    if hasattr(fp, "read"):
-        with contextlib.suppress(AttributeError, OSError):
-            position = fp.tell()
-    try:
-        return Image._read_bytes(fp)
-    finally:
-        if position is not None:
-            with contextlib.suppress(AttributeError, OSError):
-                cast("BinaryIO", fp).seek(position)
-
-
 def _load(fp: _File) -> tuple[bytes, str, dict[object, object]]:
     """Inspect input bytes to determine format and read container metadata."""
-    data = _read(fp)
+    data = read_bytes(fp, restore_position=True)
     format, _, _, _ = _inspect(data, None)
     info = read_metadata(data, "HEIF" if format == "AVIF" else format)
-    raw_exif = info.get("Raw profile type exif")
-    if "exif" not in info and isinstance(raw_exif, str):
-        with contextlib.suppress(ValueError):
-            info["exif"] = bytes.fromhex("".join(raw_exif.split("\n")[3:]) if "\n" in raw_exif else raw_exif)
+    if "exif" not in info:
+        raw_exif = exif_source(info)
+        if isinstance(raw_exif, bytes):
+            info["exif"] = raw_exif
     return data, format, info
 
 
@@ -192,10 +176,7 @@ def rewrite(
         icc_value = None
     encoded = _rewrite_metadata(data, format, exif_value, xmp_value, icc_value, _text(info) if replace_text else None, new_dpi, remove_resolution)
     if output is not None:
-        if hasattr(output, "write"):
-            write_all(cast("BinaryIO", output), encoded)
-        else:
-            Path(os.fsdecode(os.fspath(output))).write_bytes(encoded)
+        write_bytes(output, encoded)
     return encoded
 
 
