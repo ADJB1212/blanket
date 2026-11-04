@@ -1,0 +1,60 @@
+name: CUDA kernel compilation
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/gpu-cuda/src/**"
+      - "crates/gpu-cuda/build.rs"
+      - "scripts/setup_cuda.sh"
+      - ".github/workflows/cuda-kernels.yml"
+  pull_request:
+    paths:
+      - "crates/gpu-cuda/src/**"
+      - "crates/gpu-cuda/build.rs"
+      - "scripts/setup_cuda.sh"
+      - ".github/workflows/cuda-kernels.yml"
+  workflow_dispatch:
+
+env:
+  RUSTUP_TERM_PROGRESS_WHEN: "never"
+  RUST_BACKTRACE: "1"
+  UV_LINK_MODE: "hardlink"
+  CARGO_INCREMENTAL: "0"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  FORCE_COLOR: "1"
+  MACOSX_DEPLOYMENT_TARGET: "26.0"
+  PYTHONFAULTHANDLER: "1"
+  DO_NOT_TRACK: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+  HOMEBREW_NO_ASK: "1"
+  HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
+  UV_NO_SYNC: "1"
+
+permissions:
+  contents: read
+
+jobs:
+  compile:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install CUDA compiler
+        run: bash scripts/setup_cuda.sh
+      - name: Compile CUDA kernels
+        shell: bash
+        env:
+          CC: "clang"
+          CXX: "clang++"
+        run: |
+          architectures=(75 80 86 89 90 100 120)
+          code_flags=()
+          for architecture in "${architectures[@]}"; do
+            code_flags+=("--generate-code=arch=compute_${architecture},code=sm_${architecture}")
+          done
+          code_flags+=("--generate-code=arch=compute_${architectures[0]},code=compute_${architectures[0]}")
+          "$NVCC" --fatbin --std=c++17 --fmad=false --threads=4 -O3 --use_fast_math -DNDEBUG \
+            "${code_flags[@]}" crates/gpu-cuda/src/kernels.cu \
+            --output-file "$RUNNER_TEMP/blanket.fatbin"
+          test -s "$RUNNER_TEMP/blanket.fatbin"

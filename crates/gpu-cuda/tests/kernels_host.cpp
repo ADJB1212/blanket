@@ -3,6 +3,7 @@
 
 #define __device__
 #define __global__
+#define __forceinline__ inline __attribute__((always_inline))
 struct Dim {
     unsigned x;
 };

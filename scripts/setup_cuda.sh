@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# CUDA 13.2.0 redistributions: https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.2.2.json
+# CUDA 13.2.2 redistributions: https://developer.download.nvidia.com/compute/cuda/redist/redistrib_13.2.2.json
 case "$(uname -m)" in
 x86_64)
 	cuda_arch=linux-x86_64
