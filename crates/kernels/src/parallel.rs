@@ -104,14 +104,15 @@ pub fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
     }
 }
 
+#[expect(unevaluated_default_field_value)]
 struct CandidateResult<E> {
-    best: Option<(usize, Vec<u8>)>,
-    error: Option<(usize, E)>,
+    best: Option<(usize, Vec<u8>)> = None,
+    error: Option<(usize, E)> = None,
 }
 
 impl<E> Default for CandidateResult<E> {
     fn default() -> Self {
-        Self { best: None, error: None }
+        Self { .. }
     }
 }
 
@@ -149,6 +150,16 @@ pub fn chunks_mut_above<T: Send>(output: &mut [T], chunk_size: usize, minimum_by
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn candidate_defaults_do_not_require_default_errors() {
+        struct Error;
+
+        for result in [CandidateResult::<Error> { .. }, CandidateResult::<Error>::default()] {
+            assert!(result.best.is_none());
+            assert!(result.error.is_none());
+        }
+    }
 
     #[test]
     fn codec_search_preserves_ties_and_error_order() {

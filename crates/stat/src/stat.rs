@@ -76,6 +76,42 @@ fn list_count(histogram: &Bound<'_, PyList>, index: usize) -> PyResult<u64> {
     histogram.get_item(index)?.extract()
 }
 
+fn exact_extrema(histogram: &Bound<'_, PyList>) -> PyResult<Option<Vec<(u8, u8)>>> {
+    pyo3::sync::critical_section::with_critical_section(histogram, || {
+        let length = histogram.len();
+        if !length.is_multiple_of(256) {
+            return Err(PyValueError::new_err("histogram must contain 256 bins per band"));
+        }
+        let mut result = Vec::with_capacity(length / 256);
+        for band in 0..length / 256 {
+            let mut minimum = 255;
+            let mut maximum = 0;
+            for bin in 0..256 {
+                // SAFETY: the list is locked and the index is in bounds. Exact
+                // integer conversion cannot invoke Python or release the lock
+                // on success; errors exit without accessing the list again.
+                let count = unsafe {
+                    let value = pyo3::ffi::PyList_GET_ITEM(histogram.as_ptr(), (band * 256 + bin) as pyo3::ffi::Py_ssize_t);
+                    if pyo3::ffi::PyLong_CheckExact(value) == 0 {
+                        return Ok(None);
+                    }
+                    let count = pyo3::ffi::PyLong_AsUnsignedLongLong(value);
+                    if count == u64::MAX && !pyo3::ffi::PyErr_Occurred().is_null() {
+                        return Err(PyErr::fetch(histogram.py()));
+                    }
+                    count
+                };
+                if count != 0 {
+                    minimum = minimum.min(bin as u8);
+                    maximum = bin as u8;
+                }
+            }
+            result.push((minimum, maximum));
+        }
+        Ok(Some(result))
+    })
+}
+
 #[pyfunction]
 #[pyo3(signature = (histogram, bins=256))]
 fn stat_count(histogram: &Bound<'_, PyList>, bins: usize) -> PyResult<Vec<u128>> {
@@ -120,6 +156,9 @@ fn stat_extrema<'py>(histogram: &Bound<'py, PyList>, bins: usize) -> PyResult<Bo
                 (a as u8, b as u8)
             }),
         );
+    }
+    if let Some(result) = exact_extrema(histogram)? {
+        return PyList::new(histogram.py(), result);
     }
     if !histogram.len().is_multiple_of(256) {
         return Err(PyValueError::new_err("histogram must contain 256 bins per band"));

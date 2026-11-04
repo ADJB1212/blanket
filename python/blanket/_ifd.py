@@ -41,9 +41,11 @@ class Exif(MutableMapping[int, object]):
         self.endian: str | None = None
         self.bigtiff = False
         self._data: dict[int, object] = {}
-        self._raw = b""
+        self._raw: bytes | memoryview = b""
+        self._source = b""
+        self._offsets: dict[int, int] = {}
         self._types: dict[int, dict[int, int]] = {}
-        self._entries: dict[int, dict[int, tuple[bytes, object]]] = {}
+        self._entries: dict[int, dict[int, tuple[int, object]]] = {}
         self._ifds: dict[int, dict[int, object]] = {}
         self._hidden: dict[int, object] = {}
         self._next = 0
@@ -73,10 +75,24 @@ class Exif(MutableMapping[int, object]):
         """Return the number of visible top-level tags."""
         return len(self._data)
 
+    def __getstate__(self) -> dict[str, object]:
+        """Retain immutable source bytes when copying or pickling metadata."""
+        state = self.__dict__.copy()
+        if isinstance(self._raw, memoryview):
+            state["_raw"] = None
+        return state
+
+    def __setstate__(self, state: dict[str, object]) -> None:
+        """Restore a TIFF view without copying its source buffer."""
+        self.__dict__.update(state)
+        if state["_raw"] is None:
+            self._raw = memoryview(self._source)[6:] if self._source.startswith(b"Exif\0\0") else memoryview(self._source)
+
     def load(self, data: bytes) -> None:
         """Load an EXIF APP1 payload or a classic TIFF byte stream."""
         self.__init__()
-        data = bytes(data).removeprefix(b"Exif\0\0")
+        self._source = bytes(data)
+        data = memoryview(self._source)[6:] if self._source.startswith(b"Exif\0\0") else memoryview(self._source)
         if not data:
             return
         if len(data) < 8 or data[:2] not in (b"II", b"MM"):
@@ -96,7 +112,7 @@ class Exif(MutableMapping[int, object]):
         self._ifds[1] = ifd
         start, length = ifd.get(513), ifd.get(514)
         if isinstance(start, int) and isinstance(length, int) and 0 <= start <= len(self._raw) and 0 <= length <= len(self._raw) - start:
-            self.thumbnail = self._raw[start : start + length]
+            self.thumbnail = bytes(self._raw[start : start + length])
 
     def load_from_fp(self, fp: BinaryIO, offset: int | None = None) -> None:
         """Read EXIF from a seekable TIFF stream."""
@@ -116,9 +132,9 @@ class Exif(MutableMapping[int, object]):
             raise ValueError("truncated EXIF IFD")
         result: dict[int, object] = {}
         types: dict[int, int] = {}
-        entries: dict[int, tuple[bytes, object]] = {}
-        for pos in range(offset + 2, end, 12):
-            tag, kind, length, field = struct.unpack_from(endian + "HHII", data, pos)
+        entries: dict[int, tuple[int, object]] = {}
+        for index, (tag, kind, length, field) in enumerate(struct.iter_unpack(endian + "HHII", memoryview(data)[offset + 2 : end])):
+            pos = offset + 2 + index * 12
             size = _SIZES.get(kind, 0) * length
             if not size:
                 continue
@@ -126,9 +142,9 @@ class Exif(MutableMapping[int, object]):
             if start > len(data) or size > len(data) - start:
                 continue
             if kind == 2:
-                value = data[start : start + size].rstrip(b"\0").decode("ascii", "replace")
+                value = bytes(data[start : start + size]).rstrip(b"\0").decode("ascii", "replace")
             elif kind == 7 or (kind == 1 and (tag in (700, 34675) or key == 34853)):
-                value = data[start : start + size]
+                value = bytes(data[start : start + size])
             elif kind in (5, 10):
                 fmt = endian + ("II" if kind == 5 else "ii")
                 if length == 1:
@@ -138,8 +154,9 @@ class Exif(MutableMapping[int, object]):
             else:
                 values = struct.unpack_from(f"{endian}{length}{_FORMATS[kind]}", data, start)
                 value = values[0] if length == 1 else values
-            result[tag], types[tag], entries[tag] = value, kind, (data[pos : pos + 12], value)
+            result[tag], types[tag], entries[tag] = value, kind, (pos, value)
         self._types[key], self._entries[key] = types, entries
+        self._offsets[key] = offset
         return result, struct.unpack_from(endian + "I", data, end)[0]
 
     def get_ifd(self, tag: int) -> dict[int, object]:
@@ -169,16 +186,25 @@ class Exif(MutableMapping[int, object]):
     def tobytes(self, offset: int = 8) -> bytes:
         """Serialize tags, nested IFDs, and an optional JPEG thumbnail."""
         endian = self.endian or ">"
-        output = bytearray(self._raw or ((b"II" if endian == "<" else b"MM") + struct.pack(endian + "HI", 42, offset)))
-        if not self._raw:
-            output.extend(bytes(max(0, offset - len(output))))
+        output: bytearray | None = None
+
+        def buffer() -> bytearray:
+            """Allocate output only when metadata changes."""
+            nonlocal output
+            if output is None:
+                output = bytearray(b"Exif\0\0")
+                output.extend(self._raw or ((b"II" if endian == "<" else b"MM") + struct.pack(endian + "HI", 42, offset)))
+                if not self._raw:
+                    output.extend(bytes(max(0, offset + 6 - len(output))))
+            return output
 
         def append(raw: bytes) -> int:
             """Append bytes on a word boundary and return their TIFF-relative offset."""
-            if len(output) & 1:
-                output.append(0)
-            start = len(output)
-            output.extend(raw)
+            target = buffer()
+            if len(target) & 1:
+                target.append(0)
+            start = len(target) - 6
+            target.extend(raw)
             return start
 
         active: set[int] = set()
@@ -191,17 +217,32 @@ class Exif(MutableMapping[int, object]):
             records = []
             previous_entries = self._entries.get(key, {})
             types = self._types.get(key, {})
-            for tag, value in sorted(values.items()):
+            previous_offset = self._offsets.get(key)
+            unchanged = bool(self._raw) and previous_offset is not None and len(values) == len(previous_entries)
+            if unchanged and previous_offset is not None:
+                count = struct.unpack_from(endian + "H", self._raw, previous_offset)[0]
+                unchanged = count == len(values) and struct.unpack_from(endian + "I", self._raw, previous_offset + 2 + count * 12)[0] == following
+            pointers: dict[int, int] = {}
+            for tag, value in values.items():
                 if tag in _POINTERS:
                     nested = self._ifds.get(tag)
                     if nested is None:
                         nested = value if isinstance(value, Mapping) else self.get_ifd(tag)
-                    value = write(nested, tag)
+                    value = pointers[tag] = write(nested, tag)
+                if unchanged:
+                    previous = previous_entries.get(tag)
+                    unchanged = previous is not None and (value is previous[1] or value == previous[1])
+            if unchanged and previous_offset is not None:
+                active.remove(id(values))
+                return previous_offset
+            for tag, value in sorted(values.items()):
+                if tag in _POINTERS:
+                    value = pointers[tag]
                     kind = 4
                 else:
                     previous = previous_entries.get(tag)
-                    if previous is not None and value == previous[1]:
-                        records.append(previous[0])
+                    if previous is not None and (value is previous[1] or value == previous[1]):
+                        records.append(bytes(self._raw[previous[0] : previous[0] + 12]))
                         continue
                     kind = 2 if isinstance(value, str) else types.get(tag) or _TYPES.get(tag)
                 if kind is None:
@@ -236,14 +277,20 @@ class Exif(MutableMapping[int, object]):
             active.remove(id(values))
             if len(records) > 65535:
                 raise ValueError("too many EXIF tags")
-            return append(struct.pack(endian + "H", len(records)) + b"".join(records) + struct.pack(endian + "I", following))
+            raw = struct.pack(endian + "H", len(records)) + b"".join(records) + struct.pack(endian + "I", following)
+            return append(raw)
 
         following = 0
         if self.thumbnail is not None or self._ifds.get(1):
             thumbnail_ifd = self.get_ifd(1).copy()
             if self.thumbnail is not None:
-                thumbnail_ifd.update({259: 6, 513: append(self.thumbnail), 514: len(self.thumbnail)})
+                start, length = thumbnail_ifd.get(513), thumbnail_ifd.get(514)
+                if not isinstance(start, int) or not isinstance(length, int) or length != len(self.thumbnail) or self._raw[start : start + length] != self.thumbnail:
+                    start = append(self.thumbnail)
+                thumbnail_ifd.update({259: 6, 513: start, 514: len(self.thumbnail)})
             following = write(thumbnail_ifd, 1)
         root = write({**self._hidden, **self._data} if self._hidden else self._data, 0, following)
-        struct.pack_into(endian + "I", output, 4, root)
-        return b"Exif\0\0" + bytes(output)
+        if output is None and self._raw and struct.unpack_from(endian + "I", self._raw, 4)[0] == root:
+            return self._source if self._source.startswith(b"Exif\0\0") else b"Exif\0\0" + self._raw
+        struct.pack_into(endian + "I", buffer(), 10, root)
+        return bytes(buffer())

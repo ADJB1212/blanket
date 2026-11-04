@@ -207,7 +207,7 @@ class PngInfo:
 
     def add(self, cid: bytes, data: bytes, after_idat: bool = False) -> None:
         """Append an ancillary chunk, optionally after the pixel data."""
-        if len(cid) != 4 or not cid.isalpha() or not cid[:1].islower() or not cid[2:3].isupper():
+        if cid not in (b"tEXt", b"zTXt", b"iTXt") and (len(cid) != 4 or not cid.isalpha() or not cid[:1].islower() or not cid[2:3].isupper()):
             raise ValueError("PNG chunk must have a valid ancillary identifier")
         self.chunks.append((cid, bytes(data), bool(after_idat)))
 

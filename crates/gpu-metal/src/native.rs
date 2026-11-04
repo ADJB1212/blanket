@@ -108,15 +108,11 @@ fn finished(command: &Command) -> bool {
     matches!(command.status(), MTLCommandBufferStatus::Completed | MTLCommandBufferStatus::Error)
 }
 
+#[derive(Default)]
 struct BufferPool {
     entries: Vec<PoolEntry>,
     bytes: usize,
-    limit: usize,
-}
-impl Default for BufferPool {
-    fn default() -> Self {
-        Self { entries: Vec::new(), bytes: 0, limit: POOL_MAX_BYTES }
-    }
+    limit: usize = POOL_MAX_BYTES,
 }
 
 struct PoolEntry {
@@ -148,17 +144,13 @@ impl BufferPool {
     }
 }
 
+#[derive(Default)]
 struct ControlCache {
     entries: Vec<ControlEntry>,
     bytes: usize,
-    limit: usize,
+    limit: usize = CONTROL_MAX_BYTES,
 }
 unsafe impl Send for ControlCache {}
-impl Default for ControlCache {
-    fn default() -> Self {
-        Self { entries: Vec::new(), bytes: 0, limit: CONTROL_MAX_BYTES }
-    }
-}
 
 pub struct Context {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -789,6 +781,19 @@ mod pixels_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cache_defaults_preserve_memory_limits() {
+        let pool = BufferPool::default();
+        assert!(pool.entries.is_empty());
+        assert_eq!(pool.bytes, 0);
+        assert_eq!(pool.limit, POOL_MAX_BYTES);
+
+        let controls = ControlCache::default();
+        assert!(controls.entries.is_empty());
+        assert_eq!(controls.bytes, 0);
+        assert_eq!(controls.limit, CONTROL_MAX_BYTES);
+    }
 
     #[test]
     fn availability_matches_context_initialization_requirements() {

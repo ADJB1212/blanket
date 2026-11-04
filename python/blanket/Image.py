@@ -1089,7 +1089,9 @@ class Image:
         """
         self._native.load()
         info = self._info
-        raw = exif_source(info)
+        raw = info.get("exif")
+        if raw is None and "Raw profile type exif" in info:
+            raw = exif_source(info)
         if self._exif is None or raw != self._exif_source:
             self._exif = Exif()
             if isinstance(raw, bytes):

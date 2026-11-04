@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import copy
+import pickle
 import struct
 import zlib
 from fractions import Fraction
@@ -223,6 +225,60 @@ def test_exif_mapping_nested_ifds_and_thumbnail(endian: str) -> None:
     again = Image.Exif()
     again.load(parsed.tobytes())
     assert again.thumbnail == thumb.getvalue()
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("prefixed", [False, True])
+def test_exif_unchanged_roundtrips_reuse_directories_and_thumbnail(endian: str, prefixed: bool) -> None:
+    source = exif_tags()
+    source.endian = endian
+    source.thumbnail = encode_image(Image.new("RGB", (3, 2), "red"), "JPEG")
+    raw = source.tobytes()
+    for _ in range(5):
+        exif = Image.Exif()
+        exif.load(raw if prefixed else raw[6:])
+        exif.hide_offsets()
+        assert exif.tobytes() == raw
+        assert exif.thumbnail == source.thumbnail
+        raw = exif.tobytes()
+
+    exif.get_ifd(40965)[1] = "THM"
+    exif.get_ifd(34853)[1] = "S"
+    exif[305] = "changed"
+    exif.thumbnail = encode_image(Image.new("RGB", (2, 3), "blue"), "JPEG")
+    changed = exif.tobytes()
+    assert changed != raw
+    assert exif.tobytes() == changed
+    for loader in (Image.Exif, PILImage.Exif):
+        restored = loader()
+        restored.load(changed)
+        assert restored[305] == "changed"
+        assert restored.get_ifd(40965)[1] == "THM"
+        assert restored.get_ifd(34853)[1] == "S"
+    restored = Image.Exif()
+    restored.load(changed)
+    assert restored.thumbnail == exif.thumbnail
+    assert restored.tobytes() == changed
+
+
+@pytest.mark.parametrize("pickled", [False, True])
+def test_exif_copy_and_reload_keep_mutable_directories_independent(pickled: bool) -> None:
+    source = Image.Exif()
+    source.load(exif_tags().tobytes())
+    source.get_ifd(34665)
+    cloned = pickle.loads(pickle.dumps(source)) if pickled else copy.deepcopy(source)
+    cloned[305] = "copy"
+    cloned.get_ifd(34665)[36867] = "2026:11:04 10:00:00"
+    assert source[305] == "Blanket"
+    assert source.get_ifd(34665)[36867] == "2026:10:23 10:00:00"
+    restored = Image.Exif()
+    restored.load(cloned.tobytes())
+    assert restored[305] == "copy"
+    assert restored.get_ifd(34665)[36867] == "2026:11:04 10:00:00"
+    cloned.load(source.tobytes())
+    assert cloned.tobytes() == source.tobytes()
+    cloned.load(b"")
+    assert not cloned and not cloned.get_ifd(34665)
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])

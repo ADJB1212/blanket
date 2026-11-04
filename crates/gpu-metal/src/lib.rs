@@ -1,3 +1,6 @@
+#![allow(unused_features)]
+#![feature(default_field_values)]
+
 // Shared helpers precede the scalar entry points used by native Metal and MPS.
 pub const SHADERS: &str = concat!(
     include_str!("shaders/common.metal"),

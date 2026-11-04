@@ -110,8 +110,10 @@ def transpose_metadata(info: dict[object, object]) -> tuple[int, dict[object, ob
 def exif_source(info: Mapping[object, object]) -> object:
     """Resolve EXIF bytes, including the legacy PNG text representation."""
     raw = info.get("exif")
+    if raw is not None:
+        return raw
     profile = info.get("Raw profile type exif")
-    if raw is None and isinstance(profile, str):
+    if isinstance(profile, str):
         with contextlib.suppress(ValueError):
             return bytes.fromhex("".join(profile.split("\n")[3:]) if "\n" in profile else profile)
     return raw
