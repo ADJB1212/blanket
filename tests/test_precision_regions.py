@@ -10,6 +10,41 @@ from PIL import Image as Pillow
 from blanket import Image, UnidentifiedImageError
 
 
+@pytest.mark.parametrize("source_mode,target_mode", [("RGB;F", "RGBA;F"), ("RGBA;F", "RGB;F")])
+@pytest.mark.parametrize("count", [0, 1, 17, 65537])
+def test_float_layout_conversion_preserves_exact_nonfinite_bits(source_mode: str, target_mode: str, count: int) -> None:
+    source_channels, target_channels = Image.getmodebands(source_mode), Image.getmodebands(target_mode)
+    bits = [0x80000000, 0, 0x7F800000, 0xFF800000, 0x7FC01234, 0x7FA01234, 0x3F000000]
+    raw = struct.pack(f"<{count * source_channels}I", *(bits[i % len(bits)] for i in range(count * source_channels)))
+    image = Image.frombytes(source_mode, (count, 1), raw)
+    result = image.convert(target_mode)
+    expected = b"".join(raw[i * source_channels * 4 : i * source_channels * 4 + 12] + (struct.pack("<f", 1) if target_channels == 4 else b"") for i in range(count))
+    assert result.tobytes() == expected
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("source_mode,target_mode", [("RGB;F", "RGBA"), ("RGBA;F", "RGB")])
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
+@pytest.mark.parametrize("count", [0, 1, 17, 16385])
+def test_float_layout_quantization_preserves_channels_and_rounding(source_mode: str, target_mode: str, depth: int, count: int) -> None:
+    channels = Image.getmodebands(source_mode)
+    pattern = [-0.0, 0.0, 0.25, 0.5, 1.0, -2.0, 2.0, math.nan, math.inf, -math.inf]
+    values = [pattern[i % len(pattern)] for i in range(count * channels)]
+    raw = struct.pack(f"<{len(values)}f", *values)
+    image = Image.frombytes(source_mode, (count, 1), raw)
+    result = image.convert(target_mode, bit_depth=depth)
+    maximum = (1 << depth) - 1
+    expected = []
+    for i in range(count):
+        expected.extend(0 if math.isnan(value) else math.floor(max(0, min(1, value)) * maximum + 0.5) for value in values[i * channels : i * channels + 3])
+        if target_mode == "RGBA":
+            expected.append(maximum)
+    expected_raw = bytes(expected) if depth == 8 else struct.pack(f"<{len(expected)}H", *expected)
+    assert result.mode == target_mode and result.bit_depth == depth
+    assert result.tobytes() == expected_raw
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
 @pytest.mark.parametrize("method", [0, 1, 2, 3, 4, 5, 6, 7])
 @pytest.mark.parametrize("target", [(1, 1), (17, 9), (257, 65)])

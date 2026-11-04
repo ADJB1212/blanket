@@ -1,5 +1,6 @@
 //! Small palette kernels. Python owns mutable palette storage and file parsing.
 
+use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyIndexError, PyOverflowError, PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
@@ -12,6 +13,7 @@ const GRADIENT_EPSILON: f64 = 1e-10;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_colors, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_to_pa, module)?)?;
     module.add_function(wrap_pyfunction!(palette_decode, module)?)?;
     module.add_function(wrap_pyfunction!(palette_ramp, module)?)?;
     module.add_function(wrap_pyfunction!(palette_linear, module)?)?;
@@ -19,6 +21,58 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_sepia, module)?)?;
     module.add_function(wrap_pyfunction!(palette_gradient, module)?)?;
     Ok(())
+}
+
+#[pyfunction]
+#[pyo3(signature = (image, alpha=None, table=None))]
+fn palette_to_pa(py: Python<'_>, image: &Image, alpha: Option<&Image>, table: Option<Vec<u8>>) -> PyResult<Image> {
+    if image.mode != PixelMode::L || image.bit_depth != 8 {
+        return Err(PyValueError::new_err("indexed image required"));
+    }
+    let indices = image.pixel_data()?;
+    let alpha = alpha
+        .map(|alpha| {
+            if !matches!(alpha.mode, PixelMode::La | PixelMode::Rgba) || alpha.bit_depth != 8 || alpha.size() != image.size() {
+                return Err(PyValueError::new_err("alpha image has wrong mode or size"));
+            }
+            Ok((alpha.pixel_data()?, alpha.mode.channels()))
+        })
+        .transpose()?;
+    let table: [u8; 256] = if let Some(table) = table {
+        table.try_into().map_err(|_| PyValueError::new_err("translation table must be 256 characters long"))?
+    } else {
+        std::array::from_fn(|index| match &image.palette {
+            Some((PixelMode::Rgba, entries)) => entries.get(index * 4 + 3).copied().unwrap_or(255),
+            _ => 255,
+        })
+    };
+    py.detach(|| {
+        let pixels = pa_pixels(indices, alpha, &table, image.size())?;
+        let mut result = Image::from_pixels(image.width, image.height, PixelMode::Pa, pixels, None)?;
+        result.palette.clone_from(&image.palette);
+        Ok(result)
+    })
+}
+
+fn pa_pixels(indices: &[u8], alpha: Option<(&[u8], usize)>, table: &[u8; 256], size: (u32, u32)) -> PyResult<Vec<u8>> {
+    let mut output = blanket_core::buffers::reserved_buffer(size, 2)?;
+    let length = indices.len() * 2;
+    blanket_core::parallel::chunks_mut_above(
+        &mut output.spare_capacity_mut()[..length],
+        blanket_core::parallel::CHUNK_PIXELS * 2,
+        blanket_core::parallel::MIN_PARALLEL_BYTES,
+        |chunk, dst| {
+            let start = chunk * blanket_core::parallel::CHUNK_PIXELS;
+            for (i, pixel) in dst.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                let index = indices[start + i];
+                let alpha = alpha.map_or_else(|| table[usize::from(index)], |(values, channels)| values[(start + i + 1) * channels - 1]);
+                pixel.write_copy_of_slice(&[index, alpha]);
+            }
+        },
+    );
+    // Each index/alpha pair in the reserved output was initialized above.
+    unsafe { output.set_len(length) };
+    Ok(output)
 }
 
 #[pyfunction]
@@ -179,6 +233,25 @@ fn palette_gradient(py: Python<'_>, segments: Vec<(Vec<f64>, usize)>) -> PyResul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pa_pixels_preserve_indices_alpha_and_partition_tails() {
+        let table = std::array::from_fn(|i| 255 - i as u8);
+        for count in [0, 1, 15, 16, 17, 16385, 131073] {
+            let indices: Vec<_> = (0..count + 3).map(|i| (i * 71) as u8).collect();
+            let source = &indices[3..];
+            for channels in [0, 2, 4] {
+                let alpha: Vec<_> = (0..count * channels + 1).map(|i| (i * 37) as u8).collect();
+                let values = if channels == 0 { None } else { Some((&alpha[1..], channels)) };
+                let output = pa_pixels(source, values, &table, (count as u32, 1)).unwrap();
+                assert_eq!(output.len(), count * 2);
+                for (i, pair) in output.as_chunks::<2>().0.iter().enumerate() {
+                    let expected = if channels == 0 { table[usize::from(source[i])] } else { alpha[(i + 1) * channels] };
+                    assert_eq!(*pair, [source[i], expected]);
+                }
+            }
+        }
+    }
 
     #[test]
     fn ramps_and_luts() {

@@ -3,14 +3,13 @@ use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
 use blanket_core::color::{LUMA_BITS, LUMA_BLUE, LUMA_GREEN, LUMA_RED, LUMA_ROUND};
-use blanket_core::pixels::{Samples, load_samples, store_samples};
-use blanket_core::{Image, PixelMode, samples};
+use blanket_core::pixels::{Samples, load_samples, store_sample_bytes};
+use blanket_core::{Image, samples};
 use pyo3::prelude::*;
 
 pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyResult<Image> {
     let source = samples::view(image)?;
     let channels = image.mode.channels();
-    let color_channels = if image.mode == PixelMode::Rgba { 3 } else { channels };
     let luma = |pixel: &[u16]| -> u16 {
         if channels == 1 {
             pixel[0]
@@ -22,10 +21,17 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
                 >> LUMA_BITS) as u16
         }
     };
-    let values = py.detach(|| {
-        let mut values = source.to_vec();
+    if operation == "sharpness" {
+        let values = py.detach(|| {
+            let mut values = source.to_vec();
+            smooth(&source, &mut values, image.width as usize, image.height as usize, channels);
+            values
+        });
+        return samples::output(image, &values);
+    }
+    let mean = py.detach(|| {
         let end = source.len() / (channels * 16) * channels * 16;
-        let mean = if operation != "contrast" || source.is_empty() {
+        if operation != "contrast" || source.is_empty() {
             0
         } else {
             let mut sum = 0_u64;
@@ -40,38 +46,23 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
             }
             sum += source[end..].chunks_exact(channels).map(|pixel| u64::from(luma(pixel))).sum::<u64>();
             (sum as f64 / (source.len() / channels) as f64 + 0.5) as u16
-        };
-        if operation == "sharpness" {
-            smooth(&source, &mut values, image.width as usize, image.height as usize, channels);
-            return values;
         }
-        for i in (0..end).step_by(channels * 16) {
-            match channels {
-                1 => {
-                    let value = if operation == "color" {
-                        Samples::from_slice(&source[i..])
-                    } else {
-                        Samples::splat(if operation == "brightness" { 0 } else { mean })
-                    };
-                    value.copy_to_slice(&mut values[i..i + 16]);
-                }
-                3 => degenerate_block::<3>(&source[i..], &mut values[i..], operation, mean),
-                4 => degenerate_block::<4>(&source[i..], &mut values[i..], operation, mean),
-                _ => unreachable!(),
-            }
-        }
-        for (pixel_index, pixel) in values[end..].chunks_exact_mut(channels).enumerate() {
-            let i = end / channels + pixel_index;
-            match operation {
-                "brightness" => pixel[..color_channels].fill(0),
-                "color" => pixel[..color_channels].fill(luma(&source[i * channels..])),
-                "contrast" => pixel[..color_channels].fill(mean),
-                _ => unreachable!(),
-            }
-        }
-        values
     });
-    samples::output(image, &values)
+    let mut pixels = blanket_core::buffers::buffer(image.size(), channels * 2)?;
+    py.detach(|| {
+        let chunk_size = blanket_core::parallel::CHUNK_PIXELS * channels * 2;
+        blanket_core::parallel::chunks_mut(&mut pixels, chunk_size, |chunk, dst| {
+            let start = chunk * chunk_size / 2;
+            let source = &source[start..start + dst.len() / 2];
+            match channels {
+                1 => degenerate_bytes::<1>(source, dst, operation, mean, image.mode.is_big_endian()),
+                3 => degenerate_bytes::<3>(source, dst, operation, mean, false),
+                4 => degenerate_bytes::<4>(source, dst, operation, mean, false),
+                _ => unreachable!(),
+            }
+        });
+    });
+    samples::output_bytes(image, pixels)
 }
 
 pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
@@ -98,11 +89,44 @@ fn luminance<const C: usize>(pixel: [Samples; C]) -> Samples {
         .cast()
 }
 
-fn degenerate_block<const C: usize>(source: &[u16], output: &mut [u16], operation: &str, mean: u16) {
-    let mut pixel = load_samples::<C>(source);
-    let gray = if operation == "color" { luminance(pixel) } else { Samples::splat(if operation == "brightness" { 0 } else { mean }) };
-    pixel[..3].fill(gray);
-    store_samples(output, pixel);
+fn degenerate_bytes<const C: usize>(source: &[u16], output: &mut [u8], operation: &str, mean: u16, big_endian: bool) {
+    let end = source.len() / (C * 16) * C * 16;
+    for i in (0..end).step_by(C * 16) {
+        let mut pixel = load_samples::<C>(&source[i..]);
+        let gray = if operation == "color" {
+            if C == 1 { pixel[0] } else { luminance(pixel) }
+        } else {
+            Samples::splat(if operation == "brightness" { 0 } else { mean })
+        };
+        pixel[..C.min(3)].fill(gray);
+        store_sample_bytes::<C>(&mut output[i * 2..], pixel);
+        if big_endian {
+            for bytes in output[i * 2..(i + C * 16) * 2].as_chunks_mut::<2>().0 {
+                bytes.swap(0, 1);
+            }
+        }
+    }
+    for (pixel, dst) in source[end..].as_chunks::<C>().0.iter().zip(output[end * 2..].chunks_exact_mut(C * 2)) {
+        let gray = if operation == "color" {
+            if C == 1 {
+                pixel[0]
+            } else {
+                ((u64::from(pixel[0]) * u64::from(LUMA_RED)
+                    + u64::from(pixel[1]) * u64::from(LUMA_GREEN)
+                    + u64::from(pixel[2]) * u64::from(LUMA_BLUE)
+                    + u64::from(LUMA_ROUND))
+                    >> LUMA_BITS) as u16
+            }
+        } else if operation == "brightness" {
+            0
+        } else {
+            mean
+        };
+        for (c, bytes) in dst.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+            let value = if c == 3 { pixel[c] } else { gray };
+            *bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+        }
+    }
 }
 
 fn smooth(source: &[u16], output: &mut [u16], width: usize, height: usize, channels: usize) {
@@ -193,6 +217,44 @@ fn blend_chunk<const BIG_ENDIAN: bool>(a: &[u16], b: &[u16], output: &mut [u8], 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn direct_degenerate_output_preserves_endianness_alpha_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, 16385, 131073] {
+                let storage: Vec<_> = (0..count * C + 1).map(|i| (i * 719) as u16).collect();
+                let source = &storage[1..];
+                for big_endian in [false, true] {
+                    for operation in ["color", "brightness", "contrast"] {
+                        let mut output = vec![173; count * C * 2 + 2];
+                        degenerate_bytes::<C>(source, &mut output[1..count * C * 2 + 1], operation, 33001, big_endian);
+                        for (src, dst) in source.as_chunks::<C>().0.iter().zip(output[1..count * C * 2 + 1].chunks_exact(C * 2)) {
+                            let gray = match operation {
+                                "brightness" => 0,
+                                "contrast" => 33001,
+                                _ if C == 1 => src[0],
+                                _ => {
+                                    ((u64::from(src[0]) * u64::from(LUMA_RED)
+                                        + u64::from(src[1]) * u64::from(LUMA_GREEN)
+                                        + u64::from(src[2]) * u64::from(LUMA_BLUE)
+                                        + u64::from(LUMA_ROUND))
+                                        >> LUMA_BITS) as u16
+                                }
+                            };
+                            for (c, &bytes) in dst.as_chunks::<2>().0.iter().enumerate() {
+                                let actual = if big_endian { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
+                                assert_eq!(actual, if c == 3 { src[c] } else { gray });
+                            }
+                        }
+                        assert_eq!((output[0], output[count * C * 2 + 1]), (173, 173));
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<3>();
+        check::<4>();
+    }
 
     #[test]
     fn blend_preserves_scalar_rounding_nonfinite_values_tails_and_guards() {

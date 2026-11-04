@@ -130,6 +130,18 @@ def test_xmp_allowlist_and_invalid_xmp():
         assert policy.apply({"xmp": raw})["xmp"] == b""
 
 
+def test_xmp_filter_preserves_sibling_order_attributes_and_nested_fields():
+    children = b"".join(f'<gps>{i}</gps><title gps="private" public="kept"><city>private</city><value>{i}</value></title>'.encode() for i in range(4096))
+    raw = b"<root>text" + children + b"</root>"
+    policy = ImageMetadata.MetadataPolicy(location=False)
+    result = ET.fromstring(policy.apply({"xmp": raw})["xmp"])
+    assert result.text == "text"
+    assert len(result) == 4096
+    for i, child in enumerate(result):
+        assert child.tag == "title" and child.attrib == {"public": "kept"}
+        assert len(child) == 1 and child[0].tag == "value" and child[0].text == str(i)
+
+
 def test_png_text_categories_and_hdr_preservation():
     text = PngImagePlugin.PngInfo()
     text.add_text("Author", "public-author", zip=True)

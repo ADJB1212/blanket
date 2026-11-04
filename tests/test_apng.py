@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import struct
 from io import BytesIO
 
 import pytest
@@ -12,6 +13,31 @@ from blanket import Image, ImageSequence, PngImagePlugin
 TYPE_CHECKING = False
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("L", 16), ("RGB", 16), ("RGBA", 16)])
+@pytest.mark.parametrize("default_image", [False, True])
+def test_terminal_previous_disposal_preserves_lazy_and_eager_samples(mode: str, depth: int, default_image: bool) -> None:
+    channels = len(mode)
+    frames = []
+    for i in range(3):
+        values = [(17 + i * 37 + c * 53) * (257 if depth == 16 else 1) for c in range(channels)]
+        raw = bytes(values) if depth == 8 else struct.pack(f"<{channels}H", *values)
+        frames.append(Image.frombytes(mode, (17, 3), raw * 51, bit_depth=depth))
+    disposal = [2, 2] if default_image else [0, 2, 2]
+    duration = [20, 30] if default_image else [10, 20, 30]
+    data = frames[0].encode("PNG", save_all=True, append_images=frames[1:], default_image=default_image, disposal=disposal, duration=duration, blend=[0] * len(disposal))
+    assert all(frame.tell() == 0 for frame in frames)
+    for lazy in [False, True]:
+        with Image.open(BytesIO(data), lazy=lazy) as image:
+            assert image.n_frames == 3 and image.is_animated
+            for index in [2, 0, 1, 2, 1, 0]:
+                image.seek(index)
+                expected = frames[index] if depth == 8 else frames[index].convert("RGBA", bit_depth=16)
+                assert image.mode == expected.mode and image.bit_depth == depth
+                assert image.tobytes() == expected.tobytes()
+                if index > 0:
+                    assert image.info["disposal"] == 2 and image.info["duration"] == duration[index - int(default_image)]
 
 
 # APNG browser support tests and fixtures via:

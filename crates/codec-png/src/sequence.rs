@@ -10,7 +10,7 @@ trait CanvasSample: Copy + Into<u64> {
     const MAX_SAMPLE: u64;
     fn read(bytes: &[u8]) -> Self;
     fn value(value: u64) -> Self;
-    fn pack(canvas: &[[Self; 4]]) -> Vec<u8>;
+    fn pack(canvas: &[[Self; 4]], mode: PixelMode) -> Vec<u8>;
     fn over(src: [Self; 4], dst: &mut [Self; 4]);
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]);
 }
@@ -23,8 +23,14 @@ impl CanvasSample for u8 {
     fn value(value: u64) -> Self {
         value as u8
     }
-    fn pack(canvas: &[[Self; 4]]) -> Vec<u8> {
-        canvas.as_flattened().to_vec()
+    fn pack(canvas: &[[Self; 4]], mode: PixelMode) -> Vec<u8> {
+        match mode {
+            PixelMode::One | PixelMode::L => canvas.iter().map(|pixel| pixel[0]).collect(),
+            PixelMode::La => canvas.iter().map(|pixel| [pixel[0], pixel[3]]).collect::<Vec<_>>().into_flattened(),
+            PixelMode::Rgb => canvas.iter().map(|pixel| [pixel[0], pixel[1], pixel[2]]).collect::<Vec<_>>().into_flattened(),
+            PixelMode::Rgba => canvas.as_flattened().to_vec(),
+            _ => unreachable!("validated APNG output mode"),
+        }
     }
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
         canvas.as_flattened_mut().copy_from_slice(source);
@@ -45,7 +51,7 @@ impl CanvasSample for u16 {
     fn value(value: u64) -> Self {
         value as u16
     }
-    fn pack(canvas: &[[Self; 4]]) -> Vec<u8> {
+    fn pack(canvas: &[[Self; 4]], _mode: PixelMode) -> Vec<u8> {
         canvas.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
     }
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
@@ -151,7 +157,11 @@ fn decode_animation<T: CanvasSample>(
         if x.checked_add(output.width).is_none_or(|v| v > width) || y.checked_add(output.height).is_none_or(|v| v > height) {
             return Err("APNG frame outside canvas".into());
         }
-        let restore_previous = control.is_some_and(|c| c.dispose_op == png::DisposeOp::Previous);
+        let terminal = frame_index + 1 == count || target == Some(frame_index as usize);
+        let restore_previous = control.is_some_and(|c| c.dispose_op == png::DisposeOp::Previous) && !terminal;
+        if terminal {
+            drop(std::mem::take(&mut previous));
+        }
         if restore_previous {
             previous.clear();
             for row in y..y + output.height {
@@ -199,7 +209,6 @@ fn decode_animation<T: CanvasSample>(
             }
         }
         if target.is_none_or(|target| target == frame_index as usize) {
-            let mut pixels = T::pack(&canvas);
             let mode = if bytes == 2 {
                 PixelMode::Rgba
             } else {
@@ -211,14 +220,7 @@ fn decode_animation<T: CanvasSample>(
                     png::ColorType::Rgba => PixelMode::Rgba,
                 }
             };
-            if mode != PixelMode::Rgba {
-                let channels: &[usize] = match mode {
-                    PixelMode::La => &[0, 3],
-                    PixelMode::Rgb => &[0, 1, 2],
-                    _ => &[0],
-                };
-                pixels = pixels.as_chunks::<4>().0.iter().flat_map(|pixel| channels.iter().map(move |&channel| pixel[channel])).collect();
-            }
+            let pixels = T::pack(&canvas, mode);
             let mut image = if bytes == 2 {
                 Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
             } else {
@@ -400,6 +402,24 @@ pub fn encode_sequence_regions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canvas_packing_selects_output_channels_without_rgba_intermediate() {
+        for count in [0, 1, 15, 16, 17, 65537] {
+            let storage: Vec<[u8; 4]> = (0..count + 1).map(|i| std::array::from_fn(|c| (i * 71 + c * 37) as u8)).collect();
+            let canvas = &storage[1..];
+            for (mode, channels) in [
+                (PixelMode::One, &[0][..]),
+                (PixelMode::L, &[0]),
+                (PixelMode::La, &[0, 3]),
+                (PixelMode::Rgb, &[0, 1, 2]),
+                (PixelMode::Rgba, &[0, 1, 2, 3]),
+            ] {
+                let expected: Vec<u8> = canvas.iter().flat_map(|pixel| channels.iter().map(move |&c| pixel[c])).collect();
+                assert_eq!(<u8 as CanvasSample>::pack(canvas, mode), expected);
+            }
+        }
+    }
 
     #[test]
     fn animated_sources_preserve_modes_and_sample_widths() {

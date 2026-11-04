@@ -71,6 +71,7 @@ from ._blanket import (
     ops_transpose,
     ops_warp,
     ops_xbm,
+    palette_to_pa,
     quantize as _native_quantize,
     wide_histogram,
 )
@@ -939,35 +940,23 @@ class Image:
             result.info.pop("transparency", None)
             return result
         if self.mode == "P" and mode in ("LA", "RGBA") and isinstance(transparency, (int, bytes)):
-            source = self.copy()
+            self._sync_palette()
             if isinstance(transparency, int):
-                source._native.set_palette_alpha(index=transparency)
+                result = Image(self._native.convert_palette_alpha(mode, index=transparency, bit_depth=bit_depth))
             else:
-                source._native.set_palette_alpha(alpha=transparency)
-            result = Image(source._native.convert(mode, bit_depth))
+                result = Image(self._native.convert_palette_alpha(mode, alpha=transparency, bit_depth=bit_depth))
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
         if mode == "PA" and self.mode != "PA":
             source = self if self.mode == "P" else self.convert("RGB").quantize()
-            if self.mode in ("LA", "RGBA"):
-                alpha = self.getchannel("A").tobytes()
-            elif self.mode == "P" and isinstance(transparency, (int, bytes)):
+            source._sync_palette()
+            table = None
+            if self.mode == "P" and isinstance(transparency, (int, bytes)):
                 table = bytes(0 if slot == transparency else 255 for slot in range(256)) if isinstance(transparency, int) else transparency.ljust(256, b"\xff")
-                alpha = source.tobytes().translate(table)
-            elif self.mode == "P" and self.palette is not None and self.palette.mode == "RGBA":
-                entries = self.palette.tobytes()
-                table = bytes(entries[slot * 4 + 3] if slot * 4 + 3 < len(entries) else 255 for slot in range(256))
-                alpha = source.tobytes().translate(table)
-            else:
-                alpha = b"\xff" * (self.width * self.height)
-            indices = source.tobytes()
-            pixels = bytearray(2 * len(indices))
-            pixels[0::2] = indices
-            pixels[1::2] = alpha
-            result = frombytes("PA", source.size, pixels)
+            result = Image(palette_to_pa(source._native, self._native if self.mode in ("LA", "RGBA") else None, table))
             if source.palette is not None:
-                result.putpalette(source.palette)
+                result.palette = source.palette.copy()
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
@@ -1914,7 +1903,8 @@ class Image:
             ```
         """
         if self.mode in ("RGB;F", "RGBA;F"):
-            return tuple(cast("tuple[float, float]", self.getchannel(c).getextrema()) for c in self.getbands()) if self.width * self.height else None
+            ranges = self._native.getextrema_float()
+            return tuple(ranges) if ranges else None
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             return self._native.getextrema_scalar()
         ranges = self._native.getextrema()

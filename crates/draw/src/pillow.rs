@@ -208,8 +208,16 @@ fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Cl
     let (x0, y0, x1, y1) = bounds;
     let (a, b) = (x1 - x0, y1 - y0);
     ellipse_spans(a, b, width, |l, y, r| {
+        let row = y0 + (y + b) / 2;
+        if row < 0 || row >= i64::from(image.height) {
+            return;
+        }
+        if matches!(clip, Clip::Pass) {
+            super::draw::hline(image, x0 + (l + a) / 2, x0 + (r + a) / 2, row, ink, blend);
+            return;
+        }
         for (left, right) in clip.spans(l, y, r) {
-            super::draw::hline(image, x0 + (left + a) / 2, x0 + (right + a) / 2, y0 + (y + b) / 2, ink, blend);
+            super::draw::hline(image, x0 + (left + a) / 2, x0 + (right + a) / 2, row, ink, blend);
         }
     });
 }
@@ -312,7 +320,7 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
     if points.len() < 2 {
         return;
     }
-    let mut edges: Vec<Edge> = Vec::new();
+    let mut edges: Vec<Edge> = Vec::with_capacity(points.len());
     for (i, pair) in points.windows(2).enumerate() {
         if i > 0 && pair[0].1 == pair[1].1 && pair[0].1 == points[i - 1].1 {
             let last = edges.last_mut().unwrap();
@@ -341,6 +349,10 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
     }
     let lines: Vec<_> = edges.iter().filter(|e| e.ymin != e.ymax).collect();
     let mut intersections = Vec::new();
+    let mut spans = Vec::new();
+    let mut horizontal: Vec<_> = if blend { edges.iter().filter(|e| e.ymin == e.ymax).collect() } else { Vec::new() };
+    horizontal.sort_unstable_by_key(|edge| edge.ymin);
+    let mut first_horizontal = 0;
     for y in first..=last {
         intersections.clear();
         for (i, edge) in lines.iter().enumerate() {
@@ -375,27 +387,41 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
             intersections.push(x);
         }
         intersections.sort_unstable_by(f32::total_cmp);
-        let mut spans: Vec<_> = intersections
+        spans.clear();
+        let row_spans = intersections
             .as_chunks::<2>()
             .0
             .iter()
             .map(|pair| (f64::from(pair[0]).round() as i64, round_down(f64::from(pair[1]))))
-            .filter(|&(l, r)| l <= r)
-            .collect();
-        if blend {
-            spans.extend(edges.iter().filter(|e| e.ymin == y && e.ymax == y).map(|e| (e.xmin, e.xmax)));
-            spans.sort_unstable();
-            let mut merged: Vec<(i64, i64)> = Vec::new();
-            for (l, r) in spans {
-                if let Some(last) = merged.last_mut().filter(|last| last.1 + 1 >= l) {
-                    last.1 = last.1.max(r);
-                } else {
-                    merged.push((l, r));
-                }
+            .filter(|&(l, r)| l <= r);
+        if !blend {
+            for (l, r) in row_spans {
+                emit(l, y, r);
             }
-            spans = merged;
+            continue;
         }
-        for (l, r) in spans {
+        spans.extend(row_spans);
+        while first_horizontal < horizontal.len() && horizontal[first_horizontal].ymin < y {
+            first_horizontal += 1;
+        }
+        while first_horizontal < horizontal.len() && horizontal[first_horizontal].ymin == y {
+            let edge = horizontal[first_horizontal];
+            spans.push((edge.xmin, edge.xmax));
+            first_horizontal += 1;
+        }
+        spans.sort_unstable();
+        let mut kept = 0;
+        for i in 0..spans.len() {
+            let (l, r) = spans[i];
+            if kept != 0 && spans[kept - 1].1 + 1 >= l {
+                spans[kept - 1].1 = spans[kept - 1].1.max(r);
+            } else {
+                spans[kept] = (l, r);
+                kept += 1;
+            }
+        }
+        spans.truncate(kept);
+        for &(l, r) in &spans {
             emit(l, y, r);
         }
     }

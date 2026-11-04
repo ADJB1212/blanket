@@ -11,9 +11,51 @@ from PIL import Image as PILImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("count", [0, 1, 2, 3, 17, 65537])
+def test_float_color_extrema_preserve_band_order_nan_and_signed_zero(mode: str, channels: int, count: int) -> None:
+    patterns = [(math.nan, -0.0, 0.0), (math.nan, math.inf, -math.inf), (math.nan,), (17.0, -19.0, 0.5)]
+    values = [patterns[c][i % len(patterns[c])] for i in range(count) for c in range(channels)]
+    raw = struct.pack(f"<{len(values)}f", *values)
+    image = Image.frombytes(mode, (count, 1), raw)
+    actual = image.getextrema()
+    if count == 0:
+        assert actual is None
+        return
+    expected = [image.getchannel(c).getextrema() for c in range(channels)]
+    assert actual is not None and len(actual) == channels
+    for pair, reference in zip(actual, expected, strict=True):
+        for value, target in zip(pair, reference, strict=True):
+            if math.isnan(target):
+                assert math.isnan(value)
+            else:
+                assert value == target and math.copysign(1, value) == math.copysign(1, target)
+    assert image.tobytes() == raw
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.getextrema()
+
+
 def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
     raw = bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * len(mode)))
     return Image.frombytes(mode, (17, 13), raw), PILImage.frombytes(mode, (17, 13), raw)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("count", [0, 17, 131073])
+def test_wide_merge_writes_interleaved_sample_bytes(mode: str, depth: int, count: int) -> None:
+    maximum = (1 << depth) - 1
+    channels = Image.getmodebands(mode)
+    values = [[(i * 719 + c * 313) & maximum for i in range(count)] for c in range(channels)]
+    bands = [Image.frombytes("L", (count, 1), struct.pack(f"<{count}H", *band), bit_depth=depth) for band in values]
+    result = Image.merge(mode, bands)
+    expected = struct.pack(f"<{count * channels}H", *(values[c][i] for i in range(count) for c in range(channels)))
+    assert result.mode == mode and result.bit_depth == depth
+    assert result.tobytes() == expected
+    for band in bands:
+        band.close()
+    assert result.tobytes() == expected
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "PA"])

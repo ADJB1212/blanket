@@ -59,7 +59,8 @@ pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dp
     if !data.starts_with(b"\xff\xd8") {
         return Err(codec_error("invalid JPEG container"));
     }
-    let mut output = data[..2].to_vec();
+    let mut output = Vec::with_capacity(data.len());
+    output.extend_from_slice(&data[..2]);
     let mut pos = 2;
     let mut has_density = false;
     let mut in_scan = false;
@@ -121,16 +122,15 @@ pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dp
             if payload.len() < 14 {
                 return Err(codec_error("truncated JFIF density"));
             }
-            let mut segment = data[start..end].to_vec();
-            let base = pos + 2 - start;
+            let base = output.len() + pos + 2 - start;
+            output.extend_from_slice(&data[start..end]);
             if let Some((x, y)) = dpi {
-                segment[base + 7] = 1;
-                segment[base + 8..base + 10].copy_from_slice(&(density(x, 1.0, 65535)? as u16).to_be_bytes());
-                segment[base + 10..base + 12].copy_from_slice(&(density(y, 1.0, 65535)? as u16).to_be_bytes());
+                output[base + 7] = 1;
+                output[base + 8..base + 10].copy_from_slice(&(density(x, 1.0, 65535)? as u16).to_be_bytes());
+                output[base + 10..base + 12].copy_from_slice(&(density(y, 1.0, 65535)? as u16).to_be_bytes());
             } else {
-                segment[base + 7..base + 12].copy_from_slice(&[0, 0, 1, 0, 1]);
+                output[base + 7..base + 12].copy_from_slice(&[0, 0, 1, 0, 1]);
             }
-            output.extend_from_slice(&segment);
             has_density = true;
         } else if !remove {
             output.extend_from_slice(&data[start..end]);
@@ -157,7 +157,8 @@ fn png(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, resolution: bo
     if !data.starts_with(b"\x89PNG\r\n\x1a\n") {
         return Err(codec_error("invalid PNG container"));
     }
-    let mut output = data[..8].to_vec();
+    let mut output = Vec::with_capacity(data.len());
+    output.extend_from_slice(&data[..8]);
     let mut pos = 8;
     let mut first = true;
     while pos < data.len() {
@@ -179,9 +180,9 @@ fn png(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, resolution: bo
             return Err(codec_error("invalid PNG chunk CRC"));
         }
         let is_text = matches!(kind, b"tEXt" | b"zTXt" | b"iTXt");
-        let keyword = payload.split(|&b| b == 0).next().unwrap_or_default();
-        let is_xmp = is_text && keyword == b"XML:com.adobe.xmp";
-        let is_exif_text = is_text && keyword == b"Raw profile type exif";
+        let keyword = if is_text { payload.split(|&b| b == 0).next().unwrap_or_default() } else { &[] };
+        let is_xmp = keyword == b"XML:com.adobe.xmp";
+        let is_exif_text = keyword == b"Raw profile type exif";
         let remove = (exif && (kind == b"eXIf" || is_exif_text))
             || (icc && kind == b"iCCP")
             || (xmp && is_xmp)
@@ -209,7 +210,8 @@ fn webp(data: &[u8], exif: bool, xmp: bool, icc: bool) -> PyResult<Vec<u8>> {
     if declared.checked_add(8) != Some(data.len()) {
         return Err(codec_error("invalid WebP RIFF size"));
     }
-    let mut output = data[..12].to_vec();
+    let mut output = Vec::with_capacity(data.len());
+    output.extend_from_slice(&data[..12]);
     let mut pos = 12;
     while pos < data.len() {
         let header = data.get(pos..pos + 8).ok_or_else(|| codec_error("truncated WebP chunk"))?;
@@ -241,7 +243,8 @@ fn webp(data: &[u8], exif: bool, xmp: bool, icc: bool) -> PyResult<Vec<u8>> {
 
 fn jxl(data: &[u8], exif: Option<&[u8]>, xmp: Option<&[u8]>) -> PyResult<Vec<u8>> {
     let signature = b"\0\0\0\x0cJXL \r\n\x87\n";
-    let mut output = signature.to_vec();
+    let mut output = Vec::with_capacity(data.len());
+    output.extend_from_slice(signature);
     let mut metadata = Vec::new();
     if let Some(raw) = exif
         && !raw.is_empty()

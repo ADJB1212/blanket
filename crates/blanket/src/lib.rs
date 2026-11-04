@@ -20,6 +20,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_cms::register(module)?;
     module.add_function(wrap_pyfunction!(fromarray, module)?)?;
     module.add_function(wrap_pyfunction!(frombytes, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_core::raster::mapped_getpixel, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_inspect, module)?)?;

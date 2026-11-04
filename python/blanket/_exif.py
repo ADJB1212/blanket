@@ -127,6 +127,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
     if format == "JPEG":
         info.update(read_jpeg_metadata(data))
         profiles: dict[int, bytes] = {}
+        exif_parts: list[bytes] = []
         profile_count = 0
         valid_profile = True
         pos = 2
@@ -150,8 +151,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
             if marker == 0xE1:
                 payload = data[pos + 2 : pos + length]
                 if payload.startswith(b"Exif\0\0"):
-                    previous = info.get("exif", b"")
-                    info["exif"] = previous + payload[6:] if previous else payload
+                    exif_parts.append(payload[6:] if exif_parts else payload)
                 elif payload.startswith(b"http://ns.adobe.com/xap/1.0/\0"):
                     info["xmp"] = payload.split(b"\0", 1)[1]
             elif marker == 0xE2 and data[pos + 2 : pos + 14] == b"ICC_PROFILE\0" and length >= 16:
@@ -161,13 +161,15 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 profile_count = count
                 profiles[part] = data[pos + 16 : pos + length]
             elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
-                if valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
+                if valid_profile and profile_count and len(profiles) == profile_count:
                     info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
                 profiles.clear()
                 profile_count = 0
                 valid_profile = True
             pos += length
-        if "icc_profile" not in info and valid_profile and profile_count and sorted(profiles) == list(range(1, profile_count + 1)):
+        if exif_parts:
+            info["exif"] = b"".join(exif_parts)
+        if "icc_profile" not in info and valid_profile and profile_count and len(profiles) == profile_count:
             info["icc_profile"] = b"".join(profiles[i] for i in range(1, profile_count + 1))
         if "dpi" not in info and "exif" in info:
             try:
@@ -212,6 +214,9 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 pos += length + 12
                 continue
             if kind in HDR_KEYS and length != {b"cICP": 4, b"mDCV": 24, b"cLLI": 8}[kind]:
+                pos += length + 12
+                continue
+            if kind in (b"eXIf", b"tEXt") and length + (6 if kind == b"eXIf" else 0) > remaining:
                 pos += length + 12
                 continue
             payload = data[pos + 8 : pos + 8 + length]

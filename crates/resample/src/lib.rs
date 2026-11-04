@@ -28,6 +28,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 fn ops_color_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool) -> PyResult<Image> {
     let prepared = py.detach(|| blanket_core::float::prepare(image, srgb, premultiply))?;
     let resized = ops_resize(py, &prepared, size, method, bounds, None)?;
+    drop(prepared);
     py.detach(|| blanket_core::float::finish(&resized, image, srgb, premultiply))
 }
 

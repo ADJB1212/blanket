@@ -87,10 +87,22 @@ fn chunk(output: &mut Vec<u8>, kind: &[u8], payload: &[u8], little: bool) -> PyR
 }
 
 fn png_chunk(output: &mut Vec<u8>, kind: &[u8], payload: &[u8]) -> PyResult<()> {
-    chunk(output, kind, payload, false)?;
+    png_chunk_parts(output, kind, &[payload])
+}
+
+fn png_chunk_parts(output: &mut Vec<u8>, kind: &[u8], parts: &[&[u8]]) -> PyResult<()> {
+    let length = parts
+        .iter()
+        .try_fold(0_u32, |length, part| length.checked_add(u32::try_from(part.len()).ok()?))
+        .ok_or_else(|| PyValueError::new_err("metadata chunk exceeds 4 GiB"))?;
+    output.extend_from_slice(&length.to_be_bytes());
+    output.extend_from_slice(kind);
     let mut crc = crc32fast::Hasher::new();
     crc.update(kind);
-    crc.update(payload);
+    for part in parts {
+        output.extend_from_slice(part);
+        crc.update(part);
+    }
     output.extend_from_slice(&crc.finalize().to_be_bytes());
     Ok(())
 }
@@ -133,12 +145,12 @@ fn insert_metadata(data: Cow<'_, [u8]>, before: usize, after: usize, prefix: &[u
                 return copy(&output);
             }
             output.reserve(prefix.len() + suffix.len());
-            if !suffix.is_empty() {
-                drop(output.splice(after..after, suffix.iter().copied()));
-            }
-            if !prefix.is_empty() {
-                drop(output.splice(before..before, prefix.iter().copied()));
-            }
+            let length = output.len();
+            output.resize(length + prefix.len() + suffix.len(), 0);
+            output.copy_within(after..length, after + prefix.len() + suffix.len());
+            output.copy_within(before..after, before + prefix.len());
+            output[before..before + prefix.len()].copy_from_slice(prefix);
+            output[after + prefix.len()..after + prefix.len() + suffix.len()].copy_from_slice(suffix);
             output
         }
     }
@@ -205,12 +217,12 @@ fn write_metadata_buffer(data: Cow<'_, [u8]>, format: &str, exif: &[u8], xmp: &[
                 png_chunk(&mut metadata, b"eXIf", tiff)?;
             }
             if !icc.is_empty() {
-                let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+                let mut encoder = flate2::write::ZlibEncoder::new(b"ICC Profile\0\0".to_vec(), flate2::Compression::default());
                 encoder.write_all(icc).map_err(codec_error)?;
-                png_chunk(&mut metadata, b"iCCP", &[b"ICC Profile\0\0".as_slice(), &encoder.finish().map_err(codec_error)?].concat())?;
+                png_chunk(&mut metadata, b"iCCP", &encoder.finish().map_err(codec_error)?)?;
             }
             if !xmp.is_empty() {
-                png_chunk(&mut metadata, b"iTXt", &[b"XML:com.adobe.xmp\0\0\0\0\0".as_slice(), xmp].concat())?;
+                png_chunk_parts(&mut metadata, b"iTXt", &[b"XML:com.adobe.xmp\0\0\0\0\0", xmp])?;
             }
             let mut after = Vec::new();
             for (kind, payload, after_idat) in chunks {
@@ -507,16 +519,26 @@ fn write_tiff(data: Cow<'_, [u8]>, exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyRes
     if following != 0 {
         entries.push(record(330, 4, 1, &word(following, little), little));
     }
-    for (tag, _, _, pos) in base {
-        entries.retain(|entry| &entry[..2] != if little { tag.to_le_bytes() } else { tag.to_be_bytes() }.as_slice());
-        entries.push(output[pos - 8..pos + 4].try_into().expect("validated TIFF entry"));
-    }
+    let base: std::collections::BTreeMap<[u8; 2], [u8; 12]> = base
+        .into_iter()
+        .map(|(tag, _, _, pos)| {
+            (if little { tag.to_le_bytes() } else { tag.to_be_bytes() }, output[pos - 8..pos + 4].try_into().expect("validated TIFF entry"))
+        })
+        .collect();
+    entries.retain(|entry| !base.contains_key(&[entry[0], entry[1]]));
+    entries.extend(base.into_values());
     for (tag, raw) in [(700u16, xmp), (34675, icc)] {
         if !raw.is_empty() {
             let count = u32::try_from(raw.len()).map_err(codec_error)?;
-            let field = if raw.len() > 4 { word(append_tiff(&mut output, raw)?, little).to_vec() } else { raw.to_vec() };
+            let offset;
+            let field = if raw.len() > 4 {
+                offset = word(append_tiff(&mut output, raw)?, little);
+                offset.as_slice()
+            } else {
+                raw
+            };
             entries.retain(|entry| &entry[..2] != if little { tag.to_le_bytes() } else { tag.to_be_bytes() }.as_slice());
-            entries.push(record(tag, 1, count, &field, little));
+            entries.push(record(tag, 1, count, field, little));
         }
     }
     let root = write_ifd(&mut output, entries, 0, little)?;
@@ -527,6 +549,39 @@ fn write_tiff(data: Cow<'_, [u8]>, exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyRes
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inserting_two_metadata_regions_preserves_all_ranges() {
+        let data: Vec<u8> = (0..31).collect();
+        for before in 0..=data.len() {
+            for after in before..=data.len() {
+                for prefix in [b"".as_slice(), b"prefix"] {
+                    for suffix in [b"".as_slice(), b"suffix"] {
+                        let expected = insert_metadata(Cow::Borrowed(&data), before, after, prefix, suffix);
+                        for spare in [0, 128] {
+                            let mut input = Vec::with_capacity(data.len() + spare);
+                            input.extend_from_slice(&data);
+                            assert_eq!(insert_metadata(Cow::Owned(input), before, after, prefix, suffix), expected);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn multipart_png_chunks_preserve_length_payload_and_crc() {
+        for parts in [vec![], vec![b"".as_slice()], vec![b"first".as_slice(), b"", b"second"]] {
+            let mut output = vec![173];
+            png_chunk_parts(&mut output, b"iTXt", &parts).unwrap();
+            let payload = parts.concat();
+            assert_eq!(u32::from_be_bytes(output[1..5].try_into().unwrap()) as usize, payload.len());
+            assert_eq!(&output[5..9], b"iTXt");
+            assert_eq!(&output[9..output.len() - 4], payload);
+            assert_eq!(u32::from_be_bytes(output[output.len() - 4..].try_into().unwrap()), crc32fast::hash(&output[5..output.len() - 4]));
+            assert_eq!(output[0], 173);
+        }
+    }
 
     #[test]
     fn owned_metadata_matches_borrowed_output_and_preserves_decoded_pixels() {

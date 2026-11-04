@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import tracemalloc
 import weakref
 
 import pytest
@@ -9,6 +10,40 @@ from PIL import Image as PillowImage, ImageDraw as PillowDraw
 from blanket import Image, ImageDraw
 
 MAPPED_MODES = ["L", "P", "RGBX", "RGBA", "CMYK", "I;16", "I;16L", "I;16B"]
+
+
+@pytest.mark.parametrize("mode", MAPPED_MODES)
+@pytest.mark.parametrize("orientation", [1, -1])
+def test_mapped_pixel_reads_use_bounded_memory(mode: str, orientation: int) -> None:
+    size = (1024, 1024)
+    channels = 2 if mode.startswith("I;16") else PillowImage.getmodebands(mode)
+    stride = size[0] * channels + 3
+    data = bytearray(stride * size[1])
+    image = Image.frombuffer(mode, size, data, "raw", mode, stride, orientation)
+    reference = PillowImage.frombuffer(mode, size, data, "raw", mode, stride, orientation)
+    pixels = image.load()
+    tracemalloc.start()
+    try:
+        for value in (19, 137, 251):
+            data[0] = value
+            data[-4] = 255 - value
+            for xy in [(0, 0), (-1, -1), (1023, 0), (0, 1023)]:
+                assert image.getpixel(xy) == reference.getpixel(xy)
+                assert pixels[xy] == reference.getpixel(xy)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 32 * 1024
+    for xy in [(1024, 0), (-1025, 0), (0, 1024), (0, -1025)]:
+        with pytest.raises(IndexError):
+            image.getpixel(xy)
+        with pytest.raises(IndexError):
+            pixels[xy]
+    assert image.getpixel([0.5, 0]) == reference.getpixel((0, 0))
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.getpixel((0, 0))
+    assert pixels[0, 0] == reference.getpixel((0, 0))
 
 
 @pytest.mark.parametrize("mode", MAPPED_MODES)

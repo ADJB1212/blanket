@@ -771,14 +771,17 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(&bands[0]) {
+        if mode == PixelMode::L {
+            let source = bands[0].raw_data()?;
+            return Image::from_sample_bytes(width, height, mode, py.detach(|| source.to_vec()), bands[0].bit_depth, None);
+        }
         let sources = bands.iter().map(|b| blanket_core::samples::view(b)).collect::<PyResult<Vec<_>>>()?;
-        let values = py.detach(|| match mode {
-            PixelMode::L => Ok(sources[0].to_vec()),
+        let pixels = py.detach(|| match mode {
             PixelMode::Rgb => Ok(merge_samples::<3>(&sources)),
             PixelMode::Rgba => Ok(merge_samples::<4>(&sources)),
             _ => Err(PyValueError::new_err("this mode requires 8-bit pixels")),
         })?;
-        return Image::from_samples(width, height, mode, values, bands[0].bit_depth, None);
+        return Image::from_sample_bytes(width, height, mode, pixels, bands[0].bit_depth, None);
     }
     let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
     if matches!(mode, PixelMode::One | PixelMode::L) {
@@ -797,16 +800,21 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
     Image::from_pixels(width, height, mode, pixels, None)
 }
 
-fn merge_samples<const C: usize>(sources: &[std::borrow::Cow<'_, [u16]>]) -> Vec<u16> {
-    let mut values = vec![0; sources[0].len() * C];
+fn merge_samples<const C: usize>(sources: &[std::borrow::Cow<'_, [u16]>]) -> Vec<u8> {
+    let mut values = vec![0; sources[0].len() * C * 2];
     const CHUNK: usize = 128 * 1024;
-    blanket_core::parallel::chunks_mut_above(&mut values, CHUNK * C, 4 * 1024 * 1024, |chunk, dst| {
+    blanket_core::parallel::chunks_mut_above(&mut values, CHUNK * C * 2, 4 * 1024 * 1024, |chunk, dst| {
         let start = chunk * CHUNK;
-        let dst = dst.as_chunks_mut::<C>().0;
-        let bands = std::array::from_fn(|c| &sources[c][start..start + dst.len()]);
-        let offset = blanket_core::pixels::merge_samples(bands, dst);
-        for (i, pixel) in dst.iter_mut().enumerate().skip(offset) {
-            *pixel = std::array::from_fn(|c| bands[c][i]);
+        let count = dst.len() / (C * 2);
+        let end = count / 16 * 16;
+        for i in (0..end).step_by(16) {
+            let samples = std::array::from_fn(|c| blanket_core::pixels::Samples::from_slice(&sources[c][start + i..]));
+            blanket_core::pixels::store_sample_bytes::<C>(&mut dst[i * C * 2..], samples);
+        }
+        for (i, pixel) in dst[end * C * 2..].chunks_exact_mut(C * 2).enumerate() {
+            for (c, sample) in pixel.as_chunks_mut::<2>().0.iter_mut().enumerate() {
+                *sample = sources[c][start + end + i].to_le_bytes();
+            }
         }
     });
     values
@@ -834,7 +842,8 @@ mod tests {
                 let sources: Vec<std::borrow::Cow<'_, [u16]>> =
                     (0..C).map(|c| std::borrow::Cow::Owned((0..count).map(|i| (i * 719 + c * 313) as u16).collect())).collect();
                 let actual = super::merge_samples::<C>(&sources);
-                assert_eq!(actual.len(), count * C);
+                assert_eq!(actual.len(), count * C * 2);
+                let actual: Vec<u16> = actual.as_chunks::<2>().0.iter().map(|&bytes| u16::from_le_bytes(bytes)).collect();
                 for (i, pixel) in actual.as_chunks::<C>().0.iter().enumerate() {
                     assert_eq!(*pixel, std::array::from_fn(|c| sources[c][i]));
                 }

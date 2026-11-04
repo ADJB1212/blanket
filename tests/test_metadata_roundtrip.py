@@ -73,6 +73,24 @@ def exif_tags() -> Image.Exif:
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])
+def test_tiff_merges_many_tags_preserving_raster_fields_and_metadata(endian: str) -> None:
+    exif = Image.Exif()
+    exif.endian = endian
+    exif[256], exif[257] = 999, 888
+    for tag in range(45000, 46000):
+        exif[tag] = tag - 44999
+    image = Image.new("RGB", (3, 2), (17, 83, 191))
+    data = image.encode("TIFF", exif=exif, xmp=b"<title>kept</title>")
+    for module in (Image, PILImage):
+        with module.open(BytesIO(data)) as restored:
+            assert restored.size == image.size and restored.tobytes() == image.tobytes()
+            tags = restored.getexif()
+            assert tags[256] == 3 and tags[257] == 2
+            assert all(tags[tag] == tag - 44999 for tag in range(45000, 46000))
+            assert tags[700] == b"<title>kept</title>"
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
 @pytest.mark.parametrize("nested", [False, True])
 def test_string_user_comment_roundtrips_like_pillow(endian: str, nested: bool) -> None:
     exif = Image.Exif()

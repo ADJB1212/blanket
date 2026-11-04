@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from operator import index
 from typing import TYPE_CHECKING
 
-from ._blanket import frombytes as _native_frombytes
+from ._blanket import frombytes as _native_frombytes, mapped_getpixel
 from .Image import Image, PixelAccess
 
 if TYPE_CHECKING:
@@ -46,6 +47,11 @@ class BufferPixelAccess(PixelAccess):
         """Raise ValueError because mapped buffer pixel access is readonly."""
         raise ValueError("image is readonly")
 
+    def __getitem__(self, xy: tuple[int, int]) -> int | float | tuple[int | float, ...]:
+        """Read one mapped pixel without taking a raster snapshot."""
+        mapping = self._mapping
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, self._coordinates(xy))
+
 
 class MappedImage(Image):
     """An image backed by a mapped memory buffer."""
@@ -82,6 +88,18 @@ class MappedImage(Image):
             self._native.load()
             return BufferPixelAccess(self._mapping, self.palette)
         return super().load()
+
+    def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
+        """Read a pixel directly from a live buffer mapping."""
+        mapping = self._mapping
+        if mapping is None:
+            return super().getpixel(xy)
+        if not isinstance(xy, (tuple, list)):
+            raise TypeError("argument must be a sequence")
+        if len(xy) != 2:
+            raise TypeError("argument must be sequence of length 2")
+        coordinates = tuple(int(value) if isinstance(value, float) else index(value) for value in xy)
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, coordinates)
 
     def close(self) -> None:
         """Release buffer mapping and close native raster."""

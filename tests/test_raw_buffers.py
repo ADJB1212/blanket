@@ -96,6 +96,24 @@ def test_extended_raw_decoders_clip_to_rows(mode: str, rawmode: str, bits: int, 
                     Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation)
 
 
+@pytest.mark.parametrize("mode,depth", [("L", 8), ("L", 16), ("RGB", 10), ("RGBA", 12), ("LAB", 8), ("I", 8), ("F", 8), ("I;16B", 8), ("RGB;F", 8)])
+@pytest.mark.parametrize("decoder", ["hex", "packbits"])
+@pytest.mark.parametrize("orientation,padding", [(1, 0), (-1, 3)])
+def test_owned_decoders_preserve_layout_and_sample_storage(mode, depth, decoder, orientation, padding) -> None:
+    size = (17, 3)
+    sample_bytes = 4 if mode in ("I", "F", "RGB;F") else 2 if depth > 8 or mode == "I;16B" else 1
+    row_bytes = size[0] * Image.getmodebands(mode) * sample_bytes
+    raw = (bytes([0, 1]) * (row_bytes // 2 + 1))[:row_bytes] if depth > 8 else bytes((i * 71) % 256 for i in range(row_bytes))
+    raw = (raw + bytes(padding)) * size[1]
+    encoded = raw.hex().encode() if decoder == "hex" else b"".join(bytes([len(raw[i : i + 128]) - 1]) + raw[i : i + 128] for i in range(0, len(raw), 128))
+    actual = Image.frombytes(mode, size, encoded, decoder, mode, row_bytes + padding, orientation, bit_depth=depth)
+    expected = Image.frombytes(mode, size, raw, "raw", mode, row_bytes + padding, orientation, bit_depth=depth)
+    assert actual.mode == expected.mode and actual.bit_depth == expected.bit_depth
+    assert actual.tobytes() == expected.tobytes()
+    actual.close()
+    assert expected.tobytes()
+
+
 @pytest.mark.parametrize("decoder,data", [("hex", b"01 02\n03ff"), ("packbits", bytes([2, 1, 2, 3, 0, 255]))])
 def test_raw_byte_decoders(decoder: str, data: bytes) -> None:
     expected = PillowImage.frombytes("L", (4, 1), data, decoder, "L")

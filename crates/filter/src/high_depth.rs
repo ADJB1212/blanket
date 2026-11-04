@@ -93,13 +93,14 @@ fn extrema(source: &[u16], output: &mut [u16], width: usize, height: usize, chan
     });
 }
 
-struct RankCounts {
-    tree: Vec<u64>,
+pub(super) struct RankCounts {
+    pub(super) tree: Vec<u32>,
 }
 
 impl RankCounts {
-    fn update(&mut self, value: u16, weight: u64, add: bool) {
-        let mut index = usize::from(value) + 1;
+    pub(super) fn update(&mut self, value: usize, weight: u64, add: bool) {
+        let weight = u32::try_from(weight).expect("validated rank window weight");
+        let mut index = value + 1;
         while index < self.tree.len() {
             if add {
                 self.tree[index] += weight;
@@ -110,18 +111,18 @@ impl RankCounts {
         }
     }
 
-    fn select(&self, mut rank: u64) -> u16 {
+    pub(super) fn select(&self, mut rank: u64) -> usize {
         let mut index = 0;
-        let mut step = (self.tree.len() - 1) / 2;
+        let mut step = 1 << (usize::BITS - 1 - (self.tree.len() - 1).leading_zeros());
         while step != 0 {
             let next = index + step;
-            if self.tree[next] <= rank {
-                rank -= self.tree[next];
+            if next < self.tree.len() && u64::from(self.tree[next]) <= rank {
+                rank -= u64::from(self.tree[next]);
                 index = next;
             }
             step >>= 1;
         }
-        index as u16
+        index
     }
 }
 
@@ -158,7 +159,7 @@ fn sliding_neighborhood_rows(
                     let value = source[(yy * width + xx) * channels + c];
                     let weight = wx * wy as u64;
                     if !counts.tree.is_empty() {
-                        counts.update(value, weight, add);
+                        counts.update(usize::from(value), weight, add);
                     } else if add {
                         *histogram.entry(value).or_default() += weight;
                     } else {
@@ -181,7 +182,7 @@ fn sliding_neighborhood_rows(
             for x in 0..width {
                 let dst = &mut values[((y - first) * width + x) * channels + c];
                 if !counts.tree.is_empty() {
-                    *dst = counts.select(rank.unwrap());
+                    *dst = counts.select(rank.unwrap()) as u16;
                 } else if rank == Some(0) {
                     *dst = *histogram.first_key_value().unwrap().0;
                 } else if rank == Some(maximum_rank) {
@@ -639,6 +640,39 @@ mod tests {
         counts.update(32767, 7, false);
         assert_eq!(counts.select(5), 32768);
         assert_eq!(counts.select(6), 65535);
+    }
+
+    #[test]
+    fn rank_counts_cover_non_power_of_two_domains() {
+        for bins in 1..=257 {
+            let mut counts = RankCounts { tree: vec![0; bins + 1] };
+            for value in 0..bins {
+                counts.update(value, 3, true);
+            }
+            for rank in 0..bins * 3 {
+                assert_eq!(counts.select(rank as u64), rank / 3);
+            }
+            for value in 0..bins {
+                counts.update(value, 2, false);
+            }
+            for rank in 0..bins {
+                assert_eq!(counts.select(rank as u64), rank);
+            }
+        }
+    }
+
+    #[test]
+    fn compact_rank_counts_cover_largest_supported_window() {
+        let count = 23169_u64.pow(2);
+        let mut counts = RankCounts { tree: vec![0; 4] };
+        assert_eq!(size_of_val(counts.tree.as_slice()), 16);
+        counts.update(0, count / 2, true);
+        counts.update(2, count - count / 2, true);
+        assert_eq!(counts.select(count / 2 - 1), 0);
+        assert_eq!(counts.select(count / 2), 2);
+        assert_eq!(counts.select(count - 1), 2);
+        counts.update(0, count / 2, false);
+        assert_eq!(counts.select(0), 2);
     }
 
     #[test]

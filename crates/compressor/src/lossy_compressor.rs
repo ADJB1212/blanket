@@ -5,6 +5,7 @@ use blanket_core::raster::{Image, PixelMode};
 use blanket_kernels::ops as ops_simd;
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
+use rayon::prelude::*;
 
 use crate::compressor::LosslessImageCompressor;
 
@@ -107,8 +108,18 @@ impl LossyImageCompressor {
                     continue;
                 }
                 tried.push(color_table);
-                let rounded = rounded.get_or_insert_with(|| image.clone());
-                rounded.ensure_owned();
+                if rounded.is_none() {
+                    let mut scratch = Image::from_pixels(
+                        image.width,
+                        image.height,
+                        image.mode,
+                        blanket_core::raster::alloc_pixels(pixels.len())?,
+                        image.format.clone(),
+                    )?;
+                    scratch.palette.clone_from(&image.palette);
+                    rounded = Some(scratch);
+                }
+                let rounded = rounded.as_mut().expect("initialized PNG rounding scratch");
                 let destination = rounded.pixels.as_mut().expect("validated image");
                 round_png_pixels(pixels, destination, channels, &color_table);
                 let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;
@@ -196,6 +207,22 @@ fn within_error(candidate: &Image, reference: &Image, max_rmse: f64) -> PyResult
 }
 
 fn png_rounding_histogram(pixels: &[u8], channels: usize) -> [u64; 256] {
+    let chunk = 64 * 1024 * channels;
+    if blanket_core::parallel::should_parallel(pixels.len(), chunk, 4 * 1024 * 1024) {
+        return pixels.par_chunks(chunk).map(|pixels| png_rounding_histogram_chunk(pixels, channels)).reduce(
+            || [0; 256],
+            |mut a, b| {
+                for (a, b) in a.iter_mut().zip(b) {
+                    *a += b;
+                }
+                a
+            },
+        );
+    }
+    png_rounding_histogram_chunk(pixels, channels)
+}
+
+fn png_rounding_histogram_chunk(pixels: &[u8], channels: usize) -> [u64; 256] {
     let mut histogram = [0_u64; 256];
     if channels == 4 {
         for pixel in pixels.as_chunks::<4>().0 {
@@ -282,6 +309,23 @@ fn rgba_sample(image: &Image, data: &[u8], index: usize) -> [f64; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_png_histograms_preserve_alpha_exclusion_and_partition_tails() {
+        for channels in [1, 3, 4] {
+            for count in [0, 1, 17, 65537, 1048593, 4194307] {
+                let storage: Vec<u8> = (0..count * channels + 1).map(|i| (i * 71 + i / 17) as u8).collect();
+                let source = &storage[1..];
+                let mut expected = [0; 256];
+                for (i, &sample) in source.iter().enumerate() {
+                    if channels != 4 || i % 4 != 3 {
+                        expected[usize::from(sample)] += 1;
+                    }
+                }
+                assert_eq!(png_rounding_histogram(source, channels), expected);
+            }
+        }
+    }
 
     #[test]
     fn png_rounding_replaces_trials_and_restores_color_without_changing_alpha() {

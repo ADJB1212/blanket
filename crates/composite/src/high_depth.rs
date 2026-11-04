@@ -7,6 +7,46 @@ use blanket_core::{Image, PixelMode, samples};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+enum MaskSamples<'a> {
+    Bytes(&'a [u8]),
+    Wide(std::borrow::Cow<'a, [u16]>),
+}
+
+impl MaskSamples<'_> {
+    fn get(&self, index: usize) -> u16 {
+        match self {
+            Self::Bytes(values) => u16::from(values[index]),
+            Self::Wide(values) => values[index],
+        }
+    }
+
+    fn load(&self, index: usize, channels: usize) -> Samples {
+        match self {
+            Self::Bytes(values) => {
+                if channels == 1 {
+                    blanket_core::pixels::Bytes::from_slice(&values[index..]).cast()
+                } else {
+                    blanket_core::pixels::load::<4>(&values[index..])[3].cast()
+                }
+            }
+            Self::Wide(values) => {
+                if channels == 1 {
+                    Samples::from_slice(&values[index..])
+                } else {
+                    load_samples::<4>(&values[index..])[3]
+                }
+            }
+        }
+    }
+
+    fn slice(&self, index: usize) -> MaskSamples<'_> {
+        match self {
+            Self::Bytes(values) => MaskSamples::Bytes(&values[index..]),
+            Self::Wide(values) => MaskSamples::Wide(std::borrow::Cow::Borrowed(&values[index..])),
+        }
+    }
+}
+
 fn matching(first: &Image, second: &Image) -> PyResult<()> {
     if first.mode != second.mode || first.bit_depth != second.bit_depth {
         return Err(PyValueError::new_err("images do not match"));
@@ -17,7 +57,6 @@ fn matching(first: &Image, second: &Image) -> PyResult<()> {
 pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     matching(image, source)?;
     let source_bytes = source.raw_data()?;
-    let source_values = if mask.is_some() { samples::view(source)? } else { std::borrow::Cow::Borrowed(&[][..]) };
     image.raw_data()?;
     let mask_values = mask
         .map(|mask| {
@@ -28,11 +67,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
             {
                 return Err(PyValueError::new_err("bad transparency mask"));
             }
-            let values = if mask.bit_depth == 8 {
-                std::borrow::Cow::Owned(mask.pixel_data()?.iter().map(|&v| u16::from(v)).collect::<Vec<_>>())
-            } else {
-                samples::view(mask)?
-            };
+            let values = if mask.bit_depth == 8 { MaskSamples::Bytes(mask.pixel_data()?) } else { MaskSamples::Wide(samples::view(mask)?) };
             Ok((values, mask.mode.channels(), (1_u64 << mask.bit_depth) - 1))
         })
         .transpose()?;
@@ -42,6 +77,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
     if right <= left || bottom <= top {
         return Ok(());
     }
+    let source_values = if mask.is_some() { samples::view(source)? } else { std::borrow::Cow::Borrowed(&[][..]) };
     let big_endian = image.mode.is_big_endian();
     let width = image.width as usize;
     image.ensure_owned();
@@ -62,11 +98,11 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
         let dst = &mut values;
         let src = &source_values[src_start..src_start + count * channels];
         let end = if let Some((mask, mc, maximum)) = &mask_values {
-            let mask = &mask[src_start / channels * mc..];
+            let mask = mask.slice(src_start / channels * mc);
             match channels {
-                1 => paste_row::<1>(dst, src, mask, *mc, *maximum as u32, fill),
-                3 => paste_row::<3>(dst, src, mask, *mc, *maximum as u32, fill),
-                4 => paste_row::<4>(dst, src, mask, *mc, *maximum as u32, fill),
+                1 => paste_row::<1>(dst, src, &mask, *mc, *maximum as u32, fill),
+                3 => paste_row::<3>(dst, src, &mask, *mc, *maximum as u32, fill),
+                4 => paste_row::<4>(dst, src, &mask, *mc, *maximum as u32, fill),
                 _ => unreachable!(),
             }
         } else {
@@ -78,7 +114,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
             let dst = (x - left) as usize * channels;
             let (alpha, maximum) = mask_values
                 .as_ref()
-                .map_or((1, 1), |(values, channels_mask, maximum)| (u64::from(values[(src / channels + 1) * channels_mask - 1]), *maximum));
+                .map_or((1, 1), |(values, channels_mask, maximum)| (u64::from(values.get((src / channels + 1) * channels_mask - 1)), *maximum));
             let replace_rgb =
                 fill && channels == 4 && mask_values.as_ref().is_some_and(|(_, channels, _)| *channels == 1) && values[dst + 3] == 0 && alpha != 0;
             for c in 0..channels {
@@ -94,7 +130,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
     Ok(())
 }
 
-fn paste_row<const C: usize>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usize, maximum: u32, fill: bool) -> usize {
+fn paste_row<const C: usize>(dst: &mut [u16], src: &[u16], mask: &MaskSamples<'_>, mc: usize, maximum: u32, fill: bool) -> usize {
     match maximum {
         255 => paste_row_max::<C, 255>(dst, src, mask, mc, fill),
         1023 => paste_row_max::<C, 1023>(dst, src, mask, mc, fill),
@@ -104,12 +140,12 @@ fn paste_row<const C: usize>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usi
     }
 }
 
-fn paste_row_max<const C: usize, const MAXIMUM: u32>(dst: &mut [u16], src: &[u16], mask: &[u16], mc: usize, fill: bool) -> usize {
+fn paste_row_max<const C: usize, const MAXIMUM: u32>(dst: &mut [u16], src: &[u16], mask: &MaskSamples<'_>, mc: usize, fill: bool) -> usize {
     let end = dst.len() / C / 16 * 16;
     for i in (0..end).step_by(16) {
         let original = load_samples::<C>(&dst[i * C..]);
         let source = load_samples::<C>(&src[i * C..]);
-        let alpha = if mc == 1 { Samples::from_slice(&mask[i..]) } else { load_samples::<4>(&mask[i * 4..])[3] }.cast::<u32>();
+        let alpha = mask.load(i * mc, mc).cast::<u32>();
         let replace = if C == 4 && mc == 1 && fill {
             original[3].simd_eq(Samples::splat(0)).cast::<i32>() & alpha.simd_ne(Simd::splat(0))
         } else {
@@ -190,31 +226,44 @@ pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
     }
     let source = samples::view(image)?;
     let maximum = u32::from(samples::maximum(image));
-    let alpha_values = if alpha.bit_depth == 8 {
-        std::borrow::Cow::Owned(alpha.pixel_data()?.iter().map(|&a| ((u32::from(a) * maximum + 127) / 255) as u16).collect::<Vec<_>>())
-    } else {
-        samples::view(alpha)?
-    };
-    let mut values = vec![0; alpha_values.len() * 4];
+    let alpha_values = if alpha.bit_depth == 8 { MaskSamples::Bytes(alpha.pixel_data()?) } else { MaskSamples::Wide(samples::view(alpha)?) };
+    let mut pixels = blanket_core::buffers::buffer(image.size(), 8)?;
     match image.mode.channels() {
-        3 => putalpha_samples::<3>(&source, &alpha_values, &mut values),
-        4 => putalpha_samples::<4>(&source, &alpha_values, &mut values),
+        3 => putalpha_samples::<3>(&source, &alpha_values, &mut pixels, maximum),
+        4 => putalpha_samples::<4>(&source, &alpha_values, &mut pixels, maximum),
         _ => unreachable!(),
     }
-    let result = Image::from_samples(image.width, image.height, PixelMode::Rgba, values, image.bit_depth, None)?;
+    let result = Image::from_sample_bytes(image.width, image.height, PixelMode::Rgba, pixels, image.bit_depth, None)?;
     image.pixels = result.pixels;
     image.mode = PixelMode::Rgba;
     Ok(())
 }
 
-fn putalpha_samples<const C: usize>(source: &[u16], alpha: &[u16], output: &mut [u16]) {
-    let end = alpha.len() / 16 * 16;
+fn putalpha_samples<const C: usize>(source: &[u16], alpha: &MaskSamples<'_>, output: &mut [u8], maximum: u32) {
+    const CHUNK: usize = 16 * 1024;
+    blanket_core::parallel::chunks_mut(output, CHUNK * 8, |chunk, dst| {
+        let start = chunk * CHUNK;
+        let count = dst.len() / 8;
+        putalpha_chunk::<C>(&source[start * C..][..count * C], &alpha.slice(start), dst, maximum);
+    });
+}
+
+fn putalpha_chunk<const C: usize>(source: &[u16], alpha: &MaskSamples<'_>, output: &mut [u8], maximum: u32) {
+    let count = output.len() / 8;
+    let end = count / 16 * 16;
     for i in (0..end).step_by(16) {
         let input = load_samples::<C>(&source[i * C..]);
-        store_samples(&mut output[i * 4..], [input[0], input[1], input[2], Samples::from_slice(&alpha[i..])]);
+        let values = alpha.load(i, 1).cast::<u32>();
+        let values =
+            if matches!(alpha, MaskSamples::Bytes(_)) { (values * Simd::splat(maximum) + Simd::splat(127)) / Simd::splat(255) } else { values };
+        store_sample_bytes(&mut output[i * 8..], [input[0], input[1], input[2], values.cast()]);
     }
-    for ((dst, src), &a) in output[end * 4..].as_chunks_mut::<4>().0.iter_mut().zip(source[end * C..].as_chunks::<C>().0).zip(&alpha[end..]) {
-        *dst = [src[0], src[1], src[2], a];
+    for (i, (dst, src)) in output[end * 8..].as_chunks_mut::<8>().0.iter_mut().zip(source[end * C..].as_chunks::<C>().0).enumerate() {
+        let a = u32::from(alpha.get(end + i));
+        let a = if matches!(alpha, MaskSamples::Bytes(_)) { (a * maximum + 127) / 255 } else { a } as u16;
+        for (dst, value) in dst.as_chunks_mut::<2>().0.iter_mut().zip([src[0], src[1], src[2], a]) {
+            *dst = value.to_le_bytes();
+        }
     }
 }
 
@@ -230,7 +279,9 @@ mod tests {
             *dst = if i % 4 == 3 { 0 } else { 65535 };
         }
         let original = output.clone();
-        let end = paste_row::<C>(&mut output[1..count * C + 1], &source[1..], &mask[1..], mc, maximum, fill);
+        let byte_mask: Vec<u8> = mask.iter().map(|&v| v as u8).collect();
+        let samples = if maximum == 255 { MaskSamples::Bytes(&byte_mask[1..]) } else { MaskSamples::Wide(std::borrow::Cow::Borrowed(&mask[1..])) };
+        let end = paste_row::<C>(&mut output[1..count * C + 1], &source[1..], &samples, mc, maximum, fill);
         for i in 0..end {
             let a = u64::from(mask[1 + (i + 1) * mc - 1]);
             let replace = fill && C == 4 && mc == 1 && original[1 + i * C + 3] == 0 && a != 0;
@@ -254,7 +305,8 @@ mod tests {
             for (source, destination) in [(0, 65535), (65535, 0), (32767, 65535)] {
                 let source = vec![source; count];
                 let mut output = vec![destination; count];
-                assert_eq!(paste_row::<1>(&mut output, &source, &mask, 1, maximum, false), count);
+                let samples = MaskSamples::Wide(std::borrow::Cow::Borrowed(&mask));
+                assert_eq!(paste_row::<1>(&mut output, &source, &samples, 1, maximum, false), count);
                 for (i, &value) in output.iter().enumerate() {
                     let expected =
                         (u64::from(destination) * (u64::from(maximum) - i as u64) + u64::from(source[i]) * i as u64 + u64::from(maximum / 2))
@@ -353,17 +405,27 @@ mod tests {
     fn putalpha_case<const C: usize>(count: usize) {
         let source: Vec<_> = (0..count * C + 1).map(|i| (i * 719 + 257) as u16).collect();
         let alpha: Vec<_> = (0..count + 1).map(|i| (i * 313 + 619) as u16).collect();
-        let mut output = vec![173; count * 4 + 2];
-        putalpha_samples::<C>(&source[1..], &alpha[1..], &mut output[1..count * 4 + 1]);
-        for i in 0..count {
-            assert_eq!(&output[1 + i * 4..1 + i * 4 + 4], &[source[1 + i * C], source[2 + i * C], source[3 + i * C], alpha[1 + i]]);
+        let byte_alpha: Vec<u8> = alpha.iter().map(|&v| v as u8).collect();
+        for maximum in [1023, 4095, 65535] {
+            for byte in [false, true] {
+                let samples = if byte { MaskSamples::Bytes(&byte_alpha[1..]) } else { MaskSamples::Wide(std::borrow::Cow::Borrowed(&alpha[1..])) };
+                let mut output = vec![173; count * 8 + 2];
+                putalpha_samples::<C>(&source[1..], &samples, &mut output[1..count * 8 + 1], maximum);
+                for i in 0..count {
+                    let a = if byte { ((u32::from(byte_alpha[1 + i]) * maximum + 127) / 255) as u16 } else { alpha[1 + i] };
+                    let expected = [source[1 + i * C], source[2 + i * C], source[3 + i * C], a];
+                    for (bytes, value) in output[1 + i * 8..1 + (i + 1) * 8].as_chunks::<2>().0.iter().zip(expected) {
+                        assert_eq!(u16::from_le_bytes(*bytes), value);
+                    }
+                }
+                assert_eq!((output[0], output[count * 8 + 1]), (173, 173));
+            }
         }
-        assert_eq!((output[0], output[count * 4 + 1]), (173, 173));
     }
 
     #[test]
     fn alpha_replacement_preserves_channels_tails_and_guards() {
-        for count in [0, 1, 15, 16, 17, 31, 32, 33, 65] {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33, 65, 65537] {
             putalpha_case::<3>(count);
             putalpha_case::<4>(count);
         }

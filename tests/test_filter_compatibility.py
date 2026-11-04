@@ -31,7 +31,7 @@ def test_integer_convolution_matches_pillow_with_unaligned_source(width: int, su
 @pytest.mark.parametrize("mode", ["I", "F"])
 def test_wide_rank_filters_match_pillow(mode: str, subtests: pytest.Subtests) -> None:
     for size in [(0, 1), (1, 0), (1, 1), (2, 7), (19, 5)]:
-        for window, rank in [(3, 0), (3, 4), (3, 8), (5, 1), (5, 12), (5, 24)]:
+        for window, rank in [(3, 0), (3, 4), (3, 8), (5, 1), (5, 12), (5, 24), (9, 1), (9, 40), (9, 79), (31, 480)]:
             with subtests.test(mode=mode, size=size, window=window, rank=rank):
                 values = [-2147483648, 2147483647, -1, 0, 255, 256, 1000] if mode == "I" else [float("nan"), float("inf"), -float("inf"), -0.0, 0.0, 1.25, -3.5]
                 count = size[0] * size[1]
@@ -53,6 +53,18 @@ def test_wide_rank_one_is_an_independent_copy(mode: str) -> None:
     result = image.filter(ImageFilter.RankFilter(1, 0))
     assert result.tobytes() == raw
     result.putpixel((0, 0), 3)
+    assert image.tobytes() == raw
+
+
+@pytest.mark.parametrize("size", [(1, 137), (19, 137), (65, 131)])
+@pytest.mark.parametrize("window", [9, 31])
+def test_integer_rank_bands_preserve_halos_and_border_weights(size: tuple[int, int], window: int) -> None:
+    count = size[0] * size[1]
+    raw = struct.pack(f"<{count}i", *((i * 7919 % 4093) - 2046 for i in range(count)))
+    image = Image.frombytes("I", size, raw)
+    reference = PILImage.frombytes("I", size, raw)
+    for rank in [1, window * window // 2, window * window - 2]:
+        assert image.filter(ImageFilter.RankFilter(window, rank)).tobytes() == reference.filter(PILFilter.RankFilter(window, rank)).tobytes()
     assert image.tobytes() == raw
 
 

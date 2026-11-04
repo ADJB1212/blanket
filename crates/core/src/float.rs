@@ -67,20 +67,75 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
     if (float && depth != 32) || (!float && !matches!(depth, 8 | 10 | 12 | 16)) {
         return Err(PyValueError::new_err("invalid color sample depth"));
     }
+    if float && image.mode.is_float() {
+        let source = image.raw_data()?;
+        let source_channels = image.mode.channels();
+        let channels = mode.channels();
+        let pixels = if source_channels == channels {
+            source.to_vec()
+        } else {
+            let mut pixels = crate::buffers::buffer(image.size(), channels * 4)?;
+            crate::parallel::chunks_mut(&mut pixels, crate::parallel::CHUNK_PIXELS * channels * 4, |chunk, dst| {
+                let start = chunk * crate::parallel::CHUNK_PIXELS * source_channels * 4;
+                for (src, dst) in source[start..].chunks_exact(source_channels * 4).zip(dst.chunks_exact_mut(channels * 4)) {
+                    dst[..12].copy_from_slice(&src[..12]);
+                    if channels == 4 {
+                        dst[12..16].copy_from_slice(&1.0_f32.to_le_bytes());
+                    }
+                }
+            });
+            pixels
+        };
+        return Image::from_color_float_bytes(image.width, image.height, mode, pixels);
+    }
     convert_values(image, mode, depth, values(image)?)
 }
 
-fn convert_values(image: &Image, mode: PixelMode, depth: u8, mut source: Vec<f32>) -> PyResult<Image> {
+fn convert_values(image: &Image, mode: PixelMode, depth: u8, source: Vec<f32>) -> PyResult<Image> {
     if image.mode.channels() != mode.channels() {
-        let mut mapped = vec![0.0; source.len() / image.mode.channels() * mode.channels()];
-        if mode.channels() == 4 {
-            crate::pixels::float_color_layout::<3, 4>(&source, &mut mapped);
+        let pixels = if mode.channels() == 4 {
+            mapped_color_bytes::<3, 4>(image.size(), &source, mode.is_float(), depth)?
         } else {
-            crate::pixels::float_color_layout::<4, 3>(&source, &mut mapped);
-        }
-        source = mapped;
+            mapped_color_bytes::<4, 3>(image.size(), &source, mode.is_float(), depth)?
+        };
+        return if mode.is_float() {
+            Image::from_color_float_bytes(image.width, image.height, mode, pixels)
+        } else if depth == 8 {
+            Image::from_pixels(image.width, image.height, mode, pixels, None)
+        } else {
+            Image::from_sample_bytes(image.width, image.height, mode, pixels, depth, None)
+        };
     }
     color_output(image.width, image.height, mode, depth, &source)
+}
+
+fn mapped_color_bytes<const S: usize, const D: usize>(size: (u32, u32), source: &[f32], floating: bool, depth: u8) -> PyResult<Vec<u8>> {
+    let bytes = if floating {
+        4
+    } else if depth == 8 {
+        1
+    } else {
+        2
+    };
+    let mut output = crate::buffers::buffer(size, D * bytes)?;
+    crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * D * bytes, |chunk, dst| {
+        let mut mapped = [0.0; 64];
+        let start = chunk * crate::parallel::CHUNK_PIXELS * S;
+        for (block, dst) in dst.chunks_mut(16 * D * bytes).enumerate() {
+            let count = dst.len() / (D * bytes);
+            let source = &source[start + block * 16 * S..][..count * S];
+            let mapped = &mut mapped[..count * D];
+            crate::pixels::float_color_layout::<S, D>(source, mapped);
+            if floating {
+                for (sample, dst) in mapped.iter().zip(dst.as_chunks_mut::<4>().0) {
+                    *dst = sample.to_le_bytes();
+                }
+            } else {
+                quantize_into(mapped, dst, depth);
+            }
+        }
+    });
+    Ok(output)
 }
 
 fn color_output(width: u32, height: u32, mode: PixelMode, depth: u8, values: &[f32]) -> PyResult<Image> {
@@ -94,9 +149,16 @@ fn color_output(width: u32, height: u32, mode: PixelMode, depth: u8, values: &[f
 
 pub fn quantize(source: &[f32], depth: u8) -> Vec<u8> {
     assert!(matches!(depth, 8 | 10 | 12 | 16));
-    let maximum = ((1_u32 << depth) - 1) as f32;
     let stride = if depth == 8 { 1 } else { 2 };
     let mut output = vec![0; source.len() * stride];
+    quantize_into(source, &mut output, depth);
+    output
+}
+
+fn quantize_into(source: &[f32], output: &mut [u8], depth: u8) {
+    let maximum = ((1_u32 << depth) - 1) as f32;
+    let stride = if depth == 8 { 1 } else { 2 };
+    assert_eq!(source.len() * stride, output.len());
     let end = source.len() / 16 * 16;
     for i in (0..end).step_by(16) {
         let values = Simd::<f32, 16>::from_slice(&source[i..]);
@@ -115,7 +177,6 @@ pub fn quantize(source: &[f32], depth: u8) -> Vec<u8> {
             output[i * 2..i * 2 + 2].copy_from_slice(&sample.to_le_bytes());
         }
     }
-    output
 }
 
 pub fn values(image: &Image) -> PyResult<Vec<f32>> {
@@ -226,6 +287,27 @@ pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mapped_color_output_matches_materialized_layout() {
+        fn check<const S: usize, const D: usize>() {
+            let values = [-0.0, 0.0, -2.0, 0.25, 0.5, 1.0, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+            for count in [0, 1, 3, 4, 5, 15, 16, 17, 16385, 65537] {
+                let storage: Vec<_> = (0..count * S + 1).map(|i| values[i % values.len()]).collect();
+                let source = &storage[1..];
+                let mut expected = vec![0.0; count * D];
+                crate::pixels::float_color_layout::<S, D>(source, &mut expected);
+                for depth in [8, 10, 12, 16, 32] {
+                    let actual = mapped_color_bytes::<S, D>((count as u32, 1), source, depth == 32, depth).unwrap();
+                    let reference: Vec<u8> =
+                        if depth == 32 { expected.iter().flat_map(|v| v.to_le_bytes()).collect() } else { quantize(&expected, depth) };
+                    assert_eq!(actual, reference, "S={S}, D={D}, count={count}, depth={depth}");
+                }
+            }
+        }
+        check::<3, 4>();
+        check::<4, 3>();
+    }
 
     #[test]
     fn linear_transfer_preserves_alpha_and_signed_zero() {

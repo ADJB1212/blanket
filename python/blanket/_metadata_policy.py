@@ -63,8 +63,10 @@ def _filtered_xmp(raw: bytes, policy: MetadataPolicy) -> bytes:
         return b""
     try:
         text = raw.decode("utf-8")
-        if "<!DOCTYPE" in text.upper() or "<!ENTITY" in text.upper():
+        upper = text.upper()
+        if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
             return b""
+        del upper
         root = ET.fromstring(text)  # noqa: S314 - DTDs and entities are rejected above.
     except (UnicodeDecodeError, ET.ParseError):
         return b""
@@ -81,9 +83,10 @@ def _filtered_xmp(raw: bytes, policy: MetadataPolicy) -> bytes:
         for name in list(element.attrib):
             if not keep(name):
                 del element.attrib[name]
-        for child in list(element):
-            if not keep(child.tag):
-                element.remove(child)
+        children = list(element)
+        retained = [child for child in children if keep(child.tag)]
+        if len(retained) != len(children):
+            element[:] = retained
     return ET.tostring(root, encoding="utf-8")
 
 

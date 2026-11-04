@@ -10,6 +10,30 @@ from blanket import Image, ImageDraw
 from blanket._blanket import draw_path
 
 
+@pytest.mark.parametrize("blend", [False, True])
+@pytest.mark.parametrize("offset", [-31, 0, 37])
+def test_polygon_horizontal_edges_and_reused_scanlines_match_pillow(blend: bool, offset: int) -> None:
+    points = [(2, -9), (27, -9), (27, 3), (8, 3), (8, 11), (25, 11), (25, 19), (2, 19), (2, 27), (30, 27), (30, 41), (1, 41)]
+    points = [(x, y + offset) for x, y in points]
+    actual = Image.new("RGB", (33, 35), (11, 29, 47))
+    expected = PILImage.new("RGB", actual.size, (11, 29, 47))
+    ink = (171, 83, 39, 117) if blend else (171, 83, 39)
+    ImageDraw.Draw(actual, "RGBA" if blend else None).polygon(points, fill=ink)
+    PILDraw.Draw(expected, "RGBA" if blend else None).polygon(points, fill=ink)
+    assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("bounds", [(1, -13, 31, 27), (1, 17, 31, 57), (1, 45, 31, 85)])
+@pytest.mark.parametrize("filled", [False, True])
+def test_ellipse_clipped_scanlines_match_pillow(bounds, filled: bool) -> None:
+    actual = Image.new("RGB", (33, 35), (11, 29, 47))
+    expected = PILImage.new("RGB", actual.size, (11, 29, 47))
+    options = {"fill" if filled else "outline": (171, 83, 39, 117)}
+    ImageDraw.Draw(actual, "RGBA").ellipse(bounds, **options)
+    PILDraw.Draw(expected, "RGBA").ellipse(bounds, **options)
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("style", ["fill", "outline", "line"])
 @pytest.mark.parametrize("antialias", [False, True])
 @pytest.mark.parametrize("reverse", [False, True])
