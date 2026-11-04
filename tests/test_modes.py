@@ -5,6 +5,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
+from helpers import assert_pixels_equal, image_pair
 from PIL import Image as PillowImage, ImageOps as PillowOps
 
 from blanket import Image, ImageChops, ImageOps
@@ -46,8 +47,7 @@ def test_la_conversion_and_png_roundtrip() -> None:
 def test_mode_conversion_matches_pillow_at_simd_boundaries(mode: str, destination: str) -> None:
     size = (37, 3)
     raw = bytes((i * 53 + 17) % 256 for i in range(size[1] * ((size[0] + 7) // 8 if mode == "1" else size[0] * 2)))
-    blanket = Image.frombytes(mode, size, raw)
-    pillow = PillowImage.frombytes(mode, size, raw)
+    blanket, pillow = image_pair(mode, size, raw)
     assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
 
@@ -138,8 +138,7 @@ def test_bilevel_logical_operations_with_different_widths(widths: tuple[int, int
     for operation in ("logical_and", "logical_or", "logical_xor"):
         expected = getattr(PillowChops, operation)(pillow_first, pillow_second)
         actual = getattr(ImageChops, operation)(first, second)
-        assert actual.size == expected.size
-        assert actual.tobytes() == expected.tobytes()
+        assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["I", "F"])

@@ -4,6 +4,7 @@ from copy import copy, deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_pixels_equal
 
 from blanket import Image
 
@@ -17,8 +18,7 @@ def test_copy_pixels_and_metadata_lists_are_independent(copier: Callable[[Image.
     image.info["keywords"] = ["original"]
     image.getexif()[305] = "original"
     result = copier(image)
-    assert result.size == image.size
-    assert result.tobytes() == image.tobytes()
+    assert_pixels_equal(result, image)
     result.info["keywords"].append("changed")
     result.getexif()[305] = "changed"
     result.putpixel((0, 0), (1, 2, 3, 4))

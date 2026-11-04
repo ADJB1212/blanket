@@ -2,23 +2,14 @@ import math
 import struct
 
 import pytest
+from gpu_helpers import CHANNELS, MODES, shader_runtime
+from helpers import float_samples
 
 from blanket import Image, ImageFilter, ImageGpu
 
-MODES = ("L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F")
-CHANNELS = dict(zip(MODES, (1, 2, 3, 4, 1, 3, 4), strict=True))
+runtime = shader_runtime
+
 CPU_CONVERSIONS = sorted({(a, b) for a in MODES[:5] for b in MODES[:5]} | {(a, b) for a in ("RGB", "RGBA", "RGB;F", "RGBA;F") for b in ("RGB", "RGBA", "RGB;F", "RGBA;F")})
-
-
-@pytest.fixture(params=("native", "torch"))
-def runtime(request):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal feature and device required")
-    if request.param == "torch":
-        torch = pytest.importorskip("torch")
-        if not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
-            pytest.skip("PyTorch MPS shader support required")
-    return request.param
 
 
 def source(mode, size=(17, 11)):
@@ -34,11 +25,6 @@ def source(mode, size=(17, 11)):
     return image
 
 
-def floats(image):
-    data = image.tobytes()
-    return struct.unpack(f"{len(data) // 4}f", data)
-
-
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("axis", [0, 1])
 def test_nearest_resize_integer_boundaries(runtime, mode, axis):
@@ -47,7 +33,7 @@ def test_nearest_resize_integer_boundaries(runtime, mode, axis):
     actual = ImageGpu.from_image(image, runtime=runtime).resize(size, Image.Resampling.NEAREST).to_image()
     expected = image.resize(size, Image.Resampling.NEAREST)
     if "F" in mode:
-        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=1e-6)
+        assert float_samples(actual) == pytest.approx(float_samples(expected), rel=1e-5, abs=1e-6)
     else:
         assert actual.tobytes() == expected.tobytes()
 
@@ -91,20 +77,20 @@ def test_mode_conversion_cpu_parity(runtime, src, dst):
     assert actual.size == image.size
     assert actual.info["description"] == "gpu precision"
     if "F" in dst:
-        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=1e-6)
+        assert float_samples(actual) == pytest.approx(float_samples(expected), rel=1e-5, abs=1e-6)
     else:
         assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=True)) <= 1
 
 
 def test_extended_float_grayscale_conversion(runtime):
     gray = ImageGpu.from_image(Image.new("L", (1, 1), 64), runtime=runtime)
-    assert floats(gray.convert("RGBA;F").to_image()) == pytest.approx((64 / 255, 64 / 255, 64 / 255, 1))
+    assert float_samples(gray.convert("RGBA;F").to_image()) == pytest.approx((64 / 255, 64 / 255, 64 / 255, 1))
     raw = ImageGpu.from_image(Image.new("F", (1, 1), 128.5), runtime=runtime)
-    assert floats(raw.convert("RGB;F").to_image()) == pytest.approx((128.5 / 255,) * 3)
+    assert float_samples(raw.convert("RGB;F").to_image()) == pytest.approx((128.5 / 255,) * 3)
     assert raw.convert("RGB").to_image().getpixel((0, 0)) == (128, 128, 128)
     color = Image.frombytes("RGBA;F", (1, 1), struct.pack("4f", 1, 0.5, 0, 0.25))
     gpu = ImageGpu.from_image(color, runtime=runtime)
-    assert floats(gpu.grayscale().to_image()) == pytest.approx((151.0875,))
+    assert float_samples(gpu.grayscale().to_image()) == pytest.approx((151.0875,))
     assert gpu.convert("LA").to_image().getpixel((0, 0)) == (151, 64)
 
 
@@ -117,7 +103,7 @@ def test_byte_color_to_float_preserves_fractional_luminance(runtime, mode, width
     image = Image.frombytes(mode, (width, 1), raw)
     result = ImageGpu.from_image(image, runtime=runtime).convert("F").to_image()
     expected = tuple((r * 299 + g * 587 + b * 114) / 1000 for r, g, b in (colors[i % len(colors)] for i in range(width)))
-    assert floats(result) == pytest.approx(expected, rel=1e-6, abs=1e-7)
+    assert float_samples(result) == pytest.approx(expected, rel=1e-6, abs=1e-7)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -209,12 +195,12 @@ def test_float_filters(runtime, mode):
     samples = [0.0] * channels + [1.0] * channels + [0.0] * channels
     image = Image.frombytes(mode, (3, 1), struct.pack(f"{len(samples)}f", *samples))
     gpu = ImageGpu.from_image(image, runtime=runtime)
-    assert floats(gpu.box_blur((1, 0)).to_image()) == pytest.approx([1 / 3] * len(samples), rel=1e-5, abs=1e-6)
-    assert floats(gpu.gaussian_blur(1).to_image()) == pytest.approx([7 / 24] * channels + [5 / 12] * channels + [7 / 24] * channels, rel=1e-5, abs=1e-6)
-    assert floats(gpu.unsharp_mask(1, 150, 0.01).to_image()) == pytest.approx([-7 / 16] * channels + [15 / 8] * channels + [-7 / 16] * channels, rel=1e-5, abs=1e-6)
-    assert floats(gpu.min_filter().to_image()) == (0.0,) * len(samples)
-    assert floats(gpu.max_filter().to_image()) == (1.0,) * len(samples)
-    assert floats(gpu.median_filter().to_image()) == (0.0,) * len(samples)
+    assert float_samples(gpu.box_blur((1, 0)).to_image()) == pytest.approx([1 / 3] * len(samples), rel=1e-5, abs=1e-6)
+    assert float_samples(gpu.gaussian_blur(1).to_image()) == pytest.approx([7 / 24] * channels + [5 / 12] * channels + [7 / 24] * channels, rel=1e-5, abs=1e-6)
+    assert float_samples(gpu.unsharp_mask(1, 150, 0.01).to_image()) == pytest.approx([-7 / 16] * channels + [15 / 8] * channels + [-7 / 16] * channels, rel=1e-5, abs=1e-6)
+    assert float_samples(gpu.min_filter().to_image()) == (0.0,) * len(samples)
+    assert float_samples(gpu.max_filter().to_image()) == (1.0,) * len(samples)
+    assert float_samples(gpu.median_filter().to_image()) == (0.0,) * len(samples)
 
 
 def test_nonfinite_samples(runtime):
@@ -223,7 +209,7 @@ def test_nonfinite_samples(runtime):
     assert gpu.getchannel(0).to_image().tobytes() == image.tobytes()
     assert gpu.convert("L").to_image().tobytes() == bytes((0, 255, 0))
     for method in ("min_filter", "max_filter", "median_filter"):
-        actual = floats(getattr(gpu, method)().to_image())
+        actual = float_samples(getattr(gpu, method)().to_image())
         assert math.isnan(actual[0]) and math.isnan(actual[1])
     assert gpu.box_blur(0).to_image().tobytes() == image.tobytes()
     assert gpu.unsharp_mask(percent=0).to_image().tobytes() == image.tobytes()
@@ -253,7 +239,7 @@ def test_rank_filter_every_rank(runtime, mode, window):
     for rank in range(window * window):
         actual = gpu.rank_filter(window, rank).to_image()
         expected = [values[rank] for values in neighborhoods]
-        assert (list(actual.tobytes()) if mode == "L" else list(floats(actual))) == expected
+        assert (list(actual.tobytes()) if mode == "L" else list(float_samples(actual))) == expected
 
 
 def test_validation(runtime):

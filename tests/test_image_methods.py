@@ -6,6 +6,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from helpers import assert_pixels_equal, image_pair
 from PIL import Image as PIL
 
 from blanket import Image
@@ -31,8 +32,7 @@ def test_thumbnail(mode: str, size: tuple[float, float]) -> None:
     actual.info["custom"] = 42
     assert actual.thumbnail(size) is None
     expected.thumbnail(size)
-    assert actual.size == expected.size
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     assert actual.info["custom"] == 42
 
 
@@ -283,13 +283,11 @@ def test_show_launches_configured_viewer(monkeypatch: pytest.MonkeyPatch, mode: 
 @pytest.mark.parametrize("size", [(800, 600), (1024, 1024), (803, 607)])
 def test_l_thumbnail_integer_reduction_matches_pillow(size: tuple[int, int]) -> None:
     raw = bytes((i * 37 + i // 11) % 256 for i in range(size[0] * size[1]))
-    image = Image.frombytes("L", size, raw)
-    reference = PIL.frombytes("L", size, raw)
+    image, reference = image_pair("L", size, raw)
     target = (size[0] // 8, size[1] // 8)
     image.thumbnail(target)
     reference.thumbnail(target)
-    assert image.size == reference.size
-    assert image.tobytes() == reference.tobytes()
+    assert_pixels_equal(image, reference)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

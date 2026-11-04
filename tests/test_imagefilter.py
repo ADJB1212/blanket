@@ -7,6 +7,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import image_pair
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 from blanket import Image, ImageFilter
@@ -146,8 +147,7 @@ def test_mode_filter_candidates_enter_leave_and_tie(mode: str, window: int, subt
         with subtests.test(size=size):
             rng = random.Random(81)
             raw = bytes(rng.choice(values) for _ in range(size[0] * size[1] * len(mode)))
-            image = Image.frombytes(mode, size, raw)
-            reference = PillowImage.frombytes(mode, size, raw)
+            image, reference = image_pair(mode, size, raw)
             assert image.filter(ImageFilter.ModeFilter(window)).tobytes() == reference.filter(PillowFilter.ModeFilter(window)).tobytes()
 
 

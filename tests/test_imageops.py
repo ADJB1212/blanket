@@ -7,6 +7,7 @@ from pillow_helpers import PILLOW_IMAGES
 PILLOW_IMAGE_PREFIX = str(PILLOW_IMAGES) + "/"
 
 import pytest
+from helpers import assert_pillow_equal, assert_pixels_equal, encode_image, random_pair
 from pillow_helpers import assert_image_equal, assert_image_similar, assert_image_similar_tofile, hopper
 
 from blanket import ExifTags, Image, ImageDraw, ImageOps, ImageStat, features
@@ -25,66 +26,39 @@ class Deformer(ImageOps.SupportsGetMesh):
 deformer = Deformer()
 
 
-def test_sanity() -> None:
-    ImageOps.autocontrast(hopper("L"))
-    ImageOps.autocontrast(hopper("RGB"))
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize(
+    "operation,args",
+    [
+        ("autocontrast", ()),
+        ("pad", ((128, 128),)),
+        ("contain", ((128, 128),)),
+        ("cover", ((128, 128),)),
+        ("crop", (1,)),
+        ("deform", (deformer,)),
+        ("equalize", ()),
+        ("expand", (1,)),
+        ("expand", (2, "blue")),
+        ("fit", ((128, 128),)),
+        ("flip", ()),
+        ("grayscale", ()),
+        ("invert", ()),
+        ("mirror", ()),
+        ("posterize", (4,)),
+        ("solarize", ()),
+        ("exif_transpose", ()),
+    ],
+)
+def test_sanity(mode, operation, args) -> None:
+    getattr(ImageOps, operation)(hopper(mode), *args)
 
-    ImageOps.autocontrast(hopper("L"), cutoff=10)
-    ImageOps.autocontrast(hopper("L"), cutoff=(2, 10))
-    ImageOps.autocontrast(hopper("L"), ignore=[0, 255])
-    ImageOps.autocontrast(hopper("L"), mask=hopper("L"))
-    ImageOps.autocontrast(hopper("L"), preserve_tone=True)
 
-    ImageOps.colorize(hopper("L"), (0, 0, 0), (255, 255, 255))
-    ImageOps.colorize(hopper("L"), "black", "white")
-
-    ImageOps.pad(hopper("L"), (128, 128))
-    ImageOps.pad(hopper("RGB"), (128, 128))
-
-    ImageOps.contain(hopper("L"), (128, 128))
-    ImageOps.contain(hopper("RGB"), (128, 128))
-
-    ImageOps.cover(hopper("L"), (128, 128))
-    ImageOps.cover(hopper("RGB"), (128, 128))
-
-    ImageOps.crop(hopper("L"), 1)
-    ImageOps.crop(hopper("RGB"), 1)
-
-    ImageOps.deform(hopper("L"), deformer)
-    ImageOps.deform(hopper("RGB"), deformer)
-
-    ImageOps.equalize(hopper("L"))
-    ImageOps.equalize(hopper("RGB"))
-
-    ImageOps.expand(hopper("L"), 1)
-    ImageOps.expand(hopper("RGB"), 1)
-    ImageOps.expand(hopper("L"), 2, "blue")
-    ImageOps.expand(hopper("RGB"), 2, "blue")
-
-    ImageOps.fit(hopper("L"), (128, 128))
-    ImageOps.fit(hopper("RGB"), (128, 128))
-
-    ImageOps.flip(hopper("L"))
-    ImageOps.flip(hopper("RGB"))
-
-    ImageOps.grayscale(hopper("L"))
-    ImageOps.grayscale(hopper("RGB"))
-
+def test_sanity_special_options() -> None:
+    for options in ({"cutoff": 10}, {"cutoff": (2, 10)}, {"ignore": [0, 255]}, {"mask": hopper("L")}, {"preserve_tone": True}):
+        ImageOps.autocontrast(hopper("L"), **options)
+    for black, white in (((0, 0, 0), (255, 255, 255)), ("black", "white")):
+        ImageOps.colorize(hopper("L"), black, white)
     ImageOps.invert(hopper("1"))
-    ImageOps.invert(hopper("L"))
-    ImageOps.invert(hopper("RGB"))
-
-    ImageOps.mirror(hopper("L"))
-    ImageOps.mirror(hopper("RGB"))
-
-    ImageOps.posterize(hopper("L"), 4)
-    ImageOps.posterize(hopper("RGB"), 4)
-
-    ImageOps.solarize(hopper("L"))
-    ImageOps.solarize(hopper("RGB"))
-
-    ImageOps.exif_transpose(hopper("L"))
-    ImageOps.exif_transpose(hopper("RGB"))
 
 
 @pytest.mark.parametrize("border, expected_box", ((1, (1, 1, 127, 127)), ((1, 2), (1, 2, 127, 126)), ((1, 2, 3, 4), (1, 2, 125, 124))))
@@ -93,16 +67,9 @@ def test_crop(border: int | tuple[int, ...], expected_box: tuple[int, int, int, 
     assert_image_equal(ImageOps.crop(im, border), im.crop(expected_box))
 
 
-def test_1pxfit() -> None:
-    # Division by zero in equalize if image is 1 pixel high
-    newimg = ImageOps.fit(hopper("RGB").resize((1, 1)), (35, 35))
-    assert newimg.size == (35, 35)
-
-    newimg = ImageOps.fit(hopper("RGB").resize((1, 100)), (35, 35))
-    assert newimg.size == (35, 35)
-
-    newimg = ImageOps.fit(hopper("RGB").resize((100, 1)), (35, 35))
-    assert newimg.size == (35, 35)
+@pytest.mark.parametrize("size", [(1, 1), (1, 100), (100, 1)])
+def test_1pxfit(size) -> None:
+    assert ImageOps.fit(hopper("RGB").resize(size), (35, 35)).size == (35, 35)
 
 
 def test_fit_same_ratio() -> None:
@@ -335,54 +302,19 @@ def test_expand_invalid_border(border: tuple[int, ...]) -> None:
         ImageOps.expand(im, border)
 
 
-def test_colorize_2color() -> None:
-    # Test the colorizing function with 2-color functionality
-
-    # Open test image (256px by 10px, black to white)
-    with Image.open(PILLOW_IMAGE_PREFIX + "bw_gradient.png") as im:
-        im_l = im.convert("L")
-
-    # Create image with original 2-color functionality
-    im_test = ImageOps.colorize(im_l, "red", "green")
-
-    # Test output image (2-color)
-    assert im_test.getpixel((0, 1)) == pytest.approx((255, 0, 0), abs=1), "black test pixel incorrect"
-    assert im_test.getpixel((127, 1)) == pytest.approx((127, 63, 0), abs=1), "mid test pixel incorrect"
-    assert im_test.getpixel((255, 1)) == pytest.approx((0, 127, 0), abs=1), "white test pixel incorrect"
-
-
-def test_colorize_2color_offset() -> None:
-    # Test the colorizing function with 2-color functionality and offset
-
-    # Open test image (256px by 10px, black to white)
-    with Image.open(PILLOW_IMAGE_PREFIX + "bw_gradient.png") as im:
-        im_l = im.convert("L")
-
-    # Create image with original 2-color functionality with offsets
-    im_test = ImageOps.colorize(im_l, black="red", white="green", blackpoint=50, whitepoint=100)
-
-    # Test output image (2-color) with offsets
-    assert im_test.getpixel((25, 1)) == pytest.approx((255, 0, 0), abs=1), "black test pixel incorrect"
-    assert im_test.getpixel((75, 1)) == pytest.approx((127, 63, 0), abs=1), "mid test pixel incorrect"
-    assert im_test.getpixel((125, 1)) == pytest.approx((0, 127, 0), abs=1), "white test pixel incorrect"
-
-
-def test_colorize_3color_offset() -> None:
-    # Test the colorizing function with 3-color functionality and offset
-
-    # Open test image (256px by 10px, black to white)
-    with Image.open(PILLOW_IMAGE_PREFIX + "bw_gradient.png") as im:
-        im_l = im.convert("L")
-
-    # Create image with new three color functionality with offsets
-    im_test = ImageOps.colorize(im_l, black="red", white="green", mid="blue", blackpoint=50, whitepoint=200, midpoint=100)
-
-    # Test output image (3-color) with offsets
-    assert im_test.getpixel((25, 1)) == pytest.approx((255, 0, 0), abs=1), "black test pixel incorrect"
-    assert im_test.getpixel((75, 1)) == pytest.approx((127, 0, 127), abs=1), "low-mid test pixel incorrect"
-    assert im_test.getpixel((100, 1)) == pytest.approx((0, 0, 255), abs=1), "mid incorrect"
-    assert im_test.getpixel((150, 1)) == pytest.approx((0, 63, 127), abs=1), "high-mid test pixel incorrect"
-    assert im_test.getpixel((225, 1)) == pytest.approx((0, 127, 0), abs=1), "white test pixel incorrect"
+@pytest.mark.parametrize(
+    "options,samples",
+    [
+        ({}, [(0, (255, 0, 0)), (127, (127, 63, 0)), (255, (0, 127, 0))]),
+        ({"blackpoint": 50, "whitepoint": 100}, [(25, (255, 0, 0)), (75, (127, 63, 0)), (125, (0, 127, 0))]),
+        ({"mid": "blue", "blackpoint": 50, "whitepoint": 200, "midpoint": 100}, [(25, (255, 0, 0)), (75, (127, 0, 127)), (100, (0, 0, 255)), (150, (0, 63, 127)), (225, (0, 127, 0))]),
+    ],
+)
+def test_colorize_reference_samples(options, samples) -> None:
+    with Image.open(PILLOW_IMAGES / "bw_gradient.png") as image:
+        result = ImageOps.colorize(image.convert("L"), black="red", white="green", **options)
+    for x, color in samples:
+        assert result.getpixel((x, 1)) == pytest.approx(color, abs=1)
 
 
 def test_colorize_invalid_mode() -> None:
@@ -636,7 +568,6 @@ import sys
 from io import BytesIO
 from typing import TYPE_CHECKING, cast
 
-import numpy as np
 import pytest
 from PIL import Image as PILImage, ImageOps as PILOps
 from PIL.PngImagePlugin import PngInfo
@@ -661,22 +592,11 @@ def test_deformer_can_subclass_public_protocol(mode: str) -> None:
     assert result.tobytes() == image.tobytes()
 
 
-def pair(mode: str = "RGB", size: tuple[int, int] = (37, 29)) -> tuple[Image.Image, PILImage.Image]:
-    raw = np.random.default_rng(42).integers(0, 256, size[0] * size[1] * len(mode), dtype=np.uint8).tobytes()
-    return Image.frombytes(mode, size, raw), PILImage.frombytes(mode, size, raw)
-
-
-def same(actual: Image.Image, expected: PILImage.Image) -> None:
-    assert isinstance(actual, Image.Image)
-    assert (actual.mode, actual.size) == (expected.mode, expected.size)
-    assert actual.tobytes() == expected.tobytes()
-
-
 @pytest.mark.parametrize("mode", ["L", "RGB"])
 @pytest.mark.parametrize("name", ["autocontrast", "equalize"])
 @pytest.mark.parametrize("size", [(0, 0), (1, 1), (33, 17)])
 def test_native_histogram_operations_avoid_python_tables(mode: str, name: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
-    image, reference = pair(mode, size)
+    image, reference = random_pair(mode, size)
     image.info["description"] = "native tone mapping"
     mask = Image.new("L", size, 1)
     reference_mask = PILImage.new("L", size, 1)
@@ -690,14 +610,14 @@ def test_native_histogram_operations_avoid_python_tables(mode: str, name: str, s
         patch.setattr(ImageOps, "ops_histogram", unexpected)
         patch.setattr(ImageOps, "_lut", unexpected)
         result = getattr(ImageOps, name)(image, mask=mask, **options)
-    same(result, expected)
+    assert_pillow_equal(result, expected)
     assert result.info == image.info and result.info is not image.info
 
 
 @pytest.mark.parametrize("cutoff", [0.1, (0.3, 0.7), (33.33333333333333, 66.66666666666666), (100, 100), (-3, 110), (2, 4, 6)])
 def test_autocontrast_fractional_and_unusual_cutoffs(cutoff: object) -> None:
-    image, reference = pair("RGB", (53, 41))
-    same(ImageOps.autocontrast(image, cutoff=cutoff), PILOps.autocontrast(reference, cutoff=cutoff))
+    image, reference = random_pair("RGB", (53, 41))
+    assert_pillow_equal(ImageOps.autocontrast(image, cutoff=cutoff), PILOps.autocontrast(reference, cutoff=cutoff))
 
 
 @pytest.mark.parametrize("points", [(0, 0, 255), (0, 255, 255), (70, 70, 200), (70, 200, 200), (255, 255, 255), (0, 0, 0)])
@@ -705,16 +625,16 @@ def test_colorize_coincident_stops_preserve_floor_rounding(points: tuple[int, in
     image = Image.frombytes("L", (256, 1), bytes(range(256)))
     reference = PILImage.frombytes("L", image.size, image.tobytes())
     options = {"black": (250, 30, 17), "mid": (10, 230, 90), "white": (20, 40, 55), "blackpoint": points[0], "midpoint": points[1], "whitepoint": points[2]}
-    same(ImageOps.colorize(image, **options), PILOps.colorize(reference, **options))
+    assert_pillow_equal(ImageOps.colorize(image, **options), PILOps.colorize(reference, **options))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ["flip", "mirror", "grayscale"])
 def test_flips_and_grayscale(mode: str, name: str) -> None:
-    b, p = pair(mode)
+    b, p = random_pair(mode)
     b.info["custom"] = p.info["custom"] = "kept"
     result = getattr(ImageOps, name)(b)
-    same(result, getattr(PILOps, name)(p))
+    assert_pillow_equal(result, getattr(PILOps, name)(p))
     assert result.info == p.info
 
 
@@ -757,7 +677,7 @@ def test_integer_canvas_fill_preserves_samples_and_byte_order(mode, fill, operat
     else:
         result = ImageOps.pad(image, (5, 2), color=fill)
         expected = PILOps.pad(reference, (5, 2), color=fill)
-    same(result, expected)
+    assert_pillow_equal(result, expected)
     assert result.bit_depth == image.bit_depth
     assert image.getpixel((0, 0)) == 512
 
@@ -786,18 +706,18 @@ def test_canvas_preserves_float_and_high_depth_samples(mode, depth, operation):
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_crop_border_and_box_are_distinct(mode: str) -> None:
-    b, p = pair(mode)
+    b, p = random_pair(mode)
     b.info["custom"] = "preserved"
     border = ImageOps.crop(b, border=2)
-    same(border, PILOps.crop(p, border=2))
+    assert_pillow_equal(border, PILOps.crop(p, border=2))
     assert border.size == (b.width - 4, b.height - 4)
     box = (1, 2, 3, 4)
     region = b.crop(box=box)
-    same(region, p.crop(box=box))
+    assert_pillow_equal(region, p.crop(box=box))
     assert region.size == (2, 2)
     # Pillow retains tuple border support despite its integer annotation.
     sides = ImageOps.crop(b, border=box)
-    same(sides, PILOps.crop(p, border=box))
+    assert_pillow_equal(sides, PILOps.crop(p, border=box))
     assert sides.size == (b.width - 4, b.height - 6)
     for result in (border, region, sides, ImageOps.crop(b), b.crop()):
         assert result is not b
@@ -822,7 +742,7 @@ class Deformer_regression:
 @pytest.mark.parametrize("key", ["XML:com.adobe.xmp", "xmp"])
 @pytest.mark.parametrize("kind", [str, bytes, tuple])
 def test_exif_cleans_xmp(key: str, kind: type) -> None:
-    b, p = pair()
+    b, p = random_pair()
     exif = PILImage.Exif()
     exif[274] = 6
     b.info["exif"] = p.info["exif"] = exif.tobytes()
@@ -838,32 +758,32 @@ def test_exif_cleans_xmp(key: str, kind: type) -> None:
         assert b.info[key] == value
         return
     actual, expected = ImageOps.exif_transpose(b), PILOps.exif_transpose(p)
-    same(actual, expected)
+    assert_pillow_equal(actual, expected)
     assert actual.info[key] == expected.info[key]
     assert b.info[key] == value
 
 
 def test_xmp_only_png() -> None:
-    _, p = pair()
+    _, p = random_pair()
     metadata = PngInfo()
     metadata.add_itxt("XML:com.adobe.xmp", '<rdf tiff:Orientation="8"/>', zip=True)
     stream = BytesIO()
     p.save(stream, "PNG", pnginfo=metadata)
     b, p = Image.open(stream), PILImage.open(stream)
-    same(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
+    assert_pillow_equal(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
 
 
 @pytest.mark.parametrize(("mode", "size"), [("RGB", (2, 2)), ("L", (1, 1))])
 def test_invalid_masks(mode: str, size: tuple[int, int]) -> None:
-    b, _ = pair()
-    mask, _ = pair(mode, size)
+    b, _ = random_pair()
+    mask, _ = random_pair(mode, size)
     for op in (ImageOps.autocontrast, ImageOps.equalize):
         with pytest.raises(ValueError):
             op(b, mask=mask)
 
 
 def test_closed_image() -> None:
-    b, _ = pair()
+    b, _ = random_pair()
     b.close()
     for op in (ImageOps.invert, ImageOps.flip, ImageOps.equalize, ImageOps.exif_transpose):
         with pytest.raises(ValueError, match="closed"):
@@ -890,7 +810,7 @@ assert ImageOps.expand(im, 1, 'rebeccapurple').size == (4, 4)
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_processed_png_interop(mode: str) -> None:
-    b, p = pair(mode)
+    b, p = random_pair(mode)
     b = ImageOps.fit(ImageOps.mirror(b), (21, 17))
     p = PILOps.fit(PILOps.mirror(p), (21, 17))
     stream = BytesIO()
@@ -902,28 +822,28 @@ def test_processed_png_interop(mode: str) -> None:
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize(("source", "target"), [((1, 1), (7, 9)), ((1, 7), (3, 11)), ((7, 1), (11, 3)), ((4, 4), (2, 4)), ((4, 4), (4, 2)), ((4, 4), (3, 3)), ((10, 10), (15, 15)), ((2, 205), (5, 61))])
 def test_resize_thin_and_small_images(mode: str, source: tuple, target: tuple, subtests: pytest.Subtests) -> None:
-    b, p = pair(mode, source)
+    b, p = random_pair(mode, source)
     for method in Image.Resampling:
         with subtests.test(method=method):
-            same(ImageOps.fit(b, target, method), PILOps.fit(p, target, method))
+            assert_pillow_equal(ImageOps.fit(b, target, method), PILOps.fit(p, target, method))
 
 
 @pytest.mark.parametrize("method", [0, 2, 3])
 def test_deform_clipped_and_overlapping_boxes(method: int) -> None:
-    b, p = pair()
+    b, p = random_pair()
     mesh = [((-5, -3, 20, 24), (0, 0, 0, 29, 37, 29, 37, 0)), ((10, 5, 40, 30), (3, 4, -2, 25, 28, 35, 37, 0))]
-    same(ImageOps.deform(b, Deformer_regression(mesh), method), PILOps.deform(p, Deformer_regression(mesh), method))
+    assert_pillow_equal(ImageOps.deform(b, Deformer_regression(mesh), method), PILOps.deform(p, Deformer_regression(mesh), method))
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])
 def test_exif_byte_order_and_profile(endian: str) -> None:
     import struct
 
-    b, p = pair()
+    b, p = random_pair()
     raw = (b"II" if endian == "<" else b"MM") + struct.pack(endian + "HIHHHIH", 42, 8, 1, 274, 3, 1, 8) + bytes(6)
     b.info["Raw profile type exif"] = p.info["Raw profile type exif"] = f"\nexif\n{len(raw)}\n{raw.hex()}"
     actual, expected = ImageOps.exif_transpose(b), PILOps.exif_transpose(p)
-    same(actual, expected)
+    assert_pillow_equal(actual, expected)
     exif = PILImage.Exif()
     exif.load(bytes.fromhex(actual.info["Raw profile type exif"]))
     assert 274 not in exif
@@ -931,7 +851,7 @@ def test_exif_byte_order_and_profile(endian: str) -> None:
 
 @pytest.mark.parametrize("compressed", [False, True])
 def test_png_exif_profile(compressed: bool) -> None:
-    _, p = pair()
+    _, p = random_pair()
     exif = PILImage.Exif()
     exif[274] = 3
     raw = exif.tobytes()
@@ -939,14 +859,12 @@ def test_png_exif_profile(compressed: bool) -> None:
     metadata.add_text("Raw profile type exif", f"\nexif\n{len(raw)}\n{raw.hex()}", zip=compressed)
     stream = BytesIO()
     p.save(stream, "PNG", pnginfo=metadata)
-    same(ImageOps.exif_transpose(Image.open(stream)), PILOps.exif_transpose(PILImage.open(stream)))
+    assert_pillow_equal(ImageOps.exif_transpose(Image.open(stream)), PILOps.exif_transpose(PILImage.open(stream)))
 
 
 def test_jxl_exif_container() -> None:
-    b, p = pair()
-    stream = BytesIO()
-    b.save(stream, "JXL", lossless=True)
-    encoded = stream.getvalue()
+    b, p = random_pair()
+    encoded = encode_image(b, "JXL", lossless=True)
     exif = PILImage.Exif()
     exif[274] = 6
     p.info["exif"] = exif.tobytes()
@@ -960,18 +878,18 @@ def test_jxl_exif_container() -> None:
         # Insert after the signature so a final zero-length codestream box
         # cannot swallow the metadata box.
         encoded = encoded[:12] + box + encoded[12:]
-    same(ImageOps.exif_transpose(Image.open(BytesIO(encoded))), PILOps.exif_transpose(p))
+    assert_pillow_equal(ImageOps.exif_transpose(Image.open(BytesIO(encoded))), PILOps.exif_transpose(p))
 
 
 @pytest.mark.parametrize("raw", [b"", b"garbage", b"Exif\0\0II", b"II*\0\xff\xff\xff\xff"])
 def test_malformed_exif_does_not_break_pixels(raw: bytes) -> None:
-    b, p = pair()
+    b, p = random_pair()
     b.info["exif"] = raw
-    same(ImageOps.exif_transpose(b), p)
+    assert_pillow_equal(ImageOps.exif_transpose(b), p)
 
 
 def test_deform_zero_area_box() -> None:
-    b, p = pair()
+    b, p = random_pair()
     deformer = Deformer_regression([((1, 0, 1, 10), (0, 0, 0, 10, 10, 10, 10, 0))])
     for ops, image in ((ImageOps, b), (PILOps, p)):
         with pytest.raises(ZeroDivisionError):
@@ -993,39 +911,39 @@ def test_deform_zero_area_box() -> None:
 )
 def test_parallel_imageops_match_pillow(mode: str, name: str, kwargs: dict) -> None:
     # Large enough for worker partitions, with unaligned row and SIMD tails.
-    b, p = pair(mode, (521, 509))
-    same(getattr(ImageOps, name)(b, **kwargs), getattr(PILOps, name)(p, **kwargs))
+    b, p = random_pair(mode, (521, 509))
+    assert_pillow_equal(getattr(ImageOps, name)(b, **kwargs), getattr(PILOps, name)(p, **kwargs))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
 @pytest.mark.parametrize(("name", "kwargs"), [("autocontrast", {"cutoff": (2, 7), "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 3}), ("solarize", {"threshold": 173})])
 def test_parallel_luts_and_histograms(mode: str, name: str, kwargs: dict) -> None:
-    b, p = pair(mode, (521, 509))
+    b, p = random_pair(mode, (521, 509))
     b_options, p_options = kwargs.copy(), kwargs.copy()
     if name in ("autocontrast", "equalize"):
         data = bytes(0 if i % 3 == 0 else 255 for i in range(521 * 509))
         b_options["mask"] = Image.frombytes("L", b.size, data)
         p_options["mask"] = PILImage.frombytes("L", p.size, data)
-    same(getattr(ImageOps, name)(b, **b_options), getattr(PILOps, name)(p, **p_options))
+    assert_pillow_equal(getattr(ImageOps, name)(b, **b_options), getattr(PILOps, name)(p, **p_options))
 
 
 def test_parallel_colorize() -> None:
-    b, p = pair("L", (521, 509))
-    same(ImageOps.colorize(b, "navy", "gold", "red"), PILOps.colorize(p, "navy", "gold", "red"))
+    b, p = random_pair("L", (521, 509))
+    assert_pillow_equal(ImageOps.colorize(b, "navy", "gold", "red"), PILOps.colorize(p, "navy", "gold", "red"))
 
 
 @pytest.mark.parametrize("orientation", range(2, 9))
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_parallel_exif_tiles(mode: str, orientation: int) -> None:
-    b, p = pair(mode, (521, 509))
+    b, p = random_pair(mode, (521, 509))
     exif = PILImage.Exif()
     exif[274] = orientation
     b.info["exif"] = p.info["exif"] = exif.tobytes()
-    same(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
+    assert_pillow_equal(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_parallel_mesh_overwrite_order(mode: str) -> None:
-    b, p = pair(mode, (521, 509))
+    b, p = random_pair(mode, (521, 509))
     mesh = [((0, 0, 521, 509), (521, 0, 521, 509, 0, 509, 0, 0)), ((1, 1, 520, 508), (0, 0, 0, 507, 519, 507, 519, 0))]
-    same(ImageOps.deform(b, Deformer_regression(mesh)), PILOps.deform(p, Deformer_regression(mesh)))
+    assert_pillow_equal(ImageOps.deform(b, Deformer_regression(mesh)), PILOps.deform(p, Deformer_regression(mesh)))

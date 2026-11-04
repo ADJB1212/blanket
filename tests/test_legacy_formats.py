@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
@@ -196,9 +197,7 @@ def test_fits_sample_depth_and_orientation(bits: int, subtests: pytest.Subtests)
 @pytest.mark.parametrize("predictor", [1, 2])
 def test_tiff_lzw_strips_preserve_samples_and_reject_truncation(mode: str, predictor: int) -> None:
     source = patterned(mode, (513, 517))
-    stream = BytesIO()
-    source.to_pillow().save(stream, "TIFF", compression="tiff_lzw", tiffinfo={317: predictor}, strip_size=8192)
-    data = stream.getvalue()
+    data = encode_image(source.to_pillow(), "TIFF", compression="tiff_lzw", tiffinfo={317: predictor}, strip_size=8192)
     expected = PillowImage.open(BytesIO(data))
     assert len(expected.tag_v2[273]) > 1
     assert Image.open(BytesIO(data)).tobytes() == expected.tobytes() == source.tobytes()
@@ -232,8 +231,7 @@ def test_sun_stride_channels_and_rle(depth: int, subtests: pytest.Subtests) -> N
                 actual = Image.open(BytesIO(data), formats=["SUN"])
                 reference = struct.pack(">8I", 0x59A66A95, w, h, depth, len(raw), 1 if kind == 2 else kind, 0, 0) + raw
                 expected = PillowImage.open(BytesIO(reference))
-                assert (actual.mode, actual.size) == (expected.mode, expected.size)
-                assert actual.tobytes() == expected.tobytes()
+                assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "L"])
@@ -264,9 +262,7 @@ def test_xpm_encoded_keys_preserve_order_padding_and_repeated_rows(count: int, m
         colors[-1] = (0, 0, 0, 0)
     source = Image.new(mode, (count + 3, 3))
     source.putdata([colors[(i * 7 + i // (count + 3)) % count] for i in range(source.width * source.height)])
-    stream = BytesIO()
-    source.save(stream, "XPM")
-    encoded = stream.getvalue()
+    encoded = encode_image(source, "XPM")
     actual = Image.open(BytesIO(encoded)).convert("RGBA" if mode == "RGBA" else "RGB")
     assert actual.tobytes() == source.convert(actual.mode).tobytes()
     assert actual.tobytes() == PillowImage.open(BytesIO(encoded)).convert(actual.mode).tobytes()
@@ -307,9 +303,7 @@ def test_pcx_uncompressed_rows(bits: int, planes: int) -> None:
 @pytest.mark.parametrize("size", [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)])
 def test_palm_write(mode: str, size: tuple[int, int]) -> None:
     source = patterned(mode, size)
-    stream = BytesIO()
-    source.save(stream, "PALM")
-    data = stream.getvalue()
+    data = encode_image(source, "PALM")
     w, h, stride, flags = struct.unpack_from(">4H", data)
     assert (w, h, data[13]) == (*source.size, 255)
     assert len(data) == 16 + stride * h + (1026 if mode != "1" else 0)

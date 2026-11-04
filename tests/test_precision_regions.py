@@ -5,6 +5,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import encode_image
 from PIL import Image as Pillow
 
 from blanket import Image, UnidentifiedImageError
@@ -171,9 +172,7 @@ def test_tiff_region_interoperability(mode: str, compression: str) -> None:
 
 
 def test_region_fallback_and_validation() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (5, 4), "red").save(stream, format="PNG")
-    data = stream.getvalue()
+    data = encode_image(Image.new("RGB", (5, 4), "red"), format="PNG")
     with pytest.raises(NotImplementedError, match="fallback"):
         Image.open_region(BytesIO(data), (1, 1, 4, 3))
     result = Image.open_region(BytesIO(data), (1, 1, 4, 3), fallback="full")

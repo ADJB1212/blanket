@@ -43,6 +43,78 @@ POINTS = (((10, 10), (20, 40), (30, 30)), [(10, 10), (20, 40), (30, 30)], ([10, 
 KITE_POINTS = (((10, 50), (70, 10), (90, 50), (70, 90), (10, 50)), [(10, 50), (70, 10), (90, 50), (70, 90), (10, 50)], ([10, 50], [70, 10], [90, 50], [70, 90], [10, 50]), [[10, 50], [70, 10], [90, 50], [70, 90], [10, 50]])
 
 
+@pytest.mark.parametrize("bbox", BBOX)
+@pytest.mark.parametrize(
+    "method,args,options,draw_mode,filename,epsilon",
+    [
+        pytest.param("arc", (), {"start": 270.5, "end": 0}, None, "imagedraw_arc_end_le_start.png", 0, id="arc_end_le_start"),
+        pytest.param("arc", (), {"start": 5, "end": 370}, None, "imagedraw_arc_no_loops.png", 1, id="arc_no_loops"),
+        pytest.param("arc", (10, 260), {"width": 5}, None, "imagedraw_arc_width.png", 1, id="arc_width"),
+        pytest.param("arc", (10, 260), {"fill": "yellow", "width": 100}, None, "imagedraw_arc_width_pieslice.png", 1, id="arc_width_pieslice_large"),
+        pytest.param("arc", (10, 260), {"fill": "yellow", "width": 5}, None, "imagedraw_arc_width_fill.png", 1, id="arc_width_fill"),
+        pytest.param("arc", (10, 259.5), {"width": 5}, None, "imagedraw_arc_width_non_whole_angle.png", 1, id="arc_width_non_whole_angle"),
+        pytest.param("chord", (10, 260), {"outline": "yellow", "width": 5}, None, "imagedraw_chord_width.png", 1, id="chord_width"),
+        pytest.param("chord", (10, 260), {"fill": "red", "outline": "yellow", "width": 5}, None, "imagedraw_chord_width_fill.png", 1, id="chord_width_fill"),
+        pytest.param("chord", (10, 260), {"fill": "red", "outline": "yellow", "width": 0}, None, "imagedraw_chord_zero_width.png", 0, id="chord_zero_width"),
+        pytest.param("ellipse", (), {"fill": (0, 255, 0, 127)}, "RGBA", "imagedraw_ellipse_translucent.png", 1, id="ellipse_translucent"),
+        pytest.param("ellipse", (), {"outline": "blue", "width": 5}, None, "imagedraw_ellipse_width.png", 1, id="ellipse_width"),
+        pytest.param("ellipse", (), {"fill": "green", "outline": "blue", "width": 5}, None, "imagedraw_ellipse_width_fill.png", 1, id="ellipse_width_fill"),
+        pytest.param("ellipse", (), {"fill": "green", "outline": "blue", "width": 0}, None, "imagedraw_ellipse_zero_width.png", 0, id="ellipse_zero_width"),
+        pytest.param("pieslice", (10, 260), {"outline": "blue", "width": 5}, None, "imagedraw_pieslice_width.png", 1, id="pieslice_width"),
+        pytest.param("pieslice", (10, 260), {"fill": "white", "outline": "blue", "width": 5}, None, "imagedraw_pieslice_width_fill.png", 1, id="pieslice_width_fill"),
+        pytest.param("pieslice", (10, 260), {"fill": "white", "outline": "blue", "width": 0}, None, "imagedraw_pieslice_zero_width.png", 0, id="pieslice_zero_width"),
+        pytest.param("rectangle", (), {"fill": "black", "outline": "green"}, None, "imagedraw_rectangle.png", 0, id="rectangle"),
+        pytest.param("rectangle", (), {"outline": "green", "width": 5}, None, "imagedraw_rectangle_width.png", 0, id="rectangle_width"),
+        pytest.param("rectangle", (), {"fill": "blue", "outline": "green", "width": 5}, None, "imagedraw_rectangle_width_fill.png", 0, id="rectangle_width_fill"),
+        pytest.param("rectangle", (), {"fill": "blue", "outline": "green", "width": 0}, None, "imagedraw_rectangle_zero_width.png", 0, id="rectangle_zero_width"),
+        pytest.param("rectangle", (), {"fill": "black", "outline": (0, 255, 0, 127), "width": 5}, "RGBA", "imagedraw_rectangle_translucent_outline.png", 0, id="rectangle_translucent_outline"),
+        pytest.param("rounded_rectangle", (0,), {"fill": "blue", "outline": "green", "width": 5}, None, "imagedraw_rectangle_width_fill.png", 0, id="rounded_rectangle_zero_radius"),
+    ],
+)
+def test_shapes_match_reference(bbox: Coords, method: str, args: tuple[float, ...], options: dict[str, object], draw_mode: str | None, filename: str, epsilon: float) -> None:
+    image = Image.new("RGB", (W, H))
+    draw = ImageDraw.Draw(image, draw_mode)
+    getattr(draw, method)(bbox, *args, **options)
+    reference = PILLOW_IMAGES / filename
+    if epsilon:
+        assert_image_similar_tofile(image, reference, epsilon)
+    else:
+        assert_image_equal_tofile(image, reference)
+
+
+@pytest.mark.parametrize(
+    "size,draw_mode,operation,filename,epsilon",
+    [
+        pytest.param((100, 100), None, lambda draw: draw.chord([-150, -150, 99, 99], 15, 60, width=10, fill="white", outline="red"), "imagedraw_chord_too_fat.png", 0, id="chord_too_fat"),
+        pytest.param((W, H), None, lambda draw: draw.ellipse(((0, 0), (W - 1, H - 1)), fill="white"), "imagedraw_ellipse_edge.png", 1, id="ellipse_edge"),
+        pytest.param((500, 500), None, lambda draw: draw.ellipse((25, 25, 475, 475), outline="blue", width=75), "imagedraw_ellipse_width_large.png", 1, id="ellipse_width_large"),
+        pytest.param((200, 100), None, lambda draw: draw.pieslice([0, 0, 199, 99], 190, 170, width=10, fill="white", outline="red"), "imagedraw_pieslice_wide.png", 0, id="pieslice_wide"),
+        pytest.param((3, 3), None, lambda draw: draw.polygon([(0, 1), (0, 1), (2, 1), (2, 1)], "#f00"), "imagedraw_polygon_1px_high.png", 0, id="polygon_1px_high"),
+        pytest.param((4, 3), "RGBA", lambda draw: draw.polygon([(1, 1), (1, 1), (3, 1), (3, 1)], (255, 0, 0, 127)), "imagedraw_polygon_1px_high_translucent.png", 0, id="polygon_1px_high_translucent"),
+        pytest.param((W, H), "RGBA", lambda draw: draw.polygon([(20, 80), (80, 80), (80, 20)], fill=(0, 255, 0, 127)), "imagedraw_polygon_translucent.png", 0, id="polygon_translucent"),
+        pytest.param(
+            (W, H),
+            "RGBA",
+            lambda draw: draw.rounded_rectangle((20, 10, 80, 90), 30, fill="red", outline="green", width=5, corners=(True, False, False, False)),
+            "imagedraw_rounded_rectangle_joined_x_different_corners.png",
+            0,
+            id="rounded_rectangle_joined_x_different_corners",
+        ),
+        pytest.param((W, H), "RGB", lambda draw: draw.rounded_rectangle((25, 25, 75, 75), 24, fill="red", outline="green", width=5), "imagedraw_rounded_rectangle_radius.png", 0, id="rounded_rectangle_radius"),
+        pytest.param((W, H), None, lambda draw: draw.line([(50, 50), (50, 50)], width=3), "imagedraw_wide_line_dot.png", 1, id="wide_line_dot"),
+        pytest.param((W, H), None, lambda draw: draw.line([(0, 0), (32768, 32768)], width=3), "imagedraw_wide_line_larger_than_int.png", 1, id="wide_line_larger_than_int"),
+        pytest.param((W, H), None, lambda draw: draw.polygon([(18, 30), (19, 31), (18, 30), (85, 30), (60, 72)], "red"), "imagedraw_outline_polygon_RGB.png", 1, id="polygon2"),
+    ],
+)
+def test_drawing_reference_cases(size, draw_mode, operation, filename, epsilon) -> None:
+    image = Image.new("RGB", size)
+    operation(ImageDraw.Draw(image, draw_mode))
+    if epsilon:
+        assert_image_similar_tofile(image, PILLOW_IMAGES / filename, epsilon)
+    else:
+        assert_image_equal_tofile(image, PILLOW_IMAGES / filename)
+
+
 def test_sanity() -> None:
     im = hopper("RGB").copy()
 
@@ -85,249 +157,57 @@ def test_mode_mismatch() -> None:
 @pytest.mark.parametrize("bbox", BBOX)
 @pytest.mark.parametrize("start, end", ((0, 180), (0.5, 180.4)))
 def test_arc(bbox: Coords, start: float, end: float) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.arc(bbox, start, end)
-
-    # Assert
     assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc.png"), 1)
 
 
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_end_le_start(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    start = 270.5
-    end = 0
-
-    # Act
-    draw.arc(bbox, start=start, end=end)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_end_le_start.png"))
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_no_loops(bbox: Coords) -> None:
-    # No need to go in loops
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    start = 5
-    end = 370
-
-    # Act
-    draw.arc(bbox, start=start, end=end)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_no_loops.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.arc(bbox, 10, 260, width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_width.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_width_pieslice_large(bbox: Coords) -> None:
-    # Tests an arc with a large enough width that it is a pieslice
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.arc(bbox, 10, 260, fill="yellow", width=100)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_width_pieslice.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_width_fill(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.arc(bbox, 10, 260, fill="yellow", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_width_fill.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_arc_width_non_whole_angle(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_arc_width_non_whole_angle.png"
-
-    # Act
-    draw.arc(bbox, 10, 259.5, width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, expected, 1)
-
-
 def test_arc_high() -> None:
-    # Arrange
     im = Image.new("RGB", (200, 200))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.arc([10, 10, 89, 189], 20, 330, width=20, fill="white")
     draw.arc([110, 10, 189, 189], 20, 150, width=20, fill="white")
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_arc_high.png"))
 
 
 def test_bitmap() -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
     with Image.open(PILLOW_IMAGE_PREFIX + "pil123rgba.png") as small:
         small_resized = small.resize((50, 50), Image.Resampling.NEAREST)
-
-        # Act
         draw.bitmap((10, 10), small_resized)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_bitmap.png"))
 
 
 @pytest.mark.parametrize("mode", ("RGB", "L"))
 @pytest.mark.parametrize("bbox", BBOX)
 def test_chord(mode: str, bbox: Coords) -> None:
-    # Arrange
     im = Image.new(mode, (W, H))
     draw = ImageDraw.Draw(im)
     expected = PILLOW_IMAGE_PREFIX + f"imagedraw_chord_{mode}.png"
-
-    # Act
     draw.chord(bbox, 0, 180, fill="red", outline="yellow")
-
-    # Assert
     assert_image_similar_tofile(im, expected, 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_chord_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.chord(bbox, 10, 260, outline="yellow", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_chord_width.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_chord_width_fill(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.chord(bbox, 10, 260, fill="red", outline="yellow", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_chord_width_fill.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_chord_zero_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.chord(bbox, 10, 260, fill="red", outline="yellow", width=0)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_chord_zero_width.png"))
-
-
-def test_chord_too_fat() -> None:
-    # Arrange
-    im = Image.new("RGB", (100, 100))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.chord([-150, -150, 99, 99], 15, 60, width=10, fill="white", outline="red")
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_chord_too_fat.png"))
 
 
 @pytest.mark.parametrize("mode", ("RGB", "L"))
 @pytest.mark.parametrize("xy", ((W / 2, H / 2), [W / 2, H / 2]))
 def test_circle(mode: str, xy: Sequence[float]) -> None:
-    # Arrange
     im = Image.new(mode, (W, H))
     draw = ImageDraw.Draw(im)
     expected = PILLOW_IMAGE_PREFIX + f"imagedraw_ellipse_{mode}.png"
-
-    # Act
     draw.circle(xy, 25, fill="green", outline="blue")
-
-    # Assert
     assert_image_similar_tofile(im, expected, 1)
 
 
 @pytest.mark.parametrize("mode", ("RGB", "L"))
 @pytest.mark.parametrize("bbox", BBOX)
 def test_ellipse(mode: str, bbox: Coords) -> None:
-    # Arrange
     im = Image.new(mode, (W, H))
     draw = ImageDraw.Draw(im)
     expected = PILLOW_IMAGE_PREFIX + f"imagedraw_ellipse_{mode}.png"
-
-    # Act
     draw.ellipse(bbox, fill="green", outline="blue")
-
-    # Assert
     assert_image_similar_tofile(im, expected, 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_ellipse_translucent(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im, "RGBA")
-
-    # Act
-    draw.ellipse(bbox, fill=(0, 255, 0, 127))
-
-    # Assert
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_translucent.png"
-    assert_image_similar_tofile(im, expected, 1)
-
-
-def test_ellipse_edge() -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.ellipse(((0, 0), (W - 1, H - 1)), fill="white")
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_edge.png"), 1)
 
 
 def test_ellipse_symmetric() -> None:
@@ -336,57 +216,6 @@ def test_ellipse_symmetric() -> None:
         draw = ImageDraw.Draw(im)
         draw.ellipse(bbox, fill="green", outline="blue")
         assert_image_equal(im, im.transpose(Image.Transpose.FLIP_LEFT_RIGHT))
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_ellipse_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.ellipse(bbox, outline="blue", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_width.png"), 1)
-
-
-def test_ellipse_width_large() -> None:
-    # Arrange
-    im = Image.new("RGB", (500, 500))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.ellipse((25, 25, 475, 475), outline="blue", width=75)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_width_large.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_ellipse_width_fill(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.ellipse(bbox, fill="green", outline="blue", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_width_fill.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_ellipse_zero_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.ellipse(bbox, fill="green", outline="blue", width=0)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_ellipse_zero_width.png"))
 
 
 def ellipse_various_sizes_helper(filled: bool) -> Image.Image:
@@ -430,123 +259,51 @@ def test_ellipse_various_sizes_filled() -> None:
 
 @pytest.mark.parametrize("points", POINTS)
 def test_line(points: Coords) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.line(points, fill="yellow", width=2)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_line.png"))
 
 
 def test_shape1() -> None:
-    # Arrange
     im = Image.new("RGB", (100, 100), "white")
     draw = ImageDraw.Draw(im)
     x0, y0 = 5, 5
     x1, y1 = 5, 50
     x2, y2 = 95, 50
     x3, y3 = 95, 5
-
-    # Act
     s = ImageDraw.Outline()
     s.move(x0, y0)
     s.curve(x1, y1, x2, y2, x3, y3)
     s.line(x0, y0)
 
     draw.shape(s, fill=1)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_shape1.png"))
 
 
 def test_shape2() -> None:
-    # Arrange
     im = Image.new("RGB", (100, 100), "white")
     draw = ImageDraw.Draw(im)
     x0, y0 = 95, 95
     x1, y1 = 95, 50
     x2, y2 = 5, 50
     x3, y3 = 5, 95
-
-    # Act
     s = ImageDraw.Outline()
     s.move(x0, y0)
     s.curve(x1, y1, x2, y2, x3, y3)
     s.line(x0, y0)
 
     draw.shape(s, outline="blue")
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_shape2.png"))
 
 
 @pytest.mark.parametrize("bbox", BBOX)
 @pytest.mark.parametrize("start, end", ((-92, 46), (-92.2, 46.2)))
 def test_pieslice(bbox: Coords, start: float, end: float) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.pieslice(bbox, start, end, fill="white", outline="blue")
-
-    # Assert
     assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_pieslice.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_pieslice_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.pieslice(bbox, 10, 260, outline="blue", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_pieslice_width.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_pieslice_width_fill(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_pieslice_width_fill.png"
-
-    # Act
-    draw.pieslice(bbox, 10, 260, fill="white", outline="blue", width=5)
-
-    # Assert
-    assert_image_similar_tofile(im, expected, 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_pieslice_zero_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.pieslice(bbox, 10, 260, fill="white", outline="blue", width=0)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_pieslice_zero_width.png"))
-
-
-def test_pieslice_wide() -> None:
-    # Arrange
-    im = Image.new("RGB", (200, 100))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.pieslice([0, 0, 199, 99], 190, 170, width=10, fill="white", outline="red")
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_pieslice_wide.png"))
 
 
 def test_pieslice_no_spikes() -> None:
@@ -567,27 +324,17 @@ def test_pieslice_no_spikes() -> None:
 
 @pytest.mark.parametrize("points", POINTS)
 def test_point(points: Coords) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.point(points, fill="yellow")
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_point.png"))
 
 
 @pytest.mark.parametrize("points", POINTS)
 def test_polygon(points: Coords) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.polygon(points, fill="red", outline="blue")
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_polygon.png"))
 
 
@@ -596,150 +343,27 @@ def test_polygon(points: Coords) -> None:
 def test_polygon_kite(mode: str, kite_points: tuple[tuple[int, int], ...] | list[tuple[int, int]]) -> None:
     # Test drawing lines of different gradients (dx>dy, dy>dx) and
     # vertical (dx==0) and horizontal (dy==0) lines
-    # Arrange
     im = Image.new(mode, (W, H))
     draw = ImageDraw.Draw(im)
     expected = PILLOW_IMAGE_PREFIX + f"imagedraw_polygon_kite_{mode}.png"
-
-    # Act
     draw.polygon(kite_points, fill="blue", outline="yellow")
-
-    # Assert
     assert_image_equal_tofile(im, expected)
-
-
-def test_polygon_1px_high() -> None:
-    # Test drawing a 1px high polygon
-    # Arrange
-    im = Image.new("RGB", (3, 3))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_polygon_1px_high.png"
-
-    # Act
-    draw.polygon([(0, 1), (0, 1), (2, 1), (2, 1)], "#f00")
-
-    # Assert
-    assert_image_equal_tofile(im, expected)
-
-
-def test_polygon_1px_high_translucent() -> None:
-    # Test drawing a translucent 1px high polygon
-    # Arrange
-    im = Image.new("RGB", (4, 3))
-    draw = ImageDraw.Draw(im, "RGBA")
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_polygon_1px_high_translucent.png"
-
-    # Act
-    draw.polygon([(1, 1), (1, 1), (3, 1), (3, 1)], (255, 0, 0, 127))
-
-    # Assert
-    assert_image_equal_tofile(im, expected)
-
-
-def test_polygon_translucent() -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im, "RGBA")
-
-    # Act
-    draw.polygon([(20, 80), (80, 80), (80, 20)], fill=(0, 255, 0, 127))
-
-    # Assert
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_polygon_translucent.png"
-    assert_image_equal_tofile(im, expected)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rectangle(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.rectangle(bbox, fill="black", outline="green")
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rectangle.png"))
 
 
 def test_big_rectangle() -> None:
     # Test drawing a rectangle bigger than the image
-    # Arrange
     im = Image.new("RGB", (W, H))
     bbox = [(-1, -1), (W + 1, H + 1)]
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.rectangle(bbox, fill="orange")
-
-    # Assert
     assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_big_rectangle.png"), 1)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rectangle_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_rectangle_width.png"
-
-    # Act
-    draw.rectangle(bbox, outline="green", width=5)
-
-    # Assert
-    assert_image_equal_tofile(im, expected)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rectangle_width_fill(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_rectangle_width_fill.png"
-
-    # Act
-    draw.rectangle(bbox, fill="blue", outline="green", width=5)
-
-    # Assert
-    assert_image_equal_tofile(im, expected)
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rectangle_zero_width(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.rectangle(bbox, fill="blue", outline="green", width=0)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rectangle_zero_width.png"))
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rectangle_translucent_outline(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im, "RGBA")
-
-    # Act
-    draw.rectangle(bbox, fill="black", outline=(0, 255, 0, 127), width=5)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rectangle_translucent_outline.png"))
 
 
 @pytest.mark.parametrize("xy", [(10, 20, 190, 180), ([10, 20], [190, 180]), ((10, 20), (190, 180))])
 def test_rounded_rectangle(xy: (tuple[int, int, int, int] | tuple[list[int]] | tuple[tuple[int, int], tuple[int, int]])) -> None:
-    # Arrange
     im = Image.new("RGB", (200, 200))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.rounded_rectangle(xy, 30, fill="red", outline="green", width=5)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle.png"))
 
 
@@ -749,67 +373,19 @@ def test_rounded_rectangle(xy: (tuple[int, int, int, int] | tuple[list[int]] | t
 @pytest.mark.parametrize("bottom_left", (True, False))
 def test_rounded_rectangle_corners(top_left: bool, top_right: bool, bottom_right: bool, bottom_left: bool) -> None:
     corners = (top_left, top_right, bottom_right, bottom_left)
-
-    # Arrange
     im = Image.new("RGB", (200, 200))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.rounded_rectangle((10, 20, 190, 180), 30, fill="red", outline="green", width=5, corners=corners)
-
-    # Assert
     suffix = "".join((("y" if top_left else "n"), ("y" if top_right else "n"), ("y" if bottom_right else "n"), ("y" if bottom_left else "n")))
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle_corners_") + suffix + ".png")
 
 
-def test_rounded_rectangle_joined_x_different_corners() -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im, "RGBA")
-
-    # Act
-    draw.rounded_rectangle((20, 10, 80, 90), 30, fill="red", outline="green", width=5, corners=(True, False, False, False))
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle_joined_x_different_corners.png"))
-
-
-def test_rounded_rectangle_radius() -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im, "RGB")
-
-    # Act
-    draw.rounded_rectangle((25, 25, 75, 75), 24, fill="red", outline="green", width=5)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle_radius.png"))
-
-
 @pytest.mark.parametrize("xy, radius, type", [((10, 20, 190, 180), 30.5, "given"), ((10, 10, 181, 190), 90, "width"), ((10, 20, 190, 181), 85, "height")])
 def test_rounded_rectangle_non_integer_radius(xy: tuple[int, int, int, int], radius: float, type: str) -> None:
-    # Arrange
     im = Image.new("RGB", (200, 200))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.rounded_rectangle(xy, radius, fill="red", outline="green", width=5)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle_non_integer_radius_") + type + ".png")
-
-
-@pytest.mark.parametrize("bbox", BBOX)
-def test_rounded_rectangle_zero_radius(bbox: Coords) -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.rounded_rectangle(bbox, 0, fill="blue", outline="green", width=5)
-
-    # Assert
-    assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rectangle_width_fill.png"))
 
 
 @pytest.mark.parametrize("w, h", ((200, 100), (100, 200)))
@@ -827,14 +403,9 @@ def test_rounded_rectangle_large_radius(w: int, h: int) -> None:
 
 @pytest.mark.parametrize("xy, suffix", [((20, 10, 80, 90), "x"), ((20, 10, 81, 90), "x_odd"), ((20, 10, 81.1, 90), "x_odd"), ((10, 20, 90, 80), "y"), ((10, 20, 90, 81), "y_odd"), ((10, 20, 90, 81.1), "y_odd"), ((20, 20, 80, 80), "both")])
 def test_rounded_rectangle_translucent(xy: tuple[int, int, int, int], suffix: str) -> None:
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im, "RGBA")
-
-    # Act
     draw.rounded_rectangle(xy, 30, fill=(255, 0, 0, 127), outline=(0, 255, 0, 127), width=5)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_rounded_rectangle_") + suffix + ".png")
 
 
@@ -844,16 +415,11 @@ def test_floodfill(bbox: Coords) -> None:
 
     mode_values: list[tuple[str, int | tuple[int, ...]]] = [("L", 1), ("RGBA", (255, 0, 0, 0)), ("RGB", red)]
     for mode, value in mode_values:
-        # Arrange
         im = Image.new(mode, (W, H))
         draw = ImageDraw.Draw(im)
         draw.rectangle(bbox, outline="yellow", fill="green")
         centre_point = (int(W / 2), int(H / 2))
-
-        # Act
         ImageDraw.floodfill(im, centre_point, value)
-
-        # Assert
         expected = (PILLOW_IMAGE_PREFIX + "imagedraw_floodfill_") + mode + ".png"
         with Image.open(expected) as im_floodfill:
             assert_image_equal(im, im_floodfill)
@@ -875,51 +441,33 @@ def test_floodfill(bbox: Coords) -> None:
 @pytest.mark.parametrize("bbox", BBOX)
 def test_floodfill_border(bbox: Coords) -> None:
     # floodfill() is experimental
-
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
     draw.rectangle(bbox, outline="yellow", fill="green")
     centre_point = (int(W / 2), int(H / 2))
-
-    # Act
     ImageDraw.floodfill(im, centre_point, ImageColor.getrgb("red"), border=ImageColor.getrgb("black"))
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_floodfill2.png"))
 
 
 @pytest.mark.parametrize("bbox", BBOX)
 def test_floodfill_thresh(bbox: Coords) -> None:
     # floodfill() is experimental
-
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
     draw.rectangle(bbox, outline="darkgreen", fill="green")
     centre_point = (int(W / 2), int(H / 2))
-
-    # Act
     ImageDraw.floodfill(im, centre_point, ImageColor.getrgb("red"), thresh=30)
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_floodfill2.png"))
 
 
 def test_floodfill_not_negative() -> None:
     # floodfill() is experimental
     # Test that floodfill does not extend into negative coordinates
-
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
     draw.line((W / 2, 0, W / 2, H / 2), fill="green")
     draw.line((0, H / 2, W / 2, H / 2), fill="green")
-
-    # Act
     ImageDraw.floodfill(im, (int(W / 4), int(H / 4)), ImageColor.getrgb("red"))
-
-    # Assert
     assert_image_equal_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_floodfill_not_negative.png"))
 
 
@@ -932,23 +480,34 @@ def create_base_image_draw(size: tuple[int, int], mode: str = DEFAULT_MODE, back
     return img, ImageDraw.Draw(img)
 
 
-def test_square() -> None:
-    expected = os.path.join(IMAGES_PATH, "square.png")
-    img, draw = create_base_image_draw((10, 10))
-    draw.polygon([(2, 2), (2, 7), (7, 7), (7, 2)], BLACK)
-    assert_image_equal_tofile(img, expected, "square as normal polygon failed")
-    img, draw = create_base_image_draw((10, 10))
-    draw.polygon([(7, 7), (7, 2), (2, 2), (2, 7)], BLACK)
-    assert_image_equal_tofile(img, expected, "square as inverted polygon failed")
-    img, draw = create_base_image_draw((10, 10))
-    draw.rectangle((2, 2, 7, 7), BLACK)
-    assert_image_equal_tofile(img, expected, "square as normal rectangle failed")
-
-
-def test_triangle_right() -> None:
-    img, draw = create_base_image_draw((20, 20))
-    draw.polygon([(3, 5), (17, 5), (10, 12)], BLACK)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "triangle_right.png"), "triangle right failed")
+@pytest.mark.parametrize(
+    "size,operation,filename",
+    [
+        pytest.param((10, 10), lambda draw: draw.polygon([(2, 2), (2, 7), (7, 7), (7, 2)], BLACK), "square.png", id="square_1"),
+        pytest.param((10, 10), lambda draw: draw.polygon([(7, 7), (7, 2), (2, 2), (2, 7)], BLACK), "square.png", id="square_2"),
+        pytest.param((10, 10), lambda draw: draw.rectangle((2, 2, 7, 7), BLACK), "square.png", id="square_3"),
+        pytest.param((20, 20), lambda draw: draw.polygon([(3, 5), (17, 5), (10, 12)], BLACK), "triangle_right.png", id="triangle_right_1"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 14, 5), BLACK, 2), "line_horizontal_w2px_normal.png", id="line_horizontal_1"),
+        pytest.param((20, 20), lambda draw: draw.line((14, 5, 5, 5), BLACK, 2), "line_horizontal_w2px_inverted.png", id="line_horizontal_2"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 14, 5), BLACK, 3), "line_horizontal_w3px.png", id="line_horizontal_3"),
+        pytest.param((20, 20), lambda draw: draw.line((14, 5, 5, 5), BLACK, 3), "line_horizontal_w3px.png", id="line_horizontal_4"),
+        pytest.param((200, 110), lambda draw: draw.line((5, 55, 195, 55), BLACK, 101), "line_horizontal_w101px.png", id="line_horizontal_5"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 5, 14), BLACK, 2), "line_vertical_w2px_normal.png", id="line_vertical_1"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 14, 5, 5), BLACK, 2), "line_vertical_w2px_inverted.png", id="line_vertical_2"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 5, 14), BLACK, 3), "line_vertical_w3px.png", id="line_vertical_3"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 14, 5, 5), BLACK, 3), "line_vertical_w3px.png", id="line_vertical_4"),
+        pytest.param((110, 200), lambda draw: draw.line((55, 5, 55, 195), BLACK, 101), "line_vertical_w101px.png", id="line_vertical_5"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 6, 14), BLACK, 2), "line_vertical_slope1px_w2px.png", id="line_vertical_6"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 5, 14, 14), BLACK, 3), "line_oblique_45_w3px_a.png", id="line_oblique_45_1"),
+        pytest.param((20, 20), lambda draw: draw.line((14, 14, 5, 5), BLACK, 3), "line_oblique_45_w3px_a.png", id="line_oblique_45_2"),
+        pytest.param((20, 20), lambda draw: draw.line((14, 5, 5, 14), BLACK, 3), "line_oblique_45_w3px_b.png", id="line_oblique_45_3"),
+        pytest.param((20, 20), lambda draw: draw.line((5, 14, 14, 5), BLACK, 3), "line_oblique_45_w3px_b.png", id="line_oblique_45_4"),
+    ],
+)
+def test_line_and_polygon_references(size, operation, filename) -> None:
+    image, draw = create_base_image_draw(size)
+    operation(draw)
+    assert_image_equal_tofile(image, os.path.join(IMAGES_PATH, filename))
 
 
 @pytest.mark.parametrize("fill, suffix", ((BLACK, "width"), (None, "width_no_fill")))
@@ -956,98 +515,6 @@ def test_triangle_right_width(fill: tuple[int, int, int] | None, suffix: str) ->
     img, draw = create_base_image_draw((100, 100))
     draw.polygon([(15, 25), (85, 25), (50, 60)], fill, WHITE, width=5)
     assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "triangle_right_" + suffix + ".png"))
-
-
-def test_line_horizontal() -> None:
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 14, 5), BLACK, 2)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_horizontal_w2px_normal.png"), "line straight horizontal normal 2px wide failed")
-
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((14, 5, 5, 5), BLACK, 2)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_horizontal_w2px_inverted.png"), "line straight horizontal inverted 2px wide failed")
-
-    expected = os.path.join(IMAGES_PATH, "line_horizontal_w3px.png")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 14, 5), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line straight horizontal normal 3px wide failed")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((14, 5, 5, 5), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line straight horizontal inverted 3px wide failed")
-
-    img, draw = create_base_image_draw((200, 110))
-    draw.line((5, 55, 195, 55), BLACK, 101)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_horizontal_w101px.png"), "line straight horizontal 101px wide failed")
-
-
-def test_line_vertical() -> None:
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 5, 14), BLACK, 2)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_vertical_w2px_normal.png"), "line straight vertical normal 2px wide failed")
-
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 14, 5, 5), BLACK, 2)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_vertical_w2px_inverted.png"), "line straight vertical inverted 2px wide failed")
-
-    expected = os.path.join(IMAGES_PATH, "line_vertical_w3px.png")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 5, 14), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line straight vertical normal 3px wide failed")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 14, 5, 5), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line straight vertical inverted 3px wide failed")
-
-    img, draw = create_base_image_draw((110, 200))
-    draw.line((55, 5, 55, 195), BLACK, 101)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_vertical_w101px.png"), "line straight vertical 101px wide failed")
-
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 6, 14), BLACK, 2)
-    assert_image_equal_tofile(img, os.path.join(IMAGES_PATH, "line_vertical_slope1px_w2px.png"), "line vertical 1px slope 2px wide failed")
-
-
-def test_line_oblique_45() -> None:
-    expected = os.path.join(IMAGES_PATH, "line_oblique_45_w3px_a.png")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 5, 14, 14), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line oblique 45 normal 3px wide A failed")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((14, 14, 5, 5), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line oblique 45 inverted 3px wide A failed")
-
-    expected = os.path.join(IMAGES_PATH, "line_oblique_45_w3px_b.png")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((14, 5, 5, 14), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line oblique 45 normal 3px wide B failed")
-    img, draw = create_base_image_draw((20, 20))
-    draw.line((5, 14, 14, 5), BLACK, 3)
-    assert_image_equal_tofile(img, expected, "line oblique 45 inverted 3px wide B failed")
-
-
-def test_wide_line_dot() -> None:
-    # Test drawing a wide "line" from one point to another just draws a single point
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-
-    # Act
-    draw.line([(50, 50), (50, 50)], width=3)
-
-    # Assert
-    assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_wide_line_dot.png"), 1)
-
-
-def test_wide_line_larger_than_int() -> None:
-    # Arrange
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_wide_line_larger_than_int.png"
-
-    # Act
-    draw.line([(0, 0), (32768, 32768)], width=3)
-
-    # Assert
-    assert_image_similar_tofile(im, expected, 1)
 
 
 @pytest.mark.parametrize(
@@ -1061,21 +528,14 @@ def test_wide_line_larger_than_int() -> None:
 def test_line_joint(xy: list[tuple[int, int]] | tuple[int, ...] | list[int]) -> None:
     im = Image.new("RGB", (500, 325))
     draw = ImageDraw.Draw(im)
-
-    # Act
     draw.line(xy, GRAY, 50, "curve")
-
-    # Assert
     assert_image_similar_tofile(im, (PILLOW_IMAGE_PREFIX + "imagedraw_line_joint_curve.png"), 3)
 
 
 def test_textsize_empty_string() -> None:
     # https://github.com/python-pillow/Pillow/issues/2783
-    # Arrange
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-
-    # Act
     # Should not cause 'SystemError: <built-in method getsize of
     # ImagingFont object at 0x...> returned NULL without setting an error'
     draw.textbbox((0, 0), "")
@@ -1102,17 +562,12 @@ def test_same_color_outline(bbox: Coords) -> None:
         fill = "red"
         for outline in [None, "red", "#f00"]:
             for operation, args in {"chord": [bbox, 0, 180], "ellipse": [bbox], "shape": [s], "pieslice": [bbox, -90, 45], "polygon": [[(18, 30), (85, 30), (60, 72)]], "rectangle": [bbox]}.items():
-                # Arrange
                 im = Image.new(mode, (W, H))
                 draw = ImageDraw.Draw(im)
-
-                # Act
                 draw_method = getattr(draw, operation)
                 assert isinstance(args, list)
                 args += [fill, outline]
                 draw_method(*args)
-
-                # Assert
                 expected = PILLOW_IMAGE_PREFIX + f"imagedraw_outline_{operation}_{mode}.png"
                 assert_image_similar_tofile(im, expected, 1)
 
@@ -1188,14 +643,6 @@ def test_discontiguous_corners_polygon() -> None:
     draw.polygon(((38, 66), (5, 49), (77, 49), (47, 66), (82, 63), (82, 47), (1, 47), (1, 63)), BLACK)
     expected = os.path.join(IMAGES_PATH, "discontiguous_corners_polygon.png")
     assert_image_equal_tofile(img, expected)
-
-
-def test_polygon2() -> None:
-    im = Image.new("RGB", (W, H))
-    draw = ImageDraw.Draw(im)
-    draw.polygon([(18, 30), (19, 31), (18, 30), (85, 30), (60, 72)], "red")
-    expected = PILLOW_IMAGE_PREFIX + "imagedraw_outline_polygon_RGB.png"
-    assert_image_similar_tofile(im, expected, 1)
 
 
 @pytest.mark.parametrize("xy", ((1, 1, 0, 1), (1, 1, 1, 0)))

@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
+from helpers import encode_image, image_pair
 from PIL import Image as PillowImage, JpegImagePlugin as PillowJpegImagePlugin
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
@@ -50,9 +51,7 @@ def test_jpeg_comment_and_density_roundtrip(comment: str | bytes | None, dpi: tu
 
 
 def encode(image, **options):
-    stream = BytesIO()
-    image.save(stream, "JPEG", quality=85, **options)
-    return stream.getvalue()
+    return encode_image(image, "JPEG", quality=85, **options)
 
 
 @pytest.mark.parametrize("width", [1, 3, 17, 33, 257])
@@ -149,8 +148,7 @@ def test_jpeg_quality_with_keep_rgb(quality: str) -> None:
 @pytest.mark.parametrize("options", [{}, {"progressive": True}, {"optimize": True}, {"keep_rgb": True}])
 def test_jpeg_smooth_edges_and_controls(size: tuple[int, int], options: dict[str, bool]) -> None:
     raw = bytes(i * 37 % 256 for i in range(size[0] * size[1] * 3))
-    image = Image.frombytes("RGB", size, raw)
-    reference = PillowImage.frombytes("RGB", size, raw)
+    image, reference = image_pair("RGB", size, raw)
     actual = encode(image, smooth=100, **options)
     expected = encode(reference, smooth=100, **options)
     with PillowImage.open(BytesIO(actual)) as decoded, PillowImage.open(BytesIO(expected)) as expected_image:

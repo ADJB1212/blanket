@@ -5,6 +5,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import assert_pixels_equal
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -148,8 +149,7 @@ def test_fromarray_grayscale_alpha_matches_pillow(mode, strided):
     expected = PillowImage.fromarray(values)
     image = Image.fromarray(values, mode)
     assert image.mode == expected.mode == "LA"
-    assert image.size == expected.size
-    assert image.tobytes() == expected.tobytes()
+    assert_pixels_equal(image, expected)
     np.testing.assert_array_equal(np.asarray(image), values)
     values[:] = 0
     assert image.tobytes() == expected.tobytes()

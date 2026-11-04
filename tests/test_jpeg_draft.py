@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -16,14 +17,10 @@ def test_jpeg_draft_matches_decoder(source_mode: str, mode: str | None, size: tu
     channels = len(source_mode)
     pixels = bytes((value * 37 + value // 7) % 256 for value in range(63 * 47 * channels))
     source = PillowImage.frombytes(source_mode, dimensions, pixels)
-    output = BytesIO()
-    source.save(output, "JPEG")
-    encoded = output.getvalue()
+    encoded = encode_image(source, "JPEG")
     with Image.open(BytesIO(encoded)) as actual, PillowImage.open(BytesIO(encoded)) as expected:
         assert actual.draft(mode, size) == expected.draft(mode, size)
-        assert actual.mode == expected.mode
-        assert actual.size == expected.size
-        assert actual.tobytes() == expected.tobytes()
+        assert_pixels_equal(actual, expected)
         assert actual.draft(mode, size) is None
     assert Image.open(BytesIO(encoded)).tobytes() == PillowImage.open(BytesIO(encoded)).tobytes()
 

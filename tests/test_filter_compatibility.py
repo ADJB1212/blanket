@@ -3,6 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PILImage, ImageChops as PILChops, ImageFilter as PILFilter, ImageOps as PILOps
 
 from blanket import Image, ImageChops, ImageFilter, ImageOps
@@ -36,8 +37,7 @@ def test_wide_rank_filters_match_pillow(mode: str, subtests: pytest.Subtests) ->
                 values = [-2147483648, 2147483647, -1, 0, 255, 256, 1000] if mode == "I" else [float("nan"), float("inf"), -float("inf"), -0.0, 0.0, 1.25, -3.5]
                 count = size[0] * size[1]
                 raw = struct.pack(f"<{count}{'i' if mode == 'I' else 'f'}", *(values[i % len(values)] for i in range(count)))
-                actual = Image.frombytes(mode, size, raw)
-                expected = PILImage.frombytes(mode, size, raw)
+                actual, expected = image_pair(mode, size, raw)
                 result = actual.filter(ImageFilter.RankFilter(window, rank))
                 reference = expected.filter(PILFilter.RankFilter(window, rank))
                 assert result.mode == mode
@@ -61,8 +61,7 @@ def test_wide_rank_one_is_an_independent_copy(mode: str) -> None:
 def test_integer_rank_bands_preserve_halos_and_border_weights(size: tuple[int, int], window: int) -> None:
     count = size[0] * size[1]
     raw = struct.pack(f"<{count}i", *((i * 7919 % 4093) - 2046 for i in range(count)))
-    image = Image.frombytes("I", size, raw)
-    reference = PILImage.frombytes("I", size, raw)
+    image, reference = image_pair("I", size, raw)
     for rank in [1, window * window // 2, window * window - 2]:
         assert image.filter(ImageFilter.RankFilter(window, rank)).tobytes() == reference.filter(PILFilter.RankFilter(window, rank)).tobytes()
     assert image.tobytes() == raw
@@ -75,8 +74,7 @@ def test_integer_extrema_match_pillow(size: tuple[int, int], window: int, maximu
     values = [-2147483648, 2147483647, -1000, 16777217, 0, 127, 255]
     count = size[0] * size[1]
     raw = struct.pack(f"<{count}i", *(values[(i * 3 + i // size[0]) % len(values)] for i in range(count)))
-    image = Image.frombytes("I", size, raw)
-    reference = PILImage.frombytes("I", size, raw)
+    image, reference = image_pair("I", size, raw)
     operation = ImageFilter.MaxFilter if maximum else ImageFilter.MinFilter
     pillow_operation = PILFilter.MaxFilter if maximum else PILFilter.MinFilter
     result = image.filter(operation(window))

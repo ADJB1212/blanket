@@ -5,6 +5,7 @@ import zlib
 from io import BytesIO, StringIO
 
 import pytest
+from helpers import encode_image, png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageCms, PngImagePlugin, UnidentifiedImageError, features
@@ -47,9 +48,7 @@ def encode(mode="RGB", format="PNG", depth=8, **options):
     image = Image.new(mode, (17, 9))
     if depth != 8:
         image = image.convert(mode, bit_depth=depth)
-    stream = BytesIO()
-    image.save(stream, format, **options)
-    return stream.getvalue()
+    return encode_image(image, format, **options)
 
 
 @pytest.mark.parametrize(
@@ -121,10 +120,6 @@ def test_heif_and_avif_headers(format, depth):
     header = Image.inspect(BytesIO(encode("RGB", format, depth)))
     assert (header.format, header.size, header.mode) == (format, (17, 9), "RGB")
     assert header.bit_depth == (8 if format == "AVIF" else depth)
-
-
-def png_chunk(kind, data):
-    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
 
 @pytest.mark.parametrize("color,depth,mode", [(0, 1, "1"), (0, 2, "L"), (0, 4, "L"), (3, 4, "P"), (6, 16, "RGBA")])

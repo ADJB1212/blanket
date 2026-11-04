@@ -2,22 +2,12 @@ import math
 import struct
 
 import pytest
+from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
+from helpers import assert_pixels_equal
 
 from blanket import Image, ImageChops, ImageEnhance, ImageGpu
 
-MODES = ("L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F")
-CHANNELS = dict(zip(MODES, (1, 2, 3, 4, 1, 3, 4), strict=True))
-
-
-@pytest.fixture(params=("native", "torch"))
-def runtime(request):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal feature and device required")
-    if request.param == "torch":
-        torch = pytest.importorskip("torch")
-        if not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
-            pytest.skip("PyTorch MPS shader support required")
-    return request.param
+runtime = shader_runtime
 
 
 def source(mode, seed=0, size=(17, 11)):
@@ -37,8 +27,7 @@ def test_transpose(runtime, mode, method, size):
     gpu = ImageGpu.from_image(image, runtime=runtime)
     actual = gpu.transpose(method).to_image()
     expected = image.transpose(method)
-    assert actual.size == expected.size
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     assert actual.info["description"] == image.info["description"]
     assert gpu.to_image().tobytes() == image.tobytes()
 
@@ -49,8 +38,7 @@ def test_crop(runtime, mode, box):
     image = source(mode)
     actual = ImageGpu.from_image(image, runtime=runtime).crop(box).to_image()
     expected = image.crop(box)
-    assert actual.size == expected.size
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -167,8 +155,7 @@ def test_validation_and_lifetimes(runtime):
 
 
 def test_torch_pipeline_does_not_stage_pixels(monkeypatch):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     torch = pytest.importorskip("torch")
     if not torch.backends.mps.is_available():
         pytest.skip("MPS required")

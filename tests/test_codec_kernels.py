@@ -7,15 +7,13 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
+from helpers import png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
 
 
 def png_chunks(width: int, height: int, depth: int, color: int, pixels: list[tuple[int, ...]], interlaced: bool, extra: list[tuple[bytes, bytes]]) -> bytes:
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
-
     passes = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)] if interlaced else [(0, 0, 1, 1)]
     rows = bytearray()
     for left, top, dx, dy in passes:
@@ -34,7 +32,7 @@ def png_chunks(width: int, height: int, depth: int, color: int, pixels: list[tup
                     packed[i * depth // 8] |= value << (8 - depth - i * depth % 8)
                 rows.extend(packed)
     header = struct.pack(">IIBBBBB", width, height, depth, color, 0, 0, int(interlaced))
-    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + b"".join(chunk(kind, data) for kind, data in extra) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) + b"".join(png_chunk(kind, data) for kind, data in extra) + png_chunk(b"IDAT", zlib.compress(rows)) + png_chunk(b"IEND", b"")
 
 
 def test_png_raster_decode_preserves_separately_parsed_compressed_metadata() -> None:

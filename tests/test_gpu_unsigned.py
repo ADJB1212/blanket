@@ -1,19 +1,11 @@
 import struct
 
 import pytest
+from gpu_helpers import require_metal, runtime as metal_runtime
 
 from blanket import Image, ImageGpu
 
-
-@pytest.fixture(params=["native", "torch"])
-def runtime(request):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
-    if request.param == "torch":
-        torch = pytest.importorskip("torch")
-        if not torch.backends.mps.is_available():
-            pytest.skip("MPS required")
-    return request.param
+runtime = metal_runtime
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
@@ -72,8 +64,7 @@ def test_unsigned_transfer_nonfinite_and_malformed():
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
 def test_native_unsigned_transfers_bypass_staging(depth, mode, channels, monkeypatch):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     maximum = (1 << depth) - 1
     count = 65 * 17 * channels
     data = struct.pack(f"{count}H", *((i * 719) % (maximum + 1) for i in range(count)))
@@ -97,8 +88,7 @@ def test_native_unsigned_transfers_bypass_staging(depth, mode, channels, monkeyp
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
 def test_native_unsigned_download_nonfinite_and_half_samples(depth):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     from blanket._gpu_unsigned import GpuUnsignedImage
 
     maximum = (1 << depth) - 1
@@ -110,8 +100,7 @@ def test_native_unsigned_download_nonfinite_and_half_samples(depth):
 
 
 def test_native_unsigned_transfer_validation_and_closed_images():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     from blanket import _blanket
 
     with pytest.raises(ValueError, match="mode or depth"):
@@ -141,8 +130,7 @@ def test_unsigned_alpha(runtime, depth):
 
 
 def test_unsigned_tensor_import_stays_resident():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     torch = pytest.importorskip("torch")
     tensor = torch.arange(12, dtype=torch.float32, device="mps").reshape(2, 2, 3).to(torch.uint16)
     gpu = ImageGpu.from_torch(tensor, layout="HWC", mode="RGB", bit_depth=12)

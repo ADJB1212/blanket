@@ -4,6 +4,7 @@ import random
 import struct
 
 import pytest
+from helpers import assert_pixels_equal, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -49,8 +50,7 @@ def test_filtered_resize_row_batches_and_fractional_boxes(mode: str, subtests: p
             with subtests.test(mode=mode, height=height, method=method):
                 size = (39, height)
                 raw = random.Random(83).randbytes(size[0] * size[1] * len(mode))
-                actual = Image.frombytes(mode, size, raw)
-                expected = PillowImage.frombytes(mode, size, raw)
+                actual, expected = image_pair(mode, size, raw)
                 for target in [(17, height), (67, height), (13, 7)]:
                     for box in [None, (0.25, 0.0, 38.5, float(height))]:
                         assert actual.resize(target, method, box=box).tobytes() == expected.resize(target, method, box=box).tobytes()
@@ -63,8 +63,7 @@ def test_nearest_gathers_and_repeated_rows(mode: str, subtests: pytest.Subtests)
         for target in [(19, 13), (91, 79), (7, 5)]:
             with subtests.test(mode=mode, size=size, target=target):
                 raw = random.Random(42).randbytes(size[0] * size[1] * len(mode))
-                image = Image.frombytes(mode, size, raw)
-                reference = PillowImage.frombytes(mode, size, raw)
+                image, reference = image_pair(mode, size, raw)
                 for box in (None, (1.25, 2.5, size[0] - 0.75, size[1] - 1.5)):
                     actual = image.resize(target, Image.Resampling.NEAREST, box=box)
                     expected = reference.resize(target, PillowImage.Resampling.NEAREST, box=box)
@@ -90,8 +89,7 @@ def test_filtered_half_resize_vector_blocks_and_edges(mode: str, subtests: pytes
 @pytest.mark.parametrize("size", [(1, 1), (15, 17), (16, 16), (17, 19), (803, 607)])
 def test_nearest_double_rgb_layout(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(42).randbytes(size[0] * size[1] * 3)
-    actual = Image.frombytes(mode, size, raw)
-    expected = PillowImage.frombytes(mode, size, raw)
+    actual, expected = image_pair(mode, size, raw)
     target = (size[0] * 2, size[1] * 2)
     assert actual.resize(target, Image.Resampling.NEAREST).tobytes() == expected.resize(target, PillowImage.Resampling.NEAREST).tobytes()
 
@@ -101,8 +99,7 @@ def test_nearest_double_rgb_layout(mode: str, size: tuple[int, int]) -> None:
 @pytest.mark.parametrize("size", [(803, 607), (800, 600)])
 def test_parallel_thumbnail_reduction(mode: str, target: tuple[int, int], size: tuple[int, int]) -> None:
     raw = random.Random(81).randbytes(size[0] * size[1] * len(mode))
-    image = Image.frombytes(mode, size, raw)
-    reference = PillowImage.frombytes(mode, size, raw)
+    image, reference = image_pair(mode, size, raw)
     options = {"resample": Image.Resampling.LANCZOS, "reducing_gap": 3.0}
     assert image.resize(target, **options).tobytes() == reference.resize(target, **options).tobytes()
 
@@ -117,5 +114,4 @@ def test_conversion_vector_tails_and_parallel_chunks(source: str, subtests: pyte
                 reference = PillowImage.frombytes(source, (count, 1), raw)
                 actual = image.convert(target)
                 expected = reference.convert(target)
-                assert (actual.mode, actual.size) == (expected.mode, expected.size)
-                assert actual.tobytes() == expected.tobytes()
+                assert_pixels_equal(actual, expected)

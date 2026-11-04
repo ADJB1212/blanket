@@ -5,6 +5,7 @@ from io import BytesIO
 from xml.etree import ElementTree as ET
 
 import pytest
+from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageCms, ImageMetadata, PngImagePlugin, UnidentifiedImageError
@@ -16,9 +17,7 @@ def encode(format="PNG", mode="RGB", depth=8, **options):
     image = Image.new(mode, (17, 9))
     if depth != 8:
         image = image.convert(mode, bit_depth=depth)
-    stream = BytesIO()
-    image.save(stream, format, **options)
-    return stream.getvalue()
+    return encode_image(image, format, **options)
 
 
 def exif_data(thumbnail=False):
@@ -75,7 +74,7 @@ def test_metadata_replacement_removal_and_unchanged_pixels(format):
     exif[305] = "replacement"
     rewritten = ImageMetadata.rewrite(BytesIO(data), exif=exif, xmp=b"<replacement/>")
     result = Image.open(BytesIO(rewritten))
-    assert (result.mode, result.size, result.tobytes()) == (original.mode, original.size, original.tobytes())
+    assert_pixels_equal(result, original)
     assert result.getexif()[305] == "replacement"
     assert result.info["xmp"] == b"<replacement/>"
     assert result.info["icc_profile"] == profile
@@ -379,9 +378,7 @@ def test_rewrite_preserves_unedited_container_bytes(format):
 def test_progressive_jpeg_and_indexed_png_interoperate():
     for mode, format, options in [("RGB", "JPEG", {"progressive": True}), ("P", "PNG", {"bits": 4, "transparency": 0})]:
         image = PillowImage.new(mode, (17, 9))
-        stream = BytesIO()
-        image.save(stream, format, **options)
-        data = stream.getvalue()
+        data = encode_image(image, format, **options)
         rewritten = ImageMetadata.rewrite(BytesIO(data), xmp=XMP, dpi=(72, 72))
         before = PillowImage.open(BytesIO(data)).convert("RGBA")
         after = PillowImage.open(BytesIO(rewritten)).convert("RGBA")

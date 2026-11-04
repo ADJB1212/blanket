@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import patterned_pair
 from PIL import Image as PILImage, ImageStat as PILStat
 from pillow_helpers import hopper
 
@@ -85,7 +86,7 @@ STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var",
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("fill", [0, 1])
 def test_bilevel_masks_match_pillow(mode: str, fill: int) -> None:
-    image, pillow = pair(mode, (19, 11))
+    image, pillow = patterned_pair(mode, (19, 11))
     mask = Image.new("1", image.size, fill)
     reference = PILImage.new("1", image.size, fill)
     mask.putpixel((0, 0), 1 - fill)
@@ -114,11 +115,6 @@ def test_high_depth_statistics_accept_bilevel_masks(bit_depth: int) -> None:
     assert stats.mean == [512]
     assert stats.median == [512]
     assert stats.var == [0.0]
-
-
-def pair(mode: str, size: tuple[int, int]) -> tuple[Image.Image, PILImage.Image]:
-    raw = bytes((i * 37 + i // 11) % 256 for i in range(size[0] * size[1] * len(mode)))
-    return Image.frombytes(mode, size, raw), PILImage.frombytes(mode, size, raw)
 
 
 def same(actual: ImageStat.Stat, expected: PILStat.Stat) -> None:
@@ -153,7 +149,7 @@ def test_median_selects_upper_middle(samples: list[int], median: int) -> None:
 
 
 def test_histogram_snapshot_survives_source_changes_and_close() -> None:
-    image, pillow = pair("RGBA", (19, 11))
+    image, pillow = patterned_pair("RGBA", (19, 11))
     stat, reference = ImageStat.Stat(image), PILStat.Stat(pillow)
     image.paste((10, 20, 30, 40), (0, 0, *image.size))
     image.close()
@@ -183,7 +179,7 @@ def test_list_input_ignores_mask() -> None:
 
 
 def test_palette_statistics_use_indices() -> None:
-    image, pillow = pair("L", (23, 19))
+    image, pillow = patterned_pair("L", (23, 19))
     palette = bytes(range(256)) * 3
     image.putpalette(palette)
     pillow.putpalette(palette)

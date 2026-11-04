@@ -1,18 +1,14 @@
 import pytest
+from gpu_helpers import require_metal
 
 from blanket import Image, ImageFilter, ImageGpu
-
-
-def require_gpu():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal feature and device required")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_unified_memory_automatic_roundtrip_and_copy_on_write(mode: str) -> None:
     from blanket import ImageDraw
 
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     value = 0.25 if "F" in mode else 57
     image = Image.new(mode, (17, 9), value if channels == 1 else (value,) * channels)
@@ -44,7 +40,7 @@ def test_unified_memory_automatic_roundtrip_and_copy_on_write(mode: str) -> None
 def test_unified_memory_paste_and_shared_image_close_on_worker() -> None:
     from concurrent.futures import ThreadPoolExecutor
 
-    require_gpu()
+    require_metal()
     original = Image.new("RGBA", (17, 9), (50, 100, 150, 200))
     gpu = ImageGpu.from_image(original, unified_memory=True)
     cpu = gpu.to_image()
@@ -65,7 +61,7 @@ def test_unified_memory_paste_and_shared_image_close_on_worker() -> None:
 def test_unified_memory_mutations_preserve_gpu_pixels(operation: str) -> None:
     import io
 
-    require_gpu()
+    require_metal()
     original = Image.new("RGBA", (17, 9), (50, 100, 150, 200))
     gpu = ImageGpu.from_image(original, unified_memory=True)
     cpu = gpu.to_image()
@@ -87,7 +83,7 @@ def test_unified_memory_mutations_preserve_gpu_pixels(operation: str) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_shared_metal_mapping_lifetime(mode: str) -> None:
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     value = 0.25 if "F" in mode else 57
     image = Image.new(mode, (65, 17), value if channels == 1 else (value,) * channels)
@@ -123,7 +119,7 @@ def test_shared_metal_mapping_lifetime(mode: str) -> None:
 
 
 def test_shared_metal_handles_reject_closed_images() -> None:
-    require_gpu()
+    require_metal()
     gpu = ImageGpu.from_image(Image.new("RGBA", (3, 5)), runtime="native")
     gpu.close()
     with pytest.raises(ValueError, match="closed"):
@@ -134,7 +130,7 @@ def test_shared_metal_handles_reject_closed_images() -> None:
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_native_transfers_bypass_python_bytes(mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
-    require_gpu()
+    require_metal()
     image = Image.new(mode, (65, 17))
     expected = image.tobytes()
 
@@ -156,7 +152,7 @@ def test_native_transfers_bypass_python_bytes(mode: str, monkeypatch: pytest.Mon
 def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
     from blanket import ImageChops, ImageEnhance
 
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     size = (width, 3)
     image = Image.frombytes(mode, size, bytes((i * 37 + 13) % 256 for i in range(width * 3 * channels)))
@@ -184,7 +180,7 @@ def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
 def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
     import struct
 
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     values = [(i * 37 % 251) for i in range(17 * 9 * channels)]
     data = struct.pack(f"{len(values)}f", *[v / 127 - 0.5 for v in values]) if "F" in mode else bytes(values)
@@ -209,7 +205,7 @@ def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
 @pytest.mark.parametrize("gaussian", [False, True])
 @pytest.mark.parametrize("radii", [(0, 0), (2.5, 0), (0, 32.5), (32.5, 40)])
 def test_native_blur_matches_individual_passes(mode, gaussian, radii, monkeypatch):
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     image = Image.new(mode, (33, 17), 0.25 if channels == 1 else (0.25,) * channels) if "F" in mode else Image.frombytes(mode, (33, 17), bytes(i * 97 % 256 for i in range(33 * 17 * channels)))
     gpu = ImageGpu.from_image(image, unified_memory=True)
@@ -236,7 +232,7 @@ def test_native_blur_matches_individual_passes(mode, gaussian, radii, monkeypatc
 
 
 def test_native_preparation_validates_controls_and_large_blur_radii():
-    require_gpu()
+    require_metal()
     gpu = ImageGpu.from_image(Image.new("L", (3, 1), 255))
     for target, method, axis in [(0, 3, 0), (5, 6, 0), (5, 3, 2)]:
         with pytest.raises(ValueError):
@@ -252,7 +248,7 @@ def test_native_preparation_validates_controls_and_large_blur_radii():
 
 @pytest.mark.parametrize("mode", ["L", "RGBA", "F", "RGBA;F"])
 def test_native_closed_sources_survive_buffer_reuse(mode: str) -> None:
-    require_gpu()
+    require_metal()
     pending = []
     for value in range(24):
         color = value if mode in ("L", "F") else (value,) * 4
@@ -273,7 +269,7 @@ def test_native_closed_sources_survive_buffer_reuse(mode: str) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_upload_roundtrip_and_lifetime(mode):
-    require_gpu()
+    require_metal()
     image = Image.new(mode, (17, 9))
     image.info["description"] = "gpu"
     resident = ImageGpu.from_image(image)
@@ -288,7 +284,7 @@ def test_upload_roundtrip_and_lifetime(mode):
 @pytest.mark.parametrize("method", range(6))
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 def test_resize_cpu_parity(mode, method):
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     data = bytes((i * 31 + i // 11) % 256 for i in range(23 * 19 * channels))
     image = Image.frombytes(mode, (23, 19), data)
@@ -298,7 +294,7 @@ def test_resize_cpu_parity(mode, method):
 
 
 def test_compositing_and_convolution():
-    require_gpu()
+    require_metal()
     a = Image.new("RGBA", (13, 17), (40, 150, 70, 127))
     b = Image.new("RGBA", a.size, (220, 30, 60, 83))
     ga, gb = ImageGpu.from_image(a), ImageGpu.from_image(b)
@@ -312,7 +308,7 @@ def test_compositing_and_convolution():
 
 
 def test_tensor_residency_views_and_sharing(monkeypatch):
-    require_gpu()
+    require_metal()
     torch = pytest.importorskip("torch")
     if not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
         pytest.skip("PyTorch MPS shader support required")
@@ -336,7 +332,7 @@ def test_tensor_residency_views_and_sharing(monkeypatch):
 
 
 def test_validation():
-    require_gpu()
+    require_metal()
     with pytest.raises(ValueError):
         ImageGpu.from_image(Image.new("P", (2, 2)))
     resident = ImageGpu.from_image(Image.new("L", (2, 2)))
@@ -353,7 +349,7 @@ def test_validation():
 def test_float_resize(mode, method):
     import struct
 
-    require_gpu()
+    require_metal()
     channels = {"F": 1, "RGB;F": 3, "RGBA;F": 4}[mode]
     samples = [((i * 31) % 251) / 250 for i in range(13 * 17 * channels)]
     image = Image.frombytes(mode, (13, 17), struct.pack(f"{len(samples)}f", *samples))
@@ -365,7 +361,7 @@ def test_float_resize(mode, method):
 
 
 def test_torch_upload_copy_export_and_validation():
-    require_gpu()
+    require_metal()
     torch = pytest.importorskip("torch")
     if not torch.backends.mps.is_available():
         pytest.skip("MPS required")
@@ -388,7 +384,7 @@ def test_torch_upload_copy_export_and_validation():
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 def test_box_half_and_same_size(mode):
-    require_gpu()
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     image = Image.frombytes(mode, (16, 18), bytes((i * 37 + i // 7) % 256 for i in range(16 * 18 * channels)))
     gpu = ImageGpu.from_image(image)
@@ -400,7 +396,7 @@ def test_same_size_float_preserves_nonfinite():
     import math
     import struct
 
-    require_gpu()
+    require_metal()
     image = Image.frombytes("F", (3, 1), struct.pack("3f", float("inf"), -float("inf"), float("nan")))
     output = ImageGpu.from_image(image).resize(image.size).to_image().tobytes()
     a, b, c = struct.unpack("3f", output)
@@ -413,7 +409,7 @@ def test_native_download_owns_completed_pixels(floating):
 
     from blanket import _blanket
 
-    require_gpu()
+    require_metal()
     samples = [i % 251 for i in range(17 * 9 * 4)]
     data = struct.pack(f"{len(samples)}f", *samples) if floating else bytes(samples)
     source = _blanket.MetalImage(17, 9, 4, floating, data)
@@ -431,7 +427,7 @@ def test_native_download_owns_completed_pixels(floating):
 def test_native_lut_rejects_nonfinite_controls(floating, index, value):
     from blanket import _blanket
 
-    require_gpu()
+    require_metal()
     source = _blanket.MetalImage(1, 1, 3, floating, bytes(12 if floating else 3))
     controls = _blanket._gpu_lut_controls([2, 2, 2], 3, [0.0] * 24, floating)
     controls[index] = value
@@ -446,7 +442,7 @@ def test_native_control_storage_boundary(floating, control_samples):
 
     from blanket import _blanket
 
-    require_gpu()
+    require_metal()
     data = struct.pack("3f", 0.0, 0.25, 1.0) if floating else bytes((0, 34, 255))
     source = _blanket.MetalImage(3, 1, 1, floating, data)
     # Pad resize controls to immediately below, at, and above Metal's 4 KiB limit.

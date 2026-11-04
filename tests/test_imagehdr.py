@@ -6,6 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageHdr, PngImagePlugin
@@ -153,9 +154,7 @@ def test_png_hdr_metadata_roundtrip_and_pillow_interop(code):
     metadata = {"cicp": (9, code, 0, 1), "mastering_display": MASTERING, "content_light_level": (1000.0, 250.0)}
     image.info.update(metadata)
     for _ in range(2):
-        output = BytesIO()
-        image.save(output, "PNG")
-        data = output.getvalue()
+        data = encode_image(image, "PNG")
         assert data.index(b"cICP") < data.index(b"IDAT")
         assert data.index(b"mDCV") < data.index(b"IDAT")
         assert data.index(b"cLLI") < data.index(b"IDAT")

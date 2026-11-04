@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 import pytest
+from helpers import assert_pixels_equal, image_pair
 from PIL import Image as PillowImage, ImageOps as PillowOps
 
 from blanket import Image, ImageOps
@@ -21,8 +22,7 @@ def test_new_fills_serial_and_parallel_buffers(mode: str, color: object, size: t
 def test_scalar_crop_copies_complete_rows(mode: str, size: tuple[int, int]) -> None:
     sample_bytes = 4 if mode in ("I", "F") else 2
     raw = random.Random(41).randbytes(size[0] * size[1] * sample_bytes)
-    image = Image.frombytes(mode, size, raw)
-    reference = PillowImage.frombytes(mode, size, raw)
+    image, reference = image_pair(mode, size, raw)
     for box in ((1, 2, size[0] - 2, size[1] - 1), (0, 0, *size), (3, 2, 3, size[1]), (-1, -2, size[0] + 1, size[1] + 2)):
         assert image.crop(box).tobytes() == reference.crop(box).tobytes()
     assert image.tobytes() == raw
@@ -32,21 +32,18 @@ def test_scalar_crop_copies_complete_rows(mode: str, size: tuple[int, int]) -> N
 @pytest.mark.parametrize("size", [(1, 33), (33, 1), (31, 65), (32, 64), (33, 63), (803, 607)])
 def test_transpose_tile_edges(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(19).randbytes(size[0] * size[1] * len(mode))
-    image = Image.frombytes(mode, size, raw)
-    reference = PillowImage.frombytes(mode, size, raw)
+    image, reference = image_pair(mode, size, raw)
     for method in Image.Transpose:
         actual = image.transpose(method)
         expected = reference.transpose(int(method))
-        assert actual.size == expected.size
-        assert actual.tobytes() == expected.tobytes()
+        assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(30, 7), (32, 17), (34, 33), (800, 600), (1034, 1033)])
 def test_memory_kernels(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(42).randbytes(size[0] * size[1] * len(mode))
-    image = Image.frombytes(mode, size, raw)
-    reference = PillowImage.frombytes(mode, size, raw)
+    image, reference = image_pair(mode, size, raw)
     assert [band.tobytes() for band in image.split()] == [band.tobytes() for band in reference.split()]
     target = (size[0] // 2, max(1, size[1] // 2))
     assert image.resize(target, Image.Resampling.NEAREST).tobytes() == reference.resize(target, PillowImage.Resampling.NEAREST).tobytes()

@@ -7,6 +7,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import assert_pixels_equal
 from PIL import Image as PillowImage, ImageChops as PillowChops, ImageColor as PillowColor, ImageEnhance as PillowEnhance, ImageFilter as PillowFilter
 
 from blanket import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageHdr, ImageOps, ImageStat
@@ -21,31 +22,27 @@ def images(mode: str, width: int = 33, height: int = 5) -> tuple[Image.Image, Pi
     return Image.frombytes(mode, (width, height), raw), PillowImage.frombytes(mode, (width, height), raw)
 
 
-def assert_equal(actual: Image.Image | PillowImage.Image, expected: PillowImage.Image) -> None:
-    assert (actual.mode, actual.size, actual.getbands(), actual.tobytes()) == (expected.mode, expected.size, expected.getbands(), expected.tobytes())
-
-
 @pytest.mark.parametrize("mode", MODES)
 def test_storage_and_geometry(mode: str, subtests: pytest.Subtests) -> None:
     for width in [0, 1, 15, 16, 17, 33]:
         with subtests.test(mode=mode, width=width):
             actual, expected = images(mode, width)
-            assert_equal(actual, expected)
+            assert_pixels_equal(actual, expected)
             assert actual.getdata() == list(expected.get_flattened_data())
-            assert_equal(copy.copy(actual), expected.copy())
-            assert_equal(copy.deepcopy(actual), expected.copy())
-            assert_equal(actual.crop((-1, 1, width + 1, 7)), expected.crop((-1, 1, width + 1, 7)))
+            assert_pixels_equal(copy.copy(actual), expected.copy())
+            assert_pixels_equal(copy.deepcopy(actual), expected.copy())
+            assert_pixels_equal(actual.crop((-1, 1, width + 1, 7)), expected.crop((-1, 1, width + 1, 7)))
             for method in range(7):
-                assert_equal(actual.transpose(method), expected.transpose(method))
+                assert_pixels_equal(actual.transpose(method), expected.transpose(method))
             for alpha_only in (False, True):
                 assert actual.getbbox(alpha_only=alpha_only) == expected.getbbox(alpha_only=alpha_only)
             if width:
                 reference = expected.convert("I") if mode == "I;16N" else expected
                 assert actual.getextrema() == reference.getextrema()
-                assert_equal(ImageChops.offset(actual, -3, 2), PillowChops.offset(expected, -3, 2))
+                assert_pixels_equal(ImageChops.offset(actual, -3, 2), PillowChops.offset(expected, -3, 2))
             for band, reference in zip(actual.split(), expected.split(), strict=True):
-                assert_equal(band, reference)
-            assert_equal(Image.merge(mode, actual.split()), expected)
+                assert_pixels_equal(band, reference)
+            assert_pixels_equal(Image.merge(mode, actual.split()), expected)
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -55,12 +52,12 @@ def test_raw_layout_and_array_interoperability(mode: str, orientation: int) -> N
     row = len(actual.tobytes()) // actual.height
     encoded = actual.tobytes("raw", mode, row + 5, orientation)
     assert encoded == expected.tobytes("raw", mode, row + 5, orientation)
-    assert_equal(Image.frombytes(mode, actual.size, encoded, "raw", mode, row + 5, orientation), expected)
-    assert_equal(actual.to_pillow(), expected)
+    assert_pixels_equal(Image.frombytes(mode, actual.size, encoded, "raw", mode, row + 5, orientation), expected)
+    assert_pixels_equal(actual.to_pillow(), expected)
     array = np.asarray(actual)
     assert array.dtype == np.asarray(expected).dtype
     np.testing.assert_array_equal(array, np.asarray(expected))
-    assert_equal(Image.fromarray(array, mode=mode), expected)
+    assert_pixels_equal(Image.fromarray(array, mode=mode), expected)
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
@@ -71,18 +68,18 @@ def test_premultiplied_conversion_arithmetic(mode: str, width: int) -> None:
     actual = Image.frombytes(mode, (width, 1), raw)
     expected = PillowImage.frombytes(mode, (width, 1), raw)
     destination = "La" if mode == "LA" else "RGBa"
-    assert_equal(actual.convert(destination), expected.convert(destination))
-    assert_equal(actual.convert(destination).convert(mode), expected.convert(destination).convert(mode))
+    assert_pixels_equal(actual.convert(destination), expected.convert(destination))
+    assert_pixels_equal(actual.convert(destination).convert(mode), expected.convert(destination).convert(mode))
     actual = Image.frombytes(destination, (width, 1), raw)
     expected = PillowImage.frombytes(destination, (width, 1), raw)
-    assert_equal(actual.convert(mode), expected.convert(mode))
+    assert_pixels_equal(actual.convert(mode), expected.convert(mode))
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
 @pytest.mark.parametrize("color", ["red", "#ff000080", "#12345600", "#123456ff"])
 def test_color_strings(mode: str, color: str) -> None:
     assert ImageColor.getcolor(color, mode) == PillowColor.getcolor(color, mode)
-    assert_equal(Image.new(mode, (3, 2), color), PillowImage.new(mode, (3, 2), color))
+    assert_pixels_equal(Image.new(mode, (3, 2), color), PillowImage.new(mode, (3, 2), color))
 
 
 @pytest.mark.parametrize(
@@ -103,7 +100,7 @@ def test_conversions(source: str, destination: str) -> None:
         with pytest.raises(ValueError):
             actual.convert(destination)
     else:
-        assert_equal(actual.convert(destination), reference)
+        assert_pixels_equal(actual.convert(destination), reference)
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
@@ -112,26 +109,26 @@ def test_filters(mode: str, subtests: pytest.Subtests) -> None:
         with subtests.test(mode=mode, name=name):
             actual, expected = images(mode)
             if name == "BoxBlur":
-                assert_equal(actual.filter(ImageFilter.BoxBlur(2)), expected.filter(PillowFilter.BoxBlur(2)))
+                assert_pixels_equal(actual.filter(ImageFilter.BoxBlur(2)), expected.filter(PillowFilter.BoxBlur(2)))
                 return
-            assert_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
+            assert_pixels_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
 @pytest.mark.parametrize("method", range(6))
 def test_resize_and_reduce(mode: str, method: int) -> None:
     actual, expected = images(mode)
-    assert_equal(actual.resize((17, 9), method), expected.resize((17, 9), method))
-    assert_equal(actual.reduce((3, 2)), expected.reduce((3, 2)))
+    assert_pixels_equal(actual.resize((17, 9), method), expected.resize((17, 9), method))
+    assert_pixels_equal(actual.reduce((3, 2)), expected.reduce((3, 2)))
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
 @pytest.mark.parametrize("method", [0, 2, 3])
 def test_transforms(mode: str, method: int) -> None:
     actual, expected = images(mode)
-    assert_equal(actual.rotate(17, method, expand=True), expected.rotate(17, method, expand=True))
+    assert_pixels_equal(actual.rotate(17, method, expand=True), expected.rotate(17, method, expand=True))
     matrix = (0.8, 0.1, -1.0, 0.2, 1.2, 0.5)
-    assert_equal(actual.transform((19, 7), Image.AFFINE, matrix, method), expected.transform((19, 7), PillowImage.Transform.AFFINE, matrix, method))
+    assert_pixels_equal(actual.transform((19, 7), Image.AFFINE, matrix, method), expected.transform((19, 7), PillowImage.Transform.AFFINE, matrix, method))
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
@@ -142,7 +139,7 @@ def test_channel_operations(mode: str) -> None:
     for name in ("invert", "multiply", "difference", "add", "screen"):
         operation = getattr(ImageChops, name)
         reference = getattr(PillowChops, name)
-        assert_equal(operation(actual) if name == "invert" else operation(actual, actual), reference(expected) if name == "invert" else reference(expected, expected))
+        assert_pixels_equal(operation(actual) if name == "invert" else operation(actual, actual), reference(expected) if name == "invert" else reference(expected, expected))
     for name in ("Brightness", "Sharpness", "Color", "Contrast"):
         try:
             reference = getattr(PillowEnhance, name)(expected).enhance(0.7)
@@ -150,11 +147,11 @@ def test_channel_operations(mode: str) -> None:
             with pytest.raises(ValueError):
                 getattr(ImageEnhance, name)(actual)
         else:
-            assert_equal(getattr(ImageEnhance, name)(actual).enhance(0.7), reference)
+            assert_pixels_equal(getattr(ImageEnhance, name)(actual).enhance(0.7), reference)
     mask = Image.new("L", actual.size, 83)
     actual.paste(Image.new(mode, actual.size, 71), mask=mask)
     expected.paste(PillowImage.new(mode, expected.size, 71), mask=PillowImage.new("L", expected.size, 83))
-    assert_equal(actual, expected)
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
@@ -163,12 +160,12 @@ def test_alpha_promotion(mode: str, alpha: int | str) -> None:
     actual, expected = images(mode)
     actual.putalpha(Image.new("L", actual.size, 83) if alpha == "mask" else alpha)
     expected.putalpha(PillowImage.new("L", expected.size, 83) if alpha == "mask" else alpha)
-    assert_equal(actual, expected)
+    assert_pixels_equal(actual, expected)
     actual, expected = images(mode)
     before = actual.tobytes()
     with pytest.raises(ValueError):
         actual.putalpha(Image.new("L", (1, 1)))
-    assert_equal(actual, expected)
+    assert_pixels_equal(actual, expected)
     assert actual.tobytes() == before
 
 
@@ -177,8 +174,8 @@ def test_native_u16_byte_order_and_mutation() -> None:
     raw = struct.pack(f"={len(values)}H", *values)
     actual = Image.frombytes("I;16N", (len(values), 1), memoryview(b"x" + raw + b"y")[1:-1])
     expected = PillowImage.frombytes("I;16N", actual.size, raw)
-    assert_equal(actual, expected)
-    assert_equal(actual.resize((17, 3), Image.NEAREST), expected.resize((17, 3), PillowImage.Resampling.NEAREST))
+    assert_pixels_equal(actual, expected)
+    assert_pixels_equal(actual.resize((17, 3), Image.NEAREST), expected.resize((17, 3), PillowImage.Resampling.NEAREST))
     for destination, byteorder in (("I;16L", "little"), ("I;16B", "big"), ("I;16N", sys.byteorder)):
         converted = actual.convert(destination)
         assert converted.tobytes() == b"".join(v.to_bytes(2, byteorder) for v in values)
@@ -199,7 +196,7 @@ def test_native_u16_byte_order_and_mutation() -> None:
 @pytest.mark.parametrize("name", ["SMOOTH", "FIND_EDGES"])
 def test_native_u16_convolution(name: str) -> None:
     actual, expected = images("I;16N", 17, 7)
-    assert_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
+    assert_pixels_equal(actual.filter(getattr(ImageFilter, name)), expected.filter(getattr(PillowFilter, name)))
 
 
 @pytest.mark.parametrize("format", ["PNG", "TIFF"])
@@ -237,7 +234,7 @@ def test_native_u16_shared_operations() -> None:
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 def test_float_luminance_conversion_preserves_fractional_values(mode: str) -> None:
     actual, expected = images(mode)
-    assert_equal(actual.convert("F"), expected.convert("F"))
+    assert_pixels_equal(actual.convert("F"), expected.convert("F"))
 
 
 @pytest.mark.parametrize("mode", MODES)
@@ -254,4 +251,4 @@ def test_codec_restrictions_and_explicit_conversion(mode: str) -> None:
     with pytest.raises(Image.UnsupportedCodecError):
         actual.encode("PNG")
     converted = actual.convert({"La": "LA", "RGBa": "RGBA", "RGBX": "RGB"}[mode])
-    assert_equal(Image.open(BytesIO(converted.encode("PNG"))).to_pillow(), converted.to_pillow())
+    assert_pixels_equal(Image.open(BytesIO(converted.encode("PNG"))).to_pillow(), converted.to_pillow())

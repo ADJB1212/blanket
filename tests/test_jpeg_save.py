@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from helpers import encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile
@@ -18,9 +19,7 @@ def source(mode: str = "RGB", size: tuple[int, int] = (17, 9)) -> tuple[Image.Im
 
 
 def save(image: Image.Image | PillowImage.Image, **options: object) -> bytes:
-    output = BytesIO()
-    image.save(output, "JPEG", **options)
-    return output.getvalue()
+    return encode_image(image, "JPEG", **options)
 
 
 def compare(actual: bytes, expected: bytes, tolerance: int = 6) -> None:

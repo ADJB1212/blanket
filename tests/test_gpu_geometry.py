@@ -2,19 +2,12 @@ import math
 import struct
 
 import pytest
+from gpu_helpers import require_metal, runtime as metal_runtime
+from helpers import assert_pixels_equal
 
 from blanket import Image, ImageGpu
 
-
-@pytest.fixture(params=["native", "torch"])
-def runtime(request):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
-    if request.param == "torch":
-        torch = pytest.importorskip("torch")
-        if not torch.backends.mps.is_available():
-            pytest.skip("MPS required")
-    return request.param
+runtime = metal_runtime
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
@@ -53,8 +46,7 @@ def test_rotation(runtime, angle):
     image = Image.frombytes("L", (9, 7), bytes(range(63)))
     actual = ImageGpu.from_image(image, runtime=runtime).rotate(angle, expand=True).to_image()
     expected = image.rotate(angle, expand=True)
-    assert actual.size == expected.size
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 def test_geometry_validation(runtime):
@@ -129,8 +121,7 @@ def test_resident_reductions(runtime):
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(4095, 1), (4096, 1), (4097, 1), (1025, 1025)])
 def test_native_reduction_partitions(mode, size):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     image = Image.frombytes(mode, size, bytes(range(256)) * (size[0] * size[1] * channels // 256) + bytes(range(size[0] * size[1] * channels % 256)))
     gpu = ImageGpu.from_image(image, runtime="native")
@@ -147,8 +138,7 @@ def test_native_reduction_partitions(mode, size):
 
 
 def test_native_float_reduction_partitions_and_nan():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     samples = [float(i % 31 - 15) / 8 for i in range(8193)]
     image = Image.frombytes("F", (8193, 1), struct.pack("8193f", *samples))
     gpu = ImageGpu.from_image(image, runtime="native")
@@ -164,8 +154,7 @@ def test_native_float_reduction_partitions_and_nan():
 
 
 def test_native_histogram_concentrated_bins_and_pending_reuse():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     pending = []
     for value in (0, 255, 19, 71):
         gpu = ImageGpu.from_image(Image.new("RGBA", (513, 257), (value,) * 4), runtime="native")
@@ -181,8 +170,7 @@ def test_native_histogram_concentrated_bins_and_pending_reuse():
 @pytest.mark.parametrize("mask_mode", [None, "L", "F"])
 @pytest.mark.parametrize("position", [(-2, 1), (3, -2), (0, 0), (10**30, 0)])
 def test_native_paste_clipping_and_lifetime(mode, mask_mode, position):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
     floating = "F" in mode
     first, second = (0.25, 0.75) if floating else (17, 193)
@@ -214,8 +202,7 @@ def test_native_paste_clipping_and_lifetime(mode, mask_mode, position):
 
 
 def test_geometry_and_reductions_remain_resident(monkeypatch):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     torch = pytest.importorskip("torch")
     source = ImageGpu.from_torch(torch.ones((3, 5, 3), device="mps"), layout="HWC")
     mask = ImageGpu.from_torch(torch.ones((3, 5), device="mps"), layout="HW")
@@ -292,8 +279,7 @@ def test_fully_clipped_paste_still_validates_mask(runtime):
 @pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
 @pytest.mark.parametrize("mask_mode", ["L", "F"])
 def test_native_float_paste_nonfinite_channels_and_odd_rows(mode, channels, mask_mode):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     values = [math.nan, math.inf, -math.inf, -2.0, 0.0, 0.25, 1.0, 2.0]
     background_samples = [values[i % len(values)] for i in range(33 * 3 * channels)]
     source_samples = [values[(i * 3 + 1) % len(values)] for i in range(35 * 4 * channels)]

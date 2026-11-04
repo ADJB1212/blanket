@@ -3,14 +3,14 @@ import struct
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
+from gpu_helpers import require_metal
 
 from blanket import Image, ImageGpu
 
 
 @pytest.fixture
 def metal():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("native Metal required")
+    require_metal()
     ImageGpu.configure_cache()
     yield
     ImageGpu.configure_cache()

@@ -2,14 +2,14 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor
 from threading import Event as ThreadEvent
 
 import pytest
+from gpu_helpers import require_metal
 
 from blanket import Image, ImageGpu
 
 
 @pytest.fixture
 def metal():
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("native Metal required")
+    require_metal()
 
 
 @pytest.mark.parametrize("unified", [False, True])

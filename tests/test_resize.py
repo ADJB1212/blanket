@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -12,8 +13,7 @@ def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> Non
     channels = 3 if mode == "YCbCr" else len(mode)
     size = (width * 2, 34)
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(size[0] * size[1] * channels))
-    actual = Image.frombytes(mode, size, raw)
-    expected = PillowImage.frombytes(mode, size, raw)
+    actual, expected = image_pair(mode, size, raw)
     if mode in ("LA", "RGBA"):
         expected = expected.convert("La" if mode == "LA" else "RGBa")
     direct = expected.resize((width, 17), PillowImage.Resampling.BOX)
@@ -107,6 +107,5 @@ def test_resize_closed_image() -> None:
 @pytest.mark.parametrize(("size", "target"), [((2, 1024), (1, 5)), ((1024, 2), (5, 1)), ((67, 49), (1, 1))])
 def test_alpha_resize_reduction_extreme_shapes(mode: str, size: tuple[int, int], target: tuple[int, int]) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(size[0] * size[1] * len(mode)))
-    actual = Image.frombytes(mode, size, raw)
-    expected = PillowImage.frombytes(mode, size, raw)
+    actual, expected = image_pair(mode, size, raw)
     assert actual.resize(target, Image.Resampling.LANCZOS, reducing_gap=2.0).tobytes() == expected.resize(target, PillowImage.Resampling.LANCZOS, reducing_gap=2.0).tobytes()

@@ -6,6 +6,7 @@ import math
 import struct
 
 import pytest
+from helpers import image_pair, patterned_pair
 from PIL import Image as PILImage
 
 from blanket import Image
@@ -36,11 +37,6 @@ def test_float_color_extrema_preserve_band_order_nan_and_signed_zero(mode: str, 
         image.getextrema()
 
 
-def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * len(mode)))
-    return Image.frombytes(mode, (17, 13), raw), PILImage.frombytes(mode, (17, 13), raw)
-
-
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("count", [0, 17, 131073])
@@ -60,7 +56,7 @@ def test_wide_merge_writes_interleaved_sample_bytes(mode: str, depth: int, count
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "PA"])
 def test_split_band_metadata_and_lifetime_are_independent(mode: str) -> None:
-    image, _ = pair(mode)
+    image, _ = patterned_pair(mode, (17, 13), divisor=7)
     image.info["custom"] = 42
     bands = image.split()
     pixels = [band.tobytes() for band in bands]
@@ -126,7 +122,7 @@ def test_reduce(mode: str, subtests: pytest.Subtests) -> None:
     for factor in [1, 2, 3, 4, 5, (1, 3), (1, 7), (1, 100), (3, 1), (2, 5), (100, 100)]:
         for box in [None, (1, 2, 16, 12), (0, 0, 16, 12)]:
             with subtests.test(mode=mode, factor=factor, box=box):
-                image, reference = pair(mode)
+                image, reference = patterned_pair(mode, (17, 13), divisor=7)
                 image.info["custom"] = 42
                 result = image.reduce(factor, box)
                 expected = reference.reduce(factor, box)
@@ -141,12 +137,11 @@ def test_reduce(mode: str, subtests: pytest.Subtests) -> None:
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("mask_kind", [None, "empty", "partial", "full"])
 def test_entropy(mode: str, mask_kind: str | None) -> None:
-    image, reference = pair(mode)
+    image, reference = patterned_pair(mode, (17, 13), divisor=7)
     mask = pillow_mask = None
     if mask_kind is not None:
         raw = bytes((0 if mask_kind == "empty" else 255 if mask_kind == "full" else i % 3) for i in range(17 * 13))
-        mask = Image.frombytes("L", image.size, raw)
-        pillow_mask = PILImage.frombytes("L", image.size, raw)
+        mask, pillow_mask = image_pair("L", image.size, raw)
     result = image.entropy(mask, extrema=(10, 20))
     expected = reference.entropy(pillow_mask, extrema=(10, 20))
     if math.isnan(expected):
@@ -163,13 +158,13 @@ def test_constant_entropy(mode: str) -> None:
 
 @pytest.mark.parametrize(("factor", "box"), [(0, None), (-1, None), ((2, 0), None), (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
 def test_invalid_reduce(factor: object, box: object) -> None:
-    image, _ = pair("L")
+    image, _ = patterned_pair("L", (17, 13), divisor=7)
     with pytest.raises(ValueError):
         image.reduce(factor, box)
 
 
 def test_mask_validation_and_closed_images() -> None:
-    image, _ = pair("RGB")
+    image, _ = patterned_pair("RGB", (17, 13), divisor=7)
     for mask in (Image.frombytes("L", (1, 1), b"a"), image):
         with pytest.raises(ValueError):
             image.entropy(mask)

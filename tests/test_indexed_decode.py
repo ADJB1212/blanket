@@ -4,6 +4,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
+from helpers import encode_image, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -16,9 +17,7 @@ def test_indexed_png_preserves_palette_and_alpha(bits: int, transparency: int | 
     source = PillowImage.new("P", (13, 5))
     source.putpalette(bytes(value % 256 for value in range(768)))
     source.putdata([value % (1 << bits) for value in range(65)])
-    output = BytesIO()
-    source.save(output, "PNG", bits=bits, transparency=transparency)
-    encoded = output.getvalue()
+    encoded = encode_image(source, "PNG", bits=bits, transparency=transparency)
     expected = PillowImage.open(BytesIO(encoded))
     actual = Image.open(BytesIO(encoded))
     assert actual.mode == expected.mode == "P"
@@ -39,9 +38,7 @@ def test_single_frame_gif_preserves_indices(transparency: int | None, lazy: bool
     source = PillowImage.new("P", (13, 5))
     source.putpalette(bytes(value % 256 for value in range(768)))
     source.putdata([value % 4 for value in range(65)])
-    output = BytesIO()
-    source.save(output, "GIF", transparency=transparency)
-    encoded = output.getvalue()
+    encoded = encode_image(source, "GIF", transparency=transparency)
     expected = PillowImage.open(BytesIO(encoded))
     actual = Image.open(BytesIO(encoded), lazy=lazy)
     assert actual.mode == expected.mode == "P"
@@ -55,8 +52,7 @@ def test_single_frame_gif_preserves_indices(transparency: int | None, lazy: bool
 def test_gif_save_matches_pillow_quantization(mode: str) -> None:
     size = (37, 29)
     raw = Random(914).randbytes(size[0] * size[1] * len(mode))
-    actual = Image.frombytes(mode, size, raw)
-    expected = PillowImage.frombytes(mode, size, raw)
+    actual, expected = image_pair(mode, size, raw)
     if mode == "P":
         palette = Random(915).randbytes(768)
         actual.putpalette(palette)
@@ -78,9 +74,7 @@ def test_gif_frame_modes_match_pillow(transparent: bool, lazy: bool) -> None:
     if transparent:
         for frame in frames:
             frame.putpixel((0, 0), (0, 0, 0, 0))
-    output = BytesIO()
-    frames[0].save(output, "GIF", save_all=True, append_images=frames[1:], duration=30)
-    encoded = output.getvalue()
+    encoded = encode_image(frames[0], "GIF", save_all=True, append_images=frames[1:], duration=30)
     expected = PillowImage.open(BytesIO(encoded))
     actual = Image.open(BytesIO(encoded), lazy=lazy)
     for position in (0, 2, 1, 0):

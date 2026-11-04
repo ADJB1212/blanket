@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile, UnidentifiedImageError
@@ -16,9 +17,7 @@ if TYPE_CHECKING:
 def encoded(mode: str) -> bytes:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
     raw = random.Random(74).randbytes(33 * 19 * channels)
-    output = BytesIO()
-    Image.frombytes(mode, (33, 19), raw).save(output, "JXL", lossless=True)
-    return output.getvalue()
+    return encode_image(Image.frombytes(mode, (33, 19), raw), "JXL", lossless=True)
 
 
 @pytest.mark.parametrize("container", [False, True])

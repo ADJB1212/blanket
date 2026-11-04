@@ -3,6 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -139,8 +140,7 @@ def test_raw_buffers_match_pillow(mode, rawmode, subtests: pytest.Subtests):
                 with subtests.test(mode=mode, rawmode=rawmode, width=width, padding=padding, orientation=orientation):
                     size = (width, 3)
                     raw = bytes((i * 37 + i // 7) % 256 for i in range(width * 3 * len(mode)))
-                    actual = Image.frombytes(mode, size, raw)
-                    expected = PillowImage.frombytes(mode, size, raw)
+                    actual, expected = image_pair(mode, size, raw)
                     stride = width * len(rawmode) + padding
                     args = (rawmode, stride, orientation)
                     encoded = actual.tobytes("raw", *args)

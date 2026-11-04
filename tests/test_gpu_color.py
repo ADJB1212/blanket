@@ -2,22 +2,12 @@ import math
 import struct
 
 import pytest
+from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
+from helpers import float_samples
 
 from blanket import Image, ImageEnhance, ImageFilter, ImageGpu
 
-MODES = ("L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F")
-CHANNELS = dict(zip(MODES, (1, 2, 3, 4, 1, 3, 4), strict=True))
-
-
-@pytest.fixture(params=("native", "torch"))
-def runtime(request):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal feature and device required")
-    if request.param == "torch":
-        torch = pytest.importorskip("torch")
-        if not torch.backends.mps.is_available() or not hasattr(torch.mps, "compile_shader"):
-            pytest.skip("PyTorch MPS shader support required")
-    return request.param
+runtime = shader_runtime
 
 
 def source(mode, size=(17, 11), seed=0):
@@ -29,16 +19,10 @@ def source(mode, size=(17, 11), seed=0):
     return image
 
 
-def floats(image):
-    data = image.tobytes()
-    return struct.unpack(f"{len(data) // 4}f", data)
-
-
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "RGB;F", "RGBA;F"])
 @pytest.mark.parametrize("channels", [3, 4])
 def test_native_color_lut_keeps_controls_in_rust(mode, channels, monkeypatch):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal feature and device required")
+    require_metal()
     gpu = ImageGpu.from_image(source(mode), unified_memory=True)
     output_mode = ("RGBA;F" if "F" in mode else "RGBA") if channels == 4 else mode
     lut = ImageFilter.Color3DLUT.generate((3, 4, 5), lambda r, g, b: (r * 0.8, g * 0.7, b * 0.9, 0.25)[:channels], channels=channels, target_mode=output_mode)
@@ -59,7 +43,7 @@ def test_native_color_lut_keeps_controls_in_rust(mode, channels, monkeypatch):
 def assert_images_equal(actual, expected):
     assert actual.mode == expected.mode and actual.size == expected.size
     if "F" in expected.mode:
-        assert floats(actual) == pytest.approx(floats(expected), rel=1e-5, abs=2e-6, nan_ok=True)
+        assert float_samples(actual) == pytest.approx(float_samples(expected), rel=1e-5, abs=2e-6, nan_ok=True)
     else:
         assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=True)) <= 1
 
@@ -101,17 +85,17 @@ def test_float_enhancements(runtime, mode):
     expected = [0.0, 40.0] if mode == "F" else [-0.5, -0.5, -0.5, 1.5, 1.5, 1.5]
     if channels == 4:
         expected = [*expected[:3], 0.25, *expected[3:], 0.75]
-    assert floats(gpu.contrast(2).to_image()) == pytest.approx(expected)
+    assert float_samples(gpu.contrast(2).to_image()) == pytest.approx(expected)
     assert gpu.sharpness(0).to_image().tobytes() == image.tobytes()
     if channels >= 3:
         red = Image.frombytes(mode, (1, 1), struct.pack(f"{channels}f", *([1, 0, 0] + ([-0.25] if channels == 4 else []))))
         expected = [0.299] * 3 + ([-0.25] if channels == 4 else [])
-        assert floats(ImageGpu.from_image(red, runtime=runtime).color(0).to_image()) == pytest.approx(expected)
+        assert float_samples(ImageGpu.from_image(red, runtime=runtime).color(0).to_image()) == pytest.approx(expected)
     impulse = [0.0] * (9 * channels)
     for channel in range(channels):
         impulse[4 * channels + channel] = 1.0
     image = Image.frombytes(mode, (3, 3), struct.pack(f"{len(impulse)}f", *impulse))
-    actual = floats(ImageGpu.from_image(image, runtime=runtime).sharpness(2).to_image())
+    actual = float_samples(ImageGpu.from_image(image, runtime=runtime).sharpness(2).to_image())
     expected = impulse.copy()
     for channel in range(3 if channels == 4 else channels):
         expected[4 * channels + channel] = 21 / 13
@@ -142,7 +126,7 @@ def test_float_color_lut(runtime, mode):
     image = source(mode)
     gpu = ImageGpu.from_image(image, runtime=runtime)
     lut = ImageFilter.Color3DLUT.generate((3, 4, 5), lambda r, g, b: (r * 0.5 - 0.25, g * 2, 1 - b))
-    samples = floats(image)
+    samples = float_samples(image)
     expected = []
     channels = CHANNELS[mode]
     for i in range(0, len(samples), channels):
@@ -150,11 +134,11 @@ def test_float_color_lut(runtime, mode):
         expected.extend((r * 0.5 - 0.25, g * 2, 1 - b))
         if channels == 4:
             expected.append(samples[i + 3])
-    assert floats(gpu.color_lut(lut).to_image()) == pytest.approx(expected, rel=1e-5, abs=1e-6)
+    assert float_samples(gpu.color_lut(lut).to_image()) == pytest.approx(expected, rel=1e-5, abs=1e-6)
     rgba = ImageFilter.Color3DLUT.generate(2, lambda r, g, b: (r, g, b, 1.5), channels=4, target_mode="RGBA;F")
     actual = gpu.color_lut(rgba)
     assert actual.mode == "RGBA;F"
-    assert floats(actual.getchannel("A").to_image()) == (1.5,) * (image.width * image.height)
+    assert float_samples(actual.getchannel("A").to_image()) == (1.5,) * (image.width * image.height)
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "RGB;F", "RGBA;F"])
@@ -211,11 +195,11 @@ def test_nonfinite_enhancements_and_transfer(runtime):
     for method in ("color", "contrast", "sharpness"):
         assert getattr(gpu, method)(1).to_image().tobytes() == image.tobytes()
     actual = gpu.resize((3, 1), linear_light=True).to_image()
-    assert floats(actual) == (0.0,) * 12
-    mean = floats(gpu.contrast(0).to_image())
+    assert float_samples(actual) == (0.0,) * 12
+    mean = float_samples(gpu.contrast(0).to_image())
     assert math.isnan(mean[0]) and math.isnan(mean[4])
     identity = ImageFilter.Color3DLUT.generate(2, lambda r, g, b: (r, g, b))
-    output = floats(gpu.color_lut(identity).to_image())
+    output = float_samples(gpu.color_lut(identity).to_image())
     assert output[:4] == (1.0, 0.0, 0.0, 0.0)
     assert math.isnan(output[7])
 
@@ -248,8 +232,7 @@ def test_validation(runtime):
 
 
 def test_resident_mps_color_pipeline(monkeypatch):
-    if not ImageGpu.capabilities()["available"]:
-        pytest.skip("Metal required")
+    require_metal()
     torch = pytest.importorskip("torch")
     if not torch.backends.mps.is_available():
         pytest.skip("MPS required")

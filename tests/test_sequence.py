@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -234,8 +235,7 @@ def test_tiff_special_mode_on_later_page(mode: str) -> None:
     assert actual.mode == mode
     if mode == "I;16":
         assert actual.bit_depth == 16
-    assert actual.size == second.size
-    assert actual.tobytes() == second.tobytes()
+    assert_pixels_equal(actual, second)
 
 
 @pytest.mark.parametrize("duration", [0.0, 0.5, 1.25, 1000 / 3, 32768000, 65535000])
@@ -452,9 +452,7 @@ def test_apng_modes_and_transparency_match_pillow(mode: str, blend: int) -> None
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "TIFF"])
 def test_truncated_later_frame_is_rejected_at_open(format: str) -> None:
     first = PillowImage.new("RGB", (17, 13), "red")
-    stream = BytesIO()
-    first.save(stream, format, save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
-    data = stream.getvalue()
+    data = encode_image(first, format, save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
     with pytest.raises(UnidentifiedImageError):
         Image.open(BytesIO(data[: len(data) * 3 // 4]))
 

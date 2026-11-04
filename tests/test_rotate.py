@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -13,8 +14,7 @@ from blanket import Image
 @pytest.mark.parametrize("method", [0, 2, 3])
 def test_rotate_parity(mode: str, size: tuple[int, int], method: int, subtests: pytest.Subtests) -> None:
     data = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
-    image = Image.frombytes(mode, size, data)
-    reference = PillowImage.frombytes(mode, size, data)
+    image, reference = image_pair(mode, size, data)
     for angle in (0, 90, 180, 270, 45, -32.5, 721):
         for options in ({}, {"expand": True}, {"center": (2.25, 4.5)}, {"translate": (3, -2)}, {"expand": True, "center": (1, 3), "translate": (-2.5, 1)}, {"expand": True, "fillcolor": "#12345680"}):
             with subtests.test(angle=angle, options=options):

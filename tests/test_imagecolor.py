@@ -8,162 +8,108 @@ from PIL import ImageColor as PillowColor
 from blanket import Image, ImageColor, ImageDraw, ImageOps
 
 
-def test_hash() -> None:
-    # short 3 components
-    assert ImageColor.getrgb("#f00") == (255, 0, 0)
-    assert ImageColor.getrgb("#0f0") == (0, 255, 0)
-    assert ImageColor.getrgb("#00f") == (0, 0, 255)
+@pytest.mark.parametrize(
+    "color,expected",
+    [
+        ("#f00", (255, 0, 0)),
+        ("#0f0", (0, 255, 0)),
+        ("#00f", (0, 0, 255)),
+        ("#f000", (255, 0, 0, 0)),
+        ("#0f00", (0, 255, 0, 0)),
+        ("#00f0", (0, 0, 255, 0)),
+        ("#000f", (0, 0, 0, 255)),
+        ("#de0000", (222, 0, 0)),
+        ("#00de00", (0, 222, 0)),
+        ("#0000de", (0, 0, 222)),
+        ("#de000000", (222, 0, 0, 0)),
+        ("#00de0000", (0, 222, 0, 0)),
+        ("#0000de00", (0, 0, 222, 0)),
+        ("#000000de", (0, 0, 0, 222)),
+        ("#DEF", ImageColor.getrgb("#def")),
+        ("#CDEF", ImageColor.getrgb("#cdef")),
+        ("#DEFDEF", ImageColor.getrgb("#defdef")),
+        ("#CDEFCDEF", ImageColor.getrgb("#cdefcdef")),
+        ("rgb(255,0,0)", (255, 0, 0)),
+        ("rgb(0,255,0)", (0, 255, 0)),
+        ("rgb(0,0,255)", (0, 0, 255)),
+        ("rgb(100%,0%,0%)", (255, 0, 0)),
+        ("rgb(0%,100%,0%)", (0, 255, 0)),
+        ("rgb(0%,0%,100%)", (0, 0, 255)),
+        ("rgba(255,0,0,0)", (255, 0, 0, 0)),
+        ("rgba(0,255,0,0)", (0, 255, 0, 0)),
+        ("rgba(0,0,255,0)", (0, 0, 255, 0)),
+        ("rgba(0,0,0,255)", (0, 0, 0, 255)),
+        ("hsl(0,100%,50%)", (255, 0, 0)),
+        ("hsl(360,100%,50%)", (255, 0, 0)),
+        ("hsl(180,100%,50%)", (0, 255, 255)),
+        ("hsv(0,100%,100%)", (255, 0, 0)),
+        ("hsv(360,100%,100%)", (255, 0, 0)),
+        ("hsv(180,100%,100%)", (0, 255, 255)),
+        ("hsb(0,100%,50%)", ImageColor.getrgb("hsv(0,100%,50%)")),
+        ("hsl(0.1,99.2%,50.3%)", (254, 3, 3)),
+        ("hsl(360.,100.0%,50%)", (255, 0, 0)),
+        ("hsv(0.1,99.2%,99.3%)", (253, 2, 2)),
+        ("hsv(360.,100.0%,100%)", (255, 0, 0)),
+        ("RGB(255,0,0)", ImageColor.getrgb("rgb(255,0,0)")),
+        ("RGB(100%,0%,0%)", ImageColor.getrgb("rgb(100%,0%,0%)")),
+        ("RGBA(255,0,0,0)", ImageColor.getrgb("rgba(255,0,0,0)")),
+        ("HSL(0,100%,50%)", ImageColor.getrgb("hsl(0,100%,50%)")),
+        ("HSV(0,100%,50%)", ImageColor.getrgb("hsv(0,100%,50%)")),
+        ("HSB(0,100%,50%)", ImageColor.getrgb("hsb(0,100%,50%)")),
+        ("rgb(  255  ,  0  ,  0  )", (255, 0, 0)),
+        ("rgb(  100%  ,  0%  ,  0%  )", (255, 0, 0)),
+        ("rgba(  255  ,  0  ,  0  ,  0  )", (255, 0, 0, 0)),
+        ("hsl(  0  ,  100%  ,  50%  )", (255, 0, 0)),
+        ("hsv(  0  ,  100%  ,  100%  )", (255, 0, 0)),
+        ("black", (0, 0, 0)),
+        ("white", (255, 255, 255)),
+        ("WHITE", (255, 255, 255)),
+    ],
+)
+def test_getrgb_formats(color: str, expected: tuple[int, ...]) -> None:
+    assert ImageColor.getrgb(color) == expected
 
-    # short 4 components
-    assert ImageColor.getrgb("#f000") == (255, 0, 0, 0)
-    assert ImageColor.getrgb("#0f00") == (0, 255, 0, 0)
-    assert ImageColor.getrgb("#00f0") == (0, 0, 255, 0)
-    assert ImageColor.getrgb("#000f") == (0, 0, 0, 255)
 
-    # long 3 components
-    assert ImageColor.getrgb("#de0000") == (222, 0, 0)
-    assert ImageColor.getrgb("#00de00") == (0, 222, 0)
-    assert ImageColor.getrgb("#0000de") == (0, 0, 222)
-
-    # long 4 components
-    assert ImageColor.getrgb("#de000000") == (222, 0, 0, 0)
-    assert ImageColor.getrgb("#00de0000") == (0, 222, 0, 0)
-    assert ImageColor.getrgb("#0000de00") == (0, 0, 222, 0)
-    assert ImageColor.getrgb("#000000de") == (0, 0, 0, 222)
-
-    # case insensitivity
-    assert ImageColor.getrgb("#DEF") == ImageColor.getrgb("#def")
-    assert ImageColor.getrgb("#CDEF") == ImageColor.getrgb("#cdef")
-    assert ImageColor.getrgb("#DEFDEF") == ImageColor.getrgb("#defdef")
-    assert ImageColor.getrgb("#CDEFCDEF") == ImageColor.getrgb("#cdefcdef")
-
-    # not a number
+@pytest.mark.parametrize(
+    "color",
+    [
+        "#fo0",
+        "#fo00",
+        "#fo0000",
+        "#fo000000",
+        "#f0000",
+        "#f000000",
+        "#f00000000",
+        "#f000000000",
+        "#f00000 ",
+        "rgb(255,0)",
+        "rgb(255,0,0,0)",
+        "rgb(100%,0%)",
+        "rgb(100%,0%,0)",
+        "rgb(100%,0%,0 %)",
+        "rgb(100%,0%,0%,0%)",
+        "rgba(255,0,0)",
+        "rgba(255,0,0,0,0)",
+        "hsl(0,100%)",
+        "hsl(0,100%,0%,0%)",
+        "hsl(0%,100%,50%)",
+        "hsl(0,100,50%)",
+        "hsl(0,100%,50)",
+        "hsv(0,100%)",
+        "hsv(0,100%,0%,0%)",
+        "hsv(0%,100%,50%)",
+        "hsv(0,100,50%)",
+        "hsv(0,100%,50)",
+        "black ",
+    ],
+)
+def test_getrgb_invalid_formats(color: str) -> None:
     with pytest.raises(ValueError):
-        ImageColor.getrgb("#fo0")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#fo00")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#fo0000")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#fo000000")
-
-    # wrong number of components
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#f0000")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#f000000")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#f00000000")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#f000000000")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("#f00000 ")
+        ImageColor.getrgb(color)
 
 
 def test_transparent_keyword_extension() -> None:
     assert ImageColor.getrgb("transparent") == (0, 0, 0, 0)
-
-
-def test_colormap() -> None:
-    assert ImageColor.getrgb("black") == (0, 0, 0)
-    assert ImageColor.getrgb("white") == (255, 255, 255)
-    assert ImageColor.getrgb("WHITE") == (255, 255, 255)
-
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("black ")
-
-
-def test_functions() -> None:
-    # rgb numbers
-    assert ImageColor.getrgb("rgb(255,0,0)") == (255, 0, 0)
-    assert ImageColor.getrgb("rgb(0,255,0)") == (0, 255, 0)
-    assert ImageColor.getrgb("rgb(0,0,255)") == (0, 0, 255)
-
-    # percents
-    assert ImageColor.getrgb("rgb(100%,0%,0%)") == (255, 0, 0)
-    assert ImageColor.getrgb("rgb(0%,100%,0%)") == (0, 255, 0)
-    assert ImageColor.getrgb("rgb(0%,0%,100%)") == (0, 0, 255)
-
-    # rgba numbers
-    assert ImageColor.getrgb("rgba(255,0,0,0)") == (255, 0, 0, 0)
-    assert ImageColor.getrgb("rgba(0,255,0,0)") == (0, 255, 0, 0)
-    assert ImageColor.getrgb("rgba(0,0,255,0)") == (0, 0, 255, 0)
-    assert ImageColor.getrgb("rgba(0,0,0,255)") == (0, 0, 0, 255)
-
-    assert ImageColor.getrgb("hsl(0,100%,50%)") == (255, 0, 0)
-    assert ImageColor.getrgb("hsl(360,100%,50%)") == (255, 0, 0)
-    assert ImageColor.getrgb("hsl(180,100%,50%)") == (0, 255, 255)
-
-    assert ImageColor.getrgb("hsv(0,100%,100%)") == (255, 0, 0)
-    assert ImageColor.getrgb("hsv(360,100%,100%)") == (255, 0, 0)
-    assert ImageColor.getrgb("hsv(180,100%,100%)") == (0, 255, 255)
-
-    # alternate format
-    assert ImageColor.getrgb("hsb(0,100%,50%)") == ImageColor.getrgb("hsv(0,100%,50%)")
-
-    # floats
-    assert ImageColor.getrgb("hsl(0.1,99.2%,50.3%)") == (254, 3, 3)
-    assert ImageColor.getrgb("hsl(360.,100.0%,50%)") == (255, 0, 0)
-
-    assert ImageColor.getrgb("hsv(0.1,99.2%,99.3%)") == (253, 2, 2)
-    assert ImageColor.getrgb("hsv(360.,100.0%,100%)") == (255, 0, 0)
-
-    # case insensitivity
-    assert ImageColor.getrgb("RGB(255,0,0)") == ImageColor.getrgb("rgb(255,0,0)")
-    assert ImageColor.getrgb("RGB(100%,0%,0%)") == ImageColor.getrgb("rgb(100%,0%,0%)")
-    assert ImageColor.getrgb("RGBA(255,0,0,0)") == ImageColor.getrgb("rgba(255,0,0,0)")
-    assert ImageColor.getrgb("HSL(0,100%,50%)") == ImageColor.getrgb("hsl(0,100%,50%)")
-    assert ImageColor.getrgb("HSV(0,100%,50%)") == ImageColor.getrgb("hsv(0,100%,50%)")
-    assert ImageColor.getrgb("HSB(0,100%,50%)") == ImageColor.getrgb("hsb(0,100%,50%)")
-
-    # space agnosticism
-    assert ImageColor.getrgb("rgb(  255  ,  0  ,  0  )") == (255, 0, 0)
-    assert ImageColor.getrgb("rgb(  100%  ,  0%  ,  0%  )") == (255, 0, 0)
-    assert ImageColor.getrgb("rgba(  255  ,  0  ,  0  ,  0  )") == (255, 0, 0, 0)
-    assert ImageColor.getrgb("hsl(  0  ,  100%  ,  50%  )") == (255, 0, 0)
-    assert ImageColor.getrgb("hsv(  0  ,  100%  ,  100%  )") == (255, 0, 0)
-
-    # wrong number of components
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(255,0)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(255,0,0,0)")
-
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(100%,0%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(100%,0%,0)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(100%,0%,0 %)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgb(100%,0%,0%,0%)")
-
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgba(255,0,0)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("rgba(255,0,0,0,0)")
-
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsl(0,100%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsl(0,100%,0%,0%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsl(0%,100%,50%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsl(0,100,50%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsl(0,100%,50)")
-
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsv(0,100%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsv(0,100%,0%,0%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsv(0%,100%,50%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsv(0,100,50%)")
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("hsv(0,100%,50)")
 
 
 # look for rounding errors (based on code by Tim Hatch)
@@ -217,10 +163,7 @@ def test_color_premultiplied_alpha(mode: str, premultiplied_mode: str, color: st
 
 
 def test_color_too_long() -> None:
-    # Arrange
     color_too_long = "hsl(" + "1" * 40 + "," + "1" * 40 + "%," + "1" * 40 + "%)"
-
-    # Act / Assert
     with pytest.raises(ValueError):
         ImageColor.getrgb(color_too_long)
 

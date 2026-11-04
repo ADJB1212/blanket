@@ -120,14 +120,9 @@ def test_trns_p(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("mode", ("LA", "PA", "RGBA"))
 def test_trns_p_transparency(mode: str) -> None:
-    # Arrange
     im = hopper("P")
     im.info["transparency"] = 128
-
-    # Act
     converted_im = im.convert(mode)
-
-    # Assert
     assert "transparency" not in converted_im.info
     if mode == "PA":
         assert converted_im.palette is not None
@@ -271,44 +266,30 @@ rgb2xyz_matrix = (
 
 
 def test_matrix_illegal_conversion() -> None:
-    # Arrange
     im = hopper("CMYK")
     assert im.mode != "RGB"
-
-    # Act / Assert
     with pytest.raises(ValueError, match="illegal conversion"):
         im.convert(mode="CMYK", matrix=rgb2xyz_matrix)
 
 
 def test_matrix_wrong_mode() -> None:
-    # Arrange
     im = hopper("L")
-
-    # Act / Assert
     with pytest.raises(ValueError, match="image has wrong mode"):
         im.convert(mode="L", matrix=rgb2xyz_matrix)
 
 
 def test_matrix_truncated() -> None:
-    # Arrange
     im = hopper()
-
-    # Act / Assert
     with pytest.raises(TypeError, match="matrix must be tuple of length 4 or 12"):
         im.convert(mode="L", matrix=(0,))
 
 
 @pytest.mark.parametrize("mode", ("RGB", "L"))
 def test_matrix_xyz(mode: str) -> None:
-    # Arrange
     im = hopper("RGB")
     im.info["transparency"] = (255, 0, 0)
-
-    # Act
     # Convert an RGB image to the CIE XYZ colour space
     converted_im = im.convert(mode=mode, matrix=rgb2xyz_matrix)
-
-    # Assert
     assert converted_im.mode == mode
     assert converted_im.size == im.size
     with Image.open(PILLOW_IMAGES / "hopper-XYZ.png") as target:
@@ -321,19 +302,14 @@ def test_matrix_xyz(mode: str) -> None:
 
 
 def test_matrix_identity() -> None:
-    # Arrange
     im = hopper("RGB")
     identity_matrix = (
         1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, 1, 0,
     )  # fmt: skip
-
-    # Act
     # Convert with an identity matrix
     converted_im = im.convert("RGB", identity_matrix)
-
-    # Assert
     # No change
     assert_image_equal(converted_im, im)
 

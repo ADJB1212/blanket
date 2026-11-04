@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from helpers import encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, JpegImagePlugin
@@ -12,9 +13,7 @@ def jpeg(mode="RGB", size=(32, 48), *, subsampling=0, progressive=False, **metad
     channels = len(PillowImage.new(mode, (1, 1)).getbands())
     pixels = bytes((x * 17 + y * 31 + c * 59) % 256 for y in range(size[1]) for x in range(size[0]) for c in range(channels))
     source = PillowImage.frombytes(mode, size, pixels)
-    stream = BytesIO()
-    source.save(stream, "JPEG", quality=87, subsampling=subsampling, progressive=progressive, **metadata)
-    return stream.getvalue()
+    return encode_image(source, "JPEG", quality=87, subsampling=subsampling, progressive=progressive, **metadata)
 
 
 def decoded(data):
@@ -104,9 +103,7 @@ def test_metadata_policy_is_explicit_and_preserve_does_not_apply_orientation():
     exif_bytes = exif.tobytes()
     icc = b"test ICC profile" * 6000
     xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">packet</x:xmpmeta>'
-    stream = BytesIO()
-    Image.new("RGB", (32, 48), (50, 100, 150)).save(stream, "JPEG", exif=exif_bytes, icc_profile=icc, xmp=xmp)
-    data = stream.getvalue()
+    data = encode_image(Image.new("RGB", (32, 48), (50, 100, 150)), "JPEG", exif=exif_bytes, icc_profile=icc, xmp=xmp)
     comment = b"sample comment"
     data = data[:2] + b"\xff\xfe" + (len(comment) + 2).to_bytes(2, "big") + comment + data[2:]
     preserved = JpegImagePlugin.transform(data, Image.ROTATE_90, metadata="preserve")

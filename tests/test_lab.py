@@ -4,6 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -55,7 +56,7 @@ def test_conversion_routes(mode: str) -> None:
 
 def test_operations() -> None:
     raw = random.Random(31).randbytes(17 * 13 * 3)
-    actual, expected = Image.frombytes("LAB", (17, 13), raw), PIL.frombytes("LAB", (17, 13), raw)
+    actual, expected = image_pair("LAB", (17, 13), raw)
     for name in ("Brightness", "Sharpness"):
         reference = PIL.frombytes("RGB", expected.size, bytes(v for pixel in actual.getdata() for v in pixel))
         enhanced = getattr(PILEnhance, name)(reference).enhance(0.6)

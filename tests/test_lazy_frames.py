@@ -5,6 +5,7 @@ import zlib
 from io import BytesIO
 
 import pytest
+from helpers import assert_pixels_equal, encode_image, png_chunk
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -17,9 +18,7 @@ def sequence_data(format="PNG", **options):
         frames = [PillowImage.new("RGBA", (13, 7), "white") for _ in range(3)]
     for i, color in enumerate(("red", "green", "blue")):
         frames[i].paste(color, (i * 4, 0, i * 4 + 5, 5))
-    stream = BytesIO()
-    frames[0].save(stream, format, save_all=True, append_images=frames[1:], duration=[20, 40, 60], loop=2, **options)
-    return stream.getvalue()
+    return encode_image(frames[0], format, save_all=True, append_images=frames[1:], duration=[20, 40, 60], loop=2, **options)
 
 
 @pytest.mark.parametrize("format", ["PNG", "GIF", "WEBP"])
@@ -163,7 +162,7 @@ def test_lazy_tiff_jpeg_pages():
     for i in (1, 0, 1):
         lazy.seek(i)
         pillow.seek(i)
-        assert (lazy.mode, lazy.size, lazy.tobytes()) == (pillow.mode, pillow.size, pillow.tobytes())
+        assert_pixels_equal(lazy, pillow)
 
 
 def test_lazy_webp_alpha_matches_eager():
@@ -222,10 +221,6 @@ def test_lazy_iteration_saving_and_position_restoration(format):
     with pytest.raises(RuntimeError, match="callback"):
         ImageSequence.all_frames(image, fail)
     assert image.tell() == 1
-
-
-def png_chunk(kind, data):
-    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
 
 def test_lazy_defers_bad_compressed_frame_and_preserves_position():
@@ -326,8 +321,7 @@ def test_lazy_save_current_frame_and_replaced_cached_raster():
     expected = image.copy()
     image.seek(0)
     image.seek(1)
-    assert image.size == expected.size
-    assert image.tobytes() == expected.tobytes()
+    assert_pixels_equal(image, expected)
     output = BytesIO()
     image.save(output, "PNG")
     reopened = Image.open(output)

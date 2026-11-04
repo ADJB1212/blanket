@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_pixels_equal
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageMetadata
@@ -95,7 +96,7 @@ def test_file_save_matches_stream(tmp_path: Path, mode: str, depth: int, format:
     with PillowImage.open(path) as actual, PillowImage.open(BytesIO(output.getvalue())) as expected:
         actual.load()
         expected.load()
-        assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
+        assert_pixels_equal(actual, expected)
 
 
 def test_file_save_encoding_failure_preserves_existing_file(tmp_path: Path) -> None:

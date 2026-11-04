@@ -3,13 +3,10 @@ from __future__ import annotations
 import random
 
 import pytest
+from helpers import assert_pixels_equal, image_pair
 from PIL import Image as PIL
 
 from blanket import Image
-
-
-def assert_same(actual: Image.Image, expected: PIL.Image) -> None:
-    assert (actual.mode, actual.size, actual.tobytes()) == (expected.mode, expected.size, expected.tobytes())
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
@@ -19,9 +16,9 @@ def test_new(mode, subtests: pytest.Subtests):
             with subtests.test(mode=mode, size=size, color=color):
                 actual, expected = Image.new(mode, size, color), PIL.new(mode, size, color)
                 if color is not None:
-                    assert_same(actual, expected)
+                    assert_pixels_equal(actual, expected)
                     if mode == "P":
-                        assert_same(actual.convert("RGB"), expected.convert("RGB"))
+                        assert_pixels_equal(actual.convert("RGB"), expected.convert("RGB"))
                 assert actual.size == size
 
 
@@ -40,7 +37,7 @@ def test_paste(mode, subtests: pytest.Subtests):
                     bmask = Image.frombytes(mask_mode, mask.size, mask.tobytes()) if mask else None
                     assert actual.paste(source, position, bmask) is None
                     background.paste(foreground, position, mask)
-                    assert_same(actual, background)
+                    assert_pixels_equal(actual, background)
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
@@ -52,11 +49,11 @@ def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, subtests: py
                 rng = random.Random(71)
                 raw = rng.randbytes(7 * 6 * sample_bytes)
                 source_raw = rng.randbytes(source_size[0] * source_size[1] * sample_bytes)
-                actual, expected = Image.frombytes(mode, (7, 6), raw), PIL.frombytes(mode, (7, 6), raw)
+                actual, expected = image_pair(mode, (7, 6), raw)
                 source = Image.frombytes(mode, source_size, source_raw)
                 actual.paste(source, position)
                 expected.paste(PIL.frombytes(mode, source_size, source_raw), position)
-                assert_same(actual, expected)
+                assert_pixels_equal(actual, expected)
                 assert source.tobytes() == source_raw
 
 
@@ -67,11 +64,11 @@ def test_paste_fill_and_alias(mode, color):
     expected.paste(color, (-1, 1, 4, 3))
     actual.paste(actual, (1, 0))
     expected.paste(expected.copy(), (1, 0))
-    assert_same(actual, expected)
+    assert_pixels_equal(actual, expected)
     amask, pmask = Image.new("L", (6, 5), 127), PIL.new("L", (6, 5), 127)
     actual.paste(color, amask)
     expected.paste(color, pmask)
-    assert_same(actual, expected)
+    assert_pixels_equal(actual, expected)
 
 
 def test_alpha_composite_rounding():
@@ -79,16 +76,16 @@ def test_alpha_composite_rounding():
     a, b = [PIL.frombytes("RGBA", (257, 257), rng.randbytes(257 * 257 * 4)) for _ in range(2)]
     ba, bb = [Image.frombytes("RGBA", im.size, im.tobytes()) for im in (a, b)]
     original = ba.tobytes()
-    assert_same(Image.alpha_composite(ba, bb), PIL.alpha_composite(a, b))
+    assert_pixels_equal(Image.alpha_composite(ba, bb), PIL.alpha_composite(a, b))
     assert ba.tobytes() == original
     for dest, source in [((0, 0), (0, 0)), ((-3, 2), (1, 2, 20, 30)), ((250, 250), (1, 1, 12, 12)), ((0, 0), (250, 250, 260, 260))]:
         ac, ec = ba.copy(), a.copy()
         assert ac.alpha_composite(bb, dest, source) is None
         ec.alpha_composite(b, dest, source)
-        assert_same(ac, ec)
+        assert_pixels_equal(ac, ec)
     ba.alpha_composite(ba)
     a.alpha_composite(a.copy())
-    assert_same(ba, a)
+    assert_pixels_equal(ba, a)
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
@@ -98,22 +95,22 @@ def test_putalpha(mode, alpha):
     actual.info["custom"] = "kept"
     if alpha == "band":
         raw = random.Random(16).randbytes(35)
-        aa, pa = Image.frombytes("L", (7, 5), raw), PIL.frombytes("L", (7, 5), raw)
+        aa, pa = image_pair("L", (7, 5), raw)
     else:
         aa = pa = alpha
     assert actual.putalpha(aa) is None
     expected.putalpha(pa)
-    assert_same(actual, expected)
+    assert_pixels_equal(actual, expected)
     assert actual.info["custom"] == "kept"
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_merge(mode):
     raw = random.Random(92).randbytes(35 * len(mode))
-    actual, expected = Image.frombytes(mode, (7, 5), raw), PIL.frombytes(mode, (7, 5), raw)
+    actual, expected = image_pair(mode, (7, 5), raw)
     bands = actual.split()
     merged = Image.merge(mode, bands)
-    assert_same(merged, PIL.merge(mode, expected.split()))
+    assert_pixels_equal(merged, PIL.merge(mode, expected.split()))
     bands[0].paste(0, (0, 0, 7, 5))
     assert merged.tobytes() == raw
 
@@ -156,7 +153,7 @@ def test_high_depth_compositing():
 
 @pytest.mark.parametrize(("mode", "color"), [("L", (42,)), ("RGB", (20, 30, 40)), ("RGBA", (20, 30, 40)), ("RGBA", (20, 30, 40, 50)), ("P", (3,)), ("P", (20, 30, 40))])
 def test_new_tuple_color(mode, color):
-    assert_same(Image.new(mode, (3, 2), color), PIL.new(mode, (3, 2), color))
+    assert_pixels_equal(Image.new(mode, (3, 2), color), PIL.new(mode, (3, 2), color))
 
 
 @pytest.mark.parametrize("alpha", [0, 1, 127, 254, 255])
@@ -165,9 +162,9 @@ def test_transparent_fill_and_composite(alpha):
     expected = PIL.new("RGBA", (2, 2), (19, 29, 39, 0))
     actual.paste((73, 83, 93, 113), mask=Image.new("L", actual.size, alpha))
     expected.paste((73, 83, 93, 113), mask=PIL.new("L", expected.size, alpha))
-    assert_same(actual, expected)
+    assert_pixels_equal(actual, expected)
     overlay, reference = Image.new("RGBA", actual.size, (3, 7, 11, alpha)), PIL.new("RGBA", expected.size, (3, 7, 11, alpha))
-    assert_same(Image.alpha_composite(actual, overlay), PIL.alpha_composite(expected, reference))
+    assert_pixels_equal(Image.alpha_composite(actual, overlay), PIL.alpha_composite(expected, reference))
 
 
 def test_empty_and_alias_alpha():
@@ -199,14 +196,14 @@ def test_masked_paste_vector_boundaries(mode, subtests: pytest.Subtests):
                 for position in [(0, 0), (-1, 1)]:
                     actual.paste(bsource, position, bmask)
                     background.paste(source, position, mask)
-                    assert_same(actual, background)
+                    assert_pixels_equal(actual, background)
                 # Test the distinct color-fill rule on transparent RGBA pixels in vectors
                 # and tails, including zero mask values.
                 actual = Image.new(mode, size)
                 background = PIL.new(mode, size)
                 actual.paste("red", mask=bmask)
                 background.paste("red", mask=mask)
-                assert_same(actual, background)
+                assert_pixels_equal(actual, background)
 
 
 def test_paste_mask_alias_and_failed_mutation():
@@ -218,7 +215,7 @@ def test_paste_mask_alias_and_failed_mutation():
     reference = PIL.new("RGBA", expected.size, "red")
     actual.paste(source, mask=actual)
     expected.paste(reference, mask=expected.copy())
-    assert_same(actual, expected)
+    assert_pixels_equal(actual, expected)
     before = actual.tobytes()
     bad_mask = Image.new("L", actual.size)
     bad_mask.close()
@@ -232,10 +229,9 @@ def test_merge_and_alpha_kernel_boundaries(size):
     rng = random.Random(745)
     for mode in ("RGB", "RGBA"):
         raw = rng.randbytes(size[0] * size[1] * len(mode))
-        actual = Image.frombytes(mode, size, raw)
-        expected = PIL.frombytes(mode, size, raw)
-        assert_same(Image.merge(mode, actual.split()), PIL.merge(mode, expected.split()))
+        actual, expected = image_pair(mode, size, raw)
+        assert_pixels_equal(Image.merge(mode, actual.split()), PIL.merge(mode, expected.split()))
         alpha_raw = rng.randbytes(size[0] * size[1])
         actual.putalpha(Image.frombytes("L", size, alpha_raw))
         expected.putalpha(PIL.frombytes("L", size, alpha_raw))
-        assert_same(actual, expected)
+        assert_pixels_equal(actual, expected)

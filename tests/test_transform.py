@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from helpers import image_pair, patterned_pair
 from PIL import Image as PILImage, ImageTransform
 
 from blanket import Image
-
-
-def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
-    raw = bytes((i * 37 + i // 7) % 256 for i in range(13 * 9 * len(mode)))
-    return Image.frombytes(mode, (13, 9), raw), PILImage.frombytes(mode, (13, 9), raw)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -28,8 +24,7 @@ def pair(mode: str) -> tuple[Image.Image, PILImage.Image]:
 def test_transform_parallel_rows(mode: str, method: int, data: object, subtests: pytest.Subtests) -> None:
     size = (277, 211)
     raw = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
-    image = Image.frombytes(mode, size, raw)
-    reference = PILImage.frombytes(mode, size, raw)
+    image, reference = image_pair(mode, size, raw)
     for resample in (0, 2, 3):
         with subtests.test(resample=resample):
             actual = image.transform((259, 193), method, data, resample, fillcolor=17)
@@ -40,7 +35,7 @@ def test_transform_parallel_rows(mode: str, method: int, data: object, subtests:
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("method", list(Image.Transpose))
 def test_transpose_metadata_and_lifetime_are_independent(mode: str, method: int) -> None:
-    image, _ = pair(mode)
+    image, _ = patterned_pair(mode, (13, 9), divisor=7)
     image.info["test"] = 42
     result = image.transpose(method)
     pixels = result.tobytes()
@@ -65,7 +60,7 @@ def test_transpose_metadata_and_lifetime_are_independent(mode: str, method: int)
     ],
 )
 def test_transform_parity(mode: str, method: int, data: object, subtests: pytest.Subtests) -> None:
-    image, reference = pair(mode)
+    image, reference = patterned_pair(mode, (13, 9), divisor=7)
     image.info["test"] = 42
     for resample in (0, 2, 3):
         for fillcolor in (None, "#12345680", 17):
@@ -91,14 +86,14 @@ def test_transform_parity(mode: str, method: int, data: object, subtests: pytest
     ],
 )
 def test_nearest_warp_fractional_clipped(mode: str, fillcolor: object, method: int, data: object) -> None:
-    image, reference = pair(mode)
+    image, reference = patterned_pair(mode, (13, 9), divisor=7)
     actual = image.transform((25, 18), method, data, Image.Resampling.NEAREST, fillcolor=fillcolor)
     expected = reference.transform((25, 18), method, data, PILImage.Resampling.NEAREST, fillcolor=fillcolor)
     assert actual.tobytes() == expected.tobytes()
 
 
 def test_transform_getdata() -> None:
-    image, reference = pair("RGB")
+    image, reference = patterned_pair("RGB", (13, 9), divisor=7)
     method = ImageTransform.AffineTransform((1, 0, -2, 0, 1, 3))
     assert image.transform((8, 7), method).tobytes() == reference.transform((8, 7), method).tobytes()
 
@@ -111,19 +106,19 @@ def test_transform_handler() -> None:
             assert fill == 0
             return image.crop((0, 0, *size))
 
-    image, _ = pair("RGB")
+    image, _ = patterned_pair("RGB", (13, 9), divisor=7)
     assert image.transform((8, 7), Handler(), resample=2, fill=0).size == (8, 7)
 
 
 @pytest.mark.parametrize(("method", "data", "resample"), [(99, (), 0), (0, None, 0), (0, (1, 2), 0), (0, (1, 0, 0, 0, 1, 0), 1), (2, (float("nan"),) * 8, 0)])
 def test_invalid_transform(method: int, data: object, resample: int) -> None:
-    image, _ = pair("L")
+    image, _ = patterned_pair("L", (13, 9), divisor=7)
     with pytest.raises(ValueError):
         image.transform((5, 5), method, data, resample)
 
 
 def test_closed_and_invalid_transpose() -> None:
-    image, _ = pair("L")
+    image, _ = patterned_pair("L", (13, 9), divisor=7)
     with pytest.raises(ValueError):
         image.transpose(7)
     image.close()
@@ -135,7 +130,7 @@ def test_closed_and_invalid_transpose() -> None:
 
 @pytest.mark.parametrize("scale", [0.1, 0.2, 0.3, 1.1])
 def test_nearest_fractional_boundaries(scale: float) -> None:
-    image, reference = pair("L")
+    image, reference = patterned_pair("L", (13, 9), divisor=7)
     data = (scale, 0, -0.05, 0, scale, 0)
     assert image.transform((80, 80), Image.AFFINE, data).tobytes() == reference.transform((80, 80), PILImage.Transform.AFFINE, data).tobytes()
 
@@ -155,7 +150,7 @@ def test_nearest_extent_gather(mode: str, extent: tuple[float, float, float, flo
 
 @pytest.mark.parametrize("size", [(0, 5), (5, 0), (0, 0)])
 def test_empty_affine_and_transpose(size: tuple[int, int]) -> None:
-    image, _ = pair("L")
+    image, _ = patterned_pair("L", (13, 9), divisor=7)
     result = image.transform(size, Image.AFFINE, (1, 0, 0, 0, 1, 0))
     assert result.size == size
     assert result.tobytes() == b""
@@ -164,6 +159,6 @@ def test_empty_affine_and_transpose(size: tuple[int, int]) -> None:
 
 @pytest.mark.parametrize("resample", [0, 2, 3])
 def test_singular_perspective(resample: int) -> None:
-    image, reference = pair("L")
+    image, reference = patterned_pair("L", (13, 9), divisor=7)
     data = (1, 0, 0, 0, 1, 0, -2, 0)
     assert image.transform((5, 5), Image.PERSPECTIVE, data, resample).tobytes() == reference.transform((5, 5), PILImage.Transform.PERSPECTIVE, data, resample).tobytes()

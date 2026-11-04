@@ -5,13 +5,10 @@ import zlib
 from io import BytesIO
 
 import pytest
+from helpers import png_chunk
 
 from blanket import Image, ImageOps
 from blanket._exif import _png_metadata, read_metadata, transpose_metadata
-
-
-def png_chunk(kind: bytes, payload: bytes) -> bytes:
-    return struct.pack(">I", len(payload)) + kind + payload + struct.pack(">I", zlib.crc32(kind + payload))
 
 
 @pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])

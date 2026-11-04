@@ -4,6 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
+from helpers import image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -24,7 +25,7 @@ def test_channel_extraction_parallel_cutoff_and_tail(mode: str) -> None:
 @pytest.mark.parametrize("count", [17, 4097, 262143, 262144, 262147, 300007])
 def test_raw_conversion_chunks(mode: str, count: int) -> None:
     raw = random.Random(73).randbytes(count * PIL.getmodebands(mode))
-    actual, expected = Image.frombytes(mode, (count, 1), raw), PIL.frombytes(mode, (count, 1), raw)
+    actual, expected = image_pair(mode, (count, 1), raw)
     for target in ("RGB", "RGBA", "L", "LA", "HSV", "CMYK", "YCbCr", "F", "I", "1"):
         assert actual.convert(target).tobytes() == expected.convert(target, dither=PIL.Dither.NONE).tobytes()
 
@@ -87,7 +88,7 @@ def test_conversions(mode: str, other: str, reverse: bool) -> None:
 def test_storage_and_bands(mode: str) -> None:
     channels = PIL.getmodebands(mode)
     raw = random.Random(42).randbytes(35 * channels)
-    actual, expected = Image.frombytes(mode, (7, 5), raw), PIL.frombytes(mode, (7, 5), raw)
+    actual, expected = image_pair(mode, (7, 5), raw)
     assert actual.getbands() == expected.getbands()
     assert actual.to_pillow().tobytes() == raw
     assert actual.getdata() == list(expected.get_flattened_data())
@@ -114,7 +115,7 @@ def test_storage_and_bands(mode: str) -> None:
 @pytest.mark.parametrize("method", range(6))
 def test_geometry(mode: str, method: int) -> None:
     raw = random.Random(19).randbytes(17 * 13 * PIL.getmodebands(mode))
-    actual, expected = Image.frombytes(mode, (17, 13), raw), PIL.frombytes(mode, (17, 13), raw)
+    actual, expected = image_pair(mode, (17, 13), raw)
     assert actual.resize((9, 7), method).tobytes() == expected.resize((9, 7), method).tobytes()
     assert actual.transpose(method).tobytes() == expected.transpose(method).tobytes()
     assert actual.crop((-1, 2, 12, 17)).tobytes() == expected.crop((-1, 2, 12, 17)).tobytes()
@@ -127,7 +128,7 @@ def test_geometry(mode: str, method: int) -> None:
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
 def test_operations(mode: str) -> None:
     raw = random.Random(31).randbytes(17 * 13 * PIL.getmodebands(mode))
-    actual, expected = Image.frombytes(mode, (17, 13), raw), PIL.frombytes(mode, (17, 13), raw)
+    actual, expected = image_pair(mode, (17, 13), raw)
     for name in ("Color", "Contrast", "Brightness", "Sharpness"):
         assert getattr(ImageEnhance, name)(actual).enhance(0.6).tobytes() == getattr(PILEnhance, name)(expected).enhance(0.6).tobytes()
     for name in ("BLUR", "SMOOTH", "GaussianBlur", "MedianFilter"):
@@ -147,7 +148,7 @@ def test_operations(mode: str) -> None:
 @pytest.mark.parametrize("format", ["JPEG", "TIFF"])
 def test_cmyk_codecs(format: str) -> None:
     raw = random.Random(13).randbytes(17 * 13 * 4)
-    actual, expected = Image.frombytes("CMYK", (17, 13), raw), PIL.frombytes("CMYK", (17, 13), raw)
+    actual, expected = image_pair("CMYK", (17, 13), raw)
     for image in (actual, expected):
         stream = BytesIO()
         image.save(stream, format)

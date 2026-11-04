@@ -90,68 +90,40 @@ def test_apng_fdat(filename: str) -> None:
         assert im.getpixel((64, 32)) == (0, 255, 0, 255)
 
 
-def test_apng_dispose() -> None:
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_none.png") as im:
+@pytest.mark.parametrize(
+    "filename,first,second",
+    [
+        ("dispose_op_none.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("dispose_op_background.png", (0, 0, 0, 0), (0, 0, 0, 0)),
+        ("dispose_op_background_final.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("dispose_op_previous.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("dispose_op_previous_final.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("dispose_op_previous_first.png", (0, 0, 0, 0), (0, 0, 0, 0)),
+    ],
+)
+def test_apng_dispose(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert im.getpixel((0, 0)) == first
+        assert im.getpixel((64, 32)) == second
 
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_background.png") as im:
+
+@pytest.mark.parametrize(
+    "filename,first,second",
+    [
+        ("dispose_op_none_region.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("dispose_op_background_before_region.png", (0, 0, 0, 0), (0, 0, 0, 0)),
+        ("dispose_op_background_region.png", (0, 0, 255, 255), (0, 0, 0, 0)),
+        ("dispose_op_previous_region.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+    ],
+)
+def test_apng_dispose_region(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_background_final.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_previous.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_previous_final.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_previous_first.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-
-def test_apng_dispose_region() -> None:
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_none_region.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_background_before_region.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_background_region.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 0, 255, 255)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-    with Image.open(PILLOW_IMAGES / "apng/dispose_op_previous_region.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert im.getpixel((0, 0)) == first
+        assert im.getpixel((64, 32)) == second
 
 
 def test_apng_dispose_op_previous_frame() -> None:
@@ -203,36 +175,22 @@ def test_apng_dispose_op_background_decompression_bomb() -> None:
         Image.open(b)
 
 
-def test_apng_blend() -> None:
-    with Image.open(PILLOW_IMAGES / "apng/blend_op_source_solid.png") as im:
+@pytest.mark.parametrize(
+    "filename,first,second",
+    [
+        ("blend_op_source_solid.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("blend_op_source_transparent.png", (0, 0, 0, 0), (0, 0, 0, 0)),
+        ("blend_op_source_near_transparent.png", (0, 255, 0, 2), (0, 255, 0, 2)),
+        ("blend_op_over.png", (0, 255, 0, 255), (0, 255, 0, 255)),
+        ("blend_op_over_near_transparent.png", (0, 255, 0, 97), (0, 255, 0, 255)),
+    ],
+)
+def test_apng_blend(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/blend_op_source_transparent.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-    with Image.open(PILLOW_IMAGES / "apng/blend_op_source_near_transparent.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 2)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 2)
-
-    with Image.open(PILLOW_IMAGES / "apng/blend_op_over.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    with Image.open(PILLOW_IMAGES / "apng/blend_op_over_near_transparent.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 97)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert im.getpixel((0, 0)) == first
+        assert im.getpixel((64, 32)) == second
 
 
 def test_apng_blend_transparency() -> None:
@@ -249,44 +207,14 @@ def test_apng_chunk_order() -> None:
         assert im.getpixel((64, 32)) == (0, 255, 0, 255)
 
 
-def test_apng_delay() -> None:
-    with Image.open(PILLOW_IMAGES / "apng/delay.png") as im:
-        im.seek(1)
-        assert im.info.get("duration") == 500.0
-        im.seek(2)
-        assert im.info.get("duration") == 1000.0
-        im.seek(3)
-        assert im.info.get("duration") == 500.0
-        im.seek(4)
-        assert im.info.get("duration") == 1000.0
-
-    with Image.open(PILLOW_IMAGES / "apng/delay_round.png") as im:
-        im.seek(1)
-        assert im.info.get("duration") == 500.0
-        im.seek(2)
-        assert im.info.get("duration") == 1000.0
-
-    with Image.open(PILLOW_IMAGES / "apng/delay_short_max.png") as im:
-        im.seek(1)
-        assert im.info.get("duration") == 500.0
-        im.seek(2)
-        assert im.info.get("duration") == 1000.0
-
-    with Image.open(PILLOW_IMAGES / "apng/delay_zero_denom.png") as im:
-        im.seek(1)
-        assert im.info.get("duration") == 500.0
-        im.seek(2)
-        assert im.info.get("duration") == 1000.0
-
-    with Image.open(PILLOW_IMAGES / "apng/delay_zero_numer.png") as im:
-        im.seek(1)
-        assert im.info.get("duration") == 0.0
-        im.seek(2)
-        assert im.info.get("duration") == 0.0
-        im.seek(3)
-        assert im.info.get("duration") == 500.0
-        im.seek(4)
-        assert im.info.get("duration") == 1000.0
+@pytest.mark.parametrize(
+    "filename,durations", [("delay.png", [500.0, 1000.0, 500.0, 1000.0]), ("delay_round.png", [500.0, 1000.0]), ("delay_short_max.png", [500.0, 1000.0]), ("delay_zero_denom.png", [500.0, 1000.0]), ("delay_zero_numer.png", [0.0, 0.0, 500.0, 1000.0])]
+)
+def test_apng_delay(filename: str, durations: list[float]) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
+        for frame, duration in enumerate(durations, 1):
+            im.seek(frame)
+            assert im.info.get("duration") == duration
 
 
 def test_apng_num_plays() -> None:

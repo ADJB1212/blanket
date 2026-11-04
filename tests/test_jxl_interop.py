@@ -5,6 +5,7 @@ from io import BytesIO
 import pytest
 
 pytest.importorskip("pillow_jxl")
+from helpers import encode_image
 from PIL import Image as PillowImage
 from test_api import pixels
 
@@ -18,9 +19,7 @@ def test_jxl_cross_library_pixels(mode: str, lossless: bool, effort: int) -> Non
     size = (257, 259)
     raw = pixels(mode, size)
     for library in (BlanketImage, PillowImage):
-        output = BytesIO()
-        library.frombytes(mode, size, raw).save(output, "JXL", lossless=lossless, quality=90, effort=effort)
-        payload = output.getvalue()
+        payload = encode_image(library.frombytes(mode, size, raw), "JXL", lossless=lossless, quality=90, effort=effort)
         with BlanketImage.open(BytesIO(payload)) as blanket, PillowImage.open(BytesIO(payload)) as pillow:
             pillow.load()
             assert (blanket.mode, blanket.size) == (pillow.mode, pillow.size) == (mode, size)

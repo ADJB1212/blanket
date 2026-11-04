@@ -7,6 +7,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
+from helpers import encode_image
 from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
 from PIL.TiffImagePlugin import IFDRational
 
@@ -18,12 +19,6 @@ from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 @pytest.fixture
 def profile() -> bytes:
     return ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
-
-
-def encode(image: Image.Image, format: str, **options: object) -> bytes:
-    stream = BytesIO()
-    image.save(stream, format, **options)
-    return stream.getvalue()
 
 
 @pytest.mark.parametrize("short_writes", [False, True])
@@ -166,7 +161,7 @@ def test_pa_conversion_preserves_metadata_and_cached_exif_edits(mode, profile):
 def test_metadata_preserved_and_editable(format: str, profile: bytes, tmp_path) -> None:
     image = Image.new("RGB", (16, 16), (30, 70, 100))
     xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">test packet</x:xmpmeta>'
-    data = encode(image, format, exif=exif_tags(), xmp=xmp, icc_profile=profile)
+    data = encode_image(image, format, exif=exif_tags(), xmp=xmp, icc_profile=profile)
     loaded = Image.open(BytesIO(data))
     assert loaded.getexif()[270] == exif_tags()[270]
     assert loaded.getexif().get_ifd(34665)[33434] == pytest.approx(1 / 125)
@@ -194,9 +189,9 @@ def test_metadata_preserved_and_editable(format: str, profile: bytes, tmp_path) 
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP"])
 def test_metadata_text_does_not_override_container_detection(format: str) -> None:
     image = Image.new("RGB", (17, 19), (30, 70, 100))
-    expected = Image.open(BytesIO(encode(image, format)))
+    expected = Image.open(BytesIO(encode_image(image, format)))
     xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">_width _height</x:xmpmeta>'
-    actual = Image.open(BytesIO(encode(image, format, xmp=xmp)))
+    actual = Image.open(BytesIO(encode_image(image, format, xmp=xmp)))
     assert (actual.format, actual.size, actual.mode) == (format, expected.size, expected.mode)
     assert actual.tobytes() == expected.tobytes()
     assert actual.info["xmp"] == xmp
@@ -250,7 +245,7 @@ def test_exif_numeric_arrays_and_tiff_relocation(endian: str, count: int, kind: 
     reloaded = Image.Exif()
     reloaded.load(exif.tobytes())
     assert reloaded[65000] == exif[65000]
-    image = Image.open(BytesIO(encode(Image.new("L", (1, 1)), "TIFF", exif=raw)))
+    image = Image.open(BytesIO(encode_image(Image.new("L", (1, 1)), "TIFF", exif=raw)))
     assert image.getexif()[65000] == expected
 
 
@@ -278,10 +273,10 @@ def test_metadata_overrides_and_removal(format: str, profile: bytes) -> None:
     original = image.info.copy()
     override = Image.Exif()
     override[305] = "Replacement"
-    opened = Image.open(BytesIO(encode(image, format, exif=override, xmp="replacement", icc_profile=None)))
+    opened = Image.open(BytesIO(encode_image(image, format, exif=override, xmp="replacement", icc_profile=None)))
     assert opened.getexif()[305] == "Replacement"
     assert opened.info["xmp"] == b"replacement"
-    removed = Image.open(BytesIO(encode(image, format, exif=None, xmp=b"", icc_profile=b"")))
+    removed = Image.open(BytesIO(encode_image(image, format, exif=None, xmp=b"", icc_profile=b"")))
     assert 305 not in removed.getexif()
     assert 270 not in removed.getexif()
     assert "xmp" not in removed.info
@@ -289,7 +284,7 @@ def test_metadata_overrides_and_removal(format: str, profile: bytes) -> None:
 
 
 def test_tiff_getexif_includes_raster_tags(profile: bytes) -> None:
-    raw = encode(Image.new("RGB", (8, 6)), "TIFF", exif=exif_tags(), icc_profile=profile)
+    raw = encode_image(Image.new("RGB", (8, 6)), "TIFF", exif=exif_tags(), icc_profile=profile)
     image = Image.open(BytesIO(raw))
     pillow = PILImage.open(BytesIO(raw))
     for tag in (256, 257, 258, 259, 262, 273, 277, 278, 279, 284, 305, 34675):
@@ -303,7 +298,7 @@ def test_png_text_interop_and_roundtrip(compressed: bool) -> None:
     info.add_text("Unicode", "snowman \u2603", zip=compressed)
     info.add_itxt("Title", "Translated", lang="en", tkey="Title translation", zip=compressed)
     info.add(b"vpAg", b"private chunk", after_idat=True)
-    data = encode(Image.new("RGBA", (4, 3)), "PNG", pnginfo=info)
+    data = encode_image(Image.new("RGBA", (4, 3)), "PNG", pnginfo=info)
     pillow = PILImage.open(BytesIO(data))
     opened = Image.open(BytesIO(data))
     for key in ("Author", "Unicode", "Title"):
@@ -311,10 +306,10 @@ def test_png_text_interop_and_roundtrip(compressed: bool) -> None:
     assert opened.info["Title"].lang == "en"
     assert opened.info["Title"].tkey == "Title translation"
     assert data.index(b"vpAg") > data.index(b"IDAT")
-    second = Image.open(BytesIO(encode(opened, "PNG")))
+    second = Image.open(BytesIO(encode_image(opened, "PNG")))
     assert second.info["Unicode"] == "snowman \u2603"
     assert second.info["Title"].tkey == "Title translation"
-    assert "Author" not in Image.open(BytesIO(encode(opened, "PNG", pnginfo=PngImagePlugin.PngInfo()))).info
+    assert "Author" not in Image.open(BytesIO(encode_image(opened, "PNG", pnginfo=PngImagePlugin.PngInfo()))).info
     native_info = PILPng.PngInfo()
     native_info.add_itxt("Unicode", "snowman \u2603", zip=True)
     stream = BytesIO()
@@ -326,7 +321,7 @@ def test_png_text_interop_and_roundtrip(compressed: bool) -> None:
 def test_animation_preserves_metadata(format: str, profile: bytes) -> None:
     source = Image.new("RGBA", (5, 4), "red")
     source.info.update(exif=exif_tags().tobytes(), xmp=b"animation", icc_profile=profile)
-    data = encode(source, format, save_all=True, append_images=[Image.new("RGBA", source.size, "blue")], duration=[20, 40], loop=2)
+    data = encode_image(source, format, save_all=True, append_images=[Image.new("RGBA", source.size, "blue")], duration=[20, 40], loop=2)
     opened = Image.open(BytesIO(data))
     assert opened.n_frames == 2
     for i in range(2):
@@ -348,7 +343,7 @@ def test_exif_edits_copy_and_orientation(mode: str) -> None:
     copied = image.copy()
     copied.getexif()[305] = "independent"
     assert image.getexif()[305] == "new EXIF"
-    assert Image.open(BytesIO(encode(image, "PNG"))).getexif()[305] == "new EXIF"
+    assert Image.open(BytesIO(encode_image(image, "PNG"))).getexif()[305] == "new EXIF"
     image.info["exif"] = exif_tags().tobytes()
     assert image.getexif()[305] == "Blanket"
     image.getexif()[274] = 6
@@ -392,10 +387,10 @@ def test_exif_cache_tracks_metadata_replacement(profile: bool) -> None:
 def test_jpeg_multisegment_icc_and_size_limits() -> None:
     image = Image.new("RGB", (2, 2))
     profile = bytes(range(256)) * 700
-    opened = Image.open(BytesIO(encode(image, "JPEG", icc_profile=profile)))
+    opened = Image.open(BytesIO(encode_image(image, "JPEG", icc_profile=profile)))
     assert opened.info["icc_profile"] == profile
     with pytest.raises(ValueError, match="XMP data is too long"):
-        encode(image, "JPEG", xmp=b"x" * 65534)
+        encode_image(image, "JPEG", xmp=b"x" * 65534)
 
 
 @pytest.mark.parametrize("raw", [b"bad", b"II*\0\xff\xff\xff\xff", b"II*\0\x08\0\0\0\xff\xff"])
@@ -421,12 +416,12 @@ def test_metadata_options_validated_before_write(options: dict[str, object]) -> 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF"])
 def test_thumbnail_embedding_in_containers(format: str) -> None:
     exif = exif_tags()
-    exif.thumbnail = encode(Image.new("RGB", (3, 2), "red"), "JPEG")
-    data = encode(Image.new("RGB", (8, 6)), format, exif=exif)
+    exif.thumbnail = encode_image(Image.new("RGB", (3, 2), "red"), "JPEG")
+    data = encode_image(Image.new("RGB", (8, 6)), format, exif=exif)
     image = Image.open(BytesIO(data))
     assert image.n_frames == 1
     assert image.getexif().thumbnail == exif.thumbnail
-    again = Image.open(BytesIO(encode(image, format)))
+    again = Image.open(BytesIO(encode_image(image, format)))
     assert again.getexif().thumbnail == exif.thumbnail
 
 
@@ -437,8 +432,8 @@ def test_metadata_does_not_change_lossless_pixels(format: str, mode: str, depth:
     if depth == 16 and mode == "RGB":
         image = image.convert(mode, bit_depth=depth)
     options = {"lossless": True} if format == "JXL" else {}
-    baseline = Image.open(BytesIO(encode(image, format, **options)))
-    output = Image.open(BytesIO(encode(image, format, exif=exif_tags(), xmp=b"text", **options)))
+    baseline = Image.open(BytesIO(encode_image(image, format, **options)))
+    output = Image.open(BytesIO(encode_image(image, format, exif=exif_tags(), xmp=b"text", **options)))
     assert output.mode == baseline.mode
     assert output.bit_depth == baseline.bit_depth
     assert output.tobytes() == baseline.tobytes()
@@ -453,7 +448,7 @@ def test_tiff_compression_and_external_metadata(compression: str, profile: bytes
     image = Image.open(stream)
     assert image.getexif()[305] == "Pillow metadata"
     image.getexif()[34665] = {33434: Fraction(1, 125)}
-    reopened = Image.open(BytesIO(encode(image, "TIFF", compression=compression)))
+    reopened = Image.open(BytesIO(encode_image(image, "TIFF", compression=compression)))
     assert reopened.getexif()[305] == "Pillow metadata"
     assert reopened.info["icc_profile"] == profile
     assert reopened.getexif().get_ifd(34665)[33434] == pytest.approx(1 / 125)
@@ -466,8 +461,8 @@ def test_compression_preserves_metadata(format: str, compressor: object, profile
     image = Image.new("RGB", (16, 16), (20, 50, 80))
     image.info.update(exif=exif_tags().tobytes(), xmp=b"packet", icc_profile=profile)
     options = {"xmp": image.info["xmp"]} if format == "JPEG" else {}
-    normal = Image.open(BytesIO(encode(image, format, **options)))
-    optimized = Image.open(BytesIO(encode(image, format, compressor=compressor, **options)))
+    normal = Image.open(BytesIO(encode_image(image, format, **options)))
+    optimized = Image.open(BytesIO(encode_image(image, format, compressor=compressor, **options)))
     assert optimized.getexif()[305] == "Blanket"
     assert optimized.info["xmp"] == b"packet"
     assert optimized.info["icc_profile"] == profile
@@ -504,7 +499,7 @@ def test_getexif_reads_xmp_orientation_and_hidden_ifds() -> None:
     image.getexif()[34665] = {33434: Fraction(1, 125)}
     image.getexif().hide_offsets()
     assert 34665 not in image.getexif()
-    reopened = Image.open(BytesIO(encode(image, "PNG")))
+    reopened = Image.open(BytesIO(encode_image(image, "PNG")))
     assert reopened.getexif().get_ifd(34665)[33434] == pytest.approx(1 / 125)
 
 

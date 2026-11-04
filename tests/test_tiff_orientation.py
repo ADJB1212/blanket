@@ -4,6 +4,7 @@ from copy import copy, deepcopy
 from io import BytesIO
 
 import pytest
+from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PILImage
 
 from blanket import Image, ImageOps
@@ -18,9 +19,7 @@ def test_tiff_applies_orientation_before_copy(mode: str, orientation: int, lazy:
         source.putdata([(i * 37) % 256 for i in range(35)])
     else:
         source.putdata([tuple((i * 37 + c * 19) % 256 for c in range(len(source.getbands()))) for i in range(35)])
-    stream = BytesIO()
-    source.save(stream, "TIFF", tiffinfo={274: orientation})
-    raw = stream.getvalue()
+    raw = encode_image(source, "TIFF", tiffinfo={274: orientation})
     expected = PILImage.open(BytesIO(raw))
     expected.load()
     actual = Image.open(BytesIO(raw), lazy=lazy)
@@ -32,8 +31,7 @@ def test_tiff_applies_orientation_before_copy(mode: str, orientation: int, lazy:
         assert actual.tobytes() == expected.tobytes()
     assert 274 not in actual.getexif()
     for result in (actual.copy(), copy(actual), deepcopy(actual), ImageOps.exif_transpose(actual)):
-        assert result.size == actual.size
-        assert result.tobytes() == actual.tobytes()
+        assert_pixels_equal(result, actual)
         assert 274 not in result.getexif()
     assert Image.inspect(BytesIO(raw)).size == actual.size
 
@@ -65,9 +63,7 @@ def test_tiff_orientation_preserves_high_depth(mode: str, orientation: int) -> N
 def test_tiff_oriented_pages_keep_navigation_and_local_metadata(lazy: bool) -> None:
     first = PILImage.new("RGB", (7, 5), (30, 60, 90))
     second = PILImage.new("L", (4, 3), 100)
-    stream = BytesIO()
-    first.save(stream, "TIFF", save_all=True, append_images=[second], tiffinfo={274: 6})
-    raw = stream.getvalue()
+    raw = encode_image(first, "TIFF", save_all=True, append_images=[second], tiffinfo={274: 6})
     actual = Image.open(BytesIO(raw), lazy=lazy)
     expected = PILImage.open(BytesIO(raw))
     assert actual.n_frames == 2
@@ -75,9 +71,7 @@ def test_tiff_oriented_pages_keep_navigation_and_local_metadata(lazy: bool) -> N
         actual.seek(frame)
         expected.seek(frame)
         expected.load()
-        assert actual.mode == expected.mode
-        assert actual.size == expected.size
-        assert actual.tobytes() == expected.tobytes()
+        assert_pixels_equal(actual, expected)
         assert 274 not in actual.getexif()
         result = actual.copy()
         assert result.n_frames == 1
@@ -90,9 +84,7 @@ def test_tiff_oriented_pages_keep_navigation_and_local_metadata(lazy: bool) -> N
 def test_oriented_tiff_region_uses_display_coordinates() -> None:
     source = PILImage.new("RGB", (7, 5))
     source.putdata([(i * 7, i * 3, i) for i in range(35)])
-    stream = BytesIO()
-    source.save(stream, "TIFF", tiffinfo={274: 6})
-    raw = stream.getvalue()
+    raw = encode_image(source, "TIFF", tiffinfo={274: 6})
     expected = PILImage.open(BytesIO(raw))
     expected.load()
     result = Image.open_region(BytesIO(raw), (1, 2, 4, 6), fallback="full")
@@ -114,9 +106,7 @@ def test_header_metadata_retains_raw_tiff_orientation() -> None:
 def test_oriented_tiff_clears_xmp_orientation_without_changing_source_metadata() -> None:
     source = PILImage.new("RGB", (7, 5), (10, 20, 30))
     xmp = b'<rdf:Description tiff:Orientation="6" keep="metadata"/>'
-    stream = BytesIO()
-    source.save(stream, "TIFF", tiffinfo={274: 6, 700: xmp})
-    raw = stream.getvalue()
+    raw = encode_image(source, "TIFF", tiffinfo={274: 6, 700: xmp})
     image = Image.open(BytesIO(raw))
     assert 274 not in image.getexif()
     assert b"tiff:Orientation" not in image.info["xmp"]
