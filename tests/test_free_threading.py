@@ -11,6 +11,7 @@ from threading import Barrier, Event
 
 import numpy as np
 import pytest
+from helpers import assert_raises
 
 from blanket import Image, ImageCms, ImageFile, ImageFilter, _blanket
 
@@ -102,8 +103,7 @@ def test_native_writer_rejects_concurrent_mutation() -> None:
                 self.attempts += 1
                 with ThreadPoolExecutor(max_workers=1) as pool:
                     future = pool.submit(self.writer.abort)
-                    with pytest.raises(RuntimeError, match="borrowed"):
-                        future.result(timeout=10)
+                    assert_raises(RuntimeError, lambda: future.result(timeout=10), match="borrowed")
             return super().write(data)
 
     sink = CheckingSink()

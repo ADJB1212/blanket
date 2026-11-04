@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
-from helpers import float_samples
+from helpers import assert_raises, float_samples
 
 from blanket import Image, ImageEnhance, ImageFilter, ImageGpu
 
@@ -208,27 +208,20 @@ def test_validation(runtime):
     gpu = ImageGpu.from_image(source("RGB"), runtime=runtime)
     for method in ("color", "contrast", "sharpness"):
         for invalid in (float("nan"), float("inf"), 1e40):
-            with pytest.raises(ValueError):
-                getattr(gpu, method)(invalid)
-    with pytest.raises(ValueError):
-        gpu.resize((1, 1), transfer="bad")
-    with pytest.raises(ValueError):
-        ImageGpu.from_image(source("L"), runtime=runtime).resize((1, 1), linear_light=True)
+            assert_raises(ValueError, lambda: getattr(gpu, method)(invalid))
+    assert_raises(ValueError, lambda: gpu.resize((1, 1), transfer="bad"))
+    assert_raises(ValueError, lambda: ImageGpu.from_image(source("L"), runtime=runtime).resize((1, 1), linear_light=True))
     lut = ImageFilter.Color3DLUT.generate(2, lambda r, g, b: (r, g, b))
     lut.table[0] = float("nan")
-    with pytest.raises(ValueError):
-        gpu.color_lut(lut)
+    assert_raises(ValueError, lambda: gpu.color_lut(lut))
     lut.table[0] = 0
     lut.size = (1, 2, 2)
-    with pytest.raises(ValueError):
-        gpu.color_lut(lut)
+    assert_raises(ValueError, lambda: gpu.color_lut(lut))
     lut.size = (2, 2, 2)
     lut.mode = "RGB;F"
-    with pytest.raises(ValueError):
-        gpu.color_lut(lut)
+    assert_raises(ValueError, lambda: gpu.color_lut(lut))
     gpu.close()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.contrast(0)
+    assert_raises(ValueError, lambda: gpu.contrast(0), match="closed")
 
 
 def test_resident_mps_color_pipeline(monkeypatch):

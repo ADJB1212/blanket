@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -21,8 +22,7 @@ def test_raster_interoperability(format: str, mode: str, size: tuple[int, int]) 
     raw = bytes((i * 17 + 31) % 256 for i in range(size[0] * size[1] * channels))
     source = Image.frombytes(mode, size, raw)
     options = {"lossless": True} if format == "WEBP" else {}
-    output = BytesIO()
-    source.save(output, format, **options)
+    output = image_buffer(source, format, **options)
     expected_mode = "RGB" if mode == "L" and format == "WEBP" else mode
     expected = source.convert(expected_mode).tobytes()
     loaded = Image.open(output, formats=[format])
@@ -30,11 +30,9 @@ def test_raster_interoperability(format: str, mode: str, size: tuple[int, int]) 
     assert loaded.tobytes() == expected
     assert PillowImage.open(output).convert(expected_mode).tobytes() == expected
 
-    external = BytesIO()
-    PillowImage.frombytes(mode, size, raw).save(external, format, **options)
+    external = image_buffer(PillowImage.frombytes(mode, size, raw), format, **options)
     assert Image.open(external).convert(expected_mode).tobytes() == expected
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(output, formats=["PNG"])
+    assert_raises(UnidentifiedImageError, lambda: Image.open(output, formats=["PNG"]))
 
 
 @pytest.mark.parametrize("extension", ["tif", "tiff", "webp"])
@@ -45,8 +43,7 @@ def test_extension_inference(tmp_path: Path, extension: str) -> None:
 
 
 def test_lossy_webp() -> None:
-    stream = BytesIO()
-    Image.frombytes("RGB", (16, 16), bytes([50, 100, 150] * 256)).save(stream, "WEBP", quality=90)
+    stream = image_buffer(Image.frombytes("RGB", (16, 16), bytes([50, 100, 150] * 256)), "WEBP", quality=90)
     result = Image.open(stream)
     assert result.size == (16, 16)
     assert max(abs(a - b) for a, b in zip(result.tobytes(), bytes([50, 100, 150] * 256), strict=False)) < 8
@@ -54,8 +51,7 @@ def test_lossy_webp() -> None:
 
 def test_packbits_tiff() -> None:
     source = PillowImage.frombytes("RGB", (8, 6), bytes(range(144)))
-    stream = BytesIO()
-    source.save(stream, "TIFF", compression="packbits")
+    stream = image_buffer(source, "TIFF", compression="packbits")
     assert Image.open(stream).tobytes() == source.tobytes()
 
 
@@ -68,8 +64,7 @@ def test_svg_is_unsupported(prefix: bytes, formats: list[str] | None) -> None:
       <rect width="2" height="2" fill="red" fill-opacity="0.5"/>
     </svg>"""
     )
-    with pytest.raises(UnidentifiedImageError, match="cannot identify image file"):
-        Image.open(BytesIO(data), formats=formats)
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data), formats=formats), match="cannot identify image file")
 
 
 def make_dng(cfa: bool = False) -> bytes:
@@ -127,17 +122,14 @@ def make_dng(cfa: bool = False) -> bytes:
 @pytest.mark.parametrize("cfa", [False, True])
 @pytest.mark.parametrize("formats", [None, ["DNG"], ["TIFF"]])
 def test_dng_is_unsupported(cfa: bool, formats: list[str] | None) -> None:
-    with pytest.raises(UnidentifiedImageError, match="cannot identify image file"):
-        Image.open(BytesIO(make_dng(cfa)), formats=formats)
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(make_dng(cfa)), formats=formats), match="cannot identify image file")
 
 
 @pytest.mark.parametrize("data", [b"<svg", b"<html/>", b"RIFF\0\0\0\0WEBP", make_dng()[:32]])
 def test_invalid_new_formats(data: bytes) -> None:
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
 @pytest.mark.parametrize("format", ["DNG", "SVG"])
 def test_unsupported_save_formats(format: str) -> None:
-    with pytest.raises(ValueError, match="unsupported image format"):
-        Image.frombytes("L", (1, 1), b"\0").save(BytesIO(), format)
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\0").save(BytesIO(), format), match="unsupported image format")

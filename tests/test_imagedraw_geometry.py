@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from itertools import pairwise
 
 import pytest
+from helpers import assert_drawing_equal, assert_raises, new_pair
 from PIL import Image as PILImage, ImageDraw as PILDraw, ImageFont as PILFont
 
 from blanket import Image, ImageDraw
@@ -15,23 +16,17 @@ from blanket._blanket import draw_path
 def test_polygon_horizontal_edges_and_reused_scanlines_match_pillow(blend: bool, offset: int) -> None:
     points = [(2, -9), (27, -9), (27, 3), (8, 3), (8, 11), (25, 11), (25, 19), (2, 19), (2, 27), (30, 27), (30, 41), (1, 41)]
     points = [(x, y + offset) for x, y in points]
-    actual = Image.new("RGB", (33, 35), (11, 29, 47))
-    expected = PILImage.new("RGB", actual.size, (11, 29, 47))
+    actual, expected = new_pair("RGB", (33, 35), (11, 29, 47))
     ink = (171, 83, 39, 117) if blend else (171, 83, 39)
-    ImageDraw.Draw(actual, "RGBA" if blend else None).polygon(points, fill=ink)
-    PILDraw.Draw(expected, "RGBA" if blend else None).polygon(points, fill=ink)
-    assert actual.tobytes() == expected.tobytes()
+    assert_drawing_equal(actual, expected, "polygon", points, fill=ink, draw_mode="RGBA" if blend else None)
 
 
 @pytest.mark.parametrize("bounds", [(1, -13, 31, 27), (1, 17, 31, 57), (1, 45, 31, 85)])
 @pytest.mark.parametrize("filled", [False, True])
 def test_ellipse_clipped_scanlines_match_pillow(bounds, filled: bool) -> None:
-    actual = Image.new("RGB", (33, 35), (11, 29, 47))
-    expected = PILImage.new("RGB", actual.size, (11, 29, 47))
+    actual, expected = new_pair("RGB", (33, 35), (11, 29, 47))
     options = {"fill" if filled else "outline": (171, 83, 39, 117)}
-    ImageDraw.Draw(actual, "RGBA").ellipse(bounds, **options)
-    PILDraw.Draw(expected, "RGBA").ellipse(bounds, **options)
-    assert actual.tobytes() == expected.tobytes()
+    assert_drawing_equal(actual, expected, "ellipse", bounds, **options, draw_mode="RGBA")
 
 
 @pytest.mark.parametrize("style", ["fill", "outline", "line"])
@@ -103,11 +98,8 @@ def test_path_scanlines_match_scalar_coverage(style, subtests: pytest.Subtests) 
 def test_thin_lines_match_pillow(mode: str, ink: object, subtests: pytest.Subtests) -> None:
     for points in [[(1, 2), (12, 9)], [(12, 9), (1, 2)], [(-4, -3), (20, 10)], [(0, 0), (7, 14)], [(7, 14), (0, 0)], [(2, 2), (2, 2)], [(2, 2), (2, 9), (8, 9)]]:
         with subtests.test(points=points, mode=mode, ink=ink):
-            actual = Image.new(mode, (15, 15))
-            expected = PILImage.new(mode, actual.size)
-            ImageDraw.Draw(actual).line(points, fill=ink)
-            PILDraw.Draw(expected).line(points, fill=ink)
-            assert actual.tobytes() == expected.tobytes()
+            actual, expected = new_pair(mode, (15, 15))
+            assert_drawing_equal(actual, expected, "line", points, fill=ink)
 
 
 @pytest.mark.parametrize("vertical", [False, True])
@@ -119,11 +111,8 @@ def test_short_line_segments_on_large_canvas(vertical: bool, reverse: bool) -> N
         points = [(y, x) for x, y in points]
     if reverse:
         points.reverse()
-    actual = Image.new("RGB", size)
-    expected = PILImage.new("RGB", size)
-    ImageDraw.Draw(actual, "RGBA").line(points, fill=(23, 81, 157, 91))
-    PILDraw.Draw(expected, "RGBA").line(points, fill=(23, 81, 157, 91))
-    assert actual.tobytes() == expected.tobytes()
+    actual, expected = new_pair("RGB", size)
+    assert_drawing_equal(actual, expected, "line", points, fill=(23, 81, 157, 91), draw_mode="RGBA")
 
 
 @pytest.mark.parametrize(
@@ -197,8 +186,7 @@ def test_antialias_produces_coverage(mode: str, operation: str) -> None:
 def test_antialias_rejects_noncoverage_modes(mode: str) -> None:
     image = Image.new(mode, (10, 10))
     before = image.tobytes()
-    with pytest.raises(ValueError, match="anti-aliasing"):
-        ImageDraw.Draw(image, antialias=True).ellipse((1, 1, 8, 8), fill=1)
+    assert_raises(ValueError, lambda: ImageDraw.Draw(image, antialias=True).ellipse((1, 1, 8, 8), fill=1), match="anti-aliasing")
     assert image.tobytes() == before
 
 
@@ -212,11 +200,8 @@ def test_clipping_and_single_alpha_blend() -> None:
 
 @pytest.mark.parametrize(("mode", "ink"), [("L", 117), ("RGB", (23, 81, 157)), ("RGBA", (23, 81, 157, 91)), ("I", -100), ("F", 1.5), ("I;16B", 500)])
 def test_filled_circle_matches_pillow(mode: str, ink: object) -> None:
-    actual = Image.new(mode, (15, 15))
-    expected = PILImage.new(mode, actual.size)
-    ImageDraw.Draw(actual).ellipse((2, 2, 12, 12), fill=ink)
-    PILDraw.Draw(expected).ellipse((2, 2, 12, 12), fill=ink)
-    assert actual.tobytes() == expected.tobytes()
+    actual, expected = new_pair(mode, (15, 15))
+    assert_drawing_equal(actual, expected, "ellipse", (2, 2, 12, 12), fill=ink)
 
 
 def test_curved_shape_interiors_and_selected_corners() -> None:
@@ -236,12 +221,9 @@ def test_curved_shape_interiors_and_selected_corners() -> None:
 
 
 def test_polygon_fill_includes_edges() -> None:
-    actual = Image.new("L", (15, 15))
-    expected = PILImage.new("L", actual.size)
+    actual, expected = new_pair("L", (15, 15))
     coords = [(2, 2), (12, 2), (12, 12), (2, 12)]
-    ImageDraw.Draw(actual).polygon(coords, fill=255, outline=100, width=1)
-    PILDraw.Draw(expected).polygon(coords, fill=255, outline=100, width=1)
-    assert actual.tobytes() == expected.tobytes()
+    assert_drawing_equal(actual, expected, "polygon", coords, fill=255, outline=100, width=1)
 
 
 @pytest.mark.parametrize("operation", ["arc", "chord", "pieslice"])
@@ -265,8 +247,7 @@ def test_floodfill_matches_pillow(border: int | None, threshold: int) -> None:
 @pytest.mark.parametrize(("mode", "fill"), [("L", 100), ("RGB", (10, 20, 30)), ("RGBA", (10, 20, 30, 40))])
 @pytest.mark.parametrize("border", [False, True])
 def test_floodfill_connected_region_and_holes(mode: str, fill: object, border: bool) -> None:
-    actual = Image.new(mode, (97, 89), 0)
-    expected = PILImage.new(mode, actual.size, 0)
+    actual, expected = new_pair(mode, (97, 89), 0)
     for image, module in ((actual, ImageDraw), (expected, PILDraw)):
         draw = module.Draw(image)
         draw.rectangle((0, 0, 96, 88), outline="white")
@@ -350,8 +331,7 @@ def test_default_bitmap_text(mode: str) -> None:
 @pytest.mark.parametrize("anchor", [None, "la", "mm", "rs"])
 def test_supplied_font_matches_pillow(mode: str, anchor: str | None) -> None:
     font = PILFont.load_default(size=13)
-    actual = Image.new(mode, (100, 40))
-    expected = PILImage.new(mode, actual.size)
+    actual, expected = new_pair(mode, (100, 40))
     for module, image in ((ImageDraw, actual), (PILDraw, expected)):
         draw = module.Draw(image)
         draw.text((40, 20), "Hello!", font=font, fill="white", anchor=anchor)
@@ -366,8 +346,7 @@ def test_supplied_font_matches_pillow(mode: str, anchor: str | None) -> None:
 @pytest.mark.parametrize("align", ["left", "center", "right"])
 def test_multiline_text_layout_and_stroke_bounds(anchor: str | None, align: str) -> None:
     font = PILFont.load_default(size=13)
-    actual = Image.new("L", (100, 60))
-    expected = PILImage.new("L", actual.size)
+    actual, expected = new_pair("L", (100, 60))
     draw = ImageDraw.Draw(actual)
     reference = PILDraw.Draw(expected)
     draw.multiline_text((40, 25), "Hello\nWorld!", fill=255, font=font, align=align, anchor=anchor, spacing=6)
@@ -384,8 +363,7 @@ def test_multiline_text_layout_and_stroke_bounds(anchor: str | None, align: str)
 @pytest.mark.parametrize("stroke_fill", [None, "red"])
 def test_supplied_font_stroke_and_fractional_position(mode: str, draw_mode: str | None, stroke_fill: str | None) -> None:
     font = PILFont.load_default(size=15)
-    actual = Image.new(mode, (100, 40), 37)
-    expected = PILImage.new(mode, actual.size, 37)
+    actual, expected = new_pair(mode, (100, 40), 37)
     for module, image in ((ImageDraw, actual), (PILDraw, expected)):
         module.Draw(image, draw_mode).text((20.5, 10.75), "Ab!", font=font, fill="white", stroke_fill=stroke_fill, stroke_width=2)
     assert actual.tobytes() == expected.tobytes()
@@ -394,8 +372,7 @@ def test_supplied_font_stroke_and_fractional_position(mode: str, draw_mode: str 
 @pytest.mark.parametrize("background", [(30, 80, 110, 91), (30, 80, 110, 0), (30, 80, 110, 255)])
 def test_translucent_rgba_font_masks_match_pillow(background: tuple[int, ...]) -> None:
     font = PILFont.load_default(size=15)
-    actual = Image.new("RGBA", (50, 30), background)
-    expected = PILImage.new("RGBA", actual.size, background)
+    actual, expected = new_pair("RGBA", (50, 30), background)
     for module, image in ((ImageDraw, actual), (PILDraw, expected)):
         module.Draw(image).text((3, 3), "Ab", fill=(211, 20, 141, 128), font=font)
     assert actual.tobytes() == expected.tobytes()
@@ -403,19 +380,11 @@ def test_translucent_rgba_font_masks_match_pillow(background: tuple[int, ...]) -
 
 def test_invalid_geometry_and_text() -> None:
     draw = ImageDraw.Draw(Image.new("L", (10, 10)))
-    with pytest.raises(ValueError):
-        draw.regular_polygon((5, 5, -1), 4)
-    with pytest.raises(ValueError):
-        draw.polygon([(1, 1)])
-    with pytest.raises(ValueError):
-        draw.ellipse((5, 5, 2, 2), fill=255)
-    with pytest.raises(ValueError):
-        draw.arc((0, 0, 5, 5), float("nan"), 90)
-    with pytest.raises(ValueError):
-        draw.textlength("A\nB")
-    with pytest.raises(ValueError):
-        draw.multiline_text((0, 0), "A\nB", align="invalid")
-    with pytest.raises(ValueError):
-        draw.text((0, 0), "A", stroke_width=-1)
-    with pytest.raises(ValueError):
-        ImageDraw.floodfill(draw.im, (0, 0), 1, thresh=-1)
+    assert_raises(ValueError, lambda: draw.regular_polygon((5, 5, -1), 4))
+    assert_raises(ValueError, lambda: draw.polygon([(1, 1)]))
+    assert_raises(ValueError, lambda: draw.ellipse((5, 5, 2, 2), fill=255))
+    assert_raises(ValueError, lambda: draw.arc((0, 0, 5, 5), float("nan"), 90))
+    assert_raises(ValueError, lambda: draw.textlength("A\nB"))
+    assert_raises(ValueError, lambda: draw.multiline_text((0, 0), "A\nB", align="invalid"))
+    assert_raises(ValueError, lambda: draw.text((0, 0), "A", stroke_width=-1))
+    assert_raises(ValueError, lambda: ImageDraw.floodfill(draw.im, (0, 0), 1, thresh=-1))

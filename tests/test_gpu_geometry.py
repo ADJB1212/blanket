@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import require_metal, runtime as metal_runtime
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises
 
 from blanket import Image, ImageGpu
 
@@ -52,12 +52,9 @@ def test_rotation(runtime, angle):
 def test_geometry_validation(runtime):
     source = ImageGpu.from_image(Image.new("L", (2, 2)), runtime=runtime)
     for coefficients in [(1, 0), (1, 0, math.inf, 0, 1, 0)]:
-        with pytest.raises(ValueError):
-            source.transform((2, 2), Image.Transform.AFFINE, coefficients)
-    with pytest.raises(ValueError):
-        source.remap(source)
-    with pytest.raises(ValueError):
-        source.rotate(math.nan)
+        assert_raises(ValueError, lambda: source.transform((2, 2), Image.Transform.AFFINE, coefficients))
+    assert_raises(ValueError, lambda: source.remap(source))
+    assert_raises(ValueError, lambda: source.rotate(math.nan))
 
 
 @pytest.mark.parametrize("size", [(2, 3), (3, 2), (4, 7), (1, 2)])
@@ -114,8 +111,7 @@ def test_resident_reductions(runtime):
         assert actual["sum"] == sum(values)
         assert actual["mean"] == pytest.approx(sum(values) / len(values))
     statistics.close()
-    with pytest.raises(ValueError, match="closed"):
-        statistics.to_cpu()
+    assert_raises(ValueError, lambda: statistics.to_cpu(), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
@@ -272,8 +268,7 @@ def test_fully_clipped_paste_with_huge_offsets(runtime, mode, position, mask_mod
 def test_fully_clipped_paste_still_validates_mask(runtime):
     gpu = ImageGpu.from_image(Image.new("L", (2, 3)), runtime=runtime)
     mask = ImageGpu.from_image(Image.new("RGB", gpu.size), runtime=runtime)
-    with pytest.raises(ValueError, match="paste mask"):
-        gpu.paste(gpu, (10**100, 0), mask)
+    assert_raises(ValueError, lambda: gpu.paste(gpu, (10**100, 0), mask), match="paste mask")
 
 
 @pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])

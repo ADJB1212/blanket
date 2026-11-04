@@ -5,7 +5,7 @@ import struct
 from io import BytesIO
 
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image, image_buffer
 from PIL import Image as Pillow
 
 from blanket import Image, UnidentifiedImageError
@@ -109,8 +109,7 @@ def test_float_color_storage(mode: str, channels: int) -> None:
     image.putdata([(0.5,) * channels])
     assert image.getdata()[0] == (0.5,) * channels
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.resize((2, 2))
+    assert_raises(ValueError, lambda: image.resize((2, 2)), match="closed")
 
 
 def test_float_conversion_and_nonfinite_policy() -> None:
@@ -133,8 +132,7 @@ def test_linear_resize_and_alpha() -> None:
     rgba = Image.frombytes("RGBA;F", (2, 1), struct.pack("<8f", 1, 0, 0, 0, 0, 0, 1, 1))
     assert rgba.resize((1, 1), Image.Resampling.BOX).getpixel((0, 0)) == (0, 0, 1, 0.5)
     assert rgba.resize((1, 1), Image.Resampling.BOX, premultiply_alpha=False).getpixel((0, 0)) == (0.5, 0, 0.5, 0.5)
-    with pytest.raises(ValueError, match="transfer"):
-        image.resize((1, 1), linear_light=True, transfer="unknown")
+    assert_raises(ValueError, lambda: image.resize((1, 1), linear_light=True, transfer="unknown"), match="transfer")
 
 
 @pytest.mark.parametrize("depth", [8, 10, 12, 16])
@@ -162,8 +160,7 @@ def test_tiff_region_interoperability(mode: str, compression: str) -> None:
             value = x + y * 19
             pixel = value if mode in ("L", "I;16") else (value % 256, x, y) + ((128,) if mode == "RGBA" else ())
             source.putpixel((x, y), pixel)
-    stream = BytesIO()
-    source.save(stream, format="TIFF", compression=compression)
+    stream = image_buffer(source, format="TIFF", compression=compression)
     bounds = (3, 2, 18, 12)
     result = Image.open_region(BytesIO(stream.getvalue()), bounds)
     assert result.info["decode_fallback"] is False
@@ -173,17 +170,14 @@ def test_tiff_region_interoperability(mode: str, compression: str) -> None:
 
 def test_region_fallback_and_validation() -> None:
     data = encode_image(Image.new("RGB", (5, 4), "red"), format="PNG")
-    with pytest.raises(NotImplementedError, match="fallback"):
-        Image.open_region(BytesIO(data), (1, 1, 4, 3))
+    assert_raises(NotImplementedError, lambda: Image.open_region(BytesIO(data), (1, 1, 4, 3)), match="fallback")
     result = Image.open_region(BytesIO(data), (1, 1, 4, 3), fallback="full")
     assert result.size == (3, 2)
     assert result.getpixel((0, 0)) == (255, 0, 0)
     assert result.info["decode_fallback"] is True
     for bounds in ((-1, 0, 1, 1), (0, 0, 6, 1), (1, 1, 1, 2)):
-        with pytest.raises(ValueError, match="region"):
-            Image.open_region(BytesIO(data), bounds)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open_region(BytesIO(data), (0, 0, 1, 1), formats=["TIFF"])
+        assert_raises(ValueError, lambda: Image.open_region(BytesIO(data), bounds), match="region")
+    assert_raises(UnidentifiedImageError, lambda: Image.open_region(BytesIO(data), (0, 0, 1, 1), formats=["TIFF"]))
 
 
 @pytest.mark.parametrize("channels,depth", [(1, 8), (3, 8), (4, 16)])
@@ -219,16 +213,14 @@ def test_tiled_region_edges_and_unrequested_corrupt_tile(channels: int, depth: i
     damaged = bytearray(data)
     struct.pack_into("<I", damaged, offsets_offset + 5 * 4, len(data) + 100)
     assert Image.open_region(BytesIO(damaged), (0, 0, 1, 1)).getpixel((0, 0)) == (0 if channels == 1 else tuple(range(channels)))
-    with pytest.raises(OSError):
-        Image.open_region(BytesIO(damaged), (4, 2, 5, 3))
+    assert_raises(OSError, lambda: Image.open_region(BytesIO(damaged), (4, 2, 5, 3)))
 
 
 @pytest.mark.parametrize("mode", ["RGB;F", "RGBA;F"])
 @pytest.mark.parametrize("compression", ["raw", "tiff_lzw", "tiff_adobe_deflate"])
 def test_float_tiff_roundtrip(mode: str, compression: str) -> None:
     image = Image.new(mode, (3, 2), (-0.5, 2.0, 0.25, 0.75)[: 3 if mode == "RGB;F" else 4])
-    stream = BytesIO()
-    image.save(stream, format="TIFF", compression=compression)
+    stream = image_buffer(image, format="TIFF", compression=compression)
     assert Image.inspect(BytesIO(stream.getvalue())).mode == mode
     result = Image.open(BytesIO(stream.getvalue()))
     assert result.mode == mode
@@ -253,8 +245,7 @@ def test_float_zero_and_nonfinite_alpha() -> None:
     assert result.getpixel((0, 0)) == (0.0, 0.0, 0.0, 0.0)
     assert foreground.resize((1, 1)).getpixel((0, 0)) == (0.0, 0.0, 0.0, 0.0)
     for mode in ("L", "F", "CMYK"):
-        with pytest.raises(ValueError, match="RGB"):
-            Image.new(mode, (2, 2)).resize((1, 1), linear_light=True)
+        assert_raises(ValueError, lambda: Image.new(mode, (2, 2)).resize((1, 1), linear_light=True), match="RGB")
 
 
 @pytest.mark.parametrize("width", [1, 3, 4, 5, 17])

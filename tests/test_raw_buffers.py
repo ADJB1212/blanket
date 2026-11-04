@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -93,8 +93,7 @@ def test_extended_raw_decoders_clip_to_rows(mode: str, rawmode: str, bits: int, 
                 expected = PillowImage.frombytes(mode, (width, 3), raw, "raw", rawmode, stride, orientation)
                 actual = Image.frombytes(mode, expected.size, raw, "raw", rawmode, stride, orientation)
                 assert actual.tobytes() == expected.tobytes()
-                with pytest.raises(ValueError, match="not enough image data"):
-                    Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation)
+                assert_raises(ValueError, lambda: Image.frombytes(mode, expected.size, raw[:-1], "raw", rawmode, stride, orientation), match="not enough image data")
 
 
 @pytest.mark.parametrize("mode,depth", [("L", 8), ("L", 16), ("RGB", 10), ("RGBA", 12), ("LAB", 8), ("I", 8), ("F", 8), ("I;16B", 8), ("RGB;F", 8)])
@@ -127,8 +126,7 @@ def test_raw_byte_decoders(decoder: str, data: bytes) -> None:
 @pytest.mark.parametrize("decoder,data", [("hex", b"010203"), ("packbits", bytes([2, 1, 2, 3]))])
 def test_layered_raw_decoders_reject_truncated_planes(decoder: str, data: bytes) -> None:
     image = Image.new("P", (9, 1))
-    with pytest.raises(ValueError, match="not enough image data"):
-        image.frombytes(data, decoder, "P;2L")
+    assert_raises(ValueError, lambda: image.frombytes(data, decoder, "P;2L"), match="not enough image data")
     assert image.tobytes() == bytes(9)
 
 
@@ -190,8 +188,7 @@ def test_raw_input_ignores_padding_and_does_not_require_final_padding():
     assert image.tobytes() == bytes([3, 2, 1, 6, 5, 4])
     data[:] = bytes(7)
     assert image.tobytes() == bytes([3, 2, 1, 6, 5, 4])
-    with pytest.raises(ValueError, match="not enough image data"):
-        Image.frombytes("RGB", (1, 2), bytes(6), "raw", "BGR", 4)
+    assert_raises(ValueError, lambda: Image.frombytes("RGB", (1, 2), bytes(6), "raw", "BGR", 4), match="not enough image data")
 
 
 @pytest.mark.parametrize(
@@ -212,32 +209,24 @@ def test_raw_input_ignores_padding_and_does_not_require_final_padding():
 )
 def test_invalid_raw_layouts_fail(args, error):
     image = Image.new("RGB", (2, 2))
-    with pytest.raises(error):
-        image.tobytes("raw", *args)
-    with pytest.raises(error):
-        Image.frombytes("RGB", (2, 2), bytes(12), "raw", *args)
+    assert_raises(error, lambda: image.tobytes("raw", *args))
+    assert_raises(error, lambda: Image.frombytes("RGB", (2, 2), bytes(12), "raw", *args))
 
 
 @pytest.mark.parametrize("codec", ["png", "jpeg", ""])
 def test_raw_methods_reject_other_codecs(codec):
-    with pytest.raises(ValueError, match="only the raw"):
-        Image.new("L", (1, 1)).tobytes(codec)
-    with pytest.raises(ValueError, match="only the raw"):
-        Image.frombytes("L", (1, 1), b"\0", codec)
+    assert_raises(ValueError, lambda: Image.new("L", (1, 1)).tobytes(codec), match="only the raw")
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\0", codec), match="only the raw")
 
 
 def test_raw_rejects_size_overflow_and_closed_images():
     image = Image.new("RGB", (2, 2))
-    with pytest.raises(ValueError, match="overflow"):
-        image.tobytes("raw", "RGB", (1 << 64) - 1)
+    assert_raises(ValueError, lambda: image.tobytes("raw", "RGB", (1 << 64) - 1), match="overflow")
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.tobytes("raw", "BGR", 8, -1)
+    assert_raises(ValueError, lambda: image.tobytes("raw", "BGR", 8, -1), match="closed")
 
 
 def test_bgr_layout_requires_8_bit_samples():
     image = Image.frombytes("RGB", (1, 1), bytes(6), bit_depth=16)
-    with pytest.raises(ValueError, match="unsupported raw mode"):
-        image.tobytes("raw", "BGR")
-    with pytest.raises(ValueError, match="unsupported raw mode"):
-        Image.frombytes("RGB", (1, 1), bytes(6), "raw", "BGR", bit_depth=16)
+    assert_raises(ValueError, lambda: image.tobytes("raw", "BGR"), match="unsupported raw mode")
+    assert_raises(ValueError, lambda: Image.frombytes("RGB", (1, 1), bytes(6), "raw", "BGR", bit_depth=16), match="unsupported raw mode")

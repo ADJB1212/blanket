@@ -6,6 +6,7 @@ from io import StringIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises
 from PIL import Image as PillowImage, ImagePalette as PillowPalette
 
 from blanket import Image, ImagePalette
@@ -17,8 +18,7 @@ if TYPE_CHECKING:
 def test_gimp_palette_rejects_long_lines(tmp_path: Path) -> None:
     path = tmp_path / "invalid.gpl"
     path.write_bytes(b"GIMP Palette\n" + b"1" * 101 + b"\n")
-    with pytest.raises(OSError):
-        ImagePalette.load(path)
+    assert_raises(OSError, lambda: ImagePalette.load(path))
 
 
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:
@@ -83,8 +83,7 @@ def test_color_allocation(mode: str) -> None:
 def test_color_allocation_requires_mutable_storage(monkeypatch: pytest.MonkeyPatch) -> None:
     palette = ImagePalette.ImagePalette(palette=b"\x01\x02\x03")
     monkeypatch.setattr(palette, "_new_color_index", lambda *args: 1)
-    with pytest.raises(TypeError, match="color allocation requires a bytearray palette"):
-        palette.getcolor((4, 5, 6))
+    assert_raises(TypeError, lambda: palette.getcolor((4, 5, 6)), match="color allocation requires a bytearray palette")
 
 
 @pytest.mark.parametrize("color", ["red", [1, 2, 3], 0, None, (1, 2, 3, 0), (-1, 2, 3), (256, 2, 3), (1.0, 2, 3)])
@@ -112,8 +111,7 @@ def test_full_palette_and_reuse() -> None:
     expected = PillowPalette.wedge()
     color = (2, 4, 6)
     for palette in (actual, expected):
-        with pytest.raises(ValueError, match="cannot allocate more than 256 colors"):
-            palette.getcolor(color)
+        assert_raises(ValueError, lambda: palette.getcolor(color), match="cannot allocate more than 256 colors")
     image = PillowImage.new("P", (1, 1))
     image.info["transparency"] = 255
     actual_data, expected_data = actual.palette, expected.palette
@@ -122,8 +120,7 @@ def test_full_palette_and_reuse() -> None:
     assert_palette(actual, expected)
     full = PillowImage.frombytes("P", (256, 1), bytes(range(256)))
     for palette in (actual, expected):
-        with pytest.raises(ValueError, match="cannot allocate more than 256 colors"):
-            palette.getcolor((5, 6, 7), full)
+        assert_raises(ValueError, lambda: palette.getcolor((5, 6, 7), full), match="cannot allocate more than 256 colors")
     # Blanket images can provide the same histogram/info allocation context.
     gray = Image.frombytes("L", (1, 1), b"\0")
     assert ImagePalette.wedge().getcolor(color, gray) == 255
@@ -140,8 +137,7 @@ def test_raw_palette(rawmode: str) -> None:
         assert actual.tobytes() == bytes(data)
         return
     for operation in (actual.tobytes, actual.tostring, lambda: actual.getcolor((1, 2, 3)), lambda: actual.save(StringIO())):
-        with pytest.raises(ValueError, match="palette contains raw palette data"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="palette contains raw palette data")
 
 
 @pytest.mark.parametrize("factory", ["wedge", "negative", "random"])
@@ -171,8 +167,7 @@ def test_sepia(white: str) -> None:
 @pytest.mark.parametrize("white", [-100, 0, 1, 128, 255, 256, 12.5, 0.1, 10**30])
 def test_linear_lut(white: float) -> None:
     assert ImagePalette.make_linear_lut(0, white) == PillowPalette.make_linear_lut(0, white)
-    with pytest.raises(NotImplementedError, match="unavailable when black is non-zero"):
-        ImagePalette.make_linear_lut(1, white)
+    assert_raises(NotImplementedError, lambda: ImagePalette.make_linear_lut(1, white), match="unavailable when black is non-zero")
 
 
 def test_linear_lut_all_byte_endpoints() -> None:
@@ -194,8 +189,7 @@ def test_gamma_lut(exp: float) -> None:
     try:
         expected = PillowPalette.make_gamma_lut(exp)
     except Exception as error:
-        with pytest.raises(type(error)):
-            ImagePalette.make_gamma_lut(exp)
+        assert_raises(type(error), lambda: ImagePalette.make_gamma_lut(exp))
     else:
         assert ImagePalette.make_gamma_lut(exp) == expected
 
@@ -220,8 +214,7 @@ def test_save(mode: str, tmp_path: Path) -> None:
 @pytest.mark.parametrize("factory", ["ImagePalette", "wedge", "negative", "random"])
 def test_unsupported_palette_modes(mode: str, factory: str) -> None:
     for module in (ImagePalette, PillowPalette):
-        with pytest.raises(ValueError, match="unsupported palette mode"):
-            getattr(module, factory)(mode)
+        assert_raises(ValueError, lambda: getattr(module, factory)(mode), match="unsupported palette mode")
 
 
 @pytest.mark.parametrize(

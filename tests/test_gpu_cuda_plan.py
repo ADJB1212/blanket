@@ -3,6 +3,7 @@ import os
 import struct
 
 import pytest
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu, _blanket, _gpu_cuda as cuda_runtime
 
@@ -114,8 +115,7 @@ def test_common_plan_preparation_is_backend_independent():
     assert info[0] == 1
     assert info[3] <= 512
     assert steps[0][3] == list(range(256)) * 4
-    with pytest.raises(ValueError, match="halos"):
-        _blanket._gpu_prepare_plan(37, 29, 4, True, [(19, 7, 0, [])], 16)
+    assert_raises(ValueError, lambda: _blanket._gpu_prepare_plan(37, 29, 4, True, [(19, 7, 0, [])], 16), match="halos")
 
 
 def test_cuda_float_fusion_preserves_nonfinite_values(cuda):
@@ -128,9 +128,6 @@ def test_cuda_float_fusion_preserves_nonfinite_values(cuda):
 
 @pytest.mark.parametrize("backend,device", [("bad", 0), ("cuda", -1), ("cuda", True), ("metal", 1)])
 def test_plan_and_cache_backend_validation(backend, device):
-    with pytest.raises(ValueError):
-        ImageGpu.ProcessingPlan((1, 1), "L", [], backend=backend, device=device)
-    with pytest.raises(ValueError):
-        ImageGpu.configure_cache(backend=backend, device=device)
-    with pytest.raises(ValueError):
-        ImageGpu.cache_info(backend=backend, device=device)
+    assert_raises(ValueError, lambda: ImageGpu.ProcessingPlan((1, 1), "L", [], backend=backend, device=device))
+    assert_raises(ValueError, lambda: ImageGpu.configure_cache(backend=backend, device=device))
+    assert_raises(ValueError, lambda: ImageGpu.cache_info(backend=backend, device=device))

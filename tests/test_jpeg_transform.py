@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, JpegImagePlugin
@@ -78,8 +78,7 @@ def test_crop_allows_partial_right_and_bottom_edges():
 @pytest.mark.parametrize("method", [Image.FLIP_LEFT_RIGHT, Image.FLIP_TOP_BOTTOM, Image.ROTATE_90, Image.ROTATE_180, Image.ROTATE_270, Image.TRANSVERSE])
 def test_imperfect_edges_rejected_or_explicitly_trimmed(method):
     data = jpeg("L", size=(31, 39))
-    with pytest.raises(OSError):
-        JpegImagePlugin.transform(data, method)
+    assert_raises(OSError, lambda: JpegImagePlugin.transform(data, method))
     result = decoded(JpegImagePlugin.transform(data, method, trim=True))
     box = {Image.FLIP_LEFT_RIGHT: (0, 0, 24, 39), Image.FLIP_TOP_BOTTOM: (0, 0, 31, 32), Image.ROTATE_90: (0, 0, 24, 39), Image.ROTATE_180: (0, 0, 24, 32), Image.ROTATE_270: (0, 0, 31, 32), Image.TRANSVERSE: (0, 0, 24, 32)}[method]
     expected = decoded(data).crop(box).transpose(method)
@@ -140,16 +139,14 @@ def test_preserved_exif_first_marker_allows_backend_dimension_update(endian):
 
 def test_crop_partial_result_requires_explicit_trim_for_rotation():
     data = jpeg("L")
-    with pytest.raises(OSError):
-        JpegImagePlugin.transform(data, Image.ROTATE_180, crop=(8, 8, 29, 37))
+    assert_raises(OSError, lambda: JpegImagePlugin.transform(data, Image.ROTATE_180, crop=(8, 8, 29, 37)))
     result = JpegImagePlugin.transform(data, Image.ROTATE_180, crop=(8, 8, 29, 37), trim=True)
     assert decoded(result).size == (16, 24)
 
 
 @pytest.mark.parametrize("crop", [(1, 0, 16, 16), (0, 1, 16, 16), (0, 0, 33, 48), (8, 8, 8, 16), (16, 16, 8, 8)])
 def test_invalid_crop_is_rejected(crop):
-    with pytest.raises(ValueError):
-        JpegImagePlugin.transform(jpeg(), crop=crop)
+    assert_raises(ValueError, lambda: JpegImagePlugin.transform(jpeg(), crop=crop))
 
 
 @pytest.mark.parametrize(
@@ -169,14 +166,12 @@ def test_invalid_crop_is_rejected(crop):
     ],
 )
 def test_invalid_options(options, error):
-    with pytest.raises(error):
-        JpegImagePlugin.transform(jpeg(), **options)
+    assert_raises(error, lambda: JpegImagePlugin.transform(jpeg(), **options))
 
 
 @pytest.mark.parametrize("data", [b"", b"not JPEG", b"\xff\xd8\xff\xd9", jpeg()[:100], jpeg()[:-100]])
 def test_malformed_jpeg(data):
-    with pytest.raises(OSError):
-        JpegImagePlugin.transform(data)
+    assert_raises(OSError, lambda: JpegImagePlugin.transform(data))
 
 
 def test_input_types_and_noop():
@@ -186,13 +181,11 @@ def test_input_types_and_noop():
         assert isinstance(output, bytes)
         assert decoded(output).tobytes() == decoded(data).tobytes()
     for value in ("photo.jpg", BytesIO(data), Image.new("RGB", (1, 1)), 123):
-        with pytest.raises(TypeError):
-            JpegImagePlugin.transform(value)
+        assert_raises(TypeError, lambda: JpegImagePlugin.transform(value))
 
 
 def test_dimension_limit_before_transform_allocation():
     data = bytearray(jpeg())
     start = data.index(b"\xff\xc0")
     data[start + 5 : start + 9] = (20000).to_bytes(2, "big") * 2
-    with pytest.raises(OSError, match="limit"):
-        JpegImagePlugin.transform(data)
+    assert_raises(OSError, lambda: JpegImagePlugin.transform(data), match="limit")

@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises, image_pair
 from PIL import Image as PillowImage, ImageChops as PillowChops, ImageColor as PillowColor, ImageEnhance as PillowEnhance, ImageFilter as PillowFilter
 
 from blanket import Image, ImageChops, ImageColor, ImageDraw, ImageEnhance, ImageFilter, ImageHdr, ImageOps, ImageStat
@@ -65,13 +65,11 @@ def test_raw_layout_and_array_interoperability(mode: str, orientation: int) -> N
 def test_premultiplied_conversion_arithmetic(mode: str, width: int) -> None:
     channels = Image.getmodebands(mode)
     raw = bytes(value for i in range(width) for value in (*([i % 256] * (channels - 1)), (i // 256) % 256))
-    actual = Image.frombytes(mode, (width, 1), raw)
-    expected = PillowImage.frombytes(mode, (width, 1), raw)
+    actual, expected = image_pair(mode, (width, 1), raw)
     destination = "La" if mode == "LA" else "RGBa"
     assert_pixels_equal(actual.convert(destination), expected.convert(destination))
     assert_pixels_equal(actual.convert(destination).convert(mode), expected.convert(destination).convert(mode))
-    actual = Image.frombytes(destination, (width, 1), raw)
-    expected = PillowImage.frombytes(destination, (width, 1), raw)
+    actual, expected = image_pair(destination, (width, 1), raw)
     assert_pixels_equal(actual.convert(mode), expected.convert(mode))
 
 
@@ -97,8 +95,7 @@ def test_conversions(source: str, destination: str) -> None:
     try:
         reference = expected.convert(destination)
     except ValueError:
-        with pytest.raises(ValueError):
-            actual.convert(destination)
+        assert_raises(ValueError, lambda: actual.convert(destination))
     else:
         assert_pixels_equal(actual.convert(destination), reference)
 
@@ -144,8 +141,7 @@ def test_channel_operations(mode: str) -> None:
         try:
             reference = getattr(PillowEnhance, name)(expected).enhance(0.7)
         except ValueError:
-            with pytest.raises(ValueError):
-                getattr(ImageEnhance, name)(actual)
+            assert_raises(ValueError, lambda: getattr(ImageEnhance, name)(actual))
         else:
             assert_pixels_equal(getattr(ImageEnhance, name)(actual).enhance(0.7), reference)
     mask = Image.new("L", actual.size, 83)
@@ -163,8 +159,7 @@ def test_alpha_promotion(mode: str, alpha: int | str) -> None:
     assert_pixels_equal(actual, expected)
     actual, expected = images(mode)
     before = actual.tobytes()
-    with pytest.raises(ValueError):
-        actual.putalpha(Image.new("L", (1, 1)))
+    assert_raises(ValueError, lambda: actual.putalpha(Image.new("L", (1, 1))))
     assert_pixels_equal(actual, expected)
     assert actual.tobytes() == before
 
@@ -241,14 +236,12 @@ def test_float_luminance_conversion_preserves_fractional_values(mode: str) -> No
 def test_closed_mode_conversion(mode: str) -> None:
     actual, _ = images(mode)
     actual.close()
-    with pytest.raises(ValueError, match="closed"):
-        actual.convert("RGBA" if mode == "RGBa" else "LA" if mode == "La" else "RGB")
+    assert_raises(ValueError, lambda: actual.convert("RGBA" if mode == "RGBa" else "LA" if mode == "La" else "RGB"), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["La", "RGBa", "RGBX"])
 def test_codec_restrictions_and_explicit_conversion(mode: str) -> None:
     actual, _ = images(mode)
-    with pytest.raises(Image.UnsupportedCodecError):
-        actual.encode("PNG")
+    assert_raises(Image.UnsupportedCodecError, lambda: actual.encode("PNG"))
     converted = actual.convert({"La": "LA", "RGBa": "RGBA", "RGBX": "RGB"}[mode])
     assert_pixels_equal(Image.open(BytesIO(converted.encode("PNG"))).to_pillow(), converted.to_pillow())

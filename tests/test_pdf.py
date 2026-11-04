@@ -4,6 +4,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import PdfParser
 
 from blanket import Image, UnidentifiedImageError
@@ -18,8 +19,7 @@ def test_pdf_save(mode: str, channels: int, destination: str, tmp_path: Path) ->
     pixels = bytes((i * 37) % 256 for i in range(6 * channels))
     source = Image.frombytes(mode, (2, 3), pixels)
     if destination == "stream":
-        output = BytesIO()
-        source.save(output, format="pdf")
+        output = image_buffer(source, format="pdf")
         assert not output.closed
         data = output.getvalue()
     else:
@@ -49,20 +49,16 @@ def test_pdf_save(mode: str, channels: int, destination: str, tmp_path: Path) ->
         assert raster.decode() == pixels
         assert b"SMask" not in raster.dictionary
     assert source.tobytes() == pixels
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
 def test_pdf_rejects_unsupported_options_and_depth() -> None:
     output = BytesIO()
-    with pytest.raises(TypeError, match="unsupported PDF save option"):
-        Image.frombytes("RGB", (1, 1), b"\0\0\0").save(output, "PDF", quality=90)
-    with pytest.raises(ValueError, match="bit_depth=8"):
-        Image.frombytes("L", (1, 1), b"\x00\x01", bit_depth=16).save(output, "PDF")
+    assert_raises(TypeError, lambda: Image.frombytes("RGB", (1, 1), b"\0\0\0").save(output, "PDF", quality=90), match="unsupported PDF save option")
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\x00\x01", bit_depth=16).save(output, "PDF"), match="bit_depth=8")
     assert output.getvalue() == b""
 
 
 @pytest.mark.parametrize("size", [(0, 1), (1, 0)])
 def test_pdf_rejects_empty_image(size: tuple[int, int]) -> None:
-    with pytest.raises(ValueError, match="empty PDF"):
-        Image.frombytes("RGB", size, b"").save(BytesIO(), "PDF")
+    assert_raises(ValueError, lambda: Image.frombytes("RGB", size, b"").save(BytesIO(), "PDF"), match="empty PDF")

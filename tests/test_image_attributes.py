@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
+from helpers import image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -13,8 +14,7 @@ from blanket import Image
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_image_attributes(mode: str) -> None:
     raw = bytes([255] * len(mode))
-    image = Image.frombytes(mode, (1, 1), raw)
-    pillow = PillowImage.frombytes(mode, (1, 1), raw)
+    image, pillow = image_pair(mode, (1, 1), raw)
     assert image.filename == ""
     assert image.palette is pillow.palette is None
     assert image.is_animated is getattr(pillow, "is_animated", False)
@@ -51,8 +51,7 @@ def test_filename_from_path(tmp_path: Path, path_type: type) -> None:
 def test_opened_image_attributes(mode: str, format: str) -> None:
     if mode == "RGBA" and format == "JPEG":
         pytest.skip("JPEG does not support alpha")
-    stream = BytesIO()
-    Image.frombytes(mode, (1, 1), bytes([255] * len(mode))).save(stream, format)
+    stream = image_buffer(Image.frombytes(mode, (1, 1), bytes([255] * len(mode))), format)
     image = Image.open(stream)
     assert image.filename == ""
     assert image.palette is None

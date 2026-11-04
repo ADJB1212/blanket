@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 
 from blanket import CodecError, CodecResourceLimitError, CorruptImageError, Image, ImageFile, MissingBackendError, UnidentifiedImageError, UnsupportedCodecError
 
@@ -56,8 +57,7 @@ def test_eps_validation_precedes_backend_lookup(monkeypatch: pytest.MonkeyPatch,
 
 
 def test_decoded_pixel_limit() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (1, 1)).save(stream, "PNG")
+    stream = image_buffer(Image.new("RGB", (1, 1)), "PNG")
     data = bytearray(stream.getvalue())
     struct.pack_into(">II", data, 16, 20000, 20000)
     struct.pack_into(">I", data, 29, zlib.crc32(data[12:29]))
@@ -92,8 +92,7 @@ def test_cumulative_frame_limit() -> None:
     start = data.index(b"acTL")
     struct.pack_into(">I", data, start + 4, 0x7FFFFFFF)
     struct.pack_into(">I", data, start + 12, zlib.crc32(data[start : start + 12]))
-    with pytest.raises(CodecResourceLimitError):
-        Image.open(BytesIO(data))
+    assert_raises(CodecResourceLimitError, lambda: Image.open(BytesIO(data)))
 
 
 def test_streaming_corrupt_input() -> None:
@@ -118,8 +117,7 @@ def test_unsupported_animation() -> None:
 
 
 def test_unsupported_decoding() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (8, 8)).save(stream, "BMP")
+    stream = image_buffer(Image.new("RGB", (8, 8)), "BMP")
     data = bytearray(stream.getvalue())
     struct.pack_into("<I", data, 30, 4)
     with pytest.raises(UnsupportedCodecError) as caught:
@@ -129,17 +127,14 @@ def test_unsupported_decoding() -> None:
 
 
 def test_invalid_compression_identifier_is_corrupt() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (8, 8)).save(stream, "BMP")
+    stream = image_buffer(Image.new("RGB", (8, 8)), "BMP")
     data = bytearray(stream.getvalue())
     struct.pack_into("<I", data, 30, 99)
-    with pytest.raises(CorruptImageError):
-        Image.open(BytesIO(data))
+    assert_raises(CorruptImageError, lambda: Image.open(BytesIO(data)))
 
 
 def test_non_codec_failures_keep_existing_types(tmp_path: Path) -> None:
-    with pytest.raises(FileNotFoundError):
-        Image.open(tmp_path / "missing.png")
+    assert_raises(FileNotFoundError, lambda: Image.open(tmp_path / "missing.png"))
     with pytest.raises(UnidentifiedImageError) as caught:
         Image.open(BytesIO(b"not an image"))
     assert not isinstance(caught.value, CodecError)

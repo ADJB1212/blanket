@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
-from helpers import png_chunk
+from helpers import assert_raises, image_buffer, png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -110,8 +110,7 @@ def test_png_sbit_preserves_supported_depth_and_grayscale_alpha(color: int, chan
 def test_png_decoder_keeps_first_image_for_animated_containers(default_image: bool) -> None:
     first = PillowImage.new("RGBA", (17, 9), (100, 30, 20, 127))
     second = PillowImage.new("RGBA", first.size, (20, 30, 100, 255))
-    encoded = BytesIO()
-    first.save(encoded, "PNG", save_all=True, append_images=[second], default_image=default_image)
+    encoded = image_buffer(first, "PNG", save_all=True, append_images=[second], default_image=default_image)
     actual = Image.open(encoded)
     assert actual.size == first.size
     assert actual.mode == first.mode
@@ -128,8 +127,7 @@ def test_wide_encoding_reuses_sample_storage_with_exact_byte_order(format: str, 
     raw = struct.pack("<" + "H" * len(values), *values)
     image = Image.frombytes(mode, size, raw, bit_depth=depth)
     for level in (0, 6) if format == "PNG" else (None,):
-        encoded = BytesIO()
-        image.save(encoded, format, **({"compress_level": level} if level is not None else {}))
+        encoded = image_buffer(image, format, **({"compress_level": level} if level is not None else {}))
         actual = Image.open(encoded)
         scaled = [(value * 65535 + maximum // 2) // maximum for value in values]
         expected = raw if format == "PNG" else struct.pack("<" + "H" * len(scaled), *scaled)
@@ -148,8 +146,7 @@ def test_wide_encoding_reuses_sample_storage_with_exact_byte_order(format: str, 
 def test_grayscale_gif_preserves_exact_samples(values: list[int], count: int) -> None:
     raw = bytes(values[i % len(values)] for i in range(count))
     image = Image.frombytes("L", (count, 1), raw)
-    encoded = BytesIO()
-    image.save(encoded, "GIF")
+    encoded = image_buffer(image, "GIF")
     assert Image.open(encoded).convert("L").tobytes() == raw
     assert PillowImage.open(encoded).convert("L").tobytes() == raw
     assert image.tobytes() == raw
@@ -165,8 +162,7 @@ def test_png_deflate_levels(mode: str, subtests: pytest.Subtests) -> None:
                 raw = random.Random(61).randbytes(count) if random_pixels else bytes(i % 251 for i in range(count))
                 image = Image.frombytes(mode, size, raw)
                 raw = image.tobytes()
-                encoded = BytesIO()
-                image.save(encoded, "PNG", compress_level=level)
+                encoded = image_buffer(image, "PNG", compress_level=level)
                 for decoder in (Image.open, PillowImage.open):
                     decoded = decoder(BytesIO(encoded.getvalue()))
                     assert decoded.mode == mode
@@ -179,14 +175,12 @@ def test_jxl_reused_runners_are_independent() -> None:
     for size in ((17, 13), (513, 129), (65, 513)):
         for mode in ("L", "RGB", "RGBA"):
             raw = random.Random(71).randbytes(size[0] * size[1] * len(mode))
-            encoded = BytesIO()
-            Image.frombytes(mode, size, raw).save(encoded, "JXL", lossless=True, effort=1)
+            encoded = image_buffer(Image.frombytes(mode, size, raw), "JXL", lossless=True, effort=1)
             cases.append((encoded.getvalue(), mode, size, raw))
 
     def decode_cases(_: int) -> None:
         for payload, mode, size, raw in cases + cases[::-1]:
-            with pytest.raises(UnidentifiedImageError):
-                Image.open(BytesIO(b"\xff\x0a\0"))
+            assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(b"\xff\x0a\0")))
             decoded = Image.open(BytesIO(payload))
             assert decoded.mode == mode
             assert decoded.size == size

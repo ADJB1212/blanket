@@ -3,6 +3,7 @@ from threading import Event as ThreadEvent
 
 import pytest
 from gpu_helpers import require_metal
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu
 
@@ -44,8 +45,7 @@ def test_transfer_cancellation_before_execution(metal, monkeypatch):
             transfer = ImageGpu.from_image_async(Image.new("L", (17, 9), 57))
             assert transfer.cancel()
             assert transfer.cancelled() and transfer.done()
-            with pytest.raises(CancelledError):
-                transfer.result()
+            assert_raises(CancelledError, lambda: transfer.result())
         finally:
             gate.set()
             blocker.result(timeout=10)
@@ -53,14 +53,11 @@ def test_transfer_cancellation_before_execution(metal, monkeypatch):
 
 def test_async_errors_and_closed_images(metal):
     failed = ImageGpu.from_image_async(Image.new("L", (3, 5)), backend="invalid")
-    with pytest.raises(ValueError, match="backend"):
-        failed.result(timeout=10)
+    assert_raises(ValueError, lambda: failed.result(timeout=10), match="backend")
     gpu = ImageGpu.from_image(Image.new("L", (3, 5)))
     gpu.close()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.to_image_async()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.record_event()
+    assert_raises(ValueError, lambda: gpu.to_image_async(), match="closed")
+    assert_raises(ValueError, lambda: gpu.record_event(), match="closed")
 
 
 def test_native_stream_ordering_and_event_ownership(metal):
@@ -79,15 +76,12 @@ def test_native_stream_ordering_and_event_ownership(metal):
 
 
 def test_stream_context_validation(metal):
-    with pytest.raises(ValueError):
-        ImageGpu.Stream("metal", device=1)
-    with pytest.raises(ValueError):
-        ImageGpu.Stream("invalid")
+    assert_raises(ValueError, lambda: ImageGpu.Stream("metal", device=1))
+    assert_raises(ValueError, lambda: ImageGpu.Stream("invalid"))
     source = ImageGpu.from_image(Image.new("L", (3, 5)))
     event = source.record_event()
     event.device = "cuda:0"
-    with pytest.raises(ValueError, match="context"):
-        ImageGpu.Stream().wait_event(event)
+    assert_raises(ValueError, lambda: ImageGpu.Stream().wait_event(event), match="context")
 
 
 def test_async_unsigned_roundtrip(metal):
@@ -130,8 +124,7 @@ def test_running_transfer_cannot_be_cancelled(metal, monkeypatch):
         assert started.wait(timeout=10)
         assert transfer.running()
         assert not transfer.cancel()
-        with pytest.raises(TimeoutError):
-            transfer.result(timeout=0)
+        assert_raises(TimeoutError, lambda: transfer.result(timeout=0))
     finally:
         release.set()
     assert transfer.result(timeout=10).to_image().tobytes() == bytes([57]) * (17 * 9)

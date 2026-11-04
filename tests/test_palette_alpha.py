@@ -4,6 +4,7 @@ import struct
 import tracemalloc
 
 import pytest
+from helpers import assert_raises
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -97,8 +98,6 @@ def test_indexed_alpha_conversion_rejects_invalid_tables_and_closed_images() -> 
     image = Image.new("P", (1, 1))
     image.info["transparency"] = bytes(257)
     for mode in ("PA", "LA", "RGBA"):
-        with pytest.raises(ValueError):
-            image.convert(mode)
+        assert_raises(ValueError, lambda: image.convert(mode))
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.convert("PA")
+    assert_raises(ValueError, lambda: image.convert("PA"), match="closed")

@@ -7,7 +7,7 @@ from pillow_helpers import PILLOW_IMAGES
 PILLOW_IMAGE_PREFIX = str(PILLOW_IMAGES) + "/"
 
 import pytest
-from helpers import assert_pillow_equal, assert_pixels_equal, encode_image, random_pair
+from helpers import assert_pillow_equal, assert_pixels_equal, assert_raises, encode_image, image_buffer, image_pair, new_pair, random_pair
 from pillow_helpers import assert_image_equal, assert_image_similar, assert_image_similar_tofile, hopper
 
 from blanket import ExifTags, Image, ImageDraw, ImageOps, ImageStat, features
@@ -256,8 +256,7 @@ def test_scale() -> None:
     # Test the scaling function
     i = hopper("L").resize((50, 50))
 
-    with pytest.raises(ValueError):
-        ImageOps.scale(i, -1)
+    assert_raises(ValueError, lambda: ImageOps.scale(i, -1))
 
     newimg = ImageOps.scale(i, 1)
     assert newimg.size == (50, 50)
@@ -298,8 +297,7 @@ def test_expand_palette(border: int | tuple[int, int, int, int]) -> None:
 @pytest.mark.parametrize("border", ((1,), (1, 2, 3), (1, 2, 3, 4, 5)))
 def test_expand_invalid_border(border: tuple[int, ...]) -> None:
     im = Image.new("1", (1, 1))
-    with pytest.raises(ValueError):
-        ImageOps.expand(im, border)
+    assert_raises(ValueError, lambda: ImageOps.expand(im, border))
 
 
 @pytest.mark.parametrize(
@@ -318,26 +316,22 @@ def test_colorize_reference_samples(options, samples) -> None:
 
 
 def test_colorize_invalid_mode() -> None:
-    with pytest.raises(ValueError, match="mode must be L, not RGB"):
-        ImageOps.colorize(hopper("RGB"), "black", "white")
+    assert_raises(ValueError, lambda: ImageOps.colorize(hopper("RGB"), "black", "white"), match="mode must be L, not RGB")
 
 
 @pytest.mark.parametrize("bits", (0, 9))
 def test_posterize_invalid_bits(bits: int) -> None:
-    with pytest.raises(ValueError, match="bits must be between or equal to 1 and 8"):
-        ImageOps.posterize(hopper("L"), bits)
+    assert_raises(ValueError, lambda: ImageOps.posterize(hopper("L"), bits), match="bits must be between or equal to 1 and 8")
 
 
 @pytest.mark.parametrize("blackpoint, whitepoint", ((-1, 255), (0, 256), (200, 50)))
 def test_colorize_invalid_points(blackpoint: int, whitepoint: int) -> None:
-    with pytest.raises(ValueError, match="blackpoint and whitepoint must each be"):
-        ImageOps.colorize(hopper("L"), "black", "white", blackpoint=blackpoint, whitepoint=whitepoint)
+    assert_raises(ValueError, lambda: ImageOps.colorize(hopper("L"), "black", "white", blackpoint=blackpoint, whitepoint=whitepoint), match="blackpoint and whitepoint must each be")
 
 
 @pytest.mark.parametrize("midpoint", (100, 200))
 def test_colorize_invalid_midpoint(midpoint: int) -> None:
-    with pytest.raises(ValueError, match="midpoint must be between or equal to"):
-        ImageOps.colorize(hopper("L"), "black", "white", mid="blue", blackpoint=125, midpoint=midpoint, whitepoint=175)
+    assert_raises(ValueError, lambda: ImageOps.colorize(hopper("L"), "black", "white", mid="blue", blackpoint=125, midpoint=midpoint, whitepoint=175), match="midpoint must be between or equal to")
 
 
 def test_exif_transpose() -> None:
@@ -440,8 +434,7 @@ def test_exif_transpose_in_place() -> None:
 
 def test_autocontrast_unsupported_mode() -> None:
     im = Image.new("RGBA", (1, 1))
-    with pytest.raises(OSError):
-        ImageOps.autocontrast(im)
+    assert_raises(OSError, lambda: ImageOps.autocontrast(im))
 
 
 def test_autocontrast_cutoff() -> None:
@@ -559,8 +552,7 @@ def test_palette_operation_keeps_alpha() -> None:
 
 def test_palette_histogram_operation_not_supported() -> None:
     im = hopper("P")
-    with pytest.raises(NotImplementedError, match="mode P support coming soon"):
-        ImageOps.autocontrast(im)
+    assert_raises(NotImplementedError, lambda: ImageOps.autocontrast(im), match="mode P support coming soon")
 
 
 import subprocess
@@ -598,8 +590,7 @@ def test_deformer_can_subclass_public_protocol(mode: str) -> None:
 def test_native_histogram_operations_avoid_python_tables(mode: str, name: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     image, reference = random_pair(mode, size)
     image.info["description"] = "native tone mapping"
-    mask = Image.new("L", size, 1)
-    reference_mask = PILImage.new("L", size, 1)
+    mask, reference_mask = new_pair("L", size, 1)
     options = {"cutoff": (2.5, 9), "ignore": [-1, 0], "preserve_tone": True} if name == "autocontrast" else {}
     expected = getattr(PILOps, name)(reference, mask=reference_mask, **options)
 
@@ -622,8 +613,7 @@ def test_autocontrast_fractional_and_unusual_cutoffs(cutoff: object) -> None:
 
 @pytest.mark.parametrize("points", [(0, 0, 255), (0, 255, 255), (70, 70, 200), (70, 200, 200), (255, 255, 255), (0, 0, 0)])
 def test_colorize_coincident_stops_preserve_floor_rounding(points: tuple[int, int, int]) -> None:
-    image = Image.frombytes("L", (256, 1), bytes(range(256)))
-    reference = PILImage.frombytes("L", image.size, image.tobytes())
+    image, reference = image_pair("L", (256, 1), bytes(range(256)))
     options = {"black": (250, 30, 17), "mid": (10, 230, 90), "white": (20, 40, 55), "blackpoint": points[0], "midpoint": points[1], "whitepoint": points[2]}
     assert_pillow_equal(ImageOps.colorize(image, **options), PILOps.colorize(reference, **options))
 
@@ -723,10 +713,8 @@ def test_crop_border_and_box_are_distinct(mode: str) -> None:
         assert result is not b
         assert result.info == b.info
         assert result.info is not b.info
-    with pytest.raises(TypeError):
-        cast("Callable[..., object]", b.crop)(border=2)
-    with pytest.raises(TypeError):
-        cast("Callable[..., object]", ImageOps.crop)(b, box=box)
+    assert_raises(TypeError, lambda: cast("Callable[..., object]", b.crop)(border=2))
+    assert_raises(TypeError, lambda: cast("Callable[..., object]", ImageOps.crop)(b, box=box))
 
 
 class Deformer_regression:
@@ -767,8 +755,7 @@ def test_xmp_only_png() -> None:
     _, p = random_pair()
     metadata = PngInfo()
     metadata.add_itxt("XML:com.adobe.xmp", '<rdf tiff:Orientation="8"/>', zip=True)
-    stream = BytesIO()
-    p.save(stream, "PNG", pnginfo=metadata)
+    stream = image_buffer(p, "PNG", pnginfo=metadata)
     b, p = Image.open(stream), PILImage.open(stream)
     assert_pillow_equal(ImageOps.exif_transpose(b), PILOps.exif_transpose(p))
 
@@ -778,16 +765,14 @@ def test_invalid_masks(mode: str, size: tuple[int, int]) -> None:
     b, _ = random_pair()
     mask, _ = random_pair(mode, size)
     for op in (ImageOps.autocontrast, ImageOps.equalize):
-        with pytest.raises(ValueError):
-            op(b, mask=mask)
+        assert_raises(ValueError, lambda: op(b, mask=mask))
 
 
 def test_closed_image() -> None:
     b, _ = random_pair()
     b.close()
     for op in (ImageOps.invert, ImageOps.flip, ImageOps.equalize, ImageOps.exif_transpose):
-        with pytest.raises(ValueError, match="closed"):
-            op(b)
+        assert_raises(ValueError, lambda: op(b), match="closed")
 
 
 def test_no_pillow_runtime_dependency() -> None:
@@ -813,8 +798,7 @@ def test_processed_png_interop(mode: str) -> None:
     b, p = random_pair(mode)
     b = ImageOps.fit(ImageOps.mirror(b), (21, 17))
     p = PILOps.fit(PILOps.mirror(p), (21, 17))
-    stream = BytesIO()
-    b.save(stream, "PNG")
+    stream = image_buffer(b, "PNG")
     loaded = PILImage.open(stream)
     assert loaded.tobytes() == p.tobytes()
 
@@ -857,8 +841,7 @@ def test_png_exif_profile(compressed: bool) -> None:
     raw = exif.tobytes()
     metadata = PngInfo()
     metadata.add_text("Raw profile type exif", f"\nexif\n{len(raw)}\n{raw.hex()}", zip=compressed)
-    stream = BytesIO()
-    p.save(stream, "PNG", pnginfo=metadata)
+    stream = image_buffer(p, "PNG", pnginfo=metadata)
     assert_pillow_equal(ImageOps.exif_transpose(Image.open(stream)), PILOps.exif_transpose(PILImage.open(stream)))
 
 
@@ -892,8 +875,7 @@ def test_deform_zero_area_box() -> None:
     b, p = random_pair()
     deformer = Deformer_regression([((1, 0, 1, 10), (0, 0, 0, 10, 10, 10, 10, 0))])
     for ops, image in ((ImageOps, b), (PILOps, p)):
-        with pytest.raises(ZeroDivisionError):
-            ops.deform(image, deformer)
+        assert_raises(ZeroDivisionError, lambda: ops.deform(image, deformer))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

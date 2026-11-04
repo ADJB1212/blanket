@@ -6,6 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
@@ -24,14 +25,12 @@ def test_extended_interoperability(format: str, mode: str) -> None:
     if mode == "1":
         source.putdata([255 if i % 3 else 0 for i in range(size[0] * size[1])])
     for writer in (source, source.to_pillow()):
-        stream = BytesIO()
-        writer.save(stream, format)
+        stream = image_buffer(writer, format)
         actual = Image.open(stream, formats=[format])
         expected = PillowImage.open(stream)
         assert (actual.format, actual.size, actual.mode) == (format, size, mode)
         assert actual.tobytes() == source.tobytes() == expected.tobytes()
-        with pytest.raises(UnidentifiedImageError, match="not in formats"):
-            Image.open(stream, formats=["PNG"])
+        assert_raises(UnidentifiedImageError, lambda: Image.open(stream, formats=["PNG"]), match="not in formats")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
@@ -39,8 +38,7 @@ def test_pam_roundtrip(mode: str) -> None:
     channels = len(mode)
     raw = bytes((i * 19) % 256 for i in range(5 * 3 * channels))
     source = Image.frombytes(mode, (5, 3), raw)
-    stream = BytesIO()
-    source.save(stream, "PAM")
+    stream = image_buffer(source, "PAM")
     assert stream.getvalue().startswith(b"P7\n")
     for formats in (None, ["PAM"], ["PPM"]):
         actual = Image.open(stream, formats=formats)
@@ -61,8 +59,7 @@ def test_extended_wide_roundtrip(mode: str, depth: int, format: str) -> None:
     channels = len(mode)
     values = [(i * 719) % (1 << depth) for i in range(9 * 5 * channels)]
     source = Image.frombytes(mode, (9, 5), struct.pack("<" + "H" * len(values), *values), bit_depth=depth)
-    stream = BytesIO()
-    source.save(stream, format)
+    stream = image_buffer(source, format)
     actual = Image.open(stream)
     assert (actual.mode, actual.bit_depth) == (mode, 16)
     maximum = (1 << depth) - 1
@@ -73,8 +70,7 @@ def test_extended_wide_roundtrip(mode: str, depth: int, format: str) -> None:
 @pytest.mark.parametrize("raw_codestream", [False, True])
 def test_external_jpeg2000_16bit(raw_codestream: bool) -> None:
     raw = struct.pack("<6H", 0, 1, 255, 256, 32768, 65535)
-    stream = BytesIO()
-    PillowImage.frombytes("I;16", (3, 2), raw).save(stream, "JPEG2000", no_jp2=raw_codestream)
+    stream = image_buffer(PillowImage.frombytes("I;16", (3, 2), raw), "JPEG2000", no_jp2=raw_codestream)
     actual = Image.open(stream)
     assert actual.bit_depth == 16
     assert actual.tobytes() == raw
@@ -85,8 +81,7 @@ def test_external_jpeg2000_16bit(raw_codestream: bool) -> None:
 def test_extended_integer_save(mode: str, format: str) -> None:
     values = [0, 1, 255, 256, 32768, 65535]
     raw = struct.pack((">" if mode == "I;16B" else "<") + "6H", *values)
-    stream = BytesIO()
-    Image.frombytes(mode, (3, 2), raw).save(stream, format)
+    stream = image_buffer(Image.frombytes(mode, (3, 2), raw), format)
     actual = Image.open(stream)
     assert actual.bit_depth == 16
     assert actual.tobytes() == struct.pack("<6H", *values)
@@ -98,8 +93,7 @@ def test_external_tga_orientation_and_palette(mode: str, compression: str | None
     source = PillowImage.frombytes(mode, (7, 5), bytes((i * 37) % 256 for i in range(35 * len(mode))))
     if mode == "P":
         source.putpalette(bytes((i * 17) % 256 for i in range(768)))
-    stream = BytesIO()
-    source.save(stream, "TGA", compression=compression)
+    stream = image_buffer(source, "TGA", compression=compression)
     actual = Image.open(stream)
     assert actual.convert("RGBA").tobytes() == source.convert("RGBA").tobytes()
 
@@ -111,8 +105,7 @@ def test_tga_raw_rows_with_image_id(mode: str, width: int, top_origin: bool) -> 
     size = (width, 3)
     raw = bytes((i * 37) % 256 for i in range(width * 3 * len(mode)))
     source = PillowImage.frombytes(mode, size, raw)
-    stream = BytesIO()
-    source.save(stream, "TGA", orientation=1 if top_origin else -1, id_section=b"test image id")
+    stream = image_buffer(source, "TGA", orientation=1 if top_origin else -1, id_section=b"test image id")
     actual = Image.open(stream)
     assert (actual.mode, actual.size, actual.tobytes()) == (mode, size, raw)
     assert actual.tobytes() == PillowImage.open(stream).tobytes()
@@ -135,14 +128,12 @@ def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int) ->
     actual = Image.open(BytesIO(payload))
     assert (actual.mode, actual.size, actual.bit_depth) == (mode, (3, 2), 16)
     assert actual.tobytes() == struct.pack("<" + "H" * len(samples), *samples)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(payload[:-1]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(payload[:-1])))
 
 
 def test_lossy_jpeg2000_decode() -> None:
     source = PillowImage.frombytes("RGB", (13, 7), bytes((i * 37) % 256 for i in range(13 * 7 * 3)))
-    stream = BytesIO()
-    source.save(stream, "JPEG2000", irreversible=True)
+    stream = image_buffer(source, "JPEG2000", irreversible=True)
     assert Image.open(stream).tobytes() == PillowImage.open(stream).tobytes()
 
 
@@ -154,14 +145,12 @@ def test_jpeg2000_parallel_codec_preserves_serial_output(monkeypatch: pytest.Mon
     raw = bytes(values) if depth == 8 else struct.pack("<" + "H" * count, *values)
     source = Image.frombytes(mode, size, raw, bit_depth=depth)
     monkeypatch.setenv("OPJ_NUM_THREADS", "1")
-    serial = BytesIO()
-    source.save(serial, "JPEG2000")
+    serial = image_buffer(source, "JPEG2000")
     expected = Image.open(serial)
     restored = expected if depth in (8, 16) else expected.convert(mode, bit_depth=depth)
     assert restored.tobytes() == raw
     monkeypatch.delenv("OPJ_NUM_THREADS")
-    parallel = BytesIO()
-    source.save(parallel, "JPEG2000")
+    parallel = image_buffer(source, "JPEG2000")
     assert parallel.getvalue() == serial.getvalue()
     actual = Image.open(parallel)
     assert (actual.mode, actual.size, actual.bit_depth) == (expected.mode, expected.size, expected.bit_depth)
@@ -193,8 +182,7 @@ def test_extended_extension_inference(tmp_path: Path, extension: str, format: st
 
 @pytest.mark.parametrize("format", ["DDS", "EPS"])
 def test_readonly_save_rejected(format: str) -> None:
-    with pytest.raises(ValueError, match="unsupported image format"):
-        Image.new("RGB", (1, 1)).save(BytesIO(), format)
+    assert_raises(ValueError, lambda: Image.new("RGB", (1, 1)).save(BytesIO(), format), match="unsupported image format")
 
 
 @pytest.mark.parametrize("fourcc", [b"DXT1", b"DXT3", b"DXT5"])
@@ -218,8 +206,7 @@ EPS = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BoundingBox: 0 0 4 3\n%%EndComments\n1 0 0 se
 def test_eps_missing_ghostscript(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATH", "")
     assert features.check("eps") is False
-    with pytest.raises(UnidentifiedImageError, match="requires Ghostscript"):
-        Image.open(BytesIO(EPS))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(EPS)), match="requires Ghostscript")
 
 
 @pytest.mark.skipif(shutil.which("gs") is None, reason="Ghostscript is optional")
@@ -233,5 +220,4 @@ def test_eps_rasterization(preview: bool) -> None:
 
 @pytest.mark.parametrize("data", [b"P6\n99999999 99999999\n255\n", b"P7\n", b"qoif", b"DDS ", b"\0\0\0\x0cjP  \r\n\x87\n", b"\xff\x4f\xff\x51", bytes([0, 0, 2] + [0] * 9 + [2, 0, 2, 0, 24, 0])])
 def test_malformed_extended_inputs(data: bytes) -> None:
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))

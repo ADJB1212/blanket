@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import hopper
 
 from blanket import Image
@@ -55,8 +56,7 @@ def test_fromarray() -> None:
 
     # Test mode is None with no "typestr" in the array interface
     wrapped = Wrapper(hopper("L"), {"shape": (100, 128)})
-    with pytest.raises(TypeError):
-        Image.fromarray(wrapped)
+    assert_raises(TypeError, lambda: Image.fromarray(wrapped))
 
 
 def test_fromarray_strides_without_tobytes() -> None:

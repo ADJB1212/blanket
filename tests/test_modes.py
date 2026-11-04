@@ -5,7 +5,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
-from helpers import assert_pixels_equal, image_pair
+from helpers import assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
 from PIL import Image as PillowImage, ImageOps as PillowOps
 
 from blanket import Image, ImageChops, ImageOps
@@ -26,8 +26,7 @@ def test_new_modes_pixel_access_and_bytes(mode: str, fill: int | tuple[int, int]
 @pytest.mark.parametrize("mode", ["1", "LA", "PA"])
 def test_new_modes_crop_and_transpose(mode: str) -> None:
     raw = {"1": b"\xa0\x40", "LA": bytes(range(20)), "PA": bytes(range(20))}[mode]
-    image = Image.frombytes(mode, (5, 2), raw)
-    pillow = PillowImage.frombytes(mode, (5, 2), raw)
+    image, pillow = image_pair(mode, (5, 2), raw)
     for operation in (lambda im: im.crop((1, 0, 4, 2)), lambda im: im.transpose(Image.Transpose.FLIP_LEFT_RIGHT)):
         assert operation(image).getdata() == list(operation(pillow).get_flattened_data())
 
@@ -36,8 +35,7 @@ def test_la_conversion_and_png_roundtrip() -> None:
     image = Image.frombytes("LA", (2, 1), bytes([40, 70, 210, 255]))
     assert image.convert("RGBA").getdata() == [(40, 40, 40, 70), (210, 210, 210, 255)]
     assert image.convert("L").getdata() == [40, 210]
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     assert Image.open(BytesIO(output.getvalue())).mode == "LA"
     assert Image.open(BytesIO(output.getvalue())).tobytes() == image.tobytes()
 
@@ -57,8 +55,7 @@ def test_pa_palette_alpha_conversion() -> None:
     assert image.convert("RGBA").getdata() == [(255, 0, 0, 128), (0, 0, 255, 255)]
     assert image.convert("PA").getdata() == image.getdata()
     assert image.convert("P").getdata() == [0, 1]
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     assert Image.open(BytesIO(output.getvalue())).convert("RGBA").getdata() == image.convert("RGBA").getdata()
 
 
@@ -98,8 +95,7 @@ def test_two_channel_masked_paste(mode: str) -> None:
 
 
 def test_la_resize_premultiplies_alpha() -> None:
-    image = Image.frombytes("LA", (2, 1), bytes([255, 0, 0, 255]))
-    pillow = PillowImage.frombytes("LA", image.size, image.tobytes())
+    image, pillow = image_pair("LA", (2, 1), bytes([255, 0, 0, 255]))
     actual = image.resize((5, 1), Image.Resampling.BILINEAR)
     expected = pillow.resize((5, 1), PillowImage.Resampling.BILINEAR)
     assert actual.getdata() == list(expected.get_flattened_data())
@@ -107,8 +103,7 @@ def test_la_resize_premultiplies_alpha() -> None:
 
 @pytest.mark.parametrize("mode", ["1", "LA", "PA"])
 def test_new_modes_reject_high_bit_depth(mode: str) -> None:
-    with pytest.raises(ValueError, match="requires 8-bit"):
-        Image.frombytes(mode, (1, 1), bytes([0, 0]) * (2 if mode != "1" else 1), bit_depth=16)
+    assert_raises(ValueError, lambda: Image.frombytes(mode, (1, 1), bytes([0, 0]) * (2 if mode != "1" else 1), bit_depth=16), match="requires 8-bit")
 
 
 def test_bilevel_png_and_logical_operations() -> None:
@@ -120,8 +115,7 @@ def test_bilevel_png_and_logical_operations() -> None:
 
     for operation in ("logical_and", "logical_or", "logical_xor"):
         assert getattr(ImageChops, operation)(first, second).tobytes() == getattr(PillowChops, operation)(pillow_first, pillow_second).tobytes()
-    output = BytesIO()
-    first.save(output, "PNG")
+    output = image_buffer(first, "PNG")
     reopened = Image.open(BytesIO(output.getvalue()))
     assert reopened.mode == "1"
     assert reopened.tobytes() == first.tobytes()
@@ -180,8 +174,7 @@ def test_integer_mode_conversion_simd_boundaries(mode: str, subtests: pytest.Sub
             values = (values * ((count + len(values) - 1) // len(values)))[:count]
             format = "i" if mode == "I" else "H"
             raw = struct.pack(f"{'>' if mode == 'I;16B' else '<'}{count}{format}", *values)
-            blanket = Image.frombytes(mode, (count, 1), raw)
-            pillow = PillowImage.frombytes(mode, (count, 1), raw)
+            blanket, pillow = image_pair(mode, (count, 1), raw)
             for destination in ("L", "RGB", "RGBA", "I"):
                 assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
@@ -190,8 +183,7 @@ def test_integer_mode_conversion_simd_boundaries(mode: str, subtests: pytest.Sub
 @pytest.mark.parametrize("filter", [Image.Resampling.NEAREST, Image.Resampling.BILINEAR])
 def test_integer_mode_resize_matches_pillow(mode: str, filter: Image.Resampling) -> None:
     values = [-10, 1000] if mode == "I" else [0, 65535]
-    blanket = Image.new(mode, (2, 1))
-    pillow = PillowImage.new(mode, (2, 1))
+    blanket, pillow = new_pair(mode, (2, 1))
     blanket.putdata(values)
     pillow.putdata(values)
     assert blanket.resize((3, 1), filter).getdata() == list(pillow.resize((3, 1), filter).get_flattened_data())
@@ -199,8 +191,7 @@ def test_integer_mode_resize_matches_pillow(mode: str, filter: Image.Resampling)
 
 def test_big_endian_integer_bilinear_resize_matches_pillow_byte_order() -> None:
     values = [1, 258, 1025, 32767]
-    blanket = Image.new("I;16B", (4, 1))
-    pillow = PillowImage.new("I;16B", (4, 1))
+    blanket, pillow = new_pair("I;16B", (4, 1))
     blanket.putdata(values)
     pillow.putdata(values)
     assert blanket.resize((7, 1), Image.Resampling.BILINEAR).tobytes() == pillow.resize((7, 1), PillowImage.Resampling.BILINEAR).tobytes()
@@ -236,8 +227,7 @@ def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, s
 
 @pytest.mark.parametrize(("mode", "value"), [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
 def test_integer_mode_new_fills_full_sample(mode: str, value: int) -> None:
-    blanket = Image.new(mode, (37, 3), value)
-    pillow = PillowImage.new(mode, (37, 3), value)
+    blanket, pillow = new_pair(mode, (37, 3), value)
     assert blanket.tobytes() == pillow.tobytes()
 
 
@@ -281,8 +271,7 @@ def test_integer_mode_png_save_preserves_sample_values(mode: str) -> None:
     values = [-1, 258, 65536] if mode == "I" else [0, 258, 65535]
     image = Image.new(mode, (3, 1))
     image.putdata(values)
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     reopened = PillowImage.open(BytesIO(output.getvalue()))
     expected = [max(0, min(65535, value)) for value in values]
     assert list(reopened.get_flattened_data()) == expected
@@ -370,8 +359,7 @@ def test_signed_integer_masked_paste_matches_pillow() -> None:
 
 def test_float_mode_storage_conversion_and_geometry() -> None:
     values = [-10.75, -1.5, -0.0, 0.25, 1.5, 254.9, 255.1, 300.5]
-    blanket = Image.new("F", (len(values), 1))
-    pillow = PillowImage.new("F", (len(values), 1))
+    blanket, pillow = new_pair("F", (len(values), 1))
     blanket.putdata(values)
     pillow.putdata(values)
     assert blanket.mode == "F"
@@ -505,16 +493,14 @@ def test_float_reduce_preserves_double_accumulation() -> None:
 def test_float_tiff_preserves_sample_bits() -> None:
     raw = struct.pack("<8I", 0, 0x80000000, 0x7F800000, 0xFF800000, 0x7FC00001, 1, 0x7F7FFFFF, 0xBF800000)
     image = Image.frombytes("F", (4, 2), raw)
-    output = BytesIO()
-    image.save(output, "TIFF")
+    output = image_buffer(image, "TIFF")
     assert PillowImage.open(BytesIO(output.getvalue())).tobytes() == raw
     assert Image.open(BytesIO(output.getvalue())).tobytes() == raw
 
 
 def test_float_mode_reduce_transform_and_tiff_roundtrip() -> None:
     values = [1.25, 2.5, -3.75, 100.0, 0.0, 9.5]
-    blanket = Image.new("F", (3, 2))
-    pillow = PillowImage.new("F", (3, 2))
+    blanket, pillow = new_pair("F", (3, 2))
     blanket.putdata(values)
     pillow.putdata(values)
     assert blanket.reduce(2).tobytes() == pillow.reduce(2).tobytes()
@@ -526,14 +512,11 @@ def test_float_mode_reduce_transform_and_tiff_roundtrip() -> None:
         lambda im: im.transform((3, 2), PillowImage.Transform.QUAD, (0, 0, 0, 2, 3, 2, 3, 0)),
     ):
         assert operation(blanket).getdata() == pytest.approx(list(operation(pillow).get_flattened_data()), abs=0.0001)
-    output = BytesIO()
-    blanket.save(output, "TIFF")
+    output = image_buffer(blanket, "TIFF")
     assert list(PillowImage.open(BytesIO(output.getvalue())).get_flattened_data()) == blanket.getdata()
-    pillow_output = BytesIO()
-    pillow.save(pillow_output, "TIFF")
+    pillow_output = image_buffer(pillow, "TIFF")
     assert Image.open(BytesIO(pillow_output.getvalue())).getdata() == blanket.getdata()
-    with pytest.raises(OSError, match="cannot write mode F as PNG"):
-        blanket.save(BytesIO(), "PNG")
+    assert_raises(OSError, lambda: blanket.save(BytesIO(), "PNG"), match="cannot write mode F as PNG")
 
 
 @pytest.mark.parametrize(("source", "destination"), [("RGB", "HSV"), ("RGBA", "HSV"), ("L", "HSV"), ("LA", "HSV"), ("HSV", "RGB"), ("HSV", "RGBA"), ("HSV", "L")])
@@ -544,15 +527,13 @@ def test_hsv_conversion_chunks_match_pillow(source: str, destination: str, subte
 
             channels = len(source)
             raw = random.Random(42).randbytes(count * channels)
-            blanket = Image.frombytes(source, (count, 1), raw)
-            pillow = PillowImage.frombytes(source, (count, 1), raw)
+            blanket, pillow = image_pair(source, (count, 1), raw)
             assert blanket.convert(destination).tobytes() == pillow.convert(destination).tobytes()
 
 
 def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:
     raw = bytes(i * 17 % 256 for i in range(37 * 3))
-    blanket = Image.frombytes("HSV", (37, 1), raw)
-    pillow = PillowImage.frombytes("HSV", (37, 1), raw)
+    blanket, pillow = image_pair("HSV", (37, 1), raw)
     assert blanket.mode == "HSV"
     assert blanket.getbands() == ("H", "S", "V")
     assert blanket.getpixel((0, 0)) == pillow.getpixel((0, 0))
@@ -577,5 +558,4 @@ def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:
     assert blanket.crop((2, 0, 9, 1)).getdata() == list(pillow.crop((2, 0, 9, 1)).get_flattened_data())
     assert blanket.split()[2].getdata() == list(pillow.split()[2].get_flattened_data())
     assert Image.merge("HSV", blanket.split()).tobytes() == blanket.tobytes()
-    with pytest.raises(OSError, match="cannot write mode HSV"):
-        blanket.save(BytesIO(), "PNG")
+    assert_raises(OSError, lambda: blanket.save(BytesIO(), "PNG"), match="cannot write mode HSV")

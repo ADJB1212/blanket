@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage, ImageCms as PillowCms
 
 from blanket import Image, ImageCms
@@ -80,15 +81,13 @@ def test_in_place_and_embedded_output_profile() -> None:
     assert image.tobytes() == expected.tobytes()
     assert image.tobytes() != original
     assert image.getchannel("A").tobytes() == bytes([0, 127, 255])
-    stream = BytesIO()
-    image.save(stream, "PNG")
+    stream = image_buffer(image, "PNG")
     reopened = Image.open(BytesIO(stream.getvalue()))
     assert reopened.info["icc_profile"] == output.tobytes()
 
 
 def test_transform_only_changes_current_frame() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (2, 1), (80, 140, 220)).save(stream, "PNG", save_all=True, append_images=[Image.new("RGB", (2, 1), (35, 200, 25))])
+    stream = image_buffer(Image.new("RGB", (2, 1), (80, 140, 220)), "PNG", save_all=True, append_images=[Image.new("RGB", (2, 1), (35, 200, 25))])
     image = Image.open(BytesIO(stream.getvalue()))
     first = image.tobytes()
     format = image.format
@@ -109,8 +108,7 @@ def test_transform_only_changes_current_frame() -> None:
 @pytest.mark.parametrize("mode", ["1", "LA", "P", "PA", "I", "I;16", "I;16L", "I;16B", "F", "HSV", "YCbCr"])
 def test_unsupported_modes_are_rejected(mode: str) -> None:
     profile = ImageCms.createProfile("sRGB")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.profileToProfile(Image.new(mode, (1, 1)), profile, profile)
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.profileToProfile(Image.new(mode, (1, 1)), profile, profile))
 
 
 def test_invalid_arguments_leave_pixels_unchanged(tmp_path: Path) -> None:
@@ -118,28 +116,19 @@ def test_invalid_arguments_leave_pixels_unchanged(tmp_path: Path) -> None:
     image = Image.new("RGB", (2, 1), (80, 140, 220))
     raw = image.tobytes()
     for intent in (-1, 4, 1.5, "perceptual"):
-        with pytest.raises(ImageCms.PyCMSError):
-            ImageCms.profileToProfile(image, profile, profile, intent, inPlace=True)  # type: ignore[arg-type]
+        assert_raises(ImageCms.PyCMSError, lambda: ImageCms.profileToProfile(image, profile, profile, intent, inPlace=True))  # type: ignore[arg-type]
     for flags in (-1, 2**32, 0.5):
-        with pytest.raises(ImageCms.PyCMSError):
-            ImageCms.buildTransform(profile, profile, "RGB", "RGB", flags=flags)  # type: ignore[arg-type]
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.ImageCmsProfile(BytesIO(b"invalid ICC"))
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.getOpenProfile(tmp_path / "missing.icc")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.createProfile("unknown")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.profileToProfile(image, profile, ImageCms.createProfile("LAB"), outputMode="LAB", inPlace=True)
+        assert_raises(ImageCms.PyCMSError, lambda: ImageCms.buildTransform(profile, profile, "RGB", "RGB", flags=flags))  # type: ignore[arg-type]
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.ImageCmsProfile(BytesIO(b"invalid ICC")))
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.getOpenProfile(tmp_path / "missing.icc"))
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.createProfile("unknown"))
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.profileToProfile(image, profile, ImageCms.createProfile("LAB"), outputMode="LAB", inPlace=True))
     transform = ImageCms.buildTransform(profile, profile, "RGB", "RGB")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.applyTransform(Image.new("RGBA", (1, 1)), transform)
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.applyTransform(Image.new("RGBA", (1, 1)), transform))
     assert image.tobytes() == raw
     image.close()
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.applyTransform(image, transform)
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.applyTransform(Image.new("RGB", (1, 1)).convert("RGB", bit_depth=16), transform)
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.applyTransform(image, transform))
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.applyTransform(Image.new("RGB", (1, 1)).convert("RGB", bit_depth=16), transform))
 
 
 def test_reused_transform_across_threads() -> None:
@@ -175,8 +164,7 @@ def test_lab_white_temperature(temperature: int) -> None:
 
 @pytest.mark.parametrize("temperature", [-100, 3000, 30000, float("nan"), float("inf")])
 def test_invalid_lab_temperature(temperature: float) -> None:
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.createProfile("LAB", temperature)
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.createProfile("LAB", temperature))
 
 
 @pytest.mark.parametrize("flags", [ImageCms.Flags.NOCACHE, ImageCms.Flags.NOOPTIMIZE, ImageCms.Flags.COPY_ALPHA])
@@ -187,19 +175,15 @@ def test_flags_and_output_image(flags: int) -> None:
     output = Image.new("RGBA", image.size)
     assert transform.apply(image, output) is output
     assert output.tobytes() == image.tobytes()
-    with pytest.raises(ImageCms.PyCMSError):
-        transform.apply(image, Image.new("RGBA", (1, 1)))
-    with pytest.raises(ImageCms.PyCMSError):
-        transform.apply(image, Image.new("RGB", image.size))
+    assert_raises(ImageCms.PyCMSError, lambda: transform.apply(image, Image.new("RGBA", (1, 1))))
+    assert_raises(ImageCms.PyCMSError, lambda: transform.apply(image, Image.new("RGB", image.size)))
 
 
 @pytest.mark.parametrize("mode", ["L", "CMYK", "LAB"])
 def test_profile_and_mode_must_match(mode: str) -> None:
     profile = ImageCms.createProfile("sRGB")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.buildTransform(profile, profile, mode, "RGB")
-    with pytest.raises(ImageCms.PyCMSError):
-        ImageCms.buildTransform(profile, profile, "RGB", mode)
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.buildTransform(profile, profile, mode, "RGB"))
+    assert_raises(ImageCms.PyCMSError, lambda: ImageCms.buildTransform(profile, profile, "RGB", mode))
 
 
 def test_empty_image_and_truncated_profile() -> None:
@@ -210,5 +194,4 @@ def test_empty_image_and_truncated_profile() -> None:
         assert result.size == size
         assert result.tobytes() == b""
     for data in (profile.tobytes()[:64], profile.tobytes()[:128]):
-        with pytest.raises(ImageCms.PyCMSError):
-            ImageCms.ImageCmsProfile(BytesIO(data))
+        assert_raises(ImageCms.PyCMSError, lambda: ImageCms.ImageCmsProfile(BytesIO(data)))

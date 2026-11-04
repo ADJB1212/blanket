@@ -5,6 +5,7 @@ import struct
 from typing import NoReturn
 
 import pytest
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu, _blanket
 
@@ -136,22 +137,16 @@ def test_native_exchange_validation() -> None:
     assert caps["native_torch_exchange_policy"] == "synchronized GPU copy"
     native = ImageGpu.from_image(Image.new("RGB", (3, 7)))
     for layout in ("HW", "invalid"):
-        with pytest.raises(ValueError, match="layout"):
-            native.to_torch(layout=layout)
+        assert_raises(ValueError, lambda: native.to_torch(layout=layout), match="layout")
     native.close()
-    with pytest.raises(ValueError, match="closed"):
-        native.to_torch()
-    with pytest.raises(ValueError, match="runtime"):
-        ImageGpu.from_torch(torch.zeros((7, 3), device="mps"), layout="HW", runtime="invalid")
+    assert_raises(ValueError, lambda: native.to_torch(), match="closed")
+    assert_raises(ValueError, lambda: ImageGpu.from_torch(torch.zeros((7, 3), device="mps"), layout="HW", runtime="invalid"), match="runtime")
     for tensor in (torch.zeros((7, 3)), torch.zeros((7, 3), device="mps", requires_grad=True), torch.zeros((7, 3), dtype=torch.int32, device="mps")):
-        with pytest.raises(ValueError):
-            ImageGpu.from_torch(tensor, layout="HW", runtime="native")
+        assert_raises(ValueError, lambda: ImageGpu.from_torch(tensor, layout="HW", runtime="native"))
     for tensor in (torch.zeros((1, 2, 3)), torch.zeros((1, 2, 3), device="mps", requires_grad=True), torch.zeros((1, 2, 3), dtype=torch.int32, device="mps")):
-        with pytest.raises(ValueError):
-            _blanket.MetalImage.from_torch(tensor)
+        assert_raises(ValueError, lambda: _blanket.MetalImage.from_torch(tensor))
     native = ImageGpu.from_image(Image.new("L", (3, 7)))
-    with pytest.raises(ValueError, match="match"):
-        native._resource.copy_to_torch(torch.empty((7, 3, 3), dtype=torch.uint8, device="mps"))
+    assert_raises(ValueError, lambda: native._resource.copy_to_torch(torch.empty((7, 3, 3), dtype=torch.uint8, device="mps")), match="match")
 
 
 def test_native_export_to_offset_tensor_preserves_guards() -> None:

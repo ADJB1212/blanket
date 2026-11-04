@@ -4,6 +4,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -61,8 +62,7 @@ def test_encoded_bytes_preserve_sample_depth(mode, channels, depth, format):
     source = Image.frombytes(mode, (3, 2), raw, bit_depth=depth)
     options = {"compression": "tiff_lzw"} if format == "TIFF" else {}
     encoded = source.encode(format, **options)
-    reference = BytesIO()
-    source.save(reference, format, **options)
+    reference = image_buffer(source, format, **options)
     assert encoded == reference.getvalue()
     decoded = Image.decode(encoded)
     assert decoded.bit_depth == depth
@@ -93,8 +93,7 @@ def test_byte_encoding_uses_jpeg_options_and_compressors(compressor):
     source = Image.new("RGB", (17, 9), (31, 73, 127))
     options = {"quality": 85, "subsampling": 0, "progressive": True, "optimize": True, "compressor": compressor}
     encoded = source.encode("jpg", **options)
-    stream = BytesIO()
-    source.save(stream, "JPEG", **options)
+    stream = image_buffer(source, "JPEG", **options)
     assert encoded == stream.getvalue()
     assert Image.decode(encoded, formats=["JPEG"]).format == "JPEG"
     assert PillowImage.open(BytesIO(encoded)).info["progressive"]
@@ -108,8 +107,7 @@ def test_byte_sequences_preserve_frames_controls_and_positions(format, lazy):
     if format == "WEBP":
         options["lossless"] = True
     encoded = frames[0].encode(format, **options)
-    stream = BytesIO()
-    frames[0].save(stream, format, **options)
+    stream = image_buffer(frames[0], format, **options)
     assert encoded == stream.getvalue()
     image = Image.decode(encoded, lazy=lazy, frame_cache_size=3)
     assert image.n_frames == 3
@@ -130,15 +128,13 @@ def test_byte_sequences_preserve_frames_controls_and_positions(format, lazy):
     exported.seek(1)
     assert exported.tobytes() == pixels
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.encode(format)
+    assert_raises(ValueError, lambda: image.encode(format), match="closed")
 
 
 def test_pdf_byte_encoding_matches_stream():
     first, second = Image.new("RGB", (7, 5), "red"), Image.new("L", (3, 9), 42)
     options = {"save_all": True, "append_images": [second]}
-    stream = BytesIO()
-    first.save(stream, "PDF", **options)
+    stream = image_buffer(first, "PDF", **options)
     assert first.encode("PDF", **options) == stream.getvalue()
 
 
@@ -163,14 +159,12 @@ def test_decode_accepts_strided_buffer():
 
 @pytest.mark.parametrize("data", [None, 100, "photo.png", [1, 2, 3], BytesIO(b"data")])
 def test_decode_rejects_non_buffers(data):
-    with pytest.raises(TypeError, match="bytes-like"):
-        Image.decode(data)
+    assert_raises(TypeError, lambda: Image.decode(data), match="bytes-like")
 
 
 @pytest.mark.parametrize("data", [b"", b"not an image", b"\x89PNG\r\n\x1a\n"])
 def test_decode_rejects_invalid_encoded_data(data):
-    with pytest.raises(UnidentifiedImageError):
-        Image.decode(data)
+    assert_raises(UnidentifiedImageError, lambda: Image.decode(data))
 
 
 @pytest.mark.parametrize(
@@ -178,36 +172,27 @@ def test_decode_rejects_invalid_encoded_data(data):
 )
 def test_decode_validates_options(options, error):
     encoded = Image.new("L", (1, 1)).encode("PNG")
-    with pytest.raises(error):
-        Image.decode(encoded, **options)
+    assert_raises(error, lambda: Image.decode(encoded, **options))
 
 
 def test_decode_enforces_format_allowlist_and_does_not_read_paths(tmp_path):
     encoded = Image.new("L", (1, 1)).encode("PNG")
-    with pytest.raises(UnidentifiedImageError):
-        Image.decode(encoded, formats=["JPEG"])
+    assert_raises(UnidentifiedImageError, lambda: Image.decode(encoded, formats=["JPEG"]))
     path = tmp_path / "image.png"
     path.write_bytes(encoded)
-    with pytest.raises(UnidentifiedImageError):
-        Image.decode(bytes(path))
+    assert_raises(UnidentifiedImageError, lambda: Image.decode(bytes(path)))
 
 
 def test_encode_validates_format_options_and_image_state():
     image = Image.new("RGB", (3, 2))
     for format in (None, 1, b"PNG"):
-        with pytest.raises(TypeError, match="format must be a string"):
-            image.encode(format)
-    with pytest.raises(UnsupportedCodecError):
-        image.encode("unknown")
-    with pytest.raises(TypeError, match="unsupported PNG save option"):
-        image.encode("PNG", quality=85)
-    with pytest.raises(TypeError, match="compressor must"):
-        image.encode("PNG", compressor=object())
-    with pytest.raises(TypeError, match="path or binary stream"):
-        image.save(None, "PNG")
+        assert_raises(TypeError, lambda: image.encode(format), match="format must be a string")
+    assert_raises(UnsupportedCodecError, lambda: image.encode("unknown"))
+    assert_raises(TypeError, lambda: image.encode("PNG", quality=85), match="unsupported PNG save option")
+    assert_raises(TypeError, lambda: image.encode("PNG", compressor=object()), match="compressor must")
+    assert_raises(TypeError, lambda: image.save(None, "PNG"), match="path or binary stream")
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.encode("PNG")
+    assert_raises(ValueError, lambda: image.encode("PNG"), match="closed")
 
 
 def test_sequence_encoding_restores_position_on_failure():
@@ -216,9 +201,7 @@ def test_sequence_encoding_restores_position_on_failure():
     image = Image.decode(encoded, lazy=True, frame_cache_size=2)
     image.seek(1)
     pixels = image.tobytes()
-    with pytest.raises(ValueError):
-        image.encode("PNG", save_all=True, duration=[1])
+    assert_raises(ValueError, lambda: image.encode("PNG", save_all=True, duration=[1]))
     assert image.tell() == 1
     assert image.tobytes() == pixels
-    with pytest.raises(UnsupportedCodecError):
-        image.encode("PNG", save_all=True, compressor=LosslessImageCompressor())
+    assert_raises(UnsupportedCodecError, lambda: image.encode("PNG", save_all=True, compressor=LosslessImageCompressor()))

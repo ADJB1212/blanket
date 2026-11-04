@@ -5,7 +5,7 @@ import zlib
 from io import BytesIO, StringIO
 
 import pytest
-from helpers import encode_image, png_chunk
+from helpers import assert_raises, encode_image, image_buffer, png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageCms, PngImagePlugin, UnidentifiedImageError, features
@@ -26,8 +26,7 @@ def test_png_image_file_constructor_and_type() -> None:
     assert isinstance(image, PngImagePlugin.PngImageFile)
     assert image.tobytes() == Image.open(BytesIO(encoded)).tobytes()
     assert not isinstance(Image.new("RGB", (3, 2)), PngImagePlugin.PngImageFile)
-    with pytest.raises(SyntaxError):
-        PngImagePlugin.PngImageFile(BytesIO(Image.new("RGB", (3, 2)).encode("JPEG")))
+    assert_raises(SyntaxError, lambda: PngImagePlugin.PngImageFile(BytesIO(Image.new("RGB", (3, 2)).encode("JPEG"))))
 
 
 def test_apng_mimetype_includes_single_frame_animation() -> None:
@@ -127,8 +126,7 @@ def test_png_header_without_pixels_or_decoded_pixel_budget(color, depth, mode):
     data = b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", struct.pack(">IIBBBBB", 100000, 100000, depth, color, 0, 0, 0))
     header = Image.inspect(BytesIO(data))
     assert (header.size, header.mode, header.bit_depth) == ((100000, 100000), mode, depth)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "TIFF", "WEBP", "JXL"])
@@ -164,8 +162,7 @@ def test_png_text_metadata_after_pixels_and_corrupt_pixels():
     damaged = data[:pos] + bytes([data[pos] ^ 255]) + data[pos + 1 :]
     assert Image.inspect(BytesIO(damaged)).info == Image.inspect(BytesIO(data)).info
     assert Image.inspect(BytesIO(data)).info["label"] == "inspection"
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(damaged))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(damaged)))
 
 
 def test_paths_streams_and_allowlists(tmp_path):
@@ -178,13 +175,10 @@ def test_paths_streams_and_allowlists(tmp_path):
     stream.seek(5)
     assert Image.inspect(stream, formats=("png",)) == expected
     assert stream.tell() == 5 and not stream.closed
-    with pytest.raises(UnidentifiedImageError, match="not in formats"):
-        Image.inspect(stream, formats=["JPEG"])
+    assert_raises(UnidentifiedImageError, lambda: Image.inspect(stream, formats=["JPEG"]), match="not in formats")
     assert stream.tell() == 5
-    with pytest.raises(TypeError, match="list or tuple"):
-        Image.inspect(stream, formats="PNG")
-    with pytest.raises(ValueError, match="binary data"):
-        Image.inspect(StringIO("image"))
+    assert_raises(TypeError, lambda: Image.inspect(stream, formats="PNG"), match="list or tuple")
+    assert_raises(ValueError, lambda: Image.inspect(StringIO("image")), match="binary data")
     assert Image.inspect(BytesIO(encode(format="JPEG")), formats=["jpg"]).format == "JPEG"
 
 
@@ -215,21 +209,18 @@ def test_jpeg_exif_dpi_inspection(unit, resolution, expected):
 def test_invalid_or_truncated_headers(data):
     stream = BytesIO(data)
     stream.seek(1)
-    with pytest.raises(UnidentifiedImageError):
-        Image.inspect(stream)
+    assert_raises(UnidentifiedImageError, lambda: Image.inspect(stream))
     assert stream.tell() == 1
 
 
 def test_animation_and_mixed_tiff_pages():
     frames = [PillowImage.new("RGB", (17, 9), "red"), PillowImage.new("RGB", (17, 9), "blue")]
     for format in ("GIF", "PNG", "WEBP", "TIFF"):
-        output = BytesIO()
-        frames[0].save(output, format, save_all=True, append_images=frames[1:], duration=50, loop=2)
+        output = image_buffer(frames[0], format, save_all=True, append_images=frames[1:], duration=50, loop=2)
         header = Image.inspect(output)
         assert (header.size, header.format) == ((17, 9), format)
         assert header.mode == ("P" if format == "GIF" else "RGB")
-    output = BytesIO()
-    frames[0].save(output, "TIFF", save_all=True, append_images=[PillowImage.new("L", (3, 5))])
+    output = image_buffer(frames[0], "TIFF", save_all=True, append_images=[PillowImage.new("L", (3, 5))])
     assert (Image.inspect(output).size, Image.inspect(output).mode) == ((17, 9), "RGB")
 
 
@@ -250,8 +241,7 @@ def test_fits_header_without_samples(bits, mode):
 def test_indexed_png_encoded_depth(depth):
     image = PillowImage.new("P", (17, 9))
     image.putpalette([i for i in range(256) for _ in range(3)])
-    stream = BytesIO()
-    image.save(stream, "PNG", bits=depth, transparency=0)
+    stream = image_buffer(image, "PNG", bits=depth, transparency=0)
     header = Image.inspect(stream)
     assert (header.mode, header.bit_depth) == ("P", depth)
 
@@ -286,8 +276,7 @@ def test_ico_selects_largest_entry_and_rejects_malformed_bitmap():
     payloads = []
     offset = 6 + 2 * 16
     for size in (32, 16):
-        stream = BytesIO()
-        PillowImage.new("RGBA", (size, size)).save(stream, "PNG")
+        stream = image_buffer(PillowImage.new("RGBA", (size, size)), "PNG")
         data = stream.getvalue()
         entries.append(struct.pack("<BBBBHHII", size, size, 0, 0, 1, 32, len(data), offset))
         payloads.append(data)
@@ -295,10 +284,8 @@ def test_ico_selects_largest_entry_and_rejects_malformed_bitmap():
     data = b"\0\0\x01\0\x02\0" + b"".join(entries + payloads)
     assert Image.inspect(BytesIO(data)).size == Image.open(BytesIO(data)).size == (32, 32)
     invalid = b"\0\0\x01\0\x01\0" + struct.pack("<BBBBHHII", 16, 16, 0, 0, 1, 32, 0, 22)
-    with pytest.raises(UnidentifiedImageError):
-        Image.inspect(BytesIO(invalid))
-    stream = BytesIO()
-    PillowImage.new("RGBA", (16, 16)).save(stream, "ICO", bitmap_format="bmp")
+    assert_raises(UnidentifiedImageError, lambda: Image.inspect(BytesIO(invalid)))
+    stream = image_buffer(PillowImage.new("RGBA", (16, 16)), "ICO", bitmap_format="bmp")
     assert Image.inspect(stream).size == (16, 16)
 
 
@@ -313,7 +300,6 @@ def test_jpeg_header_precision():
 
 def test_tiff_float_and_integer_depths():
     for mode, depth, expected in [("1", 1, "1"), ("I;16", 16, "I;16"), ("I", 32, "I"), ("F", 32, "F")]:
-        stream = BytesIO()
-        PillowImage.new(mode, (4, 3)).save(stream, "TIFF")
+        stream = image_buffer(PillowImage.new(mode, (4, 3)), "TIFF")
         header = Image.inspect(stream)
         assert (header.mode, header.bit_depth) == (expected, depth)

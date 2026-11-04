@@ -4,6 +4,7 @@ from io import BytesIO, StringIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import features as pillow_features
 
 from blanket import Image, __version__, features
@@ -13,10 +14,8 @@ from blanket import Image, __version__, features
 def test_pillow_codec_queries(codec: str, feature: str) -> None:
     assert features.check_codec(codec) == features.check(feature)
     assert features.version_codec(codec) == features.version(feature)
-    with pytest.raises(ValueError, match="Unknown codec"):
-        features.check_codec("unknown")
-    with pytest.raises(ValueError, match="Unknown codec"):
-        features.version_codec("unknown")
+    assert_raises(ValueError, lambda: features.check_codec("unknown"), match="Unknown codec")
+    assert_raises(ValueError, lambda: features.version_codec("unknown"), match="Unknown codec")
 
 
 if TYPE_CHECKING:
@@ -45,8 +44,7 @@ def test_encoding_capabilities_can_encode(format: str) -> None:
             image = Image.new(mode, (32, 32))
             if depth in (10, 12, 16):
                 image = image.convert(mode, bit_depth=depth)
-            stream = BytesIO()
-            image.save(stream, format)
+            stream = image_buffer(image, format)
             assert stream.getvalue(), (format, mode, depth)
 
 
@@ -55,10 +53,8 @@ def test_encoding_query_validation_and_aliases(monkeypatch: pytest.MonkeyPatch) 
         assert features.encoding_capabilities(alias) == features.encoding_capabilities(name)
     for name in ("DDS", "EPS", "FITS", "SPIDER", "PIXAR", "SUN"):
         assert features.encoding_capabilities(name) is None
-    with pytest.raises(TypeError):
-        features.encoding_capabilities(None)
-    with pytest.raises(ValueError):
-        features.encoding_capabilities("unknown")
+    assert_raises(TypeError, lambda: features.encoding_capabilities(None))
+    assert_raises(ValueError, lambda: features.encoding_capabilities("unknown"))
     monkeypatch.setattr(features, "_feature_info", lambda name: (name != "heif_encoder", None))
     assert features.encoding_capabilities("HEIF") is None
 
@@ -81,8 +77,7 @@ def test_reported_animation_depths_can_encode(format: str) -> None:
             if depth > 8:
                 first = first.convert(mode, bit_depth=depth)
                 second = second.convert(mode, bit_depth=depth)
-            stream = BytesIO()
-            first.save(stream, format, save_all=True, append_images=[second], duration=[100, 200], loop=2)
+            stream = image_buffer(first, format, save_all=True, append_images=[second], duration=[100, 200], loop=2)
             reopened = Image.open(BytesIO(stream.getvalue()))
             assert reopened.n_frames == 2
             assert reopened.info["loop"] == 2
@@ -91,8 +86,7 @@ def test_reported_animation_depths_can_encode(format: str) -> None:
 def test_reported_tiff_compression_methods_can_encode() -> None:
     capability = features.encoding_capabilities("TIFF")
     for method in capability.compression_methods:
-        stream = BytesIO()
-        Image.new("RGB", (8, 8), (40, 80, 120)).save(stream, "TIFF", compression=method)
+        stream = image_buffer(Image.new("RGB", (8, 8), (40, 80, 120)), "TIFF", compression=method)
         assert Image.open(BytesIO(stream.getvalue())).size == (8, 8)
 
 
@@ -131,15 +125,13 @@ def test_unknown_features_match_pillow() -> None:
 @pytest.mark.parametrize("value", [None, 1, [], {}])
 @pytest.mark.parametrize("function", [features.check, features.version])
 def test_feature_name_requires_string(function: Callable, value: object) -> None:
-    with pytest.raises(TypeError, match="feature must be a string"):
-        function(value)
+    assert_raises(TypeError, lambda: function(value), match="feature must be a string")
 
 
 @pytest.mark.parametrize(("feature", "format"), [("png", "PNG"), ("jpg", "JPEG"), ("jxl", "JXL"), ("libtiff", "TIFF"), ("webp", "WEBP"), ("avif", "AVIF"), ("bmp", "BMP"), ("gif", "GIF"), ("ico", "ICO")])
 def test_reported_codecs_can_save_and_open(feature: str, format: str) -> None:
     assert features.check(feature)
-    stream = BytesIO()
-    Image.new("RGB", (32, 32), (60, 120, 180)).save(stream, format)
+    stream = image_buffer(Image.new("RGB", (32, 32), (60, 120, 180)), format)
     assert Image.open(BytesIO(stream.getvalue())).size == (32, 32)
 
 
@@ -149,8 +141,7 @@ def test_heif_runtime_capabilities() -> None:
     for feature, available in (("heif_decoder", decode), ("heif_encoder", encode), ("heif", decode and encode)):
         assert features.version(feature) == (features.version("libheif") if available else None)
     if encode:
-        stream = BytesIO()
-        Image.new("RGB", (32, 32), (60, 120, 180)).save(stream, "HEIF")
+        stream = image_buffer(Image.new("RGB", (32, 32), (60, 120, 180)), "HEIF")
         if decode:
             assert Image.open(BytesIO(stream.getvalue())).size == (32, 32)
 

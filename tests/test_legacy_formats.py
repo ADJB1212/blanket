@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal, encode_image
+from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
@@ -63,8 +63,7 @@ def test_sgi_multiple_rows_and_planes(depth: int, channels: int, compressed: boo
     assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack(f"<{len(expected)}H", *expected))
     if depth == 8:
         assert image.tobytes() == PillowImage.open(BytesIO(data)).tobytes()
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data[:-2]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data[:-2])))
 
 
 def test_xpm_escaped_keys_comments_and_rows() -> None:
@@ -81,15 +80,13 @@ def test_legacy_interoperability(format: str, mode: str, subtests: pytest.Subtes
         with subtests.test(format=format, mode=mode, size=size):
             source = patterned(mode, size)
             for writer in (source, source.to_pillow()):
-                stream = BytesIO()
-                writer.save(stream, format)
+                stream = image_buffer(writer, format)
                 actual = Image.open(stream, formats=[format])
                 expected = PillowImage.open(stream)
                 assert (actual.format, actual.mode, actual.size) == (format, mode, source.size)
                 assert actual.tobytes() == source.tobytes() == expected.tobytes()
                 assert actual.convert("RGB").tobytes() == expected.convert("RGB").tobytes()
-                with pytest.raises(UnidentifiedImageError, match="not in formats"):
-                    Image.open(stream, formats=["PNG"])
+                assert_raises(UnidentifiedImageError, lambda: Image.open(stream, formats=["PNG"]), match="not in formats")
 
 
 @pytest.mark.parametrize("mode", ["L", "P", "RGB"])
@@ -138,8 +135,7 @@ def test_pcx_rejects_invalid_runs_and_truncated_literals(payload: bytes) -> None
     header[8] = 1
     header[65] = 1
     header[66] = 2
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(header + payload))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(header + payload)))
 
 
 @pytest.mark.parametrize("short", [False, True])
@@ -160,8 +156,7 @@ def test_xbm_literals_and_padded_rows(short: bool, style: str) -> None:
 @pytest.mark.parametrize("body", ["0xgg", "0x0g", "0x100", "65536", "0x", "", "0x01,0xgg"])
 def test_xbm_rejects_invalid_literals(body: str) -> None:
     data = f"#define im_width 8\n#define im_height 1\nstatic char im_bits[] = {{{body}}};\n"
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data.encode()))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data.encode())))
 
 
 @pytest.mark.parametrize("big", [False, True])
@@ -202,8 +197,7 @@ def test_tiff_lzw_strips_preserve_samples_and_reject_truncation(mode: str, predi
     assert len(expected.tag_v2[273]) > 1
     assert Image.open(BytesIO(data)).tobytes() == expected.tobytes() == source.tobytes()
     offset = expected.tag_v2[273][-1]
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data[: offset + 1]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data[: offset + 1])))
 
 
 def test_pixar_rgb() -> None:
@@ -239,8 +233,7 @@ def test_xpm_write_and_read(mode: str) -> None:
     source = patterned(mode)
     if mode == "RGBA":
         source.putalpha(255)
-    stream = BytesIO()
-    source.save(stream, "XPM")
+    stream = image_buffer(source, "XPM")
     actual = Image.open(stream, formats=["XPM"])
     assert actual.convert("RGB").tobytes() == source.convert("RGB").tobytes() == PillowImage.open(stream).convert("RGB").tobytes()
 
@@ -250,8 +243,7 @@ def test_xpm_transparency_and_multichar_keys() -> None:
     actual = Image.open(BytesIO(data))
     assert actual.mode == "RGBA"
     assert actual.tobytes() == PillowImage.open(BytesIO(data)).convert("RGBA").tobytes()
-    stream = BytesIO()
-    actual.save(stream, "XPM")
+    stream = image_buffer(actual, "XPM")
     assert Image.open(stream).tobytes() == actual.tobytes()
 
 
@@ -309,8 +301,7 @@ def test_palm_write(mode: str, size: tuple[int, int]) -> None:
     assert len(data) == 16 + stride * h + (1026 if mode != "1" else 0)
     assert flags == (0 if mode == "1" else 0x4000)
     if mode == "1":
-        other = BytesIO()
-        source.to_pillow().save(other, "PALM")
+        other = image_buffer(source.to_pillow(), "PALM")
         assert data == other.getvalue()
 
 
@@ -319,8 +310,7 @@ def test_palm_write(mode: str, size: tuple[int, int]) -> None:
 def test_tiff_compression_interoperability(compression: str, mode: str) -> None:
     source = patterned(mode)
     for writer in (source, source.to_pillow()):
-        stream = BytesIO()
-        writer.save(stream, "TIFF", compression=compression)
+        stream = image_buffer(writer, "TIFF", compression=compression)
         actual = Image.open(stream)
         expected = PillowImage.open(stream)
         assert expected.tag_v2[259] == {"tiff_lzw": 5, "tiff_adobe_deflate": 8, "jpeg": 7}[compression]
@@ -334,8 +324,7 @@ def test_tiff_compression_interoperability(compression: str, mode: str) -> None:
 @pytest.mark.parametrize("mode", ["RGBA", "CMYK", "LAB", "F"])
 def test_tiff_compression_special_modes(compression: str, mode: str) -> None:
     source = patterned(mode)
-    stream = BytesIO()
-    source.save(stream, "TIFF", compression=compression)
+    stream = image_buffer(source, "TIFF", compression=compression)
     assert Image.open(stream).tobytes() == source.tobytes() == PillowImage.open(stream).tobytes()
 
 
@@ -344,8 +333,7 @@ def test_tiff_compression_special_modes(compression: str, mode: str) -> None:
 def test_tiff_compression_wide(compression: str, mode: str) -> None:
     raw = struct.pack("<" + "H" * (15 * len(mode)), *[(i * 3001) % 65536 for i in range(15 * len(mode))])
     source = Image.frombytes(mode, (5, 3), raw, bit_depth=16)
-    stream = BytesIO()
-    source.save(stream, "TIFF", compression=compression)
+    stream = image_buffer(source, "TIFF", compression=compression)
     actual = Image.open(stream)
     assert actual.bit_depth == 16
     assert actual.tobytes() == raw
@@ -367,10 +355,8 @@ def test_deprecated_im_is_unsupported() -> None:
     header = b"Image type: Greyscale image\r\nImage size (x*y): 1*1\r\n"
     data = header.ljust(511, b"\0") + b"\x1a\xff"
     for formats in (None, ["IM"]):
-        with pytest.raises(UnidentifiedImageError):
-            Image.open(BytesIO(data), formats=formats)
-    with pytest.raises(ValueError, match="unsupported image format"):
-        Image.new("L", (1, 1)).save(BytesIO(), "IM")
+        assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data), formats=formats))
+    assert_raises(ValueError, lambda: Image.new("L", (1, 1)).save(BytesIO(), "IM"), match="unsupported image format")
     assert "im" not in features.get_supported()
     with pytest.warns(UserWarning, match="Unknown feature 'im'"):
         assert features.check("im") is False
@@ -378,5 +364,4 @@ def test_deprecated_im_is_unsupported() -> None:
 
 @pytest.mark.parametrize("signature", [b"\x0a\x05", b"\x01\xda", b"DanM", b"LinS", b"\x59\xa6\x6a\x95", b"\x80\xe8\0\0", b"SIMPLE  =", b"/* XPM */", b"#define im_width 3\n#define im_height 2\n"])
 def test_legacy_truncated_header(signature: bytes) -> None:
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(signature))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(signature)))

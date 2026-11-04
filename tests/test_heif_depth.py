@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pillow_heif
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PILImage
 
 from blanket import Image, UnidentifiedImageError
@@ -22,8 +23,7 @@ def test_streamed_wide_png_samples(mode: str, channels: int, subtests: pytest.Su
             with subtests.test(mode=mode, channels=channels, depth=depth, compress_level=compress_level):
                 values = np.random.default_rng(73).integers(0, 1 << depth, (19, 257, channels), dtype=np.uint16)
                 image = Image.fromarray(values[:, :, 0] if channels == 1 else values, bit_depth=depth)
-                stream = BytesIO()
-                image.save(stream, "PNG", compress_level=compress_level)
+                stream = image_buffer(image, "PNG", compress_level=compress_level)
                 reopened = Image.open(BytesIO(stream.getvalue()))
                 assert (reopened.mode, reopened.bit_depth) == (mode, depth)
                 assert reopened.tobytes() == image.tobytes()
@@ -59,8 +59,7 @@ def test_wide_pixels_and_png(mode: str, channels: int, depth: int) -> None:
     assert image.getpixel((-1, -1)) == expected
     assert image.copy().tobytes() == image.tobytes()
     assert image.copy().bit_depth == depth
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     result = Image.open(output)
     assert result.bit_depth == depth
     assert result.tobytes() == image.tobytes()
@@ -77,8 +76,7 @@ def test_heif_roundtrip(depth: int, mode: str, channels: int) -> None:
     if channels == 4:
         array[:, :, 3] = maximum
     source = Image.fromarray(array[:, :, 0] if channels == 1 else array, bit_depth=depth)
-    output = BytesIO()
-    source.save(output, "HEIC", quality=100)
+    output = image_buffer(source, "HEIC", quality=100)
     loaded = Image.open(output, formats=["HEIC"])
     assert (loaded.format, loaded.bit_depth, loaded.size) == ("HEIF", depth, (32, 32))
     pixel = loaded.getpixel((16, 16))
@@ -96,8 +94,7 @@ def test_heif_roundtrip(depth: int, mode: str, channels: int) -> None:
         decoded = np.repeat(decoded[:, :, None], 3, axis=2)
     expected = np.frombuffer(loaded.tobytes(), dtype=np.uint8 if depth == 8 else "<u2").reshape(decoded.shape)
     np.testing.assert_array_equal(decoded, expected)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(output, formats=["PNG"])
+    assert_raises(UnidentifiedImageError, lambda: Image.open(output, formats=["PNG"]))
 
 
 @pytest.mark.parametrize("extension", ["heic", "heif", "HEIC"])
@@ -116,8 +113,7 @@ def test_heif_pixel_rows(mode: str, channels: int, subtests: pytest.Subtests) ->
                 width, height = size
                 samples = (np.arange(width * height * channels, dtype=np.uint32) * 37 % (1 << depth)).astype(np.uint8 if depth == 8 else "<u2")
                 source = Image.frombytes(mode, size, samples.tobytes(), bit_depth=depth)
-                output = BytesIO()
-                source.save(output, "HEIF", lossless=True)
+                output = image_buffer(source, "HEIF", lossless=True)
                 result = Image.open(output)
                 expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
                 if mode == "L":
@@ -136,8 +132,7 @@ def test_heif_concurrent_codec_lifetimes() -> None:
 
     def roundtrip(value: int) -> bytes:
         source = Image.frombytes("RGB", (32, 32), bytes([value] * (32 * 32 * 3)))
-        output = BytesIO()
-        source.save(output, "HEIF", lossless=True)
+        output = image_buffer(source, "HEIF", lossless=True)
         return Image.open(output).tobytes()
 
     with ThreadPoolExecutor(max_workers=4) as pool:
@@ -152,23 +147,16 @@ def test_high_depth_validation_and_lifecycle(depth: int) -> None:
     assert image.getpixel((0, 0)) == 256
     assert image.convert("RGB").getpixel((1, 0)) == (maximum, maximum, maximum)
     if depth < 16:
-        with pytest.raises(ValueError, match="range"):
-            Image.frombytes("L", (1, 1), struct.pack("<H", maximum + 1), bit_depth=depth)
-    with pytest.raises(ValueError):
-        Image.frombytes("L", (1, 1), b"\x00", bit_depth=depth)
-    with pytest.raises(ValueError):
-        Image.frombytes("L", (1, 1), bytes(4), bit_depth=depth)
-    with pytest.raises(ValueError, match="bit_depth"):
-        Image.fromarray(np.zeros((1, 1), dtype=np.uint16), bit_depth=9)
-    with pytest.raises(ValueError, match="8-bit"):
-        image.to_pillow()
+        assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), struct.pack("<H", maximum + 1), bit_depth=depth), match="range")
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\x00", bit_depth=depth))
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), bytes(4), bit_depth=depth))
+    assert_raises(ValueError, lambda: Image.fromarray(np.zeros((1, 1), dtype=np.uint16), bit_depth=9), match="bit_depth")
+    assert_raises(ValueError, lambda: image.to_pillow(), match="8-bit")
     for format in ("JPEG", "WEBP"):
-        with pytest.raises(ValueError, match="high-bit-depth"):
-            image.save(BytesIO(), format)
+        assert_raises(ValueError, lambda: image.save(BytesIO(), format), match="high-bit-depth")
     image.close()
     for operation in (image.load, image.copy, image.tobytes):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
 
 
 def test_big_endian_strided_uint16() -> None:
@@ -193,8 +181,7 @@ def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int,
     if depth < 16:
         samples.flat[-1] = 1 << depth
         for construct in (lambda: Image.fromarray(samples, mode, bit_depth=depth), lambda: Image.frombytes(mode, (23, 19), samples.astype("<u2").tobytes(), bit_depth=depth)):
-            with pytest.raises(ValueError, match="range"):
-                construct()
+            assert_raises(ValueError, lambda: construct(), match="range")
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])
@@ -227,8 +214,7 @@ def test_external_ten_bit_heif() -> None:
     # Independent encoder uses 16-bit input normalized to 10-bit HEVC samples.
     samples = np.linspace(0, 65535, 32 * 32 * 3, dtype=np.uint16).reshape(32, 32, 3)
     external = pillow_heif.from_bytes("RGB;16", (32, 32), samples.tobytes())
-    output = BytesIO()
-    external.save(output, bit_depth=10, quality=100)
+    output = image_buffer(external, bit_depth=10, quality=100)
     image = Image.open(output)
     expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
     assert image.bit_depth == 10
@@ -240,8 +226,7 @@ def test_external_ten_bit_heif() -> None:
 def test_wide_export_uses_full_uint16_range(format: str) -> None:
     source = np.array([[0, 1, 256, 511, 1022, 1023]], dtype=np.uint16)
     image = Image.fromarray(source, bit_depth=10)
-    output = BytesIO()
-    image.save(output, format, **({"lossless": True} if format == "JXL" else {}))
+    output = image_buffer(image, format, **({"lossless": True} if format == "JXL" else {}))
     loaded = Image.open(output)
     assert loaded.bit_depth == 16
     assert loaded.convert("L", bit_depth=10).tobytes() == image.tobytes()
@@ -287,5 +272,4 @@ def test_wide_resize_matches_independent_row_regions(mode: str, subtests: pytest
 
 @pytest.mark.parametrize("data", [b"", b"\x00\x00\x00\x18ftypheic", b"\x00\x00\x00\x10ftypheic\0\0\0\0"])
 def test_invalid_heif(data: bytes) -> None:
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))

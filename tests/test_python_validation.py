@@ -5,6 +5,7 @@ from io import BytesIO, StringIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 
 from blanket import Image, ImageChops, ImageCms, ImageFile, ImageFilter, ImageFont, ImageHash, ImageOps, ImagePath, PngImagePlugin
 from blanket._color import color_pixel
@@ -55,16 +56,14 @@ if TYPE_CHECKING:
     ],
 )
 def test_image_argument_errors(operation, error) -> None:
-    with pytest.raises(error):
-        operation(Image.new("RGB", (2, 2)))
+    assert_raises(error, lambda: operation(Image.new("RGB", (2, 2))))
 
 
 @pytest.mark.parametrize("mode", ["LAB", "CMYK", "F"])
 def test_rejects_compressor_for_special_modes(mode: str) -> None:
     from blanket.Compressor import LosslessImageCompressor
 
-    with pytest.raises(ValueError, match="compression optimization"):
-        Image.new(mode, (1, 1)).save(BytesIO(), "TIFF", compressor=LosslessImageCompressor())
+    assert_raises(ValueError, lambda: Image.new(mode, (1, 1)).save(BytesIO(), "TIFF", compressor=LosslessImageCompressor()), match="compression optimization")
 
 
 @pytest.mark.parametrize(
@@ -73,8 +72,7 @@ def test_rejects_compressor_for_special_modes(mode: str) -> None:
 )
 def test_fill_color_validation(mode, color, expected, error) -> None:
     if error:
-        with pytest.raises(error):
-            color_pixel(color, mode)
+        assert_raises(error, lambda: color_pixel(color, mode))
     else:
         assert color_pixel(color, mode) == expected
 
@@ -98,13 +96,11 @@ def test_fill_color_validation(mode, color, expected, error) -> None:
     ],
 )
 def test_operation_validation(operation) -> None:
-    with pytest.raises((ValueError, TypeError)):
-        operation()
+    assert_raises((ValueError, TypeError), lambda: operation())
 
 
 def test_abstract_filter_contract() -> None:
-    with pytest.raises(NotImplementedError):
-        ImageFilter.Filter.filter(None, Image.new("L", (1, 1))._native)
+    assert_raises(NotImplementedError, lambda: ImageFilter.Filter.filter(None, Image.new("L", (1, 1))._native))
 
 
 def test_palette_access_and_remapping() -> None:
@@ -113,25 +109,19 @@ def test_palette_access_and_remapping() -> None:
     image = Image.new("P", (1, 1))
     image.putpalette(bytes([1, 2, 3, 4, 5, 6]))
     assert image.getpalette("RGBA") == [1, 2, 3, 255, 4, 5, 6, 255]
-    with pytest.raises(ValueError, match="raw mode"):
-        image.getpalette("L")
-    with pytest.raises(ValueError, match="unique"):
-        image.remap_palette([0, 0])
-    with pytest.raises(ValueError, match="too few"):
-        image.remap_palette([2])
+    assert_raises(ValueError, lambda: image.getpalette("L"), match="raw mode")
+    assert_raises(ValueError, lambda: image.remap_palette([0, 0]), match="unique")
+    assert_raises(ValueError, lambda: image.remap_palette([2]), match="too few")
     image.info["transparency"] = 1
     assert "transparency" not in image.remap_palette([0]).info
     image.putpalette(bytes([1, 2, 3, 4]), "RGBA")
     assert image.getpalette("RGB") == [1, 2, 3]
-    with pytest.raises(ValueError, match="index"):
-        image.putpixel((0, 0), (1, 2, 3))
-    with pytest.raises(TypeError, match="color"):
-        image.paste("red", (0, 0, 1, 1))
+    assert_raises(ValueError, lambda: image.putpixel((0, 0), (1, 2, 3)), match="index")
+    assert_raises(TypeError, lambda: image.paste("red", (0, 0, 1, 1)), match="color")
     image.putpixel([0, 0], 1)
     assert image.getpixel((0, 0)) == 1
     image.palette.palette = b"\x01\x02"
-    with pytest.raises(ValueError, match="invalid palette"):
-        image.getpalette("RGBA")
+    assert_raises(ValueError, lambda: image.getpalette("RGBA"), match="invalid palette")
 
 
 def test_empty_image_geometry() -> None:
@@ -151,13 +141,11 @@ def test_deform_rejects_unsupported_filter() -> None:
         def getmesh(self, image):
             return [((0, 0, 1, 1), (0, 0, 0, 1, 1, 1, 1, 0))]
 
-    with pytest.raises(ValueError, match="mesh transforms"):
-        ImageOps.deform(Image.new("L", (1, 1)), Mesh(), Image.Resampling.LANCZOS)
+    assert_raises(ValueError, lambda: ImageOps.deform(Image.new("L", (1, 1)), Mesh(), Image.Resampling.LANCZOS), match="mesh transforms")
 
 
 def test_path_allocation_assignment_and_bounds() -> None:
-    with pytest.raises(MemoryError):
-        ImagePath.Path(-1)
+    assert_raises(MemoryError, lambda: ImagePath.Path(-1))
     path = ImagePath.Path([(1, 0), (0, 2)])
     with pytest.raises(IndexError):
         path[2] = (0, 0)
@@ -167,25 +155,20 @@ def test_path_allocation_assignment_and_bounds() -> None:
 
 
 def test_hash_rejects_empty_serialization() -> None:
-    with pytest.raises(ValueError, match="hexadecimal"):
-        ImageHash.hex_to_hash("")
-    with pytest.raises(TypeError, match="string"):
-        ImageHash.hex_to_hash(1)
+    assert_raises(ValueError, lambda: ImageHash.hex_to_hash(""), match="hexadecimal")
+    assert_raises(TypeError, lambda: ImageHash.hex_to_hash(1), match="string")
 
 
 def test_parser_preview_and_failed_close() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (3, 2), "red").save(stream, "JXL", lossless=True)
+    stream = image_buffer(Image.new("RGB", (3, 2), "red"), "JXL", lossless=True)
     parser = ImageFile.Parser()
     parser.feed(stream.getvalue())
     preview = parser.image
     assert preview is not None
     assert preview.tobytes() == parser.close().tobytes()
     parser = ImageFile.Parser()
-    with pytest.raises(OSError):
-        parser.feed(b"not an image")
-    with pytest.raises(ValueError, match="closed"):
-        parser.close()
+    assert_raises(OSError, lambda: parser.feed(b"not an image"))
+    assert_raises(ValueError, lambda: parser.close(), match="closed")
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])
@@ -209,8 +192,7 @@ def test_show_cleans_up_after_failure(failure: str, monkeypatch, tmp_path: Path)
     monkeypatch.setattr(Image.tempfile, "tempdir", str(tmp_path))
     monkeypatch.setenv("BLANKET_IMAGE_VIEWER", "viewer")
     monkeypatch.setattr(Image.Image if failure == "save" else Image.subprocess, "save" if failure == "save" else "Popen", fail)
-    with pytest.raises(OSError, match="failed"):
-        Image.new("RGB", (1, 1)).show()
+    assert_raises(OSError, lambda: Image.new("RGB", (1, 1)).show(), match="failed")
     assert list(tmp_path.iterdir()) == []
 
 
@@ -223,8 +205,7 @@ def test_to_pillow_without_pillow(monkeypatch) -> None:
         return original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", import_module)
-    with pytest.raises(ImportError, match="Pillow is required"):
-        Image.new("RGB", (1, 1)).to_pillow()
+    assert_raises(ImportError, lambda: Image.new("RGB", (1, 1)).to_pillow(), match="Pillow is required")
 
 
 def test_cms_profile_accessors_and_in_place_errors() -> None:
@@ -240,8 +221,7 @@ def test_cms_profile_accessors_and_in_place_errors() -> None:
     image = Image.new("RGB", (1, 1))
     assert transform.apply(image, image) is image
     image.close()
-    with pytest.raises(ImageCms.PyCMSError):
-        transform.apply_in_place(image)
+    assert_raises(ImageCms.PyCMSError, lambda: transform.apply_in_place(image))
 
 
 @pytest.mark.parametrize("mode", ["1", "I", "F", "I;16", "I;16L", "I;16B"])
@@ -263,6 +243,5 @@ def test_indexed_geometry_uses_nearest_sampling() -> None:
 
 @pytest.mark.parametrize("mode", ["I;16", "I;16L", "I;16B"])
 def test_integer_saves_convert_for_eight_bit_formats(mode: str) -> None:
-    output = BytesIO()
-    Image.new(mode, (1, 1), 7).save(output, "BMP")
+    output = image_buffer(Image.new(mode, (1, 1), 7), "BMP")
     assert Image.open(output).getpixel((0, 0)) == (7, 7, 7)

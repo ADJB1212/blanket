@@ -5,7 +5,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -67,8 +67,7 @@ def test_array_snapshots_survive_mutation_and_close():
     image.close()
     np.testing.assert_array_equal(snapshot, np.full((2, 3, 3), [10, 20, 30], dtype=np.uint8))
     np.testing.assert_array_equal(converted, snapshot)
-    with pytest.raises(ValueError, match="closed"):
-        np.asarray(image)
+    assert_raises(ValueError, lambda: np.asarray(image), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["1", "RGB", "I;16B", "RGB;F"])

@@ -4,7 +4,7 @@ from copy import copy, deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises
 
 from blanket import Image
 
@@ -82,5 +82,4 @@ def test_copy_preserves_high_depth_samples(bit_depth: int, copier: Callable[[Ima
 def test_copy_closed_image_raises(copier: Callable[[Image.Image], Image.Image]) -> None:
     image = Image.new("RGB", (1, 1))
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        copier(image)
+    assert_raises(ValueError, lambda: copier(image), match="closed")

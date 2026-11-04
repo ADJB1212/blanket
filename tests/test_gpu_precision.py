@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, shader_runtime
-from helpers import float_samples
+from helpers import assert_raises, float_samples
 
 from blanket import Image, ImageFilter, ImageGpu
 
@@ -57,14 +57,11 @@ def test_resize_avoids_oversized_intermediate(runtime, mode, resample):
 def test_blend_and_convolve_reject_overflowing_controls(runtime, mode):
     gpu = ImageGpu.from_image(source(mode, (3, 3)), runtime=runtime)
     for alpha in (1e40, -1e40, math.inf, math.nan):
-        with pytest.raises(ValueError):
-            gpu.blend(gpu, alpha)
+        assert_raises(ValueError, lambda: gpu.blend(gpu, alpha))
     for arguments in ({"kernel": [1e40, -1e40, 0, 0, 0, 0, 0, 0, 0], "scale": 1}, {"kernel": [1] * 9, "scale": 1e-40}, {"kernel": [1] * 9, "offset": 1e40}):
-        with pytest.raises(ValueError):
-            gpu.convolve(**arguments)
+        assert_raises(ValueError, lambda: gpu.convolve(**arguments))
         if runtime == "native":
-            with pytest.raises(ValueError):
-                ImageGpu.ProcessingPlan(gpu.size, mode, [("convolve", arguments)])
+            assert_raises(ValueError, lambda: ImageGpu.ProcessingPlan(gpu.size, mode, [("convolve", arguments)]))
     assert gpu.convolve([1e40] * 9, scale=9e40).to_image().size == gpu.size
 
 
@@ -245,36 +242,23 @@ def test_rank_filter_every_rank(runtime, mode, window):
 def test_validation(runtime):
     gpu = ImageGpu.from_image(source("RGB"), runtime=runtime)
     for mode in ("P", "I;16", "CMYK"):
-        with pytest.raises(ValueError):
-            gpu.convert(mode)
+        assert_raises(ValueError, lambda: gpu.convert(mode))
     for channel in (-1, 3, "A"):
-        with pytest.raises(ValueError):
-            gpu.getchannel(channel)
+        assert_raises(ValueError, lambda: gpu.getchannel(channel))
     for radius in (-1, float("nan"), float("inf"), 1e30, (1, -1)):
-        with pytest.raises(ValueError):
-            gpu.box_blur(radius)
-        with pytest.raises(ValueError):
-            gpu.gaussian_blur(radius)
+        assert_raises(ValueError, lambda: gpu.box_blur(radius))
+        assert_raises(ValueError, lambda: gpu.gaussian_blur(radius))
     for size in (0, 2, 9):
-        with pytest.raises(ValueError):
-            gpu.median_filter(size)
-    with pytest.raises(ValueError):
-        gpu.rank_filter(3, 9)
-    with pytest.raises(ValueError):
-        gpu.unsharp_mask(percent=2**40)
-    with pytest.raises(ValueError):
-        ImageGpu.merge("RGB", gpu.split()[:2])
-    with pytest.raises(ValueError):
-        ImageGpu.merge("RGB;F", gpu.split())
-    with pytest.raises(ValueError):
-        gpu.putalpha(ImageGpu.from_image(source("RGB"), runtime=runtime))
-    with pytest.raises(ValueError):
-        gpu.putalpha(ImageGpu.from_image(source("F"), runtime=runtime))
-    with pytest.raises(ValueError):
-        gpu.putalpha(ImageGpu.from_image(source("L", (1, 1)), runtime=runtime))
+        assert_raises(ValueError, lambda: gpu.median_filter(size))
+    assert_raises(ValueError, lambda: gpu.rank_filter(3, 9))
+    assert_raises(ValueError, lambda: gpu.unsharp_mask(percent=2**40))
+    assert_raises(ValueError, lambda: ImageGpu.merge("RGB", gpu.split()[:2]))
+    assert_raises(ValueError, lambda: ImageGpu.merge("RGB;F", gpu.split()))
+    assert_raises(ValueError, lambda: gpu.putalpha(ImageGpu.from_image(source("RGB"), runtime=runtime)))
+    assert_raises(ValueError, lambda: gpu.putalpha(ImageGpu.from_image(source("F"), runtime=runtime)))
+    assert_raises(ValueError, lambda: gpu.putalpha(ImageGpu.from_image(source("L", (1, 1)), runtime=runtime)))
     gpu.close()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.box_blur()
+    assert_raises(ValueError, lambda: gpu.box_blur(), match="closed")
 
 
 def test_new_operations_remain_resident(monkeypatch):

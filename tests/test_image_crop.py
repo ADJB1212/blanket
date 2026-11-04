@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
 from blanket import Image
@@ -51,8 +52,7 @@ def test_wide_crop() -> None:
 def test_negative_crop(box: tuple[int, int, int, int]) -> None:
     im = Image.new("RGB", (10, 10))
 
-    with pytest.raises(ValueError):
-        im.crop(box)
+    assert_raises(ValueError, lambda: im.crop(box))
 
 
 def test_crop_float() -> None:

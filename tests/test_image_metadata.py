@@ -5,7 +5,7 @@ from io import BytesIO
 from xml.etree import ElementTree as ET
 
 import pytest
-from helpers import assert_pixels_equal, encode_image
+from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageCms, ImageMetadata, PngImagePlugin, UnidentifiedImageError
@@ -298,8 +298,7 @@ def test_resolution_rewrite_and_removal(format):
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "TIFF", "BMP"])
 def test_external_resolution_and_units(format):
-    stream = BytesIO()
-    PillowImage.new("RGB", (17, 9)).save(stream, format, dpi=(254, 127))
+    stream = image_buffer(PillowImage.new("RGB", (17, 9)), format, dpi=(254, 127))
     result = ImageMetadata.get_resolution(stream)
     assert result.dpi == pytest.approx((254, 127), rel=1e-4)
     assert result.pixel_aspect == pytest.approx(0.5, rel=1e-4)
@@ -308,14 +307,12 @@ def test_external_resolution_and_units(format):
 def test_resolution_conflicts_and_unitless_density():
     exif = Image.Exif()
     exif[282], exif[283], exif[296] = 100.0, 50.0, 3
-    stream = BytesIO()
-    PillowImage.new("RGB", (17, 9)).save(stream, "JPEG", dpi=(72, 72), exif=exif.tobytes())
+    stream = image_buffer(PillowImage.new("RGB", (17, 9)), "JPEG", dpi=(72, 72), exif=exif.tobytes())
     result = ImageMetadata.get_resolution(stream)
     assert result.dpi == (72, 72) and result.conflicts == ("exif",)
     result = ImageMetadata.get_resolution(stream, conflict="exif")
     assert result.dpi == pytest.approx((254, 127)) and result.unit == "cm"
-    with pytest.raises(ValueError, match="conflicting"):
-        ImageMetadata.get_resolution(stream, conflict="error")
+    assert_raises(ValueError, lambda: ImageMetadata.get_resolution(stream, conflict="error"), match="conflicting")
     data = bytearray(encode("JPEG"))
     pos = data.index(b"JFIF\0")
     data[pos + 7 : pos + 12] = struct.pack(">BHH", 0, 2, 1)
@@ -329,8 +326,7 @@ def test_save_policy_filters_explicit_metadata_and_cached_exif(format):
     image.getexif().update(exif_data(thumbnail=True))
     image.info["xmp"] = XMP
     profile = ImageCms.createProfile("sRGB").tobytes()
-    stream = BytesIO()
-    image.save(stream, format, metadata_policy=ImageMetadata.MetadataPolicy(location=False), icc_profile=profile, xmp=image.info["xmp"])
+    stream = image_buffer(image, format, metadata_policy=ImageMetadata.MetadataPolicy(location=False), icc_profile=profile, xmp=image.info["xmp"])
     result = Image.open(stream)
     assert 34853 not in result.getexif() and b"private-gps" not in result.info["xmp"]
     assert 34853 in image.getexif() and image.info["xmp"] == XMP
@@ -365,8 +361,7 @@ def test_malformed_exif_thumbnail_bounds():
         if struct.unpack_from(">H", raw, pos)[0] == 513:
             struct.pack_into(">I", raw, pos + 8, len(raw) + 100)
             break
-    with pytest.raises(ValueError, match="thumbnail bounds"):
-        ImageMetadata.get_previews(BytesIO(encode("JPEG", exif=bytes(raw))))
+    assert_raises(ValueError, lambda: ImageMetadata.get_previews(BytesIO(encode("JPEG", exif=bytes(raw)))), match="thumbnail bounds")
 
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL"])
@@ -392,14 +387,12 @@ def test_eps_container_preview_bounds():
     previews = ImageMetadata.get_previews(BytesIO(data))
     assert len(previews) == 1 and previews[0].data == tiff and previews[0].source == "container"
     assert previews[0].open().size == (17, 9)
-    with pytest.raises(OSError, match="truncated EPS preview"):
-        ImageMetadata.get_previews(BytesIO(data[:-1]))
+    assert_raises(OSError, lambda: ImageMetadata.get_previews(BytesIO(data[:-1])), match="truncated EPS preview")
 
 
 def test_heif_container_thumbnail_interoperability():
     pillow_heif = pytest.importorskip("pillow_heif")
-    stream = BytesIO()
-    pillow_heif.from_pillow(PillowImage.new("RGB", (128, 96), (70, 130, 190))).save(stream, thumbnails=[32, 64])
+    stream = image_buffer(pillow_heif.from_pillow(PillowImage.new("RGB", (128, 96), (70, 130, 190))), thumbnails=[32, 64])
     previews = ImageMetadata.get_previews(stream)
     assert len(previews) == 2
     assert {preview.size for preview in previews} == {(32, 24), (64, 48)}
@@ -414,8 +407,7 @@ def test_heif_wide_thumbnails_return_sample_preserving_png(depth):
     pillow_heif = pytest.importorskip("pillow_heif")
     size = (128, 96)
     raw = struct.pack("<H", 24000) * (size[0] * size[1] * 3)
-    stream = BytesIO()
-    pillow_heif.from_bytes("RGB;16", size, raw).save(stream, thumbnails=[32], bit_depth=depth)
+    stream = image_buffer(pillow_heif.from_bytes("RGB;16", size, raw), thumbnails=[32], bit_depth=depth)
     preview = ImageMetadata.get_previews(stream)[0]
     image = preview.open()
     assert (image.size, image.mode, image.bit_depth) == ((32, 24), "RGB", depth)
@@ -428,12 +420,10 @@ def test_png_save_policy_filters_explicit_xmp_text_and_sequence_position():
     text.add_text("GPSLatitude", "private")
     first = Image.new("RGBA", (8, 6), "red")
     second = Image.new("RGBA", (8, 6), "blue")
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=[second], pnginfo=text, metadata_policy=ImageMetadata.MetadataPolicy(location=False))
+    stream = image_buffer(first, "PNG", save_all=True, append_images=[second], pnginfo=text, metadata_policy=ImageMetadata.MetadataPolicy(location=False))
     image = Image.open(stream)
     image.seek(1)
-    output = BytesIO()
-    image.save(output, "PNG", save_all=True, metadata_policy=ImageMetadata.MetadataPolicy(text=False))
+    output = image_buffer(image, "PNG", save_all=True, metadata_policy=ImageMetadata.MetadataPolicy(text=False))
     assert image.tell() == 1 and image.n_frames == 2
     info = Image.inspect(output).info
     assert b"public-title" in info["xmp"] and b"private" not in info["xmp"] and "GPSLatitude" not in info
@@ -451,19 +441,15 @@ def test_paths_positions_output_validation_and_no_raster_decode(tmp_path, monkey
     assert ImageMetadata.get_resolution(stream).dpi is None
     assert ImageMetadata.get_previews(stream) == ()
     assert ImageMetadata.rewrite(source, source, xmp=XMP) == source.read_bytes()
-    with pytest.raises(ValueError, match="distinct"):
-        ImageMetadata.rewrite(stream, stream)
-    with pytest.raises(ValueError, match="not supported"):
-        ImageMetadata.rewrite(BytesIO(encode("TIFF")), output)
-    with pytest.raises(ValueError, match="codestream"):
-        ImageMetadata.rewrite(BytesIO(encode("JXL")), output, icc_profile=None)
+    assert_raises(ValueError, lambda: ImageMetadata.rewrite(stream, stream), match="distinct")
+    assert_raises(ValueError, lambda: ImageMetadata.rewrite(BytesIO(encode("TIFF")), output), match="not supported")
+    assert_raises(ValueError, lambda: ImageMetadata.rewrite(BytesIO(encode("JXL")), output, icc_profile=None), match="codestream")
     assert output.read_bytes() == data
 
 
 @pytest.mark.parametrize("dpi", [(0, 10), (float("nan"), 10), (float("inf"), 10), (-1, 10), (10,), True])
 def test_invalid_resolution(dpi):
-    with pytest.raises((TypeError, ValueError)):
-        ImageMetadata.rewrite(BytesIO(encode()), dpi=dpi)
+    assert_raises((TypeError, ValueError), lambda: ImageMetadata.rewrite(BytesIO(encode()), dpi=dpi))
 
 
 def test_malformed_containers_and_metadata_are_rejected_without_output(tmp_path):
@@ -472,8 +458,6 @@ def test_malformed_containers_and_metadata_are_rejected_without_output(tmp_path)
     data = bytearray(encode())
     pos = data.index(b"IDAT") + 4
     data[pos] ^= 255
-    with pytest.raises(OSError, match="CRC"):
-        ImageMetadata.rewrite(BytesIO(data), output, xmp=XMP)
-    with pytest.raises((ValueError, UnidentifiedImageError)):
-        ImageMetadata.rewrite(BytesIO(encode("JPEG", exif=b"Exif\0\0invalid")), output, policy=ImageMetadata.MetadataPolicy(location=False))
+    assert_raises(OSError, lambda: ImageMetadata.rewrite(BytesIO(data), output, xmp=XMP), match="CRC")
+    assert_raises((ValueError, UnidentifiedImageError), lambda: ImageMetadata.rewrite(BytesIO(encode("JPEG", exif=b"Exif\0\0invalid")), output, policy=ImageMetadata.MetadataPolicy(location=False)))
     assert output.read_bytes() == b"unchanged"

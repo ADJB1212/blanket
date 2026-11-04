@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
-from helpers import encode_image, image_pair
+from helpers import assert_raises, encode_image, image_buffer, image_pair
 from PIL import Image as PillowImage, JpegImagePlugin as PillowJpegImagePlugin
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
@@ -46,8 +46,7 @@ def test_jpeg_comment_and_density_roundtrip(comment: str | bytes | None, dpi: tu
     if comment:
         output = actual.encode("JPEG")
         assert PillowImage.open(BytesIO(output)).info["comment"] == expected.info["comment"]
-    with pytest.raises(ValueError, match="Comment is too long"):
-        Image.new("RGB", (1, 1)).encode("JPEG", comment=b"x" * 65534)
+    assert_raises(ValueError, lambda: Image.new("RGB", (1, 1)).encode("JPEG", comment=b"x" * 65534), match="Comment is too long")
 
 
 def encode(image, **options):
@@ -102,15 +101,13 @@ def test_jpeg_compressors_keep_subsampling_and_progressive(compressor):
 def test_jpeg_rejects_invalid_controls(options, error):
     image = Image.new("RGB", (2, 2))
     stream = BytesIO(b"unchanged")
-    with pytest.raises(error):
-        image.save(stream, "JPEG", **options)
+    assert_raises(error, lambda: image.save(stream, "JPEG", **options))
     assert stream.getvalue() == b"unchanged"
 
 
 @pytest.mark.parametrize("name", ["subsampling", "progressive", "progression", "optimize", "keep_rgb", "smooth", "qtables", "restart_marker_blocks", "restart_marker_rows", "streamtype"])
 def test_jpeg_options_are_format_specific(name):
-    with pytest.raises(TypeError, match="unsupported PNG save option"):
-        Image.new("RGB", (2, 2)).save(BytesIO(), "PNG", **{name: 0})
+    assert_raises(TypeError, lambda: Image.new("RGB", (2, 2)).save(BytesIO(), "PNG", **{name: 0}), match="unsupported PNG save option")
 
 
 @pytest.mark.parametrize("mode", ["YCbCr", "CMYK"])
@@ -121,8 +118,7 @@ def test_jpeg_preset_component_edges(mode: str, width: int, options: dict[str, b
     channels = len(PillowImage.new(mode, size).getbands())
     raw = bytes(i * 137 % 256 for i in range(width * 3 * channels))
     actual = Image.frombytes(mode, size, raw).encode("JPEG", quality="web_medium", **options)
-    output = BytesIO()
-    PillowImage.frombytes(mode, size, raw).save(output, "JPEG", quality="web_medium", **options)
+    output = image_buffer(PillowImage.frombytes(mode, size, raw), "JPEG", quality="web_medium", **options)
     decoded = PillowImage.open(BytesIO(actual)).tobytes()
     reference = PillowImage.open(BytesIO(output.getvalue())).tobytes()
     assert max(abs(a - b) for a, b in zip(decoded, reference, strict=True)) <= 3
@@ -133,14 +129,11 @@ def test_jpeg_quality_with_keep_rgb(quality: str) -> None:
     raw = bytes(i * 37 % 256 for i in range(17 * 9 * 3))
     source = Image.frombytes("RGB", (17, 9), raw).encode("JPEG", keep_rgb=True)
     if quality == "web_low":
-        with pytest.raises(OSError):
-            Image.open(BytesIO(source)).encode("JPEG", quality=quality, keep_rgb=True, subsampling=0)
-        with pytest.raises(OSError):
-            PillowImage.open(BytesIO(source)).save(BytesIO(), "JPEG", quality=quality, keep_rgb=True, subsampling=0)
+        assert_raises(OSError, lambda: Image.open(BytesIO(source)).encode("JPEG", quality=quality, keep_rgb=True, subsampling=0))
+        assert_raises(OSError, lambda: PillowImage.open(BytesIO(source)).save(BytesIO(), "JPEG", quality=quality, keep_rgb=True, subsampling=0))
         return
     actual = Image.open(BytesIO(source)).encode("JPEG", quality=quality, keep_rgb=True, subsampling=0)
-    output = BytesIO()
-    PillowImage.open(BytesIO(source)).save(output, "JPEG", quality=quality, keep_rgb=True, subsampling=0)
+    output = image_buffer(PillowImage.open(BytesIO(source)), "JPEG", quality=quality, keep_rgb=True, subsampling=0)
     assert PillowImage.open(BytesIO(actual)).tobytes() == PillowImage.open(BytesIO(output.getvalue())).tobytes()
 
 
@@ -162,8 +155,7 @@ def test_jpeg_smooth_edges_and_controls(size: tuple[int, int], options: dict[str
 @pytest.mark.parametrize("smooth,error", [(1.5, TypeError), ("100", TypeError), (None, TypeError), (2**31, OverflowError)])
 def test_jpeg_smooth_rejects_invalid_arguments(smooth: object, error: type[Exception]) -> None:
     output = BytesIO(b"unchanged")
-    with pytest.raises(error):
-        Image.new("RGB", (1, 1)).save(output, "JPEG", smooth=smooth)
+    assert_raises(error, lambda: Image.new("RGB", (1, 1)).save(output, "JPEG", smooth=smooth))
     assert output.getvalue() == b"unchanged"
 
 
@@ -181,8 +173,7 @@ def test_jpeg_smooth_lossless_compressor_preserves_pixels() -> None:
 
 class TestFileJpeg:
     def roundtrip_with_bytes(self, im: Image.Image, **options: Any) -> tuple[JpegImagePlugin.JpegImageFile, int]:
-        out = BytesIO()
-        im.save(out, "JPEG", **options)
+        out = image_buffer(im, "JPEG", **options)
         test_bytes = out.tell()
         out.seek(0)
         reloaded = cast("JpegImagePlugin.JpegImageFile", Image.open(out))
@@ -287,11 +278,9 @@ class TestFileJpeg:
             im = self.roundtrip(hopper(), keep_rgb=True, subsampling=subsampling1)
             assert getsampling(im) == (1, 1, 1, 1, 1, 1)
         for subsampling1 in (1, "4:2:2", 2, "4:2:0", 3):
-            with pytest.raises(OSError):
-                self.roundtrip(hopper(), keep_rgb=True, subsampling=subsampling1)
+            assert_raises(OSError, lambda: self.roundtrip(hopper(), keep_rgb=True, subsampling=subsampling1))
 
-        with pytest.raises(TypeError):
-            self.roundtrip(hopper(), subsampling="1:1:1")
+        assert_raises(TypeError, lambda: self.roundtrip(hopper(), subsampling="1:1:1"))
 
     def test_quality_keep(self, tmp_path: Path) -> None:
         # RGB
@@ -335,143 +324,137 @@ class TestFileJpeg:
 
             # values from wizard.txt in jpeg9-a src package.
             standard_l_qtable = [
-                int(s)
-                for s in [
-                    "16",
-                    "11",
-                    "10",
-                    "16",
-                    "24",
-                    "40",
-                    "51",
-                    "61",
-                    "12",
-                    "12",
-                    "14",
-                    "19",
-                    "26",
-                    "58",
-                    "60",
-                    "55",
-                    "14",
-                    "13",
-                    "16",
-                    "24",
-                    "40",
-                    "57",
-                    "69",
-                    "56",
-                    "14",
-                    "17",
-                    "22",
-                    "29",
-                    "51",
-                    "87",
-                    "80",
-                    "62",
-                    "18",
-                    "22",
-                    "37",
-                    "56",
-                    "68",
-                    "109",
-                    "103",
-                    "77",
-                    "24",
-                    "35",
-                    "55",
-                    "64",
-                    "81",
-                    "104",
-                    "113",
-                    "92",
-                    "49",
-                    "64",
-                    "78",
-                    "87",
-                    "103",
-                    "121",
-                    "120",
-                    "101",
-                    "72",
-                    "92",
-                    "95",
-                    "98",
-                    "112",
-                    "100",
-                    "103",
-                    "99",
-                ]
+                16,
+                11,
+                10,
+                16,
+                24,
+                40,
+                51,
+                61,
+                12,
+                12,
+                14,
+                19,
+                26,
+                58,
+                60,
+                55,
+                14,
+                13,
+                16,
+                24,
+                40,
+                57,
+                69,
+                56,
+                14,
+                17,
+                22,
+                29,
+                51,
+                87,
+                80,
+                62,
+                18,
+                22,
+                37,
+                56,
+                68,
+                109,
+                103,
+                77,
+                24,
+                35,
+                55,
+                64,
+                81,
+                104,
+                113,
+                92,
+                49,
+                64,
+                78,
+                87,
+                103,
+                121,
+                120,
+                101,
+                72,
+                92,
+                95,
+                98,
+                112,
+                100,
+                103,
+                99,
             ]
 
             standard_chrominance_qtable = [
-                int(s)
-                for s in [
-                    "17",
-                    "18",
-                    "24",
-                    "47",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "18",
-                    "21",
-                    "26",
-                    "66",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "24",
-                    "26",
-                    "56",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "47",
-                    "66",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                    "99",
-                ]
+                17,
+                18,
+                24,
+                47,
+                99,
+                99,
+                99,
+                99,
+                18,
+                21,
+                26,
+                66,
+                99,
+                99,
+                99,
+                99,
+                24,
+                26,
+                56,
+                99,
+                99,
+                99,
+                99,
+                99,
+                47,
+                66,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
+                99,
             ]
 
             for quality in range(101):
@@ -504,21 +487,16 @@ class TestFileJpeg:
             _n_qtables_helper(4, PILLOW_IMAGES / "pil_sample_cmyk.jpg")
 
             # not a sequence
-            with pytest.raises(ValueError):
-                self.roundtrip(im, qtables="a")
+            assert_raises(ValueError, lambda: self.roundtrip(im, qtables="a"))
             # sequence wrong length
-            with pytest.raises(ValueError):
-                self.roundtrip(im, qtables=[])
+            assert_raises(ValueError, lambda: self.roundtrip(im, qtables=[]))
             # sequence wrong length
-            with pytest.raises(ValueError):
-                self.roundtrip(im, qtables=[1, 2, 3, 4, 5])
+            assert_raises(ValueError, lambda: self.roundtrip(im, qtables=[1, 2, 3, 4, 5]))
 
             # qtable entry not a sequence
-            with pytest.raises(ValueError):
-                self.roundtrip(im, qtables=[1])
+            assert_raises(ValueError, lambda: self.roundtrip(im, qtables=[1]))
             # qtable entry has wrong number of items
-            with pytest.raises(ValueError):
-                self.roundtrip(im, qtables=[[1, 2, 3, 4]])
+            assert_raises(ValueError, lambda: self.roundtrip(im, qtables=[[1, 2, 3, 4]]))
 
     def test_qtables_incorrect_length(self) -> None:
         class IncorrectLength(list[list[int]]):
@@ -590,15 +568,13 @@ class TestFileJpeg:
         with Image.open(f) as reloaded:
             assert reloaded.info["xmp"] == b"1" * 65504
 
-        with pytest.raises(ValueError):
-            im.save(f, xmp=b"1" * 65505)
+        assert_raises(ValueError, lambda: im.save(f, xmp=b"1" * 65505))
 
     def test_separate_tables(self) -> None:
         im = hopper()
         data = []  # [interchange, tables-only, image-only]
         for streamtype in range(3):
-            out = BytesIO()
-            im.save(out, format="JPEG", streamtype=streamtype)
+            out = image_buffer(im, format="JPEG", streamtype=streamtype)
             data.append(out.getvalue())
 
         # SOI, EOI

@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises
 
 from blanket import Image, ImageChops, ImageEnhance, ImageGpu
 
@@ -130,28 +130,19 @@ def test_nonfinite_geometry_and_arithmetic(runtime):
 def test_validation_and_lifetimes(runtime):
     gpu = ImageGpu.from_image(source("L"), runtime=runtime)
     for box in ((0, 0, 0, 1), (2, 0, 1, 1), (0, 0, 2**32, 1)):
-        with pytest.raises(ValueError):
-            gpu.crop(box)
-    with pytest.raises(TypeError):
-        gpu.crop((0.1, 0, 1, 1))
-    with pytest.raises(ValueError):
-        gpu.transpose(7)
+        assert_raises(ValueError, lambda: gpu.crop(box))
+    assert_raises(TypeError, lambda: gpu.crop((0.1, 0, 1, 1)))
+    assert_raises(ValueError, lambda: gpu.transpose(7))
     for value in (float("inf"), float("nan"), 1e40):
-        with pytest.raises(ValueError):
-            gpu.brightness(value)
-    with pytest.raises(ValueError):
-        gpu.point([1])
-    with pytest.raises(ValueError):
-        gpu.posterize(9)
-    with pytest.raises(ValueError):
-        gpu.add(gpu, scale=0)
-    with pytest.raises(ValueError):
-        gpu.add(ImageGpu.from_image(source("RGB"), runtime=runtime))
+        assert_raises(ValueError, lambda: gpu.brightness(value))
+    assert_raises(ValueError, lambda: gpu.point([1]))
+    assert_raises(ValueError, lambda: gpu.posterize(9))
+    assert_raises(ValueError, lambda: gpu.add(gpu, scale=0))
+    assert_raises(ValueError, lambda: gpu.add(ImageGpu.from_image(source("RGB"), runtime=runtime)))
     result = gpu.transpose(2).crop((-2, -2, 9, 7)).invert().offset(-7)
     gpu.close()
     assert result.to_image().size == (11, 9)
-    with pytest.raises(ValueError, match="closed"):
-        gpu.invert()
+    assert_raises(ValueError, lambda: gpu.invert(), match="closed")
 
 
 def test_torch_pipeline_does_not_stage_pixels(monkeypatch):

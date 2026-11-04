@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -13,14 +14,12 @@ from blanket import Image, UnidentifiedImageError
 def test_webp_decode_matches_pillow(mode: str, lossless: bool) -> None:
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
     raw = bytes((i * 31 + i // 7) % 256 for i in range(19 * 13 * channels))
-    stream = BytesIO()
-    PillowImage.frombytes(mode, (19, 13), raw).save(stream, "WEBP", lossless=lossless, quality=85)
+    stream = image_buffer(PillowImage.frombytes(mode, (19, 13), raw), "WEBP", lossless=lossless, quality=85)
     expected = PillowImage.open(BytesIO(stream.getvalue()))
     actual = Image.open(BytesIO(stream.getvalue()))
     assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "WEBP")
     assert actual.tobytes() == expected.tobytes()
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(stream.getvalue()[:30]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(stream.getvalue()[:30])))
 
 
 @pytest.mark.parametrize("lossless", [False, True])
@@ -40,8 +39,7 @@ def test_webp_encode_matches_pillow_decode(mode: str, lossless: bool, size: tupl
     channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
     raw = bytes((i * 31 + i // 7) % 256 for i in range(size[0] * size[1] * channels))
     source = Image.frombytes(mode, size, raw)
-    stream = BytesIO()
-    source.save(stream, "WEBP", lossless=lossless, quality=85)
+    stream = image_buffer(source, "WEBP", lossless=lossless, quality=85)
     expected = PillowImage.open(BytesIO(stream.getvalue()))
     actual = Image.open(BytesIO(stream.getvalue()))
     assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "WEBP")

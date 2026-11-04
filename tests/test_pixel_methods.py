@@ -5,6 +5,7 @@ from io import BytesIO
 from typing import SupportsIndex, overload
 
 import pytest
+from helpers import assert_raises, image_buffer, image_pair
 from PIL import Image as PIL
 
 from blanket import Image
@@ -75,14 +76,12 @@ def test_pixel_access_lifetime_and_closed_image():
     pixels = image.load()
     image.close()
     for operation in (image.load, lambda: pixels[0, 0], lambda: pixels.__setitem__((0, 0), 7)):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
 
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_pixel_access_stays_bound_to_selected_frame(lazy):
-    stream = BytesIO()
-    PIL.new("L", (2, 2), 10).save(stream, "TIFF", save_all=True, append_images=[PIL.new("L", (3, 1), 20)])
+    stream = image_buffer(PIL.new("L", (2, 2), 10), "TIFF", save_all=True, append_images=[PIL.new("L", (3, 1), 20)])
     image = Image.open(stream, lazy=lazy, frame_cache_size=2)
     first = image.load()
     image.seek(1)
@@ -121,8 +120,7 @@ def test_pixel_snapshots_are_independent_and_immutable(mode: str, size: tuple[in
     actual.close()
     assert snapshot == expected.get_flattened_data()
     assert values == list(snapshot)
-    with pytest.raises(ValueError, match="closed"):
-        actual.get_flattened_data()
+    assert_raises(ValueError, lambda: actual.get_flattened_data(), match="closed")
 
 
 class ListValues(list[int]):
@@ -200,8 +198,7 @@ def test_extrema_late_band_extremes(mode: str) -> None:
         values[band * 257 * len(mode) + band] = 0
         values[(1024 - band * 257) * len(mode) + band] = 255
     raw = bytes(values)
-    actual = Image.frombytes(mode, (1025, 1), raw)
-    expected = PIL.frombytes(mode, (1025, 1), raw)
+    actual, expected = image_pair(mode, (1025, 1), raw)
     assert actual.getextrema() == expected.getextrema()
 
 
@@ -217,8 +214,7 @@ def test_color_count_table_limits(mode: str, limit: int) -> None:
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_data_and_colors(mode: str) -> None:
     raw = bytes((i * 31) % 256 for i in range(18 * len(mode)))
-    actual = Image.frombytes(mode, (6, 3), raw)
-    expected = PIL.frombytes(mode, (6, 3), raw)
+    actual, expected = image_pair(mode, (6, 3), raw)
     assert actual.getdata() == list(expected.get_flattened_data())
     assert actual.get_flattened_data() == expected.get_flattened_data()
     for band in range(len(mode)):
@@ -239,8 +235,7 @@ def test_putpixel(mode: str, value: int) -> None:
     actual.putpixel((-1, -2), value)
     expected.putpixel((-1, -2), value)
     assert actual.tobytes() == expected.tobytes()
-    with pytest.raises(IndexError):
-        actual.putpixel((3, 0), value)
+    assert_raises(IndexError, lambda: actual.putpixel((3, 0), value))
 
 
 @pytest.mark.parametrize(("mode", "value"), [("L", (400,)), ("RGB", (-5, 120, 400)), ("RGBA", (1, 2, 3)), ("RGBA", (1, 2, 3, 4))])
@@ -251,8 +246,7 @@ def test_tuple_pixels(mode: str, value: tuple[int, ...]) -> None:
     assert actual.tobytes() == expected.tobytes()
     if mode == "L":
         for image in (actual, expected):
-            with pytest.raises(TypeError):
-                image.putdata([value, value])
+            assert_raises(TypeError, lambda: image.putdata([value, value]))
         return
     actual.putdata([value, value])
     expected.putdata([value, value])
@@ -279,8 +273,7 @@ def test_putdata_rejects_iterators_exceeding_reported_length(mode: str, size: tu
             return iter([7] * (length + 1))
 
     image = Image.new(mode, size, 99)
-    with pytest.raises(TypeError, match="too many data entries"):
-        image.putdata(Values())
+    assert_raises(TypeError, lambda: image.putdata(Values()), match="too many data entries")
     assert image.getdata() == [7] * length + [99] * (size[0] - length)
 
 
@@ -311,8 +304,7 @@ def test_putdata_integer_conversion(container: type, scale: float, offset: float
     actual.putdata(values, scale, offset)
     expected.putdata(values, scale, offset)
     assert actual.tobytes() == expected.tobytes()
-    with pytest.raises(OverflowError):
-        actual.putdata([2**10000])
+    assert_raises(OverflowError, lambda: actual.putdata([2**10000]))
     actual.putdata([-1, True, False], scale, offset)
     expected.putdata([-1, True, False], scale, offset)
     assert actual.tobytes() == expected.tobytes()
@@ -351,16 +343,12 @@ def test_high_depth_reads() -> None:
 
 def test_errors_and_empty() -> None:
     image = Image.new("RGB", (1, 1))
-    with pytest.raises(TypeError):
-        image.putdata([(1, 2, 3)] * 2)
-    with pytest.raises(ValueError):
-        Image.blend(image, Image.new("L", (1, 1)), 0.5)
-    with pytest.raises(ValueError):
-        Image.composite(image, image, Image.new("L", (2, 1)))
+    assert_raises(TypeError, lambda: image.putdata([(1, 2, 3)] * 2))
+    assert_raises(ValueError, lambda: Image.blend(image, Image.new("L", (1, 1)), 0.5))
+    assert_raises(ValueError, lambda: Image.composite(image, image, Image.new("L", (2, 1))))
     empty = Image.new("L", (0, 0))
     assert empty.getdata() == []
     assert empty.getcolors() == []
     image.close()
     for method in (image.getdata, image.getcolors, image.getextrema):
-        with pytest.raises(ValueError):
-            method()
+        assert_raises(ValueError, lambda: method())

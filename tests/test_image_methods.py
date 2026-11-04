@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from helpers import assert_pixels_equal, image_pair
+from helpers import assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
 from PIL import Image as PIL
 
 from blanket import Image
@@ -15,8 +15,7 @@ from blanket import Image
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_channels_and_point(mode: str) -> None:
     data = bytes((i * 37) % 256 for i in range(63 * len(mode)))
-    actual = Image.frombytes(mode, (9, 7), data)
-    expected = PIL.frombytes(mode, (9, 7), data)
+    actual, expected = image_pair(mode, (9, 7), data)
     for channel in (*range(len(mode)), *mode):
         assert actual.getchannel(channel).tobytes() == expected.getchannel(channel).tobytes()
     for lut in (lambda v: v / 2, list(range(255, -1, -1)) * len(mode)):
@@ -27,8 +26,7 @@ def test_channels_and_point(mode: str) -> None:
 @pytest.mark.parametrize("size", [(13, 11), (1, 8), (8, 1), (100, 100), (7.9, 5.2)])
 def test_thumbnail(mode: str, size: tuple[float, float]) -> None:
     data = bytes((i * 19) % 256 for i in range(31 * 23 * len(mode)))
-    actual = Image.frombytes(mode, (31, 23), data)
-    expected = PIL.frombytes(mode, (31, 23), data)
+    actual, expected = image_pair(mode, (31, 23), data)
     actual.info["custom"] = 42
     assert actual.thumbnail(size) is None
     expected.thumbnail(size)
@@ -39,18 +37,14 @@ def test_thumbnail(mode: str, size: tuple[float, float]) -> None:
 def test_validation_and_empty_images() -> None:
     image = Image.new("RGB", (2, 2))
     for channel in (-1, 3, "A"):
-        with pytest.raises(ValueError):
-            image.getchannel(channel)
-    with pytest.raises(ValueError):
-        image.point([0] * 256)
-    with pytest.raises(ValueError):
-        image.histogram(Image.new("L", (1, 1)))
+        assert_raises(ValueError, lambda: image.getchannel(channel))
+    assert_raises(ValueError, lambda: image.point([0] * 256))
+    assert_raises(ValueError, lambda: image.histogram(Image.new("L", (1, 1))))
     assert Image.new("L", (0, 0)).getextrema() is None
     assert Image.new("RGBA", (0, 0)).getbbox() is None
     image.close()
     for operation in (image.getbbox, image.histogram, image.getextrema):
-        with pytest.raises(ValueError):
-            operation()
+        assert_raises(ValueError, lambda: operation())
 
 
 def test_palette_and_independent_channel() -> None:
@@ -70,8 +64,7 @@ def test_high_depth_bbox(depth: int) -> None:
     image = Image.frombytes("RGBA", (2, 1), b"\x00" * 8 + b"\x00\x01" * 4, bit_depth=depth)
     assert image.getbbox() == (1, 0, 2, 1)
     assert image.getchannel("A").getpixel((1, 0)) == 256
-    with pytest.raises(ValueError, match="8-bit"):
-        image.histogram()
+    assert_raises(ValueError, lambda: image.histogram(), match="8-bit")
 
 
 def test_getbands_tracks_in_place_mode_changes() -> None:
@@ -88,14 +81,12 @@ def test_getbands_tracks_in_place_mode_changes() -> None:
 @pytest.mark.parametrize("width", [1, 17, 1024])
 def test_l_bbox_scans_empty_edge_columns(width: int) -> None:
     raw = bytes(width) + (b"\0" + bytes([7]) * (width - 1)) * 31 + bytes(width)
-    image = Image.frombytes("L", (width, 33), raw)
-    reference = PIL.frombytes("L", (width, 33), raw)
+    image, reference = image_pair("L", (width, 33), raw)
     assert image.getbbox() == reference.getbbox()
 
 
 def test_remap_palette_matches_pillow_and_preserves_transparency() -> None:
-    image = Image.frombytes("P", (4, 1), b"\x00\x01\x02\x01")
-    reference = PIL.frombytes("P", image.size, image.tobytes())
+    image, reference = image_pair("P", (4, 1), b"\x00\x01\x02\x01")
     palette = bytes([10, 20, 30, 40, 50, 60, 70, 80, 90])
     image.putpalette(palette)
     reference.putpalette(palette)
@@ -115,8 +106,7 @@ def test_remap_palette_matches_pillow_and_preserves_transparency() -> None:
 def test_remap_palette_with_source_palette(mode: str, palette_mode: str) -> None:
     raw = b"\x00\x01\x02"
     palette = bytes(i % 256 for i in range(256 * len(palette_mode)))
-    image = Image.frombytes(mode, (3, 1), raw)
-    reference = PIL.frombytes(mode, (3, 1), raw)
+    image, reference = image_pair(mode, (3, 1), raw)
     actual = image.remap_palette([2, 0, 1], source_palette=palette)
     expected = reference.remap_palette([2, 0, 1], source_palette=palette)
     assert actual.tobytes() == expected.tobytes()
@@ -124,14 +114,12 @@ def test_remap_palette_with_source_palette(mode: str, palette_mode: str) -> None
 
 
 def test_xbm_bitmap_matches_pillow() -> None:
-    image = Image.new("1", (9, 2))
-    reference = PIL.new("1", image.size)
+    image, reference = new_pair("1", (9, 2))
     for point in ((0, 0), (7, 0), (8, 1)):
         image.putpixel(point, 255)
         reference.putpixel(point, 255)
     assert image.tobitmap("sample") == reference.tobitmap("sample")
-    with pytest.raises(ValueError, match="not a bitmap"):
-        Image.new("L", (1, 1)).tobitmap()
+    assert_raises(ValueError, lambda: Image.new("L", (1, 1)).tobitmap(), match="not a bitmap")
 
 
 @pytest.mark.parametrize("width", [0, 1, 7, 8, 9, 31, 32, 33, 257])
@@ -146,21 +134,18 @@ def test_native_xbm_preserves_partial_rows_and_ascii_names(width: int) -> None:
     body = ",".join(f"0x{value:02x}" for value in _blanket.ops_xbm_bits(image._native))
     expected = f"#define sample_width {width}\n#define sample_height 3\nstatic char sample_bits[] = {{\n{body}\n}};".encode("ascii")
     assert image.tobitmap("sample") == expected
-    with pytest.raises(UnicodeEncodeError):
-        image.tobitmap("non-ascii-\u00e9")
+    assert_raises(UnicodeEncodeError, lambda: image.tobitmap("non-ascii-\u00e9"))
 
 
 def test_eager_verify_draft_and_core_shim() -> None:
-    stream = BytesIO()
-    Image.new("RGB", (3, 2), (10, 20, 30)).save(stream, "PNG")
+    stream = image_buffer(Image.new("RGB", (3, 2), (10, 20, 30)), "PNG")
     image = Image.open(BytesIO(stream.getvalue()))
     assert image.verify() is None
     assert image.draft("L", (1, 1)) is None
     assert image.getim() is image.im
     assert image.size == (3, 2)
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.verify()
+    assert_raises(ValueError, lambda: image.verify(), match="closed")
 
 
 @pytest.mark.parametrize(
@@ -201,8 +186,7 @@ def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int
 
 @pytest.mark.parametrize(("mode", "data"), [("I", [0, 10, 20, 30]), ("F", [0.0, 0.5, 1.0, 2.0])])
 def test_wide_entropy_matches_pillow(mode: str, data: list[int | float]) -> None:
-    image = Image.new(mode, (4, 1))
-    reference = PIL.new(mode, image.size)
+    image, reference = new_pair(mode, (4, 1))
     image.putdata(data)
     reference.putdata(data)
     for extrema in (None, (0, 40)):
@@ -261,10 +245,8 @@ def test_float_entropy_ignores_nonfinite_samples_and_validates_extrema() -> None
     assert image.entropy() == pytest.approx(1.0)
     assert image.entropy(extrema=(-1, 1)) == pytest.approx(1.0)
     for extrema in ((1, -1), (float("nan"), 1), (0, float("inf"))):
-        with pytest.raises(ValueError, match="invalid extrema"):
-            image.entropy(extrema=extrema)
-    with pytest.raises(ValueError, match="invalid extrema"):
-        Image.frombytes("F", (3, 1), raw[:12]).entropy()
+        assert_raises(ValueError, lambda: image.entropy(extrema=extrema), match="invalid extrema")
+    assert_raises(ValueError, lambda: Image.frombytes("F", (3, 1), raw[:12]).entropy(), match="invalid extrema")
 
 
 @pytest.mark.parametrize("mode", ["RGB", "CMYK"])

@@ -6,7 +6,7 @@ import math
 import struct
 
 import pytest
-from helpers import image_pair, patterned_pair
+from helpers import assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage
 
 from blanket import Image
@@ -33,8 +33,7 @@ def test_float_color_extrema_preserve_band_order_nan_and_signed_zero(mode: str, 
                 assert value == target and math.copysign(1, value) == math.copysign(1, target)
     assert image.tobytes() == raw
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.getextrema()
+    assert_raises(ValueError, lambda: image.getextrema(), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -159,16 +158,13 @@ def test_constant_entropy(mode: str) -> None:
 @pytest.mark.parametrize(("factor", "box"), [(0, None), (-1, None), ((2, 0), None), (2, (0, 0, 0, 2)), (2, (-1, 0, 2, 2)), (2, (0, 0, 100, 2))])
 def test_invalid_reduce(factor: object, box: object) -> None:
     image, _ = patterned_pair("L", (17, 13), divisor=7)
-    with pytest.raises(ValueError):
-        image.reduce(factor, box)
+    assert_raises(ValueError, lambda: image.reduce(factor, box))
 
 
 def test_mask_validation_and_closed_images() -> None:
     image, _ = patterned_pair("RGB", (17, 13), divisor=7)
     for mask in (Image.frombytes("L", (1, 1), b"a"), image):
-        with pytest.raises(ValueError):
-            image.entropy(mask)
+        assert_raises(ValueError, lambda: image.entropy(mask))
     image.close()
     for operation in (image.split, image.entropy, lambda: image.reduce(2)):
-        with pytest.raises(ValueError):
-            operation()
+        assert_raises(ValueError, lambda: operation())

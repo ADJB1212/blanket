@@ -7,6 +7,7 @@ Tests for resize functionality.
 from __future__ import annotations
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, assert_image_equal_tofile, assert_image_similar, hopper, skip_unless_feature
 
 from blanket import Image, ImageFile
@@ -33,11 +34,9 @@ class TestReducingGapResize:
         im = gradients_image.resize((52, 34), Image.Resampling.BICUBIC)
         assert_image_equal(ref, im)
 
-        with pytest.raises(ValueError):
-            gradients_image.resize((52, 34), Image.Resampling.BICUBIC, reducing_gap=0)
+        assert_raises(ValueError, lambda: gradients_image.resize((52, 34), Image.Resampling.BICUBIC, reducing_gap=0))
 
-        with pytest.raises(ValueError):
-            gradients_image.resize((52, 34), Image.Resampling.BICUBIC, reducing_gap=0.99)
+        assert_raises(ValueError, lambda: gradients_image.resize((52, 34), Image.Resampling.BICUBIC, reducing_gap=0.99))
 
     @pytest.mark.parametrize("box, epsilon", ((None, 4), ((1.1, 2.2, 510.8, 510.9), 4), ((3, 10, 410, 256), 10)))
     def test_reducing_gap_1(self, gradients_image: ImageFile.ImageFile, box: tuple[float, float, float, float], epsilon: float) -> None:

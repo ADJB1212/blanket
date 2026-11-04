@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_pair, new_pair
 from PIL import Image as PILImage, ImageChops as PILChops, ImageFilter as PILFilter, ImageOps as PILOps
 
 from blanket import Image, ImageChops, ImageFilter, ImageOps
@@ -97,12 +97,10 @@ def test_integer_extrema_with_largest_window(maximum: bool) -> None:
 @pytest.mark.parametrize("shape", ["scalar", "horizontal", "vertical"])
 def test_box_blur_checks_constructor_and_mutated_radii(radius: float, shape: str) -> None:
     value = radius if shape == "scalar" else (radius, 1) if shape == "horizontal" else (1, radius)
-    with pytest.raises(ValueError, match="radius"):
-        ImageFilter.BoxBlur(value)
+    assert_raises(ValueError, lambda: ImageFilter.BoxBlur(value), match="radius")
     operation = ImageFilter.BoxBlur(1)
     operation.radius = value
-    with pytest.raises(ValueError, match="radius"):
-        Image.new("RGB", (0, 1)).filter(operation)
+    assert_raises(ValueError, lambda: Image.new("RGB", (0, 1)).filter(operation), match="radius")
 
 
 @pytest.mark.parametrize("radius", [float("nan"), float("inf"), -float("inf"), 2**31])
@@ -110,8 +108,7 @@ def test_box_blur_checks_constructor_and_mutated_radii(radius: float, shape: str
 def test_gaussian_and_unsharp_reject_invalid_radii_on_empty_images(radius: float, size: tuple[int, int]) -> None:
     image = Image.new("RGB", size)
     for operation in (ImageFilter.GaussianBlur(radius), ImageFilter.UnsharpMask(radius)):
-        with pytest.raises(ValueError, match="radius"):
-            image.filter(operation)
+        assert_raises(ValueError, lambda: image.filter(operation), match="radius")
 
 
 def test_negative_gaussian_radius_matches_pillow() -> None:
@@ -125,14 +122,12 @@ def test_negative_gaussian_radius_matches_pillow() -> None:
 def test_rank_filter_revalidates_mutated_size(size: int) -> None:
     operation = ImageFilter.RankFilter(3, 0)
     operation.size = size
-    with pytest.raises(ValueError, match="filter size too large"):
-        Image.new("L", (2, 2)).filter(operation)
+    assert_raises(ValueError, lambda: Image.new("L", (2, 2)).filter(operation), match="filter size too large")
 
 
 @pytest.mark.parametrize("operation", ["invert", "posterize", "solarize"])
 def test_palette_lookup_tables_keep_indices_alpha_and_metadata(operation: str) -> None:
-    image = Image.frombytes("P", (3, 1), b"\x00\x01\x00")
-    expected = PILImage.frombytes("P", image.size, image.tobytes())
+    image, expected = image_pair("P", (3, 1), b"\x00\x01\x00")
     palette = bytes([10, 20, 30, 0, 40, 50, 60, 128])
     image.putpalette(palette, "RGBA")
     expected.putpalette(palette, "RGBA")
@@ -150,8 +145,7 @@ def test_palette_lookup_tables_keep_indices_alpha_and_metadata(operation: str) -
 @pytest.mark.parametrize("transparency", [0, bytes([0, 128])])
 @pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
 def test_palette_transparency_survives_expand_and_pad(transparency: int | bytes, palette_mode: str) -> None:
-    actual = Image.frombytes("P", (2, 1), b"\x00\x01")
-    expected = PILImage.frombytes("P", actual.size, actual.tobytes())
+    actual, expected = image_pair("P", (2, 1), b"\x00\x01")
     palette = bytes([10, 20, 30, 40, 50, 60]) if palette_mode == "RGB" else bytes([10, 20, 30, 64, 40, 50, 60, 192])
     for image in (actual, expected):
         image.putpalette(palette, palette_mode)
@@ -170,18 +164,15 @@ def test_kernel_default_scale_and_empty_coefficients_match_pillow() -> None:
     actual = ImageFilter.Kernel((3, 3), coefficients)
     expected = PILFilter.Kernel((3, 3), coefficients)
     assert actual.filterargs == expected.filterargs
-    image = Image.frombytes("L", (5, 5), bytes(range(25)))
-    reference = PILImage.frombytes("L", image.size, image.tobytes())
+    image, reference = image_pair("L", (5, 5), bytes(range(25)))
     assert image.filter(actual).tobytes() == reference.filter(expected).tobytes()
     for module in (ImageFilter, PILFilter):
-        with pytest.raises(ValueError, match="not enough coefficients"):
-            module.Kernel((3, 3), [])
+        assert_raises(ValueError, lambda: module.Kernel((3, 3), []), match="not enough coefficients")
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "P", "I", "F", "I;16", "I;16L", "I;16B"])
 def test_single_band_fills_split_and_merge_match_pillow(mode: str) -> None:
-    actual = Image.new(mode, (7, 5), (37,))
-    expected = PILImage.new(mode, actual.size, (37,))
+    actual, expected = new_pair(mode, (7, 5), (37,))
     actual.paste((71,), (1, 1, 5, 4))
     expected.paste((71,), (1, 1, 5, 4))
     assert actual.tobytes() == expected.tobytes()
@@ -196,8 +187,7 @@ def test_single_band_fills_split_and_merge_match_pillow(mode: str) -> None:
 @pytest.mark.parametrize("name", ["logical_and", "logical_or", "logical_xor"])
 def test_logical_operations_normalize_noncanonical_true_values(name: str) -> None:
     actual = Image.new("1", (33, 1))
-    other = Image.new("1", actual.size)
-    expected = PILImage.new("1", actual.size)
+    other, expected = new_pair("1", actual.size)
     reference = PILImage.new("1", actual.size)
     for i in range(33):
         for image, value in ((actual, (0, 1, 2, 128, 255)[i % 5]), (expected, (0, 1, 2, 128, 255)[i % 5]), (other, (0, 2, 1)[i % 3]), (reference, (0, 2, 1)[i % 3])):
@@ -246,8 +236,7 @@ def test_wide_histograms_match_pillow(mode: str, values: list[int | float]) -> N
     expected = PILImage.frombytes(mode, actual.size, raw)
     assert actual.histogram() == expected.histogram()
     assert actual.histogram(extrema=(-5, 105)) == expected.histogram(extrema=(-5, 105))
-    with pytest.raises(ValueError, match="image has wrong mode"):
-        actual.histogram(Image.new("1", actual.size))
+    assert_raises(ValueError, lambda: actual.histogram(Image.new("1", actual.size)), match="image has wrong mode")
 
 
 @pytest.mark.parametrize("maximum", [291, 301, 347, 1023, 65535])
@@ -264,8 +253,7 @@ def test_wide_histogram_float32_bin_boundaries(mode: str, maximum: int) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "I", "F", "CMYK", "HSV", "YCbCr"])
 def test_bilevel_conversion_normalizes_noncanonical_true_values(mode: str) -> None:
-    actual = Image.new("1", (33, 1))
-    expected = PILImage.new("1", actual.size)
+    actual, expected = new_pair("1", (33, 1))
     for i in range(33):
         value = (0, 1, 2, 128, 255)[i % 5]
         actual.putpixel((i, 0), value)

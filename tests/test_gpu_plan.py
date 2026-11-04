@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 from gpu_helpers import require_metal
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu
 
@@ -140,29 +141,22 @@ def test_plan_validation_closed_inputs_and_empty_batches(metal):
     plan = ImageGpu.ProcessingPlan(image.size, "L", [], memory_limit=32)
     assert plan.run_batch([]) == []
     assert plan.run(image).to_image().tobytes() == image.to_image().tobytes()
-    with pytest.raises(ValueError, match="match"):
-        plan.run(ImageGpu.from_image(source("L", (3, 5))))
-    with pytest.raises(TypeError):
-        plan.run(source("L"))
+    assert_raises(ValueError, lambda: plan.run(ImageGpu.from_image(source("L", (3, 5)))), match="match")
+    assert_raises(TypeError, lambda: plan.run(source("L")))
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        plan.run(image)
+    assert_raises(ValueError, lambda: plan.run(image), match="closed")
     plan.close()
-    with pytest.raises(ValueError, match="closed"):
-        plan.run_batch([])
-    with pytest.raises(ValueError, match="halos"):
-        ImageGpu.ProcessingPlan((29, 31), "RGBA;F", [("median_filter", {"size": 7})], memory_limit=100)
+    assert_raises(ValueError, lambda: plan.run_batch([]), match="closed")
+    assert_raises(ValueError, lambda: ImageGpu.ProcessingPlan((29, 31), "RGBA;F", [("median_filter", {"size": 7})], memory_limit=100), match="halos")
 
 
 @pytest.mark.parametrize("operations", [[("resize", {"size": (2, 2)})], [("brightness", {"factor": float("nan")})], [("rank_filter", {"size": 8, "rank": 0})]])
 def test_plan_rejects_invalid_operations_before_hardware_access(operations):
-    with pytest.raises(ValueError):
-        ImageGpu.ProcessingPlan((3, 5), "RGBA", operations)
+    assert_raises(ValueError, lambda: ImageGpu.ProcessingPlan((3, 5), "RGBA", operations))
 
 
 def test_cache_rejects_negative_budgets():
-    with pytest.raises(ValueError):
-        ImageGpu.configure_cache(image_bytes=-1)
+    assert_raises(ValueError, lambda: ImageGpu.configure_cache(image_bytes=-1))
 
 
 @pytest.mark.parametrize("mode,channels", [("L", 1), ("RGB", 3), ("RGBA", 4)])
@@ -182,8 +176,7 @@ def test_unsigned_plans_quantize_each_public_operation(metal, mode, channels, de
     result = plan.run(image)
     assert result.bit_depth == depth
     assert result.to_image().tobytes() == expected.to_image().tobytes()
-    with pytest.raises(ValueError, match="depth"):
-        ImageGpu.ProcessingPlan(size, mode, [], bit_depth=8).run(image)
+    assert_raises(ValueError, lambda: ImageGpu.ProcessingPlan(size, mode, [], bit_depth=8).run(image), match="depth")
 
 
 def test_control_and_coefficient_caches_reuse_and_evict(metal):

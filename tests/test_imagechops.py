@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from helpers import assert_pillow_equal, assert_pixels_equal, image_pair, patterned_pair
+from helpers import assert_pillow_equal, assert_pixels_equal, assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage, ImageChops as PILChops
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
@@ -281,20 +281,17 @@ def test_offset_regression(mode: str, size: tuple[int, int], shift: tuple[int, i
 def test_invalid_modes_and_closed_inputs(name: str) -> None:
     first = Image.new("RGB", (3, 2))
     second = Image.new("RGBA", first.size)
-    with pytest.raises(ValueError, match="images do not match"):
-        getattr(ImageChops, name)(first, second)
+    assert_raises(ValueError, lambda: getattr(ImageChops, name)(first, second), match="images do not match")
     second = first.copy()
     second.close()
-    with pytest.raises(ValueError, match="closed image"):
-        getattr(ImageChops, name)(first, second)
+    assert_raises(ValueError, lambda: getattr(ImageChops, name)(first, second), match="closed image")
 
 
 @pytest.mark.parametrize("name", ["invert", "offset", "duplicate"])
 def test_closed_unary_inputs(name: str) -> None:
     image = Image.new("L", (2, 2))
     image.close()
-    with pytest.raises(ValueError, match="closed image"):
-        getattr(ImageChops, name)(image, 1) if name == "offset" else getattr(ImageChops, name)(image)
+    assert_raises(ValueError, lambda: getattr(ImageChops, name)(image, 1) if name == "offset" else getattr(ImageChops, name)(image), match="closed image")
 
 
 @pytest.mark.parametrize("name", [*BINARY, "invert", "offset"])

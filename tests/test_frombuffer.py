@@ -5,6 +5,7 @@ import tracemalloc
 import weakref
 
 import pytest
+from helpers import assert_raises
 from PIL import Image as PillowImage, ImageDraw as PillowDraw
 
 from blanket import Image, ImageDraw
@@ -29,8 +30,7 @@ def test_getpixel_coordinate_conversion_matches_owned_images(mapped, xy) -> None
 def test_getpixel_coordinate_errors_match_owned_images(mapped, xy, message) -> None:
     data = bytearray(range(6))
     image = Image.frombuffer("L", (3, 2), data) if mapped else Image.frombytes("L", (3, 2), data)
-    with pytest.raises(TypeError, match=message):
-        image.getpixel(xy)
+    assert_raises(TypeError, lambda: image.getpixel(xy), match=message)
 
 
 @pytest.mark.parametrize("mode", MAPPED_MODES)
@@ -56,14 +56,12 @@ def test_mapped_pixel_reads_use_bounded_memory(mode: str, orientation: int) -> N
         tracemalloc.stop()
     assert peak < 32 * 1024
     for xy in [(1024, 0), (-1025, 0), (0, 1024), (0, -1025)]:
-        with pytest.raises(IndexError):
-            image.getpixel(xy)
+        assert_raises(IndexError, lambda: image.getpixel(xy))
         with pytest.raises(IndexError):
             pixels[xy]
     assert image.getpixel([0.5, 0]) == reference.getpixel((0, 0))
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.getpixel((0, 0))
+    assert_raises(ValueError, lambda: image.getpixel((0, 0)), match="closed")
     assert pixels[0, 0] == reference.getpixel((0, 0))
 
 
@@ -151,15 +149,13 @@ def test_frombuffer_keeps_export_alive_and_releases_on_close() -> None:
     image.close()
     gc.collect()
     assert reference() is None
-    with pytest.raises(ValueError, match="closed"):
-        image.tobytes()
+    assert_raises(ValueError, lambda: image.tobytes(), match="closed")
 
 
 @pytest.mark.parametrize("length", [6, 7])
 def test_mapped_buffer_requires_final_row_padding(length: int) -> None:
     for module in (Image, PillowImage):
-        with pytest.raises(ValueError, match="buffer is not large enough"):
-            module.frombuffer("L", (3, 2), bytes(length), "raw", "L", 4, 1)
+        assert_raises(ValueError, lambda: module.frombuffer("L", (3, 2), bytes(length), "raw", "L", 4, 1), match="buffer is not large enough")
 
 
 def test_frombuffer_preserves_palette_and_copies() -> None:
@@ -223,5 +219,4 @@ def test_frombuffer_empty_images(size: tuple[int, int]) -> None:
 def test_frombuffer_rejects_noncontiguous_views() -> None:
     data = memoryview(bytearray(range(16)))[::2]
     for module in (Image, PillowImage):
-        with pytest.raises((BufferError, TypeError, ValueError)):
-            module.frombuffer("L", (4, 2), data)
+        assert_raises((BufferError, TypeError, ValueError), lambda: module.frombuffer("L", (4, 2), data))

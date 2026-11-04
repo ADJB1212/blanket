@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile
@@ -71,8 +71,7 @@ def test_qtables_quality_scaling(quality: int) -> None:
 def test_qtables_validation(tables: object, error: type[Exception]) -> None:
     for image in source():
         output = BytesIO(b"unchanged")
-        with pytest.raises(error):
-            image.save(output, "JPEG", qtables=tables)
+        assert_raises(error, lambda: image.save(output, "JPEG", qtables=tables))
         assert output.getvalue() == b"unchanged"
 
 
@@ -120,8 +119,7 @@ def test_jpeg_xmp_requires_explicit_save_option() -> None:
             assert "xmp" not in Image.decode(save(decoded)).info
             assert Image.decode(save(decoded, xmp=decoded.info["xmp"])).info["xmp"] == packet
         output = BytesIO(b"unchanged")
-        with pytest.raises(ValueError):
-            image.save(output, "JPEG", xmp=b"1" * 65505)
+        assert_raises(ValueError, lambda: image.save(output, "JPEG", xmp=b"1" * 65505))
         assert output.getvalue() == b"unchanged"
 
 
@@ -155,8 +153,7 @@ def test_separate_streams_interoperate(mode: str, options: dict[str, object]) ->
 
 @pytest.mark.parametrize("streamtype", [1, 2])
 def test_separate_streams_reject_compressors(streamtype: int) -> None:
-    with pytest.raises(ValueError, match="complete JPEG stream"):
-        save(source()[0], streamtype=streamtype, compressor=LosslessImageCompressor())
+    assert_raises(ValueError, lambda: save(source()[0], streamtype=streamtype, compressor=LosslessImageCompressor()), match="complete JPEG stream")
 
 
 def test_image_only_stream_cannot_reuse_tables_from_previous_decodes() -> None:
@@ -165,8 +162,7 @@ def test_image_only_stream_cannot_reuse_tables_from_previous_decodes() -> None:
     body = save(image, streamtype=2)
     for preceding in (data, save(image, qtables=[[300] * 64]), data):
         Image.decode(preceding).load()
-        with pytest.raises(OSError):
-            Image.decode(body).load()
+        assert_raises(OSError, lambda: Image.decode(body).load())
     assert Image.decode(save(image, streamtype=1) + body).tobytes() == Image.decode(data).tobytes()
 
 
@@ -199,8 +195,7 @@ def test_separate_stream_chunk_boundaries_and_truncation(chunk_size: int) -> Non
         parser.feed(combined[position : position + chunk_size])
     assert parser.close().tobytes() == Image.decode(combined).tobytes()
     for incomplete in (tables, tables + body[:5], tables + body[:-20], b"\xff\xd8\xff\xdb\x00\x01\xff\xd9" + body):
-        with pytest.raises(OSError):
-            Image.decode(incomplete).load()
+        assert_raises(OSError, lambda: Image.decode(incomplete).load())
         parser = ImageFile.Parser()
         with pytest.raises(OSError):
             parser.feed(incomplete)
@@ -222,9 +217,7 @@ def test_jpeg_decode_stops_at_eof_and_handles_wide_scanlines() -> None:
     data = save(actual)
     assert Image.decode(data).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
     for cut in (2, 20, data.index(b"\xff\xda") + 5):
-        with pytest.raises(OSError):
-            Image.decode(data[:cut]).load()
+        assert_raises(OSError, lambda: Image.decode(data[:cut]).load())
     parser = ImageFile.Parser()
     parser.feed(data[:-20])
-    with pytest.raises(OSError, match=r"incomplete|truncated"):
-        parser.close()
+    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")

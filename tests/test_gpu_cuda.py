@@ -11,6 +11,7 @@ import test_gpu_geometry as geometry_contracts
 import test_gpu_operations as operation_contracts
 import test_gpu_precision as precision_contracts
 import test_gpu_unsigned as unsigned_contracts
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu, _gpu_cuda as cuda_runtime
 
@@ -67,8 +68,7 @@ def test_capability_diagnostics_without_cuda(monkeypatch):
     assert not capability["available"]
     assert capability["compiled_operations"] == ()
     assert "gpu-cuda feature" in capability["diagnostic"]
-    with pytest.raises(RuntimeError, match="gpu-cuda feature"):
-        ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda")
+    assert_raises(RuntimeError, lambda: ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda"), match="gpu-cuda feature")
 
 
 def test_driver_diagnostics(monkeypatch):
@@ -91,8 +91,7 @@ def test_driver_diagnostics(monkeypatch):
     result = ImageGpu.capabilities("cuda")
     assert not result["available"]
     assert "driver not found" in result["diagnostic"]
-    with pytest.raises(ValueError, match="nonnegative"):
-        cuda_runtime.require(-1)
+    assert_raises(ValueError, lambda: cuda_runtime.require(-1), match="nonnegative")
 
 
 def test_precompiled_module_loads_without_source_compilation(monkeypatch):
@@ -208,12 +207,10 @@ def test_dlpack_copy_and_export_lifetime(cuda):
 def test_explicit_device_and_cross_device_rejection(cuda):
     source = ImageGpu.from_image(Image.new("RGB", (3, 2), (1, 2, 3)), device=0)
     assert source.device == "cuda:0"
-    with pytest.raises(ValueError, match="unavailable"):
-        cuda_runtime.require(cuda.cuda.runtime.getDeviceCount())
+    assert_raises(ValueError, lambda: cuda_runtime.require(cuda.cuda.runtime.getDeviceCount()), match="unavailable")
     if cuda.cuda.runtime.getDeviceCount() > 1:
         other = ImageGpu.from_image(Image.new("RGB", (3, 2)), device=1)
-        with pytest.raises(ValueError, match="execution context"):
-            source.blend(other, 0.5)
+        assert_raises(ValueError, lambda: source.blend(other, 0.5), match="execution context")
 
 
 def test_cuda_allocation_error_has_device_context(cuda, monkeypatch):
@@ -223,8 +220,7 @@ def test_cuda_allocation_error_has_device_context(cuda, monkeypatch):
         raise RuntimeError("out of device memory")
 
     monkeypatch.setattr(cuda, "empty", fail_allocation)
-    with pytest.raises(RuntimeError, match=r"CUDA dispatch failed on device 0.*out of device memory"):
-        image.invert()
+    assert_raises(RuntimeError, lambda: image.invert(), match=r"CUDA dispatch failed on device 0.*out of device memory")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])

@@ -8,6 +8,7 @@ from collections import Counter
 from io import BytesIO
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps, ImageStat
@@ -75,11 +76,9 @@ def test_sample_pixel_writes(mode, depth):
         assert samples(image)[:channels] == [0] * channels
         if channels > 1:
             before = image.tobytes()
-            with pytest.raises((TypeError, ValueError)):
-                image.putpixel((0, 0), (10,))
+            assert_raises((TypeError, ValueError), lambda: image.putpixel((0, 0), (10,)))
             assert image.tobytes() == before
-    with pytest.raises(IndexError):
-        image.putpixel((image.width, 0), value)
+    assert_raises(IndexError, lambda: image.putpixel((image.width, 0), value))
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
@@ -130,8 +129,7 @@ def test_sample_chops_arithmetic(mode, depth, subtests: pytest.Subtests):
 
 
 def test_sample_chops_rejects_mismatched_depths():
-    with pytest.raises(ValueError, match="do not match"):
-        ImageChops.add(make_image("RGB", 10), make_image("RGB", 12))
+    assert_raises(ValueError, lambda: ImageChops.add(make_image("RGB", 10), make_image("RGB", 12)), match="do not match")
 
 
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
@@ -356,8 +354,7 @@ def test_color_lut_and_merge_retain_low_bits(depth, mode):
     assert samples(result) == expected
     assert result.bit_depth == depth
     assert Image.merge(mode, image.split()).tobytes() == image.tobytes()
-    stream = BytesIO()
-    result.convert(mode, bit_depth=16).save(stream, "PNG")
+    stream = image_buffer(result.convert(mode, bit_depth=16), "PNG")
     reopened = Image.open(BytesIO(stream.getvalue()))
     assert reopened.tobytes() == result.convert(mode, bit_depth=16).tobytes()
 
@@ -376,8 +373,7 @@ def test_empty_and_closed_images(mode, depth):
     assert statistics.mean == statistics.var == statistics.rms == [0.0] * channels
     empty.close()
     for operation in (lambda: empty.filter(ImageFilter.MedianFilter()), lambda: ImageStat.Stat(empty), lambda: ImageEnhance.Brightness(empty), lambda: Image.blend(empty, empty, 0)):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
 
 
 def test_mismatches_fail_before_mutating_destination():
@@ -392,8 +388,7 @@ def test_mismatches_fail_before_mutating_destination():
         lambda: Image.composite(image, image, Image.new("L", (1, 1))),
         lambda: Image.merge("RGBA", [image.getchannel(0)] * 3 + [make_image("L", 12)]),
     ):
-        with pytest.raises(ValueError):
-            operation()
+        assert_raises(ValueError, lambda: operation())
         assert image.tobytes() == original
 
 
@@ -448,10 +443,8 @@ def test_high_depth_blur_large_radii_and_validation(depth):
             assert max(abs(a - b) for a, b in zip(samples(result), samples(image), strict=True)) <= 1
     for radius in (math.nan, math.inf):
         for cls in (ImageFilter.BoxBlur, ImageFilter.GaussianBlur):
-            with pytest.raises(ValueError, match="radius"):
-                image.filter(cls(radius))
-    with pytest.raises(ValueError, match="radius"):
-        image.filter(ImageFilter.BoxBlur(-1))
+            assert_raises(ValueError, lambda: image.filter(cls(radius)), match="radius")
+    assert_raises(ValueError, lambda: image.filter(ImageFilter.BoxBlur(-1)), match="radius")
     assert image.filter(ImageFilter.GaussianBlur(-1)).tobytes() == image.filter(ImageFilter.GaussianBlur(1)).tobytes()
     assert ImageStat.Stat(image).var == [0.0] * 4
     image.paste((maximum, maximum, maximum, maximum), (0, 0, 1, 1))
@@ -472,8 +465,7 @@ def test_high_depth_lut_generates_alpha_and_clips(depth):
 def test_high_depth_processing_png_interoperability():
     image = make_image("L", 16)
     result = ImageEnhance.Brightness(image).enhance(0.5).filter(ImageFilter.MedianFilter())
-    stream = BytesIO()
-    result.save(stream, "PNG")
+    stream = image_buffer(result, "PNG")
     with PillowImage.open(BytesIO(stream.getvalue())) as pillow:
         assert list(pillow.get_flattened_data()) == result.getdata()
 

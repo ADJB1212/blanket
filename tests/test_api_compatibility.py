@@ -6,6 +6,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PILImage, ImageDraw as PILDraw
 
 from blanket import Image, ImageDraw
@@ -22,8 +23,7 @@ def test_conversion_palette_dither_and_transparency(mode: str, target: str, dith
     actual.info["transparency"] = expected.info["transparency"] = key
     if mode == "L" and target in ("La", "RGBa"):
         for image in (actual, expected):
-            with pytest.raises(ValueError):
-                image.convert(target, dither=dither)
+            assert_raises(ValueError, lambda: image.convert(target, dither=dither))
         return
     result, reference = actual.convert(target, dither=dither), expected.convert(target, dither=dither)
     assert result.mode == reference.mode
@@ -64,8 +64,7 @@ def test_uint16_tiff_decodes_as_integer_mode() -> None:
     values = [0, 1, 255, 256, 447, 32768, 65535] * 5
     raw = struct.pack(f"<{len(values)}H", *values)
     source = PILImage.frombytes("I;16", (7, 5), raw)
-    encoded = BytesIO()
-    source.save(encoded, "TIFF")
+    encoded = image_buffer(source, "TIFF")
     image = Image.open(BytesIO(encoded.getvalue()))
     assert image.mode == "I;16"
     assert image.tobytes() == raw
@@ -105,10 +104,8 @@ def test_array_validation_and_indexed_import() -> None:
     class MissingBytes:
         __array_interface__: ClassVar[dict[str, object]] = {"shape": (2, 3), "typestr": "|u1", "strides": (6, 2)}
 
-    with pytest.raises(TypeError):
-        Image.fromarray(MissingType())
-    with pytest.raises(ValueError):
-        Image.fromarray(MissingBytes(), "L")
+    assert_raises(TypeError, lambda: Image.fromarray(MissingType()))
+    assert_raises(ValueError, lambda: Image.fromarray(MissingBytes(), "L"))
     array = np.arange(24, dtype=np.uint8).reshape(4, 6)[:, ::2]
     actual, expected = Image.fromarray(array, "P"), PILImage.fromarray(array, "P")
     assert actual.mode == "P"
@@ -124,8 +121,7 @@ def test_replace_raw_pixels_is_atomic_and_preserves_metadata(mode: str) -> None:
     image.frombytes(source.tobytes())
     assert image.tobytes() == source.tobytes()
     assert image.info["note"] == "retained"
-    with pytest.raises(ValueError):
-        image.frombytes(b"")
+    assert_raises(ValueError, lambda: image.frombytes(b""))
     assert image.tobytes() == source.tobytes()
 
 
@@ -135,8 +131,7 @@ def test_bitmap_and_circle_match_pillow(mode: str, mask_mode: str) -> None:
     actual, expected = Image.new(mode, (19, 17)), PILImage.new(mode, (19, 17))
     mask = PILImage.new(mask_mode, (5, 4), 71 if mask_mode in ("1", "L") else (71, 83) if mask_mode == "LA" else (10, 20, 30, 83))
     if mask_mode == "LA":
-        with pytest.raises(ValueError):
-            ImageDraw.Draw(actual).bitmap((0, 0), Image.frombytes(mask.mode, mask.size, mask.tobytes()))
+        assert_raises(ValueError, lambda: ImageDraw.Draw(actual).bitmap((0, 0), Image.frombytes(mask.mode, mask.size, mask.tobytes())))
         return
     ImageDraw.Draw(actual).bitmap((-1, 2), Image.frombytes(mask.mode, mask.size, mask.tobytes()), fill="white")
     PILDraw.Draw(expected).bitmap((-1, 2), mask, fill="white")

@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal, encode_image
+from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -18,8 +18,7 @@ if TYPE_CHECKING:
 
 def animation(format: str = "PNG", **options: object) -> Image.Image:
     frames = [PillowImage.new("RGBA", (9, 7), color) for color in ("red", "green", "blue")]
-    stream = BytesIO()
-    frames[0].save(stream, format, save_all=True, append_images=frames[1:], duration=[20, 40, 60], loop=2, **options)
+    stream = image_buffer(frames[0], format, save_all=True, append_images=frames[1:], duration=[20, 40, 60], loop=2, **options)
     return Image.open(stream)
 
 
@@ -31,8 +30,7 @@ def test_apng_rgba_deltas_preserve_transparent_colors_and_sources() -> None:
     third.putpixel((0, 0), (70, 80, 90, 128))
     frames = [first, second, third, third.copy()]
     originals = [frame.tobytes() for frame in frames]
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=frames[1:], duration=[10, 20, 30, 40], disposal=0, blend=0)
+    stream = image_buffer(first, "PNG", save_all=True, append_images=frames[1:], duration=[10, 20, 30, 40], disposal=0, blend=0)
     actual = Image.open(stream)
     reference = PillowImage.open(stream)
     assert actual.n_frames == reference.n_frames == 3
@@ -67,15 +65,12 @@ def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     assert image.convert("RGBA").getpixel((0, 0)) == (50, 60, 70, 255)
     assert image.info["custom"] == "third"
     for frame in (-1, 3, 100):
-        with pytest.raises(EOFError):
-            image.seek(frame)
+        assert_raises(EOFError, lambda: image.seek(frame))
         assert image.tell() == 2
-    with pytest.raises(TypeError):
-        image.seek(1.5)
+    assert_raises(TypeError, lambda: image.seek(1.5))
     image.close()
     for operation in (lambda: image.seek(0), image.tell, image.load):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
     assert copied.convert("RGBA").getpixel((0, 0)) == (50, 60, 70, 255)
 
 
@@ -83,8 +78,7 @@ def test_static_navigation_and_sequence_protocol() -> None:
     still = Image.new("L", (2, 3), 7)
     assert (still.n_frames, still.is_animated, still.tell()) == (1, False, 0)
     still.seek(0)
-    with pytest.raises(EOFError):
-        still.seek(1)
+    assert_raises(EOFError, lambda: still.seek(1))
     image = animation()
     iterator = ImageSequence.Iterator(image)
     assert iter(iterator) is iterator
@@ -102,8 +96,7 @@ def test_static_navigation_and_sequence_protocol() -> None:
     def fail(frame: Image.Image) -> Image.Image:
         raise RuntimeError("callback")
 
-    with pytest.raises(RuntimeError, match="callback"):
-        ImageSequence.all_frames(image, fail)
+    assert_raises(RuntimeError, lambda: ImageSequence.all_frames(image, fail), match="callback")
     assert image.tell() == 2
 
 
@@ -139,8 +132,7 @@ def test_partial_frames_and_disposal(format: str, disposal: int) -> None:
     frames[0].paste("red", (0, 0, 5, 5))
     frames[1].paste("green", (4, 2, 9, 7))
     frames[2].paste("blue", (8, 0, 13, 5))
-    stream = BytesIO()
-    frames[0].save(stream, format, save_all=True, append_images=frames[1:], disposal=[disposal] * 3, duration=30)
+    stream = image_buffer(frames[0], format, save_all=True, append_images=frames[1:], disposal=[disposal] * 3, duration=30)
     actual, expected = Image.open(stream), PillowImage.open(stream)
     for i in range(3):
         actual.seek(i)
@@ -152,8 +144,7 @@ def test_partial_frames_and_disposal(format: str, disposal: int) -> None:
 def test_apng_separate_default_image(writer: str) -> None:
     module = Image if writer == "blanket" else PillowImage
     frames = [module.new("RGBA", (5, 3), color) for color in ("red", "green", "blue")]
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], default_image=True, duration=[40, 60], loop=4)
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], default_image=True, duration=[40, 60], loop=4)
     actual = Image.open(stream)
     expected = PillowImage.open(stream)
     assert actual.n_frames == 3
@@ -174,8 +165,7 @@ def test_apng_sample_precision(depth: int) -> None:
         maximum = (1 << depth) - 1
         raw = bytes([17 * i, 29 * i, 51 * i, 255]) if depth == 8 else struct.pack("<4H", 17 * i, maximum // 2, maximum - 1, maximum)
         frames.append(Image.frombytes("RGBA", (1, 1), raw, bit_depth=depth))
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], duration=30)
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], duration=30)
     reopened = Image.open(stream)
     assert reopened.bit_depth == (8 if depth == 8 else 16)
     for i, frame in enumerate(frames):
@@ -189,8 +179,7 @@ def test_tiff_pages_preserve_modes_and_dimensions(compression: str) -> None:
     frames = [PillowImage.new("RGB", (9, 7), "red"), PillowImage.new("L", (5, 3), 123), PillowImage.new("CMYK", (3, 5), (10, 20, 30, 40))]
     if compression == "jpeg":
         frames[-1] = frames[-1].convert("RGB")
-    stream = BytesIO()
-    frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:], compression=compression)
+    stream = image_buffer(frames[0], "TIFF", save_all=True, append_images=frames[1:], compression=compression)
     actual, expected = Image.open(stream), PillowImage.open(stream)
     assert actual.n_frames == 3
     assert actual.is_animated
@@ -204,8 +193,7 @@ def test_tiff_pages_preserve_modes_and_dimensions(compression: str) -> None:
 
 def test_tiff_metadata_visits_each_page_once(monkeypatch) -> None:
     pages = [PillowImage.new("L", (i + 1, 2), i) for i in range(40)]
-    stream = BytesIO()
-    pages[0].save(stream, "TIFF", save_all=True, append_images=pages[1:])
+    stream = image_buffer(pages[0], "TIFF", save_all=True, append_images=pages[1:])
     read_ifd = Image.Exif._read_ifd
     offsets = []
 
@@ -228,8 +216,7 @@ def test_tiff_metadata_visits_each_page_once(monkeypatch) -> None:
 def test_tiff_special_mode_on_later_page(mode: str) -> None:
     first = PillowImage.new("RGB", (3, 2), "red")
     second = PillowImage.new(mode, (2, 4), (60, 120, 140) if mode == "LAB" else 123)
-    stream = BytesIO()
-    first.save(stream, "TIFF", save_all=True, append_images=[second])
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[second])
     actual = Image.open(stream)
     actual.seek(1)
     assert actual.mode == mode
@@ -260,8 +247,7 @@ def test_tiff_lzw_large_pages_preserve_strip_order() -> None:
         size = (513 + i * 2, 517 - i * 3)
         raw = bytes((j * 37 + j // 7 + i * 13) % 256 for j in range(size[0] * size[1] * len(mode)))
         frames.append(PillowImage.frombytes(mode, size, raw))
-    stream = BytesIO()
-    frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:], compression="tiff_lzw", strip_size=8192)
+    stream = image_buffer(frames[0], "TIFF", save_all=True, append_images=frames[1:], compression="tiff_lzw", strip_size=8192)
     actual = Image.open(stream)
     assert actual.n_frames == len(frames)
     for i in (2, 0, 1):
@@ -273,8 +259,7 @@ def test_multipage_pdf_and_save_positions() -> None:
     source = animation()
     source.seek(2)
     extra = Image.new("CMYK", (2, 3), (10, 20, 30, 40))
-    stream = BytesIO()
-    source.save(stream, "PDF", save_all=True, append_images=[extra])
+    stream = image_buffer(source, "PDF", save_all=True, append_images=[extra])
     assert source.tell() == 2
     assert extra.tell() == 0
     pdf = PdfParser.PdfParser(buf=stream.getvalue())
@@ -301,8 +286,7 @@ def test_save_defaults_and_path(tmp_path: Path) -> None:
     assert reopened.n_frames == 3
     assert source.tell() == 1
     assert [frame.info["duration"] for frame in ImageSequence.Iterator(reopened)] == [20, 40, 60]
-    stream = BytesIO()
-    source.save(stream, "PNG", save_all=False, append_images=[Image.new("RGB", (2, 2))])
+    stream = image_buffer(source, "PNG", save_all=False, append_images=[Image.new("RGB", (2, 2))])
     still = Image.open(stream)
     assert still.n_frames == 1
     assert still.tobytes() == source.tobytes()
@@ -315,8 +299,7 @@ def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -
     source.putpixel((0, 0), (17, 29, 51, 255))
     source.info.update(duration=90, custom="edited")
     expected = ImageSequence.all_frames(source)
-    stream = BytesIO()
-    source.save(stream, format, save_all=True, append_images=(frame for frame in [source]), **({"lossless": True} if format == "WEBP" else {}))
+    stream = image_buffer(source, format, save_all=True, append_images=(frame for frame in [source]), **({"lossless": True} if format == "WEBP" else {}))
     assert source.tell() == 1
     assert source.info["custom"] == "edited"
     assert source.info["duration"] == 90
@@ -343,8 +326,7 @@ def test_pdf_save_includes_replaced_current_raster() -> None:
     source.seek(1)
     source.thumbnail((4, 4))
     size, pixels = source.size, source.convert("RGB").tobytes()
-    stream = BytesIO()
-    source.save(stream, "PDF", save_all=True)
+    stream = image_buffer(source, "PDF", save_all=True)
     assert source.tell() == 1
     assert source.size == size
     pdf = PdfParser.PdfParser(buf=stream.getvalue())
@@ -359,8 +341,7 @@ def test_closed_appended_source_does_not_write_or_change_position(format: str) -
     source.seek(1)
     closed.close()
     stream = BytesIO()
-    with pytest.raises(ValueError, match="closed"):
-        source.save(stream, format, save_all=True, append_images=[closed])
+    assert_raises(ValueError, lambda: source.save(stream, format, save_all=True, append_images=[closed]), match="closed")
     assert source.tell() == 1
     assert not stream.getvalue()
 
@@ -387,8 +368,7 @@ def test_invalid_sequence_options_do_not_write(format: str, options: dict[str, o
     image = animation()
     image.seek(1)
     stream = BytesIO()
-    with pytest.raises(error):
-        image.save(stream, format, **options)
+    assert_raises(error, lambda: image.save(stream, format, **options))
     assert stream.getvalue() == b""
     assert image.tell() == 1
 
@@ -396,8 +376,7 @@ def test_invalid_sequence_options_do_not_write(format: str, options: dict[str, o
 @pytest.mark.parametrize("format", ["GIF", "WEBP"])
 def test_animation_requires_matching_dimensions(format: str) -> None:
     output = BytesIO()
-    with pytest.raises(ValueError, match="matching dimensions"):
-        Image.new("RGB", (3, 2)).save(output, format, save_all=True, append_images=[Image.new("RGB", (2, 3))])
+    assert_raises(ValueError, lambda: Image.new("RGB", (3, 2)).save(output, format, save_all=True, append_images=[Image.new("RGB", (2, 3))]), match="matching dimensions")
     assert not output.getvalue()
 
 
@@ -410,8 +389,7 @@ def test_apng_partial_frame_sizes_and_info_controls_match_pillow(size: tuple[int
         first = module.new("RGBA", (9, 7), "red")
         first.info.update(disposal=disposal, blend=blend)
         following = module.new("RGBA", size, (0, 255, 0, 127))
-        stream = BytesIO()
-        first.save(stream, "PNG", save_all=True, append_images=[following], duration=30)
+        stream = image_buffer(first, "PNG", save_all=True, append_images=[following], duration=30)
         streams.append(stream.getvalue())
     actual = Image.open(BytesIO(streams[0]))
     expected = PillowImage.open(BytesIO(streams[1]))
@@ -435,8 +413,7 @@ def test_apng_modes_and_transparency_match_pillow(mode: str, blend: int) -> None
             for frame in frames:
                 frame.putpalette(bytes(range(256)) * 3)
                 frame.info["transparency"] = b"\x00\x7f"
-        stream = BytesIO()
-        frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], blend=blend, duration=30)
+        stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], blend=blend, duration=30)
         streams.append(stream.getvalue())
     actual = Image.open(BytesIO(streams[0]))
     expected = PillowImage.open(BytesIO(streams[1]))
@@ -453,8 +430,7 @@ def test_apng_modes_and_transparency_match_pillow(mode: str, blend: int) -> None
 def test_truncated_later_frame_is_rejected_at_open(format: str) -> None:
     first = PillowImage.new("RGB", (17, 13), "red")
     data = encode_image(first, format, save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data[: len(data) * 3 // 4]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data[: len(data) * 3 // 4])))
 
 
 @pytest.mark.parametrize("depth", [8, 16])
@@ -462,8 +438,7 @@ def test_apng_over_blending_retains_sample_precision(depth: int) -> None:
     maximum = (1 << depth) - 1
     samples = [(maximum, 0, 0, maximum), (0, 0, maximum, (maximum + 1) // 2)]
     frames = [Image.frombytes("RGBA", (1, 1), bytes(values) if depth == 8 else struct.pack("<4H", *values), bit_depth=depth) for values in samples]
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], duration=20, blend=[0, 1])
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], duration=20, blend=[0, 1])
     image = Image.open(stream)
     image.seek(1)
     assert image.info["blend"] == 1
@@ -488,8 +463,7 @@ def test_apng_over_blending_alpha_boundaries(depth: int) -> None:
         return bytes(samples) if depth == 8 else struct.pack(f"<{len(samples)}H", *samples)
 
     frames = [Image.frombytes("RGBA", (16, 1), pack(samples), bit_depth=depth) for samples in (background, foreground)]
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], blend=[0, 1])
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], blend=[0, 1])
     reopened = Image.open(stream)
     assert reopened.tobytes() == pack(background)
     reopened.seek(1)
@@ -508,43 +482,36 @@ def test_apng_over_blending_alpha_boundaries(depth: int) -> None:
 
 def test_apng_declared_frame_budget_is_checked_before_decoding() -> None:
     first = PillowImage.new("RGBA", (2, 2), "red")
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=[PillowImage.new("RGBA", first.size, "blue")])
+    stream = image_buffer(first, "PNG", save_all=True, append_images=[PillowImage.new("RGBA", first.size, "blue")])
     data = bytearray(stream.getvalue())
     start = data.index(b"acTL")
     data[start + 4 : start + 8] = struct.pack(">I", 0x7FFFFFFF)
     data[start + 12 : start + 16] = struct.pack(">I", zlib.crc32(data[start : start + 12]))
-    with pytest.raises(UnidentifiedImageError, match="limit"):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)), match="limit")
 
 
 def test_tiff_cyclic_page_chain_is_rejected() -> None:
-    stream = BytesIO()
-    PillowImage.new("RGB", (2, 2), "red").save(stream, "TIFF")
+    stream = image_buffer(PillowImage.new("RGB", (2, 2), "red"), "TIFF")
     data = bytearray(stream.getvalue())
     offset = struct.unpack_from("<I", data, 4)[0]
     count = struct.unpack_from("<H", data, offset)[0]
     struct.pack_into("<I", data, offset + 2 + count * 12, offset)
-    with pytest.raises(UnidentifiedImageError, match="cycl"):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)), match="cycl")
 
 
 def test_gif_frame_outside_canvas_is_rejected() -> None:
-    stream = BytesIO()
-    PillowImage.new("RGB", (2, 2), "red").save(stream, "GIF")
+    stream = image_buffer(PillowImage.new("RGB", (2, 2), "red"), "GIF")
     data = bytearray(stream.getvalue())
     descriptor = data.index(b",")
     struct.pack_into("<H", data, descriptor + 1, 65535)
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "I", "I;16", "I;16L", "I;16B"])
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "PDF"])
 def test_sequence_save_mode_adaptation(mode: str, format: str) -> None:
     frames = [Image.new(mode, (3, 2), 0), Image.new(mode, (3, 2), 1)]
-    stream = BytesIO()
-    frames[0].save(stream, format, save_all=True, append_images=frames[1:], **({"duration": 20} if format != "PDF" else {}))
+    stream = image_buffer(frames[0], format, save_all=True, append_images=frames[1:], **({"duration": 20} if format != "PDF" else {}))
     if format == "PDF":
         assert len(PdfParser.PdfParser(buf=stream.getvalue()).pages) == 2
     else:
@@ -559,8 +526,7 @@ def test_sequence_save_mode_adaptation(mode: str, format: str) -> None:
 @pytest.mark.parametrize("mode", ["HSV", "LAB", "YCbCr", "CMYK", "F"])
 def test_sequence_save_respects_mode_restrictions(mode: str) -> None:
     stream = BytesIO()
-    with pytest.raises(OSError, match="cannot write mode"):
-        Image.new(mode, (3, 2)).save(stream, "PNG", save_all=True)
+    assert_raises(OSError, lambda: Image.new(mode, (3, 2)).save(stream, "PNG", save_all=True), match="cannot write mode")
     assert not stream.getvalue()
 
 
@@ -568,8 +534,7 @@ def test_sequence_save_respects_mode_restrictions(mode: str) -> None:
 def test_integer_apng_retains_values_above_255(mode: str) -> None:
     values = [0x1234, 0xABCD]
     frames = [Image.new(mode, (1, 1), value) for value in values]
-    output = BytesIO()
-    frames[0].save(output, "PNG", save_all=True, append_images=frames[1:])
+    output = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:])
     reopened = Image.open(output)
     assert reopened.bit_depth == 16
     for i, value in enumerate(values):

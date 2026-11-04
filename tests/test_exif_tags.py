@@ -3,6 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
+from helpers import image_buffer
 from PIL import ExifTags as PillowTags, Image as PillowImage
 
 from blanket import ExifTags, Image
@@ -36,8 +37,7 @@ def test_named_tags_roundtrip_nested_metadata(endian: str) -> None:
 
 
 def test_named_thumbnail_ifd_preserves_integer_access() -> None:
-    thumbnail = BytesIO()
-    Image.new("RGB", (3, 2), "red").save(thumbnail, "JPEG")
+    thumbnail = image_buffer(Image.new("RGB", (3, 2), "red"), "JPEG")
     exif = Image.Exif()
     exif.thumbnail = thumbnail.getvalue()
     restored = Image.Exif()

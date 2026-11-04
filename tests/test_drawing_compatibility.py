@@ -4,6 +4,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageDraw, ImageFont
@@ -39,8 +40,7 @@ def test_outline_invalid_transform_is_atomic() -> None:
     outline.curve(4, 5, 7, 8, 10, 11)
     edges = outline.edges[:]
     for matrix in ((1, 2), (1, 0, 0, 0, float("nan"), 0)):
-        with pytest.raises((TypeError, ValueError)):
-            outline.transform(matrix)
+        assert_raises((TypeError, ValueError), lambda: outline.transform(matrix))
         assert outline.edges == edges
     outline.transform((1, 0, 0, 0, 1, 0))
     assert outline.edges == edges
@@ -57,8 +57,7 @@ def test_default_font_has_lowercase_and_integer_scaling() -> None:
 
 def test_apng_precision_and_explicit_pillow_view() -> None:
     frames = [Image.frombytes("RGBA", (2, 1), struct.pack("<8H", *(sample * 2)), bit_depth=16) for sample in ((12345, 23456, 34567, 65535), (32768, 0, 65535, 65535))]
-    output = BytesIO()
-    frames[0].save(output, "PNG", save_all=True, append_images=frames[1:], duration=[20, 40], blend=[0, 0])
+    output = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], duration=[20, 40], blend=[0, 0])
     image = Image.decode(output.getvalue())
     reference = PillowImage.open(BytesIO(output.getvalue()))
     for i in range(2):

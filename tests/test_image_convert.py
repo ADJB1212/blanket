@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
 from blanket import Image
@@ -33,8 +34,7 @@ def test_sanity() -> None:
 
 def test_unsupported_conversion() -> None:
     im = hopper()
-    with pytest.raises(ValueError, match="image has wrong mode"):
-        im.convert("INVALID")
+    assert_raises(ValueError, lambda: im.convert("INVALID"), match="image has wrong mode")
 
 
 # ref https://github.com/python-pillow/Pillow/issues/274
@@ -268,20 +268,17 @@ rgb2xyz_matrix = (
 def test_matrix_illegal_conversion() -> None:
     im = hopper("CMYK")
     assert im.mode != "RGB"
-    with pytest.raises(ValueError, match="illegal conversion"):
-        im.convert(mode="CMYK", matrix=rgb2xyz_matrix)
+    assert_raises(ValueError, lambda: im.convert(mode="CMYK", matrix=rgb2xyz_matrix), match="illegal conversion")
 
 
 def test_matrix_wrong_mode() -> None:
     im = hopper("L")
-    with pytest.raises(ValueError, match="image has wrong mode"):
-        im.convert(mode="L", matrix=rgb2xyz_matrix)
+    assert_raises(ValueError, lambda: im.convert(mode="L", matrix=rgb2xyz_matrix), match="image has wrong mode")
 
 
 def test_matrix_truncated() -> None:
     im = hopper()
-    with pytest.raises(TypeError, match="matrix must be tuple of length 4 or 12"):
-        im.convert(mode="L", matrix=(0,))
+    assert_raises(TypeError, lambda: im.convert(mode="L", matrix=(0,)), match="matrix must be tuple of length 4 or 12")
 
 
 @pytest.mark.parametrize("mode", ("RGB", "L"))

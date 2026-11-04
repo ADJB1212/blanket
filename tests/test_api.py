@@ -4,6 +4,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import assert_raises, image_buffer
 
 from blanket import Image, UnidentifiedImageError
 
@@ -35,8 +36,7 @@ def test_fromarray_supports_strided_arrays() -> None:
 
 @pytest.mark.parametrize(("shape", "dtype"), [((3, 5, 3), np.float16), ((3, 5, 5), np.uint8), ((3, 5, 2), np.uint16), ((3, 5, 2), np.float32)])
 def test_fromarray_rejects_unsupported_arrays(shape: tuple[int, ...], dtype: object) -> None:
-    with pytest.raises(TypeError, match="cannot handle this data type"):
-        Image.fromarray(np.zeros(shape, dtype=dtype))
+    assert_raises(TypeError, lambda: Image.fromarray(np.zeros(shape, dtype=dtype)), match="cannot handle this data type")
 
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
@@ -61,8 +61,7 @@ def test_context_manager() -> None:
         assert entered is source
     assert source.tobytes() == pixels("RGBA")
     source.close()
-    with pytest.raises(ValueError, match="closed image"):
-        source.tobytes()
+    assert_raises(ValueError, lambda: source.tobytes(), match="closed image")
 
 
 def test_crop_metadata_is_independent() -> None:
@@ -76,24 +75,16 @@ def test_crop_metadata_is_independent() -> None:
 
 
 def test_open_filters_and_errors() -> None:
-    output = BytesIO()
-    Image.frombytes("L", (2, 2), b"\0\x7f\x80\xff").save(output, "PNG")
+    output = image_buffer(Image.frombytes("L", (2, 2), b"\0\x7f\x80\xff"), "PNG")
     assert Image.open(output, formats=["PNG"]).format == "PNG"
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(output, formats=["JPEG"])
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(b"not an image"))
-    with pytest.raises(ValueError, match="bad mode"):
-        Image.open(output, mode="w")
+    assert_raises(UnidentifiedImageError, lambda: Image.open(output, formats=["JPEG"]))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(b"not an image")))
+    assert_raises(ValueError, lambda: Image.open(output, mode="w"), match="bad mode")
 
 
 def test_save_option_validation() -> None:
     source = Image.frombytes("RGBA", (1, 1), b"\0\0\0\xff")
-    with pytest.raises(OSError, match="cannot write mode RGBA as JPEG"):
-        source.save(BytesIO(), "JPEG")
-    with pytest.raises(TypeError, match="unsupported PNG save option"):
-        source.save(BytesIO(), "PNG", quality=80)
-    with pytest.raises(ValueError, match="compress_level"):
-        source.save(BytesIO(), "PNG", compress_level=10)
-    with pytest.raises(ValueError, match="unknown file extension"):
-        source.save(BytesIO())
+    assert_raises(OSError, lambda: source.save(BytesIO(), "JPEG"), match="cannot write mode RGBA as JPEG")
+    assert_raises(TypeError, lambda: source.save(BytesIO(), "PNG", quality=80), match="unsupported PNG save option")
+    assert_raises(ValueError, lambda: source.save(BytesIO(), "PNG", compress_level=10), match="compress_level")
+    assert_raises(ValueError, lambda: source.save(BytesIO()), match="unknown file extension")

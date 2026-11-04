@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -35,35 +35,30 @@ def test_rotate_metadata_and_independence():
     assert result.info is not image.info
     image.close()
     assert result.tobytes() == b"abcd"
-    with pytest.raises(ValueError):
-        image.rotate(12)
+    assert_raises(ValueError, lambda: image.rotate(12))
 
 
 @pytest.mark.parametrize("method", [1, 4, 5, -1, 100])
 def test_rotate_invalid_filter(method):
     image = Image.frombytes("L", (2, 2), b"abcd")
-    with pytest.raises(ValueError):
-        image.rotate(12, method)
+    assert_raises(ValueError, lambda: image.rotate(12, method))
 
 
 @pytest.mark.parametrize("angle", [float("nan"), float("inf")])
 def test_rotate_nonfinite_angle(angle):
     image = Image.frombytes("L", (2, 2), b"abcd")
-    with pytest.raises(ValueError):
-        image.rotate(angle)
+    assert_raises(ValueError, lambda: image.rotate(angle))
 
 
 @pytest.mark.parametrize("fill", [None, 0, (18, 52, 86, 128), (100, 20, 30, 0)])
 @pytest.mark.parametrize("method", [0, 2, 3])
 def test_rotate_rgba_fill(fill, method):
     data = bytes(range(64))
-    image = Image.frombytes("RGBA", (4, 4), data)
-    reference = PillowImage.frombytes("RGBA", (4, 4), data)
+    image, reference = image_pair("RGBA", (4, 4), data)
     assert image.rotate(33, method, expand=True, fillcolor=fill).tobytes() == reference.rotate(33, method, expand=True, fillcolor=fill).tobytes()
 
 
 @pytest.mark.parametrize("option", ["center", "translate"])
 def test_rotate_nonfinite_coordinates(option):
     image = Image.frombytes("L", (2, 2), b"abcd")
-    with pytest.raises(ValueError):
-        image.rotate(12, **{option: (float("inf"), 0)})
+    assert_raises(ValueError, lambda: image.rotate(12, **{option: (float("inf"), 0)}))

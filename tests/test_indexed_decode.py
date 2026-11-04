@@ -4,7 +4,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
-from helpers import encode_image, image_pair
+from helpers import encode_image, image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -26,8 +26,7 @@ def test_indexed_png_preserves_palette_and_alpha(bits: int, transparency: int | 
     assert actual.info.get("transparency") == expected.info.get("transparency")
     for mode in ("RGB", "RGBA", "PA"):
         assert actual.convert(mode).tobytes() == expected.convert(mode).tobytes()
-    saved = BytesIO()
-    actual.save(saved, "PNG")
+    saved = image_buffer(actual, "PNG")
     reloaded = PillowImage.open(BytesIO(saved.getvalue()))
     assert reloaded.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 

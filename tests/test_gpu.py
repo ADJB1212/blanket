@@ -1,5 +1,6 @@
 import pytest
 from gpu_helpers import require_metal
+from helpers import assert_raises
 
 from blanket import Image, ImageFilter, ImageGpu
 
@@ -122,10 +123,8 @@ def test_shared_metal_handles_reject_closed_images() -> None:
     require_metal()
     gpu = ImageGpu.from_image(Image.new("RGBA", (3, 5)), runtime="native")
     gpu.close()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.to_memoryview()
-    with pytest.raises(ValueError, match="closed"):
-        gpu.share()
+    assert_raises(ValueError, lambda: gpu.to_memoryview(), match="closed")
+    assert_raises(ValueError, lambda: gpu.share(), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
@@ -235,11 +234,9 @@ def test_native_preparation_validates_controls_and_large_blur_radii():
     require_metal()
     gpu = ImageGpu.from_image(Image.new("L", (3, 1), 255))
     for target, method, axis in [(0, 3, 0), (5, 6, 0), (5, 3, 2)]:
-        with pytest.raises(ValueError):
-            gpu._resource.resize_axis(target, method, axis)
+        assert_raises(ValueError, lambda: gpu._resource.resize_axis(target, method, axis))
     for radii in [(-1, 0), (float("nan"), 1), (1, float("inf"))]:
-        with pytest.raises(ValueError):
-            gpu._resource.blur(radii, False)
+        assert_raises(ValueError, lambda: gpu._resource.blur(radii, False))
     radius = 1_500_000_000
     kernel, weights = ImageGpu._blanket._gpu_blur_parameters(radius, False)
     expected = gpu._run(18, k=kernel, axis=0, values=list(weights)).to_image().tobytes()
@@ -277,8 +274,7 @@ def test_upload_roundtrip_and_lifetime(mode):
     resident.close()
     assert result.to_image().tobytes() == Image.new(mode, (7, 13)).tobytes()
     assert result.to_image().info["description"] == "gpu"
-    with pytest.raises(ValueError, match="closed"):
-        resident.to_image()
+    assert_raises(ValueError, lambda: resident.to_image(), match="closed")
 
 
 @pytest.mark.parametrize("method", range(6))
@@ -333,15 +329,11 @@ def test_tensor_residency_views_and_sharing(monkeypatch):
 
 def test_validation():
     require_metal()
-    with pytest.raises(ValueError):
-        ImageGpu.from_image(Image.new("P", (2, 2)))
+    assert_raises(ValueError, lambda: ImageGpu.from_image(Image.new("P", (2, 2))))
     resident = ImageGpu.from_image(Image.new("L", (2, 2)))
-    with pytest.raises(ValueError):
-        resident.resize((0, 2))
-    with pytest.raises(ValueError):
-        resident.convolve([1] * 9, scale=0)
-    with pytest.raises(ValueError):
-        resident.alpha_composite(resident)
+    assert_raises(ValueError, lambda: resident.resize((0, 2)))
+    assert_raises(ValueError, lambda: resident.convolve([1] * 9, scale=0))
+    assert_raises(ValueError, lambda: resident.alpha_composite(resident))
 
 
 @pytest.mark.parametrize("mode", ["F", "RGB;F", "RGBA;F"])
@@ -373,13 +365,10 @@ def test_torch_upload_copy_export_and_validation():
     assert copied.to_torch().data_ptr() != tensor.data_ptr()
     assert copied.blend(gpu, 0.3).to_image().tobytes() == image.tobytes()
     native = ImageGpu.from_image(image)
-    with pytest.raises(ValueError, match="execution context"):
-        gpu.blend(native, 0.5)
+    assert_raises(ValueError, lambda: gpu.blend(native, 0.5), match="execution context")
     assert native.to_torch().device.type == "mps"
-    with pytest.raises(ValueError):
-        ImageGpu.from_torch(torch.zeros(2, 2), layout="HW")
-    with pytest.raises(ValueError):
-        ImageGpu.from_torch(torch.zeros(2, 2, device="mps", requires_grad=True), layout="HW")
+    assert_raises(ValueError, lambda: ImageGpu.from_torch(torch.zeros(2, 2), layout="HW"))
+    assert_raises(ValueError, lambda: ImageGpu.from_torch(torch.zeros(2, 2, device="mps", requires_grad=True), layout="HW"))
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
@@ -431,8 +420,7 @@ def test_native_lut_rejects_nonfinite_controls(floating, index, value):
     source = _blanket.MetalImage(1, 1, 3, floating, bytes(12 if floating else 3))
     controls = _blanket._gpu_lut_controls([2, 2, 2], 3, [0.0] * 24, floating)
     controls[index] = value
-    with pytest.raises(ValueError, match="invalid GPU dispatch"):
-        source.run(source, [1, 1, 3, 1, 1, 25, 3, 5 if floating else 2], controls)
+    assert_raises(ValueError, lambda: source.run(source, [1, 1, 3, 1, 1, 25, 3, 5 if floating else 2], controls), match="invalid GPU dispatch")
 
 
 @pytest.mark.parametrize("floating", [False, True])

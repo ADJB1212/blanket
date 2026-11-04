@@ -4,6 +4,7 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+from helpers import assert_raises
 
 from blanket import Image, ImageChops, ImageGpu, _blanket, _gpu_cuda
 
@@ -50,14 +51,12 @@ def test_cuda_missing_dependency_reports_install_command(monkeypatch: pytest.Mon
     assert capability["compiled"] is True
     assert capability["available"] is False
     assert "cupy-cuda13x[ctk]" in str(capability["diagnostic"])
-    with pytest.raises(RuntimeError, match="cupy-cuda13x"):
-        ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda")
+    assert_raises(RuntimeError, lambda: ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda"), match="cupy-cuda13x")
 
 
 def test_missing_torch_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "torch", None)
-    with pytest.raises(RuntimeError, match="install 'torch"):
-        ImageGpu._torch()
+    assert_raises(RuntimeError, lambda: ImageGpu._torch(), match="install 'torch")
 
 
 def test_cuda_context_failure_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -71,11 +70,9 @@ def test_cuda_context_failure_reports_runtime_error(monkeypatch: pytest.MonkeyPa
     capability = ImageGpu.capabilities("cuda")
     assert capability["available"] is False
     assert "context denied" in str(capability["diagnostic"])
-    with pytest.raises(RuntimeError, match="context denied"):
-        ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda")
+    assert_raises(RuntimeError, lambda: ImageGpu.from_image(Image.new("L", (1, 1)), backend="cuda"), match="context denied")
 
 
 @pytest.mark.parametrize("backend,device", [("metal", 1), ("cuda", -1), ("cuda", True)])
 def test_invalid_gpu_device_is_a_value_error(backend: str, device: int) -> None:
-    with pytest.raises(ValueError, match="device index"):
-        ImageGpu.capabilities(backend, device=device)
+    assert_raises(ValueError, lambda: ImageGpu.capabilities(backend, device=device), match="device index")

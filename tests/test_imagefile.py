@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile, UnidentifiedImageError
@@ -26,10 +26,8 @@ def test_jxl_rejects_oversized_header_before_pixel_decoding(container: bool) -> 
     data = bytes.fromhex("ff0afc7601fef90022")
     if container:
         data = b"\0\0\0\x0cJXL \r\n\x87\n\0\0\0\x14ftypjxl \0\0\0\0jxl " + (len(data) + 8).to_bytes(4, "big") + b"jxlc" + data
-    with pytest.raises(UnidentifiedImageError, match=r"192000000 pixels.*exceeds (Blanket )?limit"):
-        Image.open(BytesIO(data))
-    with pytest.raises(OSError, match=r"192000000 pixels.*exceeds Blanket limit"):
-        ImageFile.Parser().feed(data)
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)), match=r"192000000 pixels.*exceeds (Blanket )?limit")
+    assert_raises(OSError, lambda: ImageFile.Parser().feed(data), match=r"192000000 pixels.*exceeds Blanket limit")
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -48,16 +46,14 @@ def test_parser_chunk_boundaries_match_eager(mode: str, chunk_size: int) -> None
     assert result.tobytes() == expected.tobytes()
     assert parser.close() is result
     assert parser.image is result
-    with pytest.raises(ValueError, match="closed"):
-        parser.feed(b"")
+    assert_raises(ValueError, lambda: parser.feed(b""), match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_jxl_stream_retains_wide_samples(mode: str) -> None:
     channels = len(Image.new(mode, (1, 1)).getbands())
     raw = b"".join(((i * 1973) % 65536).to_bytes(2, "little") for i in range(17 * 9 * channels))
-    output = BytesIO()
-    Image.frombytes(mode, (17, 9), raw, bit_depth=16).save(output, "JXL", lossless=True)
+    output = image_buffer(Image.frombytes(mode, (17, 9), raw, bit_depth=16), "JXL", lossless=True)
     parser = ImageFile.Parser()
     data = output.getvalue()
     for i in range(0, len(data), 13):
@@ -71,19 +67,15 @@ def test_jxl_stream_retains_wide_samples(mode: str) -> None:
 def test_parser_rejects_truncated_input(cut: int) -> None:
     parser = ImageFile.Parser()
     parser.feed(encoded("RGB")[:cut])
-    with pytest.raises(OSError, match=r"incomplete|truncated"):
-        parser.close()
+    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")
 
 
 def test_parser_rejects_unsupported_and_corrupt_input() -> None:
     parser = ImageFile.Parser()
-    with pytest.raises(UnidentifiedImageError, match="supports JXL"):
-        parser.feed(b"not an image" * 100)
-    with pytest.raises(ValueError, match="closed"):
-        parser.feed(b"")
+    assert_raises(UnidentifiedImageError, lambda: parser.feed(b"not an image" * 100), match="supports JXL")
+    assert_raises(ValueError, lambda: parser.feed(b""), match="closed")
     parser = ImageFile.Parser()
-    with pytest.raises(OSError):
-        parser.feed(b"\xff\x0a" + b"\xff" * 128)
+    assert_raises(OSError, lambda: parser.feed(b"\xff\x0a" + b"\xff" * 128))
 
 
 def jpeg_encoded(mode: str = "RGB", *, progressive: bool = True, **options: object) -> bytes:
@@ -109,8 +101,7 @@ def test_jpeg_chunks_match_eager_and_pillow(mode: str, progressive: bool, chunk_
     assert result.tobytes() == Image.open(BytesIO(data)).tobytes() == PillowImage.open(BytesIO(data)).tobytes()
     assert parser.image is result
     assert parser.close() is result
-    with pytest.raises(ValueError, match="closed"):
-        parser.feed(b"")
+    assert_raises(ValueError, lambda: parser.feed(b""), match="closed")
 
 
 @pytest.mark.parametrize("options", [{"subsampling": 0}, {"subsampling": 1}, {"subsampling": 2}, {"keep_rgb": True}, {"restart_marker_blocks": 1}, {"restart_marker_rows": 1}])
@@ -150,11 +141,9 @@ def test_jpeg_progressive_previews_are_independent_and_refine() -> None:
 def test_jpeg_truncation_releases_parser(cut: int) -> None:
     parser = ImageFile.Parser()
     parser.feed(jpeg_encoded()[:cut])
-    with pytest.raises(OSError, match=r"incomplete|truncated"):
-        parser.close()
+    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")
     assert parser.image is None
-    with pytest.raises(ValueError, match="closed"):
-        parser.close()
+    assert_raises(ValueError, lambda: parser.close(), match="closed")
 
 
 def test_jpeg_discards_metadata_and_ignores_trailing_bytes() -> None:
@@ -193,10 +182,8 @@ def test_jpeg_rejects_oversized_header_before_pixel_allocation() -> None:
     start = data.index(b"\xff\xc2")
     data[start + 5 : start + 9] = (16000).to_bytes(2, "big") + (12000).to_bytes(2, "big")
     parser = ImageFile.Parser()
-    with pytest.raises(OSError, match=r"192000000 pixels.*exceeds Blanket limit"):
-        parser.feed(data)
-    with pytest.raises(ValueError, match="closed"):
-        parser.feed(b"")
+    assert_raises(OSError, lambda: parser.feed(data), match=r"192000000 pixels.*exceeds Blanket limit")
+    assert_raises(ValueError, lambda: parser.feed(b""), match="closed")
 
 
 def test_jpeg_rejects_corrupt_later_scan_and_entropy() -> None:
@@ -208,16 +195,13 @@ def test_jpeg_rejects_corrupt_later_scan_and_entropy() -> None:
     broken = bytearray(data[start:])
     length = int.from_bytes(broken[2:4], "big")
     broken[2 + length - 1] = 0xFF
-    with pytest.raises(OSError, match="approximation"):
-        parser.feed(broken)
+    assert_raises(OSError, lambda: parser.feed(broken), match="approximation")
     assert parser.image is None
-    with pytest.raises(ValueError, match="closed"):
-        parser.close()
+    assert_raises(ValueError, lambda: parser.close(), match="closed")
 
     start = data.index(b"\xff\xda")
     end = start + 2 + int.from_bytes(data[start + 2 : start + 4], "big")
-    with pytest.raises(OSError, match="entropy"):
-        ImageFile.Parser().feed(data[:end] + b"\xff\xd9")
+    assert_raises(OSError, lambda: ImageFile.Parser().feed(data[:end] + b"\xff\xd9"), match="entropy")
 
 
 @pytest.mark.parametrize("chunk_size", [1, 7, 17, 4096])
@@ -265,23 +249,18 @@ def test_png_wide_rows(mode: str, depth: int) -> None:
     result = Image.open(BytesIO(output.getvalue()))
     assert (result.mode, result.bit_depth) == (mode, depth)
     assert result.tobytes() == raw
-    reference = BytesIO()
-    Image.frombytes(mode, (17, 9), raw, bit_depth=depth).save(reference, "PNG")
+    reference = image_buffer(Image.frombytes(mode, (17, 9), raw, bit_depth=depth), "PNG")
     assert PillowImage.open(BytesIO(output.getvalue())).tobytes() == PillowImage.open(reference).tobytes()
 
 
 def test_png_writer_validates_rows_and_close(tmp_path: Path) -> None:
     path = tmp_path / "rows.png"
     writer = ImageFile.PngWriter(path, "L", (3, 2))
-    with pytest.raises(ValueError, match="complete rows"):
-        writer.write(b"ab")
-    with pytest.raises(ValueError, match="complete rows"):
-        writer.write(b"abcdefghi")
+    assert_raises(ValueError, lambda: writer.write(b"ab"), match="complete rows")
+    assert_raises(ValueError, lambda: writer.write(b"abcdefghi"), match="complete rows")
     writer.write(b"abc")
-    with pytest.raises(OSError, match="incomplete"):
-        writer.close()
-    with pytest.raises(ValueError, match="closed"):
-        writer.write(b"def")
+    assert_raises(OSError, lambda: writer.close(), match="incomplete")
+    assert_raises(ValueError, lambda: writer.write(b"def"), match="closed")
     with ImageFile.PngWriter(path, "L", (3, 2)) as writer:
         writer.write(b"abcdef")
     assert Image.open(path).tobytes() == b"abcdef"
@@ -290,16 +269,14 @@ def test_png_writer_validates_rows_and_close(tmp_path: Path) -> None:
 @pytest.mark.parametrize(("mode", "size", "options"), [("P", (1, 1), {}), ("L", (0, 1), {}), ("L", (178956971, 1), {}), ("L", (1, 1), {"bit_depth": 9}), ("L", (1, 1), {"compress_level": 10})])
 def test_png_writer_rejects_invalid_headers(mode: str, size: tuple[int, int], options: dict[str, int]) -> None:
     output = BytesIO()
-    with pytest.raises(ValueError):
-        ImageFile.PngWriter(output, mode, size, **options)
+    assert_raises(ValueError, lambda: ImageFile.PngWriter(output, mode, size, **options))
     assert output.getvalue() == b""
 
 
 def test_png_writer_rejects_out_of_range_wide_samples() -> None:
     output = BytesIO()
     writer = ImageFile.PngWriter(output, "L", (1, 1), bit_depth=10)
-    with pytest.raises(ValueError, match="sample exceeds"):
-        writer.write(b"\x00\x04")
+    assert_raises(ValueError, lambda: writer.write(b"\x00\x04"), match="sample exceeds")
     writer.write(b"\xff\x03")
     writer.close()
     assert Image.open(BytesIO(output.getvalue())).tobytes() == b"\xff\x03"
@@ -319,8 +296,7 @@ def test_png_writer_short_writes_and_sink_failures() -> None:
         def write(self, data: bytes) -> int:
             raise RuntimeError("sink failure")
 
-    with pytest.raises(RuntimeError, match="sink failure"):
-        ImageFile.PngWriter(BrokenSink(), "L", (3, 2))
+    assert_raises(RuntimeError, lambda: ImageFile.PngWriter(BrokenSink(), "L", (3, 2)), match="sink failure")
 
 
 def test_png_writer_context_preserves_exception_and_borrowed_stream() -> None:
@@ -356,22 +332,18 @@ def test_png_writer_preserves_late_sink_error(during_write: bool) -> None:
     writer = ImageFile.PngWriter(output, "L", (8192, 32), compress_level=0)
     if during_write:
         output.failed = True
-        with pytest.raises(RuntimeError, match="late sink failure"):
-            writer.write(bytes(8192 * 32))
-        with pytest.raises(ValueError, match="closed"):
-            writer.write(bytes(8192))
+        assert_raises(RuntimeError, lambda: writer.write(bytes(8192 * 32)), match="late sink failure")
+        assert_raises(ValueError, lambda: writer.write(bytes(8192)), match="closed")
     else:
         writer.write(bytes(8192 * 32))
         output.failed = True
-        with pytest.raises(RuntimeError, match="late sink failure"):
-            writer.close()
+        assert_raises(RuntimeError, lambda: writer.close(), match="late sink failure")
 
 
 def test_png_writer_invalid_headers_preserve_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "existing.png"
     path.write_bytes(b"existing output")
-    with pytest.raises(ValueError):
-        ImageFile.PngWriter(path, "P", (1, 1))
+    assert_raises(ValueError, lambda: ImageFile.PngWriter(path, "P", (1, 1)))
     assert path.read_bytes() == b"existing output"
 
 
@@ -385,8 +357,7 @@ def test_png_callback_cannot_reenter_native_writer() -> None:
         def write(self, data: bytes) -> int:
             if self.writer is not None:
                 self.attempts += 1
-                with pytest.raises(RuntimeError, match="borrowed"):
-                    self.writer.abort()
+                assert_raises(RuntimeError, lambda: self.writer.abort(), match="borrowed")
             return super().write(data)
 
     output = ReentrantSink()

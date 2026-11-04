@@ -7,9 +7,19 @@ import zlib
 from io import BytesIO
 
 import numpy as np
-from PIL import Image as PillowImage
+import pytest
+from PIL import Image as PillowImage, ImageDraw as PillowDraw
 
-from blanket import Image
+from blanket import Image, ImageDraw
+
+
+def assert_raises(error, operation, *, match=None) -> None:
+    with pytest.raises(error, match=match):
+        operation()
+
+
+def new_pair(mode, size, color=0):
+    return Image.new(mode, size, color), PillowImage.new(mode, size, color)
 
 
 def image_pair(mode: str, size: tuple[int, int], data: bytes) -> tuple[Image.Image, PillowImage.Image]:
@@ -47,9 +57,13 @@ def assert_pillow_equal(actual: Image.Image, expected: PillowImage.Image, *, tol
 
 
 def encode_image(image: Image.Image | PillowImage.Image, format: str, **options: object) -> bytes:
+    return image_buffer(image, format, **options).getvalue()
+
+
+def image_buffer(image, *args, **options) -> BytesIO:
     stream = BytesIO()
-    image.save(stream, format, **options)
-    return stream.getvalue()
+    image.save(stream, *args, **options)
+    return stream
 
 
 def png_chunk(kind: bytes, data: bytes) -> bytes:
@@ -59,3 +73,13 @@ def png_chunk(kind: bytes, data: bytes) -> bytes:
 def float_samples(image: Image.Image) -> tuple[float, ...]:
     data = image.tobytes()
     return struct.unpack(f"{len(data) // 4}f", data)
+
+
+def compressed_pair(image, format, *, compressor, **options):
+    return image_buffer(image, format, **options), image_buffer(image, format, compressor=compressor, **options)
+
+
+def assert_drawing_equal(actual, expected, method, *args, draw_mode=None, **options) -> None:
+    for module, image in ((ImageDraw, actual), (PillowDraw, expected)):
+        getattr(module.Draw(image, draw_mode), method)(*args, **options)
+    assert_pixels_equal(actual, expected)

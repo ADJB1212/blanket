@@ -77,8 +77,7 @@ def test_filtered_half_resize_vector_blocks_and_edges(mode: str, subtests: pytes
             for method in [1, 2, 3, 4, 5]:
                 with subtests.test(mode=mode, width=width, height=height, method=method):
                     raw = random.Random(93).randbytes(width * height * len(mode))
-                    image = Image.frombytes(mode, (width, height), raw)
-                    reference = PillowImage.frombytes(mode, (width, height), raw)
+                    image, reference = image_pair(mode, (width, height), raw)
                     for target in [(width // 2, height), (width // 2, max(1, height // 2))]:
                         for box in [None, (0.25, 0.0, width - 0.5, float(height))]:
                             assert image.resize(target, method, box=box).tobytes() == reference.resize(target, method, box=box).tobytes()
@@ -110,8 +109,7 @@ def test_conversion_vector_tails_and_parallel_chunks(source: str, subtests: pyte
         for count in [15, 16, 17, 262147, 2800001]:
             with subtests.test(source=source, target=target, count=count):
                 raw = random.Random(17).randbytes(count * len(source))
-                image = Image.frombytes(source, (count, 1), raw)
-                reference = PillowImage.frombytes(source, (count, 1), raw)
+                image, reference = image_pair(source, (count, 1), raw)
                 actual = image.convert(target)
                 expected = reference.convert(target)
                 assert_pixels_equal(actual, expected)

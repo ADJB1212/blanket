@@ -4,6 +4,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -27,16 +28,14 @@ def test_interoperability(format: str, mode: str) -> None:
     if mode == "P":
         blanket.putpalette(source.getpalette())
     for writer in (source, blanket):
-        output = BytesIO()
-        writer.save(output, format)
+        output = image_buffer(writer, format)
         loaded = Image.open(output, formats=[format.lower()])
         expected = PillowImage.open(output).convert("RGBA")
         assert (loaded.format, loaded.size) == (format, source.size)
         assert loaded.convert("RGBA").tobytes() == expected.tobytes()
         # All fixture colors fit GIF's palette, so encoding should retain RGB.
         assert expected.convert("RGB").tobytes() == source.convert("RGB").tobytes()
-        with pytest.raises(UnidentifiedImageError):
-            Image.open(output, formats=["PNG"])
+        assert_raises(UnidentifiedImageError, lambda: Image.open(output, formats=["PNG"]))
 
 
 @pytest.mark.parametrize("format", ["BMP", "GIF", "ICO"])
@@ -45,16 +44,13 @@ def test_extension_and_validation(tmp_path: Path, format: str) -> None:
     path = tmp_path / f"image.{format}"
     source.save(path)
     assert Image.open(path).format == format
-    with pytest.raises(TypeError, match="unsupported"):
-        source.save(BytesIO(), format, quality=90)
-    with pytest.raises(ValueError, match="high-bit-depth"):
-        Image.frombytes("L", (1, 1), b"\0\0", bit_depth=16).save(BytesIO(), format)
+    assert_raises(TypeError, lambda: source.save(BytesIO(), format, quality=90), match="unsupported")
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\0\0", bit_depth=16).save(BytesIO(), format), match="high-bit-depth")
 
 
 @pytest.mark.parametrize("data", [b"BM", b"GIF87a", b"\0\0\x01\0"])
 def test_truncated_input(data: bytes) -> None:
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(data))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
 def test_animated_gif_first_frame() -> None:
@@ -67,8 +63,7 @@ def test_animated_gif_first_frame() -> None:
 @pytest.mark.parametrize("bitmap_format", ["png", "bmp"])
 def test_ico_largest_entry(bitmap_format: str) -> None:
     source = PillowImage.new("RGBA", (64, 64), (20, 40, 60, 255))
-    output = BytesIO()
-    source.save(output, "ICO", sizes=[(16, 16), (32, 32), (64, 64)], bitmap_format=bitmap_format)
+    output = image_buffer(source, "ICO", sizes=[(16, 16), (32, 32), (64, 64)], bitmap_format=bitmap_format)
     loaded = Image.open(output)
     assert loaded.size == source.size
     assert loaded.convert("RGBA").tobytes() == source.tobytes()
@@ -76,5 +71,4 @@ def test_ico_largest_entry(bitmap_format: str) -> None:
 
 @pytest.mark.parametrize("size", [(257, 1), (1, 257), (0, 0)])
 def test_ico_invalid_dimensions(size: tuple[int, int]) -> None:
-    with pytest.raises(ValueError):
-        Image.new("RGB", size).save(BytesIO(), "ICO")
+    assert_raises(ValueError, lambda: Image.new("RGB", size).save(BytesIO(), "ICO"))

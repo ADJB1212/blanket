@@ -9,6 +9,7 @@ PILLOW_IMAGE_PREFIX = str(PILLOW_IMAGES) + "/"
 import os.path
 
 import pytest
+from helpers import assert_drawing_equal, assert_raises, image_pair, new_pair
 from pillow_helpers import assert_image_equal, assert_image_equal_tofile, assert_image_similar_tofile, hopper
 
 from blanket import Image, ImageColor, ImageDraw
@@ -150,8 +151,7 @@ def test_new_color() -> None:
 def test_mode_mismatch() -> None:
     im = hopper("RGB").copy()
 
-    with pytest.raises(ValueError):
-        ImageDraw.ImageDraw(im, mode="L")
+    assert_raises(ValueError, lambda: ImageDraw.ImageDraw(im, mode="L"))
 
 
 @pytest.mark.parametrize("bbox", BBOX)
@@ -623,8 +623,7 @@ def test_compute_regular_polygon_vertices(n_sides: int, expected_vertices: list[
     ],
 )
 def test_compute_regular_polygon_vertices_input_error_handling(n_sides: int, bounding_circle: int | tuple[int | tuple[int] | str, ...], rotation: int | str, expected_error: type[Exception], error_message: str) -> None:
-    with pytest.raises(expected_error, match=error_message):
-        ImageDraw._compute_regular_polygon_vertices(bounding_circle, n_sides, rotation)  # type: ignore[arg-type]
+    assert_raises(expected_error, lambda: ImageDraw._compute_regular_polygon_vertices(bounding_circle, n_sides, rotation), match=error_message)  # type: ignore[arg-type]
 
 
 def test_continuous_horizontal_edges_polygon() -> None:
@@ -649,18 +648,12 @@ def test_discontiguous_corners_polygon() -> None:
 def test_incorrectly_ordered_coordinates(xy: tuple[int, int, int, int]) -> None:
     im = Image.new("RGB", (W, H))
     draw = ImageDraw.Draw(im)
-    with pytest.raises(ValueError):
-        draw.arc(xy, 10, 260)
-    with pytest.raises(ValueError):
-        draw.chord(xy, 10, 260)
-    with pytest.raises(ValueError):
-        draw.ellipse(xy)
-    with pytest.raises(ValueError):
-        draw.pieslice(xy, 10, 260)
-    with pytest.raises(ValueError):
-        draw.rectangle(xy)
-    with pytest.raises(ValueError):
-        draw.rounded_rectangle(xy)
+    assert_raises(ValueError, lambda: draw.arc(xy, 10, 260))
+    assert_raises(ValueError, lambda: draw.chord(xy, 10, 260))
+    assert_raises(ValueError, lambda: draw.ellipse(xy))
+    assert_raises(ValueError, lambda: draw.pieslice(xy, 10, 260))
+    assert_raises(ValueError, lambda: draw.rectangle(xy))
+    assert_raises(ValueError, lambda: draw.rounded_rectangle(xy))
 
 
 import pytest
@@ -669,8 +662,7 @@ from PIL import Image as PILImage, ImageDraw as PILDraw
 
 def test_palette_drawing_reuses_unused_ink_after_single_point_line() -> None:
     palette = bytes(value for i in range(249) for value in (i, i, i)) + bytes(21)
-    actual = Image.frombytes("P", (249, 1), bytes(range(249)))
-    expected = PILImage.frombytes("P", (249, 1), bytes(range(249)))
+    actual, expected = image_pair("P", (249, 1), bytes(range(249)))
     for module, image in ((ImageDraw, actual), (PILDraw, expected)):
         image.putpalette(palette)
         draw = module.Draw(image)
@@ -700,15 +692,12 @@ def test_palette_drawing_reuses_unused_ink_after_single_point_line() -> None:
     ],
 )
 def test_drawing_rejects_invalid_options(operation) -> None:
-    with pytest.raises((ValueError, NotImplementedError)):
-        operation(ImageDraw.Draw(Image.new("L", (4, 4))))
+    assert_raises((ValueError, NotImplementedError), lambda: operation(ImageDraw.Draw(Image.new("L", (4, 4)))))
 
 
 def test_drawing_rejects_foreign_image_and_string_integer_ink() -> None:
-    with pytest.raises(TypeError, match="Blanket Image"):
-        ImageDraw.Draw(object())
-    with pytest.raises(ValueError, match="numeric ink"):
-        ImageDraw.Draw(Image.new("I", (1, 1))).point((0, 0), "red")
+    assert_raises(TypeError, lambda: ImageDraw.Draw(object()), match="Blanket Image")
+    assert_raises(ValueError, lambda: ImageDraw.Draw(Image.new("I", (1, 1))).point((0, 0), "red"), match="numeric ink")
 
 
 def test_drawing_degenerate_curves_and_antialiased_rectangles() -> None:
@@ -738,19 +727,15 @@ def test_font_without_getmask2() -> None:
 @pytest.mark.parametrize("count", [1, 15, 16, 17, 33, 65])
 @pytest.mark.parametrize("alpha", [None, 0, 1, 127, 254, 255])
 def test_rectangle_row_tiles_and_blending_preserve_guards(count: int, alpha: int | None) -> None:
-    actual = Image.new("RGB", (count + 2, 3), (81, 93, 117))
-    expected = PILImage.new("RGB", actual.size, (81, 93, 117))
+    actual, expected = new_pair("RGB", (count + 2, 3), (81, 93, 117))
     mode = "RGB" if alpha is None else "RGBA"
     ink = (31, 173, 59) if alpha is None else (31, 173, 59, alpha)
-    ImageDraw.Draw(actual, mode).rectangle((1, 1, count, 1), fill=ink)
-    PILDraw.Draw(expected, mode).rectangle((1, 1, count, 1), fill=ink)
-    assert actual.tobytes() == expected.tobytes()
+    assert_drawing_equal(actual, expected, "rectangle", (1, 1, count, 1), fill=ink, draw_mode=mode)
 
 
 @pytest.mark.parametrize("blend", [False, True])
 def test_rectangle_enormous_outline_preserves_overlapping_edges(blend: bool) -> None:
-    actual = Image.new("RGB", (13, 11), (81, 93, 117))
-    expected = PILImage.new("RGB", actual.size, (81, 93, 117))
+    actual, expected = new_pair("RGB", (13, 11), (81, 93, 117))
     mode = "RGBA" if blend else "RGB"
     ink = (237, 41, 121, 129) if blend else "red"
     ImageDraw.Draw(actual, mode).rectangle((2, 2, 8, 7), outline=ink, width=10**12)
@@ -762,8 +747,7 @@ def test_rectangle_enormous_outline_preserves_overlapping_edges(blend: bool) -> 
 def test_invalid_rectangle_does_not_modify_image(bounds: tuple[int, ...]) -> None:
     image = Image.new("RGB", (5, 5), "blue")
     before = image.tobytes()
-    with pytest.raises(ValueError):
-        ImageDraw.Draw(image).rectangle(bounds, fill="red")
+    assert_raises(ValueError, lambda: ImageDraw.Draw(image).rectangle(bounds, fill="red"))
     assert image.tobytes() == before
 
 
@@ -785,8 +769,7 @@ def test_multichannel_high_depth_requires_conversion(operation: str) -> None:
     image = Image.frombytes("RGB", (2, 2), bytes(24), bit_depth=16)
     before = image.tobytes()
     points = (0, 0) if operation == "point" else (0, 0, 1, 1)
-    with pytest.raises(ValueError, match="8-bit"):
-        getattr(ImageDraw.Draw(image), operation)(points, fill="red")
+    assert_raises(ValueError, lambda: getattr(ImageDraw.Draw(image), operation)(points, fill="red"), match="8-bit")
     assert image.tobytes() == before
 
 
@@ -794,5 +777,4 @@ def test_drawing_on_closed_image_fails() -> None:
     image = Image.new("RGB", (2, 2))
     draw = ImageDraw.Draw(image)
     image.close()
-    with pytest.raises(ValueError):
-        draw.point((0, 0), fill="red")
+    assert_raises(ValueError, lambda: draw.point((0, 0), fill="red"))

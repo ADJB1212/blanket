@@ -6,6 +6,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES
 
 from blanket import Image, ImageSequence, PngImagePlugin
@@ -66,12 +67,10 @@ def test_apng_basic() -> None:
         assert im.getpixel((64, 32)) == (0, 255, 0, 255)
 
         # test out of bounds seek
-        with pytest.raises(EOFError):
-            im.seek(2)
+        assert_raises(EOFError, lambda: im.seek(2))
 
         im.seek(0)
-        with pytest.raises(ValueError, match="cannot seek to frame 2"):
-            im._seek(2)
+        assert_raises(ValueError, lambda: im._seek(2), match="cannot seek to frame 2")
 
         # test rewind support
         assert im.getpixel((0, 0)) == (255, 0, 0, 255)
@@ -171,8 +170,7 @@ def test_apng_dispose_op_background_decompression_bomb() -> None:
     PngImagePlugin.putchunk(b, b"IDAT")
     PngImagePlugin.putchunk(b, b"IEND")
 
-    with pytest.raises(Image.DecompressionBombError):
-        Image.open(b)
+    assert_raises(Image.DecompressionBombError, lambda: Image.open(b))
 
 
 @pytest.mark.parametrize(
@@ -266,18 +264,15 @@ def test_apng_chunk_errors() -> None:
 
     with Image.open(PILLOW_IMAGES / "apng/chunk_no_fctl.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        with pytest.raises(SyntaxError):
-            im.seek(im.n_frames - 1)
+        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
 
     with Image.open(PILLOW_IMAGES / "apng/chunk_repeat_fctl.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        with pytest.raises(SyntaxError):
-            im.seek(im.n_frames - 1)
+        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
 
     with Image.open(PILLOW_IMAGES / "apng/chunk_no_fdat.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        with pytest.raises(SyntaxError):
-            im.seek(im.n_frames - 1)
+        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
 
 
 def test_apng_syntax_errors() -> None:
@@ -285,8 +280,7 @@ def test_apng_syntax_errors() -> None:
         im = Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_zero.png")
     assert isinstance(im, PngImagePlugin.PngImageFile)
     assert not im.is_animated
-    with pytest.raises(OSError):
-        im.load()
+    assert_raises(OSError, lambda: im.load())
     im.close()
 
     with pytest.warns(UserWarning, match="Invalid APNG"):
@@ -448,8 +442,7 @@ def test_apng_save_large_duration(tmp_path: Path) -> None:
     test_file = tmp_path / "temp.png"
     im = Image.new("1", (1, 1))
     im2 = Image.new("1", (1, 1), 1)
-    with pytest.raises(ValueError, match="cannot write duration"):
-        im.save(test_file, save_all=True, append_images=[im2], duration=65536000)
+    assert_raises(ValueError, lambda: im.save(test_file, save_all=True, append_images=[im2], duration=65536000), match="cannot write duration")
 
     # Do not merge identical frames if the combined duration cannot be written
     im.save(test_file, save_all=True, append_images=[im.copy()], duration=[32768000, 32768000])
@@ -601,8 +594,7 @@ def test_seek_after_close() -> None:
     im.seek(1)
     im.close()
 
-    with pytest.raises(ValueError):
-        im.seek(0)
+    assert_raises(ValueError, lambda: im.seek(0))
 
 
 @pytest.mark.parametrize("mode", ("RGBA", "RGB", "P"))

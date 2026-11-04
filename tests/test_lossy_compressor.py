@@ -6,6 +6,7 @@ import random
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, encode_image as encode, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -13,12 +14,6 @@ from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-
-def encode(image: Image.Image, format: str, **options: object) -> bytes:
-    output = io.BytesIO()
-    image.save(output, format, **options)
-    return output.getvalue()
 
 
 def assert_bounded(baseline: bytes, output: bytes, bound: float) -> None:
@@ -181,35 +176,29 @@ def test_path_and_reuse(tmp_path: Path) -> None:
         image.save(path, compressor=compressor)
         assert path.read_bytes() == encode(image, "PNG", compressor=compressor)
     for property in ("effort", "max_rmse"):
-        with pytest.raises(AttributeError):
-            setattr(compressor, property, 1)
+        assert_raises(AttributeError, lambda: setattr(compressor, property, 1))
 
 
 @pytest.mark.parametrize("value", [True, "2", None, object()])
 def test_error_bound_type(value: object) -> None:
-    with pytest.raises(TypeError, match="max_rmse"):
-        LossyImageCompressor(max_rmse=value)
+    assert_raises(TypeError, lambda: LossyImageCompressor(max_rmse=value), match="max_rmse")
 
 
 @pytest.mark.parametrize("value", [-1, 256, float("nan"), float("inf"), -float("inf"), 10**1000])
 def test_error_bound_range(value: float) -> None:
-    with pytest.raises(ValueError, match="max_rmse"):
-        LossyImageCompressor(max_rmse=value)
+    assert_raises(ValueError, lambda: LossyImageCompressor(max_rmse=value), match="max_rmse")
 
 
 @pytest.mark.parametrize(("value", "error"), [(True, TypeError), (1.5, TypeError), ("7", TypeError), (None, TypeError), (0, ValueError), (11, ValueError)])
 def test_effort_validation(value: object, error: type[Exception]) -> None:
-    with pytest.raises(error, match="effort"):
-        LossyImageCompressor(effort=value)
+    assert_raises(error, lambda: LossyImageCompressor(effort=value), match="effort")
 
 
 def test_failed_save_does_not_write(tmp_path: Path) -> None:
     path = tmp_path / "existing.jpg"
     path.write_bytes(b"keep")
     source = Image.new("RGBA", (7, 9))
-    with pytest.raises(OSError):
-        source.save(path, compressor=LossyImageCompressor())
+    assert_raises(OSError, lambda: source.save(path, compressor=LossyImageCompressor()))
     assert path.read_bytes() == b"keep"
     source.close()
-    with pytest.raises(ValueError, match="closed"):
-        encode(source, "PNG", compressor=LossyImageCompressor())
+    assert_raises(ValueError, lambda: encode(source, "PNG", compressor=LossyImageCompressor()), match="closed")

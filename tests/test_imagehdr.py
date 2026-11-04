@@ -6,7 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageHdr, PngImagePlugin
@@ -85,8 +85,7 @@ def test_scalar_endianness(mode, layout):
 def test_la_alpha_and_nonfinite_float():
     image = Image.frombytes("LA", (2, 1), bytes([255, 71, 128, 0]))
     assert list(ImageHdr.tone_map(image).getdata()) == [(encoded(0.5), 71), (encoded(curve(128 / 255, "reinhard")), 0)]
-    with pytest.raises(ValueError):
-        ImageHdr.tone_map(image, bit_depth=16)
+    assert_raises(ValueError, lambda: ImageHdr.tone_map(image, bit_depth=16))
     image = Image.frombytes("F", (5, 1), struct.pack("<5f", -1, math.nan, -math.inf, math.inf, 3.4e38))
     assert list(ImageHdr.tone_map(image).getdata()) == [0, 0, 0, 255, 255]
 
@@ -126,26 +125,22 @@ def test_bt2020_primaries_and_srgb_input():
     "options", [{"operator": "invalid"}, {"transfer": ""}, {"primaries": "p3"}, {"bit_depth": 12}, {"exposure": math.nan}, {"exposure": 2000}, {"reference_white": 0}, {"reference_white": math.inf}, {"peak_luminance": 0}, {"peak_luminance": math.nan}]
 )
 def test_invalid_options(options):
-    with pytest.raises(ValueError):
-        ImageHdr.tone_map(Image.new("RGB", (1, 1)), **options)
+    assert_raises(ValueError, lambda: ImageHdr.tone_map(Image.new("RGB", (1, 1)), **options))
 
 
 @pytest.mark.parametrize("mode", ["1", "P", "PA", "I", "CMYK", "HSV", "LAB", "YCbCr"])
 def test_unsupported_modes(mode):
-    with pytest.raises(ValueError):
-        ImageHdr.tone_map(Image.new(mode, (1, 1)))
+    assert_raises(ValueError, lambda: ImageHdr.tone_map(Image.new(mode, (1, 1))))
 
 
 def test_closed_and_unsupported_metadata():
     image = Image.new("RGB", (1, 1))
     for cicp in [(9, 16, 9, 0), (12, 16, 0, 1), (9, 2, 0, 1), (9,)]:
         image.info["cicp"] = cicp
-        with pytest.raises(ValueError):
-            ImageHdr.tone_map(image)
+        assert_raises(ValueError, lambda: ImageHdr.tone_map(image))
     image.info.clear()
     image.close()
-    with pytest.raises(ValueError):
-        ImageHdr.tone_map(image)
+    assert_raises(ValueError, lambda: ImageHdr.tone_map(image))
 
 
 @pytest.mark.parametrize("code", [16, 18])
@@ -182,25 +177,20 @@ def test_png_hdr_metadata_roundtrip_and_pillow_interop(code):
 )
 def test_invalid_png_hdr_metadata(key, value):
     image = Image.new("RGB", (1, 1))
-    with pytest.raises(ValueError):
-        image.save(BytesIO(), "PNG", **{key: value})
+    assert_raises(ValueError, lambda: image.save(BytesIO(), "PNG", **{key: value}))
 
 
 def test_metadata_overrides_removal_and_raw_chunk_validation():
     image = Image.new("RGB", (1, 1))
     image.info["cicp"] = (9, 16, 0, 1)
-    output = BytesIO()
-    image.save(output, "PNG", cicp=None)
+    output = image_buffer(image, "PNG", cicp=None)
     assert "cicp" not in Image.open(output).info
-    with pytest.raises(TypeError):
-        image.save(BytesIO(), "JPEG", cicp=(9, 16, 0, 1))
-    with pytest.raises(ValueError):
-        Image.new("RGB", (1, 1)).save(BytesIO(), "PNG", mastering_display=MASTERING)
+    assert_raises(TypeError, lambda: image.save(BytesIO(), "JPEG", cicp=(9, 16, 0, 1)))
+    assert_raises(ValueError, lambda: Image.new("RGB", (1, 1)).save(BytesIO(), "PNG", mastering_display=MASTERING))
     for payload, after in [(b"bad", False), (bytes([9, 16, 0, 1]), True), (bytes([9, 16, 0, 1]), False)]:
         pnginfo = PngImagePlugin.PngInfo()
         pnginfo.add(b"cICP", payload, after)
-        with pytest.raises(ValueError):
-            image.save(BytesIO(), "PNG", pnginfo=pnginfo)
+        assert_raises(ValueError, lambda: image.save(BytesIO(), "PNG", pnginfo=pnginfo))
     pnginfo = PngImagePlugin.PngInfo()
     pnginfo.add(b"cICP", b"bad")
     # Malformed ancillary metadata is ignored without changing image pixels.
@@ -210,8 +200,7 @@ def test_metadata_overrides_removal_and_raw_chunk_validation():
 
 def test_current_frame_and_parallel_chunk_boundaries():
     frames = [Image.new("RGB", (2, 1), (value,) * 3) for value in [64, 192]]
-    output = BytesIO()
-    frames[0].save(output, "PNG", save_all=True, append_images=frames[1:])
+    output = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:])
     image = Image.open(output)
     image.seek(1)
     expected = ImageHdr.tone_map(frames[1].convert(image.mode))

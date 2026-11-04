@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal
+from helpers import assert_pixels_equal, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageMetadata
@@ -27,8 +27,7 @@ def test_read_failures_restore_source_position(operation) -> None:
 
     stream = FailingStream(Image.new("L", (3, 2), 7).encode("PNG"))
     stream.seek(5)
-    with pytest.raises(OSError, match="read failed"):
-        operation(stream)
+    assert_raises(OSError, lambda: operation(stream), match="read failed")
     assert stream.tell() == 5
     assert not stream.closed
 
@@ -82,8 +81,7 @@ def test_file_save_matches_stream(tmp_path: Path, mode: str, depth: int, format:
         source = Image.frombytes(mode, (7, 5), bytes(range(210)), bit_depth=depth)
     else:
         source = Image.new(mode, (7, 5), 1)
-    output = BytesIO()
-    source.save(output, format)
+    output = image_buffer(source, format)
     path = tmp_path / "image"
 
     class BytesPath:
@@ -102,8 +100,7 @@ def test_file_save_matches_stream(tmp_path: Path, mode: str, depth: int, format:
 def test_file_save_encoding_failure_preserves_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "image.ico"
     path.write_bytes(b"original")
-    with pytest.raises(ValueError, match="ICO dimensions"):
-        Image.new("RGB", (257, 1)).save(path)
+    assert_raises(ValueError, lambda: Image.new("RGB", (257, 1)).save(path), match="ICO dimensions")
     assert path.read_bytes() == b"original"
 
 
@@ -114,8 +111,7 @@ def test_metadata_file_save_matches_stream_and_preserves_file_on_error(tmp_path:
     exif = Image.Exif()
     exif[305] = "Blanket metadata writer"
     options = {"exif": exif, "xmp": b"test packet"}
-    stream = BytesIO()
-    source.save(stream, format, **options)
+    stream = image_buffer(source, format, **options)
     path = tmp_path / "image"
     source.save(path_type(path), format, **options)
     assert path.read_bytes() == stream.getvalue()
@@ -123,8 +119,7 @@ def test_metadata_file_save_matches_stream_and_preserves_file_on_error(tmp_path:
     assert decoded.getexif()[305] == exif[305]
     assert decoded.info["xmp"] == options["xmp"]
     if format == "JPEG":
-        with pytest.raises(ValueError, match="XMP data is too long"):
-            source.save(path_type(path), format, xmp=b"x" * 65536)
+        assert_raises(ValueError, lambda: source.save(path_type(path), format, xmp=b"x" * 65536), match="XMP data is too long")
         assert path.read_bytes() == stream.getvalue()
 
 
@@ -137,8 +132,7 @@ def test_file_save_errors_include_filename(tmp_path: Path, path_type: Callable[[
 
 
 def test_file_save_rejects_embedded_null() -> None:
-    with pytest.raises(ValueError, match="embedded null"):
-        Image.new("RGB", (1, 1)).save("image\0.png")
+    assert_raises(ValueError, lambda: Image.new("RGB", (1, 1)).save("image\0.png"), match="embedded null")
 
 
 @pytest.mark.skipif(os.name == "nt" or sys.platform == "darwin", reason="filesystem requires Unicode filenames")
@@ -160,8 +154,7 @@ def test_file_save_with_unicode_filename(tmp_path: Path, path_type: Callable[[Pa
 @pytest.mark.parametrize("compressor", [LosslessImageCompressor(effort=1), LossyImageCompressor(effort=1)])
 def test_file_save_with_compressor_matches_stream(tmp_path: Path, compressor: LosslessImageCompressor | LossyImageCompressor) -> None:
     source = Image.new("RGB", (17, 13), (23, 57, 91))
-    output = BytesIO()
-    source.save(output, "JPEG", compressor=compressor)
+    output = image_buffer(source, "JPEG", compressor=compressor)
     path = tmp_path / "image.jpg"
     source.save(path, compressor=compressor)
     assert path.read_bytes() == output.getvalue()
@@ -207,8 +200,7 @@ def test_stream_save_rejects_no_progress_and_invalid_counts(sequence: bool, coun
         def write(self, data: bytes) -> object:
             return count
 
-    with pytest.raises(OSError):
-        Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence)
+    assert_raises(OSError, lambda: Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence))
 
 
 @pytest.mark.parametrize("sequence", [False, True])
@@ -222,5 +214,4 @@ def test_stream_save_propagates_write_errors(sequence: bool) -> None:
                 return 7
             raise BlockingIOError("output would block")
 
-    with pytest.raises(BlockingIOError, match="output would block"):
-        Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence)
+    assert_raises(BlockingIOError, lambda: Image.new("RGB", (1, 1)).save(Output(), "PNG", save_all=sequence), match="output would block")

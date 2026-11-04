@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_buffer, image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -15,8 +15,7 @@ def test_channel_extraction_parallel_cutoff_and_tail(mode: str) -> None:
     count = (4 << 20) + 3
     channels = PIL.getmodebands(mode)
     raw = random.Random(17).randbytes(count * channels)
-    actual = Image.frombytes(mode, (count, 1), raw)
-    expected = PIL.frombytes(mode, (count, 1), raw)
+    actual, expected = image_pair(mode, (count, 1), raw)
     for channel in range(channels):
         assert actual.getchannel(channel).tobytes() == expected.getchannel(channel).tobytes()
 
@@ -107,8 +106,7 @@ def test_storage_and_bands(mode: str) -> None:
     assert actual.tobytes() == expected.tobytes()
     assert actual.copy().tobytes() == actual.tobytes()
     actual.close()
-    with pytest.raises(ValueError):
-        actual.convert("RGB")
+    assert_raises(ValueError, lambda: actual.convert("RGB"))
 
 
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB"])
@@ -150,8 +148,7 @@ def test_cmyk_codecs(format: str) -> None:
     raw = random.Random(13).randbytes(17 * 13 * 4)
     actual, expected = image_pair("CMYK", (17, 13), raw)
     for image in (actual, expected):
-        stream = BytesIO()
-        image.save(stream, format)
+        stream = image_buffer(image, format)
         decoded = Image.open(BytesIO(stream.getvalue()))
         reference = PIL.open(BytesIO(stream.getvalue()))
         assert decoded.mode == reference.mode == "CMYK"
@@ -184,8 +181,7 @@ def test_uncompressed_tiff_interop(mode: str, size: tuple[int, int]) -> None:
     bands = 4 if mode == "F" else PIL.getmodebands(mode)
     rng = random.Random(3)
     raw = b"".join(rng.choice([b"\x00\x00\x80\x3f", b"\x00\x00\x00\xc1"]) for _ in range(size[0] * size[1])) if mode == "F" else rng.randbytes(size[0] * size[1] * bands)
-    stream = BytesIO()
-    Image.frombytes(mode, size, raw).save(stream, "TIFF")
+    stream = image_buffer(Image.frombytes(mode, size, raw), "TIFF")
     reference = PIL.open(BytesIO(stream.getvalue()))
     assert reference.mode == mode
     assert reference.tobytes() == raw
@@ -195,8 +191,7 @@ def test_uncompressed_tiff_interop(mode: str, size: tuple[int, int]) -> None:
 @pytest.mark.parametrize("size", [(1, 1), (13, 5), (64, 3)])
 def test_bilevel_png_decodes_like_pillow(size: tuple[int, int]) -> None:
     raw = random.Random(9).randbytes((size[0] + 7) // 8 * size[1])
-    stream = BytesIO()
-    PIL.frombytes("1", size, raw).save(stream, "PNG")
+    stream = image_buffer(PIL.frombytes("1", size, raw), "PNG")
     decoded = Image.open(BytesIO(stream.getvalue()))
     assert decoded.mode == "1"
     assert decoded.tobytes() == PIL.open(BytesIO(stream.getvalue())).tobytes()
@@ -213,19 +208,13 @@ def test_full_width_paste_rows() -> None:
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
 def test_save_and_validation(mode: str) -> None:
     image = Image.new(mode, (3, 2))
-    with pytest.raises(OSError, match=f"cannot write mode {mode}"):
-        image.save(BytesIO(), "PNG")
-    with pytest.raises(ValueError):
-        image.convert(mode, bit_depth=16)
-    with pytest.raises(ValueError):
-        Image.frombytes(mode, (3, 2), bytes(6 * PIL.getmodebands(mode) * 2), bit_depth=16)
-    with pytest.raises(ValueError):
-        image.quantize()
+    assert_raises(OSError, lambda: image.save(BytesIO(), "PNG"), match=f"cannot write mode {mode}")
+    assert_raises(ValueError, lambda: image.convert(mode, bit_depth=16))
+    assert_raises(ValueError, lambda: Image.frombytes(mode, (3, 2), bytes(6 * PIL.getmodebands(mode) * 2), bit_depth=16))
+    assert_raises(ValueError, lambda: image.quantize())
     assert image.convert("P").mode == "P"
-    stream = BytesIO()
-    image.save(stream, "JPEG")
+    stream = image_buffer(image, "JPEG")
     assert PIL.open(BytesIO(stream.getvalue())).size == image.size
     if mode == "CMYK":
-        stream = BytesIO()
-        image.save(stream, "PDF")
+        stream = image_buffer(image, "PDF")
         assert b"/DeviceCMYK" in stream.getvalue()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import image_pair, patterned_pair
+from helpers import assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage, ImageTransform
 
 from blanket import Image
@@ -113,19 +113,15 @@ def test_transform_handler() -> None:
 @pytest.mark.parametrize(("method", "data", "resample"), [(99, (), 0), (0, None, 0), (0, (1, 2), 0), (0, (1, 0, 0, 0, 1, 0), 1), (2, (float("nan"),) * 8, 0)])
 def test_invalid_transform(method: int, data: object, resample: int) -> None:
     image, _ = patterned_pair("L", (13, 9), divisor=7)
-    with pytest.raises(ValueError):
-        image.transform((5, 5), method, data, resample)
+    assert_raises(ValueError, lambda: image.transform((5, 5), method, data, resample))
 
 
 def test_closed_and_invalid_transpose() -> None:
     image, _ = patterned_pair("L", (13, 9), divisor=7)
-    with pytest.raises(ValueError):
-        image.transpose(7)
+    assert_raises(ValueError, lambda: image.transpose(7))
     image.close()
-    with pytest.raises(ValueError):
-        image.transpose(Image.TRANSPOSE)
-    with pytest.raises(ValueError):
-        image.transform((5, 5), Image.AFFINE, (1, 0, 0, 0, 1, 0))
+    assert_raises(ValueError, lambda: image.transpose(Image.TRANSPOSE))
+    assert_raises(ValueError, lambda: image.transform((5, 5), Image.AFFINE, (1, 0, 0, 0, 1, 0)))
 
 
 @pytest.mark.parametrize("scale", [0.1, 0.2, 0.3, 1.1])
@@ -139,8 +135,7 @@ def test_nearest_fractional_boundaries(scale: float) -> None:
 @pytest.mark.parametrize("extent", [(80.0, 60.0, 720.0, 540.0), (799.9, 599.9, 0.1, 0.1), (0.1, 0.1, 10.1, 10.1), (3.5, 2.5, 3.5, 2.5), (-10.0, -10.0, 810.0, 610.0)])
 def test_nearest_extent_gather(mode: str, extent: tuple[float, float, float, float], subtests: pytest.Subtests) -> None:
     raw = bytes((i * 37 + i // 7) % 256 for i in range(800 * 600 * len(mode)))
-    image = Image.frombytes(mode, (800, 600), raw)
-    reference = PILImage.frombytes(mode, (800, 600), raw)
+    image, reference = image_pair(mode, (800, 600), raw)
     for target in ((15, 17), (16, 16), (33, 31), (400, 300), (800, 600)):
         with subtests.test(target=target):
             actual = image.transform(target, Image.EXTENT, extent, fillcolor=19)

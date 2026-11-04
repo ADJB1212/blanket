@@ -5,6 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
+from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
 from blanket import Image, ImageFilter
@@ -55,8 +56,7 @@ def test_sanity(filter_to_apply: ImageFilter.Filter | type[ImageFilter.Filter], 
 @pytest.mark.parametrize("mode", MODES)
 def test_sanity_error(mode: str) -> None:
     im = hopper(mode)
-    with pytest.raises(TypeError):
-        im.filter("hello")  # type: ignore[arg-type]
+    assert_raises(TypeError, lambda: im.filter("hello"))  # type: ignore[arg-type]
 
 
 def test_noop_on_small_images() -> None:
@@ -127,13 +127,11 @@ def test_rankfilter_overflow() -> None:
 
     for size in (2**31, 2**32 - 1):  # margins of 2**30 and INT_MAX
         rankfilter.size = size
-        with pytest.raises(ValueError, match="filter size too large"):
-            im.filter(rankfilter)
+        assert_raises(ValueError, lambda: im.filter(rankfilter), match="filter size too large")
 
 
 def test_kernel_not_enough_coefficients() -> None:
-    with pytest.raises(ValueError):
-        ImageFilter.Kernel((3, 3), (0, 0))
+    assert_raises(ValueError, lambda: ImageFilter.Kernel((3, 3), (0, 0)))
 
 
 EMBOSS_MATRIX = {
@@ -182,21 +180,18 @@ def test_consistency_i16_high_byte(mode: str) -> None:
 @pytest.mark.parametrize("size", (-1, math.nan, math.inf, 2**31))
 def test_invalid_box_blur_filter(size: int) -> None:
     for radius in (size, (size, size), (size, 1), (1, size)):
-        with pytest.raises(ValueError, match="radius"):
-            ImageFilter.BoxBlur(radius)
+        assert_raises(ValueError, lambda: ImageFilter.BoxBlur(radius), match="radius")
 
         im = hopper()
         box_blur_filter = ImageFilter.BoxBlur(2)
         box_blur_filter.radius = radius
-        with pytest.raises(ValueError, match="radius"):
-            im.filter(box_blur_filter)
+        assert_raises(ValueError, lambda: im.filter(box_blur_filter), match="radius")
 
 
 @pytest.mark.parametrize("radius", (math.nan, math.inf, 2**31))
 def test_invalid_gaussian_blur_filter(radius: int) -> None:
     im = hopper()
-    with pytest.raises(ValueError, match="radius"):
-        im.filter(ImageFilter.GaussianBlur(radius))
+    assert_raises(ValueError, lambda: im.filter(ImageFilter.GaussianBlur(radius)), match="radius")
 
 
 def test_rankfilter_size_1() -> None:

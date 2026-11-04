@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import patterned_pair
+from helpers import assert_raises, new_pair, patterned_pair
 from PIL import Image as PILImage, ImageStat as PILStat
 from pillow_helpers import hopper
 
@@ -29,11 +29,9 @@ def test_sanity() -> None:
     st.var
     st.stddev
 
-    with pytest.raises(AttributeError):
-        st.spam()  # type: ignore[attr-defined]
+    assert_raises(AttributeError, lambda: st.spam())  # type: ignore[attr-defined]
 
-    with pytest.raises(TypeError):
-        ImageStat.Stat(1)  # type: ignore[arg-type]
+    assert_raises(TypeError, lambda: ImageStat.Stat(1))  # type: ignore[arg-type]
 
 
 def test_hopper() -> None:
@@ -87,8 +85,7 @@ STATISTICS = ("extrema", "count", "sum", "sum2", "mean", "median", "rms", "var",
 @pytest.mark.parametrize("fill", [0, 1])
 def test_bilevel_masks_match_pillow(mode: str, fill: int) -> None:
     image, pillow = patterned_pair(mode, (19, 11))
-    mask = Image.new("1", image.size, fill)
-    reference = PILImage.new("1", image.size, fill)
+    mask, reference = new_pair("1", image.size, fill)
     mask.putpixel((0, 0), 1 - fill)
     reference.putpixel((0, 0), 1 - fill)
     assert image.histogram(mask) == pillow.histogram(reference)
@@ -200,14 +197,12 @@ def test_large_histogram_counts_do_not_overflow(frequency: int) -> None:
 
 @pytest.mark.parametrize("value", [None, 1, "histogram", tuple([0] * 256)])
 def test_invalid_input_type(value: object) -> None:
-    with pytest.raises(TypeError, match="first argument must be image or list"):
-        ImageStat.Stat(value)
+    assert_raises(TypeError, lambda: ImageStat.Stat(value), match="first argument must be image or list")
 
 
 @pytest.mark.parametrize("length", [1, 255, 257])
 def test_incomplete_histogram_is_rejected(length: int) -> None:
-    with pytest.raises(ValueError, match="256 bins per band"):
-        ImageStat.Stat([0] * length)
+    assert_raises(ValueError, lambda: ImageStat.Stat([0] * length), match="256 bins per band")
 
 
 @pytest.mark.parametrize(("value", "error"), [(-1, OverflowError), (2**64, OverflowError), (1.5, TypeError)])
@@ -223,8 +218,7 @@ def test_invalid_histogram_count(value: object, error: type[Exception]) -> None:
 def test_histogram_reductions_validate_every_bin(property_name: str, position: int, value: object, error: type[Exception]) -> None:
     histogram = [1] * 768
     histogram[position] = value
-    with pytest.raises(error):
-        getattr(ImageStat.Stat(histogram), property_name)
+    assert_raises(error, lambda: getattr(ImageStat.Stat(histogram), property_name))
 
 
 def test_histogram_reductions_accept_integer_protocol_and_list_subclasses() -> None:
@@ -265,24 +259,19 @@ def test_histogram_conversion_handles_reentrant_list_mutation(property_name: str
 
     histogram = [Count()] + [0] * 255
     stat = ImageStat.Stat(histogram)
-    with pytest.raises(IndexError):
-        getattr(stat, property_name)
+    assert_raises(IndexError, lambda: getattr(stat, property_name))
     assert histogram == []
 
 
 def test_invalid_masks_and_closed_images() -> None:
     image = Image.new("RGBA", (3, 2))
-    with pytest.raises(ValueError, match="mask"):
-        ImageStat.Stat(image, Image.new("RGB", image.size))
-    with pytest.raises(ValueError, match="images do not match"):
-        ImageStat.Stat(image, Image.new("L", (1, 1)))
+    assert_raises(ValueError, lambda: ImageStat.Stat(image, Image.new("RGB", image.size)), match="mask")
+    assert_raises(ValueError, lambda: ImageStat.Stat(image, Image.new("L", (1, 1))), match="images do not match")
     mask = Image.new("L", image.size)
     mask.close()
-    with pytest.raises(ValueError, match="closed image"):
-        ImageStat.Stat(image, mask)
+    assert_raises(ValueError, lambda: ImageStat.Stat(image, mask), match="closed image")
     image.close()
-    with pytest.raises(ValueError, match="closed image"):
-        ImageStat.Stat(image)
+    assert_raises(ValueError, lambda: ImageStat.Stat(image), match="closed image")
 
 
 @pytest.mark.parametrize("bit_depth", [10, 12, 16])
@@ -294,13 +283,8 @@ def test_high_depth_retains_sample_values(bit_depth: int) -> None:
 def test_native_reductions_validate_band_lengths() -> None:
     from blanket._blanket import stat_count, stat_median, stat_normalize, stat_sqrt
 
-    with pytest.raises(ValueError, match="256 bins per band"):
-        stat_count([1])
-    with pytest.raises(ValueError, match="band counts"):
-        stat_median([0] * 256, [])
-    with pytest.raises(ValueError, match="band counts"):
-        stat_normalize([1.0], [])
-    with pytest.raises(ValueError, match="band counts"):
-        stat_normalize([1.0], [1], [])
-    with pytest.raises(ValueError, match="math domain error"):
-        stat_sqrt([-1.0])
+    assert_raises(ValueError, lambda: stat_count([1]), match="256 bins per band")
+    assert_raises(ValueError, lambda: stat_median([0] * 256, []), match="band counts")
+    assert_raises(ValueError, lambda: stat_normalize([1.0], []), match="band counts")
+    assert_raises(ValueError, lambda: stat_normalize([1.0], [1], []), match="band counts")
+    assert_raises(ValueError, lambda: stat_sqrt([-1.0]), match="math domain error")

@@ -4,7 +4,7 @@ from copy import copy, deepcopy
 from io import BytesIO
 
 import pytest
-from helpers import assert_pixels_equal, encode_image
+from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PILImage
 
 from blanket import Image, ImageOps
@@ -76,8 +76,7 @@ def test_tiff_oriented_pages_keep_navigation_and_local_metadata(lazy: bool) -> N
         result = actual.copy()
         assert result.n_frames == 1
         assert result.tobytes() == actual.tobytes()
-    with pytest.raises(EOFError):
-        actual.seek(2)
+    assert_raises(EOFError, lambda: actual.seek(2))
     assert actual.tell() == 0
 
 
@@ -94,8 +93,7 @@ def test_oriented_tiff_region_uses_display_coordinates() -> None:
 
 def test_header_metadata_retains_raw_tiff_orientation() -> None:
     source = PILImage.new("RGB", (7, 5))
-    stream = BytesIO()
-    source.save(stream, "TIFF", tiffinfo={274: 6})
+    stream = image_buffer(source, "TIFF", tiffinfo={274: 6})
     header = Image.inspect(BytesIO(stream.getvalue()))
     exif = Image.Exif()
     exif.load(header.info["exif"])

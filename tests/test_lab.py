@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_buffer, image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -89,8 +89,7 @@ def test_tiff_interoperability(compression: str, byteorder: str, big_tiff: bool,
     decoded = Image.open(BytesIO(stream.getvalue()))
     assert decoded.mode == "LAB"
     assert decoded.tobytes() == raw
-    output = BytesIO()
-    decoded.save(output, "TIFF")
+    output = image_buffer(decoded, "TIFF")
     for module in (Image, PIL):
         reopened = module.open(BytesIO(output.getvalue()))
         assert reopened.mode == "LAB"
@@ -99,8 +98,7 @@ def test_tiff_interoperability(compression: str, byteorder: str, big_tiff: bool,
 
 def test_icc_lab_tiff() -> None:
     pixels = random.Random(13).randbytes(17 * 13 * 3)
-    stream = BytesIO()
-    PIL.frombytes("RGB", (17, 13), pixels).save(stream, "TIFF", tiffinfo={262: 9})
+    stream = image_buffer(PIL.frombytes("RGB", (17, 13), pixels), "TIFF", tiffinfo={262: 9})
     image = Image.open(BytesIO(stream.getvalue()))
     assert image.mode == "LAB"
     assert image.getdata() == list(zip(pixels[::3], pixels[1::3], pixels[2::3], strict=True))
@@ -112,8 +110,7 @@ def test_empty_and_high_depth() -> None:
         image = Image.new(mode, (0, 2))
         for target in ("RGB", "LAB"):
             assert image.convert(target).tobytes() == b""
-    with pytest.raises(ValueError):
-        Image.fromarray(np.zeros((2, 3, 3), dtype=np.uint16), "LAB")
+    assert_raises(ValueError, lambda: Image.fromarray(np.zeros((2, 3, 3), dtype=np.uint16), "LAB"))
     image = Image.new("LAB", (2, 3), (128, 128, 128))
     assert image.convert("RGB", bit_depth=16).tobytes() == image.convert("RGB").convert("RGB", bit_depth=16).tobytes()
     assert image.convert("LAB").tobytes() == image.tobytes()
@@ -125,18 +122,11 @@ def test_validation() -> None:
 
     image = Image.new("LAB", (3, 2))
     for mode in ("RGB", "LAB"):
-        with pytest.raises(ValueError):
-            Image.new(mode, (1, 1)).convert("LAB", bit_depth=16)
-    with pytest.raises(ValueError):
-        Image.frombytes("LAB", (1, 1), bytes(6), bit_depth=16)
-    with pytest.raises(ValueError):
-        Image.frombytes("LAB", (1, 1), bytes(2))
-    with pytest.raises(ValueError):
-        image.quantize()
-    with pytest.raises(OSError):
-        image.save(BytesIO(), "PNG")
-    with pytest.raises(ValueError):
-        image.save(BytesIO(), "TIFF", compressor=LosslessImageCompressor())
+        assert_raises(ValueError, lambda: Image.new(mode, (1, 1)).convert("LAB", bit_depth=16))
+    assert_raises(ValueError, lambda: Image.frombytes("LAB", (1, 1), bytes(6), bit_depth=16))
+    assert_raises(ValueError, lambda: Image.frombytes("LAB", (1, 1), bytes(2)))
+    assert_raises(ValueError, lambda: image.quantize())
+    assert_raises(OSError, lambda: image.save(BytesIO(), "PNG"))
+    assert_raises(ValueError, lambda: image.save(BytesIO(), "TIFF", compressor=LosslessImageCompressor()))
     image.close()
-    with pytest.raises(ValueError):
-        image.convert("RGB")
+    assert_raises(ValueError, lambda: image.convert("RGB"))

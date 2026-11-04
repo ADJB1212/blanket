@@ -5,7 +5,7 @@ import zlib
 from io import BytesIO
 
 import pytest
-from helpers import png_chunk
+from helpers import assert_raises, image_buffer, png_chunk
 
 from blanket import Image, ImageOps
 from blanket._exif import _png_metadata, read_metadata, transpose_metadata
@@ -13,8 +13,7 @@ from blanket._exif import _png_metadata, read_metadata, transpose_metadata
 
 @pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])
 def test_png_metadata_ignores_chunks_after_iend(kind: bytes) -> None:
-    output = BytesIO()
-    Image.new("L", (1, 1)).save(output, "PNG")
+    output = image_buffer(Image.new("L", (1, 1)), "PNG")
     payload = {b"tEXt": b"key\0value", b"zTXt": b"key\0\0" + zlib.compress(b"value"), b"iTXt": b"key\0\1\0\0\0" + zlib.compress(b"value"), b"iCCP": b"key\0\0" + zlib.compress(b"value"), b"eXIf": b"II*\0\x08\0\0\0" + bytes(6)}[kind]
     data = output.getvalue() + png_chunk(kind, payload)
     assert read_metadata(data, "PNG") == {}
@@ -25,8 +24,7 @@ def test_png_metadata_ignores_chunks_after_iend(kind: bytes) -> None:
 @pytest.mark.parametrize("repeated", [False, True])
 def test_png_metadata_has_a_cumulative_budget(monkeypatch, kind: bytes, repeated: bool) -> None:
     monkeypatch.setattr("blanket._exif._MAX_PNG_METADATA_BYTES", 100)
-    output = BytesIO()
-    Image.new("L", (1, 1)).save(output, "PNG")
+    output = image_buffer(Image.new("L", (1, 1)), "PNG")
     chunks = []
     for i in range(10):
         key = b"key" if repeated else f"key{i}".encode()
@@ -106,8 +104,7 @@ def test_orientation_ignores_invalid_tiff_headers(raw: bytes) -> None:
 
 @pytest.mark.parametrize(("format", "options"), [("GIF", {"exif": b""}), ("JPEG", {"pnginfo": None})])
 def test_metadata_options_reject_unsupported_containers(format: str, options: dict) -> None:
-    with pytest.raises(TypeError):
-        Image.new("RGB", (1, 1)).save(BytesIO(), format, **options)
+    assert_raises(TypeError, lambda: Image.new("RGB", (1, 1)).save(BytesIO(), format, **options))
 
 
 def test_exif_mapping_stream_loading_and_signed_rationals() -> None:
@@ -138,30 +135,24 @@ def test_exif_rejects_cycles_and_excessive_tags() -> None:
     nested = {}
     nested[34665] = nested
     exif[34665] = nested
-    with pytest.raises(ValueError, match="cyclic"):
-        exif.tobytes()
+    assert_raises(ValueError, lambda: exif.tobytes(), match="cyclic")
     exif = Image.Exif()
     exif.update(dict.fromkeys(range(65536), 0))
-    with pytest.raises(ValueError, match="too many"):
-        exif.tobytes()
+    assert_raises(ValueError, lambda: exif.tobytes(), match="too many")
 
 
 @pytest.mark.parametrize("options", [{"append_images": 1}, {"default_image": 1}, {"default_image": True}, {"duration": "20"}])
 def test_sequence_control_types(options: dict) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        Image.new("RGB", (1, 1)).save(BytesIO(), "PNG", save_all=True, **options)
+    assert_raises((TypeError, ValueError), lambda: Image.new("RGB", (1, 1)).save(BytesIO(), "PNG", save_all=True, **options))
 
 
 def test_sequence_rejects_unsupported_mode() -> None:
-    with pytest.raises(OSError, match="cannot write mode HSV"):
-        Image.new("HSV", (1, 1)).save(BytesIO(), "PNG", save_all=True)
-    with pytest.raises(ValueError, match="high-bit-depth"):
-        Image.frombytes("L", (1, 1), b"\x01\0", bit_depth=16).save(BytesIO(), "GIF", save_all=True)
+    assert_raises(OSError, lambda: Image.new("HSV", (1, 1)).save(BytesIO(), "PNG", save_all=True), match="cannot write mode HSV")
+    assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\x01\0", bit_depth=16).save(BytesIO(), "GIF", save_all=True), match="high-bit-depth")
 
 
 def test_single_frame_animation_controls() -> None:
-    output = BytesIO()
-    Image.new("RGB", (1, 1), "red").save(output, "GIF", duration=40)
+    output = image_buffer(Image.new("RGB", (1, 1), "red"), "GIF", duration=40)
     image = Image.open(output)
     assert image.n_frames == 1
     assert image.info["duration"] == 40

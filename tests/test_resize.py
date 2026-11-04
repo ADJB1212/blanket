@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -32,8 +32,7 @@ def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> Non
 @pytest.mark.parametrize("method", [method for method in Image.Resampling if method != Image.Resampling.NEAREST])
 def test_resize_single_axis_keeps_coefficients_and_rounding(mode: str, method: Image.Resampling, subtests: pytest.Subtests) -> None:
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * len(mode)))
-    image = Image.frombytes(mode, (67, 49), raw)
-    reference = PillowImage.frombytes(mode, (67, 49), raw)
+    image, reference = image_pair(mode, (67, 49), raw)
     for size in ((67, 7), (67, 83)):
         with subtests.test(size=size):
             actual = image.resize(size, method)
@@ -62,8 +61,7 @@ def test_resize_copies_metadata_and_owns_pixels(mode: str, size: tuple[int, int]
 def test_horizontal_resize_writes_output_directly_with_full_height(mode: str, subtests: pytest.Subtests) -> None:
     channels = 3 if mode == "YCbCr" else len(mode)
     raw = bytes((i * 37 + i // 7 * 19) % 256 for i in range(67 * 49 * channels))
-    actual = Image.frombytes(mode, (67, 49), raw)
-    expected = PillowImage.frombytes(mode, (67, 49), raw)
+    actual, expected = image_pair(mode, (67, 49), raw)
     for method in Image.Resampling:
         if method == Image.Resampling.NEAREST:
             continue
@@ -92,15 +90,13 @@ def test_horizontal_resize_writes_output_directly_with_full_height(mode: str, su
 )
 def test_resize_rejects_invalid_arguments(kwargs: dict, error: type[Exception]) -> None:
     image = Image.frombytes("L", (3, 2), bytes(6))
-    with pytest.raises(error):
-        image.resize(**({"size": (2, 2)} | kwargs))
+    assert_raises(error, lambda: image.resize(**({"size": (2, 2)} | kwargs)))
 
 
 def test_resize_closed_image() -> None:
     image = Image.frombytes("L", (3, 2), bytes(6))
     image.close()
-    with pytest.raises(ValueError):
-        image.resize((3, 2))
+    assert_raises(ValueError, lambda: image.resize((3, 2)))
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])

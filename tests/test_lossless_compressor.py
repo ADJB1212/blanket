@@ -8,6 +8,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises, compressed_pair, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -30,9 +31,7 @@ def test_png_reduces_rgba_channels(effort: int, gray: bool) -> None:
         else:
             pixels.extend((*rng.randbytes(3), 255))
     original = Image.frombytes("RGBA", size, bytes(pixels))
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "PNG", compress_level=9)
-    original.save(output, "PNG", compress_level=9, compressor=LosslessImageCompressor(effort=effort))
+    baseline, output = compressed_pair(original, "PNG", compress_level=9, compressor=LosslessImageCompressor(effort=effort))
     encoded = output.getvalue()
     assert encoded[25] == (4 if gray else 2)  # IHDR color type: LA or RGB
     assert len(encoded) < len(baseline.getvalue())
@@ -93,21 +92,17 @@ def test_png_optimization_roundtrip(effort: int, mode: str, kind: str) -> None:
     with PillowImage.open(io.BytesIO(output.getvalue())) as decoded:
         assert decoded.convert(mode).tobytes() == bytes(pixels)
     assert Image.open(io.BytesIO(output.getvalue())).convert(mode).tobytes() == bytes(pixels)
-    unchanged = io.BytesIO()
-    original.save(unchanged, "PNG", compress_level=1, compressor=None)
+    unchanged = image_buffer(original, "PNG", compress_level=1, compressor=None)
     assert unchanged.getvalue() == baseline.getvalue()
-    repeated = io.BytesIO()
-    original.save(repeated, "PNG", compress_level=1, compressor=compressor)
+    repeated = image_buffer(original, "PNG", compress_level=1, compressor=compressor)
     assert repeated.getvalue() == output.getvalue()
 
 
 def test_output_format_controls_optimization(tmp_path: Path) -> None:
-    source = io.BytesIO()
-    Image.new("RGB", (128, 128), (71, 71, 71)).save(source, "TIFF")
+    source = image_buffer(Image.new("RGB", (128, 128), (71, 71, 71)), "TIFF")
     original = Image.open(io.BytesIO(source.getvalue()))
     output = tmp_path / "optimized.png"
-    baseline = io.BytesIO()
-    original.save(baseline, "PNG", compress_level=0)
+    baseline = image_buffer(original, "PNG", compress_level=0)
     original.save(output, compressor=LosslessImageCompressor(), compress_level=0)
     assert output.stat().st_size < len(baseline.getvalue()) // 2
     with PillowImage.open(output) as decoded:
@@ -122,9 +117,7 @@ def test_exact_palette_png(colors: int, depth: int, mode: str) -> None:
     # Odd widths exercise byte padding independently at every row.
     pixels = b"".join(palette[rng.randrange(colors)] for _ in range(129 * 127))
     original = Image.frombytes(mode, (129, 127), pixels)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "PNG")
-    original.save(output, "PNG", compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(original, "PNG", compressor=LosslessImageCompressor())
     encoded = output.getvalue()
     assert encoded[24:26] == bytes((depth, 3))
     assert len(encoded) < len(baseline.getvalue())
@@ -132,17 +125,14 @@ def test_exact_palette_png(colors: int, depth: int, mode: str) -> None:
         assert decoded.convert(mode).tobytes() == pixels
     assert Image.open(io.BytesIO(encoded)).convert(mode).tobytes() == pixels
     assert original.tobytes() == pixels
-    repeated = io.BytesIO()
-    original.save(repeated, "PNG", compressor=LosslessImageCompressor())
+    repeated = image_buffer(original, "PNG", compressor=LosslessImageCompressor())
     assert repeated.getvalue() == encoded
 
 
 def test_palette_overflow_keeps_all_colors() -> None:
     pixels = b"".join(bytes((i % 256, i // 256, 19, 0)) for i in range(257))
     original = Image.frombytes("RGBA", (257, 1), pixels)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "PNG")
-    original.save(output, "PNG", compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(original, "PNG", compressor=LosslessImageCompressor())
     assert len(output.getvalue()) <= len(baseline.getvalue())
     with PillowImage.open(io.BytesIO(output.getvalue())) as decoded:
         assert decoded.convert("RGBA").tobytes() == pixels
@@ -157,9 +147,7 @@ def test_png_high_effort_preserves_palette_alpha_and_row_tails(width: int, compr
     palette += [bytes((i * 17, 255 - i * 17, 37, 0)) for i in range(12)]
     pixels = b"".join(palette[rng.randrange(len(palette))] for _ in range(width * 19))
     source = Image.frombytes("RGBA", (width, 19), pixels)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    source.save(baseline, "PNG", compress_level=compress_level)
-    source.save(output, "PNG", compress_level=compress_level, compressor=LosslessImageCompressor(effort=8))
+    baseline, output = compressed_pair(source, "PNG", compress_level=compress_level, compressor=LosslessImageCompressor(effort=8))
     assert len(output.getvalue()) <= len(baseline.getvalue())
     assert Image.open(io.BytesIO(output.getvalue())).convert("RGBA").tobytes() == pixels
     with PillowImage.open(output) as decoded:
@@ -198,9 +186,7 @@ def test_png_packed_grayscale(bits: int, mode: str) -> None:
     values = [rng.randrange(1 << bits) * (255 // ((1 << bits) - 1)) for _ in range(129 * 127)]
     pixels = b"".join(bytes([v] if mode == "L" else [v, v, v] + ([255] if mode == "RGBA" else [])) for v in values)
     original = Image.frombytes(mode, (129, 127), pixels)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "PNG")
-    original.save(output, "PNG", compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(original, "PNG", compressor=LosslessImageCompressor())
     encoded = output.getvalue()
     assert encoded[24:26] == bytes((bits, 0))
     assert len(encoded) < len(baseline.getvalue())
@@ -224,9 +210,7 @@ def test_png_transparency_key(grayscale: bool, key: int) -> None:
             red = (key + rng.randrange(1, 256)) % 256
             pixels.extend((red, rng.randrange(256), rng.randrange(256), 255))
     source = Image.frombytes("RGBA", (129, 127), bytes(pixels))
-    baseline, output = io.BytesIO(), io.BytesIO()
-    source.save(baseline, "PNG")
-    source.save(output, "PNG", compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(source, "PNG", compressor=LosslessImageCompressor())
     encoded = output.getvalue()
     if grayscale and key == 0:
         # A wider exact representation can compress better after filtering.
@@ -245,8 +229,7 @@ def test_png_transparency_key_rejects_inexact_reductions(special: bytes) -> None
     rng = random.Random(87)
     pixels = bytes((0, 0, 0, 0)) + special + b"".join(rng.randbytes(3) + b"\xff" for _ in range(257))
     source = Image.frombytes("RGBA", (259, 1), pixels)
-    output = io.BytesIO()
-    source.save(output, "PNG", compressor=LosslessImageCompressor())
+    output = image_buffer(source, "PNG", compressor=LosslessImageCompressor())
     with PillowImage.open(output) as decoded:
         assert decoded.convert("RGBA").tobytes() == pixels
 
@@ -254,8 +237,7 @@ def test_png_transparency_key_rejects_inexact_reductions(special: bytes) -> None
 def test_png_one_bit_white_transparency_key() -> None:
     rng = random.Random(81)
     pixels = b"".join(bytes((255, 255, 255, 0) if rng.randrange(2) else (0, 0, 0, 255)) for _ in range(65 * 63))
-    output = io.BytesIO()
-    Image.frombytes("RGBA", (65, 63), pixels).save(output, "PNG", compressor=LosslessImageCompressor())
+    output = image_buffer(Image.frombytes("RGBA", (65, 63), pixels), "PNG", compressor=LosslessImageCompressor())
     assert output.getvalue()[24:26] == bytes((1, 0))
     with PillowImage.open(output) as decoded:
         assert decoded.convert("RGBA").tobytes() == pixels
@@ -267,8 +249,7 @@ def test_png_palette_reordering_shortens_transparency() -> None:
     rng = random.Random(17)
     pixels = b"".join(palette[i] for i in list(range(256)) + [rng.randrange(256) for _ in range(128 * 128 - 256)])
     source = Image.frombytes("RGBA", (128, 128), pixels)
-    output = io.BytesIO()
-    source.save(output, "PNG", compressor=LosslessImageCompressor(effort=5))
+    output = image_buffer(source, "PNG", compressor=LosslessImageCompressor(effort=5))
     encoded = output.getvalue()
     assert encoded[25] == 3
     position = 8
@@ -289,9 +270,7 @@ def test_normal_encoding_fallback(format: str) -> None:
     original = Image.new("RGB", (4, 4), (10, 20, 30))
     if format == "PNG":
         original = original.convert("RGB", bit_depth=16)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, format)
-    original.save(output, format, compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(original, format, compressor=LosslessImageCompressor())
     assert output.getvalue() == baseline.getvalue()
 
 
@@ -302,9 +281,7 @@ def test_jpeg_optimization(mode: str, quality: int, effort: int) -> None:
     size = (67, 35)  # Partial MCUs must not be cropped or modified.
     pixels = random.Random(41).randbytes(size[0] * size[1] * len(mode))
     original = Image.frombytes(mode, size, pixels)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "JPEG", quality=quality)
-    original.save(output, "JPEG", quality=quality, compressor=LosslessImageCompressor(effort=effort))
+    baseline, output = compressed_pair(original, "JPEG", quality=quality, compressor=LosslessImageCompressor(effort=effort))
     assert len(output.getvalue()) <= len(baseline.getvalue())
     with PillowImage.open(baseline) as expected, PillowImage.open(output) as actual:
         assert actual.size == expected.size == size
@@ -352,11 +329,9 @@ def test_sample_codec_reuse_and_palette(format: str, tmp_path: Path) -> None:
     compressor = LosslessImageCompressor(effort=1)
     path = tmp_path / f"optimized.{format.lower()}"
     original.save(path, lossless=True, compressor=compressor)
-    output = io.BytesIO()
-    original.save(output, format, lossless=True, compressor=compressor)
+    output = image_buffer(original, format, lossless=True, compressor=compressor)
     assert path.read_bytes() == output.getvalue()
-    baseline = io.BytesIO()
-    original.save(baseline, format, lossless=True)
+    baseline = image_buffer(original, format, lossless=True)
     assert len(output.getvalue()) <= len(baseline.getvalue())
     assert Image.open(output).tobytes() == Image.open(baseline).tobytes()
 
@@ -383,9 +358,7 @@ def test_jxl_compressor_reuses_runner_across_frame_sizes(mode: str, depth: int) 
 @pytest.mark.parametrize("effort", [1, 4, 7, 10])
 def test_sample_codec_effort_range(format: str, effort: int) -> None:
     source = Image.frombytes("L", (32, 32), bytes(i % 256 for i in range(1024)))
-    baseline, output = io.BytesIO(), io.BytesIO()
-    source.save(baseline, format, lossless=True)
-    source.save(output, format, lossless=True, compressor=LosslessImageCompressor(effort=effort))
+    baseline, output = compressed_pair(source, format, lossless=True, compressor=LosslessImageCompressor(effort=effort))
     assert len(output.getvalue()) <= len(baseline.getvalue())
     assert Image.open(output).convert("L").tobytes() == source.tobytes()
 
@@ -394,9 +367,7 @@ def test_sample_codec_effort_range(format: str, effort: int) -> None:
 def test_jxl_sixteen_bit_optimization(mode: str) -> None:
     raw = random.Random(35).randbytes(17 * 19 * len(mode) * 2)
     source = Image.frombytes(mode, (17, 19), raw, bit_depth=16)
-    baseline, output = io.BytesIO(), io.BytesIO()
-    source.save(baseline, "JXL", lossless=True)
-    source.save(output, "JXL", lossless=True, compressor=LosslessImageCompressor(effort=3))
+    baseline, output = compressed_pair(source, "JXL", lossless=True, compressor=LosslessImageCompressor(effort=3))
     assert len(output.getvalue()) <= len(baseline.getvalue())
     assert Image.open(output).tobytes() == raw
 
@@ -405,8 +376,7 @@ def test_jxl_sixteen_bit_optimization(mode: str) -> None:
 def test_optimized_jxl_external_decode(mode: str) -> None:
     pytest.importorskip("pillow_jxl")
     raw = random.Random(37).randbytes(33 * 35 * len(mode))
-    output = io.BytesIO()
-    Image.frombytes(mode, (33, 35), raw).save(output, "JXL", lossless=True, compressor=LosslessImageCompressor(effort=3))
+    output = image_buffer(Image.frombytes(mode, (33, 35), raw), "JXL", lossless=True, compressor=LosslessImageCompressor(effort=3))
     with PillowImage.open(output) as decoded:
         assert decoded.tobytes() == raw
 
@@ -415,16 +385,13 @@ def test_optimized_jxl_external_decode(mode: str) -> None:
 def test_compressor_preserves_codec_validation(format: str, mode: str, depth: int, error: type[Exception]) -> None:
     source = Image.new(mode, (32, 32)).convert(mode, bit_depth=depth)
     output = io.BytesIO()
-    with pytest.raises(error):
-        source.save(output, format, compressor=LosslessImageCompressor())
+    assert_raises(error, lambda: source.save(output, format, compressor=LosslessImageCompressor()))
     assert output.getvalue() == b""
 
 
 def test_indexed_png_preserves_palette() -> None:
     original = Image.new("RGB", (4, 4), (10, 20, 30)).quantize()
-    baseline, output = io.BytesIO(), io.BytesIO()
-    original.save(baseline, "PNG")
-    original.save(output, "PNG", compressor=LosslessImageCompressor())
+    baseline, output = compressed_pair(original, "PNG", compressor=LosslessImageCompressor())
     assert output.getvalue() == baseline.getvalue()
     with PillowImage.open(io.BytesIO(output.getvalue())) as decoded:
         assert decoded.mode == "P"
@@ -439,8 +406,7 @@ def test_pillow_save_call_compatibility(tmp_path: Path, use_compressor: bool) ->
     pixels = bytes(range(192))
     for backend, name in [(Image, "blanket"), (PillowImage, "pillow")]:
         image = backend.frombytes("RGB", (8, 8), pixels)
-        stream = io.BytesIO()
-        image.save(stream, "PNG", **options)
+        stream = image_buffer(image, "PNG", **options)
         with PillowImage.open(io.BytesIO(stream.getvalue())) as decoded:
             assert decoded.convert("RGB").tobytes() == pixels
         path = tmp_path / f"{name}.png"
@@ -451,14 +417,12 @@ def test_pillow_save_call_compatibility(tmp_path: Path, use_compressor: bool) ->
 
 @pytest.mark.parametrize("effort", [0, 11, -1, 1000])
 def test_invalid_effort_range(effort: int) -> None:
-    with pytest.raises(ValueError, match="effort"):
-        LosslessImageCompressor(effort=effort)
+    assert_raises(ValueError, lambda: LosslessImageCompressor(effort=effort), match="effort")
 
 
 @pytest.mark.parametrize("effort", [True, 1.5, "7", None])
 def test_invalid_effort_type(effort: object) -> None:
-    with pytest.raises(TypeError, match="effort"):
-        LosslessImageCompressor(effort=effort)
+    assert_raises(TypeError, lambda: LosslessImageCompressor(effort=effort), match="effort")
 
 
 def test_compression_is_only_available_through_save() -> None:
@@ -467,9 +431,7 @@ def test_compression_is_only_available_through_save() -> None:
     assert not callable(compressor._native)
     image = Image.new("L", (1, 1))
     output = io.BytesIO()
-    with pytest.raises(TypeError, match="compressor"):
-        image.save(output, "PNG", compressor=object())
+    assert_raises(TypeError, lambda: image.save(output, "PNG", compressor=object()), match="compressor")
     assert output.getvalue() == b""
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.save(output, "PNG", compressor=compressor)
+    assert_raises(ValueError, lambda: image.save(output, "PNG", compressor=compressor), match="closed")

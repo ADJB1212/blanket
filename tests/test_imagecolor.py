@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from helpers import assert_raises
 from PIL import ImageColor as PillowColor
 
 from blanket import Image, ImageColor, ImageDraw, ImageOps
@@ -104,8 +105,7 @@ def test_getrgb_formats(color: str, expected: tuple[int, ...]) -> None:
     ],
 )
 def test_getrgb_invalid_formats(color: str) -> None:
-    with pytest.raises(ValueError):
-        ImageColor.getrgb(color)
+    assert_raises(ValueError, lambda: ImageColor.getrgb(color))
 
 
 def test_transparent_keyword_extension() -> None:
@@ -164,8 +164,7 @@ def test_color_premultiplied_alpha(mode: str, premultiplied_mode: str, color: st
 
 def test_color_too_long() -> None:
     color_too_long = "hsl(" + "1" * 40 + "," + "1" * 40 + "%," + "1" * 40 + "%)"
-    with pytest.raises(ValueError):
-        ImageColor.getrgb(color_too_long)
+    assert_raises(ValueError, lambda: ImageColor.getrgb(color_too_long))
 
 
 def test_public_colormap_accepts_custom_hex_and_tuple_entries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,8 +186,7 @@ def test_gamut_mapping_extreme_lightness_and_small_excursions(rgb, expected) -> 
 def test_gamut_mapping_rejects_nonfinite_conversion(rgb) -> None:
     from blanket._css_color import _gamut_map
 
-    with pytest.raises(ValueError, match="overflow"):
-        _gamut_map(rgb)
+    assert_raises(ValueError, lambda: _gamut_map(rgb), match="overflow")
 
 
 def test_gamut_mapping_converges_at_chroma_tolerance() -> None:
@@ -198,19 +196,15 @@ def test_gamut_mapping_converges_at_chroma_tolerance() -> None:
 @pytest.mark.parametrize("color", ["unknown(1 2 3)", "color(srgb 1.1 0.1 0.1)", "color(srgb 0.1 1.1 0.1)", "color(srgb 0.1 0.1 1.1)"])
 def test_color_function_dispatch_and_out_of_gamut_primaries(color: str) -> None:
     if color.startswith("unknown"):
-        with pytest.raises(ValueError):
-            ImageColor.getrgb(color)
+        assert_raises(ValueError, lambda: ImageColor.getrgb(color))
     else:
         assert all(0 <= value <= 255 for value in ImageColor.getrgb(color))
 
 
 def test_invalid_colors_and_modes_raise() -> None:
-    with pytest.raises(ValueError):
-        ImageColor.getrgb("not a color")
-    with pytest.raises(TypeError):
-        ImageColor.getrgb(123)  # type: ignore[arg-type]
-    with pytest.raises(ValueError):
-        ImageColor.getcolor("red", "invalid")
+    assert_raises(ValueError, lambda: ImageColor.getrgb("not a color"))
+    assert_raises(TypeError, lambda: ImageColor.getrgb(123))  # type: ignore[arg-type]
+    assert_raises(ValueError, lambda: ImageColor.getcolor("red", "invalid"))
 
 
 @pytest.mark.parametrize(
@@ -303,8 +297,7 @@ def test_css4_component_scales(color: str, equivalent: str) -> None:
     ],
 )
 def test_invalid_css4_colors(color: str) -> None:
-    with pytest.raises(ValueError):
-        ImageColor.getrgb(color)
+    assert_raises(ValueError, lambda: ImageColor.getrgb(color))
 
 
 def test_css4_colors_in_image_operations() -> None:

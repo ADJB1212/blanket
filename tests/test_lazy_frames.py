@@ -5,7 +5,7 @@ import zlib
 from io import BytesIO
 
 import pytest
-from helpers import assert_pixels_equal, encode_image, png_chunk
+from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer, png_chunk
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -67,8 +67,7 @@ def test_lazy_composition_matches_eager_and_pillow(format, options):
         assert lazy.tell() == i
         assert list(lazy._lazy_frames.cache) == [i]
     for i in (-1, 3):
-        with pytest.raises(EOFError):
-            lazy.seek(i)
+        assert_raises(EOFError, lambda: lazy.seek(i))
         assert lazy.tell() == 0
 
 
@@ -105,8 +104,7 @@ def test_lazy_cache_lru_edits_and_close(monkeypatch):
     image.close()
     assert image._lazy_frames.data == b"" and not image._lazy_frames.cache
     for operation in (image.load, image.tell, lambda: image.seek(1)):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
     assert copied.n_frames == 1
     assert copied.getpixel((0, 0)) == (17, 29, 51, 255)
 
@@ -116,8 +114,7 @@ def test_lazy_cache_lru_edits_and_close(monkeypatch):
 def test_lazy_tiff_mixed_pages_and_metadata(mode, compression):
     first = PillowImage.new("RGB", (3, 2), "red")
     second = PillowImage.new(mode, (5, 4))
-    stream = BytesIO()
-    first.save(stream, "TIFF", save_all=True, append_images=[second], compression=compression)
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[second], compression=compression)
     image = Image.open(stream, lazy=True)
     eager = Image.open(stream)
     for i in (1, 0, 1):
@@ -155,8 +152,7 @@ def test_lazy_tiff_metadata_traverses_forward_once_and_restarts_on_backward_seek
 
 def test_lazy_tiff_jpeg_pages():
     frames = [PillowImage.new("RGB", (9, 7), "red"), PillowImage.new("L", (5, 3), 123)]
-    stream = BytesIO()
-    frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:], compression="jpeg")
+    stream = image_buffer(frames[0], "TIFF", save_all=True, append_images=frames[1:], compression="jpeg")
     lazy = Image.open(stream, lazy=True)
     pillow = PillowImage.open(stream)
     for i in (1, 0, 1):
@@ -169,8 +165,7 @@ def test_lazy_webp_alpha_matches_eager():
     frames = [PillowImage.new("RGBA", (13, 7), (0, 0, 0, 0)) for _ in range(3)]
     for i, frame in enumerate(frames):
         frame.paste((17, 29, 51, 127 + i), (i * 4, 0, i * 4 + 5, 5))
-    stream = BytesIO()
-    frames[0].save(stream, "WEBP", save_all=True, append_images=frames[1:], duration=30, lossless=True)
+    stream = image_buffer(frames[0], "WEBP", save_all=True, append_images=frames[1:], duration=30, lossless=True)
     lazy = Image.open(stream, lazy=True)
     eager = Image.open(stream)
     for i in (2, 0, 1):
@@ -186,8 +181,7 @@ def test_lazy_webp_alpha_matches_eager():
 def test_lazy_apng_precision_and_default_image(depth, default):
     maximum = (1 << depth) - 1
     frames = [Image.frombytes("RGBA", (2, 3), bytes([i * 17, 29, 51, 255]) * 6 if depth == 8 else struct.pack("<4H", i * 17, maximum // 2, maximum - 1, maximum) * 6, bit_depth=depth) for i in (1, 2, 3)]
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:], default_image=default, duration=40)
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], default_image=default, duration=40)
     lazy = Image.open(stream, lazy=True)
     eager = Image.open(stream)
     for i in (2, 0, 1):
@@ -206,8 +200,7 @@ def test_lazy_iteration_saving_and_position_restoration(format):
     frames = ImageSequence.all_frames(image)
     assert image.tell() == 1
     assert len(frames) == 3 and all(frame.n_frames == 1 for frame in frames)
-    stream = BytesIO()
-    image.save(stream, format, save_all=True, **({"lossless": True} if format == "WEBP" else {}))
+    stream = image_buffer(image, format, save_all=True, **({"lossless": True} if format == "WEBP" else {}))
     assert image.tell() == 1
     if format == "PDF":
         assert len(PdfParser.PdfParser(buf=stream.getvalue()).pages) == 3
@@ -218,8 +211,7 @@ def test_lazy_iteration_saving_and_position_restoration(format):
     def fail(frame):
         raise RuntimeError("callback")
 
-    with pytest.raises(RuntimeError, match="callback"):
-        ImageSequence.all_frames(image, fail)
+    assert_raises(RuntimeError, lambda: ImageSequence.all_frames(image, fail), match="callback")
     assert image.tell() == 1
 
 
@@ -229,14 +221,12 @@ def test_lazy_defers_bad_compressed_frame_and_preserves_position():
     size = struct.unpack_from(">I", data, offset)[0]
     payload = data[offset + 8 : offset + 8 + size]
     data = data[:offset] + png_chunk(b"fdAT", payload[:4] + b"invalid deflate") + data[offset + size + 12 :]
-    with pytest.raises(CorruptImageError):
-        Image.open(BytesIO(data))
+    assert_raises(CorruptImageError, lambda: Image.open(BytesIO(data)))
     image = Image.open(BytesIO(data), lazy=True)
     original = image.tobytes()
     image.info["custom"] = True
     for _ in range(2):
-        with pytest.raises(CorruptImageError):
-            image.seek(1)
+        assert_raises(CorruptImageError, lambda: image.seek(1))
         assert image.tell() == 0
         assert image.tobytes() == original
         assert image.info["custom"] is True
@@ -253,12 +243,10 @@ def test_lazy_tiff_defers_bad_page_pixels():
     offset = pillow.tag_v2[273][0]
     count = pillow.tag_v2[279][0]
     data[offset : offset + count] = b"\xff" * count
-    with pytest.raises(CorruptImageError):
-        Image.open(BytesIO(data))
+    assert_raises(CorruptImageError, lambda: Image.open(BytesIO(data)))
     image = Image.open(BytesIO(data), lazy=True)
     original = image.tobytes()
-    with pytest.raises(CorruptImageError):
-        image.seek(1)
+    assert_raises(CorruptImageError, lambda: image.seek(1))
     assert image.tell() == 0 and image.tobytes() == original
 
 
@@ -283,12 +271,10 @@ def test_lazy_gif_defers_bad_lzw_pixels():
                 data[position + 1 : position + 1 + count] = b"\xff" * count
             position += count + 1
         position += 1
-    with pytest.raises(CorruptImageError):
-        Image.open(BytesIO(data))
+    assert_raises(CorruptImageError, lambda: Image.open(BytesIO(data)))
     image = Image.open(BytesIO(data), lazy=True)
     original = image.tobytes()
-    with pytest.raises(CorruptImageError):
-        image.seek(1)
+    assert_raises(CorruptImageError, lambda: image.seek(1))
     assert image.tell() == 0 and image.tobytes() == original
 
 
@@ -306,8 +292,7 @@ def test_lazy_animation_edits_do_not_change_other_composited_frames():
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA", "I;16"])
 def test_lazy_static_png_modes(mode):
-    stream = BytesIO()
-    PillowImage.new(mode, (3, 2)).save(stream, "PNG")
+    stream = image_buffer(PillowImage.new(mode, (3, 2)), "PNG")
     lazy = Image.open(stream, lazy=True)
     eager = Image.open(stream)
     assert (lazy.mode, lazy.bit_depth, lazy.tobytes()) == (eager.mode, eager.bit_depth, eager.tobytes())
@@ -322,8 +307,7 @@ def test_lazy_save_current_frame_and_replaced_cached_raster():
     image.seek(0)
     image.seek(1)
     assert_pixels_equal(image, expected)
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     reopened = Image.open(output)
     assert reopened.n_frames == 1 and reopened.tobytes() == expected.tobytes()
 
@@ -332,8 +316,7 @@ def test_lazy_cumulative_limit_before_frame_decode():
     data = sequence_data()
     offset = data.index(b"acTL") - 4
     data = data[:offset] + png_chunk(b"acTL", struct.pack(">II", 3_000_000, 0)) + data[offset + 20 :]
-    with pytest.raises(CodecResourceLimitError):
-        Image.open(BytesIO(data), lazy=True)
+    assert_raises(CodecResourceLimitError, lambda: Image.open(BytesIO(data), lazy=True))
 
 
 @pytest.mark.filterwarnings("ignore:")
@@ -367,29 +350,23 @@ def test_lazy_other_formats_cumulative_limit_before_decode(format, monkeypatch):
             offset = data.index(b"VP8X")
             data[offset + 12 : offset + 15] = (9999).to_bytes(3, "little")
             data[offset + 15 : offset + 18] = (9999).to_bytes(3, "little")
-    with pytest.raises(CodecResourceLimitError):
-        Image.open(BytesIO(data), lazy=True)
+    assert_raises(CodecResourceLimitError, lambda: Image.open(BytesIO(data), lazy=True))
 
 
 @pytest.mark.parametrize("options, error", [({"lazy": 1}, TypeError), ({"frame_cache_size": True}, TypeError), ({"frame_cache_size": 1.5}, TypeError), ({"frame_cache_size": 0}, ValueError)])
 def test_lazy_option_validation(options, error):
-    with pytest.raises(error):
-        Image.open(BytesIO(sequence_data()), **options)
+    assert_raises(error, lambda: Image.open(BytesIO(sequence_data()), **options))
 
 
 def test_lazy_format_allowlist_and_unsupported_format():
-    with pytest.raises(UnidentifiedImageError):
-        Image.open(BytesIO(sequence_data()), formats=["GIF"], lazy=True)
-    stream = BytesIO()
-    Image.new("RGB", (2, 2)).save(stream, "JPEG")
-    with pytest.raises(UnsupportedCodecError):
-        Image.open(stream, lazy=True)
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(sequence_data()), formats=["GIF"], lazy=True))
+    stream = image_buffer(Image.new("RGB", (2, 2)), "JPEG")
+    assert_raises(UnsupportedCodecError, lambda: Image.open(stream, lazy=True))
 
 
 @pytest.mark.parametrize("format", ["GIF", "PNG", "WEBP", "TIFF"])
 def test_lazy_static_images_and_stream_ownership(format):
-    stream = BytesIO()
-    PillowImage.new("L", (3, 2), 17).save(stream, format)
+    stream = image_buffer(PillowImage.new("L", (3, 2), 17), format)
     lazy = Image.open(stream, lazy=True)
     eager = Image.open(stream)
     stream.close()

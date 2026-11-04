@@ -6,6 +6,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
+from helpers import assert_raises, image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -47,8 +48,7 @@ def test_octree_matches_pillow(mode: str, colors: int) -> None:
 @pytest.mark.parametrize("xy", [(0, 0), (3, 2), (-1, -1), (-4, -3), [2, 1], (1.9, 0.1)])
 def test_getpixel_matches_pillow(mode: str, xy: object) -> None:
     raw = bytes(range(12 * len(mode)))
-    actual = Image.frombytes(mode, (4, 3), raw)
-    expected = PillowImage.frombytes(mode, (4, 3), raw)
+    actual, expected = image_pair(mode, (4, 3), raw)
     assert actual.getpixel(xy) == expected.getpixel(xy)
 
 
@@ -58,8 +58,7 @@ def test_getpixel_errors(xy: object) -> None:
     expected = PillowImage.new("L", (4, 3))
     with pytest.raises(Exception) as error:
         expected.getpixel(xy)
-    with pytest.raises(type(error.value)):
-        actual.getpixel(xy)
+    assert_raises(type(error.value), lambda: actual.getpixel(xy))
 
 
 @pytest.mark.parametrize(("mode", "methods"), [("L", [0, 1, 2]), ("RGB", [0, 1, 2]), ("RGBA", [2])])
@@ -110,8 +109,7 @@ def test_fixed_palette(mode: str, dither: int) -> None:
     reference_palette = PillowImage.new("P", (1, 1))
     reference_palette.putpalette(palette.getpalette())
     raw = bytes([0, 1, 120, 255]) if mode == "L" else bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 128, 128, 128])
-    image = Image.frombytes(mode, (4, 1), raw)
-    reference = PillowImage.frombytes(mode, (4, 1), raw)
+    image, reference = image_pair(mode, (4, 1), raw)
     result = image.quantize(colors=-1, palette=palette, dither=dither)
     expected = reference.quantize(colors=-1, palette=reference_palette, dither=dither)
     assert result.tobytes() == expected.tobytes()
@@ -123,14 +121,12 @@ def test_fixed_palette(mode: str, dither: int) -> None:
     ("kwargs", "exception"), [({"colors": 0}, ValueError), ({"colors": 257}, ValueError), ({"colors": 1.5}, TypeError), ({"method": -1}, ValueError), ({"method": 4}, ValueError), ({"method": 3}, RuntimeError), ({"kmeans": -1}, ValueError)]
 )
 def test_quantize_validation(kwargs: dict[str, object], exception: type[Exception]) -> None:
-    with pytest.raises(exception):
-        Image.frombytes("RGB", (1, 1), bytes(3)).quantize(**kwargs)
+    assert_raises(exception, lambda: Image.frombytes("RGB", (1, 1), bytes(3)).quantize(**kwargs))
 
 
 @pytest.mark.parametrize("method", [0, 1])
 def test_rgba_rejects_rgb_methods(method: int) -> None:
-    with pytest.raises(ValueError):
-        Image.frombytes("RGBA", (1, 1), bytes(4)).quantize(method=method)
+    assert_raises(ValueError, lambda: Image.frombytes("RGBA", (1, 1), bytes(4)).quantize(method=method))
 
 
 def test_palette_roundtrip_and_geometry() -> None:
@@ -145,8 +141,7 @@ def test_palette_roundtrip_and_geometry() -> None:
         assert result.mode == "P"
         assert result.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
         assert result.getpalette("RGBA") == expected.getpalette("RGBA")
-    output = BytesIO()
-    image.save(output, "PNG")
+    output = image_buffer(image, "PNG")
     decoded = PillowImage.open(BytesIO(output.getvalue()))
     assert decoded.mode == "P"
     assert decoded.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
@@ -154,8 +149,7 @@ def test_palette_roundtrip_and_geometry() -> None:
     assert reloaded.mode == decoded.mode == "P"
     assert reloaded.tobytes() == decoded.tobytes()
     assert reloaded.convert("RGBA").tobytes() == decoded.convert("RGBA").tobytes()
-    with pytest.raises(ValueError):
-        image.reduce(2)
+    assert_raises(ValueError, lambda: image.reduce(2))
     assert image.reduce(1).mode == "P"
 
 
@@ -175,11 +169,9 @@ def test_fixed_palette_random_grid(dither: int, size: tuple[int, int]) -> None:
 
 def test_quantize_palette_validation() -> None:
     rgb = Image.frombytes("RGB", (1, 1), bytes(3))
-    with pytest.raises(ValueError, match="palette"):
-        rgb.quantize(palette=rgb)
+    assert_raises(ValueError, lambda: rgb.quantize(palette=rgb), match="palette")
     palette = rgb.quantize()
-    with pytest.raises(ValueError, match="only RGB or L"):
-        rgb.convert("RGBA").quantize(palette=palette)
+    assert_raises(ValueError, lambda: rgb.convert("RGBA").quantize(palette=palette), match="only RGB or L")
     assert palette.quantize().convert("RGB").tobytes() == rgb.tobytes()
 
 
@@ -309,5 +301,4 @@ def test_closed_pixel_quantize_reduce() -> None:
     image = Image.frombytes("L", (1, 1), b"\x00")
     image.close()
     for operation in (lambda: image.getpixel((0, 0)), image.quantize, lambda: image.reduce(2)):
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")

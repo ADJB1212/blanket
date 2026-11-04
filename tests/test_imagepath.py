@@ -4,6 +4,7 @@ import struct
 from array import array
 
 import pytest
+from helpers import assert_raises
 from PIL import ImagePath as PillowPath
 
 from blanket import Image, ImageDraw, ImagePath
@@ -86,11 +87,9 @@ def test_map_and_transform_match_pillow(matrix: tuple[float, ...], wrap: float) 
 
 def test_path_mutation_failures() -> None:
     path = ImagePath.Path([(1, 2), (3, 4)])
-    with pytest.raises(ValueError, match="during mapping"):
-        path.map(lambda x, y: (path.compact(), y))
+    assert_raises(ValueError, lambda: path.map(lambda x, y: (path.compact(), y)), match="during mapping")
     assert path.compact(0) == 0
-    with pytest.raises(RuntimeError):
-        path.map(lambda x, y: (_ for _ in ()).throw(RuntimeError()))
+    assert_raises(RuntimeError, lambda: path.map(lambda x, y: (_ for _ in ()).throw(RuntimeError())))
     assert path.compact(0) == 0
     with pytest.raises(TypeError):
         path[::2]
@@ -100,8 +99,7 @@ def test_path_mutation_failures() -> None:
         del path[0]
     with pytest.raises(IndexError):
         path[2] = (0, 0)
-    with pytest.raises(ValueError):
-        path.transform((1, 2, 3))
+    assert_raises(ValueError, lambda: path.transform((1, 2, 3)))
 
 
 @pytest.mark.parametrize("distance", [float("nan"), float("inf"), -float("inf")])
@@ -134,8 +132,7 @@ def test_native_path_transform_preserves_wrapping(wrap: float) -> None:
 
 def test_native_path_transform_preserves_partial_updates_on_domain_error() -> None:
     path = ImagePath.Path([(1, 2), (float("inf"), 3), (4, 5)])
-    with pytest.raises(ValueError, match="math domain error"):
-        path.transform((2, 0, 1, 0, 1, 0), wrap=3)
+    assert_raises(ValueError, lambda: path.transform((2, 0, 1, 0, 1, 0), wrap=3), match="math domain error")
     assert path[0] == (0, 2)
     assert path[1] == (float("inf"), 3)
     assert path[2] == (4, 5)
@@ -143,8 +140,7 @@ def test_native_path_transform_preserves_partial_updates_on_domain_error() -> No
 
 @pytest.mark.parametrize("coordinates", [[1], [(1, 2, 3)], ["1", "2"], None])
 def test_invalid_coordinates(coordinates: object) -> None:
-    with pytest.raises((TypeError, ValueError)):
-        ImagePath.Path(coordinates)
+    assert_raises((TypeError, ValueError), lambda: ImagePath.Path(coordinates))
 
 
 @pytest.mark.parametrize("method", ["point", "line", "polygon", "rectangle", "ellipse", "rounded_rectangle"])

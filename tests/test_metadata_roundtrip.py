@@ -9,7 +9,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
-from helpers import encode_image
+from helpers import assert_raises, encode_image, image_buffer
 from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
 from PIL.TiffImagePlugin import IFDRational
 
@@ -203,8 +203,7 @@ def test_metadata_text_does_not_override_container_detection(format: str) -> Non
 def test_exif_mapping_nested_ifds_and_thumbnail(endian: str) -> None:
     exif = exif_tags()
     exif.endian = endian
-    thumb = BytesIO()
-    PILImage.new("RGB", (3, 2), "red").save(thumb, "JPEG")
+    thumb = image_buffer(PILImage.new("RGB", (3, 2), "red"), "JPEG")
     exif.thumbnail = thumb.getvalue()
     raw = exif.tobytes()
     pillow = PILImage.Exif()
@@ -368,8 +367,7 @@ def test_png_text_interop_and_roundtrip(compressed: bool) -> None:
     assert "Author" not in Image.open(BytesIO(encode_image(opened, "PNG", pnginfo=PngImagePlugin.PngInfo()))).info
     native_info = PILPng.PngInfo()
     native_info.add_itxt("Unicode", "snowman \u2603", zip=True)
-    stream = BytesIO()
-    PILImage.new("L", (2, 2)).save(stream, "PNG", pnginfo=native_info)
+    stream = image_buffer(PILImage.new("L", (2, 2)), "PNG", pnginfo=native_info)
     assert Image.open(stream).info["Unicode"] == "snowman \u2603"
 
 
@@ -411,8 +409,7 @@ def test_exif_edits_copy_and_orientation(mode: str) -> None:
     assert not empty
     assert image.getexif() is empty
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.getexif()
+    assert_raises(ValueError, lambda: image.getexif(), match="closed")
 
 
 @pytest.mark.parametrize("profile", [False, True])
@@ -436,8 +433,7 @@ def test_exif_cache_tracks_metadata_replacement(profile: bool) -> None:
     del image.info[key]
     assert not image.getexif()
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.getexif()
+    assert_raises(ValueError, lambda: image.getexif(), match="closed")
 
 
 def test_jpeg_multisegment_icc_and_size_limits() -> None:
@@ -445,14 +441,12 @@ def test_jpeg_multisegment_icc_and_size_limits() -> None:
     profile = bytes(range(256)) * 700
     opened = Image.open(BytesIO(encode_image(image, "JPEG", icc_profile=profile)))
     assert opened.info["icc_profile"] == profile
-    with pytest.raises(ValueError, match="XMP data is too long"):
-        encode_image(image, "JPEG", xmp=b"x" * 65534)
+    assert_raises(ValueError, lambda: encode_image(image, "JPEG", xmp=b"x" * 65534), match="XMP data is too long")
 
 
 @pytest.mark.parametrize("raw", [b"bad", b"II*\0\xff\xff\xff\xff", b"II*\0\x08\0\0\0\xff\xff"])
 def test_invalid_exif_is_bounded(raw: bytes) -> None:
-    with pytest.raises(ValueError):
-        Image.Exif().load(raw)
+    assert_raises(ValueError, lambda: Image.Exif().load(raw))
 
 
 def test_png_text_expansion_is_bounded() -> None:
@@ -464,8 +458,7 @@ def test_png_text_expansion_is_bounded() -> None:
 @pytest.mark.parametrize("options", [{"exif": "invalid"}, {"icc_profile": 1}, {"pnginfo": {}}])
 def test_metadata_options_validated_before_write(options: dict[str, object]) -> None:
     stream = BytesIO(b"untouched")
-    with pytest.raises(TypeError):
-        Image.new("RGB", (2, 2)).save(stream, "PNG", **options)
+    assert_raises(TypeError, lambda: Image.new("RGB", (2, 2)).save(stream, "PNG", **options))
     assert stream.getvalue() == b"untouched"
 
 
@@ -533,8 +526,7 @@ def test_multiframe_tiff_exif_is_frame_local() -> None:
         page = PILImage.new("RGB", (5, 4))
         page.encoderinfo = {"tiffinfo": {305: software}}
         pages.append(page)
-    stream = BytesIO()
-    pages[0].save(stream, "TIFF", save_all=True, append_images=pages[1:])
+    stream = image_buffer(pages[0], "TIFF", save_all=True, append_images=pages[1:])
     image = Image.open(stream)
     assert image.getexif()[305] == "page zero"
     image.getexif()[305] = "edited zero"

@@ -4,6 +4,7 @@ import math
 import struct
 
 import pytest
+from helpers import assert_raises, image_pair
 from PIL import Image as PILImage, ImageMath as PILMath
 
 from blanket import Image, ImageMath
@@ -99,43 +100,37 @@ def test_lambda_helpers_and_scalar_results() -> None:
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "P", "LA", "I;16"])
 def test_unsupported_modes(mode: str) -> None:
-    with pytest.raises(ValueError, match="unsupported mode"):
-        ImageMath.eval("a + 1", a=Image.new(mode, (1, 1)))
+    assert_raises(ValueError, lambda: ImageMath.eval("a + 1", a=Image.new(mode, (1, 1))), match="unsupported mode")
 
 
 @pytest.mark.parametrize("expression", ["~a", "a & 1", "a | 1", "a ^ 1", "a << 1", "a >> 1"])
 def test_float_bitwise_rejected(expression: str) -> None:
-    with pytest.raises(TypeError, match="bad operand type"):
-        ImageMath.eval(expression, a=Image.new("F", (1, 1)))
+    assert_raises(TypeError, lambda: ImageMath.eval(expression, a=Image.new("F", (1, 1))), match="bad operand type")
 
 
 @pytest.mark.parametrize("expression", ["a.__class__", "__import__('os')", "(lambda: missing)()"])
 def test_expression_names_restricted(expression: str) -> None:
-    with pytest.raises(ValueError, match="not allowed"):
-        ImageMath.eval(expression, a=Image.new("L", (1, 1)))
+    assert_raises(ValueError, lambda: ImageMath.eval(expression, a=Image.new("L", (1, 1))), match="not allowed")
 
 
 @pytest.mark.parametrize("expression", ["value + 1", "(lambda x: x + 1)(value)"])
 def test_repeated_expression_validates_current_operands(expression: str) -> None:
     assert ImageMath.unsafe_eval(expression, value=3) == 4
     assert ImageMath.unsafe_eval(expression, value=7) == 8
-    with pytest.raises(ValueError, match="'value' not allowed"):
-        ImageMath.unsafe_eval(expression, other=3)
+    assert_raises(ValueError, lambda: ImageMath.unsafe_eval(expression, other=3), match="'value' not allowed")
     assert ImageMath.unsafe_eval(expression, value=9) == 10
 
 
 @pytest.mark.parametrize("name", ["__builtins__", "open", "abs"])
 def test_operand_names_restricted(name: str) -> None:
-    with pytest.raises(ValueError, match="not allowed"):
-        ImageMath.eval("1", **{name: 1})
+    assert_raises(ValueError, lambda: ImageMath.eval("1", **{name: 1}), match="not allowed")
 
 
 @pytest.mark.parametrize("mode", ["I", "F"])
 def test_closed_image(mode: str) -> None:
     image = Image.new(mode, (1, 1))
     image.close()
-    with pytest.raises(ValueError):
-        ImageMath.eval("a + 1", a=image)
+    assert_raises(ValueError, lambda: ImageMath.eval("a + 1", a=image))
 
 
 @pytest.mark.parametrize("value", [17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf")])
@@ -154,8 +149,7 @@ def test_float_scalars_without_constant_images(expression: str, value: float, mo
 @pytest.mark.parametrize("value", [1e100, -1e100, 10**400])
 def test_float_scalar_overflow(value: float) -> None:
     image = Image.new("F", (5, 1))
-    with pytest.raises(OverflowError):
-        ImageMath.unsafe_eval("a + n", a=image, n=value)
+    assert_raises(OverflowError, lambda: ImageMath.unsafe_eval("a + n", a=image, n=value))
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "I"])
@@ -197,10 +191,8 @@ def test_compound_integer_float_rounding_and_parallel_tails(count: int) -> None:
     values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 254, 255, 256]
     values = (values * ((count + len(values) - 1) // len(values)))[:count]
     raw = struct.pack(f"<{count}i", *values)
-    a = Image.frombytes("I", (count, 1), raw)
-    pa = PILImage.frombytes("I", (count, 1), raw)
-    b = Image.frombytes("I", (count, 1), raw[::-1])
-    pb = PILImage.frombytes("I", (count, 1), raw[::-1])
+    a, pa = image_pair("I", (count, 1), raw)
+    b, pb = image_pair("I", (count, 1), raw[::-1])
     expression = "convert((float(a) + float(b)) / 2, 'L')"
 
     def evaluate(args):

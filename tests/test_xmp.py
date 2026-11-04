@@ -3,6 +3,7 @@ from __future__ import annotations
 from xml.etree.ElementTree import ParseError
 
 import pytest
+from helpers import assert_raises
 
 from blanket import Image
 
@@ -51,8 +52,7 @@ def test_getxmp_namespaces(strip: bool) -> None:
 def test_getxmp_rejects_invalid_or_unsafe_xml(raw: bytes) -> None:
     image = Image.new("RGB", (1, 1))
     image.info["xmp"] = raw
-    with pytest.raises(ParseError):
-        image.getxmp()
+    assert_raises(ParseError, lambda: image.getxmp())
 
 
 def test_getxmp_missing_metadata() -> None:

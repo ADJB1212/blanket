@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import image_pair
+from helpers import assert_raises, image_buffer, image_pair
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 from blanket import Image, ImageFilter
@@ -134,8 +134,7 @@ def test_mode_filter_special_sizes(size: int) -> None:
 
 def test_mode_filter_ties_and_rare_values() -> None:
     for values in (bytes([1, 1, 1, 2, 2, 2, 9, 8, 7]), bytes(range(9))):
-        image = Image.frombytes("L", (3, 3), values)
-        pillow = PillowImage.frombytes("L", (3, 3), values)
+        image, pillow = image_pair("L", (3, 3), values)
         assert image.filter(ImageFilter.ModeFilter).tobytes() == pillow.filter(PillowFilter.ModeFilter).tobytes()
 
 
@@ -197,8 +196,7 @@ def test_unsharp_identity_returns_independent_copy(mode: str, args: tuple[int, i
 @pytest.mark.parametrize("radius", [float("inf"), float("nan"), 1e30])
 @pytest.mark.parametrize(("percent", "threshold"), [(0, 0), (150, 255)])
 def test_unsharp_identity_still_validates_radius(radius: float, percent: int, threshold: int) -> None:
-    with pytest.raises(ValueError, match="radius"):
-        Image.new("RGB", (3, 3)).filter(ImageFilter.UnsharpMask(radius, percent, threshold))
+    assert_raises(ValueError, lambda: Image.new("RGB", (3, 3)).filter(ImageFilter.UnsharpMask(radius, percent, threshold)), match="radius")
 
 
 @pytest.mark.parametrize(
@@ -221,8 +219,7 @@ def test_invalid_parameters(name: str, args: tuple[object, ...]) -> None:
     image, pillow = images("RGB", (7, 7))
     with pytest.raises(Exception) as expected:
         pillow.filter(getattr(PillowFilter, name)(*args))
-    with pytest.raises(type(expected.value)):
-        image.filter(getattr(ImageFilter, name)(*args))
+    assert_raises(type(expected.value), lambda: image.filter(getattr(ImageFilter, name)(*args)))
 
 
 @pytest.mark.parametrize("size", [(0, 0), (0, 5), (5, 0)])
@@ -276,8 +273,7 @@ def test_lut_coordinate_tables_cover_every_sample(channels: int) -> None:
     def callback(r: float, g: float, b: float) -> tuple[float, ...]:
         return (r * g, b * r, g * b) + ((1 - r,) if channels == 4 else ())
 
-    source = Image.frombytes("RGBA", (256, 1), raw)
-    reference = PillowImage.frombytes("RGBA", (256, 1), raw)
+    source, reference = image_pair("RGBA", (256, 1), raw)
     actual = source.filter(ImageFilter.Color3DLUT.generate((2, 33, 65), callback, channels))
     expected = reference.filter(PillowFilter.Color3DLUT.generate((2, 33, 65), callback, channels))
     assert actual.tobytes() == expected.tobytes()
@@ -297,12 +293,10 @@ def test_native_filter_size_and_nonfinite_radii_are_safe() -> None:
     from blanket._blanket import filter_rank
 
     image, _ = images("RGB", (2, 2))
-    with pytest.raises(ValueError, match="filter size too large"):
-        filter_rank(image._native, 2**31 - 1, 0)
+    assert_raises(ValueError, lambda: filter_rank(image._native, 2**31 - 1, 0), match="filter size too large")
     for radius in (float("inf"), float("nan"), 1e30):
         for cls in (ImageFilter.GaussianBlur, ImageFilter.BoxBlur):
-            with pytest.raises(ValueError, match="radius"):
-                image.filter(cls(radius))
+            assert_raises(ValueError, lambda: image.filter(cls(radius)), match="radius")
 
 
 def test_lut_transform_copy_and_mutation() -> None:
@@ -343,8 +337,7 @@ def test_invalid_lut(size: object, table: object, channels: int) -> None:
 def test_lut_incompatible_modes(mode: str, channels: int, target: str | None) -> None:
     image, pillow = images(mode, (5, 5))
     for source, module in ((image, ImageFilter), (pillow, PillowFilter)):
-        with pytest.raises(ValueError):
-            source.filter(module.Color3DLUT(2, [0] * (8 * channels), channels, target))
+        assert_raises(ValueError, lambda: source.filter(module.Color3DLUT(2, [0] * (8 * channels), channels, target)))
 
 
 def test_custom_filters_and_errors() -> None:
@@ -362,18 +355,14 @@ def test_custom_filters_and_errors() -> None:
     for custom in (CopyBand, CopyBand(), CopyImage, CopyImage(), CopyBand):
         assert image.filter(custom).tobytes() == image.tobytes()
     for invalid in (None, 1, "blur", object()):
-        with pytest.raises(TypeError, match=re.escape("filter argument should be ImageFilter.Filter instance or class")):
-            image.filter(invalid)
-    with pytest.raises(TypeError):
-        ImageFilter.Filter()
+        assert_raises(TypeError, lambda: image.filter(invalid), match=re.escape("filter argument should be ImageFilter.Filter instance or class"))
+    assert_raises(TypeError, lambda: ImageFilter.Filter())
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        image.filter(ImageFilter.BLUR)
+    assert_raises(ValueError, lambda: image.filter(ImageFilter.BLUR), match="closed")
 
 
 def test_opened_image_metadata_and_filename() -> None:
-    payload = BytesIO()
-    PillowImage.new("RGB", (5, 5)).save(payload, "PNG")
+    payload = image_buffer(PillowImage.new("RGB", (5, 5)), "PNG")
     image = Image.open(payload)
     image.info["test"] = "value"
     result = image.filter(ImageFilter.BLUR)

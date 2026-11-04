@@ -2,6 +2,7 @@ import struct
 
 import pytest
 from gpu_helpers import require_metal, runtime as metal_runtime
+from helpers import assert_raises
 
 from blanket import Image, ImageGpu
 
@@ -57,8 +58,7 @@ def test_unsigned_transfer_nonfinite_and_malformed():
     values = struct.pack("4f", float("nan"), float("inf"), -float("inf"), 0.5)
     assert struct.unpack("4H", _blanket._gpu_unsigned_bytes(values, 16, True)) == (0, 65535, 0, 32768)
     for depth, data in [(8, b""), (16, b"x")]:
-        with pytest.raises(ValueError):
-            _blanket._gpu_unsigned_bytes(data, depth, False)
+        assert_raises(ValueError, lambda: _blanket._gpu_unsigned_bytes(data, depth, False))
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
@@ -103,20 +103,16 @@ def test_native_unsigned_transfer_validation_and_closed_images():
     require_metal()
     from blanket import _blanket
 
-    with pytest.raises(ValueError, match="mode or depth"):
-        _blanket.MetalImage.from_unsigned_image(Image.new("L", (1, 1))._native)
+    assert_raises(ValueError, lambda: _blanket.MetalImage.from_unsigned_image(Image.new("L", (1, 1))._native), match="mode or depth")
     gpu = ImageGpu.from_image(Image.new("F", (1, 1)))
     for mode, depth in [("L", 8), ("RGBA", 16), ("F", 16)]:
-        with pytest.raises(ValueError, match="mode or depth"):
-            gpu._resource.download_unsigned_image(mode, depth)
+        assert_raises(ValueError, lambda: gpu._resource.download_unsigned_image(mode, depth), match="mode or depth")
     source = Image.frombytes("L", (1, 1), b"\xff\x03", bit_depth=10)
     unsigned = ImageGpu.from_image(source)
     source.close()
-    with pytest.raises(ValueError, match="closed"):
-        ImageGpu.from_image(source)
+    assert_raises(ValueError, lambda: ImageGpu.from_image(source), match="closed")
     unsigned.close()
-    with pytest.raises(ValueError, match="closed"):
-        unsigned.to_image()
+    assert_raises(ValueError, lambda: unsigned.to_image(), match="closed")
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
@@ -148,8 +144,7 @@ def test_unsigned_named_channels(runtime, depth, mode, channels):
         result = gpu.getchannel(band).to_image()
         assert result.mode == "L" and result.bit_depth == depth
         assert result.getpixel((0, 0)) == value
-    with pytest.raises(ValueError, match="unknown image band"):
-        gpu.getchannel("F")
+    assert_raises(ValueError, lambda: gpu.getchannel("F"), match="unknown image band")
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])

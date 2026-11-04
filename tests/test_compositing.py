@@ -3,7 +3,7 @@ from __future__ import annotations
 import random
 
 import pytest
-from helpers import assert_pixels_equal, image_pair
+from helpers import assert_pixels_equal, assert_raises, image_pair, new_pair
 from PIL import Image as PIL
 
 from blanket import Image
@@ -134,19 +134,16 @@ def test_validation_and_closed_images():
         lambda: Image.alpha_composite(image, Image.new("RGBA", (1, 1))),
         lambda: image.alpha_composite(image, source=(-1, 0)),
     ]:
-        with pytest.raises((ValueError, TypeError)):
-            operation()
+        assert_raises((ValueError, TypeError), lambda: operation())
         assert image.tobytes() == before
     image.close()
     for operation in [lambda: image.paste(1, (0, 0, 3, 2)), lambda: image.putalpha(1), lambda: Image.alpha_composite(image, image)]:
-        with pytest.raises(ValueError, match="closed"):
-            operation()
+        assert_raises(ValueError, lambda: operation(), match="closed")
 
 
 def test_high_depth_compositing():
     image = Image.frombytes("RGBA", (1, 1), bytes(8), bit_depth=16)
-    with pytest.raises(ValueError, match="match"):
-        image.paste(Image.new("RGBA", (1, 1)))
+    assert_raises(ValueError, lambda: image.paste(Image.new("RGBA", (1, 1))), match="match")
     image.putalpha(65535)
     assert Image.alpha_composite(image, image).getpixel((0, 0)) == (0, 0, 0, 65535)
 
@@ -158,8 +155,7 @@ def test_new_tuple_color(mode, color):
 
 @pytest.mark.parametrize("alpha", [0, 1, 127, 254, 255])
 def test_transparent_fill_and_composite(alpha):
-    actual = Image.new("RGBA", (2, 2), (19, 29, 39, 0))
-    expected = PIL.new("RGBA", (2, 2), (19, 29, 39, 0))
+    actual, expected = new_pair("RGBA", (2, 2), (19, 29, 39, 0))
     actual.paste((73, 83, 93, 113), mask=Image.new("L", actual.size, alpha))
     expected.paste((73, 83, 93, 113), mask=PIL.new("L", expected.size, alpha))
     assert_pixels_equal(actual, expected)
@@ -199,8 +195,7 @@ def test_masked_paste_vector_boundaries(mode, subtests: pytest.Subtests):
                     assert_pixels_equal(actual, background)
                 # Test the distinct color-fill rule on transparent RGBA pixels in vectors
                 # and tails, including zero mask values.
-                actual = Image.new(mode, size)
-                background = PIL.new(mode, size)
+                actual, background = new_pair(mode, size)
                 actual.paste("red", mask=bmask)
                 background.paste("red", mask=mask)
                 assert_pixels_equal(actual, background)
@@ -209,8 +204,7 @@ def test_masked_paste_vector_boundaries(mode, subtests: pytest.Subtests):
 def test_paste_mask_alias_and_failed_mutation():
     rng = random.Random(20)
     raw = rng.randbytes(33 * 4 * 3)
-    actual = Image.frombytes("RGBA", (33, 3), raw)
-    expected = PIL.frombytes("RGBA", (33, 3), raw)
+    actual, expected = image_pair("RGBA", (33, 3), raw)
     source = Image.new("RGBA", actual.size, "red")
     reference = PIL.new("RGBA", expected.size, "red")
     actual.paste(source, mask=actual)
@@ -219,8 +213,7 @@ def test_paste_mask_alias_and_failed_mutation():
     before = actual.tobytes()
     bad_mask = Image.new("L", actual.size)
     bad_mask.close()
-    with pytest.raises(ValueError, match="closed"):
-        actual.paste(source, mask=bad_mask)
+    assert_raises(ValueError, lambda: actual.paste(source, mask=bad_mask), match="closed")
     assert actual.tobytes() == before
 
 

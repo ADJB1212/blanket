@@ -5,6 +5,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageHash
@@ -94,8 +95,7 @@ def test_high_depth_is_normalized_to_eight_bits(hasher, depth: int) -> None:
 @pytest.mark.parametrize("hasher", HASHERS)
 def test_current_frame_and_source_state(hasher) -> None:
     frames = [Image.new("L", (9, 8), 0), Image.frombytes("L", (9, 8), bytes(range(72)))]
-    stream = BytesIO()
-    frames[0].save(stream, "PNG", save_all=True, append_images=frames[1:])
+    stream = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:])
     image = Image.open(stream)
     image.seek(1)
     image.info["custom"] = "keep"
@@ -105,8 +105,7 @@ def test_current_frame_and_source_state(hasher) -> None:
     assert image.tell() == 1
     assert (image.tobytes(), image.info) == before
     image.close()
-    with pytest.raises(ValueError, match="closed"):
-        hasher(image)
+    assert_raises(ValueError, lambda: hasher(image), match="closed")
 
 
 def test_hash_values_serialization_distance_and_keys() -> None:
@@ -130,8 +129,7 @@ def test_hash_values_serialization_distance_and_keys() -> None:
 
 @pytest.mark.parametrize("text", ["", "xyz", " 00", "+00", "0x00", "0_0", "00000", "fff"])
 def test_invalid_hex(text: str) -> None:
-    with pytest.raises(ValueError):
-        ImageHash.hex_to_hash(text)
+    assert_raises(ValueError, lambda: ImageHash.hex_to_hash(text))
 
 
 @pytest.mark.parametrize("size", [0, 1, -1, 65, True, 8.0, "8"])
@@ -155,7 +153,5 @@ def test_invalid_hash_value(value) -> None:
 
 @pytest.mark.parametrize("hasher", HASHERS)
 def test_empty_images_and_wrong_types(hasher) -> None:
-    with pytest.raises(ValueError, match="empty"):
-        hasher(Image.new("L", (0, 2)))
-    with pytest.raises(TypeError, match="Blanket Image"):
-        hasher(None)
+    assert_raises(ValueError, lambda: hasher(Image.new("L", (0, 2))), match="empty")
+    assert_raises(TypeError, lambda: hasher(None), match="Blanket Image")

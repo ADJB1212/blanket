@@ -7,6 +7,7 @@ from math import ceil, floor
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_raises
 from PIL import Image as PILImage, ImageFont as PILFont
 from PIL.FontFile import FontFile
 
@@ -193,8 +194,7 @@ def test_font_collection_face_selection(font_data: bytes) -> None:
         font = ImageFont.truetype(BytesIO(collection), 20, index=index)
         assert font.getname() == ("Blanket Test", "Regular")
         assert any(bytes(font.getmask("AV")))
-    with pytest.raises(OSError):
-        ImageFont.truetype(BytesIO(collection), index=2)
+    assert_raises(OSError, lambda: ImageFont.truetype(BytesIO(collection), index=2))
 
 
 @pytest.mark.parametrize(("text", "direction"), [("éΩЖ😀", None), ("אב", "rtl"), ("سلام", "rtl"), ("क", None), ("AאבV", "ltr"), ("AV", "ttb")])
@@ -324,33 +324,22 @@ def test_empty_and_whitespace(font: ImageFont.TrueTypeFont, text: str) -> None:
 
 @pytest.mark.parametrize("size", [0, -1, float("nan"), float("inf"), 1_000_001])
 def test_invalid_sizes(font_data: bytes, size: float) -> None:
-    with pytest.raises(ValueError):
-        ImageFont.truetype(BytesIO(font_data), size)
+    assert_raises(ValueError, lambda: ImageFont.truetype(BytesIO(font_data), size))
 
 
 def test_invalid_options_and_input(font: ImageFont.TrueTypeFont, font_data: bytes, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(OSError):
-        ImageFont.truetype(BytesIO(b"invalid"))
-    with pytest.raises(OSError):
-        ImageFont.truetype(BytesIO(font_data), index=1)
+    assert_raises(OSError, lambda: ImageFont.truetype(BytesIO(b"invalid")))
+    assert_raises(OSError, lambda: ImageFont.truetype(BytesIO(font_data), index=1))
     for kwargs in ({"direction": "bad"}, {"features": ["invalid-feature-name"]}, {"anchor": "zz"}, {"stroke_width": -1}, {"stroke_width": float("nan")}):
-        with pytest.raises(ValueError):
-            font.getbbox("A", **kwargs)
-    with pytest.raises(ValueError):
-        font.getbbox("A", anchor="la", direction="ttb")
-    with pytest.raises(ValueError):
-        font.getmask("A", mode="RGBA")
-    with pytest.raises(ValueError):
-        font.getmask2("A", start=(float("nan"), 0))
-    with pytest.raises(ValueError):
-        font.getlength("A\nV")
-    with pytest.raises(ValueError):
-        ImageFont.truetype(BytesIO(font_data), encoding="symb")
-    with pytest.raises(ValueError):
-        ImageFont.truetype(BytesIO(font_data), index=-1)
+        assert_raises(ValueError, lambda: font.getbbox("A", **kwargs))
+    assert_raises(ValueError, lambda: font.getbbox("A", anchor="la", direction="ttb"))
+    assert_raises(ValueError, lambda: font.getmask("A", mode="RGBA"))
+    assert_raises(ValueError, lambda: font.getmask2("A", start=(float("nan"), 0)))
+    assert_raises(ValueError, lambda: font.getlength("A\nV"))
+    assert_raises(ValueError, lambda: ImageFont.truetype(BytesIO(font_data), encoding="symb"))
+    assert_raises(ValueError, lambda: ImageFont.truetype(BytesIO(font_data), index=-1))
     monkeypatch.setattr(ImageFont, "MAX_STRING_LENGTH", 2)
-    with pytest.raises(ValueError):
-        font.getlength("AVA")
+    assert_raises(ValueError, lambda: font.getlength("AVA"))
     assert font.getlength(b"AV") == font.getlength("AV")
 
 
@@ -385,20 +374,17 @@ def test_load_bitmap_font(tmp_path: Path, suffix: str, cache_pixels: int, crop_c
     atlas.save(path.with_suffix(suffix))
     font = ImageFont.load(path)
     reference = PILFont.load(path)
-    with pytest.raises(ValueError, match="left-to-right"):
-        font.getlength("A", direction="rtl")
+    assert_raises(ValueError, lambda: font.getlength("A", direction="rtl"), match="left-to-right")
     with monkeypatch.context() as context:
         context.setattr(ImageFont, "_MAX_MASK_PIXELS", 1)
-        with pytest.raises(ValueError, match="too large"):
-            font.getmask("A")
+        assert_raises(ValueError, lambda: font.getmask("A"), match="too large")
     assert font.getlength("A A") == reference.getlength("A A")
     assert font.getbbox("A A") == reference.getbbox("A A")
     assert bytes(font.getmask("A A")) == bytes(reference.getmask("A A"))
     image = Image.new("L", (20, 10))
     ImageDraw.Draw(image).text((1, 1), "A A", font=font, fill=255)
     assert any(image.tobytes())
-    with pytest.raises(UnicodeEncodeError):
-        font.getlength("Ω")
+    assert_raises(UnicodeEncodeError, lambda: font.getlength("Ω"))
     crops = []
     crop = Image.Image.crop
 
@@ -419,8 +405,7 @@ def test_corrupt_bitmap_font(tmp_path: Path) -> None:
     path = tmp_path / "font.pil"
     for data in (b"invalid", b"PILfont\n", b"PILfont\nDATA\n123"):
         path.write_bytes(data)
-        with pytest.raises(OSError):
-            ImageFont.load(path)
+        assert_raises(OSError, lambda: ImageFont.load(path))
 
 
 @pytest.mark.parametrize("atlas", [None, b"P4\n1 1\n\0"])
@@ -429,16 +414,14 @@ def test_bitmap_font_rejects_missing_atlas_and_invalid_glyphs(tmp_path: Path, at
     path.write_bytes(b"PILfont\nDATA\n" + struct.pack(">10h", 1, 0, 0, 0, 2, 2, 0, 0, 2, 2) * 256)
     if atlas is not None:
         path.with_suffix(".pbm").write_bytes(atlas)
-    with pytest.raises(OSError, match=r"atlas not found|glyph bounds"):
-        ImageFont.load(path)
+    assert_raises(OSError, lambda: ImageFont.load(path), match=r"atlas not found|glyph bounds")
 
 
 @pytest.mark.parametrize("data", [b"P1\n", b"P4\n", b"P4\n1 1 1\n", b"P4\na b\n", b"P4\n0 1\n", b"P4\n1 1\n"])
 def test_invalid_pbm_font_atlas(tmp_path: Path, data: bytes) -> None:
     path = tmp_path / "invalid.pbm"
     path.write_bytes(data)
-    with pytest.raises(OSError, match="PBM"):
-        ImageFont._load_pbm(path)
+    assert_raises(OSError, lambda: ImageFont._load_pbm(path), match="PBM")
 
 
 @pytest.mark.parametrize("bounds", [(0, 0, 3, 2), (-1, -1, 2, 1), (1, 2, 4, 4)])
