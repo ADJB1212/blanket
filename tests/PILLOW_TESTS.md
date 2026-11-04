@@ -9,29 +9,29 @@ Pillow's MIT-CMU license and copyright notices are retained in
 [`licenses/Pillow-LICENSE`](../licenses/Pillow-LICENSE). The image fixtures in
 `pillow_images/` are copied from the same revision's `Tests/images/` directory.
 
-| Local module | Upstream module |
-| --- | --- |
-| `test_imagecolor.py` | `test_imagecolor.py` |
-| `test_imagestat.py` | `test_imagestat.py` |
-| `test_imagechops.py` | `test_imagechops.py` |
-| `test_imageenhance.py` | `test_imageenhance.py` |
-| `test_image_getbbox.py` | `test_image_getbbox.py` |
-| `test_image_crop.py` | `test_image_crop.py` |
-| `test_image_transpose.py` | `test_image_transpose.py` |
-| `test_image_histogram.py` | `test_image_histogram.py` |
-| `test_image_split.py` | `test_image_split.py` |
+| Local module               | Upstream module            |
+| -------------------------- | -------------------------- |
+| `test_imagecolor.py`       | `test_imagecolor.py`       |
+| `test_imagestat.py`        | `test_imagestat.py`        |
+| `test_imagechops.py`       | `test_imagechops.py`       |
+| `test_imageenhance.py`     | `test_imageenhance.py`     |
+| `test_image_getbbox.py`    | `test_image_getbbox.py`    |
+| `test_image_crop.py`       | `test_image_crop.py`       |
+| `test_image_transpose.py`  | `test_image_transpose.py`  |
+| `test_image_histogram.py`  | `test_image_histogram.py`  |
+| `test_image_split.py`      | `test_image_split.py`      |
 | `test_image_getextrema.py` | `test_image_getextrema.py` |
-| `test_image_frombytes.py` | `test_image_frombytes.py` |
-| `test_image_filter.py` | `test_image_filter.py` |
-| `test_image_resize.py` | `test_image_resize.py` |
-| `test_jpeg_options.py` | `test_file_jpeg.py` |
-| `test_imageops.py` | `test_imageops.py` |
-| `test_apng.py` | `test_file_apng.py` |
-| `test_image_convert.py` | `test_image_convert.py` |
-| `test_imagedraw.py` | `test_imagedraw.py` |
-| `test_image_copy.py` | `test_image_copy.py` |
-| `test_image_putalpha.py` | `test_image_putalpha.py` |
-| `test_image_array.py` | `test_image_array.py` |
+| `test_image_frombytes.py`  | `test_image_frombytes.py`  |
+| `test_image_filter.py`     | `test_image_filter.py`     |
+| `test_image_resize.py`     | `test_image_resize.py`     |
+| `test_jpeg_options.py`     | `test_file_jpeg.py`        |
+| `test_imageops.py`         | `test_imageops.py`         |
+| `test_apng.py`             | `test_file_apng.py`        |
+| `test_image_convert.py`    | `test_image_convert.py`    |
+| `test_imagedraw.py`        | `test_imagedraw.py`        |
+| `test_image_copy.py`       | `test_image_copy.py`       |
+| `test_image_putalpha.py`   | `test_image_putalpha.py`   |
+| `test_image_array.py`      | `test_image_array.py`      |
 
 Retained copied tests preserve upstream assertions and tolerances. Redundant
 smoke cases may be omitted or consolidated with stronger regressions, and

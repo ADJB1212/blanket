@@ -37,22 +37,22 @@ Python argument conversion are measured.
 Benchmarks live in the owning crate's `benches/` directory. Select a crate with
 `-p` and a workload with `--bench`; only that crate's dependency graph is built.
 
-| Crate                    | Targets                          | Workloads                                                                                                                    |
-| ------------------------ | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `blanket-core`           | `conversion`                     | All L/RGB/RGBA mode pairs at 8/10/12/16 bits, plus combined mode/depth conversions and same-mode depth scaling.              |
-| `blanket-resample`       | `resize`                         | Nearest/bilinear/Lanczos downsampling, upscaling, and fractional crops. |
-| `blanket-ops`            | `histogram`                      | Random, constant-color, and masked 8-bit histograms. |
-| `blanket-filter`         | `blur`                           | Gaussian blur at 8/16 bits.                                                                                                  |
-| `blanket-enhance`        | `blend`                          | Blending at 8/16 bits.                                                                                                       |
-| `blanket-composite`      | `alpha_composite`                | RGBA alpha compositing at 8/16 bits.                                                                                         |
-| `blanket-codec-png`      | `codec`                          | PNG levels 1/6, encoding and decoding; compressed text and ICC decode overhead.                                              |
-| `blanket-codec-jpeg`     | `codec`, `streaming`             | JPEG quality 85; small-image context reuse; baseline/progressive chunked decoding.                                           |
-| `blanket-codec-jxl`      | `codec`, `settings`, `streaming` | JXL lossy/lossless encoding and decoding; float-to-8-bit decoding; efforts and thread counts; chunked decoding.              |
-| `blanket-codec-webp`     | `codec`                          | WebP lossy/lossless encoding and decoding.                                                                                   |
-| `blanket-codec-jpeg2000` | `codec`                          | Lossless JPEG 2000 encoding and decoding.                                                                                    |
-| `blanket-codec-avif`     | `codec`                          | AVIF quality 85, effort 3.                                                                                                   |
-| `blanket-codec-heif`     | `codec`                          | HEIF quality 85.                                                                                                             |
-| `blanket-codecs`         | `io`                             | Encoded file reads/writes, memory open with format detection, read-and-open, and encode-and-write for PNG/JPEG/JXL/WebP.     |
+| Crate                    | Targets                          | Workloads                                                                                                                |
+| ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `blanket-core`           | `conversion`                     | All L/RGB/RGBA mode pairs at 8/10/12/16 bits, plus combined mode/depth conversions and same-mode depth scaling.          |
+| `blanket-resample`       | `resize`                         | Nearest/bilinear/Lanczos downsampling, upscaling, and fractional crops.                                                  |
+| `blanket-ops`            | `histogram`                      | Random, constant-color, and masked 8-bit histograms.                                                                     |
+| `blanket-filter`         | `blur`                           | Gaussian blur at 8/16 bits.                                                                                              |
+| `blanket-enhance`        | `blend`                          | Blending at 8/16 bits.                                                                                                   |
+| `blanket-composite`      | `alpha_composite`                | RGBA alpha compositing at 8/16 bits.                                                                                     |
+| `blanket-codec-png`      | `codec`                          | PNG levels 1/6, encoding and decoding; compressed text and ICC decode overhead.                                          |
+| `blanket-codec-jpeg`     | `codec`, `streaming`             | JPEG quality 85; small-image context reuse; baseline/progressive chunked decoding.                                       |
+| `blanket-codec-jxl`      | `codec`, `settings`, `streaming` | JXL lossy/lossless encoding and decoding; float-to-8-bit decoding; efforts and thread counts; chunked decoding.          |
+| `blanket-codec-webp`     | `codec`                          | WebP lossy/lossless encoding and decoding.                                                                               |
+| `blanket-codec-jpeg2000` | `codec`                          | Lossless JPEG 2000 encoding and decoding.                                                                                |
+| `blanket-codec-avif`     | `codec`                          | AVIF quality 85, effort 3.                                                                                               |
+| `blanket-codec-heif`     | `codec`                          | HEIF quality 85.                                                                                                         |
+| `blanket-codecs`         | `io`                             | Encoded file reads/writes, memory open with format detection, read-and-open, and encode-and-write for PNG/JPEG/JXL/WebP. |
 
 The dev-only `blanket-bench-support` crate shares fixtures and timing helpers;
 it depends on the core and Criterion, without pulling in other codec backends.

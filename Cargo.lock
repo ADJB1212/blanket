@@ -415,6 +415,7 @@ dependencies = [
  "image",
  "pyo3",
  "rayon",
+ "rustc-hash",
  "tiff",
 ]
 

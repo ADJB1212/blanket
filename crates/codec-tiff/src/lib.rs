@@ -480,7 +480,7 @@ fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), String>) 
     let big = read(2, 2)? == 43;
     let (header, offset_bytes, count_bytes, entry_bytes) = if big { (8, 8, 8, 20) } else { (4, 4, 2, 12) };
     let mut offset = read(header, offset_bytes)?;
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = rustc_hash::FxHashSet::default();
     let mut page_data = Cow::Borrowed(data);
     let mut total = 0;
     while offset != 0 {

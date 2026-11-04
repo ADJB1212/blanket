@@ -6,9 +6,13 @@
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 [![Source license: MIT](https://img.shields.io/badge/source_license-MIT-green)](LICENSE)
 
-Blanket is a Rust-backed image library with a Pillow-shaped Python API.
-Open, transform, and save images with native SIMD and parallel processing,
-with no runtime Python dependencies for CPU use.
+<p align="center">
+    <img src="assets/benchmark.svg" width="800"/>
+</p>
+
+Blanket is a Pillow-shaped image library with the heavy lifting in Rust:
+SIMD kernels, parallel execution, and a Python API that stays out of the way.
+Open, transform, and save images with no runtime Python dependencies for CPU use.
 
 ```python
 from blanket import Image, ImageOps
@@ -26,58 +30,55 @@ with Image.open("photo.jpg") as image:
 
 ## Installation
 
-Requires **Python 3.12+**:
+Python **3.12+**:
 
 ```sh
 pip install pyblanket
 ```
 
-Release wheels include CPU processing and the platform's GPU backend:
-Metal on macOS and CUDA on Linux. CPU use needs no GPU dependencies.
-GPU processing requires compatible hardware and runtime support; explicit
-GPU requests raise an error when unavailable. See the
-[GPU guide](https://adjb1212.github.io/blanket-docs/gpu/) for setup and diagnostics.
+Release wheels ship CPU processing plus the platform GPU backend: Metal on
+macOS, CUDA on Linux. CPU work needs no GPU stack. An explicit GPU request
+raises an error when the hardware or runtime is missing. Setup and
+diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/).
 
 ## Capabilities
 
-- **Familiar APIs:** resize, crop, draw, filter, enhance, composite, quantize,
-  and compute image statistics with Pillow-shaped modules.
-- **Sample precision:** selected operations support 10/12/16-bit samples,
-  float color, and linear-light resize and compositing.
-- **Frames and pages:** read GIF, WebP, APNG, and TIFF with eager or lazy
+- **Familiar surface.** Resize, crop, draw, filter, enhance, composite,
+  quantize, and image statistics through Pillow-shaped modules.
+- **Real sample depth.** Selected operations keep 10/12/16-bit samples, float
+  color, and linear-light resize and compositing.
+- **Frames and pages.** Read GIF, WebP, APNG, and TIFF with eager or lazy
   access; write animations and multi-page PDFs.
-- **Color and metadata:** ICC transforms, HDR tone mapping, editable EXIF,
-  XMP parsing, and metadata-only container rewrites.
-- **Encoding:** JPEG controls, coefficient transforms without recompression,
-  and save-time compression searches.
-- **Interoperability:** array imports, binary streams, perceptual hashes,
-  an optional Pillow bridge, and explicit Metal/CUDA pipelines.
+- **Color and metadata.** ICC transforms, HDR tone mapping, editable EXIF,
+  XMP parsing, and metadata rewrites that leave the pixels alone.
+- **Encoding.** JPEG controls, coefficient transforms without a recompress,
+  and save-time compression search.
+- **Interop.** Array imports, binary streams, perceptual hashes, an optional
+  Pillow bridge, and explicit Metal/CUDA pipelines.
 
-Blanket is **alpha software**, with operation-specific mode and precision
-restrictions. It implements a subset of Pillow's API and is not yet a drop-in
-replacement for `PIL`. GPU operations do not guarantee byte-exact Pillow results.
-See [getting started](https://adjb1212.github.io/blanket-docs/usage/),
+Blanket is **alpha**. Mode and precision limits are operation-specific, the
+API covers a subset of Pillow, and it is not a drop-in for `PIL`. GPU paths
+do not promise byte-exact Pillow output. Start with
+[getting started](https://adjb1212.github.io/blanket-docs/usage/),
 [sample precision](https://adjb1212.github.io/blanket-docs/high-bit-depth/), and
 [Pillow interoperability](https://adjb1212.github.io/blanket-docs/pillow-interop/).
 
 ## Supported formats
 
-| Support | Formats |
-| ------- | ------- |
+| Support        | Formats                                                                                                                       |
+| -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Read and write | PNG/APNG, JPEG, JPEG XL, TIFF, WebP, AVIF, HEIC/HEIF, BMP, GIF, ICO, Netpbm/PAM, TGA, QOI, JPEG 2000, PCX, SGI, XBM, XPM, MSP |
-| Read only | DDS, EPS, FITS, SPIDER, Pixar, Sun raster |
-| Write only | PDF, PALM |
+| Read only      | DDS, EPS, FITS, SPIDER, Pixar, Sun raster                                                                                     |
+| Write only     | PDF, PALM                                                                                                                     |
 
-Support varies by mode, depth, and installed codec backend. EPS requires
-Ghostscript. TIFF writes single pages; PDF supports multiple pages.
-Use `features.blanketinfo()` to inspect an installed build and see the
-[format guide](https://adjb1212.github.io/blanket-docs/formats/) for encoder
-settings and restrictions.
+What actually works depends on mode, depth, and the codec backends in the
+build. EPS needs Ghostscript. TIFF writes a single page; PDF can write many.
+`features.blanketinfo()` reports the installed build. Encoder settings and
+limits are in the [format guide](https://adjb1212.github.io/blanket-docs/formats/).
 
-JPEG saves retain EXIF and ICC profiles; pass `xmp=image.info.get("xmp")`
-explicitly to retain XMP. See the
-[metadata guide](https://adjb1212.github.io/blanket-docs/metadata/) for retention
-rules and editing without recompressing pixels.
+JPEG saves keep EXIF and ICC profiles. Pass `xmp=image.info.get("xmp")` if
+you want XMP to come along. Retention rules and pixel-preserving edits are
+in the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
 
 ## Development
 
@@ -92,17 +93,16 @@ uv run --no-sync pytest tests/test_api.py
 uv run --no-sync scripts/verify_behavior.py
 ```
 
-The native core lives in [`crates/`](crates/), the Python API in
-[`python/blanket/`](python/blanket/), and tests in [`tests/`](tests/).
-Include a focused regression test for fixes and features. See the
-[development guide](https://adjb1212.github.io/blanket-docs/development/) for
-build options and checks, and the
-[benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/) for
-performance comparisons. Benchmarks require a release build.
+Native code is in [`crates/`](crates/), the Python API in
+[`python/blanket/`](python/blanket/), tests in [`tests/`](tests/).
+Fixes and features need a focused regression test. Build options are in the
+[development guide](https://adjb1212.github.io/blanket-docs/development/);
+timing comparisons are in the
+[benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/).
+Benchmarks expect a release build.
 
 ## License
 
-Blanket's original source is licensed under the [MIT License](LICENSE).
-Official binary wheels include GPL components and are distributed under
-GPL-3.0-or-later with their third-party notices and corresponding source.
-See [distribution licenses](THIRD_PARTY_LICENSES.md) for details.
+Original source is [MIT](LICENSE). Official wheels bundle GPL components and
+ship as GPL-3.0-or-later, with third-party notices and corresponding source.
+Details are in [distribution licenses](THIRD_PARTY_LICENSES.md).

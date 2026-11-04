@@ -17,6 +17,7 @@ blanket-codec-image.workspace = true
 image = { version = "0.25", default-features = false, features = ["tiff"] }
 tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw", "jpeg"]}
 rayon.workspace = true
+rustc-hash.workspace = true
 
 [lib]
 doctest = false
