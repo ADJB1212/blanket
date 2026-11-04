@@ -128,11 +128,17 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
                 let count = rows.len() / (width * C);
                 for x in x0..(x0 + 32).min(width) {
                     let sy = if orientation == 6 || orientation == 7 { h - 1 - x } else { x };
-                    let sx = if orientation == 7 || orientation == 8 { w - band * 32 - count } else { band << 5 };
+                    let reverse = orientation == 7 || orientation == 8;
+                    let sx = if reverse { w - band * 32 - count } else { band * 32 };
                     let src = &source[sy * w + sx..sy * w + sx + count];
-                    for (i, row) in rows.chunks_exact_mut(width * C).enumerate() {
-                        let i = if orientation == 7 || orientation == 8 { count - 1 - i } else { i };
-                        row[x * C..(x + 1) * C].copy_from_slice(&src[i]);
+                    if reverse {
+                        for (row, pixel) in rows.rchunks_exact_mut(width * C).zip(src) {
+                            row[x * C..(x + 1) * C].copy_from_slice(pixel);
+                        }
+                    } else {
+                        for (row, pixel) in rows.chunks_exact_mut(width * C).zip(src) {
+                            row[x * C..(x + 1) * C].copy_from_slice(pixel);
+                        }
                     }
                 }
             }

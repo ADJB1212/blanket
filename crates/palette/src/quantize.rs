@@ -667,7 +667,9 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
         refine(&histogram, &mut entries, kmeans);
     }
     let search = PaletteSearch::new(&entries);
-    let neighbors: Vec<Vec<usize>> = if preferred.is_empty() {
+    let exact_entries = entries.len() == histogram.len()
+        && histogram.iter().enumerate().all(|(i, (color, _))| preferred.get(i).is_some_and(|&own| entries[usize::from(own)] == *color));
+    let neighbors: Vec<Vec<usize>> = if preferred.is_empty() || exact_entries {
         Vec::new()
     } else {
         entries
@@ -682,6 +684,9 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
     let nearest = |position: usize, color: Color| {
         if let Some(&own) = preferred.get(position) {
             let own = usize::from(own);
+            if exact_entries {
+                return own;
+            }
             let mut best = own;
             let mut best_distance = distance(color, entries[own]);
             let limit = best_distance * 4;

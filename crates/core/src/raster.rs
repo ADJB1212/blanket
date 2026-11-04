@@ -1919,6 +1919,9 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         };
     }
     if from == PixelMode::One {
+        if matches!(to, PixelMode::L | PixelMode::F | PixelMode::Rgb | PixelMode::Rgba) {
+            return crate::simd::convert_bilevel(source, to);
+        }
         let gray = crate::simd::bilevel_to_l(source);
         return if to == PixelMode::L { gray } else { convert_pixels(&gray, PixelMode::L, to) };
     }

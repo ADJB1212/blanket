@@ -613,6 +613,43 @@ pub fn bilevel_to_l(source: &[u8]) -> Vec<u8> {
     output
 }
 
+pub fn convert_bilevel(source: &[u8], mode: PixelMode) -> Vec<u8> {
+    fn convert<const N: usize>(source: &[u8], mode: PixelMode) -> Vec<u8> {
+        let (blocks, tail) = source.as_chunks::<16>();
+        let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+        output.extend(blocks.iter().map(|block| {
+            let gray = Bytes::from_slice(block).simd_ne(Bytes::splat(0)).select(Bytes::splat(255), Bytes::splat(0));
+            let mut pixels = [0; N];
+            match mode {
+                PixelMode::L => gray.copy_to_slice(&mut pixels),
+                PixelMode::F => gray.cast::<f32>().to_le_bytes().copy_to_slice(&mut pixels),
+                PixelMode::Rgb => crate::pixels::store_gray_rgb(&mut pixels, gray),
+                PixelMode::Rgba => store(&mut pixels, [gray, gray, gray, Bytes::splat(255)]),
+                _ => unreachable!(),
+            }
+            pixels
+        }));
+        let mut output = output.into_flattened();
+        for &value in tail {
+            let gray = u8::from(value != 0) * 255;
+            match mode {
+                PixelMode::L => output.push(gray),
+                PixelMode::F => output.extend_from_slice(&f32::from(gray).to_le_bytes()),
+                PixelMode::Rgb => output.extend_from_slice(&[gray; 3]),
+                PixelMode::Rgba => output.extend_from_slice(&[gray, gray, gray, 255]),
+                _ => unreachable!(),
+            }
+        }
+        output
+    }
+    match mode {
+        PixelMode::L => convert::<16>(source, mode),
+        PixelMode::Rgb => convert::<48>(source, mode),
+        PixelMode::F | PixelMode::Rgba => convert::<64>(source, mode),
+        _ => unreachable!(),
+    }
+}
+
 fn bilevel_to_l_chunk(source: &[u8], output: &mut [u8]) {
     let end = output.len() / 16 * 16;
     for i in (0..end).step_by(16) {
@@ -919,6 +956,21 @@ pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn fused_bilevel_handles_unaligned_blocks_and_tails() {
+        let source: Vec<u8> = (0..300).map(|i| [0, 1, 127, 255][i % 4]).collect();
+        for offset in 0..16 {
+            for len in [0, 1, 15, 16, 17, 31, 32, 33, 257] {
+                let input = &source[offset..offset + len];
+                let gray: Vec<u8> = input.iter().map(|&v| if v == 0 { 0 } else { 255 }).collect();
+                assert_eq!(super::convert_bilevel(input, crate::raster::PixelMode::L), gray);
+                for mode in [crate::raster::PixelMode::Rgb, crate::raster::PixelMode::Rgba] {
+                    assert_eq!(super::convert_bilevel(input, mode), super::convert(&gray, crate::raster::PixelMode::L, mode));
+                }
+                assert_eq!(super::convert_bilevel(input, crate::raster::PixelMode::F), super::gray_to_float(&gray));
+            }
+        }
+    }
     #[test]
     fn bilevel_conversion_normalizes_all_bytes_with_unaligned_tails_and_guards() {
         for offset in 0..8 {
