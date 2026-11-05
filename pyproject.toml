@@ -38,7 +38,9 @@ build-backend = "maturin"
 [dependency-groups]
 dev = [
   {include-group = "test"},
-  {include-group = "docs"}
+  {include-group = "docs"},
+  {include-group = "bench"},
+  "ty>=0.0.98",
 ]
 test = [
     "numpy>=2.5",
@@ -47,14 +49,15 @@ test = [
     "pillow-heif>=1.7",
     "pytest>=9,<10",
     "pytest-xdist>=3.8.0",
-    "rich>=15",
-    "memray>=1.20; sys_platform == 'linux' or sys_platform == 'darwin'",
-    "ruff>=0.17.3",
-    "ty>=0.0.95",
     "torch>=2.13"
 ]
+bench = [
+    "rich>=15",
+    "memray>=1.20; sys_platform == 'linux' or sys_platform == 'darwin'",
+    {include-group = "test"},
+]
 docs = [
-    "zensical>=0.0.74",
+    "zensical>=0.1.0",
     "mkdocstrings[python]>=1.0.8,<2",
     "ruff>=0.17.3",
 ]
@@ -110,9 +113,6 @@ combine-as-imports = true
 
 [tool.ty.src]
 exclude = ["scripts", "tests", "docs"]
-
-[tool.ty.environment]
-python = "./.venv"
 
 [tool.ty.terminal]
 output-format = "concise"
