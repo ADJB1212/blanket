@@ -12,6 +12,7 @@ env:
   PYTHONFAULTHANDLER: "1"
   DO_NOT_TRACK: "1"
   UV_NO_SYNC: "1"
+  CARGO_INCREMENTAL: "0"
 
 permissions:
   contents: read

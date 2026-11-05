@@ -78,10 +78,6 @@ jobs:
         if: steps.cargo-cache-restore.outputs.cache-hit != 'true'
         run: cargo clean --locked
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: ${{ matrix.python }}
-
       - name: Configure macOS toolchain
         if: runner.os == 'macOS'
         run: |
@@ -103,11 +99,19 @@ jobs:
         if: runner.os == 'macOS'
         uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
 
+      - uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
+        if: runner.os == 'Linux'
+        with:
+          mold-version: 3.0.0
+          make-default: true
+
       - name: Install Deps and Setup PATH (Linux)
+        timeout-minutes: 5
         if: runner.os == 'Linux'
         run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
           sudo apt-get update
-          sudo apt-get install -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build mold nasm liblcms2-dev
+          sudo apt-get install --no-install-recommends -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build nasm liblcms2-dev
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
