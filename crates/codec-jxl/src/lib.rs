@@ -1,6 +1,7 @@
 #![feature(default_field_values)]
 
 use std::borrow::Cow;
+use std::cell::{Cell, OnceCell, RefCell};
 
 mod chunked;
 mod encode;
@@ -23,23 +24,47 @@ use pyo3::prelude::*;
 #[cfg(target_endian = "little")]
 use zerocopy::FromBytes;
 
-pub const JXL_PARALLEL_MIN_BYTES: usize = 32 * 1024;
+pub const JXL_PARALLEL_MIN_BYTES: usize = 32 << 10;
 
 pub fn backend_version() -> String {
     let version = unsafe { jpegxl_sys::decode::JxlDecoderVersion() };
     format!("{}.{}.{}", version / 1_000_000, version / 1_000 % 1_000, version % 1_000)
 }
 
+struct ReusableDecoder(*mut jpegxl_sys::decode::JxlDecoder);
+
+impl ReusableDecoder {
+    fn new() -> Option<Self> {
+        // SAFETY: null selects the default allocator.
+        let ptr = unsafe { jpegxl_sys::decode::JxlDecoderCreate(std::ptr::null()) };
+        (!ptr.is_null()).then_some(Self(ptr))
+    }
+
+    #[inline]
+    fn get(&self) -> *mut jpegxl_sys::decode::JxlDecoder {
+        // SAFETY: self.0 is valid and resetting restores initial clean state.
+        unsafe { jpegxl_sys::decode::JxlDecoderReset(self.0) };
+        self.0
+    }
+}
+
+impl Drop for ReusableDecoder {
+    fn drop(&mut self) {
+        // SAFETY: self.0 is non-null and owned by this struct.
+        unsafe { jpegxl_sys::decode::JxlDecoderDestroy(self.0) };
+    }
+}
+
 thread_local! {
-    // A runner is used by only its owning calling thread. Reuse its workers
-    // across decodes; each image still gets a fresh decoder and metadata state.
-    static JXL_DECODE_RUNNER: Option<ResizableRunner<'static>> = ResizableRunner::new(None);
-    // Reuse workers, but let libjxl size the pool for each frame. Tiny images
-    // should not pay the synchronization cost of a full-machine thread pool.
-    static JXL_ENCODE_RUNNER: std::cell::OnceCell<Option<ResizableRunner<'static>>> = const { std::cell::OnceCell::new() };
-    // Fixed-size pools for search candidates that share the machine with
-    // concurrent candidates. Each worker thread keeps its most recent pool.
-    static JXL_CANDIDATE_RUNNER: std::cell::RefCell<Option<(usize, ThreadsRunner<'static>)>> = const { std::cell::RefCell::new(None) };
+    // Lazily initialized so single-threaded/small decodes never spawn a pool.
+    static JXL_DECODE_RUNNER: OnceCell<Option<ResizableRunner<'static>>> = const { OnceCell::new() };
+    // Reuse workers and cache the last configured group dimensions to avoid redundant FFI calls.
+    static JXL_ENCODE_RUNNER: OnceCell<Option<ResizableRunner<'static>>> = const { OnceCell::new() };
+    static JXL_ENCODE_DIMS: Cell<(u64, u64)> = const { Cell::new((0, 0)) };
+    // Fixed-size pools for search candidates that share the machine with concurrent candidates.
+    static JXL_CANDIDATE_RUNNER: RefCell<Option<(usize, ThreadsRunner<'static>)>> = const { RefCell::new(None) };
+    // Reuse raw libjxl decoder allocation across inspect and metadata reads.
+    static JXL_RAW_DECODER: OnceCell<Option<ReusableDecoder>> = const { OnceCell::new() };
 }
 
 /// Thread use for one JPEG XL encoding.
@@ -52,38 +77,63 @@ pub enum JxlThreads {
 }
 
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
-    let mut decoder = decoder_builder().build().map_err(|e| e.to_string())?;
-    let mut session = decoder.session(Events::BASIC_INFO).map_err(|e| e.to_string())?;
-    let mut input = data;
-    loop {
-        match session.process(&mut input).map_err(|e| e.to_string())? {
-            Event::BasicInfo(info) => {
-                let mode = match (info.num_color_channels, info.alpha_bits > 0) {
-                    (1, false) => "L",
-                    (1, true) => "LA",
-                    (3, false) => "RGB",
-                    (3, true) => "RGBA",
-                    _ => return Err("unsupported JPEG XL channel layout".into()),
-                };
-                return blanket_codec_common::ImageHeader::new(
-                    info.xsize,
-                    info.ysize,
-                    mode,
-                    info.bits_per_sample.try_into().map_err(|_| "invalid JPEG XL depth")?,
-                );
+    use jpegxl_sys::decode::*;
+
+    JXL_RAW_DECODER.with(|cell| {
+        let dec = cell.get_or_init(ReusableDecoder::new).as_ref().ok_or_else(|| "cannot allocate JPEG XL decoder".to_owned())?.get();
+
+        // SAFETY: dec is reset at the start and input slice lives for the scope of this call.
+        unsafe {
+            if JxlDecoderSubscribeEvents(dec, JxlDecoderStatus::BasicInfo as i32) != JxlDecoderStatus::Success {
+                return Err("failed to subscribe to JPEG XL events".into());
             }
-            Event::NeedMoreInput | Event::Success => return Err("incomplete JPEG XL header".into()),
-            _ => (),
+            if JxlDecoderSetInput(dec, data.as_ptr(), data.len()) != JxlDecoderStatus::Success {
+                return Err("failed to set JPEG XL input".into());
+            }
+            JxlDecoderCloseInput(dec);
+
+            match JxlDecoderProcessInput(dec) {
+                JxlDecoderStatus::BasicInfo => {
+                    let mut info = std::mem::MaybeUninit::uninit();
+                    if JxlDecoderGetBasicInfo(dec, info.as_mut_ptr()) != JxlDecoderStatus::Success {
+                        return Err("failed to read JPEG XL basic info".into());
+                    }
+                    let info = info.assume_init();
+                    let mode = match (info.num_color_channels, info.alpha_bits > 0) {
+                        (1, false) => "L",
+                        (1, true) => "LA",
+                        (3, false) => "RGB",
+                        (3, true) => "RGBA",
+                        _ => return Err("unsupported JPEG XL channel layout".into()),
+                    };
+                    blanket_codec_common::ImageHeader::new(
+                        info.xsize,
+                        info.ysize,
+                        mode,
+                        info.bits_per_sample.try_into().map_err(|_| "invalid JPEG XL depth")?,
+                    )
+                }
+                JxlDecoderStatus::NeedMoreInput | JxlDecoderStatus::Success => Err("incomplete JPEG XL header".into()),
+                _ => Err("invalid JPEG XL header".into()),
+            }
         }
-    }
+    })
 }
 
 pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness};
 
-    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner| -> Result<_, String> {
-        let runner = runner.as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
-        let mut decoder = decoder_builder().parallel_runner(runner).build().map_err(|error| error.to_string())?;
+    let use_parallel = data.len() >= JXL_PARALLEL_MIN_BYTES;
+
+    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner_cell| -> Result<_, String> {
+        let mut decoder = if use_parallel {
+            let runner =
+                runner_cell.get_or_init(|| ResizableRunner::new(None)).as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
+            decoder_builder().parallel_runner(runner).build()
+        } else {
+            decoder_builder().build()
+        }
+        .map_err(|error| error.to_string())?;
         let mut session = decoder.session(Events::FULL_IMAGE).map_err(|error| error.to_string())?;
         let mut input = data;
         let mut info = None;
@@ -101,7 +151,6 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
                         (3, true) => 4,
                         _ => return Err("unsupported JPEG XL channel layout".into()),
                     };
-                    // Ask libjxl for the display conversion during the first decode.
                     if header.exponent_bits_per_sample != 0 {
                         data_type = Some(JxlDataType::Uint8);
                     }
@@ -171,9 +220,6 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
 
 fn with_jxl_runner<T>(threads: JxlThreads, image: &Image, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
     match threads {
-        // Do not even initialize a thread-local pool for single-threaded
-        // Rayon candidates. Besides allocating unused state, pool creation
-        // could fail despite the encoder not needing a runner at all.
         JxlThreads::Fixed(0 | 1) => encode(None),
         JxlThreads::Fixed(workers) => JXL_CANDIDATE_RUNNER.with(|cached| {
             let mut cached = cached.borrow_mut();
@@ -183,18 +229,26 @@ fn with_jxl_runner<T>(threads: JxlThreads, image: &Image, encode: impl FnOnce(Op
             }
             encode(Some(&cached.as_ref().expect("pool cached above").1))
         }),
-        JxlThreads::Pool => JXL_ENCODE_RUNNER.with(|runner| {
-            let runner = runner.get_or_init(|| ResizableRunner::new(None));
-            let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+        JxlThreads::Pool => {
             let (width, height) = (u64::from(image.width), u64::from(image.height));
-            // Include partial groups without adding workers for tiny images.
-            if width * height >= 256 * 256 {
-                runner.set_num_threads(width.next_multiple_of(256), height.next_multiple_of(256));
-            } else {
-                runner.set_num_threads(width, height);
+            // Single 256x256 group cannot parallelize across groups in libjxl.
+            if width <= 256 && height <= 256 {
+                return encode(None);
             }
-            encode(Some(runner))
-        }),
+            JXL_ENCODE_RUNNER.with(|runner| {
+                let runner = runner.get_or_init(|| ResizableRunner::new(None));
+                let runner = runner.as_ref().ok_or_else(|| PyOSError::new_err("cannot allocate JPEG XL thread pool"))?;
+                let target_dims =
+                    if width * height >= 256 * 256 { (width.next_multiple_of(256), height.next_multiple_of(256)) } else { (width, height) };
+                JXL_ENCODE_DIMS.with(|last| {
+                    if last.get() != target_dims {
+                        runner.set_num_threads(target_dims.0, target_dims.1);
+                        last.set(target_dims);
+                    }
+                });
+                encode(Some(runner))
+            })
+        }
     }
 }
 
@@ -204,9 +258,11 @@ fn encode_native(
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness, JxlPixelFormat};
     use jpegxl_sys::encoder::encode::*;
 
+    #[inline]
     fn check(status: JxlEncoderStatus) -> PyResult<()> {
         if status == JxlEncoderStatus::Success { Ok(()) } else { Err(codec_error("JPEG XL profile encoding failed")) }
     }
+
     let mut info = std::mem::MaybeUninit::uninit();
     // SAFETY: libjxl initializes the entire basic-info struct.
     unsafe { JxlEncoderInitBasicInfo(info.as_mut_ptr()) };
@@ -293,105 +349,140 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
     use jpegxl_sys::common::types::JxlBoxType;
     use jpegxl_sys::decode::*;
 
-    const LIMIT: usize = 16 * 1024 * 1024;
-    struct Decoder(*mut JxlDecoder);
-    impl Drop for Decoder {
-        fn drop(&mut self) {
-            // SAFETY: the guard owns a non-null decoder.
-            unsafe { JxlDecoderDestroy(self.0) };
-        }
-    }
+    const LIMIT: usize = 16 << 20;
+    const INITIAL_BOX_CAP: usize = 4096;
+
+    #[inline]
     fn check(status: JxlDecoderStatus) -> PyResult<()> {
         if status == JxlDecoderStatus::Success { Ok(()) } else { Err(codec_error("invalid JPEG XL metadata")) }
     }
-    let mut result = Vec::new();
-    let mut buffer = Vec::<u8>::new();
-    let mut key: Option<&str> = None;
-    // SAFETY: null selects the default allocator.
-    let decoder = Decoder(unsafe { JxlDecoderCreate(std::ptr::null()) });
-    if decoder.0.is_null() {
-        return Err(codec_error("cannot allocate JPEG XL decoder"));
-    }
-    // SAFETY: the decoder and its borrowed input/output buffers remain alive.
-    unsafe {
-        check(JxlDecoderSubscribeEvents(
-            decoder.0,
-            JxlDecoderStatus::ColorEncoding as i32 | JxlDecoderStatus::Box as i32 | JxlDecoderStatus::BoxComplete as i32,
-        ))?;
-        check(JxlDecoderSetDecompressBoxes(decoder.0, true.into()))?;
-        check(JxlDecoderSetInput(decoder.0, data.as_ptr(), data.len()))?;
-        JxlDecoderCloseInput(decoder.0);
-        loop {
-            let status = JxlDecoderProcessInput(decoder.0);
-            if matches!(status, JxlDecoderStatus::Box | JxlDecoderStatus::BoxComplete | JxlDecoderStatus::Success)
-                && let Some(key) = key.take()
-            {
-                let remaining = JxlDecoderReleaseBoxBuffer(decoder.0);
-                buffer.truncate(buffer.len() - remaining);
-                let raw = if key == "exif" {
-                    let offset = buffer.get(..4).map(|v| u32::from_be_bytes(v.try_into().expect("four bytes")) as usize);
-                    offset.and_then(|v| v.checked_add(4)).and_then(|offset| buffer.get(offset..)).map(|v| [b"Exif\0\0".as_slice(), v].concat())
-                } else {
-                    Some(std::mem::take(&mut buffer))
-                };
-                if let Some(raw) = raw {
-                    result.push((key.into(), raw));
-                }
-            }
-            match status {
-                JxlDecoderStatus::ColorEncoding => {
-                    let mut size = 0;
-                    check(JxlDecoderGetICCProfileSize(decoder.0, JxlColorProfileTarget::Original, &raw mut size))?;
-                    if size > LIMIT {
-                        return Err(codec_error("JPEG XL ICC profile exceeds 16 MiB"));
-                    }
-                    let mut profile = vec![0; size];
-                    check(JxlDecoderGetColorAsICCProfile(decoder.0, JxlColorProfileTarget::Original, profile.as_mut_ptr(), size))?;
-                    result.push(("icc_profile".into(), profile));
-                }
-                JxlDecoderStatus::Box => {
-                    let mut kind = JxlBoxType([0; 4]);
-                    check(JxlDecoderGetBoxType(decoder.0, &mut kind, true.into()))?;
-                    key = match kind.0.map(|v| v.to_ne_bytes()[0]) {
-                        [b'E', b'x', b'i', b'f'] => Some("exif"),
-                        [b'x', b'm', b'l', b' '] => Some("xmp"),
-                        _ => None,
-                    };
-                    if key.is_some() {
-                        buffer = vec![0; 1024];
-                        check(JxlDecoderSetBoxBuffer(decoder.0, buffer.as_mut_ptr(), buffer.len()))?;
+
+    JXL_RAW_DECODER.with(|cell| {
+        let dec = cell.get_or_init(ReusableDecoder::new).as_ref().ok_or_else(|| codec_error("cannot allocate JPEG XL decoder"))?.get();
+
+        let mut result = Vec::new();
+        let mut buffer = Vec::<u8>::new();
+        let mut key: Option<&str> = None;
+
+        // SAFETY: the decoder and its borrowed input/output buffers remain alive.
+        unsafe {
+            check(JxlDecoderSubscribeEvents(
+                dec,
+                JxlDecoderStatus::ColorEncoding as i32 | JxlDecoderStatus::Box as i32 | JxlDecoderStatus::BoxComplete as i32,
+            ))?;
+            check(JxlDecoderSetDecompressBoxes(dec, true.into()))?;
+            check(JxlDecoderSetInput(dec, data.as_ptr(), data.len()))?;
+            JxlDecoderCloseInput(dec);
+
+            loop {
+                let status = JxlDecoderProcessInput(dec);
+                if matches!(status, JxlDecoderStatus::Box | JxlDecoderStatus::BoxComplete | JxlDecoderStatus::Success)
+                    && let Some(k) = key.take()
+                {
+                    let remaining = JxlDecoderReleaseBoxBuffer(dec);
+                    let total_written = buffer.capacity() - remaining;
+                    buffer.set_len(total_written);
+
+                    if k == "exif" {
+                        if let Some(header_bytes) = buffer.get(..4) {
+                            let offset = u32::from_be_bytes(header_bytes.try_into().unwrap()) as usize;
+                            if let Some(payload_start) = offset.checked_add(4)
+                                && payload_start <= buffer.len()
+                            {
+                                let payload_len = buffer.len() - payload_start;
+                                if payload_start >= 6 {
+                                    // Enough prefix space to write "Exif\0\0" without moving the payload.
+                                    buffer.copy_within(payload_start.., 6);
+                                    buffer[..6].copy_from_slice(b"Exif\0\0");
+                                    buffer.truncate(6 + payload_len);
+                                } else {
+                                    // payload_start is 4 or 5: reserve 2 bytes and shift in-place.
+                                    buffer.reserve(6 - payload_start);
+                                    buffer.resize(6 + payload_len, 0);
+                                    buffer.copy_within(payload_start..payload_start + payload_len, 6);
+                                    buffer[..6].copy_from_slice(b"Exif\0\0");
+                                }
+                                result.push((k.into(), std::mem::take(&mut buffer)));
+                            }
+                        }
+                    } else {
+                        result.push((k.into(), std::mem::take(&mut buffer)));
                     }
                 }
-                JxlDecoderStatus::BoxNeedMoreOutput => {
-                    let remaining = JxlDecoderReleaseBoxBuffer(decoder.0);
-                    let written = buffer.len() - remaining;
-                    if buffer.len() >= LIMIT {
-                        return Err(codec_error("JPEG XL metadata box exceeds 16 MiB"));
+                match status {
+                    JxlDecoderStatus::ColorEncoding => {
+                        let mut size = 0;
+                        check(JxlDecoderGetICCProfileSize(dec, JxlColorProfileTarget::Original, &raw mut size))?;
+                        if size > LIMIT {
+                            return Err(codec_error("JPEG XL ICC profile exceeds 16 MiB"));
+                        }
+                        let mut profile = Vec::with_capacity(size);
+                        check(JxlDecoderGetColorAsICCProfile(
+                            dec,
+                            JxlColorProfileTarget::Original,
+                            profile.spare_capacity_mut().as_mut_ptr().cast(),
+                            size,
+                        ))?;
+                        profile.set_len(size);
+                        result.push(("icc_profile".into(), profile));
                     }
-                    buffer.resize(buffer.len() * 2, 0);
-                    check(JxlDecoderSetBoxBuffer(decoder.0, buffer[written..].as_mut_ptr(), buffer.len() - written))?;
+                    JxlDecoderStatus::Box => {
+                        let mut kind = JxlBoxType([0; 4]);
+                        check(JxlDecoderGetBoxType(dec, &mut kind, true.into()))?;
+                        key = match kind.0.map(|v| v as u8) {
+                            [b'E', b'x', b'i', b'f'] => Some("exif"),
+                            [b'x', b'm', b'l', b' '] => Some("xmp"),
+                            _ => None,
+                        };
+                        if key.is_some() {
+                            buffer.clear();
+                            if buffer.capacity() < INITIAL_BOX_CAP {
+                                buffer.reserve(INITIAL_BOX_CAP);
+                            }
+                            let spare = buffer.spare_capacity_mut();
+                            check(JxlDecoderSetBoxBuffer(dec, spare.as_mut_ptr().cast(), spare.len()))?;
+                        }
+                    }
+                    JxlDecoderStatus::BoxNeedMoreOutput => {
+                        let remaining = JxlDecoderReleaseBoxBuffer(dec);
+                        let written = buffer.capacity() - remaining;
+                        buffer.set_len(written);
+                        if buffer.capacity() >= LIMIT {
+                            return Err(codec_error("JPEG XL metadata box exceeds 16 MiB"));
+                        }
+                        buffer.reserve(buffer.capacity().max(INITIAL_BOX_CAP));
+                        let spare = buffer.spare_capacity_mut();
+                        check(JxlDecoderSetBoxBuffer(dec, spare.as_mut_ptr().cast(), spare.len()))?;
+                    }
+                    JxlDecoderStatus::Success => return Ok(result),
+                    JxlDecoderStatus::Error | JxlDecoderStatus::NeedMoreInput => return Err(codec_error("invalid JPEG XL metadata")),
+                    _ => {}
                 }
-                JxlDecoderStatus::Success => return Ok(result),
-                JxlDecoderStatus::Error | JxlDecoderStatus::NeedMoreInput => return Err(codec_error("invalid JPEG XL metadata")),
-                _ => {}
             }
         }
-    }
+    })
 }
 
 /// Worker threads worth giving one search candidate when `workers` candidates
 /// encode concurrently on the Rayon pool. libjxl parallelizes over 256-pixel
 /// groups, so more threads than groups would only add synchronization.
+#[inline]
 pub fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
     let groups = (image.width as usize).div_ceil(256) * (image.height as usize).div_ceil(256);
     (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
+}
+
+enum PreparedSamples<'a> {
+    Byte(&'a [u8]),
+    Wide(Cow<'a, [u16]>),
 }
 
 /// Normalize wide samples once per effort search, rather than once per encode.
 /// Eight-bit and aligned native-endian 16-bit input borrow the source image.
 pub struct PreparedJxl<'a> {
     image: &'a Image,
-    wide: Option<Cow<'a, [u16]>>,
+    samples: PreparedSamples<'a>,
+    raw_len: usize,
 }
 
 fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
@@ -407,29 +498,33 @@ fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
 impl<'a> PreparedJxl<'a> {
     pub fn new(image: &'a Image) -> PyResult<Self> {
         let raw = image.raw_data()?;
-        let wide = (image.bit_depth > 8).then(|| jxl_wide_samples(raw, image.bit_depth));
-        Ok(Self { image, wide })
+        let raw_len = raw.len();
+        let samples = if image.bit_depth > 8 { PreparedSamples::Wide(jxl_wide_samples(raw, image.bit_depth)) } else { PreparedSamples::Byte(raw) };
+        Ok(Self { image, samples, raw_len })
     }
 
+    #[inline]
     pub fn encode(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
         self.encode_with_threads(options, JxlThreads::Pool)
     }
 
+    #[inline]
     pub fn encode_candidate(&self, options: SaveOptions) -> PyResult<Vec<u8>> {
-        // Match the outer search's small-image cutoff. Larger serial trials
-        // still benefit from libjxl's pool; parallel trials size their own.
-        let threads = if self.image.raw_data()?.len() < JXL_PARALLEL_MIN_BYTES { JxlThreads::Fixed(1) } else { JxlThreads::Pool };
+        let threads = if self.raw_len < JXL_PARALLEL_MIN_BYTES { JxlThreads::Fixed(1) } else { JxlThreads::Pool };
         self.encode_with_threads(options, threads)
     }
 
+    #[inline]
     pub fn encode_with_threads(&self, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
-        match &self.wide {
-            Some(samples) => encode_jxl_samples(self.image, JxlSamples::Wide(samples), options, threads),
-            None => encode_jxl_samples(self.image, JxlSamples::Byte(self.image.raw_data()?), options, threads),
-        }
+        let samples = match &self.samples {
+            PreparedSamples::Byte(raw) => JxlSamples::Byte(raw),
+            PreparedSamples::Wide(wide) => JxlSamples::Wide(wide),
+        };
+        encode_jxl_samples(self.image, samples, options, threads)
     }
 }
 
+#[inline]
 fn jxl_encoder_speed(effort: u8) -> PyResult<EncoderSpeed> {
     match effort {
         1 => Ok(EncoderSpeed::Lightning),
