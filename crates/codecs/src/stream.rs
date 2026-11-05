@@ -45,6 +45,13 @@ impl Decoder {
             Self::Jpeg(decoder) => decoder.complete,
         }
     }
+
+    fn finish(self) -> Result<Option<Image>, String> {
+        match self {
+            Self::Jxl(decoder) => decoder.finish(),
+            Self::Jpeg(mut decoder) => decoder.image(),
+        }
+    }
 }
 
 #[pymethods]
@@ -82,12 +89,12 @@ impl StreamingDecoder {
     }
 
     fn close(&mut self, py: Python<'_>) -> PyResult<Image> {
-        let mut decoder = self.decoder.take().ok_or_else(|| PyValueError::new_err("closed decoder"))?;
+        let decoder = self.decoder.take().ok_or_else(|| PyValueError::new_err("closed decoder"))?;
         let format = decoder.format();
         if !decoder.complete() {
             return Err(decode_error("truncated image stream".into(), Some(format), "decode"));
         }
-        py.detach(move || decoder.image())
+        py.detach(move || decoder.finish())
             .map_err(|message| decode_error(message, Some(format), "decode"))?
             .ok_or_else(|| decode_error("image stream has no pixels".into(), Some(format), "decode"))
     }

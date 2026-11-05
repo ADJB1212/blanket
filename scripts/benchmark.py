@@ -21,7 +21,7 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import TYPE_CHECKING
 
-from _benchmark_memory import SAMPLE_INTERVAL, measure_memory, rss_reader
+from _benchmark_memory import measure_memory, memory_profiler
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -1144,14 +1144,35 @@ def _speedup_text(value: float | None) -> Text:
     return Text(label, style="red")
 
 
+def format_memory(value: float | None, *, signed: bool = False) -> str:
+    if value is None:
+        return "---"
+    precision = 3 if 0 < abs(value) < 2**20 / 100 else 2
+    return format(value / 2**20, f"{'+' if signed else ''}.{precision}f")
+
+
 def memory_cell(result: dict[str, Any], library: str) -> str:
-    value = result.get(f"{library}_rss_increase_bytes")
-    return f"{value / 2**20:.2f}" if value is not None else "---"
+    return format_memory(result.get(f"{library}_memory_bytes"))
+
+
+def memory_difference(blanket: float | None, pillow: float | None) -> str:
+    return format_memory(blanket - pillow if blanket is not None and pillow is not None else None, signed=True)
+
+
+def memory_difference_text(blanket: float | None, pillow: float | None) -> Text:
+    label = memory_difference(blanket, pillow)
+    if blanket is None or pillow is None or blanket == pillow:
+        return Text(label, style="dim")
+    return Text(label, style="green" if blanket < pillow else "red")
+
+
+def section_memory_value(results: list[dict[str, Any]], section: str, library: str) -> float | None:
+    values = [r[f"{library}_memory_bytes"] for r in results if r["section"] == section and r.get(f"{library}_memory_bytes") is not None]
+    return median(values) if values else None
 
 
 def section_memory(results: list[dict[str, Any]], section: str, library: str) -> str:
-    values = [r[f"{library}_rss_increase_bytes"] for r in results if r["section"] == section and r.get(f"{library}_rss_increase_bytes") is not None]
-    return f"{max(values) / 2**20:.2f}" if values else "---"
+    return format_memory(section_memory_value(results, section, library))
 
 
 def make_detail_table(results: list[dict[str, Any]]) -> Table:
@@ -1161,8 +1182,9 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
     table.add_column("Blanket ms", justify="right")
     table.add_column("Pillow ms", justify="right")
     table.add_column("Speedup", justify="right")
-    table.add_column("Blanket RSS +MiB", justify="right")
-    table.add_column("Pillow RSS +MiB", justify="right")
+    table.add_column("Blanket MiB", justify="right")
+    table.add_column("Pillow MiB", justify="right")
+    table.add_column("Diff MiB (B-P)", justify="right")
 
     last_section: str | None = None
     for r in results:
@@ -1172,7 +1194,7 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
         pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
-        table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]), memory_cell(r, "blanket"), memory_cell(r, "pillow"))
+        table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]), memory_cell(r, "blanket"), memory_cell(r, "pillow"), memory_difference_text(r.get("blanket_memory_bytes"), r.get("pillow_memory_bytes")))
 
     return table
 
@@ -1185,12 +1207,14 @@ def make_summary_table(results: list[dict[str, Any]]) -> Table:
     table.add_column("Geo mean", justify="right")
     table.add_column("Best", justify="right")
     table.add_column("Worst", justify="right")
-    table.add_column("Max Blanket +MiB", justify="right")
-    table.add_column("Max Pillow +MiB", justify="right")
+    table.add_column("Median Blanket MiB", justify="right")
+    table.add_column("Median Pillow MiB", justify="right")
+    table.add_column("Diff MiB (B-P)", justify="right")
 
     sections = dict.fromkeys(r["section"] for r in results)
     for section in sections:
-        memory = [section_memory(results, section, library) for library in ("blanket", "pillow")]
+        memory_values = [section_memory_value(results, section, library) for library in ("blanket", "pillow")]
+        memory = [*(format_memory(value) for value in memory_values), memory_difference_text(*memory_values)]
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
             table.add_row(section, "---", "---", "---", "---", *memory)
@@ -1204,7 +1228,7 @@ def make_summary_table(results: list[dict[str, Any]]) -> Table:
 
 def print_detail_plain(results: list[dict[str, Any]]) -> None:
     """Print every benchmark result as plain text lines."""
-    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10} {'Blanket RSS +MiB':>17} {'Pillow RSS +MiB':>17}"
+    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10} {'Blanket MiB':>17} {'Pillow MiB':>17} {'Diff MiB (B-P)':>17}"
     print(header)
     print("-" * len(header))
     last_section: str | None = None
@@ -1215,17 +1239,19 @@ def print_detail_plain(results: list[dict[str, Any]]) -> None:
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
         pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
-        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10} {memory_cell(r, 'blanket'):>17} {memory_cell(r, 'pillow'):>17}")
+        difference = memory_difference(r.get("blanket_memory_bytes"), r.get("pillow_memory_bytes"))
+        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10} {memory_cell(r, 'blanket'):>17} {memory_cell(r, 'pillow'):>17} {difference:>17}")
 
 
 def print_summary_plain(results: list[dict[str, Any]]) -> None:
     """Print section summaries as plain text lines."""
-    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10} {'Max Blanket +MiB':>17} {'Max Pillow +MiB':>17}"
+    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10} {'Median Blanket MiB':>18} {'Median Pillow MiB':>18} {'Diff MiB (B-P)':>17}"
     print(header)
     print("-" * len(header))
     sections = dict.fromkeys(r["section"] for r in results)
     for section in sections:
-        memory = f"{section_memory(results, section, 'blanket'):>17} {section_memory(results, section, 'pillow'):>17}"
+        blanket_memory, pillow_memory = (section_memory_value(results, section, library) for library in ("blanket", "pillow"))
+        memory = f"{format_memory(blanket_memory):>18} {format_memory(pillow_memory):>18} {memory_difference(blanket_memory, pillow_memory):>17}"
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
             print(f"{section:<20} {'---':>10} {'---':>10} {'---':>10} {'---':>10} {memory}")
@@ -1294,7 +1320,7 @@ def run_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "iterations": args.iterations,
         "warmups": args.warmups,
         "codec_formats": args.formats,
-        "memory": None if args.no_memory else {"method": "sampled RSS", "interval_seconds": SAMPLE_INTERVAL, "runs": 1},
+        "memory": None if args.no_memory else {"method": "Memray peak allocations", "aggregation": "single", "runs": 1},
     }
 
 
@@ -1381,7 +1407,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help=f"sections to benchmark (default: {', '.join(DEFAULT_SECTIONS)}; quote names containing spaces)")
     parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
-    parser.add_argument("--no-memory", action="store_true", help="skip the separate RSS sampling pass (default: sample every operation before timing; allocator reuse and short-lived buffers can understate increases)")
+    parser.add_argument("--no-memory", action="store_true", help="skip allocation profiling (default: peak allocated memory from one separate run per operation, excluding input fixtures)")
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
     parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O and Metadata")
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
@@ -1435,17 +1461,15 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *,
         if pillow_op is None and not include_unpaired:
             continue
         name = name.replace("→", " to ")
-        memory: dict[str, int | None] = {}
-        for library, operation in (("blanket", blanket_op), ("pillow", pillow_op)):
-            usage = measure_memory(operation) if track_memory and operation is not None else {"peak_rss_bytes": None, "rss_increase_bytes": None}
-            memory.update({f"{library}_{key}": value for key, value in usage.items()})
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
-        results[-1].update(memory)
+        for library, operation in (("blanket", blanket_op), ("pillow", pillow_op)):
+            usage = measure_memory(operation, 1) if track_memory and operation is not None else {"median_bytes": None, "p25_bytes": None, "p75_bytes": None}
+            results[-1].update({f"{library}_memory_bytes": usage["median_bytes"], f"{library}_memory_p25_bytes": usage["p25_bytes"], f"{library}_memory_p75_bytes": usage["p75_bytes"]})
     return results
 
 
@@ -1454,12 +1478,12 @@ def main() -> None:
     console = None if NO_RICH else Console()
     if not args.no_memory:
         try:
-            rss_reader()()
+            memory_profiler()
         except OSError as error:
             args.no_memory = True
             warnings.warn(f"Memory tracking disabled: {error}", stacklevel=1)
         else:
-            message = "Memory: separate 1 ms RSS sampling pass; +MiB is the observed increase, affected by allocator reuse and brief temporaries. Absolute sampled peaks are saved in JSON."
+            message = "Memory: peak allocated MiB from one separate run per operation (Python, Rust, and codecs). Includes outputs and temporary buffers; excludes input fixtures."
             print(message) if NO_RICH else console.print(message, markup=False)
     metadata = run_metadata(args)
     if args.baseline is not None:

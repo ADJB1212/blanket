@@ -67,6 +67,18 @@ impl JxlStreamDecoder {
         if self.complete {
             return Ok(());
         }
+        if self.input.is_empty() {
+            // Borrow complete chunks; retain only the unconsumed suffix.
+            unsafe {
+                check(JxlDecoderSetInput(self.decoder, data.as_ptr(), data.len()))?;
+                let result = self.process();
+                let remaining = JxlDecoderReleaseInput(self.decoder);
+                if !self.complete && result.is_ok() {
+                    self.input.extend_from_slice(&data[data.len() - remaining..]);
+                }
+                return result;
+            }
+        }
         self.input.extend_from_slice(data);
         // libjxl retains input only until ReleaseInput; output remains allocated
         // until decoder destruction and is never resized after registration.
@@ -133,12 +145,29 @@ impl JxlStreamDecoder {
         if !self.available {
             return Ok(None);
         }
+        self.output_image(self.pixels.clone()).map(Some)
+    }
+
+    pub fn finish(mut self) -> Result<Option<Image>, String> {
+        if !self.complete {
+            return Err("incomplete JPEG XL image".into());
+        }
+        if !self.available {
+            return Ok(None);
+        }
+        // Release libjxl's output reference before transferring the allocation.
+        unsafe { JxlDecoderReset(self.decoder) };
+        let pixels = std::mem::take(&mut self.pixels);
+        self.output_image(pixels).map(Some)
+    }
+
+    fn output_image(&self, pixels: Vec<u8>) -> Result<Image, String> {
         let image = if self.depth == 8 {
-            Image::from_pixels(self.width, self.height, self.mode, self.pixels.clone(), Some("JXL".into()))
+            Image::from_pixels(self.width, self.height, self.mode, pixels, Some("JXL".into()))
         } else {
-            Image::from_sample_bytes(self.width, self.height, self.mode, self.pixels.clone(), self.depth, Some("JXL".into()))
+            Image::from_sample_bytes(self.width, self.height, self.mode, pixels, self.depth, Some("JXL".into()))
         };
-        image.map(Some).map_err(|error| error.to_string())
+        image.map_err(|error| error.to_string())
     }
 }
 

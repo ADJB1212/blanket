@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 
+mod chunked;
 mod encode;
 pub mod stream;
 
@@ -88,10 +89,18 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
         let mut info = None;
         let mut pixels = None;
         let mut data_type = None;
+        let mut channels = 0;
         loop {
             match session.process(&mut input).map_err(|error| error.to_string())? {
                 Event::BasicInfo(header) => {
                     validate_dimensions(header.xsize, header.ysize)?;
+                    channels = match (header.num_color_channels, header.alpha_bits > 0) {
+                        (1, false) => 1,
+                        (3, false) => 3,
+                        (1, true) => 2,
+                        (3, true) => 4,
+                        _ => return Err("unsupported JPEG XL channel layout".into()),
+                    };
                     // Ask libjxl for the display conversion during the first decode.
                     if header.exponent_bits_per_sample != 0 {
                         data_type = Some(JxlDataType::Uint8);
@@ -99,7 +108,7 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
                     info = Some(header);
                 }
                 Event::NeedImageOutBuffer => {
-                    let format = PixelFormat { endianness: JxlEndianness::Little, ..PixelFormat::default() };
+                    let format = PixelFormat { num_channels: channels, endianness: JxlEndianness::Little, ..PixelFormat::default() };
                     session.alloc_image_buffer(format, data_type).map_err(|error| error.to_string())?;
                 }
                 Event::FullImage(image) => pixels = image,
@@ -115,13 +124,13 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
 
     let wide = pixels.format.data_type == JxlDataType::Uint16;
     let (mode, pixels) = match (info.num_color_channels, info.alpha_bits > 0) {
+        (1, false) => (PixelMode::L, pixels.data),
+        (3, false) => (PixelMode::Rgb, pixels.data),
         (1, true) if wide => {
             let mut rgba = vec![0; pixels.data.len() * 2];
             blanket_core::pixels::expand_luma_alpha::<true, false>(&pixels.data, &mut rgba);
             (PixelMode::Rgba, rgba)
         }
-        (1, false) => (PixelMode::L, pixels.data),
-        (3, false) => (PixelMode::Rgb, pixels.data),
         (1, true) => (PixelMode::Rgba, luma_alpha_to_rgba(&pixels.data)),
         (3, true) => (PixelMode::Rgba, pixels.data),
         (channels, has_alpha) => {
@@ -241,6 +250,15 @@ fn encode_native(
         check(JxlEncoderSetFrameLossless(settings, options.lossless.into()))?;
         check(JxlEncoderSetFrameDistance(settings, JxlEncoderDistanceFromQuality(options.quality.into())))?;
         check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::DecodingSpeed, 0))?;
+        if image.width > 2048 || image.height > 2048 {
+            let expected = image.width as usize * image.height as usize * image.mode.channels() * (info.bits_per_sample as usize / 8);
+            if length != expected {
+                return Err(codec_error("invalid JPEG XL input buffer"));
+            }
+            check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::Buffering, 1))?;
+            check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::OutputMode, 0))?;
+            return chunked::encode(encoder, settings, raw, length, format, image.width);
+        }
         check(JxlEncoderAddImageFrame(settings, &raw const format, raw, length))?;
         JxlEncoderCloseInput(encoder.0);
     }
@@ -638,6 +656,19 @@ mod tests {
             let frame = EncoderFrame::new(&pixels).num_channels(4);
             let reference = encoder.encode_frame(&frame, side, side).unwrap();
             assert_eq!(output, reference);
+        }
+    }
+
+    #[test]
+    fn chunked_large_images_round_trip() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            let width = 2049;
+            let height = 257;
+            let pixels: Vec<_> = (0..width * height * mode.channels()).map(|i| (i * 71 + i / 17) as u8).collect();
+            let image = Image::from_pixels(width as u32, height as u32, mode, pixels.clone(), None).unwrap();
+            let options = SaveOptions { lossless: true, effort: 1, ..Default::default() };
+            let encoded = PreparedJxl::new(&image).unwrap().encode_with_threads(options, JxlThreads::Fixed(1)).unwrap();
+            assert_eq!(decode_jxl(&encoded).unwrap().raw_data().unwrap(), pixels);
         }
     }
 
