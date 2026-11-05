@@ -113,19 +113,16 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     blanket_codec_common::ImageHeader::new(width, height, mode, depth.try_into().map_err(|_| "invalid TIFF depth")?)
 }
 
-fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
-    let Ok(mut decoder) = tiff::decoder::Decoder::new(Cursor::new(data)) else {
-        return Ok(None);
-    };
+fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
     let photometric = decoder.get_tag_u32(tiff::tags::Tag::PhotometricInterpretation).ok();
     if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(7) {
-        return decode_jpeg_tiff(data, &mut decoder).map(Some);
+        return decode_jpeg_tiff(data, decoder).map(Some);
     }
     if matches!(photometric, Some(8 | 9)) {
         let signed = photometric == Some(8);
         // Decode LAB as raw three-channel samples; the TIFF crate cannot read LAB buffers.
         let normalized = lab_tiff_as_rgb(data)?;
-        decoder = tiff::decoder::Decoder::new(Cursor::new(normalized.as_slice())).map_err(|error| error.to_string())?;
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(normalized.as_slice())).map_err(|error| error.to_string())?;
         if decoder.colortype().map_err(|error| error.to_string())? != tiff::ColorType::RGB(8) {
             return Err("only 8-bit LAB TIFF images are supported".into());
         }
@@ -146,8 +143,11 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string());
     }
     if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(5)
-        && let Some(image) = decode_lzw_strips(data, &mut decoder)?
+        && let Some(image) = decode_lzw_strips(data, decoder)?
     {
+        return Ok(Some(image));
+    }
+    if let Some(image) = decode_direct_tiff(decoder)? {
         return Ok(Some(image));
     }
     let mode = match decoder.colortype().ok() {
@@ -165,6 +165,62 @@ fn decode_special_tiff(data: &[u8]) -> Result<Option<Image>, String> {
         .map_err(|error| error.to_string())?;
     image.format = Some("TIFF".to_owned());
     Ok(Some(image))
+}
+
+fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
+    use tiff::tags::SampleFormat;
+
+    let (mode, depth) = match decoder.colortype().map_err(|error| error.to_string())? {
+        tiff::ColorType::Gray(depth @ (8 | 16)) => (PixelMode::L, depth),
+        tiff::ColorType::GrayA(8) => (PixelMode::La, 8),
+        tiff::ColorType::RGB(depth @ (8 | 16)) => (PixelMode::Rgb, depth),
+        tiff::ColorType::RGBA(depth @ (8 | 16)) => (PixelMode::Rgba, depth),
+        tiff::ColorType::Gray(32) => (PixelMode::F, 32),
+        tiff::ColorType::RGB(32) => (PixelMode::RgbF, 32),
+        tiff::ColorType::RGBA(32) => (PixelMode::RgbaF, 32),
+        _ => return Ok(None),
+    };
+    let layout = decoder.image_buffer_layout().map_err(|error| error.to_string())?;
+    let sample_format = if mode.is_float() { SampleFormat::IEEEFP } else { SampleFormat::Uint };
+    if layout.planes != 1 || layout.sample_format != sample_format {
+        return Ok(None);
+    }
+    let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
+    validate_dimensions(width, height)?;
+    let sample_bytes = usize::from(depth / 8);
+    let length = (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|n| n.checked_mul(mode.channels() * sample_bytes))
+        .ok_or("TIFF image buffer size overflow")?;
+    if layout.complete_len != length {
+        return Err("invalid TIFF image buffer layout".into());
+    }
+    let limit = if mode.is_float() {
+        tiff::decoder::Limits::default().decoding_buffer_size as u64
+    } else {
+        image::Limits::default().max_alloc.unwrap_or(u64::MAX)
+    };
+    if length as u64 > limit {
+        return Err("TIFF decoding buffer limit exceeded".into());
+    }
+    let mut pixels = blanket_core::buffers::buffer((width, height), mode.channels() * sample_bytes).map_err(|error| error.to_string())?;
+    decoder.read_image_bytes(&mut pixels).map_err(|error| error.to_string())?;
+    if cfg!(target_endian = "big") && sample_bytes > 1 {
+        for sample in pixels.chunks_exact_mut(sample_bytes) {
+            sample.reverse();
+        }
+    }
+    let image = if mode.is_float() {
+        Image::from_color_float_bytes(width, height, mode, pixels).map(|mut image| {
+            image.format = Some("TIFF".into());
+            image
+        })
+    } else if depth == 8 {
+        Image::from_pixels(width, height, mode, pixels, Some("TIFF".into()))
+    } else {
+        Image::from_sample_bytes(width, height, mode, pixels, depth, Some("TIFF".into()))
+    };
+    image.map(Some).map_err(|error| error.to_string())
 }
 
 fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
@@ -401,7 +457,7 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|error| error.to_string())?;
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let mut image = decode_special_tiff(data)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    let mut image = decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
     if image.mode == PixelMode::L && image.bit_depth == 16 {
         image.mode = PixelMode::I16;
     }
@@ -539,6 +595,17 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     Ok(output.into_inner())
 }
 
+fn float_samples(bytes: &[u8]) -> Cow<'_, [f32]> {
+    if cfg!(target_endian = "little") {
+        // SAFETY: all f32 bit patterns are valid; align_to checks the bounds.
+        let (prefix, values, suffix) = unsafe { bytes.align_to::<f32>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            return Cow::Borrowed(values);
+        }
+    }
+    Cow::Owned(bytes.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect())
+}
+
 pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
     use tiff::encoder::{Compression, TiffEncoder, colortype};
     use tiff::tags::Tag;
@@ -590,7 +657,7 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
     {
         let mut encoder = TiffEncoder::new(&mut output).map_err(codec_error)?.with_compression(compression);
         if image.mode.is_float() {
-            let values = image.raw_data()?.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect::<Vec<_>>();
+            let values = float_samples(image.raw_data()?);
             match image.mode {
                 PixelMode::F => encoder.write_image::<colortype::Gray32Float>(image.width, image.height, &values),
                 PixelMode::RgbF => encoder.write_image::<colortype::RGB32Float>(image.width, image.height, &values),
@@ -598,7 +665,11 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
             }
             .map_err(codec_error)?;
         } else if image.bit_depth > 8 {
-            let values = blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth);
+            let values = if image.bit_depth == 16 {
+                blanket_core::samples::view(image)?
+            } else {
+                Cow::Owned(blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth))
+            };
             match image.mode {
                 PixelMode::L => encoder.write_image::<colortype::Gray16>(image.width, image.height, &values),
                 PixelMode::Rgb => encoder.write_image::<colortype::RGB16>(image.width, image.height, &values),
@@ -648,6 +719,50 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_samples_borrow_only_aligned_native_storage() {
+        let bits = [0_u32, 0x8000_0000, 0x3f80_0000, 0x7fc0_1234, 0x7f80_0000, 0xff80_0000];
+        for offset in 0..8 {
+            let mut storage = vec![173; bits.len() * 4 + 8];
+            for (dst, value) in storage[offset..offset + bits.len() * 4].as_chunks_mut::<4>().0.iter_mut().zip(bits) {
+                *dst = value.to_le_bytes();
+            }
+            let bytes = &storage[offset..offset + bits.len() * 4];
+            let samples = float_samples(bytes);
+            assert_eq!(samples.iter().map(|value| value.to_bits()).collect::<Vec<_>>(), bits);
+            assert_eq!(matches!(samples, Cow::Borrowed(_)), cfg!(target_endian = "little") && bytes.as_ptr().align_offset(4) == 0);
+            assert_eq!(storage[offset + bits.len() * 4], 173);
+        }
+    }
+
+    #[test]
+    fn direct_decoding_preserves_common_modes_and_depths() {
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [8, 10, 12, 16] {
+                let maximum = (1_u32 << depth) - 1;
+                let values: Vec<u16> = (0..257 * 259 * mode.channels()).map(|i| ((i as u32 * 719 + 257) & maximum) as u16).collect();
+                let image = if depth == 8 {
+                    Image::from_pixels(257, 259, mode, values.into_iter().map(|v| v as u8).collect(), None).unwrap()
+                } else {
+                    Image::from_samples(257, 259, mode, values, depth, None).unwrap()
+                };
+                for compression in [0, 1, 2] {
+                    let encoded = if compression != 0 {
+                        encode_compressed_tiff(&image, SaveOptions { tiff_compression: compression, ..Default::default() }).unwrap()
+                    } else if depth == 8 {
+                        encode_tiff(&image, image.raw_data().unwrap()).unwrap()
+                    } else {
+                        encode_wide_tiff(&image).unwrap()
+                    };
+                    let reference = decode_rust_image(&encoded, RustFormat::Tiff, "TIFF").unwrap();
+                    let decoded = decode_tiff(&encoded).unwrap();
+                    assert_eq!(decoded.bit_depth, reference.bit_depth);
+                    assert_eq!(decoded.raw_data().unwrap(), reference.raw_data().unwrap());
+                }
+            }
+        }
+    }
 
     #[test]
     fn lzw_strip_decoding_matches_serial_with_partial_last_strip() {

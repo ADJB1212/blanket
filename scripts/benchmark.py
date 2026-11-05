@@ -21,6 +21,8 @@ from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import TYPE_CHECKING
 
+from _benchmark_memory import SAMPLE_INTERVAL, measure_memory, rss_reader
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 
@@ -1142,6 +1144,16 @@ def _speedup_text(value: float | None) -> Text:
     return Text(label, style="red")
 
 
+def memory_cell(result: dict[str, Any], library: str) -> str:
+    value = result.get(f"{library}_rss_increase_bytes")
+    return f"{value / 2**20:.2f}" if value is not None else "---"
+
+
+def section_memory(results: list[dict[str, Any]], section: str, library: str) -> str:
+    values = [r[f"{library}_rss_increase_bytes"] for r in results if r["section"] == section and r.get(f"{library}_rss_increase_bytes") is not None]
+    return f"{max(values) / 2**20:.2f}" if values else "---"
+
+
 def make_detail_table(results: list[dict[str, Any]]) -> Table:
     """Build a table containing every benchmark result."""
     table = Table(show_lines=False, pad_edge=False, box=None)
@@ -1149,6 +1161,8 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
     table.add_column("Blanket ms", justify="right")
     table.add_column("Pillow ms", justify="right")
     table.add_column("Speedup", justify="right")
+    table.add_column("Blanket RSS +MiB", justify="right")
+    table.add_column("Pillow RSS +MiB", justify="right")
 
     last_section: str | None = None
     for r in results:
@@ -1158,7 +1172,7 @@ def make_detail_table(results: list[dict[str, Any]]) -> Table:
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
         pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
-        table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]))
+        table.add_row(r["operation"], blanket_cell, pillow_cell, _speedup_text(r["blanket_speedup"]), memory_cell(r, "blanket"), memory_cell(r, "pillow"))
 
     return table
 
@@ -1171,23 +1185,26 @@ def make_summary_table(results: list[dict[str, Any]]) -> Table:
     table.add_column("Geo mean", justify="right")
     table.add_column("Best", justify="right")
     table.add_column("Worst", justify="right")
+    table.add_column("Max Blanket +MiB", justify="right")
+    table.add_column("Max Pillow +MiB", justify="right")
 
     sections = dict.fromkeys(r["section"] for r in results)
     for section in sections:
+        memory = [section_memory(results, section, library) for library in ("blanket", "pillow")]
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
-            table.add_row(section, "---", "---", "---", "---")
+            table.add_row(section, "---", "---", "---", "---", *memory)
             continue
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(speedup > 1.0 for speedup in speedups)
-        table.add_row(section, f"{wins}/{len(paired)}", _speedup_text(geometric_mean(speedups)), _speedup_text(max(speedups)), _speedup_text(min(speedups)))
+        table.add_row(section, f"{wins}/{len(paired)}", _speedup_text(geometric_mean(speedups)), _speedup_text(max(speedups)), _speedup_text(min(speedups)), *memory)
 
     return table
 
 
 def print_detail_plain(results: list[dict[str, Any]]) -> None:
     """Print every benchmark result as plain text lines."""
-    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10}"
+    header = f"{'Operation':<55} {'Blanket ms':>18} {'Pillow ms':>12} {'Speedup':>10} {'Blanket RSS +MiB':>17} {'Pillow RSS +MiB':>17}"
     print(header)
     print("-" * len(header))
     last_section: str | None = None
@@ -1198,23 +1215,24 @@ def print_detail_plain(results: list[dict[str, Any]]) -> None:
         spread = (r["blanket_p75_ms"] - r["blanket_p25_ms"]) / 2
         blanket_cell = f"{r['blanket_ms']:.2f} ±{spread:.2f}"
         pillow_cell = f"{r['pillow_ms']:.2f}" if r["pillow_ms"] is not None else "---"
-        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10}")
+        print(f"{r['operation']:<55} {blanket_cell:>18} {pillow_cell:>12} {_speedup_label(r['blanket_speedup']):>10} {memory_cell(r, 'blanket'):>17} {memory_cell(r, 'pillow'):>17}")
 
 
 def print_summary_plain(results: list[dict[str, Any]]) -> None:
     """Print section summaries as plain text lines."""
-    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10}"
+    header = f"{'Section':<20} {'Faster':>10} {'Geo mean':>10} {'Best':>10} {'Worst':>10} {'Max Blanket +MiB':>17} {'Max Pillow +MiB':>17}"
     print(header)
     print("-" * len(header))
     sections = dict.fromkeys(r["section"] for r in results)
     for section in sections:
+        memory = f"{section_memory(results, section, 'blanket'):>17} {section_memory(results, section, 'pillow'):>17}"
         paired = [r for r in results if r["section"] == section and r["blanket_speedup"] is not None]
         if not paired:
-            print(f"{section:<20} {'---':>10} {'---':>10} {'---':>10} {'---':>10}")
+            print(f"{section:<20} {'---':>10} {'---':>10} {'---':>10} {'---':>10} {memory}")
             continue
         speedups = [r["blanket_speedup"] for r in paired]
         wins = sum(speedup > 1.0 for speedup in speedups)
-        print(f"{section:<20} {f'{wins}/{len(paired)}':>10} {_speedup_label(geometric_mean(speedups)):>10} {_speedup_label(max(speedups)):>10} {_speedup_label(min(speedups)):>10}")
+        print(f"{section:<20} {f'{wins}/{len(paired)}':>10} {_speedup_label(geometric_mean(speedups)):>10} {_speedup_label(max(speedups)):>10} {_speedup_label(min(speedups)):>10} {memory}")
 
 
 def slower_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -1276,6 +1294,7 @@ def run_metadata(args: argparse.Namespace) -> dict[str, Any]:
         "iterations": args.iterations,
         "warmups": args.warmups,
         "codec_formats": args.formats,
+        "memory": None if args.no_memory else {"method": "sampled RSS", "interval_seconds": SAMPLE_INTERVAL, "runs": 1},
     }
 
 
@@ -1362,6 +1381,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help=f"sections to benchmark (default: {', '.join(DEFAULT_SECTIONS)}; quote names containing spaces)")
     parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
+    parser.add_argument("--no-memory", action="store_true", help="skip the separate RSS sampling pass (default: sample every operation before timing; allocator reuse and short-lived buffers can understate increases)")
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
     parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O and Metadata")
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
@@ -1409,24 +1429,38 @@ def parse_args() -> argparse.Namespace:
     return arguments
 
 
-def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *, include_unpaired: bool = True) -> list[dict[str, Any]]:
+def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *, include_unpaired: bool = True, track_memory: bool = True) -> list[dict[str, Any]]:
     results: list[dict[str, Any]] = []
     for name, blanket_op, pillow_op in comparisons:
         if pillow_op is None and not include_unpaired:
             continue
         name = name.replace("→", " to ")
+        memory: dict[str, int | None] = {}
+        for library, operation in (("blanket", blanket_op), ("pillow", pillow_op)):
+            usage = measure_memory(operation) if track_memory and operation is not None else {"peak_rss_bytes": None, "rss_increase_bytes": None}
+            memory.update({f"{library}_{key}": value for key, value in usage.items()})
         b = measure(blanket_op, warmups, iterations)
         if pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
         else:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
+        results[-1].update(memory)
     return results
 
 
 def main() -> None:
     args = parse_args()
     console = None if NO_RICH else Console()
+    if not args.no_memory:
+        try:
+            rss_reader()()
+        except OSError as error:
+            args.no_memory = True
+            warnings.warn(f"Memory tracking disabled: {error}", stacklevel=1)
+        else:
+            message = "Memory: separate 1 ms RSS sampling pass; +MiB is the observed increase, affected by allocator reuse and brief temporaries. Absolute sampled peaks are saved in JSON."
+            print(message) if NO_RICH else console.print(message, markup=False)
     metadata = run_metadata(args)
     if args.baseline is not None:
         previous_metadata = args.baseline.get("metadata", {})
@@ -1440,7 +1474,7 @@ def main() -> None:
 
     if "ImagePalette" in args.sections:
         with TemporaryDirectory() as directory:
-            results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations, include_unpaired=args.all)
+            results = run_section(imagepalette_comparisons(Path(directory)), args.warmups, args.iterations, include_unpaired=args.all, track_memory=not args.no_memory)
         for result in results:
             result.update(section="ImagePalette", size="palette", width=256, height=1)
         all_results.extend(results)
@@ -1480,11 +1514,13 @@ def main() -> None:
             "ImageEnhance": partial(imageenhance_comparisons, size),
             "ImageFilter": partial(imagefilter_comparisons, size),
         }
-        sections = [(name, build()) for name, build in builders.items() if name in args.sections and (name != "10-bit" or args.all)]
+        sections = [(name, build) for name, build in builders.items() if name in args.sections and (name != "10-bit" or args.all)]
 
         size_results: list[dict[str, Any]] = []
-        for section_name, comparisons in sections:
-            results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all)
+        for section_name, build in sections:
+            comparisons = build()
+            results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all, track_memory=not args.no_memory)
+            del comparisons
             for r in results:
                 r["section"] = section_name
                 r["size"] = size_name

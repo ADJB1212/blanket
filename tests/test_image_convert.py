@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 from helpers import assert_raises
+from PIL import Image as PillowImage
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
 from blanket import Image
@@ -11,6 +12,22 @@ from blanket import Image
 TYPE_CHECKING = False
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+@pytest.mark.parametrize("width", [1, 15, 16, 17, 257])
+@pytest.mark.parametrize(
+    "source,target", [("RGB", "RGBX"), ("RGBX", "RGB"), ("RGBX", "L"), ("RGBX", "RGBA"), ("RGBA", "RGBX"), ("RGBA", "RGBa"), ("RGBa", "RGBA"), ("LA", "La"), ("La", "LA"), ("RGB", "F"), ("RGBA", "F"), ("CMYK", "RGB"), ("YCbCr", "RGB")]
+)
+def test_conversion_buffers_preserve_pixels_and_source(width, source, target):
+    size = (width, 3)
+    channels = PillowImage.getmodebands(source)
+    raw = bytes((i * 137 + i // 7) % 256 for i in range(width * 3 * channels))
+    image = Image.frombytes(source, size, raw)
+    expected = PillowImage.frombytes(source, size, raw).convert(target)
+    actual = image.convert(target)
+    assert actual.tobytes() == expected.tobytes()
+    actual.putpixel((0, 0), 0 if target in ("L", "F") else (0,) * len(actual.getbands()))
+    assert image.tobytes() == raw
 
 
 def test_sanity() -> None:

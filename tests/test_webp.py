@@ -7,6 +7,16 @@ from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
+from blanket.errors import CodecResourceLimitError
+
+
+def test_webp_checks_pixel_limits_before_allocating_output():
+    encoded = bytearray(Image.new("RGB", (1, 1), "red").encode("WEBP", lossless=True))
+    assert encoded[12:16] == b"VP8L"
+    assert encoded[20] == 0x2F
+    encoded[21:25] = (8223 | (8223 << 14)).to_bytes(4, "little")
+    with pytest.raises(CodecResourceLimitError):
+        Image.decode(bytes(encoded))
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

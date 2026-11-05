@@ -1306,6 +1306,14 @@ impl Image {
             if self.mode == destination {
                 return self.copy(py);
             }
+            if matches!((self.mode, destination), (PixelMode::Rgbx, PixelMode::Rgba) | (PixelMode::Rgba, PixelMode::Rgbx))
+                && self.bit_depth == 8
+                && bit_depth.is_none_or(|depth| depth == 8)
+            {
+                let source = self.raw_data()?;
+                let pixels = py.detach(|| crate::simd::opaque_rgba(source));
+                return Self::from_pixels(self.width, self.height, destination, pixels, None);
+            }
             if matches!(self.mode, PixelMode::PremulLa | PixelMode::PremulRgba) {
                 let straight = if self.mode == PixelMode::PremulLa { PixelMode::La } else { PixelMode::Rgba };
                 if self.mode == PixelMode::PremulLa && destination != PixelMode::La {
@@ -1323,17 +1331,19 @@ impl Image {
                 });
                 let image = Self::from_pixels(self.width, self.height, straight, pixels, None)?;
                 return if destination == straight {
-                    image.convert(py, mode, bit_depth)
+                    if bit_depth.is_none_or(|depth| depth == 8) { Ok(image) } else { image.convert(py, mode, bit_depth) }
                 } else {
                     image.convert(py, "RGB", None)?.convert(py, mode, bit_depth)
                 };
             }
             if matches!(destination, PixelMode::PremulLa | PixelMode::PremulRgba) {
                 let straight = if destination == PixelMode::PremulLa { PixelMode::La } else { PixelMode::Rgba };
+                let converted;
                 let image = if self.mode == straight {
-                    self.copy(py)?
+                    self
                 } else if self.mode.channels() >= 3 || self.palette.is_some() {
-                    self.convert(py, "RGB", Some(8))?.convert(py, straight.as_str(), None)?
+                    converted = self.convert(py, "RGB", Some(8))?.convert(py, straight.as_str(), None)?;
+                    &converted
                 } else {
                     return Err(PyValueError::new_err("unsupported premultiplied conversion"));
                 };
@@ -1351,15 +1361,21 @@ impl Image {
             }
             if self.mode == PixelMode::Rgbx {
                 let source = self.raw_data()?;
+                if bit_depth.is_none_or(|depth| depth == 8) && matches!(destination, PixelMode::L | PixelMode::Rgb) {
+                    let pixels = py.detach(|| crate::simd::convert(source, PixelMode::Rgba, destination));
+                    return Self::from_pixels(self.width, self.height, destination, pixels, None);
+                }
                 let pixels = py.detach(|| crate::simd::convert(source, PixelMode::Rgba, PixelMode::Rgb));
-                return Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?.convert(py, mode, bit_depth);
+                let image = Self::from_pixels(self.width, self.height, PixelMode::Rgb, pixels, None)?;
+                return image.convert(py, mode, bit_depth);
             }
-            let image = if self.mode == PixelMode::La {
+            let mut image = if self.mode == PixelMode::La || self.mode == PixelMode::Rgb && self.bit_depth == 8 {
                 self.convert(py, "RGBA", None)?
             } else {
                 self.convert(py, "RGB", Some(8))?.convert(py, "RGBA", None)?
             };
-            return Self::from_pixels(self.width, self.height, destination, image.raw_data()?.to_vec(), None);
+            image.mode = destination;
+            return Ok(image);
         }
         if matches!(self.mode, PixelMode::RgbF | PixelMode::RgbaF) || matches!(destination, PixelMode::RgbF | PixelMode::RgbaF) {
             return py.detach(|| crate::float::convert(self, destination, bit_depth));
@@ -1398,6 +1414,13 @@ impl Image {
             }
             let source = self.pixel_data()?;
             let pixels = py.detach(|| {
+                let luma = |r, g, b| ((f64::from(r) * 299.0 + f64::from(g) * 587.0 + f64::from(b) * 114.0) as f32 / 1000.0).to_le_bytes();
+                if self.mode == PixelMode::Rgb {
+                    return map_pixels::<3, 4>(source, |p| luma(p[0], p[1], p[2]));
+                }
+                if self.mode == PixelMode::Rgba {
+                    return map_pixels::<4, 4>(source, |p| luma(p[0], p[1], p[2]));
+                }
                 let rgb = convert_pixels(source, self.mode, PixelMode::Rgb);
                 rgb.as_chunks::<3>()
                     .0
@@ -1888,7 +1911,7 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         } else {
             map_pixels::<3, 3>(source, ycbcr_to_rgb)
         };
-        return convert_pixels(&rgb, PixelMode::Rgb, to);
+        return if to == PixelMode::Rgb { rgb } else { convert_pixels(&rgb, PixelMode::Rgb, to) };
     }
     if matches!(to, PixelMode::Cmyk | PixelMode::YCbCr) {
         if matches!(from, PixelMode::One | PixelMode::L | PixelMode::La) {

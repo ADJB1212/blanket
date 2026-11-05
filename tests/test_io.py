@@ -12,6 +12,26 @@ from PIL import Image as PillowImage
 from blanket import Image, ImageMetadata
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
+
+@pytest.mark.parametrize("seekable", [False, True])
+def test_stream_reads_preserve_binary_data_and_avoid_seekable_copy(seekable):
+    from blanket._io import read_bytes
+
+    class Stream(BytesIO):
+        def seek(self, offset, whence=0):
+            if not seekable:
+                raise OSError("not seekable")
+            return super().seek(offset, whence)
+
+    payload = bytes(range(256)) * 1024
+    stream = Stream(payload)
+    data = read_bytes(stream)
+    assert data == payload
+    assert stream.tell() == len(payload)
+    if seekable:
+        assert data is payload
+
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from pathlib import Path

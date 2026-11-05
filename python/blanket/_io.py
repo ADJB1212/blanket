@@ -35,8 +35,12 @@ def read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryI
 
 def _read_stream(stream: BinaryIO) -> bytes:
     """Read binary stream contents, including streams without sized reads."""
-    with contextlib.suppress(AttributeError, OSError):
+    try:
         stream.seek(0)
+    except (AttributeError, OSError):
+        rewind = False
+    else:
+        rewind = True
     try:
         head = stream.read(16)
     except TypeError:
@@ -48,6 +52,16 @@ def _read_stream(stream: BinaryIO) -> bytes:
         raise ValueError("binary data must be used to open an image")
     if head.startswith(b"\xff\xff"):
         raise UnidentifiedImageError("cannot identify image file")
+    if rewind:
+        try:
+            stream.seek(0)
+        except (AttributeError, OSError):
+            pass
+        else:
+            data = stream.read()
+            if not isinstance(data, bytes):
+                raise ValueError("binary data must be used to open an image")
+            return data
     rest = stream.read()
     if not isinstance(rest, bytes):
         raise ValueError("binary data must be used to open an image")

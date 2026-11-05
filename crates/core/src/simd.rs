@@ -677,6 +677,10 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
 }
 
+pub(crate) fn opaque_rgba(source: &[u8]) -> Vec<u8> {
+    map_blocks::<4, 4>(source, 4 << 20, |p| [p[0], p[1], p[2], Bytes::splat(255)], |p| [p[0], p[1], p[2], 255])
+}
+
 fn map_blocks<const S: usize, const D: usize>(
     source: &[u8], parallel_bytes: usize, block: impl Fn([Bytes; S]) -> [Bytes; D] + Sync, pixel: impl Fn(&[u8; S]) -> [u8; D] + Sync,
 ) -> Vec<u8> {

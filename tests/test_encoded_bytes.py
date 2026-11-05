@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 from io import BytesIO
+from random import Random
 
 import pytest
 from helpers import assert_raises, image_buffer
@@ -10,6 +11,24 @@ from PIL import Image as PillowImage
 from blanket import Image, UnidentifiedImageError
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 from blanket.errors import UnsupportedCodecError
+
+
+@pytest.mark.parametrize("level", [1, 6, 9])
+def test_png_streams_multiple_idat_chunks_without_changing_pixels(level):
+    size = (1025, 1025)
+    raw = Random(751).randbytes(size[0] * size[1] * 3)
+    encoded = Image.frombytes("RGB", size, raw).encode("PNG", compress_level=level)
+    position = 8
+    idat_lengths = []
+    while position < len(encoded):
+        length = int.from_bytes(encoded[position : position + 4], "big")
+        if encoded[position + 4 : position + 8] == b"IDAT":
+            idat_lengths.append(length)
+        position += length + 12
+    assert len(idat_lengths) > 1
+    assert max(idat_lengths) <= 1024 * 1024
+    assert PillowImage.open(BytesIO(encoded)).tobytes() == raw
+    assert Image.decode(encoded).tobytes() == raw
 
 
 @pytest.mark.parametrize(

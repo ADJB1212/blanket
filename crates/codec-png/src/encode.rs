@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{BufWriter, Write};
 use std::simd::Select;
 use std::simd::cmp::SimdPartialOrd;
 use std::simd::num::{SimdInt, SimdUint};
@@ -98,6 +98,21 @@ fn filter(current: &[u8], previous: &[u8], channels: usize, output: &mut [u8]) {
     }
 }
 
+struct IdatWriter<'a, W: Write>(&'a mut png::Writer<W>);
+
+impl<W: Write> Write for IdatWriter<'_, W> {
+    fn write(&mut self, data: &[u8]) -> std::io::Result<usize> {
+        for part in data.chunks(1024 * 1024) {
+            self.0.write_chunk(png::chunk::IDAT, part).map_err(std::io::Error::other)?;
+        }
+        Ok(data.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8>> {
     let channels = image.mode.channels();
     let stride = image.width as usize * channels;
@@ -108,7 +123,20 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
     let rows = (4 * 1024 * 1024 / row_bytes).max(1).min(image.height as usize);
     let mut filtered = vec![0; row_bytes * rows];
     let zero = vec![0; stride];
-    let mut compressor = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(u32::from(level)));
+    let mut output = Vec::new();
+    let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
+    encoder.set_color(match image.mode {
+        PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
+        PixelMode::La => png::ColorType::GrayscaleAlpha,
+        PixelMode::Rgb => png::ColorType::Rgb,
+        PixelMode::Rgba => png::ColorType::Rgba,
+        _ => unreachable!("validated PNG mode"),
+    });
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder.validate_sequence(false);
+    let mut writer = encoder.write_header().map_err(codec_error)?;
+    let sink = BufWriter::with_capacity((1024 * 1024).min(pixels.len().saturating_add(1024)), IdatWriter(&mut writer));
+    let mut compressor = flate2::write::ZlibEncoder::new(sink, flate2::Compression::new(u32::from(level)));
     for start in (0..image.height as usize).step_by(rows) {
         let count = rows.min(image.height as usize - start);
         let batch = &mut filtered[..row_bytes * count];
@@ -125,25 +153,10 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
             compressor.write_all(&row[1..]).map_err(codec_error)?;
         }
     }
-    let compressed = compressor.finish().map_err(codec_error)?;
-    let mut output = Vec::with_capacity(compressed.len() + 128);
-    {
-        let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
-        encoder.set_color(match image.mode {
-            PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
-            PixelMode::La => png::ColorType::GrayscaleAlpha,
-            PixelMode::Rgb => png::ColorType::Rgb,
-            PixelMode::Rgba => png::ColorType::Rgba,
-            _ => unreachable!("validated PNG mode"),
-        });
-        encoder.set_depth(png::BitDepth::Eight);
-        encoder.validate_sequence(false);
-        let mut writer = encoder.write_header().map_err(codec_error)?;
-        for part in compressed.chunks(1024 * 1024) {
-            writer.write_chunk(png::chunk::IDAT, part).map_err(codec_error)?;
-        }
-        writer.finish().map_err(codec_error)?;
-    }
+    let mut sink = compressor.finish().map_err(codec_error)?;
+    sink.flush().map_err(codec_error)?;
+    drop(sink);
+    writer.finish().map_err(codec_error)?;
     Ok(output)
 }
 

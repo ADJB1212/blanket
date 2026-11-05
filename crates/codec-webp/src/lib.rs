@@ -19,29 +19,51 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     if features.has_animation {
         return decode_rust_image(data, RustFormat::WebP, "WEBP");
     }
-    let (pixels, width, height) =
-        if features.has_alpha { webpx::decode_rgba(data) } else { webpx::decode_rgb(data) }.map_err(|error| error.to_string())?;
-    Image::from_pixels(width, height, if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb }, pixels, Some("WEBP".into()))
-        .map_err(|error| error.to_string())
+    let limits = webpx::Limits::default();
+    limits.check_input_size(data.len() as u64).map_err(|error| format!("WebP limit exceeded: {error}"))?;
+    limits.check_still_image(features.width, features.height).map_err(|error| format!("WebP limit exceeded: {error}"))?;
+    let mode = if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb };
+    let stride = (features.width as usize).checked_mul(mode.channels()).ok_or("WebP row size overflow")?;
+    let length = stride.checked_mul(features.height as usize).ok_or("WebP buffer size overflow")?;
+    let stride = i32::try_from(stride).map_err(|error| error.to_string())?;
+    let mut pixels = Vec::<u8>::new();
+    pixels.try_reserve_exact(length).map_err(|error| error.to_string())?;
+    // SAFETY: dimensions and capacity cover every packed output row. The Into
+    // APIs write the entire buffer on success and never retain its pointer.
+    let output = unsafe {
+        if features.has_alpha {
+            libwebp_sys::WebPDecodeRGBAInto(data.as_ptr(), data.len(), pixels.as_mut_ptr(), length, stride)
+        } else {
+            libwebp_sys::WebPDecodeRGBInto(data.as_ptr(), data.len(), pixels.as_mut_ptr(), length, stride)
+        }
+    };
+    if output.is_null() {
+        return Err("invalid WebP bitstream".into());
+    }
+    // SAFETY: successful decoding initialized all length bytes above.
+    unsafe { pixels.set_len(length) };
+    Image::from_pixels(features.width, features.height, mode, pixels, Some("WEBP".into())).map_err(|error| error.to_string())
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
-    let rgb;
+    let argb = (image.mode == PixelMode::L).then(|| pixels.iter().map(|&v| 0xff00_0000 | (u32::from(v) * 0x0001_0101)).collect::<Vec<_>>());
     let encoder = match image.mode {
-        PixelMode::L => {
-            rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
-            webpx::Encoder::new_rgb(&rgb, image.width, image.height)
-        }
+        PixelMode::L => webpx::Encoder::new_argb(argb.as_deref().expect("grayscale pixels expanded above"), image.width, image.height),
         PixelMode::Rgb => webpx::Encoder::new_rgb(pixels, image.width, image.height),
         PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width, image.height),
         _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
     };
-    encoder
-        .config(webpx::EncoderConfig::new().thread_level(1))
-        .lossless(options.lossless)
-        .quality(if options.lossless { 75.0 } else { f32::from(options.quality) })
-        .encode(webpx::Unstoppable)
-        .map_err(codec_error)
+    let encoder = encoder.config(webpx::EncoderConfig::new().thread_level(1)).lossless(options.lossless).quality(if options.lossless {
+        75.0
+    } else {
+        f32::from(options.quality)
+    });
+    if image.mode != PixelMode::L {
+        return encoder.encode(webpx::Unstoppable).map_err(codec_error);
+    }
+    let encoded = encoder.encode_owned(webpx::Unstoppable).map_err(codec_error)?;
+    drop(argb);
+    Ok(encoded.to_vec())
 }
 
 pub fn backend_version() -> String {
@@ -131,4 +153,32 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
         timestamp = timestamp.checked_add(frame.duration.unwrap_or(0.0) as i32).ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
     }
     encoder.finish(timestamp).map_err(codec_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grayscale_encoding_matches_rgb_import_for_lossy_and_lossless() {
+        for (width, height) in [(1, 1), (17, 15), (257, 259)] {
+            let pixels: Vec<_> = (0..width * height).map(|i| (i * 137 + i / 7) as u8).collect();
+            let image = Image::from_pixels(width, height, PixelMode::L, pixels, None).unwrap();
+            let pixels = image.pixel_data().unwrap();
+            let rgb: Vec<_> = pixels.iter().flat_map(|&v| [v; 3]).collect();
+            for lossless in [false, true] {
+                for quality in [25, 85] {
+                    let reference = webpx::Encoder::new_rgb(&rgb, width, height)
+                        .config(webpx::EncoderConfig::new().thread_level(1))
+                        .lossless(lossless)
+                        .quality(if lossless { 75.0 } else { f32::from(quality) })
+                        .encode(webpx::Unstoppable)
+                        .unwrap();
+                    let encoded = encode_webp(&image, pixels, SaveOptions { quality, lossless, ..Default::default() }).unwrap();
+                    assert_eq!(encoded, reference);
+                    assert_eq!(decode_webp(&encoded).unwrap().raw_data().unwrap(), webpx::decode_rgb(&encoded).unwrap().0);
+                }
+            }
+        }
+    }
 }

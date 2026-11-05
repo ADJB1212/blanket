@@ -133,12 +133,18 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
         let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
         let frame = reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
         let bits = frame.bit_depth as usize;
-        let mut pixels = Vec::with_capacity(frame.width as usize * frame.height as usize);
-        for row in packed[..frame.buffer_size()].chunks_exact(frame.line_size) {
-            for x in 0..frame.width as usize {
-                pixels.push((row[x * bits / 8] >> (8 - bits - x * bits % 8)) & ((1u16 << bits) - 1) as u8);
+        let pixels = if bits == 8 {
+            packed.truncate(frame.buffer_size());
+            packed
+        } else {
+            let mut pixels = Vec::with_capacity(frame.width as usize * frame.height as usize);
+            for row in packed[..frame.buffer_size()].chunks_exact(frame.line_size) {
+                for x in 0..frame.width as usize {
+                    pixels.push((row[x * bits / 8] >> (8 - bits - x * bits % 8)) & ((1u16 << bits) - 1) as u8);
+                }
             }
-        }
+            pixels
+        };
         let mut image = Image::from_pixels(frame.width, frame.height, PixelMode::L, pixels, Some("PNG".into())).map_err(|error| error.to_string())?;
         image.palette = Some((PixelMode::Rgb, palette));
         return Ok(image);

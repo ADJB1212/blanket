@@ -88,7 +88,65 @@ pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Im
         };
         return Image::from_color_float_bytes(image.width, image.height, mode, pixels);
     }
-    convert_values(image, mode, depth, values(image)?)
+    let pixels = match (image.mode.channels(), mode.channels()) {
+        (3, 3) => convert_color_bytes::<3, 3>(image, mode, depth)?,
+        (3, 4) => convert_color_bytes::<3, 4>(image, mode, depth)?,
+        (4, 3) => convert_color_bytes::<4, 3>(image, mode, depth)?,
+        (4, 4) => convert_color_bytes::<4, 4>(image, mode, depth)?,
+        _ => unreachable!(),
+    };
+    if float {
+        Image::from_color_float_bytes(image.width, image.height, mode, pixels)
+    } else if depth == 8 {
+        Image::from_pixels(image.width, image.height, mode, pixels, None)
+    } else {
+        Image::from_sample_bytes(image.width, image.height, mode, pixels, depth, None)
+    }
+}
+
+fn convert_color_bytes<const S: usize, const D: usize>(image: &Image, mode: PixelMode, depth: u8) -> PyResult<Vec<u8>> {
+    let source = image.raw_data()?;
+    let source_bytes = if image.mode.is_float() {
+        4
+    } else if image.bit_depth == 8 {
+        1
+    } else {
+        2
+    };
+    let target_bytes = if mode.is_float() {
+        4
+    } else if depth == 8 {
+        1
+    } else {
+        2
+    };
+    let mut output = crate::buffers::buffer(image.size(), D * target_bytes)?;
+    crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * D * target_bytes, |chunk, dst| {
+        let mut values = [0.0; 1024];
+        let mut mapped = [0.0; 1024];
+        let start = chunk * crate::parallel::CHUNK_PIXELS * S * source_bytes;
+        for (block, dst) in dst.chunks_mut(256 * D * target_bytes).enumerate() {
+            let count = dst.len() / (D * target_bytes);
+            let src = &source[start + block * 256 * S * source_bytes..][..count * S * source_bytes];
+            let values = &mut values[..count * S];
+            decode_values(src, image.mode.is_float(), image.bit_depth, values);
+            let values = if S == D {
+                &*values
+            } else {
+                let mapped = &mut mapped[..count * D];
+                crate::pixels::float_color_layout::<S, D>(values, mapped);
+                mapped
+            };
+            if mode.is_float() {
+                for (value, dst) in values.iter().zip(dst.as_chunks_mut::<4>().0) {
+                    *dst = value.to_le_bytes();
+                }
+            } else {
+                quantize_into(values, dst, depth);
+            }
+        }
+    });
+    Ok(output)
 }
 
 fn convert_values(image: &Image, mode: PixelMode, depth: u8, source: Vec<f32>) -> PyResult<Image> {
@@ -181,12 +239,29 @@ fn quantize_into(source: &[f32], output: &mut [u8], depth: u8) {
 
 pub fn values(image: &Image) -> PyResult<Vec<f32>> {
     let data = image.raw_data()?;
-    Ok(if image.mode.is_float() {
-        data.as_chunks::<4>().0.iter().map(|v| f32::from_le_bytes(*v)).collect()
-    } else if matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
-        let maximum = ((1_u32 << image.bit_depth) - 1) as f32;
-        let bytes = if image.bit_depth == 8 { 1 } else { 2 };
-        let mut result = vec![0.0; data.len() / bytes];
+    if !image.mode.is_float() && !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("requires RGB or RGBA color"));
+    }
+    let bytes = if image.mode.is_float() {
+        4
+    } else if image.bit_depth == 8 {
+        1
+    } else {
+        2
+    };
+    let mut result = vec![0.0; data.len() / bytes];
+    decode_values(data, image.mode.is_float(), image.bit_depth, &mut result);
+    Ok(result)
+}
+
+fn decode_values(data: &[u8], floating: bool, depth: u8, result: &mut [f32]) {
+    if floating {
+        for (dst, src) in result.iter_mut().zip(data.as_chunks::<4>().0) {
+            *dst = f32::from_le_bytes(*src);
+        }
+    } else {
+        let maximum = ((1_u32 << depth) - 1) as f32;
+        let bytes = if depth == 8 { 1 } else { 2 };
         let end = result.len() / 16 * 16;
         for i in (0..end).step_by(16) {
             let samples: Simd<f32, 16> = if bytes == 1 {
@@ -199,10 +274,7 @@ pub fn values(image: &Image) -> PyResult<Vec<f32>> {
         for (i, v) in result.iter_mut().enumerate().skip(end) {
             *v = if bytes == 1 { data[i] as f32 } else { u16::from_le_bytes([data[i * 2], data[i * 2 + 1]]) as f32 } / maximum;
         }
-        result
-    } else {
-        return Err(PyValueError::new_err("requires RGB or RGBA color"));
-    })
+    }
 }
 
 pub fn transfer(v: f32, decode: bool) -> f32 {
@@ -287,6 +359,39 @@ pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_conversion_matches_full_image_intermediates() {
+        for count in [0, 1, 15, 16, 17, 255, 256, 257, 65537] {
+            for source_mode in [PixelMode::Rgb, PixelMode::Rgba, PixelMode::RgbF, PixelMode::RgbaF] {
+                for source_depth in if source_mode.is_float() { &[32][..] } else { &[8, 10, 12, 16][..] } {
+                    let source = if source_mode.is_float() {
+                        let special = [-0.0_f32, 0.0, -2.0, 0.25, 0.5, 1.0, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+                        let bytes = (0..count * source_mode.channels()).flat_map(|i| special[i % special.len()].to_le_bytes()).collect();
+                        Image::from_color_float_bytes(count as u32, 1, source_mode, bytes).unwrap()
+                    } else {
+                        let maximum = (1_u32 << source_depth) - 1;
+                        let samples: Vec<u16> = (0..count * source_mode.channels()).map(|i| ((i as u32 * 719 + 257) & maximum) as u16).collect();
+                        if *source_depth == 8 {
+                            Image::from_pixels(count as u32, 1, source_mode, samples.into_iter().map(|v| v as u8).collect(), None).unwrap()
+                        } else {
+                            Image::from_samples(count as u32, 1, source_mode, samples, *source_depth, None).unwrap()
+                        }
+                    };
+                    for target_mode in [PixelMode::Rgb, PixelMode::Rgba, PixelMode::RgbF, PixelMode::RgbaF] {
+                        for target_depth in if target_mode.is_float() { &[32][..] } else { &[8, 10, 12, 16][..] } {
+                            if !source_mode.is_float() && !target_mode.is_float() {
+                                continue;
+                            }
+                            let reference = convert_values(&source, target_mode, *target_depth, values(&source).unwrap()).unwrap();
+                            let actual = convert(&source, target_mode, Some(*target_depth)).unwrap();
+                            assert_eq!(actual.raw_data().unwrap(), reference.raw_data().unwrap());
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn mapped_color_output_matches_materialized_layout() {
