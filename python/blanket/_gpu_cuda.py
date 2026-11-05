@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"cupy", "numpy", "torch", "collections.abc", "types"}
+__lazy_modules__ = {"cupy", "numpy", "torch", "collections.abc", "types", "tempfile"}
 
 import atexit
 from collections import deque

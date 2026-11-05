@@ -6,7 +6,7 @@ support the requested modes. Only the current frame is transformed.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os"}
+__lazy_modules__ = {"os", "math"}
 
 import os
 from enum import IntEnum, IntFlag

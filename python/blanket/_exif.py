@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "zlib", "contextlib", "math"}
+__lazy_modules__ = {"collections.abc", "zlib", "contextlib", "math", "struct"}
 
 import contextlib
 import math

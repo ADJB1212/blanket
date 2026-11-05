@@ -7,6 +7,8 @@ lowercase letters use uppercase glyphs and unsupported characters use `?`.
 
 from __future__ import annotations
 
+__lazy_modules__ = {"math"}
+
 from math import ceil, isfinite
 
 from ._blanket import raster_font_mask

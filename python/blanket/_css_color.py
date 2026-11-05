@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"colorsys"}
+__lazy_modules__ = {"colorsys", "math"}
 
 import colorsys
 import re

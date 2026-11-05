@@ -409,6 +409,7 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
                         result.push((k.into(), std::mem::take(&mut buffer)));
                     }
                 }
+                #[allow(clippy::unnecessary_cast)]
                 match status {
                     JxlDecoderStatus::ColorEncoding => {
                         let mut size = 0;

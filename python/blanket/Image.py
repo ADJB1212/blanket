@@ -6,7 +6,7 @@ Supported modes are `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGB
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette", "math"}
 
 import math
 import os

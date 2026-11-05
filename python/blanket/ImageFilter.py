@@ -13,7 +13,7 @@ Nonfinite convolution intermediates use saturating casts, with NaN becoming zero
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "blanket._blanket"}
+__lazy_modules__ = {"collections.abc", "blanket._blanket", "math"}
 
 from abc import ABC, abstractmethod
 from math import isfinite

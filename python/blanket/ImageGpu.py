@@ -6,7 +6,7 @@ Floating-point arithmetic, interpolation, and quantization can change samples.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"types", "torch", "collections.abc", "concurrent.futures"}
+__lazy_modules__ = {"types", "torch", "collections.abc", "concurrent.futures", "math", "struct"}
 
 import math
 import struct

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"struct"}
+
 import struct
 from collections.abc import Mapping, MutableMapping
 from typing import TYPE_CHECKING

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc"}
+__lazy_modules__ = {"collections.abc", "operator"}
 
 from operator import index
 from typing import TYPE_CHECKING

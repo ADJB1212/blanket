@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"struct", "math"}
+
 import math
 import struct
 from dataclasses import dataclass

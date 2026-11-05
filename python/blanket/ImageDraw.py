@@ -7,7 +7,7 @@ bitmap fallback or an explicitly supplied font object; Pillow is not required.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font"}
+__lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font", "math", "operator"}
 
 from math import atan2, ceil, cos, degrees, floor, isfinite, pi, radians, sin
 from operator import index

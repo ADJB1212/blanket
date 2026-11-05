@@ -6,7 +6,7 @@ Glyph availability depends on the selected font; system fallback is not used.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "os", "pathlib", "struct"}
+__lazy_modules__ = {"collections.abc", "os", "pathlib", "struct", "math"}
 
 import os
 import struct

@@ -8,6 +8,8 @@ fingerprints, not cryptographic hashes or guarantees of identical pixels.
 
 from __future__ import annotations
 
+__lazy_modules__ = {"math"}
+
 from dataclasses import dataclass
 from math import isqrt
 

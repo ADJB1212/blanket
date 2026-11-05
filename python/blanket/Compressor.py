@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__lazy_modules__ = {"math"}
+
 import math
 
 from ._blanket import _LosslessImageCompressor, _LossyImageCompressor
