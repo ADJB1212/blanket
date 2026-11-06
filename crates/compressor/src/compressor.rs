@@ -319,24 +319,19 @@ impl LosslessImageCompressor {
             Cow::Borrowed(&[][..])
         };
         let depths: &[usize] = if grayscale { &[1, 2, 4, 8] } else { &[8] };
-        // Exact gray depths are nested: every 1-bit value also fits 2/4/8,
-        // and every 2-bit value fits 4/8. Validate only the minimum once.
-        let minimum_depth = depths.iter().copied().find(|&bits| pixels::fits_depth(&gray, bits)).expect("8-bit samples always fit");
+        let minimum_depth = if grayscale { pixels::min_gray_depth(&gray) } else { 8 };
         for &bits in depths {
             if bits == 8 && image.mode == PixelMode::L {
                 // The unchanged source representation is already a candidate.
                 continue;
             }
-            // Pillow expands 2/4-bit gray pixels to L8 but leaves the tRNS
-            // sample unscaled. Keep interoperability by using a palette or
-            // 8-bit gray for nonzero keys (1-bit mode handles scaling).
             if matches!(bits, 2 | 4) && key.is_some_and(|key| key[0] != 0) {
                 continue;
             }
-            let step = 255 / ((1 << bits) - 1);
             if bits < minimum_depth {
                 continue;
             }
+            let step = 255 / ((1 << bits) - 1);
             let packed = if grayscale && bits < 8 {
                 Cow::Owned(pixels::pack_gray_rows(&gray, image.width as usize, bits))
             } else if grayscale {
@@ -363,11 +358,7 @@ impl LosslessImageCompressor {
     /// Build an exact palette, never quantizing or discarding invisible colors.
     fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) -> Option<(bool, bool)> {
         let channels = image.mode.channels();
-        let mut lookup = ColorLookup::default();
-        let mut palette = Vec::new();
-        let mut alpha = Vec::new();
-        let mut frequencies = Vec::new();
-        let entries = palette_entries(pixels, channels)?;
+        let (lookup, entries) = palette_entries_with_lookup(pixels, channels)?;
         // Every source color is present, including hidden RGB samples.
         // Inspect at most 256 entries instead of scanning the image again.
         let properties = (
@@ -375,18 +366,18 @@ impl LosslessImageCompressor {
             channels != 4 || entries.iter().all(|(pixel, _)| pixel[3] == 255),
         );
         let colors = entries.len();
+        let mut palette = Vec::with_capacity(colors * 3);
+        let mut alpha = Vec::with_capacity(colors);
+        let mut frequencies = Vec::with_capacity(colors);
         let mut gray_mapping = [0; 256];
         for (index, (pixel, count)) in entries.into_iter().enumerate() {
-            lookup.insert(pixel_key(pixel), index);
             if channels == 1 {
                 gray_mapping[usize::from(pixel[0])] = index as u8;
-            }
-            frequencies.push(count);
-            if channels == 1 {
                 palette.extend_from_slice(&[pixel[0]; 3]);
             } else {
                 palette.extend_from_slice(&pixel[..3]);
             }
+            frequencies.push(count);
             alpha.push(if channels == 4 { pixel[3] } else { 255 });
         }
         let bits = match colors {
@@ -399,19 +390,62 @@ impl LosslessImageCompressor {
         let mut indices = if channels == 1 {
             pixels::remap(pixels, &gray_mapping)
         } else {
+            let lookup = lookup.as_ref().expect("lookup populated for multi-channel images");
             let mut indices = vec![0; pixels.len() / channels];
-            parallel::chunks_mut_above(&mut indices, 64 * 1024, 256 * 1024, |i, dst| {
-                let mut previous = None;
-                for (pixel, index) in pixels[i * 64 * 1024 * channels..].chunks_exact(channels).zip(dst) {
-                    let key = pixel_key(pixel);
-                    *index = match previous {
-                        Some((old, value)) if old == key => value,
-                        _ => {
-                            let value = lookup.find(key).expect("palette contains every pixel") as u8;
-                            previous = Some((key, value));
-                            value
+            parallel::chunks_mut_above(&mut indices, 64 << 10, 256 << 10, |i, dst| {
+                let src = &pixels[i * 64 * 1024 * channels..][..dst.len() * channels];
+                let mut previous: Option<(u32, u8)> = None;
+                if channels == 4 {
+                    let pixels_rgba = src.as_chunks::<4>().0;
+                    let mut p = 0;
+                    while p + 4 <= dst.len() {
+                        let k0 = u32::from_le_bytes(pixels_rgba[p]);
+                        if let Some((old, val)) = previous
+                            && k0 == old
+                            && u32::from_le_bytes(pixels_rgba[p + 1]) == old
+                            && u32::from_le_bytes(pixels_rgba[p + 2]) == old
+                            && u32::from_le_bytes(pixels_rgba[p + 3]) == old
+                        {
+                            dst[p..p + 4].fill(val);
+                            p += 4;
+                            continue;
                         }
-                    };
+                        for (&pixel, index) in pixels_rgba[p..p + 4].iter().zip(&mut dst[p..p + 4]) {
+                            let key = u32::from_le_bytes(pixel);
+                            *index = match previous {
+                                Some((old, value)) if old == key => value,
+                                _ => {
+                                    let value = lookup.find(key).expect("palette contains every pixel") as u8;
+                                    previous = Some((key, value));
+                                    value
+                                }
+                            };
+                        }
+                        p += 4;
+                    }
+                    for (&pixel, index) in pixels_rgba[p..].iter().zip(&mut dst[p..]) {
+                        let key = u32::from_le_bytes(pixel);
+                        *index = match previous {
+                            Some((old, value)) if old == key => value,
+                            _ => {
+                                let value = lookup.find(key).expect("palette contains every pixel") as u8;
+                                previous = Some((key, value));
+                                value
+                            }
+                        };
+                    }
+                } else {
+                    for (pixel, index) in src.chunks_exact(channels).zip(dst) {
+                        let key = pixel_key(pixel);
+                        *index = match previous {
+                            Some((old, value)) if old == key => value,
+                            _ => {
+                                let value = lookup.find(key).expect("palette contains every pixel") as u8;
+                                previous = Some((key, value));
+                                value
+                            }
+                        };
+                    }
                 }
             });
             indices
@@ -420,8 +454,6 @@ impl LosslessImageCompressor {
         let mut orders = vec![original.clone()];
         if self.effort >= 3 {
             let mut frequency = original.clone();
-            // Put transparent entries first to shorten tRNS, then favor common
-            // colors. Stable ties make output independent of HashMap iteration.
             frequency.sort_by_key(|&i| (alpha[i] == 255, std::cmp::Reverse(frequencies[i])));
             if !orders.contains(&frequency) {
                 orders.push(frequency);
@@ -437,30 +469,24 @@ impl LosslessImageCompressor {
         let order_count = orders.len();
         for (order_index, order) in orders.into_iter().enumerate() {
             let mut mapping = [0_u8; 256];
-            let mut rgb = Vec::new();
-            let mut transparency = Vec::new();
+            let mut rgb = Vec::with_capacity(colors * 3);
+            let mut transparency = Vec::with_capacity(colors);
             for (new, &old) in order.iter().enumerate() {
                 mapping[old] = new as u8;
                 rgb.extend_from_slice(&palette[3 * old..3 * old + 3]);
                 transparency.push(alpha[old]);
             }
             transparency.truncate(transparency.iter().rposition(|&a| a != 255).map_or(0, |i| i + 1));
-            // First-occurrence ordering already has these indices. Borrow it
-            // instead of allocating and applying an identity LUT to the image.
-            let fuse_mapping = order_index != 0 && self.effort < 8 && bits < 8;
+            let fuse_mapping = order_index != 0 && (self.effort < 8 || bits == 8);
             let mut remapped = if order_index == 0 || fuse_mapping { None } else { Some(pixels::remap(&indices, &mapping)) };
-            // Wider indices can produce more compressible filter residuals.
-            // Keep this extra search at high effort, retaining packed trials.
             for depth in [1, 2, 4, 8] {
                 if depth < bits || (depth != bits && self.effort < 8) {
                     continue;
                 }
                 let samples = if depth == 8 {
-                    // Eight bits is the last depth, so the buffers are free to
-                    // hand over. Fused orders never reach this depth, so only
-                    // later orders still need the first-occurrence indices.
                     match remapped.take() {
                         Some(remapped) => remapped,
+                        None if fuse_mapping => pixels::remap(&indices, &mapping),
                         None if order_index + 1 == order_count => std::mem::take(&mut indices),
                         None => indices.clone(),
                     }
@@ -585,14 +611,53 @@ impl ColorCounts {
     fn count(pixels: &[u8], channels: usize, base: usize) -> Option<Self> {
         let mut result = Self::new();
         let mut previous: Option<(u32, usize)> = None;
-        for (i, pixel) in pixels.chunks_exact(channels).enumerate() {
-            let key = pixel_key(pixel);
-            if let Some((old, index)) = previous
-                && old == key
-            {
-                result.entries[index].1 += 1;
-            } else {
-                previous = Some((key, result.add(key, 1, base + i)?));
+        if channels == 4 {
+            let chunks = pixels.as_chunks::<4>().0;
+            let mut i = 0;
+            while i + 4 <= chunks.len() {
+                let k0 = u32::from_le_bytes(chunks[i]);
+                if let Some((old, index)) = previous
+                    && k0 == old
+                    && u32::from_le_bytes(chunks[i + 1]) == old
+                    && u32::from_le_bytes(chunks[i + 2]) == old
+                    && u32::from_le_bytes(chunks[i + 3]) == old
+                {
+                    result.entries[index].1 += 4;
+                    i += 4;
+                    continue;
+                }
+                for offset in 0..4 {
+                    let key = u32::from_le_bytes(chunks[i + offset]);
+                    if let Some((old, index)) = previous
+                        && old == key
+                    {
+                        result.entries[index].1 += 1;
+                    } else {
+                        previous = Some((key, result.add(key, 1, base + i + offset)?));
+                    }
+                }
+                i += 4;
+            }
+            for (offset, pixel) in chunks[i..].iter().enumerate() {
+                let key = u32::from_le_bytes(*pixel);
+                if let Some((old, index)) = previous
+                    && old == key
+                {
+                    result.entries[index].1 += 1;
+                } else {
+                    previous = Some((key, result.add(key, 1, base + i + offset)?));
+                }
+            }
+        } else {
+            for (i, pixel) in pixels.chunks_exact(channels).enumerate() {
+                let key = pixel_key(pixel);
+                if let Some((old, index)) = previous
+                    && old == key
+                {
+                    result.entries[index].1 += 1;
+                } else {
+                    previous = Some((key, result.add(key, 1, base + i)?));
+                }
             }
         }
         Some(result)
@@ -606,9 +671,10 @@ impl ColorCounts {
     }
 }
 
-fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>> {
+type PaletteEntries<'a> = Vec<(&'a [u8], usize)>;
+
+fn palette_entries_with_lookup(pixels: &[u8], channels: usize) -> Option<(Option<ColorLookup>, PaletteEntries<'_>)> {
     if channels == 1 {
-        // The sample itself is a bounded key: avoid hashing every gray pixel.
         let mut counts = [0_usize; 256];
         let mut first = Vec::with_capacity(256);
         for (i, &value) in pixels.iter().enumerate() {
@@ -618,13 +684,12 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
             }
             *count += 1;
         }
-        return Some(first.into_iter().map(|i| (&pixels[i..=i], counts[usize::from(pixels[i])])).collect());
+        let entries = first.into_iter().map(|i| (&pixels[i..=i], counts[usize::from(pixels[i])])).collect();
+        return Some((None, entries));
     }
-    let chunk = 64 * 1024 * channels;
-    let counts = if parallel::should_parallel(pixels.len(), chunk, 256 * 1024) {
-        // Most photographic images exceed 256 colors immediately. Reject them
-        // before scheduling tasks or allocating per-image index buffers.
-        let prefix_len = pixels.len().min(4096 * channels);
+    let chunk = channels << 16;
+    let counts = if parallel::should_parallel(pixels.len(), chunk, 256 << 10) {
+        let prefix_len = pixels.len().min(channels << 12);
         let prefix = ColorCounts::count(&pixels[..prefix_len], channels, 0)?;
         let remaining = pixels[prefix_len..]
             .par_chunks(chunk)
@@ -637,7 +702,17 @@ fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>
     };
     let mut entries = counts.entries;
     entries.sort_unstable_by_key(|&(_, _, first)| first);
-    Some(entries.into_iter().map(|(_, count, first)| (&pixels[first * channels..(first + 1) * channels], count)).collect())
+    let mut lookup = counts.lookup;
+    for (new_index, &(key, _, _)) in entries.iter().enumerate() {
+        lookup.insert(key, new_index);
+    }
+    let slices = entries.into_iter().map(|(_, count, first)| (&pixels[first * channels..(first + 1) * channels], count)).collect();
+    Some((Some(lookup), slices))
+}
+
+#[cfg(test)]
+fn palette_entries(pixels: &[u8], channels: usize) -> Option<Vec<(&[u8], usize)>> {
+    palette_entries_with_lookup(pixels, channels).map(|(_, entries)| entries)
 }
 
 /// One exact pixel representation of the image, ready to encode.
@@ -680,7 +755,8 @@ impl PngCandidate<'_> {
     /// Encode unless the output reaches `limit`, which concurrent winners may
     /// tighten while this encoder runs.
     fn encode_bounded(&self, image: &Image, filter: png::Filter, level: u8, limit: &CandidateLimit) -> PyResult<Option<Vec<u8>>> {
-        let mut output = CandidateWriter { limit, .. };
+        let initial_cap = self.minimum_size(image).min(limit.get().saturating_sub(1));
+        let mut output = CandidateWriter { bytes: Vec::with_capacity(initial_cap), limit, .. };
         let result = (|| {
             let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
             encoder.set_color(self.color);

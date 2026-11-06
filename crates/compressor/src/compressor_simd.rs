@@ -1,22 +1,22 @@
 //! Exact compression preparation: bounded SIMD loads, scalar tails, and
 //! coarse Rayon partitions. Codec libraries handle their own entropy SIMD.
 
-use std::simd::Simd;
-use std::simd::cmp::SimdPartialEq;
-use std::simd::num::SimdUint;
+use std::simd::Select;
+use std::simd::cmp::{SimdPartialEq, SimdPartialOrd};
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use blanket_core::parallel::{chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load, store};
 use rayon::prelude::*;
 
 // Memory-bound scans need larger buffers to amortize parallel scheduling.
-const MEMORY_PARALLEL_BYTES: usize = 4 * 1024 * 1024;
+const MEMORY_PARALLEL_BYTES: usize = 4 << 20;
 // Coarse pixel partitions keep preparation tasks large enough for Rayon.
-const CHUNK_PIXELS: usize = 64 * 1024;
+const CHUNK_PIXELS: usize = 64 << 10;
 
 pub(crate) fn matches_key(source: &[u8], key: [u8; 3]) -> bool {
-    if should_parallel(source.len(), CHUNK_PIXELS * 4, MEMORY_PARALLEL_BYTES) {
-        source.par_chunks(CHUNK_PIXELS * 4).all(|src| matches_key_chunk(src, key))
+    if should_parallel(source.len(), CHUNK_PIXELS << 2, MEMORY_PARALLEL_BYTES) {
+        source.par_chunks(CHUNK_PIXELS << 2).all(|src| matches_key_chunk(src, key))
     } else {
         matches_key_chunk(source, key)
     }
@@ -27,7 +27,7 @@ fn matches_key_chunk(source: &[u8], key: [u8; 3]) -> bool {
     while offset + 64 <= source.len() {
         let [r, g, b, a] = load::<4>(&source[offset..]);
         let same = r.simd_eq(Bytes::splat(key[0])) & g.simd_eq(Bytes::splat(key[1])) & b.simd_eq(Bytes::splat(key[2]));
-        let valid = (same & a.simd_eq(Bytes::splat(0))) | (!same & a.simd_eq(Bytes::splat(255)));
+        let valid = same.select(Bytes::splat(0), Bytes::splat(255)).simd_eq(a);
         if !valid.all() {
             return false;
         }
@@ -42,13 +42,30 @@ pub(crate) fn properties(source: &[u8], channels: usize) -> (bool, bool) {
     }
     let chunk = CHUNK_PIXELS * channels;
     if should_parallel(source.len(), chunk, MEMORY_PARALLEL_BYTES) {
-        // Photographic RGB and nonopaque RGBA usually disprove both possible
-        // reductions immediately. Avoid scheduling a scan of every chunk.
         let prefix = properties_chunk(&source[..source.len().min(64 * channels)], channels);
         if !prefix.0 && (!prefix.1 || channels == 3) {
             return prefix;
         }
-        source.par_chunks(chunk).map(|src| properties_chunk(src, channels)).reduce(|| (true, true), |a, b| (a.0 && b.0, a.1 && b.1))
+        // Bit 0 = gray, Bit 1 = opaque.
+        let state = AtomicU8::new(u8::from(prefix.0) | (u8::from(prefix.1) << 1));
+        let stop_mask = if channels == 3 { 1 } else { 3 };
+        let _ = source.par_chunks(chunk).try_for_each(|src| {
+            let current = state.load(Ordering::Relaxed);
+            if current & stop_mask == 0 {
+                return Err(());
+            }
+            let (g, o) = properties_chunk(src, channels);
+            let mask = u8::from(g) | (u8::from(o) << 1);
+            if (current & mask) != current {
+                let updated = state.fetch_and(mask, Ordering::Relaxed) & mask;
+                if updated & stop_mask == 0 {
+                    return Err(());
+                }
+            }
+            Ok(())
+        });
+        let final_state = state.load(Ordering::Relaxed);
+        (final_state & 1 != 0, final_state & 2 != 0)
     } else {
         properties_chunk(source, channels)
     }
@@ -125,25 +142,70 @@ fn select_chunk(source: &[u8], output: &mut [u8], channels: usize, alpha: bool, 
     }
 }
 
-pub(crate) fn fits_depth(gray: &[u8], bits: usize) -> bool {
-    if bits == 8 {
-        return true;
+pub(crate) fn min_gray_depth(gray: &[u8]) -> usize {
+    let failed = if should_parallel(gray.len(), CHUNK_PIXELS, MEMORY_PARALLEL_BYTES) {
+        gray.par_chunks(CHUNK_PIXELS).map(depth_mismatch_mask).reduce(|| 0, |a, b| a | b)
+    } else {
+        depth_mismatch_mask(gray)
+    };
+    if failed & 1 == 0 {
+        1
+    } else if failed & 2 == 0 {
+        2
+    } else if failed & 4 == 0 {
+        4
+    } else {
+        8
     }
-    let check = |src: &[u8]| fits_depth_chunk(src, bits);
-    if should_parallel(gray.len(), CHUNK_PIXELS, MEMORY_PARALLEL_BYTES) { gray.par_chunks(CHUNK_PIXELS).all(check) } else { check(gray) }
 }
 
-fn fits_depth_chunk(source: &[u8], bits: usize) -> bool {
+/// Returns bit flags of depths that `source` does NOT fit:
+/// bit 0 (1): fails 1-bit (`v % 255 != 0`, i.e. `(v ^ (v >> 1)) & 0x7F != 0`)
+/// bit 1 (2): fails 2-bit (`v % 85 != 0`,  i.e. `(v ^ (v >> 2)) & 0x3F != 0`)
+/// bit 2 (4): fails 4-bit (`v % 17 != 0`,  i.e. `(v ^ (v >> 4)) & 0x0F != 0`)
+fn depth_mismatch_mask(source: &[u8]) -> u8 {
     let mut offset = 0;
-    let step = (255 / ((1 << bits) - 1)) as u8;
+    let mut diff1 = Bytes::splat(0);
+    let mut diff2 = Bytes::splat(0);
+    let mut diff4 = Bytes::splat(0);
     while offset + 16 <= source.len() {
         let v = Bytes::from_slice(&source[offset..offset + 16]);
-        if !v.simd_eq((v >> (8 - bits) as u8) * Bytes::splat(step)).all() {
-            return false;
+        let d4 = (v ^ (v >> 4)) & Bytes::splat(0x0F);
+        if d4.simd_ne(Bytes::splat(0)).any() {
+            return 0b111;
         }
+        diff4 |= d4;
+        diff2 |= (v ^ (v >> 2)) & Bytes::splat(0x3F);
+        diff1 |= (v ^ (v >> 1)) & Bytes::splat(0x7F);
         offset += 16;
     }
-    source[offset..].iter().all(|&v| v % step == 0)
+    let mut failed = 0;
+    if diff4.simd_ne(Bytes::splat(0)).any() {
+        return 0b111;
+    }
+    if diff2.simd_ne(Bytes::splat(0)).any() {
+        failed |= 0b011;
+    }
+    if diff1.simd_ne(Bytes::splat(0)).any() {
+        failed |= 0b001;
+    }
+    for &v in &source[offset..] {
+        if (v ^ (v >> 4)) & 0x0F != 0 {
+            return 0b111;
+        }
+        if (v ^ (v >> 2)) & 0x3F != 0 {
+            failed |= 0b011;
+        }
+        if (v ^ (v >> 1)) & 0x7F != 0 {
+            failed |= 0b001;
+        }
+    }
+    failed
+}
+
+#[cfg(test)]
+pub(crate) fn fits_depth(gray: &[u8], bits: usize) -> bool {
+    min_gray_depth(gray) <= bits
 }
 
 pub(crate) fn remap(source: &[u8], table: &[u8; 256]) -> Vec<u8> {
@@ -228,10 +290,13 @@ fn pack_row(source: &[u8], output: &mut [u8], bits: usize) {
             done += 64;
         }
     } else {
-        let weights = Simd::<u8, 8>::from_array([128, 64, 32, 16, 8, 4, 2, 1]);
-        while done + 8 <= source.len() {
-            output[done / 8] = (Simd::<u8, 8>::from_slice(&source[done..done + 8]) * weights).reduce_sum();
-            done += 8;
+        while done + 16 <= source.len() {
+            let v = Bytes::from_slice(&source[done..done + 16]);
+            let mask = v.simd_gt(Bytes::splat(0)).to_bitmask() as u16;
+            let [lo, hi] = mask.to_le_bytes();
+            output[done / 8] = lo.reverse_bits();
+            output[done / 8 + 1] = hi.reverse_bits();
+            done += 16;
         }
     }
     for (x, &sample) in source.iter().enumerate().skip(done) {
@@ -240,8 +305,8 @@ fn pack_row(source: &[u8], output: &mut [u8], bits: usize) {
 }
 
 // Equality scans use byte partitions and a serial prefix for early mismatches.
-const EQUALITY_CHUNK_BYTES: usize = 256 * 1024;
-const EQUALITY_PARALLEL_BYTES: usize = 8 * 1024 * 1024;
+const EQUALITY_CHUNK_BYTES: usize = 256 << 10;
+const EQUALITY_PARALLEL_BYTES: usize = 8 << 20;
 const EQUALITY_PREFIX_BYTES: usize = 1024;
 
 /// Slice equality already uses the platform's optimized SIMD memcmp. Only
