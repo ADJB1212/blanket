@@ -5,6 +5,7 @@
 [![CI](https://github.com/ADJB1212/blanket/actions/workflows/CI.yml/badge.svg)](https://github.com/ADJB1212/blanket/actions/workflows/CI.yml)
 ![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue)
 [![Source license: MIT](https://img.shields.io/badge/source_license-MIT-green)](LICENSE)
+[![PyPI Downloads](https://static.pepy.tech/personalized-badge/pyblanket?period=total&units=INTERNATIONAL_SYSTEM&left_color=BLUE&right_color=BLACK&left_text=downloads)](https://pepy.tech/projects/pyblanket)
 
 <p align="center">
     <img src="assets/benchmark.svg" width="800"/>
