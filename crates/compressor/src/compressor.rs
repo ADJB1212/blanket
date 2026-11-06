@@ -211,8 +211,8 @@ impl LosslessImageCompressor {
             source: true,
             ..
         }];
-        self.palette_candidates(image, pixels, &mut candidates);
-        self.gray_or_key_candidates(image, pixels, &mut candidates);
+        let properties = self.palette_candidates(image, pixels, &mut candidates);
+        self.gray_or_key_candidates(image, pixels, &mut candidates, properties);
         self.search_png(image, &candidates, compress_level, None)
     }
 
@@ -287,9 +287,9 @@ impl LosslessImageCompressor {
         Ok(best.or(baseline).expect("the normal save always produces an encoding"))
     }
 
-    fn gray_or_key_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) {
+    fn gray_or_key_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>, properties: Option<(bool, bool)>) {
         let channels = image.mode.channels();
-        let (grayscale, opaque) = pixels::properties(pixels, channels);
+        let (grayscale, opaque) = properties.unwrap_or_else(|| pixels::properties(pixels, channels));
         if image.mode == PixelMode::Rgba && (opaque || grayscale) {
             // Retain every alpha and hidden color sample. Gray+alpha supports
             // arbitrary transparency even when a single tRNS key cannot.
@@ -361,15 +361,19 @@ impl LosslessImageCompressor {
     }
 
     /// Build an exact palette, never quantizing or discarding invisible colors.
-    fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) {
+    fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) -> Option<(bool, bool)> {
         let channels = image.mode.channels();
         let mut lookup = ColorLookup::default();
         let mut palette = Vec::new();
         let mut alpha = Vec::new();
         let mut frequencies = Vec::new();
-        let Some(entries) = palette_entries(pixels, channels) else {
-            return;
-        };
+        let entries = palette_entries(pixels, channels)?;
+        // Every source color is present, including hidden RGB samples.
+        // Inspect at most 256 entries instead of scanning the image again.
+        let properties = (
+            channels == 1 || entries.iter().all(|(pixel, _)| pixel[0] == pixel[1] && pixel[1] == pixel[2]),
+            channels != 4 || entries.iter().all(|(pixel, _)| pixel[3] == 255),
+        );
         let colors = entries.len();
         let mut gray_mapping = [0; 256];
         for (index, (pixel, count)) in entries.into_iter().enumerate() {
@@ -386,7 +390,7 @@ impl LosslessImageCompressor {
             alpha.push(if channels == 4 { pixel[3] } else { 255 });
         }
         let bits = match colors {
-            0 => return,
+            0 => return Some(properties),
             1..=2 => 1,
             3..=4 => 2,
             5..=16 => 4,
@@ -475,6 +479,7 @@ impl LosslessImageCompressor {
                 });
             }
         }
+        Some(properties)
     }
 }
 
@@ -1031,8 +1036,11 @@ mod tests {
                         source: true,
                         ..
                     }];
-                    compressor.palette_candidates(image, pixels, &mut candidates);
-                    compressor.gray_or_key_candidates(image, pixels, &mut candidates);
+                    let properties = compressor.palette_candidates(image, pixels, &mut candidates);
+                    if let Some(properties) = properties {
+                        assert_eq!(properties, pixels::properties(pixels, image.mode.channels()));
+                    }
+                    compressor.gray_or_key_candidates(image, pixels, &mut candidates, None);
                     // Reference: the normal save, then each representation's
                     // trials in order, accepting only strictly smaller output.
                     let mut expected = codecs::encode_png(image, pixels, compress_level).unwrap();

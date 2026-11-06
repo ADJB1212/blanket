@@ -168,9 +168,13 @@ jobs:
       - name: Verify Pillow behavior
         run: uv run scripts/verify_behavior.py
 
-      - name: Prune workspace from cache
-        if: always() && steps.build-project.outcome == 'success'
-        run: cargo clean --workspace --locked
+      - name: Delete stale Rust caches
+        if: always() && steps.cargo-cache-save.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_PREFIX: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
+          CURRENT_KEY: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
+        run: gh cache list --key "$CACHE_PREFIX" --json id,key --jq '.[].id' | xargs -r -n1 gh cache delete
 
       - name: Save Rust dependencies and build artifacts
         if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-project.outcome == 'success' && steps.cargo-cache-restore.outputs.cache-hit != 'true'
@@ -182,13 +186,3 @@ jobs:
             ~/.cargo/git/db
             target
           key: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
-
-      - name: Delete stale Rust caches
-        if: always() && steps.cargo-cache-save.outcome == 'success'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CACHE_PREFIX: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
-          CURRENT_KEY: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
-        run: |
-          gh cache list --key "$CACHE_PREFIX" --ref refs/heads/main --limit 100 --json id,key \
-            | jq -r --arg current "$CURRENT_KEY" '.[] | select(.key != $current) | .id' | xargs -r -n1 gh cache delete
