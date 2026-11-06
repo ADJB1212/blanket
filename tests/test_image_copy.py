@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 
 import pytest
+from helpers import assert_image_properties
 from pillow_helpers import PILLOW_IMAGES, hopper, skip_unless_feature
 
 from blanket import Image
@@ -18,33 +19,28 @@ def test_copy(mode: str) -> None:
     # Internal copy method
     im = hopper(mode)
     out = im.copy()
-    assert out.mode == im.mode
-    assert out.size == im.size
+    assert_image_properties(out, mode=im.mode, size=im.size)
 
     # Python's copy method
     im = hopper(mode)
     out = copy.copy(im)
-    assert out.mode == im.mode
-    assert out.size == im.size
+    assert_image_properties(out, mode=im.mode, size=im.size)
 
     # Internal copy method on a cropped image
     im = hopper(mode)
     out = im.crop(cropped_coordinates).copy()
-    assert out.mode == im.mode
-    assert out.size == cropped_size
+    assert_image_properties(out, mode=im.mode, size=cropped_size)
 
     # Python's copy method on a cropped image
     im = hopper(mode)
     out = copy.copy(im.crop(cropped_coordinates))
-    assert out.mode == im.mode
-    assert out.size == cropped_size
+    assert_image_properties(out, mode=im.mode, size=cropped_size)
 
 
 def test_copy_zero() -> None:
     im = Image.new("RGB", (0, 0))
     out = im.copy()
-    assert out.mode == im.mode
-    assert out.size == im.size
+    assert_image_properties(out, mode=im.mode, size=im.size)
 
 
 @skip_unless_feature("libtiff")

@@ -6,7 +6,7 @@ import math
 import struct
 
 import pytest
-from helpers import assert_raises, image_pair, patterned_pair
+from helpers import assert_image_properties, assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage
 
 from blanket import Image
@@ -91,8 +91,7 @@ def test_wide_split_and_getchannel_preserve_samples(mode: str, subtests: pytest.
                 image = Image.frombytes(mode, (count, 1), raw, bit_depth=depth)
                 for channel, band in enumerate(image.split()):
                     expected = struct.pack(f"<{count}H", *values[channel :: len(mode)])
-                    assert band.bit_depth == depth
-                    assert band.tobytes() == expected
+                    assert_image_properties(band, bit_depth=depth, pixels=expected)
                     assert image.getchannel(channel).tobytes() == expected
                 assert image.tobytes() == raw
 
@@ -125,9 +124,7 @@ def test_reduce(mode: str, subtests: pytest.Subtests) -> None:
                 image.info["custom"] = 42
                 result = image.reduce(factor, box)
                 expected = reference.reduce(factor, box)
-                assert result.size == expected.size
-                assert result.mode == expected.mode
-                assert result.tobytes() == expected.tobytes()
+                assert_image_properties(result, size=expected.size, mode=expected.mode, pixels=expected.tobytes())
                 assert result is not image
                 assert result.info == image.info
                 assert result.info is not image.info

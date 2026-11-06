@@ -5,7 +5,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -66,9 +66,7 @@ def test_encoded_bytes_match_streams(mode, format):
     direct = Image.decode(encoded)
     reference = Image.open(BytesIO(encoded))
     assert direct.filename == ""
-    assert (direct.format, direct.mode, direct.size, direct.bit_depth) == (reference.format, reference.mode, reference.size, reference.bit_depth)
-    assert direct.tobytes() == reference.tobytes()
-    assert direct.info == reference.info
+    assert_image_properties(direct, format=reference.format, mode=reference.mode, size=reference.size, bit_depth=reference.bit_depth, pixels=reference.tobytes(), info=reference.info)
     assert direct.getpalette() == reference.getpalette()
     with PillowImage.open(BytesIO(encoded)) as interoperable:
         assert interoperable.size == direct.size
@@ -84,8 +82,7 @@ def test_encoded_bytes_preserve_sample_depth(mode, channels, depth, format):
     reference = image_buffer(source, format, **options)
     assert encoded == reference.getvalue()
     decoded = Image.decode(encoded)
-    assert decoded.bit_depth == depth
-    assert decoded.tobytes() == source.tobytes()
+    assert_image_properties(decoded, bit_depth=depth, pixels=source.tobytes())
 
 
 @pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP", "TIFF"])
@@ -134,8 +131,7 @@ def test_byte_sequences_preserve_frames_controls_and_positions(format, lazy):
     image.putpixel((0, 0), (10, 20, 30, 255))
     pixels = image.tobytes()
     current = Image.decode(image.encode("PNG"))
-    assert current.n_frames == 1
-    assert current.tobytes() == pixels
+    assert_image_properties(current, n_frames=1, pixels=pixels)
     exported = Image.decode(image.encode(format, save_all=True, **({"lossless": True} if format == "WEBP" else {})))
     assert image.tell() == 1
     assert image.tobytes() == pixels

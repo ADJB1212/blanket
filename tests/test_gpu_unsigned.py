@@ -2,7 +2,7 @@ import struct
 
 import pytest
 from gpu_helpers import require_metal, runtime as metal_runtime
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 
 from blanket import Image, ImageGpu
 
@@ -16,8 +16,7 @@ def test_unsigned_precision_roundtrip_and_geometry(runtime, depth, mode, channel
     samples = [0, 1, maximum // 2, maximum - 1, maximum] * channels
     image = Image.frombytes(mode, (5, 1), struct.pack(f"{len(samples)}H", *samples), bit_depth=depth)
     gpu = ImageGpu.from_image(image, runtime=runtime)
-    assert gpu.bit_depth == depth
-    assert gpu.mode == mode
+    assert_image_properties(gpu, bit_depth=depth, mode=mode)
     assert gpu.to_image().tobytes() == image.tobytes()
     assert gpu.copy().to_image().tobytes() == image.tobytes()
     assert gpu.invert().invert().to_image().tobytes() == image.tobytes()

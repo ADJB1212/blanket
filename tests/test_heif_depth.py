@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pillow_heif
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PILImage
 
 from blanket import Image, UnidentifiedImageError
@@ -25,8 +25,7 @@ def test_streamed_wide_png_samples(mode: str, channels: int, subtests: pytest.Su
                 image = Image.fromarray(values[:, :, 0] if channels == 1 else values, bit_depth=depth)
                 stream = image_buffer(image, "PNG", compress_level=compress_level)
                 reopened = Image.open(BytesIO(stream.getvalue()))
-                assert (reopened.mode, reopened.bit_depth) == (mode, depth)
-                assert reopened.tobytes() == image.tobytes()
+                assert_image_properties(reopened, mode=mode, bit_depth=depth, pixels=image.tobytes())
                 normalized = (values.astype(np.uint32) * 65535 + ((1 << depth) - 1) // 2) // ((1 << depth) - 1)
                 expected = normalized[:, :, 0] if channels == 1 else normalized >> 8
                 np.testing.assert_array_equal(np.asarray(PILImage.open(BytesIO(stream.getvalue()))), expected)
@@ -61,8 +60,7 @@ def test_wide_pixels_and_png(mode: str, channels: int, depth: int) -> None:
     assert image.copy().bit_depth == depth
     output = image_buffer(image, "PNG")
     result = Image.open(output)
-    assert result.bit_depth == depth
-    assert result.tobytes() == image.tobytes()
+    assert_image_properties(result, bit_depth=depth, pixels=image.tobytes())
     converted = image.convert("RGBA", bit_depth=8)
     assert converted.bit_depth == 8
     assert converted.getpixel((-1, -1)) == (255, 255, 255, 255)
@@ -118,8 +116,7 @@ def test_heif_pixel_rows(mode: str, channels: int, subtests: pytest.Subtests) ->
                 expected = np.asarray(pillow_heif.open_heif(output.getvalue(), convert_hdr_to_8bit=False, hdr_to_16bit=False))
                 if mode == "L":
                     expected = np.repeat(expected[:, :, None], 3, axis=2)
-                assert (result.mode, result.size, result.bit_depth) == ("RGB" if mode == "L" else mode, size, depth)
-                assert result.tobytes() == expected.astype(np.uint8 if depth == 8 else "<u2").tobytes()
+                assert_image_properties(result, mode="RGB" if mode == "L" else mode, size=size, bit_depth=depth, pixels=expected.astype(np.uint8 if depth == 8 else "<u2").tobytes())
                 if mode == "L":
                     # Monochrome HEVC must retain each complete sample without color conversion.
                     assert result.tobytes() == np.repeat(samples, 3).tobytes()
@@ -205,8 +202,7 @@ def test_wide_conversion_rounding_and_parallel_tails(source_mode: str, subtests:
                         expected = np.concatenate((rgb, alpha), axis=1)
                     expected = ((expected * target_max + source_max // 2) // source_max).astype("u1" if target_depth == 8 else "<u2")
                     result = image.convert(target_mode, bit_depth=target_depth)
-                    assert (result.mode, result.size, result.bit_depth) == (target_mode, image.size, target_depth)
-                    assert result.tobytes() == expected.tobytes()
+                    assert_image_properties(result, mode=target_mode, size=image.size, bit_depth=target_depth, pixels=expected.tobytes())
                     assert image.tobytes() == raw
 
 
@@ -236,11 +232,9 @@ def test_wide_geometry_and_bands() -> None:
     samples = np.arange(300, 336, dtype=np.uint16).reshape(3, 4, 3)
     image = Image.fromarray(samples, bit_depth=10)
     for operation, expected in ((image.crop(), samples), (image.crop((1, 1, 3, 3)), samples[1:3, 1:3]), (image.transpose(Image.FLIP_LEFT_RIGHT), samples[:, ::-1]), (image.transpose(Image.ROTATE_90), np.rot90(samples))):
-        assert operation.bit_depth == 10
-        assert operation.tobytes() == expected.tobytes()
+        assert_image_properties(operation, bit_depth=10, pixels=expected.tobytes())
     for channel, band in enumerate(image.split()):
-        assert band.bit_depth == 10
-        assert band.tobytes() == samples[:, :, channel].tobytes()
+        assert_image_properties(band, bit_depth=10, pixels=samples[:, :, channel].tobytes())
 
 
 @pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4)])
@@ -266,8 +260,7 @@ def test_wide_resize_matches_independent_row_regions(mode: str, subtests: pytest
                 image = Image.frombytes(mode, (1026, 514), samples.tobytes(), bit_depth=depth)
                 result = image.resize((513, 257), method)
                 regions = [image.resize((513, bottom - top), method, box=(0, top * 2, 1026, bottom * 2)) for top, bottom in ((0, 64), (64, 128), (128, 257))]
-                assert (result.mode, result.bit_depth) == (mode, depth)
-                assert result.tobytes() == b"".join(region.tobytes() for region in regions)
+                assert_image_properties(result, mode=mode, bit_depth=depth, pixels=b"".join(region.tobytes() for region in regions))
 
 
 @pytest.mark.parametrize("data", [b"", b"\x00\x00\x00\x18ftypheic", b"\x00\x00\x00\x10ftypheic\0\0\0\0"])

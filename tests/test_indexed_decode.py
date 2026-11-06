@@ -4,7 +4,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
-from helpers import encode_image, image_buffer, image_pair
+from helpers import assert_image_properties, encode_image, image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -79,6 +79,5 @@ def test_gif_frame_modes_match_pillow(transparent: bool, lazy: bool) -> None:
     for position in (0, 2, 1, 0):
         actual.seek(position)
         expected.seek(position)
-        assert actual.mode == expected.mode
-        assert actual.tobytes() == expected.tobytes()
+        assert_image_properties(actual, mode=expected.mode, pixels=expected.tobytes())
         assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()

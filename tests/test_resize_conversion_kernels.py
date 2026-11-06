@@ -4,7 +4,7 @@ import random
 import struct
 
 import pytest
-from helpers import assert_pixels_equal, image_pair
+from helpers import assert_image_properties, assert_pixels_equal, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -38,8 +38,7 @@ def test_conversion_depth_and_mode_rounding(source: str, subtests: pytest.Subtes
                         expected.extend((value * target_max + maximum // 2) // maximum for value in values)
                     encoded = bytes(expected) if target_depth == 8 else struct.pack(f"<{len(expected)}H", *expected)
                     actual = image.convert(target, bit_depth=target_depth)
-                    assert (actual.mode, actual.bit_depth, actual.size) == (target, target_depth, (33, 1))
-                    assert actual.tobytes() == encoded
+                    assert_image_properties(actual, mode=target, bit_depth=target_depth, size=(33, 1), pixels=encoded)
                     assert image.tobytes() == raw
 
 

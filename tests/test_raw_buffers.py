@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-from helpers import assert_raises, image_pair
+from helpers import assert_image_properties, assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -178,8 +178,7 @@ def test_wide_raw_samples_are_not_reinterpreted(mode, channels, depth):
     encoded = image.tobytes("raw", mode, stride, -1)
     assert encoded == raw[row:] + bytes(5) + raw[:row] + bytes(5)
     restored = Image.frombytes(mode, image.size, encoded, "raw", mode, stride, -1, bit_depth=depth)
-    assert restored.tobytes() == raw
-    assert restored.bit_depth == depth
+    assert_image_properties(restored, pixels=raw, bit_depth=depth)
 
 
 def test_raw_input_ignores_padding_and_does_not_require_final_padding():

@@ -71,7 +71,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock', 'rust-toolchain.toml') }}
+          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
 
       - name: Clean outdated Rust build artifacts
@@ -169,15 +169,14 @@ jobs:
         run: uv run scripts/verify_behavior.py
 
       - name: Delete stale Rust caches
-        if: always() && steps.cargo-cache-save.outcome == 'success'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache-restore.outputs.cache-matched-key != steps.cargo-cache-restore.outputs.cache-primary-key
         env:
           GH_TOKEN: ${{ github.token }}
           CACHE_PREFIX: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
-          CURRENT_KEY: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
         run: gh cache list --key "$CACHE_PREFIX" --json id,key --jq '.[].id' | xargs -r -n1 gh cache delete
 
       - name: Save Rust dependencies and build artifacts
-        if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.build-project.outcome == 'success' && steps.cargo-cache-restore.outputs.cache-hit != 'true'
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
           path: |

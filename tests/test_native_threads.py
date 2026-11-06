@@ -9,6 +9,7 @@ from time import monotonic
 from typing import TYPE_CHECKING
 
 import pytest
+from helpers import assert_image_properties
 
 from blanket import Image, ImageCms, _blanket
 
@@ -127,5 +128,4 @@ def test_png_compression_releases_gil(depth: int) -> None:
     assert_python_progress(write_pending)
     writer.close()
     image = Image.open(BytesIO(output.getvalue()))
-    assert image.bit_depth == depth
-    assert image.tobytes() == data
+    assert_image_properties(image, bit_depth=depth, pixels=data)

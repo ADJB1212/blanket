@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import assert_raises, image_pair
+from helpers import assert_image_properties, assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -20,9 +20,7 @@ def test_rotate_parity(mode: str, size: tuple[int, int], method: int, subtests: 
             with subtests.test(angle=angle, options=options):
                 actual = image.rotate(angle, method, **options)
                 expected = reference.rotate(angle, method, **options)
-                assert actual.size == expected.size
-                assert actual.mode == expected.mode
-                assert actual.tobytes() == expected.tobytes()
+                assert_image_properties(actual, size=expected.size, mode=expected.mode, pixels=expected.tobytes())
                 assert image.tobytes() == data
 
 

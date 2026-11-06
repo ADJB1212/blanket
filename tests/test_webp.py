@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -27,8 +27,7 @@ def test_webp_decode_matches_pillow(mode: str, lossless: bool) -> None:
     stream = image_buffer(PillowImage.frombytes(mode, (19, 13), raw), "WEBP", lossless=lossless, quality=85)
     expected = PillowImage.open(BytesIO(stream.getvalue()))
     actual = Image.open(BytesIO(stream.getvalue()))
-    assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "WEBP")
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, mode=expected.mode, size=expected.size, format="WEBP", pixels=expected.tobytes())
     assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(stream.getvalue()[:30])))
 
 
@@ -52,8 +51,7 @@ def test_webp_encode_matches_pillow_decode(mode: str, lossless: bool, size: tupl
     stream = image_buffer(source, "WEBP", lossless=lossless, quality=85)
     expected = PillowImage.open(BytesIO(stream.getvalue()))
     actual = Image.open(BytesIO(stream.getvalue()))
-    assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "WEBP")
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, mode=expected.mode, size=expected.size, format="WEBP", pixels=expected.tobytes())
     if mode == "RGBA":
         assert actual.tobytes()[3::4] == raw[3::4]
     if lossless:

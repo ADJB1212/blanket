@@ -6,7 +6,7 @@ import random
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, encode_image as encode, image_buffer
+from helpers import assert_image_properties, assert_raises, encode_image as encode, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -41,8 +41,7 @@ def test_bounded_save(format: str, mode: str) -> None:
     baseline = encode(source, format)
     output = encode(source, format, compressor=compressor)
     assert_bounded(baseline, output, compressor.max_rmse)
-    assert source.tobytes() == raw
-    assert source.info == {"custom": "retained"}
+    assert_image_properties(source, pixels=raw, info={"custom": "retained"})
     assert encode(source, format, compressor=compressor) == output
     if format in {"PNG", "JPEG", "WEBP"}:
         with PillowImage.open(io.BytesIO(output)) as external:
@@ -140,8 +139,7 @@ def test_high_depth(format: str, depth: int) -> None:
     baseline = encode(source, format)
     output = encode(source, format, compressor=LossyImageCompressor(max_rmse=8, effort=2))
     assert_bounded(baseline, output, 8)
-    assert source.tobytes() == raw
-    assert source.bit_depth == depth
+    assert_image_properties(source, pixels=raw, bit_depth=depth)
 
 
 @pytest.mark.parametrize("format", ["PNG", "TIFF", "PDF"])
@@ -161,8 +159,7 @@ def test_indexed_input(format: str) -> None:
     if format == "PNG":
         assert output == baseline
     assert_bounded(baseline, output, 2)
-    assert source.mode == "P"
-    assert source.tobytes() == raw
+    assert_image_properties(source, mode="P", pixels=raw)
     assert source.palette.tobytes() == palette
 
 

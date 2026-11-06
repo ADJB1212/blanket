@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -26,8 +26,7 @@ def test_raster_interoperability(format: str, mode: str, size: tuple[int, int]) 
     expected_mode = "RGB" if mode == "L" and format == "WEBP" else mode
     expected = source.convert(expected_mode).tobytes()
     loaded = Image.open(output, formats=[format])
-    assert (loaded.format, loaded.mode, loaded.size) == (format, expected_mode, size)
-    assert loaded.tobytes() == expected
+    assert_image_properties(loaded, format=format, mode=expected_mode, size=size, pixels=expected)
     assert PillowImage.open(output).convert(expected_mode).tobytes() == expected
 
     external = image_buffer(PillowImage.frombytes(mode, size, raw), format, **options)

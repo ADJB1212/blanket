@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, shader_runtime
-from helpers import assert_raises, float_samples
+from helpers import assert_image_properties, assert_raises, float_samples
 
 from blanket import Image, ImageFilter, ImageGpu
 
@@ -70,8 +70,7 @@ def test_mode_conversion_cpu_parity(runtime, src, dst):
     image = source(src)
     actual = ImageGpu.from_image(image, runtime=runtime).convert(dst).to_image()
     expected = image.convert(dst)
-    assert actual.mode == dst
-    assert actual.size == image.size
+    assert_image_properties(actual, mode=dst, size=image.size)
     assert actual.info["description"] == "gpu precision"
     if "F" in dst:
         assert float_samples(actual) == pytest.approx(float_samples(expected), rel=1e-5, abs=1e-6)

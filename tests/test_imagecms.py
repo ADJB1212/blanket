@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage, ImageCms as PillowCms
 
 from blanket import Image, ImageCms
@@ -46,8 +46,7 @@ def test_transform_matches_pillow(source_mode: str, target_mode: str, intent: in
     for _ in range(2):
         actual = ImageCms.applyTransform(image, transform)
         assert actual is not None
-        assert actual.tobytes() == expected.tobytes()
-        assert actual.mode == target_mode
+        assert_image_properties(actual, pixels=expected.tobytes(), mode=target_mode)
         assert actual.info["icc_profile"] == target_profile.tobytes()
         assert actual.info["custom"] == "preserved"
     assert image.tobytes() == raw
@@ -191,7 +190,6 @@ def test_empty_image_and_truncated_profile() -> None:
     for size in ((0, 0), (0, 3), (3, 0)):
         result = ImageCms.profileToProfile(Image.new("RGB", size), profile, profile)
         assert result is not None
-        assert result.size == size
-        assert result.tobytes() == b""
+        assert_image_properties(result, size=size, pixels=b"")
     for data in (profile.tobytes()[:64], profile.tobytes()[:128]):
         assert_raises(ImageCms.PyCMSError, lambda: ImageCms.ImageCmsProfile(BytesIO(data)))

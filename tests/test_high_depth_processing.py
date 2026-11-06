@@ -8,7 +8,7 @@ from collections import Counter
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter, ImageOps, ImageStat
@@ -217,8 +217,7 @@ def test_unsharp_identity_preserves_samples(mode, depth, subtests: pytest.Subtes
             image = make_image(mode, depth)
             image.info["test"] = "metadata"
             result = image.filter(ImageFilter.UnsharpMask(radius, percent, threshold))
-            assert (result.mode, result.bit_depth, result.info) == (mode, depth, image.info)
-            assert result.tobytes() == image.tobytes()
+            assert_image_properties(result, mode=mode, bit_depth=depth, info=image.info, pixels=image.tobytes())
             result.close()
             assert samples(image)[0] == 257
 

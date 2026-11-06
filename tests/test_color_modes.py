@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, image_buffer, image_pair
+from helpers import assert_image_properties, assert_raises, image_buffer, image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -183,8 +183,7 @@ def test_uncompressed_tiff_interop(mode: str, size: tuple[int, int]) -> None:
     raw = b"".join(rng.choice([b"\x00\x00\x80\x3f", b"\x00\x00\x00\xc1"]) for _ in range(size[0] * size[1])) if mode == "F" else rng.randbytes(size[0] * size[1] * bands)
     stream = image_buffer(Image.frombytes(mode, size, raw), "TIFF")
     reference = PIL.open(BytesIO(stream.getvalue()))
-    assert reference.mode == mode
-    assert reference.tobytes() == raw
+    assert_image_properties(reference, mode=mode, pixels=raw)
     assert Image.open(BytesIO(stream.getvalue())).tobytes() == raw
 
 
@@ -193,8 +192,7 @@ def test_bilevel_png_decodes_like_pillow(size: tuple[int, int]) -> None:
     raw = random.Random(9).randbytes((size[0] + 7) // 8 * size[1])
     stream = image_buffer(PIL.frombytes("1", size, raw), "PNG")
     decoded = Image.open(BytesIO(stream.getvalue()))
-    assert decoded.mode == "1"
-    assert decoded.tobytes() == PIL.open(BytesIO(stream.getvalue())).tobytes()
+    assert_image_properties(decoded, mode="1", pixels=PIL.open(BytesIO(stream.getvalue())).tobytes())
 
 
 def test_full_width_paste_rows() -> None:

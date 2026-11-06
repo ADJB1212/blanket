@@ -37,6 +37,13 @@ def random_pair(mode: str = "RGB", size: tuple[int, int] = (37, 29), *, seed: in
     return image_pair(mode, size, data)
 
 
+def assert_image_properties(image, *, pixels=None, **attributes) -> None:
+    for name, expected in attributes.items():
+        assert getattr(image, name) == expected, name
+    if pixels is not None:
+        assert image.tobytes() == pixels, "pixel buffers differ"
+
+
 def assert_pixels_equal(actual: Image.Image | PillowImage.Image, expected: Image.Image | PillowImage.Image) -> None:
     assert actual.mode == expected.mode, f"mode: {actual.mode!r} != {expected.mode!r}"
     assert actual.size == expected.size, f"size: {actual.size!r} != {expected.size!r}"

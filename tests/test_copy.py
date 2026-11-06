@@ -4,7 +4,7 @@ from copy import copy, deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises
 
 from blanket import Image
 
@@ -73,9 +73,7 @@ def test_transform_copies_nested_metadata() -> None:
 def test_copy_preserves_high_depth_samples(bit_depth: int, copier: Callable[[Image.Image], Image.Image]) -> None:
     image = Image.frombytes("RGBA", (3, 2), b"\x00\x02\x2c\x01\xbc\x02\x20\x03" * 6, bit_depth=bit_depth)
     result = copier(image)
-    assert result.bit_depth == bit_depth
-    assert result.mode == image.mode
-    assert result.tobytes() == image.tobytes()
+    assert_image_properties(result, bit_depth=bit_depth, mode=image.mode, pixels=image.tobytes())
 
 
 @pytest.mark.parametrize("copier", [Image.Image.copy, copy, deepcopy])

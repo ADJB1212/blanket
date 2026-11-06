@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, image_buffer, png_chunk
+from helpers import assert_image_properties, assert_raises, image_buffer, png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -65,8 +65,7 @@ def test_png_single_decoder_preserves_layout_and_transparency(color: int, depth:
                     encoded = png_chunks(*size, depth, color, pixels, interlaced, extra)
                     actual = Image.open(BytesIO(encoded))
                     external = PillowImage.open(BytesIO(encoded))
-                    assert actual.size == size
-                    assert actual.format == "PNG"
+                    assert_image_properties(actual, size=size, format="PNG")
                     if depth < 16:
                         assert actual.bit_depth == 8
                         assert actual.convert("RGBA").tobytes() == external.convert("RGBA").tobytes()
@@ -86,9 +85,7 @@ def test_png_single_decoder_preserves_layout_and_transparency(color: int, depth:
                                 expected.extend((*pixel, 0 if pixel == pixels[0] else maximum))
                             else:
                                 expected.extend(pixel)
-                        assert actual.mode == ("RGBA" if color in (4, 6) or transparent else "L" if color == 0 else "RGB")
-                        assert actual.bit_depth == 16
-                        assert actual.tobytes() == struct.pack("<" + "H" * len(expected), *expected)
+                        assert_image_properties(actual, mode="RGBA" if color in (4, 6) or transparent else "L" if color == 0 else "RGB", bit_depth=16, pixels=struct.pack("<" + "H" * len(expected), *expected))
 
 
 @pytest.mark.parametrize(("color", "channels"), [(0, 1), (2, 3), (4, 2), (6, 4)])
@@ -102,8 +99,7 @@ def test_png_sbit_preserves_supported_depth_and_grayscale_alpha(color: int, chan
     for pixel in pixels:
         expanded = (pixel[0], pixel[0], pixel[0], pixel[1]) if color == 4 else pixel
         expected.extend(value >> (16 - depth) for value in expanded)
-    assert image.bit_depth == depth
-    assert image.tobytes() == struct.pack("<" + "H" * len(expected), *expected)
+    assert_image_properties(image, bit_depth=depth, pixels=struct.pack("<" + "H" * len(expected), *expected))
 
 
 @pytest.mark.parametrize("default_image", [False, True])
@@ -112,9 +108,7 @@ def test_png_decoder_keeps_first_image_for_animated_containers(default_image: bo
     second = PillowImage.new("RGBA", first.size, (20, 30, 100, 255))
     encoded = image_buffer(first, "PNG", save_all=True, append_images=[second], default_image=default_image)
     actual = Image.open(encoded)
-    assert actual.size == first.size
-    assert actual.mode == first.mode
-    assert actual.tobytes() == first.tobytes()
+    assert_image_properties(actual, size=first.size, mode=first.mode, pixels=first.tobytes())
 
 
 @pytest.mark.parametrize("format", ["PNG", "TIFF"])
@@ -131,8 +125,7 @@ def test_wide_encoding_reuses_sample_storage_with_exact_byte_order(format: str, 
         actual = Image.open(encoded)
         scaled = [(value * 65535 + maximum // 2) // maximum for value in values]
         expected = raw if format == "PNG" else struct.pack("<" + "H" * len(scaled), *scaled)
-        assert actual.tobytes() == expected
-        assert actual.bit_depth == (depth if format == "PNG" else 16)
+        assert_image_properties(actual, pixels=expected, bit_depth=depth if format == "PNG" else 16)
         external = PillowImage.open(encoded)
         if mode == "L":
             assert list(external.get_flattened_data()) == scaled
@@ -165,9 +158,7 @@ def test_png_deflate_levels(mode: str, subtests: pytest.Subtests) -> None:
                 encoded = image_buffer(image, "PNG", compress_level=level)
                 for decoder in (Image.open, PillowImage.open):
                     decoded = decoder(BytesIO(encoded.getvalue()))
-                    assert decoded.mode == mode
-                    assert decoded.size == size
-                    assert decoded.tobytes() == raw
+                    assert_image_properties(decoded, mode=mode, size=size, pixels=raw)
 
 
 def test_jxl_reused_runners_are_independent() -> None:
@@ -182,9 +173,7 @@ def test_jxl_reused_runners_are_independent() -> None:
         for payload, mode, size, raw in cases + cases[::-1]:
             assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(b"\xff\x0a\0")))
             decoded = Image.open(BytesIO(payload))
-            assert decoded.mode == mode
-            assert decoded.size == size
-            assert decoded.tobytes() == raw
+            assert_image_properties(decoded, mode=mode, size=size, pixels=raw)
 
     decode_cases(0)
     with ThreadPoolExecutor(max_workers=3) as executor:

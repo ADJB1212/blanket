@@ -4,7 +4,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 
 from blanket import Image, UnidentifiedImageError
 
@@ -22,16 +22,14 @@ def test_fromarray(mode: str, channels: tuple[int, ...]) -> None:
     image = Image.fromarray(array)
 
     array[...] = 0
-    assert (image.mode, image.size) == (mode, (17, 13))
-    assert image.tobytes() == raw
+    assert_image_properties(image, mode=mode, size=(17, 13), pixels=raw)
 
 
 def test_fromarray_supports_strided_arrays() -> None:
     source = np.arange(12 * 16 * 3, dtype=np.uint8).reshape(12, 16, 3)
     array = source[::2, ::2]
     image = Image.fromarray(array)
-    assert (image.mode, image.size) == ("RGB", (8, 6))
-    assert image.tobytes() == array.tobytes()
+    assert_image_properties(image, mode="RGB", size=(8, 6), pixels=array.tobytes())
 
 
 @pytest.mark.parametrize(("shape", "dtype"), [((3, 5, 3), np.float16), ((3, 5, 5), np.uint8), ((3, 5, 2), np.uint16), ((3, 5, 2), np.float32)])
@@ -44,8 +42,7 @@ def test_fromarray_rejects_unsupported_arrays(shape: tuple[int, ...], dtype: obj
 def test_fromarray_supports_float_color(dtype: object, channels: int, mode: str) -> None:
     values = np.arange(3 * 5 * channels, dtype=dtype).reshape(3, 5, channels) / 4
     image = Image.fromarray(values)
-    assert (image.mode, image.size, image.bit_depth) == (mode, (5, 3), 32)
-    assert image.tobytes() == values.astype("<f4").tobytes()
+    assert_image_properties(image, mode=mode, size=(5, 3), bit_depth=32, pixels=values.astype("<f4").tobytes())
 
 
 def test_path_format_inference(tmp_path: object) -> None:

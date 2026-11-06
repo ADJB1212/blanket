@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -186,9 +186,7 @@ def test_tiff_pages_preserve_modes_and_dimensions(compression: str) -> None:
     for i in range(3):
         actual.seek(i)
         expected.seek(i)
-        assert actual.size == expected.size
-        assert actual.mode == expected.mode
-        assert actual.tobytes() == expected.tobytes()
+        assert_image_properties(actual, size=expected.size, mode=expected.mode, pixels=expected.tobytes())
 
 
 def test_tiff_metadata_visits_each_page_once(monkeypatch) -> None:
@@ -288,8 +286,7 @@ def test_save_defaults_and_path(tmp_path: Path) -> None:
     assert [frame.info["duration"] for frame in ImageSequence.Iterator(reopened)] == [20, 40, 60]
     stream = image_buffer(source, "PNG", save_all=False, append_images=[Image.new("RGB", (2, 2))])
     still = Image.open(stream)
-    assert still.n_frames == 1
-    assert still.tobytes() == source.tobytes()
+    assert_image_properties(still, n_frames=1, pixels=source.tobytes())
 
 
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "PDF"])
@@ -317,8 +314,7 @@ def test_save_repeated_sources_preserves_frame_edits_and_metadata(format: str) -
             assert actual.convert("RGBA").tobytes() == frame.convert("RGBA").tobytes()
             assert actual.info["duration"] == frame.info["duration"]
     for actual, frame in zip(ImageSequence.Iterator(source), expected, strict=True):
-        assert actual.tobytes() == frame.tobytes()
-        assert actual.info == frame.info
+        assert_image_properties(actual, pixels=frame.tobytes(), info=frame.info)
 
 
 def test_pdf_save_includes_replaced_current_raster() -> None:

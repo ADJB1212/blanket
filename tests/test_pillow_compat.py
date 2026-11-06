@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from helpers import image_buffer
+from helpers import assert_image_properties, image_buffer
 
 PIL = pytest.importorskip("PIL")
 from PIL import Image as PillowImage
@@ -23,8 +23,7 @@ def test_png_cross_library_roundtrip(mode: str) -> None:
     blanket_output.seek(0)
     with PillowImage.open(blanket_output) as loaded:
         loaded.load()
-        assert loaded.mode == mode
-        assert loaded.tobytes() == raw
+        assert_image_properties(loaded, mode=mode, pixels=raw)
 
 
 def test_jpeg_cross_library_loads() -> None:

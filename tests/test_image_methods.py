@@ -6,7 +6,7 @@ from io import BytesIO
 from pathlib import Path
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
 from PIL import Image as PIL
 
 from blanket import Image
@@ -281,9 +281,7 @@ def test_copy_preserves_pixels_metadata_and_independent_storage(mode: str, subte
                 image = Image.frombytes(mode, size, raw, bit_depth=depth)
                 image.info["note"] = "retained"
                 result = image.copy()
-                assert (result.mode, result.size, result.bit_depth) == (mode, size, depth)
-                assert result.tobytes() == raw
-                assert result.info == image.info
+                assert_image_properties(result, mode=mode, size=size, bit_depth=depth, pixels=raw, info=image.info)
                 result.info["note"] = "changed"
                 if depth == 8 and size[0] and size[1]:
                     result.putpixel((0, 0), 0)

@@ -4,7 +4,7 @@ from copy import copy, deepcopy
 from io import BytesIO
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PILImage
 
 from blanket import Image, ImageOps
@@ -27,8 +27,7 @@ def test_tiff_applies_orientation_before_copy(mode: str, orientation: int, lazy:
     if mode == "1":
         assert actual.convert("L").tobytes() == expected.convert("L").tobytes()
     else:
-        assert actual.mode == expected.mode
-        assert actual.tobytes() == expected.tobytes()
+        assert_image_properties(actual, mode=expected.mode, pixels=expected.tobytes())
     assert 274 not in actual.getexif()
     for result in (actual.copy(), copy(actual), deepcopy(actual), ImageOps.exif_transpose(actual)):
         assert_pixels_equal(result, actual)
@@ -53,9 +52,7 @@ def test_tiff_orientation_preserves_high_depth(mode: str, orientation: int) -> N
         orientation
     ]
     expected = source.transpose(method)
-    assert actual.size == expected.size
-    assert actual.bit_depth == 16
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, size=expected.size, bit_depth=16, pixels=expected.tobytes())
     assert 274 not in actual.getexif()
 
 
@@ -74,8 +71,7 @@ def test_tiff_oriented_pages_keep_navigation_and_local_metadata(lazy: bool) -> N
         assert_pixels_equal(actual, expected)
         assert 274 not in actual.getexif()
         result = actual.copy()
-        assert result.n_frames == 1
-        assert result.tobytes() == actual.tobytes()
+        assert_image_properties(result, n_frames=1, pixels=actual.tobytes())
     assert_raises(EOFError, lambda: actual.seek(2))
     assert actual.tell() == 0
 

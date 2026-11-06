@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile, UnidentifiedImageError
@@ -59,8 +59,7 @@ def test_jxl_stream_retains_wide_samples(mode: str) -> None:
     for i in range(0, len(data), 13):
         parser.feed(memoryview(data)[i : i + 13])
     result = parser.close()
-    assert result.bit_depth == 16
-    assert result.tobytes() == raw
+    assert_image_properties(result, bit_depth=16, pixels=raw)
 
 
 @pytest.mark.parametrize("cut", [0, 1, 12, -2])
@@ -153,8 +152,7 @@ def test_jpeg_discards_metadata_and_ignores_trailing_bytes() -> None:
         parser.feed(data[i : i + 127])
     parser.feed(b"trailing data" * 10000)
     result = parser.close()
-    assert result.info == {}
-    assert result.tobytes() == Image.open(BytesIO(data)).tobytes()
+    assert_image_properties(result, info={}, pixels=Image.open(BytesIO(data)).tobytes())
 
 
 @pytest.mark.parametrize("progressive", [False, True])
@@ -232,8 +230,7 @@ def test_png_rows_match_pillow_and_eager(mode: str, compress_level: int, buffer_
             writer.write(buffer_type(raw[i : i + stride]))
     assert not output.closed
     result = Image.open(BytesIO(output.getvalue()))
-    assert (result.mode, result.size, result.bit_depth) == (expected.mode, size, 8)
-    assert result.tobytes() == expected.tobytes()
+    assert_image_properties(result, mode=expected.mode, size=size, bit_depth=8, pixels=expected.tobytes())
     assert PillowImage.open(BytesIO(output.getvalue())).tobytes() == expected.tobytes()
 
 
@@ -247,8 +244,7 @@ def test_png_wide_rows(mode: str, depth: int) -> None:
     with ImageFile.PngWriter(output, mode, (17, 9), bit_depth=depth) as writer:
         writer.write(memoryview(raw))
     result = Image.open(BytesIO(output.getvalue()))
-    assert (result.mode, result.bit_depth) == (mode, depth)
-    assert result.tobytes() == raw
+    assert_image_properties(result, mode=mode, bit_depth=depth, pixels=raw)
     reference = image_buffer(Image.frombytes(mode, (17, 9), raw, bit_depth=depth), "PNG")
     assert PillowImage.open(BytesIO(output.getvalue())).tobytes() == PillowImage.open(reference).tobytes()
 

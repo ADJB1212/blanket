@@ -5,7 +5,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
@@ -58,9 +58,7 @@ def test_sgi_multiple_rows_and_planes(depth: int, channels: int, compressed: boo
         table = struct.pack(f">{len(rows) * 2}I", *offsets, *(len(row) for row in rows))
     data = bytes(header) + table + b"".join(rows)
     image = Image.open(BytesIO(data))
-    assert (image.mode, image.size) == ({1: "L", 3: "RGB", 4: "RGBA"}[channels], (width, height))
-    assert image.bit_depth == depth
-    assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack(f"<{len(expected)}H", *expected))
+    assert_image_properties(image, mode={1: "L", 3: "RGB", 4: "RGBA"}[channels], size=(width, height), bit_depth=depth, pixels=bytes(expected) if depth == 8 else struct.pack(f"<{len(expected)}H", *expected))
     if depth == 8:
         assert image.tobytes() == PillowImage.open(BytesIO(data)).tobytes()
     assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data[:-2])))
@@ -121,8 +119,7 @@ def test_pcx_literal_spans_and_runs(mode: str, subtests: pytest.Subtests) -> Non
                 if planes == 1:
                     output.extend(b"\x0c" + palette)
                 actual = Image.open(BytesIO(output))
-                assert (actual.mode, actual.size) == (mode, (width, 3))
-                assert actual.tobytes() == expected
+                assert_image_properties(actual, mode=mode, size=(width, 3), pixels=expected)
                 if encoded:
                     pillow = PillowImage.open(BytesIO(output))
                     assert actual.convert("RGB").tobytes() == pillow.convert("RGB").tobytes()
@@ -169,8 +166,7 @@ def test_spider_float_and_first_stack_image(big: bool) -> None:
         values = [i * 1.25 - 7 for i in range(12)]
         data = packed * (2 if stack else 1) + struct.pack((">" if big else "<") + "12f", *values)
         actual = Image.open(BytesIO(data), formats=["SPIDER"])
-        assert (actual.mode, actual.size, actual.format) == ("F", (4, 3), "SPIDER")
-        assert actual.tobytes() == struct.pack("<12f", *values)
+        assert_image_properties(actual, mode="F", size=(4, 3), format="SPIDER", pixels=struct.pack("<12f", *values))
 
 
 @pytest.mark.parametrize("bits", [8, 16, 32, -32, -64])
@@ -184,8 +180,7 @@ def test_fits_sample_depth_and_orientation(bits: int, subtests: pytest.Subtests)
             data = header + struct.pack(f">{len(values)}{code}", *values).ljust(2880, b"\0")
             actual = Image.open(BytesIO(data), formats=["FITS"])
             expected = PillowImage.open(BytesIO(data))
-            assert (actual.mode, actual.size, actual.format) == (expected.mode, expected.size, "FITS")
-            assert actual.tobytes() == expected.tobytes()
+            assert_image_properties(actual, mode=expected.mode, size=expected.size, format="FITS", pixels=expected.tobytes())
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -241,8 +236,7 @@ def test_xpm_write_and_read(mode: str) -> None:
 def test_xpm_transparency_and_multichar_keys() -> None:
     data = b'/* XPM */\nstatic char *im[] = {\n"3 2 3 2",\n"aa c #ff0000",\n"bb c None",\n"cc c #0022ff",\n"aabbcc",\n"ccbbaa"};'
     actual = Image.open(BytesIO(data))
-    assert actual.mode == "RGBA"
-    assert actual.tobytes() == PillowImage.open(BytesIO(data)).convert("RGBA").tobytes()
+    assert_image_properties(actual, mode="RGBA", pixels=PillowImage.open(BytesIO(data)).convert("RGBA").tobytes())
     stream = image_buffer(actual, "XPM")
     assert Image.open(stream).tobytes() == actual.tobytes()
 
@@ -314,8 +308,7 @@ def test_tiff_compression_interoperability(compression: str, mode: str) -> None:
         actual = Image.open(stream)
         expected = PillowImage.open(stream)
         assert expected.tag_v2[259] == {"tiff_lzw": 5, "tiff_adobe_deflate": 8, "jpeg": 7}[compression]
-        assert (actual.mode, actual.size) == (mode, source.size)
-        assert actual.tobytes() == expected.tobytes()
+        assert_image_properties(actual, mode=mode, size=source.size, pixels=expected.tobytes())
         if compression != "jpeg":
             assert actual.tobytes() == source.tobytes()
 
@@ -335,8 +328,7 @@ def test_tiff_compression_wide(compression: str, mode: str) -> None:
     source = Image.frombytes(mode, (5, 3), raw, bit_depth=16)
     stream = image_buffer(source, "TIFF", compression=compression)
     actual = Image.open(stream)
-    assert actual.bit_depth == 16
-    assert actual.tobytes() == raw
+    assert_image_properties(actual, bit_depth=16, pixels=raw)
 
 
 @pytest.mark.parametrize(("ext", "mode"), [("pcx", "RGB"), ("sgi", "RGBA"), ("rgb", "RGB"), ("bw", "L"), ("xbm", "1"), ("xpm", "RGB"), ("msp", "1"), ("palm", "1")])

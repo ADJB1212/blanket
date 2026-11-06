@@ -4,7 +4,7 @@ import random
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, image_buffer, image_pair
+from helpers import assert_image_properties, assert_raises, image_buffer, image_pair
 from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance, ImageFilter as PILFilter
 
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
@@ -87,13 +87,11 @@ def test_tiff_interoperability(compression: str, byteorder: str, big_tiff: bool,
     expected.save(stream, "TIFF", compression=compression, big_tiff=big_tiff)
     assert stream.getvalue().startswith(prefix)
     decoded = Image.open(BytesIO(stream.getvalue()))
-    assert decoded.mode == "LAB"
-    assert decoded.tobytes() == raw
+    assert_image_properties(decoded, mode="LAB", pixels=raw)
     output = image_buffer(decoded, "TIFF")
     for module in (Image, PIL):
         reopened = module.open(BytesIO(output.getvalue()))
-        assert reopened.mode == "LAB"
-        assert reopened.tobytes() == raw
+        assert_image_properties(reopened, mode="LAB", pixels=raw)
 
 
 def test_icc_lab_tiff() -> None:

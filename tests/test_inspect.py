@@ -5,7 +5,7 @@ import zlib
 from io import BytesIO, StringIO
 
 import pytest
-from helpers import assert_raises, encode_image, image_buffer, png_chunk
+from helpers import assert_image_properties, assert_raises, encode_image, image_buffer, png_chunk
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageCms, PngImagePlugin, UnidentifiedImageError, features
@@ -92,9 +92,7 @@ def test_formats_and_modes(format, mode, expected):
     data = encode(mode, format)
     header = Image.inspect(BytesIO(data), formats=[format])
     assert isinstance(header, Image.ImageHeader)
-    assert (header.format, header.size, header.mode) == (format, (17, 9), expected)
-    assert (header.width, header.height) == (17, 9)
-    assert header.bit_depth == (1 if mode == "1" else 32 if mode == "F" else 8)
+    assert_image_properties(header, format=format, size=(17, 9), mode=expected, width=17, height=9, bit_depth=1 if mode == "1" else 32 if mode == "F" else 8)
     if format not in ("JXL", "XPM", "PAM"):
         assert PillowImage.open(BytesIO(data)).size == header.size
 
@@ -108,8 +106,7 @@ def test_wide_samples(format, depth, mode):
     data = encode(mode, format, depth)
     header = Image.inspect(BytesIO(data))
     expected_mode = "I;16" if format == "TIFF" and mode == "L" else mode
-    assert (header.mode, header.size) == (expected_mode, (17, 9))
-    assert header.bit_depth == (depth if format == "JPEG2000" else 16)
+    assert_image_properties(header, mode=expected_mode, size=(17, 9), bit_depth=depth if format == "JPEG2000" else 16)
 
 
 @pytest.mark.parametrize("format,depth", [("AVIF", 8), ("HEIF", 8), ("HEIF", 10), ("HEIF", 12)])
@@ -117,8 +114,7 @@ def test_heif_and_avif_headers(format, depth):
     if format == "HEIF" and not features.check("heif_encoder"):
         pytest.skip("HEIF encoder unavailable")
     header = Image.inspect(BytesIO(encode("RGB", format, depth)))
-    assert (header.format, header.size, header.mode) == (format, (17, 9), "RGB")
-    assert header.bit_depth == (8 if format == "AVIF" else depth)
+    assert_image_properties(header, format=format, size=(17, 9), mode="RGB", bit_depth=8 if format == "AVIF" else depth)
 
 
 @pytest.mark.parametrize("color,depth,mode", [(0, 1, "1"), (0, 2, "L"), (0, 4, "L"), (3, 4, "P"), (6, 16, "RGBA")])
@@ -218,8 +214,7 @@ def test_animation_and_mixed_tiff_pages():
     for format in ("GIF", "PNG", "WEBP", "TIFF"):
         output = image_buffer(frames[0], format, save_all=True, append_images=frames[1:], duration=50, loop=2)
         header = Image.inspect(output)
-        assert (header.size, header.format) == ((17, 9), format)
-        assert header.mode == ("P" if format == "GIF" else "RGB")
+        assert_image_properties(header, size=(17, 9), format=format, mode="P" if format == "GIF" else "RGB")
     output = image_buffer(frames[0], "TIFF", save_all=True, append_images=[PillowImage.new("L", (3, 5))])
     assert (Image.inspect(output).size, Image.inspect(output).mode) == ((17, 9), "RGB")
 

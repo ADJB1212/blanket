@@ -4,7 +4,7 @@ import struct
 import tracemalloc
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -90,8 +90,7 @@ def test_indexed_transparency_expansion_matches_explicit_table(mode: str, palett
     assert image.tobytes() == indices and image.getpalette(None) == list(entries)
     if mode == "RGBA":
         wide = image.convert(mode, bit_depth=16)
-        assert wide.bit_depth == 16
-        assert wide.tobytes() == struct.pack(f"<{len(expected)}H", *(value * 257 for value in expected))
+        assert_image_properties(wide, bit_depth=16, pixels=struct.pack(f"<{len(expected)}H", *(value * 257 for value in expected)))
 
 
 def test_indexed_alpha_conversion_rejects_invalid_tables_and_closed_images() -> None:

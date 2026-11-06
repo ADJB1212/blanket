@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from helpers import assert_pillow_equal, assert_pixels_equal, assert_raises, image_pair, patterned_pair
+from helpers import assert_image_properties, assert_pillow_equal, assert_pixels_equal, assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage, ImageChops as PILChops
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
@@ -319,8 +319,7 @@ def test_high_depth_offset_and_arithmetic_preserve_depth(bit_depth: int) -> None
     samples = [0, 256, (1 << bit_depth) - 1, 17, 1000, 88]
     image = Image.frombytes("L", (3, 2), b"".join(v.to_bytes(2, "little") for v in samples), bit_depth=bit_depth)
     result = ImageChops.offset(image, 1, -1)
-    assert result.bit_depth == bit_depth
-    assert result.tobytes() == b"".join(samples[i].to_bytes(2, "little") for i in [5, 3, 4, 2, 0, 1])
+    assert_image_properties(result, bit_depth=bit_depth, pixels=b"".join(samples[i].to_bytes(2, "little") for i in [5, 3, 4, 2, 0, 1]))
     for name in BINARY:
         assert getattr(ImageChops, name)(image, image).bit_depth == bit_depth
     assert ImageChops.invert(image).bit_depth == bit_depth

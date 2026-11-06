@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 
 import pytest
-from helpers import assert_raises, image_pair, new_pair
+from helpers import assert_image_properties, assert_raises, image_pair, new_pair
 from PIL import Image as PILImage, ImageChops as PILChops, ImageFilter as PILFilter, ImageOps as PILOps
 
 from blanket import Image, ImageChops, ImageFilter, ImageOps
@@ -23,8 +23,7 @@ def test_integer_convolution_matches_pillow_with_unaligned_source(width: int, su
                 coefficients = [float(i % 5 - 2) for i in range(kernel_size * kernel_size)]
                 result = actual.filter(ImageFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
                 reference = expected.filter(PILFilter.Kernel((kernel_size, kernel_size), coefficients, scale, offset))
-                assert result.mode == "I"
-                assert result.tobytes() == reference.tobytes()
+                assert_image_properties(result, mode="I", pixels=reference.tobytes())
                 assert storage == b"x" + raw + b"guard"
                 assert actual.tobytes() == raw
 
@@ -40,9 +39,7 @@ def test_wide_rank_filters_match_pillow(mode: str, subtests: pytest.Subtests) ->
                 actual, expected = image_pair(mode, size, raw)
                 result = actual.filter(ImageFilter.RankFilter(window, rank))
                 reference = expected.filter(PILFilter.RankFilter(window, rank))
-                assert result.mode == mode
-                assert result.size == size
-                assert result.tobytes() == reference.tobytes()
+                assert_image_properties(result, mode=mode, size=size, pixels=reference.tobytes())
                 assert actual.tobytes() == raw
 
 
@@ -199,9 +196,7 @@ def test_logical_operations_normalize_noncanonical_true_values(name: str) -> Non
 def test_linear_gradient_matches_pillow(mode: str) -> None:
     actual = Image.linear_gradient(mode)
     expected = PILImage.linear_gradient(mode)
-    assert actual.size == expected.size
-    assert actual.mode == mode
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, size=expected.size, mode=mode, pixels=expected.tobytes())
 
 
 def test_image_equality_compares_pixels_metadata_and_palette() -> None:

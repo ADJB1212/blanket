@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import assert_raises, image_pair, patterned_pair
+from helpers import assert_image_properties, assert_raises, image_pair, patterned_pair
 from PIL import Image as PILImage, ImageTransform
 
 from blanket import Image
@@ -68,10 +68,7 @@ def test_transform_parity(mode: str, method: int, data: object, subtests: pytest
                 with subtests.test(resample=resample, fillcolor=fillcolor, size=size):
                     result = image.transform(size, method, data, resample, fillcolor=fillcolor)
                     expected = reference.transform(size, method, data, resample, fillcolor=fillcolor)
-                    assert result.size == expected.size
-                    assert result.mode == expected.mode
-                    assert result.tobytes() == expected.tobytes()
-                    assert result.info == image.info
+                    assert_image_properties(result, size=expected.size, mode=expected.mode, pixels=expected.tobytes(), info=image.info)
                     assert result.info is not image.info
 
 
@@ -147,8 +144,7 @@ def test_nearest_extent_gather(mode: str, extent: tuple[float, float, float, flo
 def test_empty_affine_and_transpose(size: tuple[int, int]) -> None:
     image, _ = patterned_pair("L", (13, 9), divisor=7)
     result = image.transform(size, Image.AFFINE, (1, 0, 0, 0, 1, 0))
-    assert result.size == size
-    assert result.tobytes() == b""
+    assert_image_properties(result, size=size, pixels=b"")
     assert result.transpose(Image.TRANSPOSE).size == size[::-1]
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pillow_helpers as helper
 import pytest
+from helpers import assert_image_properties
 from pillow_helpers import assert_image_equal
 
 from blanket.Image import Transpose
@@ -16,101 +17,25 @@ HOPPER = {mode: helper.hopper(mode).crop((0, 0, 121, 127)).copy() for mode in ["
 
 
 @pytest.mark.parametrize("mode", HOPPER)
-def test_flip_left_right(mode: str) -> None:
+@pytest.mark.parametrize(
+    "method,swap,point",
+    [
+        (Transpose.FLIP_LEFT_RIGHT, False, lambda x, y, w, h: (w - 1 - x, y)),
+        (Transpose.FLIP_TOP_BOTTOM, False, lambda x, y, w, h: (x, h - 1 - y)),
+        (Transpose.ROTATE_90, True, lambda x, y, w, h: (y, w - 1 - x)),
+        (Transpose.ROTATE_180, False, lambda x, y, w, h: (w - 1 - x, h - 1 - y)),
+        (Transpose.ROTATE_270, True, lambda x, y, w, h: (h - 1 - y, x)),
+        (Transpose.TRANSPOSE, True, lambda x, y, w, h: (y, x)),
+        (Transpose.TRANSVERSE, True, lambda x, y, w, h: (h - 1 - y, w - 1 - x)),
+    ],
+)
+def test_corner_mapping(mode, method, swap, point) -> None:
     im = HOPPER[mode]
-    out = im.transpose(Transpose.FLIP_LEFT_RIGHT)
-    assert out.mode == mode
-    assert out.size == im.size
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((x - 2, 1))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((1, 1))
-    assert im.getpixel((1, y - 2)) == out.getpixel((x - 2, y - 2))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((1, y - 2))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_flip_top_bottom(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.FLIP_TOP_BOTTOM)
-    assert out.mode == mode
-    assert out.size == im.size
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((1, y - 2))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((x - 2, y - 2))
-    assert im.getpixel((1, y - 2)) == out.getpixel((1, 1))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((x - 2, 1))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_rotate_90(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.ROTATE_90)
-    assert out.mode == mode
-    assert out.size == im.size[::-1]
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((1, x - 2))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((1, 1))
-    assert im.getpixel((1, y - 2)) == out.getpixel((y - 2, x - 2))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((y - 2, 1))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_rotate_180(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.ROTATE_180)
-    assert out.mode == mode
-    assert out.size == im.size
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((x - 2, y - 2))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((1, y - 2))
-    assert im.getpixel((1, y - 2)) == out.getpixel((x - 2, 1))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((1, 1))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_rotate_270(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.ROTATE_270)
-    assert out.mode == mode
-    assert out.size == im.size[::-1]
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((y - 2, 1))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((y - 2, x - 2))
-    assert im.getpixel((1, y - 2)) == out.getpixel((1, 1))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((1, x - 2))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_transpose(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.TRANSPOSE)
-    assert out.mode == mode
-    assert out.size == im.size[::-1]
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((1, 1))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((1, x - 2))
-    assert im.getpixel((1, y - 2)) == out.getpixel((y - 2, 1))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((y - 2, x - 2))
-
-
-@pytest.mark.parametrize("mode", HOPPER)
-def test_tranverse(mode: str) -> None:
-    im = HOPPER[mode]
-    out = im.transpose(Transpose.TRANSVERSE)
-    assert out.mode == mode
-    assert out.size == im.size[::-1]
-
-    x, y = im.size
-    assert im.getpixel((1, 1)) == out.getpixel((y - 2, x - 2))
-    assert im.getpixel((x - 2, 1)) == out.getpixel((y - 2, 1))
-    assert im.getpixel((1, y - 2)) == out.getpixel((1, x - 2))
-    assert im.getpixel((x - 2, y - 2)) == out.getpixel((1, 1))
+    out = im.transpose(method)
+    assert_image_properties(out, mode=mode, size=im.size[::-1] if swap else im.size)
+    w, h = im.size
+    for x, y in ((1, 1), (w - 2, 1), (1, h - 2), (w - 2, h - 2)):
+        assert im.getpixel((x, y)) == out.getpixel(point(x, y, w, h))
 
 
 @pytest.mark.parametrize("mode", HOPPER)

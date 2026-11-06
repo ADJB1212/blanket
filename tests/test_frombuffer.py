@@ -5,7 +5,7 @@ import tracemalloc
 import weakref
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 from PIL import Image as PillowImage, ImageDraw as PillowDraw
 
 from blanket import Image, ImageDraw
@@ -80,8 +80,7 @@ def test_frombuffer_observes_source_changes(mode: str, orientation: int, padding
     for value in (19, 137, 251):
         data[0] = value
         data[-1] = 255 - value
-        assert actual.mode == expected.mode
-        assert actual.tobytes() == expected.tobytes()
+        assert_image_properties(actual, mode=expected.mode, pixels=expected.tobytes())
         assert actual.getdata() == list(expected.get_flattened_data())
         assert actual.getpixel((0, 0)) == expected.getpixel((0, 0))
         assert access[0, 0] == reference[0, 0]

@@ -6,7 +6,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
-from helpers import assert_raises, image_buffer, image_pair
+from helpers import assert_image_properties, assert_raises, image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -96,8 +96,7 @@ def test_quantize_color_budget_and_determinism(method: int, colors: int) -> None
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 def test_empty_quantize(mode: str) -> None:
     result = Image.frombytes(mode, (0, 0), b"").quantize()
-    assert result.mode == "P"
-    assert result.tobytes() == b""
+    assert_image_properties(result, mode="P", pixels=b"")
     assert result.getpalette() == []
 
 

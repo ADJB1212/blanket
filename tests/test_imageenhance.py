@@ -5,7 +5,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
-from helpers import assert_pillow_equal, image_pair, random_pair
+from helpers import assert_image_properties, assert_pillow_equal, image_pair, random_pair
 from PIL import Image as PILImage, ImageEnhance as PILEnhance
 from pillow_helpers import assert_image_equal, hopper
 
@@ -102,7 +102,6 @@ def test_blend_initializes_output_across_vector_and_parallel_boundaries(mode: st
     reversed_raw = raw[::-1]
     second, second_reference = image_pair(mode, size, reversed_raw)
     actual = Image.blend(first, second, 0.5)
-    assert actual.tobytes() == PILImage.blend(reference, second_reference, 0.5).tobytes()
-    assert (actual.mode, actual.size, actual.bit_depth) == (mode, size, 8)
+    assert_image_properties(actual, pixels=PILImage.blend(reference, second_reference, 0.5).tobytes(), mode=mode, size=size, bit_depth=8)
     assert first.tobytes() == raw
     assert second.tobytes() == reversed_raw

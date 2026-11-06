@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 from PIL import Image as PillowImage
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
@@ -33,8 +33,7 @@ def test_conversion_buffers_preserve_pixels_and_source(width, source, target):
 def test_sanity() -> None:
     def convert(im: Image.Image, mode: str) -> None:
         out = im.convert(mode)
-        assert out.mode == mode
-        assert out.size == im.size
+        assert_image_properties(out, mode=mode, size=im.size)
 
     modes = ("1", "L", "LA", "P", "PA", "I", "F", "RGB", "RGBA", "RGBX", "CMYK", "YCbCr", "HSV")
 
@@ -304,8 +303,7 @@ def test_matrix_xyz(mode: str) -> None:
     im.info["transparency"] = (255, 0, 0)
     # Convert an RGB image to the CIE XYZ colour space
     converted_im = im.convert(mode=mode, matrix=rgb2xyz_matrix)
-    assert converted_im.mode == mode
-    assert converted_im.size == im.size
+    assert_image_properties(converted_im, mode=mode, size=im.size)
     with Image.open(PILLOW_IMAGES / "hopper-XYZ.png") as target:
         if converted_im.mode == "RGB":
             assert_image_similar(converted_im, target, 3)

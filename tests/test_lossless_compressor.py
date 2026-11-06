@@ -8,7 +8,7 @@ import sys
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, compressed_pair, image_buffer
+from helpers import assert_image_properties, assert_raises, compressed_pair, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -111,8 +111,7 @@ def test_png_optimization_roundtrip(effort: int, mode: str, kind: str) -> None:
     assert len(output.getvalue()) <= len(baseline.getvalue())
     assert original.mode == mode
     assert original.format is None
-    assert original.tobytes() == bytes(pixels)
-    assert original.info == {"custom": b"metadata"}
+    assert_image_properties(original, pixels=bytes(pixels), info={"custom": b"metadata"})
     with PillowImage.open(io.BytesIO(output.getvalue())) as decoded:
         assert decoded.convert(mode).tobytes() == bytes(pixels)
     assert Image.open(io.BytesIO(output.getvalue())).convert(mode).tobytes() == bytes(pixels)
@@ -333,10 +332,8 @@ def test_sample_codec_optimization(format: str, mode: str, depth: int, lossless:
     original.save(output, format, compressor=LosslessImageCompressor(effort=2), **options)
     assert len(output.getvalue()) <= len(baseline.getvalue())
     expected, actual = Image.open(baseline), Image.open(output)
-    assert (actual.size, actual.mode, actual.bit_depth) == (expected.size, expected.mode, expected.bit_depth)
-    assert actual.tobytes() == expected.tobytes()
-    assert original.tobytes() == raw
-    assert original.bit_depth == depth
+    assert_image_properties(actual, size=expected.size, mode=expected.mode, bit_depth=expected.bit_depth, pixels=expected.tobytes())
+    assert_image_properties(original, pixels=raw, bit_depth=depth)
     if format == "JXL" and lossless:
         assert actual.convert(mode, bit_depth=depth).tobytes() == raw
     if format in {"HEIF", "HEIC"}:

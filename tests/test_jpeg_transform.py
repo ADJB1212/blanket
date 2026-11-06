@@ -3,7 +3,7 @@ from __future__ import annotations
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, encode_image
+from helpers import assert_image_properties, assert_raises, encode_image
 from PIL import Image as PillowImage
 
 from blanket import Image, JpegImagePlugin
@@ -35,14 +35,12 @@ def test_transform_inverse_preserves_decoded_source_and_quantization(mode, subte
                     original = decoded(data)
                     transformed = decoded(output)
                     expected_size = original.size[::-1] if method in (Image.ROTATE_90, Image.ROTATE_270, Image.TRANSPOSE, Image.TRANSVERSE) else original.size
-                    assert transformed.size == expected_size
-                    assert transformed.mode == original.mode
+                    assert_image_properties(transformed, size=expected_size, mode=original.mode)
                     assert decoded(restored).tobytes() == original.tobytes()
                     assert decoded(restored).quantization == original.quantization
                     assert bool(transformed.info.get("progressive")) == progressive
                     with Image.open(BytesIO(output)) as blanket:
-                        assert blanket.size == transformed.size
-                        assert blanket.mode == transformed.mode
+                        assert_image_properties(blanket, size=transformed.size, mode=transformed.mode)
 
 
 @pytest.mark.parametrize("method", list(Image.Transpose))

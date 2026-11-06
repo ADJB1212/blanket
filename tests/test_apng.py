@@ -10,10 +10,18 @@ from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES
 
 from blanket import Image, ImageSequence, PngImagePlugin
+from blanket.PngImagePlugin import Blend, Disposal
 
 TYPE_CHECKING = False
 if TYPE_CHECKING:
     from pathlib import Path
+
+
+def assert_frame_pixels(image, first, second=None, *, frame=None):
+    if frame is not None:
+        image.seek(frame)
+    assert image.getpixel((0, 0)) == first
+    assert image.getpixel((64, 32)) == (first if second is None else second)
 
 
 @pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("L", 16), ("RGB", 16), ("RGBA", 16)])
@@ -51,8 +59,7 @@ def test_apng_basic() -> None:
         assert im.n_frames == 1
         assert im.get_format_mimetype() == "image/apng"
         assert im.info.get("default_image") is None
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255))
 
     with Image.open(PILLOW_IMAGES / "apng/single_frame_default.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
@@ -60,11 +67,8 @@ def test_apng_basic() -> None:
         assert im.n_frames == 2
         assert im.get_format_mimetype() == "image/apng"
         assert im.info.get("default_image")
-        assert im.getpixel((0, 0)) == (255, 0, 0, 255)
-        assert im.getpixel((64, 32)) == (255, 0, 0, 255)
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (255, 0, 0, 255))
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=1)
 
         # test out of bounds seek
         assert_raises(EOFError, lambda: im.seek(2))
@@ -73,20 +77,15 @@ def test_apng_basic() -> None:
         assert_raises(ValueError, lambda: im._seek(2), match="cannot seek to frame 2")
 
         # test rewind support
-        assert im.getpixel((0, 0)) == (255, 0, 0, 255)
-        assert im.getpixel((64, 32)) == (255, 0, 0, 255)
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (255, 0, 0, 255))
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=1)
 
 
 @pytest.mark.parametrize("filename", (PILLOW_IMAGES / "apng/split_fdat.png", PILLOW_IMAGES / "apng/split_fdat_zero_chunk.png"))
 def test_apng_fdat(filename: str) -> None:
     with Image.open(filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=im.n_frames - 1)
 
 
 @pytest.mark.parametrize(
@@ -103,9 +102,7 @@ def test_apng_fdat(filename: str) -> None:
 def test_apng_dispose(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
     with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == first
-        assert im.getpixel((64, 32)) == second
+        assert_frame_pixels(im, first, second, frame=im.n_frames - 1)
 
 
 @pytest.mark.parametrize(
@@ -120,9 +117,7 @@ def test_apng_dispose(filename: str, first: tuple[int, ...], second: tuple[int, 
 def test_apng_dispose_region(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
     with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == first
-        assert im.getpixel((64, 32)) == second
+        assert_frame_pixels(im, first, second, frame=im.n_frames - 1)
 
 
 def test_apng_dispose_op_previous_frame() -> None:
@@ -186,9 +181,7 @@ def test_apng_dispose_op_background_decompression_bomb() -> None:
 def test_apng_blend(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
     with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == first
-        assert im.getpixel((64, 32)) == second
+        assert_frame_pixels(im, first, second, frame=im.n_frames - 1)
 
 
 def test_apng_blend_transparency() -> None:
@@ -200,9 +193,7 @@ def test_apng_blend_transparency() -> None:
 def test_apng_chunk_order() -> None:
     with Image.open(PILLOW_IMAGES / "apng/fctl_actl.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=im.n_frames - 1)
 
 
 @pytest.mark.parametrize(
@@ -247,65 +238,44 @@ def test_apng_save_different_palettes(tmp_path: Path) -> None:
         assert reloaded.mode == "RGBA"
 
 
-def test_apng_chunk_errors() -> None:
-    with Image.open(PILLOW_IMAGES / "apng/chunk_no_actl.png") as im:
+@pytest.mark.parametrize("filename", ["chunk_no_actl.png", "chunk_actl_after_idat.png"])
+def test_apng_nonanimated_chunks(filename) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         assert not im.is_animated
 
-    with pytest.warns(UserWarning, match="Invalid APNG"):
-        im = Image.open(PILLOW_IMAGES / "apng/chunk_multi_actl.png")
-    assert isinstance(im, PngImagePlugin.PngImageFile)
-    assert not im.is_animated
-    im.close()
 
-    with Image.open(PILLOW_IMAGES / "apng/chunk_actl_after_idat.png") as im:
+@pytest.mark.parametrize("filename", ["chunk_no_fctl.png", "chunk_repeat_fctl.png", "chunk_no_fdat.png"])
+def test_apng_missing_frame_chunks(filename) -> None:
+    with Image.open(PILLOW_IMAGES / "apng" / filename) as im:
+        assert isinstance(im, PngImagePlugin.PngImageFile)
+        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
+
+
+@pytest.mark.parametrize("filename,error", [("chunk_multi_actl.png", None), ("syntax_num_frames_zero.png", OSError), ("syntax_num_frames_zero_default.png", None), ("syntax_num_frames_invalid.png", None)])
+def test_apng_invalid_animation_control(filename, error) -> None:
+    with pytest.warns(UserWarning, match="Invalid APNG"):
+        im = Image.open(PILLOW_IMAGES / "apng" / filename)
+    with im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         assert not im.is_animated
-
-    with Image.open(PILLOW_IMAGES / "apng/chunk_no_fctl.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
-
-    with Image.open(PILLOW_IMAGES / "apng/chunk_repeat_fctl.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
-
-    with Image.open(PILLOW_IMAGES / "apng/chunk_no_fdat.png") as im:
-        assert isinstance(im, PngImagePlugin.PngImageFile)
-        assert_raises(SyntaxError, lambda: im.seek(im.n_frames - 1))
+        if error:
+            assert_raises(error, im.load)
+        elif filename != "chunk_multi_actl.png":
+            im.load()
 
 
-def test_apng_syntax_errors() -> None:
-    with pytest.warns(UserWarning, match="Invalid APNG"):
-        im = Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_zero.png")
-    assert isinstance(im, PngImagePlugin.PngImageFile)
-    assert not im.is_animated
-    assert_raises(OSError, lambda: im.load())
-    im.close()
-
-    with pytest.warns(UserWarning, match="Invalid APNG"):
-        im = Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_zero_default.png")
-    assert isinstance(im, PngImagePlugin.PngImageFile)
-    assert not im.is_animated
-    im.load()
-    im.close()
-
-    # we can handle this case gracefully
+def test_apng_low_frame_count() -> None:
     with Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_low.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         im.seek(im.n_frames - 1)
 
+
+def test_apng_high_frame_count() -> None:
     with pytest.raises(OSError), Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_high.png") as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
         im.seek(im.n_frames - 1)
         im.load()
-
-    with pytest.warns(UserWarning, match="Invalid APNG"):
-        im = Image.open(PILLOW_IMAGES / "apng/syntax_num_frames_invalid.png")
-    assert isinstance(im, PngImagePlugin.PngImageFile)
-    assert not im.is_animated
-    im.load()
-    im.close()
 
 
 @pytest.mark.parametrize("test_file", ("sequence_start.png", "sequence_gap.png", "sequence_repeat.png", "sequence_repeat_chunk.png", "sequence_reorder.png", "sequence_reorder_chunk.png", "sequence_fdat_fctl.png"))
@@ -328,8 +298,7 @@ def test_apng_save(tmp_path: Path) -> None:
         assert im.n_frames == 1
         assert im.get_format_mimetype() == "image/png"
         assert im.info.get("default_image") is None
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255))
 
     with Image.open(PILLOW_IMAGES / "apng/single_frame_default.png") as im:
         frames = [frame_im.copy() for frame_im in ImageSequence.Iterator(im)]
@@ -342,9 +311,7 @@ def test_apng_save(tmp_path: Path) -> None:
         assert im.n_frames == 2
         assert im.get_format_mimetype() == "image/apng"
         assert im.info.get("default_image")
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=1)
 
 
 def test_apng_save_alpha(tmp_path: Path) -> None:
@@ -456,51 +423,32 @@ def test_apng_save_large_duration(tmp_path: Path) -> None:
         assert reloaded.info["duration"] == 32768000
 
 
-def test_apng_save_disposal(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "colors,default_image,disposal,blend,expected",
+    [
+        (["red", (0, 255, 0, 255), (0, 0, 0, 0)], False, Disposal.OP_NONE, Blend.OP_OVER, [(2, (0, 255, 0, 255))]),
+        (["red", "red", (0, 0, 0, 0)], False, [Disposal.OP_NONE, Disposal.OP_BACKGROUND, Disposal.OP_NONE], Blend.OP_OVER, [(2, (0, 0, 0, 0))]),
+        (["red", (0, 255, 0, 255)], False, [Disposal.OP_NONE, Disposal.OP_BACKGROUND], Blend.OP_OVER, [(1, (0, 255, 0, 255))]),
+        (["red", (0, 255, 0, 255), "red", (0, 0, 0, 0)], True, [Disposal.OP_NONE, Disposal.OP_PREVIOUS, Disposal.OP_NONE], Blend.OP_OVER, [(3, (0, 255, 0, 255))]),
+        (["red", (0, 255, 0, 255)], False, [Disposal.OP_NONE, Disposal.OP_PREVIOUS], Blend.OP_OVER, [(1, (0, 255, 0, 255))]),
+        (["red", "red", (0, 255, 0, 255)], True, Disposal.OP_NONE, [Blend.OP_OVER, Blend.OP_SOURCE], [(2, (0, 255, 0, 255))]),
+        (["red", "red", (0, 0, 0, 0)], True, Disposal.OP_NONE, [Blend.OP_OVER, Blend.OP_SOURCE], [(2, (0, 0, 0, 0))]),
+        (["red", (0, 255, 0, 255), (0, 0, 0, 0)], True, Disposal.OP_NONE, Blend.OP_OVER, [(1, (0, 255, 0, 255)), (2, (0, 255, 0, 255))]),
+    ],
+    ids=["none", "background", "background-final", "previous-default", "previous-final", "source-solid", "source-transparent", "over"],
+)
+def test_apng_save_frame_controls(tmp_path, colors, default_image, disposal, blend, expected) -> None:
     test_file = tmp_path / "temp.png"
-    size = (128, 64)
-    red = Image.new("RGBA", size, (255, 0, 0, 255))
-    green = Image.new("RGBA", size, (0, 255, 0, 255))
-    transparent = Image.new("RGBA", size, (0, 0, 0, 0))
-
-    # test OP_NONE
-    red.save(test_file, save_all=True, append_images=[green, transparent], disposal=PngImagePlugin.Disposal.OP_NONE, blend=PngImagePlugin.Blend.OP_OVER)
+    frames = [Image.new("RGBA", (128, 64), color) for color in colors]
+    frames[0].save(test_file, save_all=True, append_images=frames[1:], default_image=default_image, disposal=disposal, blend=blend)
     with Image.open(test_file) as im:
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        for index, color in expected:
+            assert_frame_pixels(im, color, frame=index)
 
-    # test OP_BACKGROUND
-    disposal = [PngImagePlugin.Disposal.OP_NONE, PngImagePlugin.Disposal.OP_BACKGROUND, PngImagePlugin.Disposal.OP_NONE]
-    red.save(test_file, save_all=True, append_images=[red, transparent], disposal=disposal, blend=PngImagePlugin.Blend.OP_OVER)
-    with Image.open(test_file) as im:
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
 
-    disposal = [PngImagePlugin.Disposal.OP_NONE, PngImagePlugin.Disposal.OP_BACKGROUND]
-    red.save(test_file, save_all=True, append_images=[green], disposal=disposal, blend=PngImagePlugin.Blend.OP_OVER)
-    with Image.open(test_file) as im:
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    # test OP_PREVIOUS
-    disposal = [PngImagePlugin.Disposal.OP_NONE, PngImagePlugin.Disposal.OP_PREVIOUS, PngImagePlugin.Disposal.OP_NONE]
-    red.save(test_file, save_all=True, append_images=[green, red, transparent], default_image=True, disposal=disposal, blend=PngImagePlugin.Blend.OP_OVER)
-    with Image.open(test_file) as im:
-        im.seek(3)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    disposal = [PngImagePlugin.Disposal.OP_NONE, PngImagePlugin.Disposal.OP_PREVIOUS]
-    red.save(test_file, save_all=True, append_images=[green], disposal=disposal, blend=PngImagePlugin.Blend.OP_OVER)
-    with Image.open(test_file) as im:
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    # test info disposal
+def test_apng_save_disposal_info(tmp_path: Path) -> None:
+    test_file = tmp_path / "temp.png"
+    red = Image.new("RGBA", (128, 64), (255, 0, 0, 255))
     red.info["disposal"] = PngImagePlugin.Disposal.OP_BACKGROUND
     red.save(test_file, save_all=True, append_images=[Image.new("RGBA", (10, 10), (0, 255, 0, 255))])
     with Image.open(test_file) as im:
@@ -520,45 +468,12 @@ def test_apng_save_disposal_previous(tmp_path: Path) -> None:
     with Image.open(test_file) as im:
         assert im.getpixel((0, 0)) == (0, 0, 255, 255)
 
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
+        assert_frame_pixels(im, (0, 255, 0, 255), frame=2)
 
 
-def test_apng_save_blend(tmp_path: Path) -> None:
+def test_apng_save_blend_info(tmp_path: Path) -> None:
     test_file = tmp_path / "temp.png"
-    size = (128, 64)
-    red = Image.new("RGBA", size, (255, 0, 0, 255))
-    green = Image.new("RGBA", size, (0, 255, 0, 255))
-    transparent = Image.new("RGBA", size, (0, 0, 0, 0))
-
-    # test OP_SOURCE on solid color
-    blend = [PngImagePlugin.Blend.OP_OVER, PngImagePlugin.Blend.OP_SOURCE]
-    red.save(test_file, save_all=True, append_images=[red, green], default_image=True, disposal=PngImagePlugin.Disposal.OP_NONE, blend=blend)
-    with Image.open(test_file) as im:
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    # test OP_SOURCE on transparent color
-    blend = [PngImagePlugin.Blend.OP_OVER, PngImagePlugin.Blend.OP_SOURCE]
-    red.save(test_file, save_all=True, append_images=[red, transparent], default_image=True, disposal=PngImagePlugin.Disposal.OP_NONE, blend=blend)
-    with Image.open(test_file) as im:
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 0, 0, 0)
-        assert im.getpixel((64, 32)) == (0, 0, 0, 0)
-
-    # test OP_OVER
-    red.save(test_file, save_all=True, append_images=[green, transparent], default_image=True, disposal=PngImagePlugin.Disposal.OP_NONE, blend=PngImagePlugin.Blend.OP_OVER)
-    with Image.open(test_file) as im:
-        im.seek(1)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-        im.seek(2)
-        assert im.getpixel((0, 0)) == (0, 255, 0, 255)
-        assert im.getpixel((64, 32)) == (0, 255, 0, 255)
-
-    # test info blend
+    red, green, transparent = [Image.new("RGBA", (128, 64), color) for color in ((255, 0, 0, 255), (0, 255, 0, 255), (0, 0, 0, 0))]
     red.info["blend"] = PngImagePlugin.Blend.OP_OVER
     red.save(test_file, save_all=True, append_images=[green, transparent])
     with Image.open(test_file) as im:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
 from blanket import Image, ImageFilter
@@ -49,8 +49,7 @@ MODES = ("L", "LA", "La", "I", "I;16", "I;16B", "I;16L", "I;16N", "RGB", "RGBA",
 def test_sanity(filter_to_apply: ImageFilter.Filter | type[ImageFilter.Filter], mode: str) -> None:
     im = hopper(mode)
     out = im.filter(filter_to_apply)
-    assert out.mode == im.mode
-    assert out.size == im.size
+    assert_image_properties(out, mode=im.mode, size=im.size)
 
 
 @pytest.mark.parametrize("mode", MODES)

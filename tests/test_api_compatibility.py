@@ -6,7 +6,7 @@ from typing import ClassVar
 
 import numpy as np
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PILImage, ImageDraw as PILDraw
 
 from blanket import Image, ImageDraw
@@ -26,8 +26,7 @@ def test_conversion_palette_dither_and_transparency(mode: str, target: str, dith
             assert_raises(ValueError, lambda: image.convert(target, dither=dither))
         return
     result, reference = actual.convert(target, dither=dither), expected.convert(target, dither=dither)
-    assert result.mode == reference.mode
-    assert result.tobytes() == reference.tobytes()
+    assert_image_properties(result, mode=reference.mode, pixels=reference.tobytes())
     assert result.getpalette() == reference.getpalette()
     assert result.info == reference.info
     assert actual.tobytes() == raw
@@ -56,8 +55,7 @@ def test_matrix_conversion_matches_pillow(target: str) -> None:
     for image in (actual, expected):
         image.info["transparency"] = (255, 0, 0)
     result, reference = actual.convert(target, matrix), expected.convert(target, matrix)
-    assert result.tobytes() == reference.tobytes()
-    assert result.info == reference.info
+    assert_image_properties(result, pixels=reference.tobytes(), info=reference.info)
 
 
 def test_uint16_tiff_decodes_as_integer_mode() -> None:
@@ -66,8 +64,7 @@ def test_uint16_tiff_decodes_as_integer_mode() -> None:
     source = PILImage.frombytes("I;16", (7, 5), raw)
     encoded = image_buffer(source, "TIFF")
     image = Image.open(BytesIO(encoded.getvalue()))
-    assert image.mode == "I;16"
-    assert image.tobytes() == raw
+    assert_image_properties(image, mode="I;16", pixels=raw)
     assert image.getextrema() == (0, 65535)
     assert image.convert("F").tobytes() == source.convert("F").tobytes()
     assert Image.inspect(BytesIO(encoded.getvalue())).mode == "I;16"
@@ -91,8 +88,7 @@ def test_default_conversion(mode: str, transparent: bool) -> None:
         actual.info["transparency"] = expected.info["transparency"] = 0
     result, reference = actual.convert(), expected.convert()
     assert actual.convert("").tobytes() == reference.tobytes()
-    assert result.mode == reference.mode
-    assert result.tobytes() == reference.tobytes()
+    assert_image_properties(result, mode=reference.mode, pixels=reference.tobytes())
     result.putpixel((0, 0), 71)
     assert actual.getpixel((0, 0)) != result.getpixel((0, 0))
 
@@ -108,8 +104,7 @@ def test_array_validation_and_indexed_import() -> None:
     assert_raises(ValueError, lambda: Image.fromarray(MissingBytes(), "L"))
     array = np.arange(24, dtype=np.uint8).reshape(4, 6)[:, ::2]
     actual, expected = Image.fromarray(array, "P"), PILImage.fromarray(array, "P")
-    assert actual.mode == "P"
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, mode="P", pixels=expected.tobytes())
     assert actual.getpalette() == expected.getpalette()
 
 

@@ -7,7 +7,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_raises, image_buffer, image_pair
+from helpers import assert_image_properties, assert_raises, image_buffer, image_pair
 from PIL import Image as PillowImage, ImageFilter as PillowFilter
 
 from blanket import Image, ImageFilter
@@ -24,8 +24,7 @@ def compare(mode: str, size: tuple[int, int], actual_filter: ImageFilter.Filter,
     image.info["test"] = pillow.info["test"] = "metadata"
     actual = image.filter(actual_filter)
     expected = pillow.filter(expected_filter)
-    assert (actual.mode, actual.size, actual.format, actual.info) == (expected.mode, expected.size, expected.format, expected.info)
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, mode=expected.mode, size=expected.size, format=expected.format, info=expected.info, pixels=expected.tobytes())
     assert image.tobytes() == original
     actual.close()
     assert image.tobytes() == original
@@ -186,9 +185,7 @@ def test_unsharp_identity_returns_independent_copy(mode: str, args: tuple[int, i
     image = Image.frombytes(mode, (19, 13), random.Random(71).randbytes(19 * 13 * len(mode)))
     original = image.tobytes()
     result = image.filter(ImageFilter.UnsharpMask(*args))
-    assert result.mode == mode
-    assert result.size == image.size
-    assert result.tobytes() == original
+    assert_image_properties(result, mode=mode, size=image.size, pixels=original)
     result.putpixel((0, 0), 0 if mode == "L" else (0,) * len(mode))
     assert image.tobytes() == original
 

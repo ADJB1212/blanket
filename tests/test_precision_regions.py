@@ -5,7 +5,7 @@ import struct
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_raises, encode_image, image_buffer
 from PIL import Image as Pillow
 
 from blanket import Image, UnidentifiedImageError
@@ -96,8 +96,7 @@ def test_float_color_storage(mode: str, channels: int) -> None:
     values = (-2.0, float("nan"), float("inf"), 0.5)[:channels]
     raw = struct.pack("<" + "f" * channels, *values)
     image = Image.frombytes(mode, (1, 1), raw)
-    assert image.bit_depth == 32
-    assert image.tobytes() == raw
+    assert_image_properties(image, bit_depth=32, pixels=raw)
     assert image.copy().tobytes() == raw
     assert image.crop((-1, 0, 1, 1)).tobytes() == bytes(channels * 4) + raw
     assert image.getpixel((0, 0))[0] == -2.0
@@ -223,8 +222,7 @@ def test_float_tiff_roundtrip(mode: str, compression: str) -> None:
     stream = image_buffer(image, format="TIFF", compression=compression)
     assert Image.inspect(BytesIO(stream.getvalue())).mode == mode
     result = Image.open(BytesIO(stream.getvalue()))
-    assert result.mode == mode
-    assert result.tobytes() == image.tobytes()
+    assert_image_properties(result, mode=mode, pixels=image.tobytes())
 
 
 def test_float_inplace_composite_and_transpose() -> None:

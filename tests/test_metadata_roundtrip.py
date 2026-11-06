@@ -9,7 +9,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
-from helpers import assert_raises, encode_image, image_buffer
+from helpers import assert_image_properties, assert_raises, encode_image, image_buffer
 from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
 from PIL.TiffImagePlugin import IFDRational
 
@@ -145,8 +145,7 @@ def test_pa_conversion_preserves_metadata_and_cached_exif_edits(mode, profile):
     image.getexif()[305] = "Edited"
     image.getexif().get_ifd(34665)[36867] = "2026:11:01 12:00:00"
     result = image.convert("PA")
-    assert result.mode == "PA"
-    assert result.info == image._metadata_info()
+    assert_image_properties(result, mode="PA", info=image._metadata_info())
     assert result.info is not image.info
     reopened = Image.decode(result.encode("PNG"))
     assert reopened.info["icc_profile"] == profile
@@ -194,8 +193,7 @@ def test_metadata_text_does_not_override_container_detection(format: str) -> Non
     expected = Image.open(BytesIO(encode_image(image, format)))
     xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/">_width _height</x:xmpmeta>'
     actual = Image.open(BytesIO(encode_image(image, format, xmp=xmp)))
-    assert (actual.format, actual.size, actual.mode) == (format, expected.size, expected.mode)
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, format=format, size=expected.size, mode=expected.mode, pixels=expected.tobytes())
     assert actual.info["xmp"] == xmp
 
 
@@ -483,9 +481,7 @@ def test_metadata_does_not_change_lossless_pixels(format: str, mode: str, depth:
     options = {"lossless": True} if format == "JXL" else {}
     baseline = Image.open(BytesIO(encode_image(image, format, **options)))
     output = Image.open(BytesIO(encode_image(image, format, exif=exif_tags(), xmp=b"text", **options)))
-    assert output.mode == baseline.mode
-    assert output.bit_depth == baseline.bit_depth
-    assert output.tobytes() == baseline.tobytes()
+    assert_image_properties(output, mode=baseline.mode, bit_depth=baseline.bit_depth, pixels=baseline.tobytes())
     assert output.getexif()[305] == "Blanket"
 
 

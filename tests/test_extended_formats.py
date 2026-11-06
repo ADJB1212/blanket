@@ -6,7 +6,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_image_properties, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError, features
@@ -42,8 +42,7 @@ def test_pam_roundtrip(mode: str) -> None:
     assert stream.getvalue().startswith(b"P7\n")
     for formats in (None, ["PAM"], ["PPM"]):
         actual = Image.open(stream, formats=formats)
-        assert (actual.format, actual.mode, actual.size) == ("PPM", mode, source.size)
-        assert actual.tobytes() == raw
+        assert_image_properties(actual, format="PPM", mode=mode, size=source.size, pixels=raw)
 
 
 @pytest.mark.parametrize(("data", "mode", "raw"), [(b"P1\n# comment\n3 2\n0 1 0 1 0 1\n", "1", b"\xff\0\xff\0\xff\0"), (b"P2\n3 1\n255\n0 127 255\n", "L", b"\0\x7f\xff"), (b"P3\n1 1\n255\n5 25 250\n", "RGB", b"\x05\x19\xfa")])
@@ -72,8 +71,7 @@ def test_external_jpeg2000_16bit(raw_codestream: bool) -> None:
     raw = struct.pack("<6H", 0, 1, 255, 256, 32768, 65535)
     stream = image_buffer(PillowImage.frombytes("I;16", (3, 2), raw), "JPEG2000", no_jp2=raw_codestream)
     actual = Image.open(stream)
-    assert actual.bit_depth == 16
-    assert actual.tobytes() == raw
+    assert_image_properties(actual, bit_depth=16, pixels=raw)
 
 
 @pytest.mark.parametrize("mode", ["I;16", "I;16L", "I;16B"])
@@ -83,8 +81,7 @@ def test_extended_integer_save(mode: str, format: str) -> None:
     raw = struct.pack((">" if mode == "I;16B" else "<") + "6H", *values)
     stream = image_buffer(Image.frombytes(mode, (3, 2), raw), format)
     actual = Image.open(stream)
-    assert actual.bit_depth == 16
-    assert actual.tobytes() == struct.pack("<6H", *values)
+    assert_image_properties(actual, bit_depth=16, pixels=struct.pack("<6H", *values))
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "P"])
@@ -116,8 +113,7 @@ def test_binary_pbm_row_padding(width: int) -> None:
     packed = bytes((i * 37 + 0x95) % 256 for i in range((width + 7) // 8 * 3))
     stream = BytesIO(f"P4\n{width} 3\n".encode() + packed)
     actual = Image.open(stream)
-    assert (actual.mode, actual.size) == ("1", (width, 3))
-    assert actual.tobytes() == PillowImage.open(stream).tobytes()
+    assert_image_properties(actual, mode="1", size=(width, 3), pixels=PillowImage.open(stream).tobytes())
 
 
 @pytest.mark.parametrize(("magic", "mode", "channels"), [("P5", "L", 1), ("P6", "RGB", 3), ("P7", "RGBA", 4)])
@@ -126,8 +122,7 @@ def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int) ->
     header = f"{magic}\n3 2\n65535\n" if magic != "P7" else "P7\nWIDTH 3\nHEIGHT 2\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
     payload = header.encode() + struct.pack(">" + "H" * len(samples), *samples)
     actual = Image.open(BytesIO(payload))
-    assert (actual.mode, actual.size, actual.bit_depth) == (mode, (3, 2), 16)
-    assert actual.tobytes() == struct.pack("<" + "H" * len(samples), *samples)
+    assert_image_properties(actual, mode=mode, size=(3, 2), bit_depth=16, pixels=struct.pack("<" + "H" * len(samples), *samples))
     assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(payload[:-1])))
 
 
@@ -153,8 +148,7 @@ def test_jpeg2000_parallel_codec_preserves_serial_output(monkeypatch: pytest.Mon
     parallel = image_buffer(source, "JPEG2000")
     assert parallel.getvalue() == serial.getvalue()
     actual = Image.open(parallel)
-    assert (actual.mode, actual.size, actual.bit_depth) == (expected.mode, expected.size, expected.bit_depth)
-    assert actual.tobytes() == expected.tobytes()
+    assert_image_properties(actual, mode=expected.mode, size=expected.size, bit_depth=expected.bit_depth, pixels=expected.tobytes())
 
 
 def test_jpeg2000_parallel_lossy_decode_matches_serial_and_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -214,8 +208,7 @@ def test_eps_missing_ghostscript(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_eps_rasterization(preview: bool) -> None:
     data = struct.pack("<7I", 0xC6D3D0C5, 30, len(EPS), 0, 0, 0, 0) + b"\xff\xff" + EPS if preview else EPS
     actual = Image.open(BytesIO(data), formats=["EPS"])
-    assert (actual.format, actual.mode, actual.size) == ("EPS", "RGB", (4, 3))
-    assert actual.tobytes() == b"\xff\0\0" * 12
+    assert_image_properties(actual, format="EPS", mode="RGB", size=(4, 3), pixels=b"\xff\0\0" * 12)
 
 
 @pytest.mark.parametrize("data", [b"P6\n99999999 99999999\n255\n", b"P7\n", b"qoif", b"DDS ", b"\0\0\0\x0cjP  \r\n\x87\n", b"\xff\x4f\xff\x51", bytes([0, 0, 2] + [0] * 9 + [2, 0, 2, 0, 24, 0])])

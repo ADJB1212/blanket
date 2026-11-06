@@ -5,7 +5,7 @@ import zlib
 from io import BytesIO
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, encode_image, image_buffer, png_chunk
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, encode_image, image_buffer, png_chunk
 from PIL import Image as PillowImage, PdfParser
 
 from blanket import Image, ImageSequence, UnidentifiedImageError
@@ -120,8 +120,7 @@ def test_lazy_tiff_mixed_pages_and_metadata(mode, compression):
     for i in (1, 0, 1):
         image.seek(i)
         eager.seek(i)
-        assert (image.mode, image.size, image.bit_depth) == (eager.mode, eager.size, eager.bit_depth)
-        assert image.tobytes() == eager.tobytes()
+        assert_image_properties(image, mode=eager.mode, size=eager.size, bit_depth=eager.bit_depth, pixels=eager.tobytes())
         assert dict(image.getexif()) == dict(eager.getexif())
 
 
@@ -143,8 +142,7 @@ def test_lazy_tiff_metadata_traverses_forward_once_and_restarts_on_backward_seek
     for frame in [0, 1, 2, 0, 2]:
         image.seek(frame)
         eager.seek(frame)
-        assert image.tobytes() == eager.tobytes()
-        assert image.info == eager.info
+        assert_image_properties(image, pixels=eager.tobytes(), info=eager.info)
     assert visited == [0, 1, 2, 0, 1, 2]
     image.close()
     assert image._lazy_frames._tiff_metadata is None
@@ -187,9 +185,7 @@ def test_lazy_apng_precision_and_default_image(depth, default):
     for i in (2, 0, 1):
         lazy.seek(i)
         eager.seek(i)
-        assert lazy.bit_depth == eager.bit_depth
-        assert lazy.tobytes() == eager.tobytes()
-        assert lazy.info == eager.info
+        assert_image_properties(lazy, bit_depth=eager.bit_depth, pixels=eager.tobytes(), info=eager.info)
 
 
 @pytest.mark.parametrize("format", ["GIF", "PNG", "WEBP", "PDF"])

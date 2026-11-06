@@ -5,7 +5,7 @@ from io import BytesIO
 from math import isnan
 
 import pytest
-from helpers import assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, image_buffer, image_pair, new_pair
 from PIL import Image as PillowImage, ImageOps as PillowOps
 
 from blanket import Image, ImageChops, ImageOps
@@ -117,8 +117,7 @@ def test_bilevel_png_and_logical_operations() -> None:
         assert getattr(ImageChops, operation)(first, second).tobytes() == getattr(PillowChops, operation)(pillow_first, pillow_second).tobytes()
     output = image_buffer(first, "PNG")
     reopened = Image.open(BytesIO(output.getvalue()))
-    assert reopened.mode == "1"
-    assert reopened.tobytes() == first.tobytes()
+    assert_image_properties(reopened, mode="1", pixels=first.tobytes())
 
 
 @pytest.mark.parametrize("widths", [(9, 9), (17, 11), (7, 19)])
@@ -296,9 +295,7 @@ def test_scalar_to_wide_grayscale_keeps_saturation_and_byte_order(mode: str, sub
             image = Image.frombytes(mode, (count, 1), raw)
             converted = image.convert("L", bit_depth=16)
             expected = [0 if isnan(value) else 65535 if value >= 65535 else 0 if value <= 0 else int(value) for value in values]
-            assert converted.mode == "L"
-            assert converted.bit_depth == 16
-            assert converted.tobytes() == struct.pack(f"<{count}H", *expected)
+            assert_image_properties(converted, mode="L", bit_depth=16, pixels=struct.pack(f"<{count}H", *expected))
             assert image.tobytes() == raw
 
 
@@ -362,8 +359,7 @@ def test_float_mode_storage_conversion_and_geometry() -> None:
     blanket, pillow = new_pair("F", (len(values), 1))
     blanket.putdata(values)
     pillow.putdata(values)
-    assert blanket.mode == "F"
-    assert blanket.bit_depth == 32
+    assert_image_properties(blanket, mode="F", bit_depth=32)
     assert blanket.getbands() == ("F",)
     assert blanket.tobytes() == pillow.tobytes()
     assert blanket.getdata() == list(pillow.get_flattened_data())

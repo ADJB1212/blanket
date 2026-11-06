@@ -7,7 +7,7 @@ Tests for resize functionality.
 from __future__ import annotations
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_image_properties, assert_raises
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, assert_image_equal_tofile, assert_image_similar, hopper, skip_unless_feature
 
 from blanket import Image, ImageFile
@@ -106,8 +106,7 @@ class TestImageResize:
     def test_resize(self) -> None:
         def resize(mode: str, size: tuple[int, int] | list[int]) -> None:
             out = hopper(mode).resize(size)
-            assert out.mode == mode
-            assert out.size == tuple(size)
+            assert_image_properties(out, mode=mode, size=tuple(size))
 
         for mode in "1", "P", "L", "RGB", "I", "F":
             resize(mode, (112, 103))

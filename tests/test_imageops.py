@@ -7,7 +7,7 @@ from pillow_helpers import PILLOW_IMAGES
 PILLOW_IMAGE_PREFIX = str(PILLOW_IMAGES) + "/"
 
 import pytest
-from helpers import assert_pillow_equal, assert_pixels_equal, assert_raises, encode_image, image_buffer, image_pair, new_pair, random_pair
+from helpers import assert_image_properties, assert_pillow_equal, assert_pixels_equal, assert_raises, encode_image, image_buffer, image_pair, new_pair, random_pair
 from pillow_helpers import assert_image_equal, assert_image_similar, assert_image_similar_tofile, hopper
 
 from blanket import ExifTags, Image, ImageDraw, ImageOps, ImageStat, features
@@ -83,18 +83,25 @@ def test_fit_same_ratio() -> None:
         assert new_im.size == (1000, 755)
 
 
-def test_fit_zero() -> None:
-    im = Image.new("1", (5, 5))
-    new_im = ImageOps.fit(im, (0, 5))
-    assert new_im.width == 0
-
-    im = Image.new("1", (5, 0))
-    new_im = ImageOps.fit(im, (5, 5))
-    assert new_im.size == (5, 5)
-
-    im = Image.new("1", (5, 5))
-    new_im = ImageOps.fit(im, (10, 0))
-    assert new_im.size == (10, 0)
+@pytest.mark.parametrize(
+    "method,source,target,color,expected",
+    [
+        ("fit", (5, 5), (0, 5), 0, {"width": 0}),
+        ("fit", (5, 0), (5, 5), 0, {"size": (5, 5)}),
+        ("fit", (5, 5), (10, 0), 0, {"size": (10, 0)}),
+        ("contain", (43, 63), (5, 7), 1, {"width": 5}),
+        ("contain", (63, 43), (7, 5), 1, {"height": 5}),
+        ("contain", (1, 10), (5, 5), 0, {"width": 0}),
+        ("contain", (10, 1), (5, 5), 0, {"height": 0}),
+        ("contain", (10, 0), (5, 5), 0, {"size": (5, 0)}),
+        ("contain", (5, 5), (2, 0), 0, {"size": (0, 0)}),
+        ("cover", (10, 0), (5, 5), 0, {"size": (5, 0)}),
+        ("cover", (5, 5), (2, 0), 0, {"size": (0, 0)}),
+    ],
+)
+def test_small_geometry(method, source, target, color, expected) -> None:
+    result = getattr(ImageOps, method)(Image.new("1", source, color), target)
+    assert_image_properties(result, **expected)
 
 
 @pytest.mark.parametrize("new_size", ((256, 256), (512, 256), (256, 512)))
@@ -102,34 +109,6 @@ def test_contain(new_size: tuple[int, int]) -> None:
     im = hopper()
     new_im = ImageOps.contain(im, new_size)
     assert new_im.size == (256, 256)
-
-
-def test_contain_round() -> None:
-    im = Image.new("1", (43, 63), 1)
-    new_im = ImageOps.contain(im, (5, 7))
-    assert new_im.width == 5
-
-    im = Image.new("1", (63, 43), 1)
-    new_im = ImageOps.contain(im, (7, 5))
-    assert new_im.height == 5
-
-
-def test_contain_zero() -> None:
-    im = Image.new("1", (1, 10))
-    new_im = ImageOps.contain(im, (5, 5))
-    assert new_im.width == 0
-
-    im = Image.new("1", (10, 1))
-    new_im = ImageOps.contain(im, (5, 5))
-    assert new_im.height == 0
-
-    im = Image.new("1", (10, 0))
-    new_im = ImageOps.contain(im, (5, 5))
-    assert new_im.size == (5, 0)
-
-    im = Image.new("1", (5, 5))
-    new_im = ImageOps.contain(im, (2, 0))
-    assert new_im.size == (0, 0)
 
 
 @pytest.mark.parametrize(
@@ -144,16 +123,6 @@ def test_cover(image_name: str, expected_size: tuple[int, int]) -> None:
     with Image.open((PILLOW_IMAGE_PREFIX + "") + image_name) as im:
         new_im = ImageOps.cover(im, (256, 256))
         assert new_im.size == expected_size
-
-
-def test_cover_zero() -> None:
-    im = Image.new("1", (10, 0))
-    new_im = ImageOps.cover(im, (5, 5))
-    assert new_im.size == (5, 0)
-
-    im = Image.new("1", (5, 5))
-    new_im = ImageOps.cover(im, (2, 0))
-    assert new_im.size == (0, 0)
 
 
 def test_pad() -> None:
@@ -579,9 +548,7 @@ def test_deformer_can_subclass_public_protocol(mode: str) -> None:
 
     image = Image.frombytes(mode, (7, 5), bytes((i * 17) % 256 for i in range(35 * Image.getmodebands(mode))))
     result = ImageOps.deform(image, IdentityDeformer(), Image.Resampling.NEAREST)
-    assert result.size == image.size
-    assert result.mode == image.mode
-    assert result.tobytes() == image.tobytes()
+    assert_image_properties(result, size=image.size, mode=image.mode, pixels=image.tobytes())
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
@@ -690,8 +657,7 @@ def test_canvas_preserves_float_and_high_depth_samples(mode, depth, operation):
         expected = (expected,) * len(mode)
     assert result.getpixel((0, 0)) == expected
     assert result.getpixel(source_corner) == image.getpixel((0, 0))
-    assert result.mode == mode
-    assert result.bit_depth == depth
+    assert_image_properties(result, mode=mode, bit_depth=depth)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

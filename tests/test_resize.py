@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import assert_raises, image_pair
+from helpers import assert_image_properties, assert_raises, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -53,8 +53,7 @@ def test_resize_copies_metadata_and_owns_pixels(mode: str, size: tuple[int, int]
     assert result.format is None
     image.close()
     expected = PillowImage.frombytes(mode, (3, 2), raw).resize(size)
-    assert (result.mode, result.size) == (mode, size)
-    assert result.tobytes() == expected.tobytes()
+    assert_image_properties(result, mode=mode, size=size, pixels=expected.tobytes())
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
