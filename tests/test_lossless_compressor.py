@@ -18,6 +18,30 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("lossless", [False, True])
+@pytest.mark.parametrize("effort", [1, 7])
+def test_webp_preserves_normal_save(mode: str, lossless: bool, effort: int) -> None:
+    raw = random.Random(73).randbytes(33 * 19 * len(mode))
+    source = Image.frombytes(mode, (33, 19), raw)
+    compressor = LosslessImageCompressor(effort=effort)
+    baseline, output = compressed_pair(source, "WEBP", lossless=lossless, compressor=compressor)
+    assert len(output.getvalue()) <= len(baseline.getvalue())
+    expected = Image.open(baseline).convert("RGBA").tobytes()
+    assert Image.open(output).convert("RGBA").tobytes() == expected
+    with PillowImage.open(io.BytesIO(output.getvalue())) as decoded:
+        assert decoded.convert("RGBA").tobytes() == expected
+    assert source.tobytes() == raw
+    assert image_buffer(source, "WEBP", lossless=lossless, compressor=compressor).getvalue() == output.getvalue()
+
+
+def test_webp_lossless_representation_reduces_flat_lossy_save() -> None:
+    source = Image.new("RGB", (129, 67), (40, 100, 180))
+    baseline, output = compressed_pair(source, "WEBP", compressor=LosslessImageCompressor(effort=1))
+    assert len(output.getvalue()) < len(baseline.getvalue())
+    assert Image.open(output).convert("RGB").tobytes() == Image.open(baseline).convert("RGB").tobytes()
+
+
 @pytest.mark.parametrize("effort", [1, 7])
 @pytest.mark.parametrize("gray", [False, True])
 def test_png_reduces_rgba_channels(effort: int, gray: bool) -> None:

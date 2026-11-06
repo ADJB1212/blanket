@@ -64,9 +64,22 @@ impl LosslessImageCompressor {
         match format {
             ImageFormat::Png if image.bit_depth == 8 => self.optimize_png(image, options.compress_level),
             ImageFormat::Jpeg => self.optimize_jpeg(image, options),
+            ImageFormat::Webp => self.optimize_webp(image, options),
             ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options),
             _ => codecs::encode(image, format, options),
         }
+    }
+
+    fn optimize_webp(&self, image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
+        let mut output = codecs::encode(image, ImageFormat::Webp, options)?;
+        let reference = codecs::decode(&output, ImageFormat::Webp).map_err(codec_error)?;
+        for method in (0..=6).rev().take(usize::from(self.effort)) {
+            let candidate = codecs::encode_webp_variant(image, options, method)?;
+            keep_equivalent(&mut output, candidate, &reference, ImageFormat::Webp)?;
+            let candidate = codecs::encode_webp_variant(&reference, SaveOptions { lossless: true, ..options }, method)?;
+            keep_equivalent(&mut output, candidate, &reference, ImageFormat::Webp)?;
+        }
+        Ok(output)
     }
 
     fn optimize_jpeg(&self, image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {

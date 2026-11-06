@@ -973,7 +973,7 @@ def check_save_compressors() -> int:
     for mode in ("L", "RGB", "RGBA"):
         image = BlanketImage.frombytes(mode, (37, 29), pixels(mode))
         original = image.tobytes()
-        for format, options in (("PNG", {}), ("JPEG", {"quality": 85})):
+        for format, options in (("PNG", {}), ("JPEG", {"quality": 85}), ("WEBP", {"quality": 85}), ("WEBP", {"lossless": True})):
             if mode == "RGBA" and format == "JPEG":
                 continue
             baseline = BytesIO()

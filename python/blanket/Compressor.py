@@ -139,7 +139,7 @@ class LosslessImageCompressor:
     Args:
         effort: Optimization effort from 1 (fastest) to 10 (most thorough).
             Controls PNG filter search, JPEG scan coding, JXL effort search,
-            and HEIF/HEIC encoder preset search. Higher settings can be slow.
+            WebP method search, and HEIF/HEIC encoder preset search. Higher settings can be slow.
 
     Eight-bit PNG saves try grayscale and opaque-alpha reductions and multiple
     row filters, including minimum-entropy filtering. Exact palettes use packed
@@ -152,8 +152,9 @@ class LosslessImageCompressor:
     a reduced mode. Size relative to the original source file is not guaranteed.
     JPEG saves optimize Huffman tables and, at effort 3 or higher, also try
     progressive scans without changing the normal save's DCT coefficients.
-    JXL and HEIF/HEIC saves search encoder settings, including high-bit-depth
-    images. Smaller candidates are accepted only when their decoded samples
+    WebP, JXL, and HEIF/HEIC saves search encoder settings. JXL and HEIF/HEIC
+    also support high-bit-depth images. Smaller candidates are accepted only
+    when their decoded samples
     exactly match the normal save. For lossy saves, this also tries lossless
     encoding of the normal save's decoded pixels.
 

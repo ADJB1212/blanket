@@ -69,7 +69,7 @@ def sample_error(reference: tuple[tuple[int, int], int, bytes], actual: tuple[tu
 
 def benchmark(image: Image.Image, fmt: str, effort: int, repeats: int, warmups: int, compressor_kind: str = "lossless", max_rmse: float = 2.0) -> dict[str, object]:
     options: dict[str, object] = {"compress_level": 6} if fmt == "PNG" else {"quality": 90}
-    if fmt in ("JXL", "HEIF") and compressor_kind == "lossless":
+    if fmt in ("WEBP", "JXL", "HEIF") and compressor_kind == "lossless":
         options = {"lossless": True}
     if fmt == "JXL":
         options["effort"] = 7
@@ -283,7 +283,7 @@ def _compare_results_plain(
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("-f", "--formats", nargs="+", choices=["PNG", "JPEG", "JXL", "HEIF"], default=["PNG", "JPEG", "JXL", "HEIF"])
+    parser.add_argument("-f", "--formats", nargs="+", choices=["PNG", "JPEG", "WEBP", "JXL", "HEIF"], default=["PNG", "JPEG", "WEBP", "JXL", "HEIF"])
     parser.add_argument("-e", "--efforts", nargs="+", type=int, choices=range(1, 11), default=[7])
     parser.add_argument("-c", "--compressor", choices=["both", "lossless", "lossy"], default="both", help="compressor(s) to benchmark (default: both)")
     parser.add_argument("--max-rmse", type=error_limit, default=2.0, help="additional RGB error limit for lossy compression (default: 2.0)")
@@ -297,7 +297,7 @@ def main() -> int:
     print("Times are median in-memory saves; decoding/verification is excluded.")
     kinds = ("lossless", "lossy") if args.compressor == "both" else (args.compressor,)
     print(f"Checks compare to each normal save: exact RGBA for lossless; RGB RMSE <= {args.max_rmse:g} and exact alpha for lossy.")
-    print("JXL/HEIF baselines use lossless=True for lossless compression and quality=90 for lossy compression.")
+    print("WebP/JXL/HEIF baselines use lossless=True for lossless compression and quality=90 for lossy compression.")
     print(f"{'Fixture':<12} {'Size':<11} {'Format':<8} {'Compressor':<10} {'Effort':>6} {'Bytes Before':>15} {'Bytes After':>15} {'Saved %':>8} {'Base ms':>10} {'Opt ms':>10} {'Time x':>8} {'RMSE':>8} {'Check':>6}")
     rows: list[dict[str, object]] = []
     failed = False

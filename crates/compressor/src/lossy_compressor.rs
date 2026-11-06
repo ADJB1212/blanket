@@ -80,7 +80,7 @@ impl LossyImageCompressor {
                 bracketed = true;
             }
         }
-        if format == ImageFormat::Jpeg {
+        if matches!(format, ImageFormat::Jpeg | ImageFormat::Webp) {
             let quality = winner_quality.unwrap_or(options.quality);
             let optimized = lossless.encode(image, format, SaveOptions { quality, ..options })?;
             if optimized.len() < output.len() {

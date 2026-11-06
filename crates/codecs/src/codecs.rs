@@ -15,6 +15,7 @@ use blanket_codec_pdf::encode_pdf;
 use blanket_codec_png::{decode_png, encode_wide_png};
 pub use blanket_codec_png::{encode_one_png, encode_palette_png, encode_png};
 use blanket_codec_tiff::{decode_tiff, encode_float_tiff, encode_lab_tiff, encode_raw_tiff, encode_tiff, encode_wide_tiff, is_dng};
+pub use blanket_codec_webp::encode_webp_variant;
 use blanket_codec_webp::{decode_webp, encode_webp};
 use blanket_core::{Image, PixelMode, UnidentifiedImageError};
 use pyo3::exceptions::{PyOSError, PyValueError};

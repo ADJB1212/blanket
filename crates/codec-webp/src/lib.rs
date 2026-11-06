@@ -46,6 +46,14 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
+    encode_webp_config(image, pixels, options, webpx::EncoderConfig::new().thread_level(1))
+}
+
+pub fn encode_webp_variant(image: &Image, options: SaveOptions, method: u8) -> PyResult<Vec<u8>> {
+    encode_webp_config(image, image.pixel_data()?, options, webpx::EncoderConfig::new().thread_level(1).method(method).exact(true))
+}
+
+fn encode_webp_config(image: &Image, pixels: &[u8], options: SaveOptions, config: webpx::EncoderConfig) -> PyResult<Vec<u8>> {
     let argb = (image.mode == PixelMode::L).then(|| pixels.iter().map(|&v| 0xff00_0000 | (u32::from(v) * 0x0001_0101)).collect::<Vec<_>>());
     let encoder = match image.mode {
         PixelMode::L => webpx::Encoder::new_argb(argb.as_deref().expect("grayscale pixels expanded above"), image.width, image.height),
@@ -53,11 +61,7 @@ pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
         PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width, image.height),
         _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
     };
-    let encoder = encoder.config(webpx::EncoderConfig::new().thread_level(1)).lossless(options.lossless).quality(if options.lossless {
-        75.0
-    } else {
-        f32::from(options.quality)
-    });
+    let encoder = encoder.config(config).lossless(options.lossless).quality(if options.lossless { 75.0 } else { f32::from(options.quality) });
     if image.mode != PixelMode::L {
         return encoder.encode(webpx::Unstoppable).map_err(codec_error);
     }
