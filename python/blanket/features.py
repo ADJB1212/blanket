@@ -59,7 +59,7 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
     known = {feature: label for label, feature in _FORMATS}
     if name not in known:
         raise ValueError(f"unknown encoding format {format!r}")
-    if name in ("dds", "eps", "fits", "spider", "pixar", "sun"):
+    if name in ("dds", "eps", "fits", "spider", "pixar", "sun", "svg"):
         return None
     if not check("heif_encoder" if name == "heif" else name):
         return None
@@ -130,6 +130,7 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
 
 
 _FEATURES = (
+    "svg",
     "pcx",
     "sgi",
     "xbm",
@@ -167,6 +168,7 @@ _FEATURES = (
 )
 _ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "heic": "heif", "jpeg2000": "jpg_2000", "pbm": "ppm", "pgm": "ppm", "pnm": "ppm"}
 _FORMATS = (
+    ("SVG", "svg"),
     ("PCX", "pcx"),
     ("SGI", "sgi"),
     ("XBM", "xbm"),
@@ -313,7 +315,7 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
                 write = info["heif_encoder"][0]
             elif feature == "pdf":
                 read = False
-            elif feature in ("dds", "eps"):
+            elif feature in ("dds", "eps", "svg"):
                 write = False
             capabilities = [name for name, available in (("open", read), ("save", write)) if available]
             print(f"  {label}: {', '.join(capabilities) or 'unavailable'}", file=out)

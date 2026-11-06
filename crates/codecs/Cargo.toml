@@ -18,6 +18,7 @@ blanket-codec-jpeg.workspace = true
 blanket-codec-jxl.workspace = true
 blanket-codec-heif.workspace = true
 blanket-codec-pdf.workspace = true
+blanket-codec-svg.workspace = true
 blanket-codec-tiff.workspace = true
 blanket-codec-webp.workspace = true
 blanket-codec-avif.workspace = true

@@ -290,6 +290,7 @@ Rust backend for performance and functionality Pillow doesn't offer.
 
 ### Planned
 
+- [x] **SVG support** — read static SVG as raster images
 - [ ] **Batch processing API** — process multiple images in parallel with
       shared pipeline configuration
 - [ ] **Smart cropping** — content-aware crop using saliency detection or

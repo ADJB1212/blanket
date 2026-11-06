@@ -8,6 +8,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "jpg" | "libjpeg_turbo" => Some(format!("turbojpeg {}", env!("BLANKET_BACKEND_TURBOJPEG"))),
         "libtiff" => Some(format!("tiff {}", env!("BLANKET_BACKEND_TIFF"))),
         "gif" => Some(format!("gif {}", env!("BLANKET_BACKEND_GIF"))),
+        "svg" => Some(format!("resvg {}", env!("BLANKET_BACKEND_RESVG"))),
         "bmp" | "ico" | "ppm" | "pam" | "tga" | "dds" | "qoi" => Some(format!("image {}", env!("BLANKET_BACKEND_IMAGE"))),
         "jpg_2000" => Some(blanket_codec_jpeg2000::backend_version()),
         "eps" => return Some((blanket_codec_extended::ghostscript_available(), None)),

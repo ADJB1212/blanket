@@ -57,6 +57,7 @@ pub enum ImageFormat {
     Heif,
     Avif,
     Pdf,
+    Svg,
     Ppm,
     Pam,
     Tga,
@@ -100,6 +101,7 @@ impl ImageFormat {
             "GIF" => Ok(Self::Gif),
             "ICO" => Ok(Self::Ico),
             "PDF" => Ok(Self::Pdf),
+            "SVG" => Ok(Self::Svg),
             "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
             "WEBP" => Ok(Self::Webp),
@@ -134,6 +136,7 @@ impl ImageFormat {
             Self::Gif => "GIF",
             Self::Ico => "ICO",
             Self::Pdf => "PDF",
+            Self::Svg => "SVG",
             Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
             Self::Webp => "WEBP",
@@ -175,6 +178,8 @@ impl ImageFormat {
             Some(Self::Avif)
         } else if is_heif(data) {
             Some(Self::Heif)
+        } else if blanket_codec_svg::detect(data) {
+            Some(Self::Svg)
         } else if let Some(format) = blanket_codec_extended::legacy::detect(data) {
             Self::parse(format).ok()
         } else if is_tga(data) {
@@ -188,6 +193,9 @@ impl ImageFormat {
 pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Image> {
     let format = input_format(data, formats)?;
     check_backend(format, "decode")?;
+    if format == ImageFormat::Svg {
+        return py.detach(|| blanket_codec_svg::decode(data)).map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"));
+    }
     py.detach(|| decode(data, format)).map_err(|message| decode_error(message, Some(format.as_str()), "decode"))
 }
 
@@ -209,6 +217,17 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
 type Inspection = (String, (u32, u32), String, u8);
 
 #[pyfunction]
+#[pyo3(signature = (data, formats=None, size=None, dpi=96.0))]
+pub fn _decode_svg(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, size: Option<(u32, u32)>, dpi: f32) -> PyResult<Image> {
+    let format = input_format(data, formats)?;
+    if format != ImageFormat::Svg {
+        return Err(PyValueError::new_err("SVG rasterization options require SVG input"));
+    }
+    py.detach(|| blanket_codec_svg::decode_options(data, blanket_codec_svg::RenderOptions { size, dpi }))
+        .map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"))
+}
+
+#[pyfunction]
 pub fn _decode_region(py: Python<'_>, data: &[u8], bounds: (u32, u32, u32, u32), formats: Option<Vec<String>>) -> PyResult<Option<Image>> {
     let format = input_format(data, formats)?;
     if format == ImageFormat::Tiff {
@@ -221,6 +240,11 @@ pub fn _decode_region(py: Python<'_>, data: &[u8], bounds: (u32, u32, u32, u32),
 #[pyfunction]
 pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> PyResult<Inspection> {
     let format = input_format(data, formats)?;
+    if format == ImageFormat::Svg {
+        let header =
+            py.detach(|| blanket_codec_svg::inspect(data)).map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "inspect"))?;
+        return Ok(("SVG".into(), (header.width, header.height), header.mode.into(), header.bit_depth));
+    }
     let header = py
         .detach(|| match format {
             ImageFormat::Png => blanket_codec_png::inspect(data),
@@ -430,6 +454,7 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Gif => decode_gif(data),
         ImageFormat::Ico => decode_ico(data),
         ImageFormat::Pdf => Err("PDF is a write-only format".into()),
+        ImageFormat::Svg => blanket_codec_svg::decode(data).map_err(|error| error.to_string()),
         ImageFormat::Avif => decode_avif(data),
         ImageFormat::Tiff => decode_tiff(data),
         ImageFormat::Webp => decode_webp(data),
@@ -446,6 +471,9 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
 }
 
 fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if format == ImageFormat::Svg {
+        return Err(CodecErrorKind::Unsupported.into_pyerr("SVG is a read-only format".into(), Some("SVG"), "encode"));
+    }
     if format == ImageFormat::Tiff && options.tiff_compression != 0 {
         return blanket_codec_tiff::encode_compressed_tiff(image, options);
     }
@@ -502,6 +530,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
         ImageFormat::Gif => encode_gif(image, pixels),
         ImageFormat::Ico => encode_ico(image, pixels),
         ImageFormat::Pdf => encode_pdf(image, pixels),
+        ImageFormat::Svg => unreachable!(),
         ImageFormat::Avif => encode_avif(image, pixels, options),
         ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => encode_tiff(image, pixels),
@@ -549,6 +578,18 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn svg_native_dispatch_preserves_pixels_and_format() {
+        let format = ImageFormat::parse("svg").unwrap();
+        assert_eq!(format, ImageFormat::Svg);
+        assert_eq!(format.as_str(), "SVG");
+        let image =
+            decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='red'/></svg>", format).unwrap();
+        assert_eq!(image.format.as_deref(), Some("SVG"));
+        assert_eq!(image.pixel_data().unwrap(), &[255, 0, 0, 255]);
+        assert!(decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='4097' height='1'/>", format).err().unwrap().contains("limit exceeded"));
+    }
+
     #[test]
     fn binary_signatures_precede_legacy_text_hints_in_metadata() {
         let image = Image::from_pixels(17, 19, PixelMode::Rgb, vec![137; 17 * 19 * 3], None).unwrap();

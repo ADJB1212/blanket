@@ -3,7 +3,7 @@ fn main() {
     println!("cargo::rerun-if-changed={}", lock_path.display());
     let lock: toml::Table = std::fs::read_to_string(lock_path).expect("read Cargo.lock").parse().expect("parse Cargo.lock");
     let packages = lock["package"].as_array().expect("Cargo.lock packages");
-    for name in ["png", "turbojpeg", "tiff", "gif", "image", "ravif", "dav1d"] {
+    for name in ["png", "turbojpeg", "tiff", "gif", "image", "ravif", "dav1d", "resvg"] {
         let package = packages.iter().find(|package| package["name"].as_str() == Some(name)).expect("codec backend in Cargo.lock");
         let version = package["version"].as_str().expect("codec backend version");
         println!("cargo::rustc-env=BLANKET_BACKEND_{}={version}", name.to_ascii_uppercase());

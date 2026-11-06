@@ -19,6 +19,7 @@ members = [
     "crates/codec-jxl",
     "crates/codec-heif",
     "crates/codec-pdf",
+    "crates/codec-svg",
     "crates/codec-tiff",
     "crates/codec-webp",
     "crates/codec-avif",
@@ -68,6 +69,7 @@ blanket-codec-jpeg = { path = "crates/codec-jpeg" }
 blanket-codec-jpeg2000 = { path = "crates/codec-jpeg2000" }
 blanket-codec-jxl = { path = "crates/codec-jxl" }
 blanket-codec-pdf = { path = "crates/codec-pdf" }
+blanket-codec-svg = { path = "crates/codec-svg" }
 blanket-codec-png = { path = "crates/codec-png" }
 blanket-codec-tiff = { path = "crates/codec-tiff" }
 blanket-codec-webp = { path = "crates/codec-webp" }

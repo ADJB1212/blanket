@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 from ._blanket import (
     UnidentifiedImageError,
     _decode_region,
+    _decode_svg,
     _draft_jpeg,
     _encode,
     _getxmp,
@@ -106,6 +107,7 @@ _EXTENSIONS = {
     ".heif": "HEIF",
     ".avif": "AVIF",
     ".pdf": "PDF",
+    ".svg": "SVG",
     ".ppm": "PPM",
     ".pgm": "PPM",
     ".pbm": "PPM",
@@ -202,6 +204,7 @@ _SAVE_OPTIONS = {
     "AVIF": frozenset({"quality", "effort"}),
 }
 _MIME_TYPES = {
+    "SVG": "image/svg+xml",
     "PNG": "image/png",
     "JPEG": "image/jpeg",
     "GIF": "image/gif",
@@ -219,6 +222,13 @@ _MIME_TYPES = {
     "PCX": "image/x-pcx",
     "SGI": "image/sgi",
 }
+
+
+def registered_extensions() -> dict[str, str]:
+    """Return known filename extensions, including read-only formats."""
+    return _EXTENSIONS.copy()
+
+
 MAX_IMAGE_PIXELS: int | None = 1024 * 1024 * 1024 // 4 // 3
 
 
@@ -2437,6 +2447,8 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
+        if output_format == "SVG":
+            raise UnsupportedCodecError("SVG is a read-only format", format="SVG", operation="encode")
         if output_format == "JPEG" and (self.width == 0 or self.height == 0):
             raise ValueError("cannot write empty image as JPEG")
         if {"save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image"} & options.keys():
@@ -2810,7 +2822,16 @@ def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, 
     return ImageHeader(format, size, mode, bit_depth, info)
 
 
-def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mode: str = "r", formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1) -> Image:
+def open(
+    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
+    mode: str = "r",
+    formats: list[str] | tuple[str, ...] | None = None,
+    *,
+    lazy: bool = False,
+    frame_cache_size: int = 1,
+    svg_size: tuple[int, int] | None = None,
+    svg_dpi: float | None = None,
+) -> Image:
     """Open an image, optionally decoding sequence frames on demand.
 
     Args:
@@ -2824,6 +2845,11 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
             palettes, and metadata survive only while a frame remains cached.
             Animation cache misses replay original preceding frames; edits do
             not affect composition of other frames.
+        svg_size: Exact SVG raster dimensions. Scales each axis independently;
+            cannot be combined with svg_dpi. Other formats reject this option.
+        svg_dpi: SVG physical-unit resolution; default is 96. Does not change
+            pixel or viewBox units. SVG is a single eager frame; lazy=True is
+            unsupported. The decoded image does not retain its source document.
 
     Examples:
         ```python
@@ -2842,6 +2868,7 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
+    svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     data = _read_bytes(fp)
     try:
         format, size, _, _ = _inspect(data, formats)
@@ -2849,13 +2876,13 @@ def open(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, mod
         pass
     else:
         _decompression_bomb_check(size, format=format)
-    image = _decode(data, formats, lazy, frame_cache_size)
+    image = _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi)
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
     return image
 
 
-def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1) -> Image:
+def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1, svg_size: tuple[int, int] | None = None, svg_dpi: float | None = None) -> Image:
     """Decode encoded bytes without a file or stream.
 
     Args:
@@ -2863,6 +2890,8 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
         formats: Optional format allowlist, as in open().
         lazy: Decode sequence frames on demand, as in open().
         frame_cache_size: Maximum cached frames for lazy decoding.
+        svg_size: Exact SVG raster dimensions, as in open().
+        svg_dpi: SVG physical-unit resolution, as in open(); exclusive with svg_size.
 
     Examples:
         ```python
@@ -2873,12 +2902,34 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
         ```
     """
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
+    svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     if not isinstance(data, bytes):
         try:
             data = memoryview(data).tobytes()
         except TypeError as error:
             raise TypeError("data must be a bytes-like object") from error
-    return _decode(data, formats, lazy, frame_cache_size)
+    return _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi)
+
+
+def _svg_options(size: tuple[int, int] | None, dpi: float | None) -> tuple[tuple[int, int] | None, float | None]:
+    if size is not None and dpi is not None:
+        raise ValueError("svg_size and svg_dpi are mutually exclusive")
+    if size is not None:
+        if not isinstance(size, (tuple, list)) or len(size) != 2:
+            raise ValueError("svg_size must contain two positive integers")
+        if any(isinstance(v, bool) for v in size):
+            raise TypeError("svg_size must contain integers")
+        size = (index(size[0]), index(size[1]))
+        if min(size) <= 0:
+            raise ValueError("svg_size must contain two positive integers")
+        if max(size) > 4096:
+            raise CodecResourceLimitError("SVG output dimensions exceed 4096", format="SVG", operation="decode")
+    if dpi is not None:
+        if isinstance(dpi, bool) or not isinstance(dpi, (int, float)):
+            raise TypeError("svg_dpi must be a number")
+        if not math.isfinite(dpi) or dpi <= 0:
+            raise ValueError("svg_dpi must be finite and positive")
+    return size, dpi
 
 
 def _decode_options(formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int) -> int:
@@ -2895,8 +2946,14 @@ def _decode_options(formats: list[str] | tuple[str, ...] | None, lazy: bool, fra
     return frame_cache_size
 
 
-def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int) -> Image:
+def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool, frame_cache_size: int, svg_size: tuple[int, int] | None = None, svg_dpi: float | None = None) -> Image:
     """Build images and frame metadata from an immutable encoded buffer."""
+    if svg_size is not None or svg_dpi is not None:
+        if lazy:
+            raise UnsupportedCodecError("SVG rasterization does not support lazy=True", format="SVG", operation="decode")
+        image = Image(_decode_svg(data, formats, svg_size, 96.0 if svg_dpi is None else svg_dpi))
+        _decompression_bomb_check(image.size, format="SVG")
+        return image
     seek_error = None
     declared_frames = None
     if data.startswith(b"\x89PNG\r\n\x1a\n") and (formats is None or any(str(f).upper() == "PNG" for f in formats)):
@@ -3118,6 +3175,8 @@ def _output_format(fp: object, requested: str | None) -> str:
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
         normalized = _FORMAT_ALIASES.get(normalized, normalized)
+        if normalized == "SVG":
+            raise UnsupportedCodecError("SVG is a read-only format", format="SVG", operation="encode")
         if normalized not in _SAVE_OPTIONS:
             raise UnsupportedCodecError(f"unsupported image format {requested!r}", format=normalized, operation="encode")
         return normalized

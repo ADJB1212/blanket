@@ -69,7 +69,7 @@ do not promise byte-exact Pillow output. Start with
 | Support        | Formats                                                                                                                       |
 | -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | Read and write | PNG/APNG, JPEG, JPEG XL, TIFF, WebP, AVIF, HEIC/HEIF, BMP, GIF, ICO, Netpbm/PAM, TGA, QOI, JPEG 2000, PCX, SGI, XBM, XPM, MSP |
-| Read only      | DDS, EPS, FITS, SPIDER, Pixar, Sun raster                                                                                     |
+| Read only      | SVG, DDS, EPS, FITS, SPIDER, Pixar, Sun raster                                                                                |
 | Write only     | PDF, PALM                                                                                                                     |
 
 What actually works depends on mode, depth, and the codec backends in the

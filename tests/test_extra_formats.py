@@ -56,14 +56,17 @@ def test_packbits_tiff() -> None:
 
 @pytest.mark.parametrize("prefix", [b"", b"\xef\xbb\xbf \n", b'<?xml version="1.0"?><!-- test -->\n'])
 @pytest.mark.parametrize("formats", [None, ["SVG"]])
-def test_svg_is_unsupported(prefix: bytes, formats: list[str] | None) -> None:
+def test_svg_read(prefix: bytes, formats: list[str] | None) -> None:
     data = (
         prefix
         + b"""<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
       <rect width="2" height="2" fill="red" fill-opacity="0.5"/>
     </svg>"""
     )
-    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data), formats=formats), match="cannot identify image file")
+    image = Image.open(BytesIO(data), formats=formats)
+    assert_image_properties(image, format="SVG", mode="RGBA", size=(4, 2))
+    assert image.getpixel((0, 0)) == (255, 0, 0, 128)
+    assert image.getpixel((3, 0)) == (0, 0, 0, 0)
 
 
 def make_dng(cfa: bool = False) -> bytes:
@@ -129,6 +132,6 @@ def test_invalid_new_formats(data: bytes) -> None:
     assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(data)))
 
 
-@pytest.mark.parametrize("format", ["DNG", "SVG"])
+@pytest.mark.parametrize("format", ["DNG"])
 def test_unsupported_save_formats(format: str) -> None:
     assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\0").save(BytesIO(), format), match="unsupported image format")

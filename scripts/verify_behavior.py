@@ -1060,6 +1060,20 @@ def check_sequences() -> int:
     return checks
 
 
+def check_svg() -> int:
+    data = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='red' fill-opacity='0.5'/></svg>"
+    image = BlanketImage.decode(data, formats=["SVG"])
+    assert (image.format, image.mode, image.size) == ("SVG", "RGBA", (4, 2))
+    assert image.getpixel((0, 0)) == (255, 0, 0, 128)
+    assert image.getpixel((3, 0)) == (0, 0, 0, 0)
+    assert BlanketImage.open(BytesIO(data), svg_size=(40, 20)).size == (40, 20)
+    header = BlanketImage.inspect(BytesIO(data))
+    assert (header.size, header.mode, header.bit_depth) == ((4, 2), "RGBA", 8)
+    image.putpixel((3, 0), (0, 255, 0, 255))
+    assert BlanketImage.decode(image.encode("PNG")).tobytes() == image.tobytes()
+    return 6
+
+
 def main() -> None:
     checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
@@ -1082,6 +1096,7 @@ def main() -> None:
     checks += check_save_compressors()
     checks += check_image_utilities()
     checks += check_sequences()
+    checks += check_svg()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
     imagefilter_checks = check_imagefilter()
