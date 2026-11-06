@@ -2486,7 +2486,7 @@ class Image:
                     native.set_palette_alpha(index=transparency)
                 else:
                     native.set_palette_alpha(alpha=transparency)
-        metadata = save_metadata(self, output_format, options)
+        metadata = save_metadata(self, output_format, options, strip=compressor is not None)
         values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
@@ -2495,6 +2495,7 @@ class Image:
             output_format,
             **values,
             compressor=None if compressor is None else compressor._native,
+            target_size=None if compressor is None else compressor.target_size,
             output=output,
             icc_profile=metadata[2],
             metadata_exif=metadata[0],

@@ -8,15 +8,18 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0, target_size=None))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
     attach_metadata: bool, metadata_chunks: Vec<blanket_codecs::metadata::PngChunk>, jpeg_subsampling: i8, jpeg_optimize: bool,
     jpeg_progressive: bool, jpeg_keep_rgb: bool, jpeg_qtables: Vec<[u16; 64]>, jpeg_smooth: i32, jpeg_qtable_quality: i16,
-    jpeg_restart_marker_blocks: u32, jpeg_restart_marker_rows: u32, jpeg_streamtype: i32,
+    jpeg_restart_marker_blocks: u32, jpeg_restart_marker_rows: u32, jpeg_streamtype: i32, target_size: Option<u64>,
 ) -> PyResult<Option<Py<PyBytes>>> {
+    if target_size == Some(0) {
+        return Err(PyValueError::new_err("target_size must be positive"));
+    }
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
         quality,
@@ -48,6 +51,14 @@ pub(crate) fn _encode(
     } else {
         encoded
     };
+    if let Some(target_size) = target_size
+        && encoded.len() as u64 > target_size
+    {
+        return Err(PyValueError::new_err(format!(
+            "target_size of {target_size} bytes cannot be reached by this search; smallest qualifying candidate is {} bytes",
+            encoded.len()
+        )));
+    }
     if let Some(output) = output {
         let path = if output.is_instance_of::<PyBytes>() {
             py.import("os")?.call_method1("fsdecode", (&output,))?.extract::<PathBuf>()?

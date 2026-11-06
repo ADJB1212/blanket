@@ -419,7 +419,7 @@ with new processing semantics exposed explicitly.
 
 #### Compression and Animation Optimization
 
-- [ ] **Target-size encoding** — search supported encoder settings for a byte
+- [x] **Target-size encoding** — search supported encoder settings for a byte
       budget and report when the requested size cannot be reached
 - [ ] **Compression reports** — expose chosen settings, candidate sizes,
       measured error, and search cost from compressor runs

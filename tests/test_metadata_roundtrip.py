@@ -506,16 +506,23 @@ def test_tiff_compression_and_external_metadata(compression: str, profile: bytes
 
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "HEIF"])
 @pytest.mark.parametrize("compressor", [LosslessImageCompressor(effort=1), LossyImageCompressor(effort=1)])
-def test_compression_preserves_metadata(format: str, compressor: object, profile: bytes) -> None:
+def test_compression_strips_metadata(format: str, compressor: object, profile: bytes) -> None:
     image = Image.new("RGB", (16, 16), (20, 50, 80))
     image.info.update(exif=exif_tags().tobytes(), xmp=b"packet", icc_profile=profile)
     options = {"xmp": image.info["xmp"]} if format == "JPEG" else {}
     normal = Image.open(BytesIO(encode_image(image, format, **options)))
     optimized = Image.open(BytesIO(encode_image(image, format, compressor=compressor, **options)))
-    assert optimized.getexif()[305] == "Blanket"
-    assert optimized.info["xmp"] == b"packet"
-    assert optimized.info["icc_profile"] == profile
+    assert normal.getexif()[305] == "Blanket"
+    assert not optimized.getexif()
+    assert "xmp" not in optimized.info
+    if format == "JXL":
+        # JXL decoding synthesizes a profile from its encoded color space.
+        assert optimized.info.get("icc_profile") != profile
+    else:
+        assert "icc_profile" not in optimized.info
+    assert image.info["icc_profile"] == profile
     if isinstance(compressor, LosslessImageCompressor):
+        normal = Image.open(BytesIO(encode_image(Image.frombytes(image.mode, image.size, image.tobytes()), format)))
         assert optimized.size == normal.size
         assert optimized.convert(normal.mode).tobytes() == normal.tobytes()
 

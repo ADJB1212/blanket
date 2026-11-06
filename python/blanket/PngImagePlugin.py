@@ -126,9 +126,8 @@ def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview
         if cid == b"IDAT":
             seen_idat = True
             output.extend(view[start:end])
-        elif cid not in (b"acTL", b"fcTL", b"fdAT") or (not seen_idat and cid == b"fcTL"):
-            if cid != b"fcTL":
-                output.extend(view[start:end])
+        elif (cid not in (b"acTL", b"fcTL", b"fdAT") or (not seen_idat and cid == b"fcTL")) and cid != b"fcTL":
+            output.extend(view[start:end])
     return output
 
 

@@ -2,13 +2,33 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"math"}
+__lazy_modules__ = {"math", "re"}
 
 import math
+import re
 
 from ._blanket import _LosslessImageCompressor, _LossyImageCompressor
 
 __all__ = ["LosslessImageCompressor", "LossyImageCompressor"]
+
+
+def _validate_target_size(target_size: int | str | None) -> int | None:
+    if isinstance(target_size, str):
+        match = re.fullmatch(r"([0-9]+)(?:\.([0-9]+))?\s*(b|[kmgt]i?b)?", target_size.strip(), re.IGNORECASE)
+        if match is None:
+            raise ValueError("target_size must be a byte size such as '50kb' or '10MiB'")
+        whole, fraction, unit = match.groups()
+        unit = (unit or "b").lower()
+        exponent = "kmgt".index(unit[0]) + 1 if unit != "b" else 0
+        multiplier = (1024 if "i" in unit else 1000) ** exponent
+        fraction = fraction or ""
+        target_size = int(whole + fraction) * multiplier // (10 ** len(fraction))
+    if target_size is not None:
+        if isinstance(target_size, bool) or not isinstance(target_size, int):
+            raise TypeError("target_size must be an integer, size string, or None")
+        if target_size <= 0:
+            raise ValueError("target_size must be positive")
+    return target_size
 
 
 class LossyImageCompressor:
@@ -27,14 +47,22 @@ class LossyImageCompressor:
     indexed or high-bit-depth PNG retain lossless optimization behavior.
     The normal save remains eligible, so output cannot grow relative to it.
     The source image is unchanged and this configuration is reusable.
+    Metadata is always stripped, including explicit metadata options.
+
+    ``target_size`` optionally caps the complete encoded output in bytes,
+    after stripping metadata. The search still respects ``max_rmse`` and ``effort``.
+    If no searched candidate fits, saving raises ``ValueError`` before writing
+    output, reporting the smallest qualifying candidate's size. This does not
+    guarantee that unsearched settings could not meet the budget.
     """
 
-    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7) -> None:
+    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7, target_size: int | str | None = None) -> None:
         """Configure LossyImageCompressor.
 
         Args:
             max_rmse: Maximum additional RGB root mean square error relative to the normal save, from 0 through 255. Alpha must match exactly.
             effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
+            target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
 
         Examples:
             ```python
@@ -58,7 +86,13 @@ class LossyImageCompressor:
             raise TypeError("effort must be an integer")
         if not 1 <= effort <= 10:
             raise ValueError("effort must be between 1 and 10")
+        self._target_size = _validate_target_size(target_size)
         self._native = _LossyImageCompressor(max_rmse=float(max_rmse), effort=effort)
+
+    @property
+    def target_size(self) -> int | None:
+        """Configured byte budget after stripping metadata, or None."""
+        return self._target_size
 
     @property
     def max_rmse(self) -> float:
@@ -128,16 +162,23 @@ class LosslessImageCompressor:
     Opened images are encoded from their current pixels, not their source
     bitstream. Quality and lossless settings retain their normal meaning.
     High-bit-depth and indexed PNG and other formats keep normal encoding.
-    Metadata follows normal save behavior. The object is reusable and affects
+    Metadata is always stripped, including explicit metadata options. The object is reusable and affects
     only the save it is passed to, without modifying the image.
+
+    ``target_size`` optionally caps the complete encoded output in bytes,
+    after stripping metadata, without relaxing the fidelity guarantee. If no searched
+    candidate fits, saving raises ``ValueError`` before writing output and
+    reports the smallest candidate's size. Search coverage depends on ``effort``
+    and format; formats without optimization try only the normal save.
 
     """
 
-    def __init__(self, *, effort: int = 7) -> None:
+    def __init__(self, *, effort: int = 7, target_size: int | str | None = None) -> None:
         """Configure LosslessImageCompressor.
 
         Args:
             effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
+            target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
 
         Examples:
             ```python
@@ -157,7 +198,13 @@ class LosslessImageCompressor:
             raise TypeError("effort must be an integer")
         if not 1 <= effort <= 10:
             raise ValueError("effort must be between 1 and 10")
+        self._target_size = _validate_target_size(target_size)
         self._native = _LosslessImageCompressor(effort=effort)
+
+    @property
+    def target_size(self) -> int | None:
+        """Configured byte budget after stripping metadata, or None."""
+        return self._target_size
 
     @property
     def effort(self) -> int:
