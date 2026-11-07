@@ -9,6 +9,9 @@ on:
       version:
         required: true
         type: string
+      lcms2-version:
+        required: true
+        type: string
 env:
   DO_NOT_TRACK: "1"
   HOMEBREW_NO_ENV_HINTS: "1"
@@ -60,6 +63,13 @@ jobs:
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
           echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
+      - name: Restore LCMS2
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/deps/lcms2
+          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.lcms2-version }}
+          fail-on-cache-miss: true
       - name: Build libjxl
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash

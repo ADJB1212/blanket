@@ -143,7 +143,7 @@ jobs:
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
   libjxl:
-    needs: prepare
+    needs: [prepare, lcms2]
     strategy:
       fail-fast: false
       matrix:
@@ -152,6 +152,7 @@ jobs:
     with:
       runner: ${{ matrix.runner }}
       version: ${{ needs.prepare.outputs.libjxl-version }}
+      lcms2-version: ${{ needs.prepare.outputs.lcms2-version }}
 
   lcms2:
     needs: prepare

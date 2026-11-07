@@ -89,11 +89,12 @@ jobs:
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
   libjxl:
-    needs: prepare
+    needs: [prepare, lcms2]
     uses: ./.github/workflows/build-libjxl.yml
     with:
       runner: ubuntu-26.04
       version: ${{ needs.prepare.outputs.libjxl-version }}
+      lcms2-version: ${{ needs.prepare.outputs.lcms2-version }}
 
   lcms2:
     needs: prepare

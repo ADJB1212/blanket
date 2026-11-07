@@ -180,12 +180,15 @@ libjxl)
 		-DJPEGXL_ENABLE_VIEWERS=OFF -DJPEGXL_ENABLE_PLUGINS=OFF \
 		-DJPEGXL_ENABLE_COVERAGE=OFF -DJPEGXL_TEST_TOOLS=OFF \
 		-DJPEGXL_ENABLE_WASM_THREADS=OFF -DJPEGXL_ENABLE_LTO=ON \
-		-DJPEGXL_ENABLE_SKCMS=OFF "${libjxl_macos_flags[@]}"
+		-DJPEGXL_ENABLE_SKCMS=OFF -DJPEGXL_FORCE_SYSTEM_LCMS2=ON \
+		-DLCMS2_INCLUDE_DIR="$HOME/deps/lcms2/include" \
+		-DLCMS2_LIBRARY="$HOME/deps/lcms2/lib/liblcms2.$shared_ext" \
+		"${libjxl_macos_flags[@]}"
 	;;
 esac
 
 cmake --build "$source_dir/build" --parallel
-cmake --install "$source_dir/build"
+cmake --install "$source_dir/build" --strip
 if [[ "$name" == libwebp ]]; then
 	PKG_CONFIG_PATH="$prefix/lib/pkgconfig" pkg-config --exists libwebp libwebpmux libwebpdemux
 fi

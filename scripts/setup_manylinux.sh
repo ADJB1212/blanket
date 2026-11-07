@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-dnf install -y numactl-devel brotli brotli-devel pkgconf-pkg-config make perl curl tar xz git ninja-build meson cmake
-manylinux-install-clang -v 23.1.4.0
+dnf install -y -4 numactl-devel pkgconf-pkg-config make perl curl tar xz git ninja-build meson cmake
+manylinux-install-clang -v 23.1.5.0
 export PATH="/opt/clang/bin:/opt/python/cp314-cp314/bin:$PATH"
 clang --version
-[[ "$(clang -dumpversion)" == 23.1.4 ]]
+[[ "$(clang -dumpversion)" == 23.1.5 ]]
 
 export CC=/opt/clang/bin/clang
 export CXX=/opt/clang/bin/clang++
