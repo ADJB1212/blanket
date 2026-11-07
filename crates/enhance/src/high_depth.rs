@@ -58,14 +58,16 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
 }
 
 pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
-    let a = samples::view(first)?;
-    let b = samples::view(second)?;
+    let a = first.raw_data()?;
+    let b = second.raw_data()?;
     if std::ptr::eq(first, second) || factor == 0.0 {
-        return samples::output(first, &a);
+        return py.detach(|| samples::output_bytes(first, blanket_core::buffers::copy(a)?));
     }
     if factor == 1.0 {
-        return samples::output(second, &b);
+        return py.detach(|| samples::output_bytes(second, blanket_core::buffers::copy(b)?));
     }
+    let a = samples::view(first)?;
+    let b = samples::view(second)?;
     let maximum = samples::maximum(first);
     let mut pixels = blanket_core::raster::alloc_pixels(a.len() * 2)?;
     py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.mode.is_big_endian()));

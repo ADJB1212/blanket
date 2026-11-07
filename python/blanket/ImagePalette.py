@@ -207,7 +207,9 @@ class ImagePalette:
             raise TypeError("color allocation requires a bytearray palette")
         offset = slot * len(self.mode)
         if offset < len(self.palette):
-            self._palette = self._palette[:offset] + bytes(color) + self._palette[offset + len(self.mode) :]
+            replacement = self._palette.copy()
+            replacement[offset : offset + len(self.mode)] = bytes(color)
+            self._palette = replacement
             self._colors = None
         else:
             self._palette += bytes(color)

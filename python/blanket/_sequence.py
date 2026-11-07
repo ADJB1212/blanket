@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     import os
     from typing import BinaryIO
 
-from ._blanket import _encode_sequence, _write_metadata
+from ._blanket import _difference_bbox, _encode_sequence, _write_metadata
 from ._exif import save_metadata
 from ._io import write_bytes
 from .errors import UnsupportedCodecError
@@ -34,8 +34,6 @@ def _png_regions(
     frames: list[Image], durations: list[float | int], disposals: list[float | int], blends: list[float | int], default_image: bool, duration_known: bool
 ) -> tuple[list[Image], list[float], list[int], list[int], tuple[tuple[int, int], list[tuple[int, int]]]]:
     """Adapt APNG deltas and repeated frames using native raster operations."""
-    from .ImageChops import subtract_modulo
-
     canvas = (max(frame.width for frame in frames), max(frame.height for frame in frames))
     records: list[_PngFrame] = []
     for position in range(int(default_image), len(frames)):
@@ -53,9 +51,12 @@ def _png_regions(
                 base = records[-2].image
             else:
                 base = previous.image
-            current_rgba = frame if frame.mode == "RGBA" else frame.convert("RGBA")
-            base_rgba = base if base.mode == "RGBA" else base.convert("RGBA")
-            bbox = subtract_modulo(current_rgba, base_rgba).getbbox(alpha_only=False)
+            if frame.mode == base.mode and frame.mode in ("1", "L", "LA", "RGB", "RGBA") and frame.info.get("transparency") is None and base.info.get("transparency") is None:
+                current, comparison = frame, base
+            else:
+                current = frame if frame.mode == "RGBA" else frame.convert("RGBA")
+                comparison = base if base.mode == "RGBA" else base.convert("RGBA")
+            bbox = _difference_bbox(current._native, comparison._native)
             combined = previous.duration + duration
             if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
                 previous.duration = combined
@@ -163,7 +164,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         indexed = [frame for frame in frames if frame.mode == "P"]
         if indexed:
             png_palette = indexed[0].palette
-            if any(frame.getpalette() != indexed[0].getpalette() for frame in indexed[1:]):
+            palette_values = indexed[0].getpalette()
+            if any(frame.getpalette() != palette_values for frame in indexed[1:]):
                 png_mode = "RGBA" if any(frame.palette is not None and frame.palette.mode == "RGBA" for frame in indexed) else "RGB"
     for frame in frames:
         if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):

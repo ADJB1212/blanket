@@ -63,6 +63,38 @@ class MappedImage(Image):
         self.readonly = 1
 
     @property
+    def mode(self) -> str:
+        """Return the pixel mode without copying mapped pixels."""
+        if self._mapping is not None and self.palette is not None:
+            return "P"
+        return self._raster.mode
+
+    @property
+    def bit_depth(self) -> int:
+        """Return sample depth without copying mapped pixels."""
+        return self._raster.bit_depth
+
+    @property
+    def size(self) -> tuple[int, int]:
+        """Return dimensions without copying mapped pixels."""
+        return self._raster.size
+
+    @property
+    def width(self) -> int:
+        """Return width without copying mapped pixels."""
+        return self._raster.width
+
+    @property
+    def height(self) -> int:
+        """Return height without copying mapped pixels."""
+        return self._raster.height
+
+    @property
+    def format(self) -> str | None:
+        """Return format without copying mapped pixels."""
+        return self._raster.format
+
+    @property
     def _native(self) -> _Image:
         """Return the current native raster snapshot."""
         if self._mapping is not None:
@@ -84,7 +116,7 @@ class MappedImage(Image):
     def load(self) -> PixelAccess:
         """Load pixel access interface for the mapped buffer."""
         if self._mapping is not None:
-            self._native.load()
+            self._raster.load()
             return BufferPixelAccess(self._mapping, self.palette)
         return super().load()
 

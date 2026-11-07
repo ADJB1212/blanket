@@ -44,43 +44,50 @@ fn convolve(source: &[i32], values: &mut [i32], size: usize, dimensions: (usize,
     if width >= size && height >= size {
         let radius = size / 2;
         let weights: Vec<f32> = weights.iter().map(|weight| weight / scale).collect();
-        for y in radius..height - radius {
-            let first = y * width + radius;
-            let last = (y + 1) * width - radius;
-            let end = first + (last - first) / 16 * 16;
-            for i in (first..end).step_by(16) {
-                let mut sum = Simd::splat(offset + 0.5);
-                for ky in 0..size {
-                    let start = i + radius * width - ky * width - radius;
-                    let at = |kx| Simd::<i32, 16>::from_slice(&source[start + kx..]).cast::<f32>();
-                    let mut row = super::filter::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
-                    for kx in 2..size {
-                        row = super::filter::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
+        blanket_core::parallel::chunks_mut_above(&mut values[radius * width..(height - radius) * width], width * 16, 256 * 1024, |band, rows| {
+            for (row_index, output) in rows.chunks_exact_mut(width).enumerate() {
+                let y = radius + band * 16 + row_index;
+                let first = y * width + radius;
+                let last = (y + 1) * width - radius;
+                let end = first + (last - first) / 16 * 16;
+                for i in (first..end).step_by(16) {
+                    let mut sum = Simd::splat(offset + 0.5);
+                    for ky in 0..size {
+                        let start = i + radius * width - ky * width - radius;
+                        let at = |kx| Simd::<i32, 16>::from_slice(&source[start + kx..]).cast::<f32>();
+                        let mut row =
+                            super::filter::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
+                        for kx in 2..size {
+                            row = super::filter::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
+                        }
+                        sum += row;
                     }
-                    sum += row;
+                    sum.cast::<i32>().simd_max(Simd::splat(0)).copy_to_slice(&mut output[i - y * width..i - y * width + 16]);
                 }
-                sum.cast::<i32>().simd_max(Simd::splat(0)).copy_to_slice(&mut values[i..i + 16]);
-            }
-            for (relative, value) in values[end..last].iter_mut().enumerate() {
-                let i = end + relative;
-                let mut sum = offset + 0.5;
-                for ky in 0..size {
-                    let start = i + radius * width - ky * width - radius;
-                    let mut row =
-                        super::filter::kernel_add(source[start] as f32, weights[ky * size], source[start + 1] as f32 * weights[ky * size + 1]);
-                    for kx in 2..size {
-                        row = super::filter::kernel_add(source[start + kx] as f32, weights[ky * size + kx], row);
+                for (relative, value) in output[end - y * width..last - y * width].iter_mut().enumerate() {
+                    let i = end + relative;
+                    let mut sum = offset + 0.5;
+                    for ky in 0..size {
+                        let start = i + radius * width - ky * width - radius;
+                        let mut row =
+                            super::filter::kernel_add(source[start] as f32, weights[ky * size], source[start + 1] as f32 * weights[ky * size + 1]);
+                        for kx in 2..size {
+                            row = super::filter::kernel_add(source[start + kx] as f32, weights[ky * size + kx], row);
+                        }
+                        sum += row;
                     }
-                    sum += row;
+                    *value = (sum as i32).max(0);
                 }
-                *value = (sum as i32).max(0);
             }
-        }
+        });
     }
 }
 
 pub(crate) fn rank(image: &Image, size: usize, rank: usize) -> PyResult<Image> {
     let bytes = image.raw_data()?;
+    if size == 1 {
+        return blanket_core::buffers::output(image, image.size(), blanket_core::buffers::copy(bytes)?);
+    }
     let pixels = if image.mode == PixelMode::I {
         let source = integer_view(bytes);
         integer_rank(source, image.width as usize, image.height as usize, size, rank)?.into_iter().flat_map(i32::to_le_bytes).collect()
@@ -150,9 +157,10 @@ fn sliding_integer_rank(source: &[i32], width: usize, height: usize, radius: usi
     if source.is_empty() {
         return output;
     }
-    for (band, rows) in output.chunks_mut(width * 64).enumerate() {
-        sliding_integer_rank_rows(source, rows, (width, height), radius, rank, band * 64);
-    }
+    let band_rows = 64.max(radius.min(height));
+    blanket_core::parallel::chunks_mut_above(&mut output, width * band_rows, 256 * 1024, |band, rows| {
+        sliding_integer_rank_rows(source, rows, (width, height), radius, rank, band * band_rows);
+    });
     output
 }
 
@@ -168,6 +176,7 @@ fn sliding_integer_rank_rows(source: &[i32], output: &mut [i32], dimensions: (us
         output.fill(keys[0]);
         return;
     }
+    let indices: Vec<usize> = source[top * width..bottom * width].iter().map(|value| keys.binary_search(value).unwrap()).collect();
     let mut counts = super::high_depth::RankCounts { tree: vec![0; keys.len() + 1] };
     let weight = |position: usize, center: usize, length: usize| {
         1 + if position == 0 { radius.saturating_sub(center) } else { 0 }
@@ -175,19 +184,19 @@ fn sliding_integer_rank_rows(source: &[i32], output: &mut [i32], dimensions: (us
     };
     for y in first.saturating_sub(radius)..=(first + radius).min(height - 1) {
         for x in 0..=radius.min(width - 1) {
-            let index = keys.binary_search(&source[y * width + x]).unwrap();
+            let index = indices[(y - top) * width + x];
             counts.update(index, weight(x, 0, width) as u64 * weight(y, first, height) as u64, true);
         }
     }
     let column = |counts: &mut super::high_depth::RankCounts, x: usize, y: usize, add: bool| {
         for yy in y.saturating_sub(radius)..=(y + radius).min(height - 1) {
-            let index = keys.binary_search(&source[yy * width + x]).unwrap();
+            let index = indices[(yy - top) * width + x];
             counts.update(index, weight(yy, y, height) as u64, add);
         }
     };
     let row = |counts: &mut super::high_depth::RankCounts, y: usize, x: usize, add: bool| {
         for xx in x.saturating_sub(radius)..=(x + radius).min(width - 1) {
-            let index = keys.binary_search(&source[y * width + xx]).unwrap();
+            let index = indices[(y - top) * width + xx];
             counts.update(index, weight(xx, x, width) as u64, add);
         }
     };

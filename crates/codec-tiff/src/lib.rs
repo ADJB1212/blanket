@@ -46,13 +46,14 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
     for cy in top / ch..=(bottom - 1) / ch {
         for cx in left / cw..=(right - 1) / cw {
             let index = cy * across + cx;
-            let bytes = match decoder.read_chunk(index).map_err(|e| e.to_string())? {
-                tiff::decoder::DecodingResult::U8(v) => v,
-                tiff::decoder::DecodingResult::U16(v) => v.into_iter().flat_map(u16::to_le_bytes).collect(),
+            let decoded = decoder.read_chunk(index).map_err(|e| e.to_string())?;
+            let byte_count = match &decoded {
+                tiff::decoder::DecodingResult::U8(v) => v.len(),
+                tiff::decoder::DecodingResult::U16(v) => v.len() * 2,
                 _ => return Err("unexpected TIFF sample type".into()),
             };
             let (w, h) = decoder.chunk_data_dimensions(index);
-            if bytes.len() != w as usize * h as usize * stride {
+            if byte_count != w as usize * h as usize * stride {
                 return Err("invalid TIFF chunk sample count".into());
             }
             let x0 = left.max(cx * cw);
@@ -61,7 +62,16 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
                 let src = ((y - cy * ch) as usize * w as usize + (x0 - cx * cw) as usize) * stride;
                 let dst = ((y - top) as usize * ow + (x0 - left) as usize) * stride;
                 let len = (x1 - x0) as usize * stride;
-                pixels[dst..dst + len].copy_from_slice(&bytes[src..src + len]);
+                let output = &mut pixels[dst..dst + len];
+                match &decoded {
+                    tiff::decoder::DecodingResult::U8(bytes) => output.copy_from_slice(&bytes[src..src + len]),
+                    tiff::decoder::DecodingResult::U16(values) => {
+                        for (bytes, value) in output.as_chunks_mut::<2>().0.iter_mut().zip(&values[src / 2..(src + len) / 2]) {
+                            *bytes = value.to_le_bytes();
+                        }
+                    }
+                    _ => unreachable!("validated TIFF sample type"),
+                }
             }
         }
     }

@@ -16,7 +16,40 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(chops_binary, module)?)?;
     module.add_function(wrap_pyfunction!(chops_invert, module)?)?;
     module.add_function(wrap_pyfunction!(chops_offset, module)?)?;
+    module.add_function(wrap_pyfunction!(_difference_bbox, module)?)?;
     Ok(())
+}
+
+#[pyfunction]
+fn _difference_bbox(py: Python<'_>, first: &Image, second: &Image) -> PyResult<Option<(usize, usize, usize, usize)>> {
+    let a = first.pixel_data()?;
+    let b = second.pixel_data()?;
+    if first.mode != second.mode {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    Ok(py.detach(|| difference_bbox(a, b, first.size(), second.size(), first.mode.channels())))
+}
+
+fn difference_bbox(a: &[u8], b: &[u8], a_size: (u32, u32), b_size: (u32, u32), channels: usize) -> Option<(usize, usize, usize, usize)> {
+    let width = a_size.0.min(b_size.0) as usize;
+    let height = a_size.1.min(b_size.1) as usize;
+    let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    for y in 0..height {
+        let a = &a[y * a_size.0 as usize * channels..][..width * channels];
+        let b = &b[y * b_size.0 as usize * channels..][..width * channels];
+        if a == b {
+            continue;
+        }
+        top = top.min(y);
+        bottom = y + 1;
+        if let Some(x) = a[..left * channels].iter().zip(b).position(|(a, b)| a != b) {
+            left = x / channels;
+        }
+        if let Some(x) = a[right * channels..].iter().zip(&b[right * channels..]).rposition(|(a, b)| a != b) {
+            right += x / channels + 1;
+        }
+    }
+    (bottom != 0).then_some((left, top, right, bottom))
 }
 
 #[derive(Clone, Copy)]

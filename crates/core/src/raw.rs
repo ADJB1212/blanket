@@ -118,24 +118,27 @@ pub(crate) fn transform<'a>(
     let mut output = Vec::new();
     output.try_reserve_exact(length).map_err(|error| PyMemoryError::new_err(error.to_string()))?;
     output.resize(length, 0);
-    for row in 0..height {
-        let source_row = if orientation == -1 { height - row - 1 } else { row };
-        let source = &data[source_row * input_stride..source_row * input_stride + input_row];
-        let target_row = if encode { layout.raw_row } else { layout.image_row };
-        let target = &mut output[row * output_stride..row * output_stride + target_row];
-        if let Some(channels) = layout.bgr_channels {
-            let (input_channels, output_channels) = if encode { (mode.channels(), channels) } else { (channels, mode.channels()) };
-            match (input_channels, output_channels) {
-                (3, 3) => crate::pixels::swap_red_blue::<3, 3>(source, target),
-                (3, 4) => crate::pixels::swap_red_blue::<3, 4>(source, target),
-                (4, 3) => crate::pixels::swap_red_blue::<4, 3>(source, target),
-                (4, 4) => crate::pixels::swap_red_blue::<4, 4>(source, target),
-                _ => unreachable!(),
+    crate::parallel::chunks_mut_above(&mut output, output_stride.saturating_mul(32), 4 * 1024 * 1024, |band, rows| {
+        for (i, target) in rows.chunks_exact_mut(output_stride).enumerate() {
+            let row = band * 32 + i;
+            let source_row = if orientation == -1 { height - row - 1 } else { row };
+            let source = &data[source_row * input_stride..source_row * input_stride + input_row];
+            let target_row = if encode { layout.raw_row } else { layout.image_row };
+            let target = &mut target[..target_row];
+            if let Some(channels) = layout.bgr_channels {
+                let (input_channels, output_channels) = if encode { (mode.channels(), channels) } else { (channels, mode.channels()) };
+                match (input_channels, output_channels) {
+                    (3, 3) => crate::pixels::swap_red_blue::<3, 3>(source, target),
+                    (3, 4) => crate::pixels::swap_red_blue::<3, 4>(source, target),
+                    (4, 3) => crate::pixels::swap_red_blue::<4, 3>(source, target),
+                    (4, 4) => crate::pixels::swap_red_blue::<4, 4>(source, target),
+                    _ => unreachable!(),
+                }
+            } else {
+                target.copy_from_slice(source);
             }
-        } else {
-            target.copy_from_slice(source);
         }
-    }
+    });
     Ok(Cow::Owned(output))
 }
 

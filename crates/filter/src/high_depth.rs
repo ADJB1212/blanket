@@ -15,43 +15,53 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
     let radius = size / 2;
     if width >= size && height >= size {
         let weights: Vec<f32> = weights.iter().map(|weight| weight / scale).collect();
-        for y in radius..height - radius {
-            let first = (y * width + radius) * channels;
-            let last = (y * width + width - radius) * channels;
-            let end = first + (last - first) / 16 * 16;
-            for i in (first..end).step_by(16) {
-                let mut sum = Simd::splat(offset + 0.5);
-                for ky in 0..size {
-                    let start = i + radius * width * channels - ky * width * channels - radius * channels;
-                    let at = |kx| Samples::from_slice(&source[start + kx * channels..]).cast::<f32>();
-                    let mut row = super::filter::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
-                    for kx in 2..size {
-                        row = super::filter::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
+        let stride = width * channels;
+        blanket_core::parallel::chunks_mut_above(&mut values[radius * stride..(height - radius) * stride], stride * 16, 256 * 1024, |band, rows| {
+            for (row_index, output) in rows.chunks_exact_mut(stride).enumerate() {
+                let y = radius + band * 16 + row_index;
+                let first = (y * width + radius) * channels;
+                let last = (y * width + width - radius) * channels;
+                let end = first + (last - first) / 16 * 16;
+                for i in (first..end).step_by(16) {
+                    let mut sum = Simd::splat(offset + 0.5);
+                    for ky in 0..size {
+                        let start = i + radius * width * channels - ky * width * channels - radius * channels;
+                        let at = |kx| Samples::from_slice(&source[start + kx * channels..]).cast::<f32>();
+                        let mut row =
+                            super::filter::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
+                        for kx in 2..size {
+                            row = super::filter::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
+                        }
+                        sum += row;
                     }
-                    sum += row;
+                    sum.cast::<u16>()
+                        .simd_min(Samples::splat(samples::maximum(image)))
+                        .copy_to_slice(&mut output[i - y * stride..i - y * stride + 16]);
                 }
-                sum.cast::<u16>().simd_min(Samples::splat(samples::maximum(image))).copy_to_slice(&mut values[i..i + 16]);
-            }
-            for i in end..last {
-                let (x, c) = ((i / channels) % width, i % channels);
-                let mut sum = offset + 0.5;
-                for ky in 0..size {
-                    let start = ((y + radius - ky) * width + x - radius) * channels + c;
-                    let mut row = f32::from(source[start + channels]) * weights[ky * size + 1];
-                    row = super::filter::kernel_add(f32::from(source[start]), weights[ky * size], row);
-                    for kx in 2..size {
-                        row = super::filter::kernel_add(f32::from(source[start + kx * channels]), weights[ky * size + kx], row);
+                for i in end..last {
+                    let (x, c) = ((i / channels) % width, i % channels);
+                    let mut sum = offset + 0.5;
+                    for ky in 0..size {
+                        let start = ((y + radius - ky) * width + x - radius) * channels + c;
+                        let mut row = f32::from(source[start + channels]) * weights[ky * size + 1];
+                        row = super::filter::kernel_add(f32::from(source[start]), weights[ky * size], row);
+                        for kx in 2..size {
+                            row = super::filter::kernel_add(f32::from(source[start + kx * channels]), weights[ky * size + kx], row);
+                        }
+                        sum += row;
                     }
-                    sum += row;
+                    output[x * channels + c] = sum.clamp(0.0, f32::from(samples::maximum(image))) as u16;
                 }
-                values[(y * width + x) * channels + c] = sum.clamp(0.0, f32::from(samples::maximum(image))) as u16;
             }
-        }
+        });
     }
     samples::output(image, &values)
 }
 
 pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> PyResult<Image> {
+    if radius == 0 {
+        return samples::output_bytes(image, blanket_core::buffers::copy(image.raw_data()?)?);
+    }
     let source = samples::view(image)?;
     let mut values = source.to_vec();
     let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
@@ -472,6 +482,10 @@ fn blurred(image: &Image, mut values: Vec<u16>, radii: (f32, f32), gaussian: boo
 }
 
 pub(crate) fn blur(image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+    let bytes = image.raw_data()?;
+    if super::filter::blur_radii(radii, gaussian)? == (0.0, 0.0) {
+        return samples::output_bytes(image, blanket_core::buffers::copy(bytes)?);
+    }
     let source = samples::read(image)?;
     samples::output(image, &blurred(image, source, radii, gaussian)?)
 }

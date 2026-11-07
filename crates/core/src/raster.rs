@@ -1223,15 +1223,23 @@ impl Image {
             return Err(PyTypeError::new_err("matrix must be tuple of length 12"));
         }
         let source = self.pixel_data()?;
-        let mut pixels = alloc_pixels(source.len() / 3 * channels)?;
+        let length = source.len() / 3 * channels;
+        let mut pixels = crate::buffers::reserved(length)?;
         py.detach(|| {
-            for (pixel, output) in source.as_chunks::<3>().0.iter().zip(pixels.chunks_exact_mut(channels)) {
-                for (channel, value) in output.iter_mut().enumerate() {
-                    let m = &matrix[channel * 4..channel * 4 + 4];
-                    *value = (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5)
-                        .clamp(0.0, 255.0) as u8;
+            crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..length], 16 * 1024 * channels, 256 * 1024, |chunk, dst| {
+                let start = chunk * 16 * 1024 * 3;
+                for (pixel, output) in source[start..].as_chunks::<3>().0.iter().zip(dst.chunks_exact_mut(channels)) {
+                    for (channel, value) in output.iter_mut().enumerate() {
+                        let m = &matrix[channel * 4..channel * 4 + 4];
+                        value.write(
+                            (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5)
+                                .clamp(0.0, 255.0) as u8,
+                        );
+                    }
                 }
-            }
+            });
+            // Every reserved byte is initialized by its pixel's matrix row.
+            unsafe { pixels.set_len(length) };
         });
         Self::from_pixels(self.width, self.height, destination, pixels, None)
     }
@@ -1754,9 +1762,15 @@ pub fn mapped_getpixel(
     let row = if orientation == 1 { y as usize } else { size.1 as usize - 1 - y as usize };
     let offset = row * stride + x as usize * pixel_bytes;
     let view = data.get_item(PySlice::new(py, offset as isize, (offset + pixel_bytes) as isize, 1))?;
-    let pixel = PyBuffer::<u8>::get(&view)?.to_vec(py)?;
-    let image = if mode.is_integer() { Image::from_integer_bytes(1, 1, mode, pixel)? } else { Image::from_pixels(1, 1, mode, pixel, None)? };
-    image.getpixel(py, (0, 0))
+    let mut pixel = [0; 4];
+    PyBuffer::<u8>::get(&view)?.copy_to_slice(py, &mut pixel[..pixel_bytes])?;
+    if mode.is_integer() {
+        return Ok(integer_value(mode, &pixel[..pixel_bytes]).into_pyobject(py)?.into_any().unbind());
+    }
+    if mode == PixelMode::L {
+        return Ok(pixel[0].into_pyobject(py)?.into_any().unbind());
+    }
+    Ok(PyTuple::new(py, pixel)?.into_any().unbind())
 }
 
 fn with_array_bytes<T>(obj: &Bound<'_, PyAny>, convert: impl FnOnce(&[u8]) -> PyResult<T>) -> PyResult<T> {

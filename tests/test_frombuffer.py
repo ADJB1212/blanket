@@ -45,6 +45,13 @@ def test_mapped_pixel_reads_use_bounded_memory(mode: str, orientation: int) -> N
     pixels = image.load()
     tracemalloc.start()
     try:
+        for _ in range(100):
+            assert image.mode == mode
+            assert image.size == size
+            assert (image.width, image.height) == size
+            assert image.bit_depth == (16 if mode.startswith("I;16") else 8)
+            assert image.format is None
+            assert image.load()[0, 0] == (0 if channels == 2 or mode in ("L", "P") else (0, 0, 0, 0))
         for value in (19, 137, 251):
             data[0] = value
             data[-4] = 255 - value
