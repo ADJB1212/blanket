@@ -49,6 +49,7 @@ from ._blanket import (
     enhance_blend,
     filter_merge,
     fromarray as _native_fromarray,
+    frombuffer_copy as _native_frombuffer_copy,
     frombytes as _native_frombytes,
     image_alpha_composite,
     image_alpha_composite_inplace,
@@ -2578,7 +2579,9 @@ class Image:
             print(a == b)
             ```
         """
-        return type(self) is type(other) and self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self.tobytes() == other.tobytes()
+        return (
+            type(self) is type(other) and self.mode == other.mode and self.size == other.size and self.bit_depth == other.bit_depth and self.info == other.info and self.getpalette() == other.getpalette() and self._native.pixels_equal(other._native)
+        )
 
 
 def linear_gradient(mode: str) -> Image:
@@ -3090,12 +3093,17 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         image = Image.frombytes("RGB", (2, 1), bytes([255, 0, 0, 0, 255, 0]))
         ```
     """
+    buffer_input = decoder_name == "raw" and type(data) in (bytearray, memoryview)
     try:
-        raw = bytes(data)
+        raw = memoryview(data) if buffer_input else bytes(data)
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     rawmode, stride, orientation = _raw_args(mode, "raw" if decoder_name in ("hex", "packbits") else decoder_name, args)
-    result = Image(_native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation, decoder_name))
+    if buffer_input:
+        native = _native_frombuffer_copy("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation)
+    else:
+        native = _native_frombytes("L" if mode == "P" else mode, size, raw, bit_depth, rawmode, stride, orientation, decoder_name)
+    result = Image(native)
     if mode in ("P", "PA"):
         result.putpalette(b"")
     return result

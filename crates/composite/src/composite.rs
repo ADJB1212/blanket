@@ -304,9 +304,7 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(image) {
-        let result = py.detach(|| crate::high_depth::composite(image, overlay))?;
-        image.pixels = result.pixels;
-        return Ok(());
+        return py.detach(|| crate::high_depth::composite_inplace(image, overlay));
     }
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
@@ -409,6 +407,17 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     let source = image.pixel_data()?;
     let alpha = alpha.pixel_data()?;
+    if matches!(image.mode, PixelMode::La | PixelMode::Pa) {
+        let pixels = image.pixels.as_mut().expect("validated open image");
+        py.detach(|| {
+            blanket_core::parallel::chunks_mut(pixels, 32 * 1024, |chunk, pixels| {
+                for (pixel, &value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(&alpha[chunk * 16 * 1024..]) {
+                    pixel[1] = value;
+                }
+            });
+        });
+        return Ok(());
+    }
     if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
         let channels = image.mode.channels();
         let bilevel = image.mode == PixelMode::One;

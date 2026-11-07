@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._blanket import frombytes as _native_frombytes, mapped_getpixel
+from ._blanket import frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
 from .Image import Image, PixelAccess, _pixel_coordinates
 
 if TYPE_CHECKING:
@@ -23,7 +23,7 @@ class BufferMap:
 
     def snapshot(self, palette: ImagePalette | None) -> _Image:
         """Create an owned native raster snapshot from the mapped buffer."""
-        native = _native_frombytes("L" if self.mode == "P" else self.mode, self.size, self.data.tobytes(), 8, self.mode, self.stride, self.orientation)
+        native = _native_frombuffer_copy("L" if self.mode == "P" else self.mode, self.size, self.data, 8, self.mode, self.stride, self.orientation)
         if palette is not None:
             native.set_palette(palette.mode, palette.tobytes())
         return native

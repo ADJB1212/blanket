@@ -198,7 +198,7 @@ fn mapped_color_bytes<const S: usize, const D: usize>(size: (u32, u32), source: 
 
 fn color_output(width: u32, height: u32, mode: PixelMode, depth: u8, values: &[f32]) -> PyResult<Image> {
     if mode.is_float() {
-        let bytes = values.iter().flat_map(|value| value.to_le_bytes()).collect();
+        let bytes = values.iter().map(|value| value.to_le_bytes()).collect::<Vec<_>>().into_flattened();
         return Image::from_color_float_bytes(width, height, mode, bytes);
     }
     let bytes = quantize(values, depth);

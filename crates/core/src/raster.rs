@@ -1086,6 +1086,15 @@ impl Image {
         self.raw_data().map(|_| ())
     }
 
+    pub fn pixels_equal(&self, py: Python<'_>, other: &Self) -> PyResult<bool> {
+        let first = self.raw_data()?;
+        let second = other.raw_data()?;
+        if self.mode != other.mode || self.size() != other.size() || self.bit_depth != other.bit_depth {
+            return Ok(false);
+        }
+        Ok(py.detach(|| if self.mode == PixelMode::One { first.iter().zip(second).all(|(&a, &b)| (a != 0) == (b != 0)) } else { first == second }))
+    }
+
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
         let mut pixels = Vec::<u8>::with_capacity(source.len());
@@ -1687,7 +1696,23 @@ pub fn frombytes(
 ) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
     let input = py.detach(|| crate::raw::decode(data, decoder))?;
-    let decoded = py.detach(|| crate::raw::transform(&input, mode, size, bit_depth, rawmode, stride, orientation, false))?;
+    py.detach(|| from_raw_input(mode, size, input, bit_depth, rawmode, stride, orientation))
+}
+
+#[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1))]
+#[allow(clippy::too_many_arguments)]
+pub fn frombuffer_copy(
+    py: Python<'_>, mode: &str, size: (u32, u32), data: &Bound<'_, PyAny>, bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
+) -> PyResult<Image> {
+    let mode = PixelMode::parse(mode)?;
+    let input = std::borrow::Cow::Owned(array_bytes(data)?);
+    py.detach(|| from_raw_input(mode, size, input, bit_depth, rawmode, stride, orientation))
+}
+
+fn from_raw_input(
+    mode: PixelMode, size: (u32, u32), input: std::borrow::Cow<'_, [u8]>, bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
+) -> PyResult<Image> {
+    let decoded = crate::raw::transform(&input, mode, size, bit_depth, rawmode, stride, orientation, false)?;
     if mode == PixelMode::One {
         if bit_depth != 8 {
             return Err(PyValueError::new_err("mode 1 requires 8-bit pixels"));
@@ -1696,7 +1721,7 @@ pub fn frombytes(
         if decoded.len() != row_bytes * size.1 as usize {
             return Err(PyValueError::new_err("wrong amount of image data"));
         }
-        let pixels = py.detach(|| unpack_bilevel(&decoded, size.0 as usize, size.1 as usize));
+        let pixels = unpack_bilevel(&decoded, size.0 as usize, size.1 as usize);
         return Image::from_pixels(size.0, size.1, mode, pixels, None);
     }
     let mut data = match decoded {
@@ -1777,9 +1802,16 @@ pub fn mapped_getpixel(
     Ok(PyTuple::new(py, pixel)?.into_any().unbind())
 }
 
-fn with_array_bytes<T>(obj: &Bound<'_, PyAny>, convert: impl FnOnce(&[u8]) -> PyResult<T>) -> PyResult<T> {
-    let bytes = if let Ok(view) = PyMemoryView::from(obj) { view.call_method0("tobytes")? } else { obj.call_method0("tobytes")? };
-    convert(bytes.cast::<PyBytes>()?.as_bytes())
+fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    if let Ok(view) = PyMemoryView::from(obj) {
+        if let Ok(raw) = view.call_method1("cast", ("B",)) {
+            return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
+        }
+        let bytes = view.call_method0("tobytes")?;
+        return crate::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes());
+    }
+    let bytes = obj.call_method0("tobytes")?;
+    crate::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes())
 }
 
 #[pyfunction(signature = (obj, mode = None, bit_depth = None))]
@@ -1815,9 +1847,10 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         if bit_depth.is_some_and(|depth| depth != 32) {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
-        return with_array_bytes(obj, |raw| {
+        let raw = array_bytes(obj)?;
+        return py.detach(|| {
             let pixels = match typestr.as_str() {
-                "<f4" | "=f4" => raw.to_vec(),
+                "<f4" | "=f4" => raw,
                 ">f4" => raw.as_chunks::<4>().0.iter().map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes()).collect::<Vec<_>>().into_flattened(),
                 "<f8" | "=f8" => {
                     raw.as_chunks::<8>().0.iter().map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes()).collect::<Vec<_>>().into_flattened()
@@ -1843,7 +1876,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         {
             return Err(PyValueError::new_err("bit_depth does not match integer mode"));
         }
-        let raw = with_array_bytes(obj, |raw| Ok(raw.to_vec()))?;
+        let raw = array_bytes(obj)?;
         if source != PixelMode::I && mode != PixelMode::I {
             let mut raw = raw;
             if source.is_big_endian() != mode.is_big_endian() {
@@ -1859,7 +1892,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
 
     let depth = bit_depth.unwrap_or(if wide { 16 } else { 8 });
     if wide {
-        let mut raw = with_array_bytes(obj, |raw| Ok(raw.to_vec()))?;
+        let mut raw = array_bytes(obj)?;
         if typestr == ">u2" {
             for bytes in raw.as_chunks_mut::<2>().0 {
                 bytes.swap(0, 1);
@@ -1870,7 +1903,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     if depth != 8 {
         return Err(PyValueError::new_err("high-bit-depth arrays must use uint16 samples"));
     }
-    let pixels = if let Ok(buffer) = PyBuffer::<u8>::get(obj) { buffer.to_vec(py)? } else { with_array_bytes(obj, |raw| Ok(raw.to_vec()))? };
+    let pixels = if let Ok(buffer) = PyBuffer::<u8>::get(obj) { buffer.to_vec(py)? } else { array_bytes(obj)? };
     let mut pixels = pixels;
     if mode == PixelMode::Lab {
         lab_raw_bytes_mut(&mut pixels);

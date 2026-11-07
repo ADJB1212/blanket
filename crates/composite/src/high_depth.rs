@@ -171,6 +171,31 @@ pub(crate) fn composite(background: &Image, overlay: &Image) -> PyResult<Image> 
     samples::output_bytes(background, pixels)
 }
 
+pub(crate) fn composite_inplace(background: &mut Image, overlay: &Image) -> PyResult<()> {
+    matching(background, overlay)?;
+    background.raw_data()?;
+    let source = samples::view(overlay)?;
+    let maximum = u64::from(samples::maximum(background));
+    background.ensure_owned();
+    let pixels = background.pixels.as_mut().expect("validated open image");
+    blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
+        let source = &source[chunk * 16 * 1024 * 4..][..dst.len() / 2];
+        let end = dst.len() / 128 * 128;
+        for i in (0..end).step_by(128) {
+            let original = blanket_core::pixels::load_sample_bytes::<4>(&dst[i..]);
+            let src = load_samples::<4>(&source[i / 2..]);
+            store_sample_bytes(&mut dst[i..], composite_values(original, src, maximum));
+        }
+        let mut original = [0; 64];
+        let tail = &mut dst[end..];
+        for (value, &bytes) in original.iter_mut().zip(tail.as_chunks::<2>().0) {
+            *value = u16::from_le_bytes(bytes);
+        }
+        composite_chunk(&original[..tail.len() / 2], &source[end / 2..], tail, maximum);
+    });
+    Ok(())
+}
+
 fn composite_samples(background: &[u16], source: &[u16], output: &mut [u8], maximum: u64) {
     const CHUNK: usize = 16 * 1024 * 8;
     blanket_core::parallel::chunks_mut_above(output, CHUNK, 256 * 1024, |chunk, dst| {
@@ -185,21 +210,7 @@ fn composite_chunk(background: &[u16], source: &[u16], output: &mut [u8], maximu
     for i in (0..end).step_by(64) {
         let dst = load_samples::<4>(&background[i..]);
         let src = load_samples::<4>(&source[i..]);
-        let a = src[3].cast::<f64>();
-        let b = dst[3].cast::<f64>() * (Simd::splat(maximum as f64) - a);
-        let alpha = a * Simd::splat(maximum as f64) + b;
-        let denominator = alpha.simd_max(Simd::splat(1.0));
-        // Numerators fit 48 bits; f64 division cannot cross sample boundaries.
-        let result: [Samples; 4] = std::array::from_fn(|c| {
-            let value = if c == 3 {
-                (alpha + Simd::splat((maximum / 2) as f64)) / Simd::splat(maximum as f64)
-            } else {
-                (src[c].cast::<f64>() * a * Simd::splat(maximum as f64) + dst[c].cast::<f64>() * b + (denominator * Simd::splat(0.5)).floor())
-                    / denominator
-            };
-            src[3].simd_eq(Samples::splat(0)).select(dst[c], value.cast())
-        });
-        store_sample_bytes(&mut output[i * 2..], result);
+        store_sample_bytes(&mut output[i * 2..], composite_values(dst, src, maximum));
     }
     for ((original, src), output) in
         background[end..].as_chunks::<4>().0.iter().zip(source[end..].as_chunks::<4>().0).zip(output[end * 2..].as_chunks_mut::<8>().0)
@@ -220,13 +231,56 @@ fn composite_chunk(background: &[u16], source: &[u16], output: &mut [u8], maximu
     }
 }
 
+fn composite_values(dst: [Samples; 4], src: [Samples; 4], maximum: u64) -> [Samples; 4] {
+    let a = src[3].cast::<f64>();
+    let b = dst[3].cast::<f64>() * (Simd::splat(maximum as f64) - a);
+    let alpha = a * Simd::splat(maximum as f64) + b;
+    let denominator = alpha.simd_max(Simd::splat(1.0));
+    // Numerators fit 48 bits; f64 division cannot cross sample boundaries.
+    std::array::from_fn(|c| {
+        let value = if c == 3 {
+            (alpha + Simd::splat((maximum / 2) as f64)) / Simd::splat(maximum as f64)
+        } else {
+            (src[c].cast::<f64>() * a * Simd::splat(maximum as f64) + dst[c].cast::<f64>() * b + (denominator * Simd::splat(0.5)).floor())
+                / denominator
+        };
+        src[3].simd_eq(Samples::splat(0)).select(dst[c], value.cast())
+    })
+}
+
 pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
     if alpha.bit_depth != 8 && alpha.bit_depth != image.bit_depth {
         return Err(PyValueError::new_err("images do not match"));
     }
-    let source = samples::view(image)?;
     let maximum = u32::from(samples::maximum(image));
     let alpha_values = if alpha.bit_depth == 8 { MaskSamples::Bytes(alpha.pixel_data()?) } else { MaskSamples::Wide(samples::view(alpha)?) };
+    if image.mode == PixelMode::Rgba {
+        image.raw_data()?;
+        image.ensure_owned();
+        let pixels = image.pixels.as_mut().expect("validated open image");
+        blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
+            let alpha = alpha_values.slice(chunk * 16 * 1024);
+            let end = dst.len() / (16 * 8) * 16;
+            for i in (0..end).step_by(16) {
+                let values = alpha.load(i, 1).cast::<u32>();
+                let values = if matches!(alpha, MaskSamples::Bytes(_)) {
+                    (values * Simd::splat(maximum) + Simd::splat(127)) / Simd::splat(255)
+                } else {
+                    values
+                };
+                for (pixel, value) in dst[i * 8..(i + 16) * 8].as_chunks_mut::<8>().0.iter_mut().zip(values.cast::<u16>().to_array()) {
+                    pixel[6..].copy_from_slice(&value.to_le_bytes());
+                }
+            }
+            for (i, pixel) in dst[end * 8..].as_chunks_mut::<8>().0.iter_mut().enumerate() {
+                let value = u32::from(alpha.get(end + i));
+                let value = if matches!(alpha, MaskSamples::Bytes(_)) { (value * maximum + 127) / 255 } else { value } as u16;
+                pixel[6..].copy_from_slice(&value.to_le_bytes());
+            }
+        });
+        return Ok(());
+    }
+    let source = samples::view(image)?;
     let mut pixels = blanket_core::buffers::buffer(image.size(), 8)?;
     match image.mode.channels() {
         3 => putalpha_samples::<3>(&source, &alpha_values, &mut pixels, maximum),
@@ -270,6 +324,56 @@ fn putalpha_chunk<const C: usize>(source: &[u16], alpha: &MaskSamples<'_>, outpu
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn putalpha_preserves_rgb_and_reuses_rgba_storage() {
+        for depth in [10, 12, 16] {
+            let maximum = (1_u32 << depth) - 1;
+            for count in [0, 1, 15, 16, 17, 16383, 16384, 16385, 65537] {
+                for mask_depth in [8, depth] {
+                    let values: Vec<u16> = (0..count * 4).map(|i| ((i * 719) as u32 & maximum) as u16).collect();
+                    let mut image = Image::from_samples(count as u32, 1, PixelMode::Rgba, values.clone(), depth, None).unwrap();
+                    let mask_maximum = (1_u32 << mask_depth) - 1;
+                    let alpha: Vec<u16> = (0..count).map(|i| ((i * 137) as u32 & mask_maximum) as u16).collect();
+                    let mask = if mask_depth == 8 {
+                        Image::from_pixels(count as u32, 1, PixelMode::L, alpha.iter().map(|&v| v as u8).collect(), None).unwrap()
+                    } else {
+                        Image::from_samples(count as u32, 1, PixelMode::L, alpha.clone(), depth, None).unwrap()
+                    };
+                    let original = image.raw_data().unwrap().as_ptr();
+                    putalpha(&mut image, &mask).unwrap();
+                    assert_eq!(image.raw_data().unwrap().as_ptr(), original);
+                    for (i, pixel) in samples::read(&image).unwrap().as_chunks::<4>().0.iter().enumerate() {
+                        assert_eq!(&pixel[..3], &values[i * 4..i * 4 + 3]);
+                        let expected = if mask_depth == 8 { (u32::from(alpha[i]) * maximum + 127) / 255 } else { u32::from(alpha[i]) };
+                        assert_eq!(u32::from(pixel[3]), expected);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn inplace_composite_matches_output_without_replacing_storage() {
+        for depth in [10, 12, 16] {
+            let maximum = (1_u32 << depth) - 1;
+            for count in [0, 1, 15, 16, 17, 16383, 16384, 16385] {
+                let make = |offset: usize| {
+                    let values: Vec<u16> = (0..count * 4).map(|i| ((i * 719 + offset) as u32 & maximum) as u16).collect();
+                    Image::from_samples(count as u32, 1, PixelMode::Rgba, values, depth, None).unwrap()
+                };
+                let mut background = make(65503);
+                let overlay = make(257);
+                let original = background.raw_data().unwrap().as_ptr();
+                let expected = composite(&background, &overlay).unwrap();
+                let overlay_bytes = overlay.raw_data().unwrap().to_vec();
+                composite_inplace(&mut background, &overlay).unwrap();
+                assert_eq!(background.raw_data().unwrap().as_ptr(), original);
+                assert_eq!(background.raw_data().unwrap(), expected.raw_data().unwrap());
+                assert_eq!(overlay.raw_data().unwrap(), overlay_bytes);
+            }
+        }
+    }
 
     fn paste_case<const C: usize>(count: usize, maximum: u32, mc: usize, fill: bool) {
         let source: Vec<_> = (0..count * C + 1).map(|i| ((i * 719 + 257) % 65536) as u16).collect();

@@ -93,9 +93,57 @@ pub fn output_bytes(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
     }
 }
 
+pub fn with_output(image: &Image, initialize: Option<&[u16]>, process: impl FnOnce(&mut [u16])) -> PyResult<Image> {
+    let len = image.raw_data()?.len();
+    let mut pixels = if let Some(source) = initialize { encode(source, cfg!(target_endian = "big"))? } else { crate::raster::alloc_pixels(len)? };
+    // All u16 bit patterns are valid; the output allocation is exclusively owned.
+    let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<u16>() };
+    if !prefix.is_empty() || !suffix.is_empty() {
+        let mut values = vec![0; len / 2];
+        if let Some(source) = initialize {
+            values.copy_from_slice(source);
+        }
+        process(&mut values);
+        drop(pixels);
+        return output(image, &values);
+    }
+    process(values);
+    if image.mode.is_big_endian() != cfg!(target_endian = "big") {
+        for value in values {
+            *value = value.swap_bytes();
+        }
+    }
+    output_bytes(image, pixels)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn output_storage_preserves_endianness_and_independence() {
+        for mode in [PixelMode::L, PixelMode::I16L, PixelMode::I16B, PixelMode::I16N] {
+            for count in [0, 1, 15, 16, 17, 131073] {
+                let source: Vec<u16> = (0..count).map(|i| (i * 719) as u16).collect();
+                let image = output_bytes(
+                    &Image { width: count as u32, height: 1, mode, bit_depth: 16, pixels: None, .. },
+                    encode(&source, mode.is_big_endian()).unwrap(),
+                )
+                .unwrap();
+                for initialize in [None, Some(source.as_slice())] {
+                    let actual = with_output(&image, initialize, |values| {
+                        for (i, value) in values.iter_mut().enumerate() {
+                            *value = value.wrapping_add(i as u16);
+                        }
+                    })
+                    .unwrap();
+                    let expected: Vec<u16> = (0..count).map(|i| initialize.map_or(0, |values| values[i]).wrapping_add(i as u16)).collect();
+                    assert_eq!(read(&actual).unwrap(), expected);
+                    assert_eq!(read(&image).unwrap(), source);
+                }
+            }
+        }
+    }
 
     #[test]
     fn views_borrow_only_aligned_native_endian_samples() {

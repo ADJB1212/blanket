@@ -14,7 +14,7 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
     let (width, height) = (image.width as usize, image.height as usize);
     convolve(&source, &mut values, size, (width, height), scale, offset, weights);
     drop(source);
-    Image::from_integer_bytes(image.width, image.height, image.mode, values.into_iter().flat_map(i32::to_le_bytes).collect())
+    Image::from_integer_bytes(image.width, image.height, image.mode, values.into_iter().map(i32::to_le_bytes).collect::<Vec<_>>().into_flattened())
 }
 
 fn integer_view(bytes: &[u8]) -> Cow<'_, [i32]> {
@@ -90,12 +90,16 @@ pub(crate) fn rank(image: &Image, size: usize, rank: usize) -> PyResult<Image> {
     }
     let pixels = if image.mode == PixelMode::I {
         let source = integer_view(bytes);
-        integer_rank(source, image.width as usize, image.height as usize, size, rank)?.into_iter().flat_map(i32::to_le_bytes).collect()
+        integer_rank(source, image.width as usize, image.height as usize, size, rank)?
+            .into_iter()
+            .map(i32::to_le_bytes)
+            .collect::<Vec<_>>()
+            .into_flattened()
     } else {
         let source = float_view(bytes);
         let values = rank_values(&source, image.width as usize, image.height as usize, size, rank)?;
         drop(source);
-        values.into_iter().flat_map(f32::to_le_bytes).collect()
+        values.into_iter().map(f32::to_le_bytes).collect::<Vec<_>>().into_flattened()
     };
     blanket_core::buffers::output(image, (image.width, image.height), pixels)
 }

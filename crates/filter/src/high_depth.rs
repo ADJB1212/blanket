@@ -10,7 +10,10 @@ use pyo3::prelude::*;
 
 pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weights: &[f32]) -> PyResult<Image> {
     let source = samples::view(image)?;
-    let mut values = source.to_vec();
+    samples::with_output(image, Some(&source), |values| kernel_values(image, &source, values, size, scale, offset, weights))
+}
+
+fn kernel_values(image: &Image, source: &[u16], values: &mut [u16], size: usize, scale: f32, offset: f32, weights: &[f32]) {
     let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
     let radius = size / 2;
     if width >= size && height >= size {
@@ -55,7 +58,6 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
             }
         });
     }
-    samples::output(image, &values)
 }
 
 pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> PyResult<Image> {
@@ -63,20 +65,20 @@ pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> P
         return samples::output_bytes(image, blanket_core::buffers::copy(image.raw_data()?)?);
     }
     let source = samples::view(image)?;
-    let mut values = source.to_vec();
     let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
-    if radius > 2 && rank.is_some_and(|rank| rank == 0 || rank == (radius as u64 * 2 + 1).pow(2) - 1) {
-        extrema(&source, &mut values, width, height, channels, radius, rank != Some(0));
-        return samples::output(image, &values);
-    }
-    if let Some(rank) = rank
-        && (radius == 1 || radius == 2 && (rank == 0 || rank == 24))
-    {
-        small_rank(&source, &mut values, width, height, channels, radius, rank as usize);
-        return samples::output(image, &values);
-    }
-    sliding_neighborhood(&source, &mut values, (width, height, channels, samples::maximum(image)), radius, rank);
-    samples::output(image, &values)
+    samples::with_output(image, rank.is_none().then_some(source.as_ref()), |values| {
+        if radius > 2 && rank.is_some_and(|rank| rank == 0 || rank == (radius as u64 * 2 + 1).pow(2) - 1) {
+            extrema(&source, values, width, height, channels, radius, rank != Some(0));
+            return;
+        }
+        if let Some(rank) = rank
+            && (radius == 1 || radius == 2 && (rank == 0 || rank == 24))
+        {
+            small_rank(&source, values, width, height, channels, radius, rank as usize);
+            return;
+        }
+        sliding_neighborhood(&source, values, (width, height, channels, samples::maximum(image)), radius, rank);
+    })
 }
 
 fn extrema(source: &[u16], output: &mut [u16], width: usize, height: usize, channels: usize, radius: usize, maximum: bool) {
@@ -463,31 +465,40 @@ fn box_sample_column<const R: usize>(source: &[u16], output: &mut [u16], y: usiz
     }
 }
 
-fn blurred(image: &Image, mut values: Vec<u16>, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u16>> {
-    let radii = super::filter::blur_radii(radii, gaussian)?;
-    if values.is_empty() || radii == (0.0, 0.0) {
-        return Ok(values);
+fn blur_into(image: &Image, source: &[u16], values: &mut [u16], radii: (f32, f32), gaussian: bool) {
+    if source.is_empty() || radii == (0.0, 0.0) {
+        values.copy_from_slice(source);
+        return;
     }
-    let mut scratch = vec![0; values.len()];
-    for (radius, vertical) in [(radii.0, false), (radii.1, true)] {
-        if radius == 0.0 {
-            continue;
-        }
-        for _ in 0..if gaussian { 3 } else { 1 } {
-            box_pass(&values, &mut scratch, image.width as usize, image.height as usize, image.mode.channels(), radius, vertical);
-            std::mem::swap(&mut values, &mut scratch);
+    let passes = if gaussian { 3 } else { 1 };
+    let horizontal = if radii.0 > 0.0 { passes } else { 0 };
+    let total = horizontal + if radii.1 > 0.0 { passes } else { 0 };
+    let mut scratch = if total > 1 { vec![0; source.len()] } else { Vec::new() };
+    let pass = |src: &[u16], dst: &mut [u16], index| {
+        let vertical = index >= horizontal;
+        let radius = if vertical { radii.1 } else { radii.0 };
+        box_pass(src, dst, image.width as usize, image.height as usize, image.mode.channels(), radius, vertical);
+    };
+    for index in 0..total {
+        // Choose the first destination so the final pass lands in the output.
+        if index == 0 {
+            if total % 2 == 1 { pass(source, values, index) } else { pass(source, &mut scratch, index) }
+        } else if (total - index) % 2 == 1 {
+            pass(&scratch, values, index);
+        } else {
+            pass(values, &mut scratch, index);
         }
     }
-    Ok(values)
 }
 
 pub(crate) fn blur(image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
     let bytes = image.raw_data()?;
-    if super::filter::blur_radii(radii, gaussian)? == (0.0, 0.0) {
+    let radii = super::filter::blur_radii(radii, gaussian)?;
+    if radii == (0.0, 0.0) {
         return samples::output_bytes(image, blanket_core::buffers::copy(bytes)?);
     }
-    let source = samples::read(image)?;
-    samples::output(image, &blurred(image, source, radii, gaussian)?)
+    let source = samples::view(image)?;
+    samples::with_output(image, None, |values| blur_into(image, &source, values, radii, gaussian))
 }
 
 pub(crate) fn unsharp(image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
@@ -496,9 +507,11 @@ pub(crate) fn unsharp(image: &Image, radius: f32, percent: i32, threshold: i32) 
         return samples::output_bytes(image, image.raw_data()?.to_vec());
     }
     let source = samples::view(image)?;
-    let mut values = blurred(image, source.to_vec(), (radius, radius), true)?;
-    sharpen(&source, &mut values, percent, threshold, samples::maximum(image));
-    samples::output(image, &values)
+    let radii = super::filter::blur_radii((radius, radius), true)?;
+    samples::with_output(image, None, |values| {
+        blur_into(image, &source, values, radii, true);
+        sharpen(&source, values, percent, threshold, samples::maximum(image));
+    })
 }
 
 fn sharpen(source: &[u16], values: &mut [u16], percent: i32, threshold: i32, maximum: u16) {

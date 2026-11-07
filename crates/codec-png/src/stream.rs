@@ -51,6 +51,7 @@ pub struct PngStreamWriter {
     stride: usize,
     remaining: usize,
     depth: u8,
+    converted: Vec<u8>,
 }
 
 impl Drop for PngStreamWriter {
@@ -118,7 +119,7 @@ impl PngStreamWriter {
             .map_err(|error| error.to_string())
         });
         let writer = result.map_err(|err| error.lock().expect("sink error lock").take().unwrap_or_else(|| codec_error(err)))?;
-        Ok(Self { writer: Some(writer), error, active, stride, remaining: stride * height as usize, depth })
+        Ok(Self { writer: Some(writer), error, active, stride, remaining: stride * height as usize, depth, converted: Vec::new() })
     }
 
     fn write(&mut self, py: Python<'_>, data: &[u8]) -> PyResult<()> {
@@ -134,13 +135,14 @@ impl PngStreamWriter {
             return Err(PyValueError::new_err("sample exceeds bit depth"));
         }
         let writer = self.writer.as_mut().expect("writer checked above");
+        let converted = &mut self.converted;
         let result = py.detach(|| {
             let result = if depth > 8 {
                 let mut result = Ok(());
-                let mut converted = vec![0; stride];
+                converted.resize(stride, 0);
                 for row in data.chunks_exact(stride) {
-                    blanket_core::simd::samples_to_be16(row, &mut converted, depth);
-                    if let Err(error) = writer.write_all(&converted) {
+                    blanket_core::simd::samples_to_be16(row, converted, depth);
+                    if let Err(error) = writer.write_all(converted) {
                         result = Err(error);
                         break;
                     }

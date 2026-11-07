@@ -91,8 +91,7 @@ class GpuUnsignedImage:
             result.info.update(self.info)
             return result
         working = self._image.to_image()
-        data = _blanket._gpu_unsigned_bytes(working.tobytes(), self.bit_depth, True)
-        result = Image.frombytes(self.mode, self.size, data, bit_depth=self.bit_depth)
+        result = Image.Image(_blanket._gpu_unsigned_image(working._native, self.bit_depth, True))
         result.info.update(self.info)
         return result
 

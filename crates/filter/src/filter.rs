@@ -29,7 +29,7 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 }
 
 #[pyfunction]
-fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, offset: f32, kernel: Vec<f32>) -> PyResult<Image> {
+fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, offset: f32, mut kernel: Vec<f32>) -> PyResult<Image> {
     if (image.palette.is_some() && image.mode != PixelMode::Pa) || image.mode == PixelMode::F {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
@@ -56,7 +56,10 @@ fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, of
     if size.0 != size.1 || !matches!(size.0, 3 | 5) {
         return Err(PyValueError::new_err("bad kernel size"));
     }
-    let weights: Vec<f32> = kernel.into_iter().map(|value| value / scale).collect();
+    for value in &mut kernel {
+        *value /= scale;
+    }
+    let weights = kernel;
     let width = image.width as usize;
     py.detach(|| match (image.mode, size.0) {
         (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),

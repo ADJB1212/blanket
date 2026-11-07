@@ -2,11 +2,14 @@
 
 use std::simd::Simd;
 
+use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_hash, module)?)?;
+    module.add_function(wrap_pyfunction!(image_hash_native, module)?)?;
     Ok(())
 }
 
@@ -84,6 +87,16 @@ fn median(values: &mut [f64]) -> f64 {
 #[pyfunction]
 fn image_hash(py: Python<'_>, pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyResult<Vec<u8>> {
     py.detach(|| hash_pixels(pixels, size, side, algorithm))
+}
+
+#[pyfunction]
+fn image_hash_native<'py>(py: Python<'py>, image: &Image, size: usize, side: usize, algorithm: &str) -> PyResult<Bound<'py, PyBytes>> {
+    if image.mode != PixelMode::L {
+        return Err(PyValueError::new_err("hash thumbnail must be 8-bit L"));
+    }
+    let pixels = image.pixel_data()?;
+    let packed = py.detach(|| hash_pixels(pixels, size, side, algorithm))?;
+    Ok(PyBytes::new(py, &packed))
 }
 
 fn hash_pixels(pixels: &[u8], size: usize, side: usize, algorithm: &str) -> PyResult<Vec<u8>> {

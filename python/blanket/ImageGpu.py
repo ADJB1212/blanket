@@ -262,8 +262,7 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         if backend == "metal" and runtime == "native":
             resource = _blanket.MetalImage.from_unsigned_image(image._native)
             return GpuUnsignedImage(GpuImage(resource, image.size, mode, runtime, dict(image._metadata_info())), image.mode, image.bit_depth)
-        data = _blanket._gpu_unsigned_bytes(image.tobytes(), image.bit_depth, False)
-        working = Image.frombytes(mode, image.size, data)
+        working = Image.Image(_blanket._gpu_unsigned_image(image._native, image.bit_depth, False))
         working.info.update(image._metadata_info())
         resident = from_image(working, backend=backend, runtime=runtime, device=device)
         if not isinstance(resident, GpuImage):

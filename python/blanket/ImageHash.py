@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from math import isqrt
 
 from . import Image
-from ._blanket import image_hash
+from ._blanket import image_hash_native
 
 __all__ = ["ImageHash", "average_hash", "dhash", "hex_to_hash", "phash"]
 
@@ -89,9 +89,10 @@ def _hash(image: Image.Image, hash_size: int, side: int, algorithm: str) -> Imag
     if image.width == 0 or image.height == 0:
         raise ValueError("cannot hash an empty image")
     width, height = (hash_size + 1, hash_size) if algorithm == "difference" else (side, side)
-    thumbnail = image.convert("L", bit_depth=8).resize((width, height), Image.Resampling.LANCZOS)
-    packed = image_hash(thumbnail.tobytes(), hash_size, side, algorithm)
-    return ImageHash(int.from_bytes(bytes(packed), "big"), hash_size)
+    grayscale = image if image.mode == "L" and image.bit_depth == 8 else image.convert("L", bit_depth=8)
+    thumbnail = grayscale if grayscale.size == (width, height) else grayscale.resize((width, height), Image.Resampling.LANCZOS)
+    packed = image_hash_native(thumbnail._native, hash_size, side, algorithm)
+    return ImageHash(int.from_bytes(packed, "big"), hash_size)
 
 
 def average_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:

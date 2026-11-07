@@ -14,12 +14,11 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
     let channels = image.mode.channels();
     let luma = |pixel: &[u16]| -> u16 { if channels == 1 { pixel[0] } else { sample_luminance(pixel[0], pixel[1], pixel[2]) } };
     if operation == "sharpness" {
-        let values = py.detach(|| {
-            let mut values = source.to_vec();
-            smooth(&source, &mut values, image.width as usize, image.height as usize, channels);
-            values
+        return py.detach(|| {
+            samples::with_output(image, Some(&source), |values| {
+                smooth(&source, values, image.width as usize, image.height as usize, channels);
+            })
         });
-        return samples::output(image, &values);
     }
     let mean = py.detach(|| {
         let end = source.len() / (channels * 16) * channels * 16;

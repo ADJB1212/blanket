@@ -30,6 +30,34 @@ fn _gpu_unsigned_bytes<'py>(py: Python<'py>, data: &[u8], depth: u8, encode: boo
 }
 
 #[pyfunction]
+fn _gpu_unsigned_image(py: Python<'_>, image: &blanket_core::Image, depth: u8, encode: bool) -> PyResult<blanket_core::Image> {
+    use blanket_core::{Image, PixelMode};
+    if !matches!(depth, 10 | 12 | 16) {
+        return Err(PyValueError::new_err("invalid unsigned GPU transfer"));
+    }
+    let mode = match (encode, image.mode) {
+        (false, PixelMode::L) if image.bit_depth == depth => PixelMode::F,
+        (false, PixelMode::Rgb) if image.bit_depth == depth => PixelMode::RgbF,
+        (false, PixelMode::Rgba) if image.bit_depth == depth => PixelMode::RgbaF,
+        (true, PixelMode::F) => PixelMode::L,
+        (true, PixelMode::RgbF) => PixelMode::Rgb,
+        (true, PixelMode::RgbaF) => PixelMode::Rgba,
+        _ => return Err(PyValueError::new_err("invalid unsigned GPU transfer")),
+    };
+    let data = image.raw_data()?;
+    let len = if encode { data.len() / 2 } else { data.len().checked_mul(2).ok_or_else(|| PyValueError::new_err("GPU transfer overflow"))? };
+    py.detach(|| {
+        let mut pixels = blanket_core::raster::alloc_pixels(len)?;
+        unsigned_transfer(data, &mut pixels, depth, encode);
+        if encode {
+            Image::from_sample_bytes(image.width, image.height, mode, pixels, depth, None)
+        } else {
+            Image::from_color_float_bytes(image.width, image.height, mode, pixels)
+        }
+    })
+}
+
+#[pyfunction]
 #[pyo3(signature = (input, output, method, floating=false))]
 fn _gpu_weights(py: Python<'_>, input: u32, output: u32, method: u8, floating: bool) -> PyResult<(u32, Vec<f32>)> {
     py.detach(|| blanket_gpu::resize_weights(input, output, method, floating)).map_err(PyValueError::new_err)
@@ -593,6 +621,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     #[cfg(feature = "cuda")]
     module.add("_gpu_cuda_fatbin", PyBytes::new(module.py(), blanket_gpu_cuda::FATBIN))?;
     module.add_function(wrap_pyfunction!(_gpu_unsigned_bytes, module)?)?;
+    module.add_function(wrap_pyfunction!(_gpu_unsigned_image, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_weights, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_prepare_plan, module)?)?;
     module.add_function(wrap_pyfunction!(_gpu_blur_parameters, module)?)?;
