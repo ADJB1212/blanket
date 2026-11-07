@@ -44,15 +44,15 @@ impl<'a> IntegerInput<'a> {
 }
 
 #[inline(always)]
-pub(super) fn apply_integer(output: &mut [[u8; 4]], a: IntegerInput<'_>, b: IntegerInput<'_>, op: Operation, reverse: bool) {
+pub(super) fn apply_integer(output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: IntegerInput<'_>, b: IntegerInput<'_>, op: Operation, reverse: bool) {
     let end = if matches!(op, Operation::Pow) { 0 } else { output.len() / 4 * 4 };
     for i in (0..end).step_by(4) {
         let (a, b) = if reverse { (b.vector(i), a.vector(i)) } else { (a.vector(i), b.vector(i)) };
-        output[i..i + 4].copy_from_slice(&integer(op, a, b).to_array().map(i32::to_le_bytes));
+        output[i..i + 4].write_copy_of_slice(&integer(op, a, b).to_array().map(i32::to_le_bytes));
     }
     for (i, out) in output.iter_mut().enumerate().skip(end) {
         let (a, b) = if reverse { (b.sample(i), a.sample(i)) } else { (a.sample(i), b.sample(i)) };
-        *out = op.integer(a, b).to_le_bytes();
+        out.write(op.integer(a, b).to_le_bytes());
     }
 }
 
@@ -200,10 +200,10 @@ mod tests {
                 right.push(divisor.to_le_bytes());
             }
             for op in [Operation::Div, Operation::Mod] {
-                let mut output = vec![[0; 4]; left.len()];
+                let mut output = vec![std::mem::MaybeUninit::uninit(); left.len()];
                 apply_integer(&mut output, IntegerInput::Wide(&left), IntegerInput::Wide(&right), op, false);
                 for ((actual, a), b) in output.iter().zip(&left).zip(&right) {
-                    assert_eq!(*actual, op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes());
+                    assert_eq!(unsafe { actual.assume_init() }, op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes());
                 }
             }
         }
@@ -216,7 +216,7 @@ mod tests {
         use std::time::Instant;
         let a: Vec<_> = (0..480_000_i32).map(|i| i.wrapping_mul(7919).to_le_bytes()).collect();
         let b: Vec<_> = (0..480_000_i32).map(|i| i.wrapping_mul(37).to_le_bytes()).collect();
-        let mut output = vec![[0; 4]; a.len()];
+        let mut output = vec![std::mem::MaybeUninit::uninit(); a.len()];
         for op in [Operation::Lshift, Operation::Rshift, Operation::Div, Operation::Mod] {
             for vector in [false, true] {
                 let start = Instant::now();
@@ -228,7 +228,7 @@ mod tests {
                         apply_integer(dst, IntegerInput::Wide(a), IntegerInput::Wide(b), op, false);
                     } else {
                         for ((dst, a), b) in dst.iter_mut().zip(a).zip(b) {
-                            *dst = op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes();
+                            dst.write(op.integer(i32::from_le_bytes(*a), i32::from_le_bytes(*b)).to_le_bytes());
                         }
                     }
                 }
@@ -256,8 +256,9 @@ mod tests {
                     for b in inputs {
                         for reverse in [false, true] {
                             for op in Operation::ALL {
-                                let mut output = vec![[0xa5; 4]; len + 2];
+                                let mut output = vec![std::mem::MaybeUninit::new([0xa5; 4]); len + 2];
                                 apply_integer(&mut output[1..len + 1], a, b, op, reverse);
+                                let output: Vec<_> = output.into_iter().map(|v| unsafe { v.assume_init() }).collect();
                                 assert_eq!(output[0], [0xa5; 4]);
                                 assert_eq!(output[len + 1], [0xa5; 4]);
                                 for (i, actual) in output[1..len + 1].iter().enumerate() {

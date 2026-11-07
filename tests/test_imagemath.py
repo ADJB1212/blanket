@@ -178,7 +178,7 @@ def test_integer_scalar_subclasses_use_their_index_value() -> None:
 
 
 @pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259), (1025, 1025)])
-@pytest.mark.parametrize("mode", ["I", "F"])
+@pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
 def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
     a, pa = pair(mode, size)
     original = a.tobytes()

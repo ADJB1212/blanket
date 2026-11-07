@@ -1091,6 +1091,10 @@ impl Image {
         let mut pixels = Vec::<u8>::with_capacity(source.len());
         let chunk = 256 * 1024;
         py.detach(|| {
+            if source.len() < 4 << 20 {
+                pixels.extend_from_slice(source);
+                return;
+            }
             crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
                 dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
             });

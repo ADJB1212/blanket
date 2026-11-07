@@ -875,6 +875,18 @@ def test_parallel_luts_and_histograms(mode: str, name: str, kwargs: dict) -> Non
     assert_pillow_equal(getattr(ImageOps, name)(b, **b_options), getattr(PILOps, name)(p, **p_options))
 
 
+@pytest.mark.parametrize("count", [0, 1, 257, 262147])
+@pytest.mark.parametrize(("mask", "xor"), [(0, 0), (255, 255), (240, 0), (85, 165)])
+def test_grayscale_point_tables(count: int, mask: int, xor: int) -> None:
+    raw = (bytes(range(256)) * ((count + 255) // 256))[:count]
+    b, p = image_pair("L", (count, 1), raw)
+    table = [(value & mask) ^ xor for value in range(256)]
+    assert_pillow_equal(b.point(table), p.point(table))
+    table[113] ^= 1
+    assert_pillow_equal(b.point(table), p.point(table))
+    assert b.tobytes() == raw
+
+
 def test_parallel_colorize() -> None:
     b, p = random_pair("L", (521, 509))
     assert_pillow_equal(ImageOps.colorize(b, "navy", "gold", "red"), PILOps.colorize(p, "navy", "gold", "red"))

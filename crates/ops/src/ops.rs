@@ -333,6 +333,25 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     if lut.len() != 256 && lut.len() != 256 * channels {
         return Err(PyValueError::new_err("wrong number of lut entries"));
     }
+    if channels == 1 && lut.len() == 256 {
+        let xor = lut[0];
+        let mask = lut[255] ^ xor;
+        if lut.iter().enumerate().all(|(value, &mapped)| mapped == (value as u8 & mask) ^ xor) {
+            let mut pixels = reserved_buffer((image.width, image.height), 1)?;
+            let len = source.len();
+            const CHUNK: usize = 256 * 1024;
+            py.detach(|| {
+                blanket_core::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK, 16 << 20, |chunk, dst| {
+                    for (dst, &value) in dst.iter_mut().zip(&source[chunk * CHUNK..]) {
+                        dst.write((value & mask) ^ xor);
+                    }
+                });
+            });
+            // Every reserved byte was initialized by its disjoint partition.
+            unsafe { pixels.set_len(len) };
+            return output(image, (image.width, image.height), pixels);
+        }
+    }
     let mut pixels = buffer((image.width, image.height), channels)?;
     py.detach(|| match image.mode {
         PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),

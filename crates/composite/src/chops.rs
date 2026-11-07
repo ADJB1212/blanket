@@ -269,6 +269,7 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
     let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
     let threshold = match operation {
         Operation::AddModulo | Operation::SubtractModulo | Operation::Lighter | Operation::Darker | Operation::Difference => 16 * 1024 * 1024,
+        Operation::Add | Operation::Subtract if scale == 1.0 && offset == 0 => 16 * 1024 * 1024,
         _ => blanket_core::parallel::MIN_PARALLEL_BYTES,
     };
     py.detach(|| {
@@ -296,6 +297,8 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
                     Operation::And => apply!(std::ops::BitAnd::bitand),
                     Operation::Or => apply!(std::ops::BitOr::bitor),
                     Operation::Xor => apply!(std::ops::BitXor::bitxor),
+                    Operation::Add if scale == 1.0 && offset == 0 => apply!(u8::saturating_add),
+                    Operation::Subtract if scale == 1.0 && offset == 0 => apply!(u8::saturating_sub),
                     Operation::Add => apply!(|a, b| Operation::Add.apply(a, b, scale, offset)),
                     Operation::Subtract => apply!(|a, b| Operation::Subtract.apply(a, b, scale, offset)),
                     Operation::Multiply => apply!(|a, b| Operation::Multiply.apply(a, b, scale, offset)),
