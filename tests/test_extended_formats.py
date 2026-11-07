@@ -117,12 +117,14 @@ def test_binary_pbm_row_padding(width: int) -> None:
 
 
 @pytest.mark.parametrize(("magic", "mode", "channels"), [("P5", "L", 1), ("P6", "RGB", 3), ("P7", "RGBA", 4)])
-def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int) -> None:
-    samples = [0, 1, 255, 256, 32768, 65535] * channels
-    header = f"{magic}\n3 2\n65535\n" if magic != "P7" else "P7\nWIDTH 3\nHEIGHT 2\nDEPTH 4\nMAXVAL 65535\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
+@pytest.mark.parametrize("maximum", [1023, 65535])
+def test_binary_netpbm_16bit_byte_order(magic: str, mode: str, channels: int, maximum: int) -> None:
+    samples = [0, 1, 255, 256, maximum // 2, maximum] * channels
+    header = f"{magic}\n3 2\n{maximum}\n" if magic != "P7" else f"P7\nWIDTH 3\nHEIGHT 2\nDEPTH 4\nMAXVAL {maximum}\nTUPLTYPE RGB_ALPHA\nENDHDR\n"
     payload = header.encode() + struct.pack(">" + "H" * len(samples), *samples)
     actual = Image.open(BytesIO(payload))
-    assert_image_properties(actual, mode=mode, size=(3, 2), bit_depth=16, pixels=struct.pack("<" + "H" * len(samples), *samples))
+    expected = [(value * 65535 + maximum // 2) // maximum for value in samples]
+    assert_image_properties(actual, mode=mode, size=(3, 2), bit_depth=16, pixels=struct.pack("<" + "H" * len(expected), *expected))
     assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(payload[:-1])))
 
 

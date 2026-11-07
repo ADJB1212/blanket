@@ -13,6 +13,33 @@ from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 from blanket.errors import UnsupportedCodecError
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
+@pytest.mark.parametrize("level", [0, 1, 6, 9])
+def test_png_path_stream_matches_encoded_bytes(tmp_path, mode, level):
+    size = (1025, 257)
+    raw = Random(791).randbytes(size[0] * size[1] * len(mode))
+    image = Image.frombytes(mode, size, raw)
+    path = tmp_path / "streamed.png"
+    image.save(path, compress_level=level)
+    assert path.read_bytes() == image.encode("PNG", compress_level=level)
+    with PillowImage.open(path) as decoded:
+        assert decoded.mode == mode
+        assert decoded.tobytes() == raw
+    assert image.tobytes() == raw
+
+
+def test_png_path_stream_preserves_path_errors_and_empty_images(tmp_path):
+    image = Image.new("RGB", (1025, 257))
+    path = tmp_path / "missing" / "image.png"
+    with pytest.raises(FileNotFoundError) as error:
+        image.save(path)
+    assert error.value.filename == str(path)
+    path = tmp_path / "empty.png"
+    with pytest.raises(OSError):
+        Image.new("RGB", (0, 0)).save(path)
+    assert not path.exists()
+
+
 @pytest.mark.parametrize("level", [1, 6, 9])
 def test_png_streams_multiple_idat_chunks_without_changing_pixels(level):
     size = (1025, 1025)

@@ -10,6 +10,17 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["LA", "RGBA"])
+@pytest.mark.parametrize("width", [2, 30, 32, 34, 510, 512, 514, 1026])
+@pytest.mark.parametrize("height", [2, 34])
+def test_alpha_box_half_blocks_and_tails(mode: str, width: int, height: int) -> None:
+    raw = random.Random(791).randbytes(width * height * len(mode))
+    actual, expected = image_pair(mode, (width, height), raw)
+    target = (width // 2, height // 2)
+    assert actual.resize(target, Image.Resampling.BOX).tobytes() == expected.resize(target, PillowImage.Resampling.BOX).tobytes()
+    assert actual.tobytes() == raw
+
+
 @pytest.mark.parametrize("source", ["L", "RGB", "RGBA"])
 def test_conversion_depth_and_mode_rounding(source: str, subtests: pytest.Subtests) -> None:
     for target in ["L", "RGB", "RGBA"]:

@@ -484,6 +484,7 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
     {
         let transposed = ops_transpose(py, image, 5)?;
         let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap)?;
+        drop(transposed);
         return ops_transpose(py, &resized, 5);
     }
     if image.mode.is_wide_scalar() {
@@ -493,12 +494,12 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         return py.detach(|| resize_wide(image, size, b, method));
     }
     let c = image.mode.channels();
-    let mut result = buffer(size, c)?;
     if image.width == 0 || image.height == 0 {
-        return output(image, size, result);
+        return output(image, size, buffer(size, c)?);
     }
-    py.detach(|| -> PyResult<()> {
+    let result = py.detach(|| -> PyResult<Vec<u8>> {
         if method == 0 {
+            let mut result = buffer(size, c)?;
             let dx = f64::from(b[2] as f32 - b[0] as f32) / f64::from(size.0);
             let dy = f64::from(b[3] as f32 - b[1] as f32) / f64::from(size.1);
             let positions = |start: f64, step: f64, count: u32, limit: u32| {
@@ -524,17 +525,15 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
                 }
                 _ => unreachable!(),
             }
-            return Ok(());
+            return Ok(result);
         }
         let mut source = Cow::Borrowed(source);
-        if matches!(image.mode, PixelMode::La | PixelMode::Rgba) {
-            premultiply_image(image.mode, source.to_mut());
-        }
         let mut reduced = None;
         if let Some(gap) = reducing_gap {
             let fx = (((bounds.2 - bounds.0) / f64::from(size.0) / gap) as u32).max(1);
             let fy = (((bounds.3 - bounds.1) / f64::from(size.1) / gap) as u32).max(1);
             if fx > 1 || fy > 1 {
+                premultiply_image(image.mode, source.to_mut());
                 let support = match method {
                     6 => 2.5,
                     7 => 4.5,
@@ -572,17 +571,18 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         if reduced.is_some() {
             source = Cow::Borrowed(image.pixel_data()?);
         }
-        match image.mode {
-            PixelMode::One | PixelMode::L => resample::<1>(&source, &mut result, image, size, b, method)?,
-            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resample::<2>(&source, &mut result, image, size, b, method)?,
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, &mut result, image, size, b, method)?,
+        let premultiply = reduced.is_none() && matches!(image.mode, PixelMode::La | PixelMode::Rgba);
+        let mut result = match image.mode {
+            PixelMode::One | PixelMode::L => resample::<1>(&source, image, size, b, method, premultiply),
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resample::<2>(&source, image, size, b, method, premultiply),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, image, size, b, method, premultiply),
             PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                resample::<4>(&source, &mut result, image, size, b, method)?
+                resample::<4>(&source, image, size, b, method, premultiply)
             }
             _ => unreachable!(),
-        }
+        }?;
         unpremultiply_image(image.mode, &mut result);
-        Ok(())
+        Ok(result)
     })?;
     output(image, size, result)
 }
@@ -820,26 +820,55 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
     });
 }
 
-fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8) -> PyResult<()> {
+fn resample_source(source: &[u8], mode: PixelMode, premultiply: bool) -> Cow<'_, [u8]> {
+    if premultiply {
+        let mut pixels = source.to_vec();
+        premultiply_image(mode, &mut pixels);
+        Cow::Owned(pixels)
+    } else {
+        Cow::Borrowed(source)
+    }
+}
+
+fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8, premultiply: bool) -> PyResult<Vec<u8>> {
     if method == 4
         && u64::from(size.0) * 2 == u64::from(image.width)
         && u64::from(size.1) * 2 == u64::from(image.height)
         && b == [0.0, 0.0, f64::from(image.width), f64::from(image.height)]
     {
+        let mut output = buffer(size, C)?;
         let stride = image.width as usize * C;
         let row_bytes = size.0 as usize * C;
-        chunks_mut(output, row_bytes * 16, |band, rows| {
+        chunks_mut(&mut output, row_bytes * 16, |band, rows| {
             for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                 let start = (band * 16 + i) * 2 * stride;
-                crate::ops_simd::box_half::<C>(&source[start..start + stride], &source[start + stride..start + 2 * stride], row);
+                if premultiply {
+                    let mut upper = [0; 2048];
+                    let mut lower = [0; 2048];
+                    for (block, dst) in row.chunks_mut(256 * C).enumerate() {
+                        let offset = start + block * 512 * C;
+                        let length = dst.len() * 2;
+                        let upper = &mut upper[..length];
+                        let lower = &mut lower[..length];
+                        upper.copy_from_slice(&source[offset..offset + length]);
+                        lower.copy_from_slice(&source[offset + stride..offset + stride + length]);
+                        premultiply_image(image.mode, upper);
+                        premultiply_image(image.mode, lower);
+                        crate::ops_simd::box_half::<C>(upper, lower, dst);
+                    }
+                } else {
+                    crate::ops_simd::box_half::<C>(&source[start..start + stride], &source[start + stride..start + 2 * stride], row);
+                }
             }
         });
-        return Ok(());
+        return Ok(output);
     }
     if size.1 == image.height && b[1] == 0.0 && b[3] == f64::from(image.height) {
+        let source = resample_source(source, image.mode, premultiply);
+        let mut output = buffer(size, C)?;
         let horizontal = weights(image.width, size.0, b[0], b[2], method);
-        resample_horizontal::<C>(source, output, image.width as usize, 0, &horizontal);
-        return Ok(());
+        resample_horizontal::<C>(&source, &mut output, image.width as usize, 0, &horizontal);
+        return Ok(output);
     }
     let vertical = weights(image.height, size.1, b[1], b[3], method);
     let first_row = vertical.get(0).0;
@@ -849,14 +878,16 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
     let input_stride = image.width as usize * C;
     let horizontal_identity = size.0 == image.width && b[0] == 0.0 && b[2] == f64::from(image.width);
     let temp = if horizontal_identity {
-        Cow::Borrowed(&source[first_row * input_stride..last_row * input_stride])
+        resample_source(&source[first_row * input_stride..last_row * input_stride], image.mode, premultiply)
     } else {
         let horizontal = weights(image.width, size.0, b[0], b[2], method);
         let mut temp = buffer((size.0, (last_row - first_row) as u32), C)?;
-        resample_horizontal::<C>(source, &mut temp, image.width as usize, first_row, &horizontal);
+        let source = resample_source(&source[first_row * input_stride..last_row * input_stride], image.mode, premultiply);
+        resample_horizontal::<C>(&source, &mut temp, image.width as usize, 0, &horizontal);
         Cow::Owned(temp)
     };
-    chunks_mut(output, row_bytes << 4, |band, rows| {
+    let mut output = buffer(size, C)?;
+    chunks_mut(&mut output, row_bytes << 4, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let (start, coefficients) = vertical.get(band * 16 + i);
             let src = &temp[(start - first_row) * row_bytes..];
@@ -870,7 +901,7 @@ fn resample<const C: usize>(source: &[u8], output: &mut [u8], image: &Image, siz
             }
         }
     });
-    Ok(())
+    Ok(output)
 }
 
 fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {

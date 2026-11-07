@@ -45,6 +45,26 @@ pub fn decode_with_metadata(
     let dimensions = decoder.dimensions();
     validate_dimensions(dimensions.0, dimensions.1)?;
     let color = decoder.color_type();
+    if matches!(color, ColorType::L16 | ColorType::Rgb16 | ColorType::Rgba16) {
+        let mode = match color {
+            ColorType::L16 => PixelMode::L,
+            ColorType::Rgb16 => PixelMode::Rgb,
+            _ => PixelMode::Rgba,
+        };
+        let depth = significant_bits
+            .filter(|bits| bits.len() == mode.channels() && matches!(bits[0], 10 | 12) && bits.iter().all(|&b| b == bits[0]))
+            .map_or(16, |bits| bits[0]);
+        let length = usize::try_from(decoder.total_bytes()).map_err(|error| error.to_string())?;
+        let mut pixels = Vec::new();
+        pixels.try_reserve_exact(length).map_err(|error| error.to_string())?;
+        pixels.resize(length, 0);
+        decoder.read_image(&mut pixels).map_err(|error| error.to_string())?;
+        for bytes in pixels.as_chunks_mut::<2>().0 {
+            *bytes = (u16::from_ne_bytes(*bytes) >> (16 - depth)).to_le_bytes();
+        }
+        return Image::from_sample_bytes(dimensions.0, dimensions.1, mode, pixels, depth, Some(format_name.into()))
+            .map_err(|error| error.to_string());
+    }
     let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
     let (width, height) = (image.width(), image.height());
     if matches!(color, ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16) {

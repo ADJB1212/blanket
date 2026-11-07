@@ -318,13 +318,39 @@ fn transfer_colors(values: &mut [f32], channels: usize, decode: bool) {
 }
 
 pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
-    let values = prepare_values(image, srgb, premultiply)?;
-    Image::from_color_float_bytes(
-        image.width,
-        image.height,
-        if image.mode.channels() == 4 { PixelMode::RgbaF } else { PixelMode::RgbF },
-        values.into_iter().flat_map(f32::to_le_bytes).collect(),
-    )
+    if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba | PixelMode::RgbF | PixelMode::RgbaF) {
+        return Err(PyValueError::new_err("linear-light processing requires RGB or RGBA color"));
+    }
+    let channels = image.mode.channels();
+    let source = image.raw_data()?;
+    let sample_bytes = if image.mode.is_float() {
+        4
+    } else if image.bit_depth == 8 {
+        1
+    } else {
+        2
+    };
+    let mut pixels = crate::buffers::buffer(image.size(), channels * 4)?;
+    crate::parallel::chunks_mut(&mut pixels, crate::parallel::CHUNK_PIXELS * channels * 4, |chunk, dst| {
+        let mut values = [0.0; 1024];
+        let start = chunk * crate::parallel::CHUNK_PIXELS * channels * sample_bytes;
+        for (block, dst) in dst.chunks_mut(256 * channels * 4).enumerate() {
+            let count = dst.len() / 4;
+            let values = &mut values[..count];
+            let src = &source[start + block * 256 * channels * sample_bytes..][..count * sample_bytes];
+            decode_values(src, image.mode.is_float(), image.bit_depth, values);
+            if srgb {
+                transfer_colors(values, channels, true);
+            }
+            if channels == 4 {
+                alpha(values, false, premultiply);
+            }
+            for (value, dst) in values.iter().zip(dst.as_chunks_mut::<4>().0) {
+                *dst = value.to_le_bytes();
+            }
+        }
+    });
+    Image::from_color_float_bytes(image.width, image.height, if image.mode.channels() == 4 { PixelMode::RgbaF } else { PixelMode::RgbF }, pixels)
 }
 
 pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Vec<f32>> {
@@ -343,7 +369,59 @@ pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<
 }
 
 pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
-    finish_values(image, original, srgb, premultiply, values(image)?)
+    if !image.mode.is_float() && !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("requires RGB or RGBA color"));
+    }
+    if image.mode.channels() != original.mode.channels() {
+        return finish_values(image, original, srgb, premultiply, values(image)?);
+    }
+    let channels = image.mode.channels();
+    let source = image.raw_data()?;
+    let sample_bytes = if image.mode.is_float() {
+        4
+    } else if image.bit_depth == 8 {
+        1
+    } else {
+        2
+    };
+    let target_bytes = if original.mode.is_float() {
+        4
+    } else if original.bit_depth == 8 {
+        1
+    } else {
+        2
+    };
+    let mut pixels = crate::buffers::buffer(image.size(), channels * target_bytes)?;
+    crate::parallel::chunks_mut(&mut pixels, crate::parallel::CHUNK_PIXELS * channels * target_bytes, |chunk, dst| {
+        let mut values = [0.0; 1024];
+        let start = chunk * crate::parallel::CHUNK_PIXELS * channels * sample_bytes;
+        for (block, dst) in dst.chunks_mut(256 * channels * target_bytes).enumerate() {
+            let count = dst.len() / target_bytes;
+            let values = &mut values[..count];
+            let src = &source[start + block * 256 * channels * sample_bytes..][..count * sample_bytes];
+            decode_values(src, image.mode.is_float(), image.bit_depth, values);
+            if channels == 4 {
+                alpha(values, true, premultiply);
+            }
+            if srgb {
+                transfer_colors(values, channels, false);
+            }
+            if original.mode.is_float() {
+                for (value, dst) in values.iter().zip(dst.as_chunks_mut::<4>().0) {
+                    *dst = value.to_le_bytes();
+                }
+            } else {
+                quantize_into(values, dst, original.bit_depth);
+            }
+        }
+    });
+    if original.mode.is_float() {
+        Image::from_color_float_bytes(image.width, image.height, original.mode, pixels)
+    } else if original.bit_depth == 8 {
+        Image::from_pixels(image.width, image.height, original.mode, pixels, None)
+    } else {
+        Image::from_sample_bytes(image.width, image.height, original.mode, pixels, original.bit_depth, None)
+    }
 }
 
 pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: bool, mut values: Vec<f32>) -> PyResult<Image> {
@@ -359,6 +437,37 @@ pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_preparation_and_finish_match_full_image_intermediates() {
+        for count in [0, 1, 7, 8, 15, 16, 17, 255, 256, 257, 16385, 65537] {
+            for mode in [PixelMode::Rgb, PixelMode::Rgba] {
+                let channels = mode.channels();
+                let special = [-0.0_f32, 0.0, -2.0, 0.25, 0.5, 1.0, 2.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+                let bytes = (0..count * channels).flat_map(|i| special[i % special.len()].to_le_bytes()).collect();
+                let floating =
+                    Image::from_color_float_bytes(count as u32, 1, if channels == 3 { PixelMode::RgbF } else { PixelMode::RgbaF }, bytes).unwrap();
+                for depth in [8, 10, 12, 16, 32] {
+                    let image = if depth == 32 { floating.clone() } else { convert(&floating, mode, Some(depth)).unwrap() };
+                    for srgb in [false, true] {
+                        for premultiply in [false, true] {
+                            let expected: Vec<_> =
+                                prepare_values(&image, srgb, premultiply).unwrap().into_iter().flat_map(f32::to_le_bytes).collect();
+                            let actual = prepare(&image, srgb, premultiply).unwrap();
+                            assert_eq!(actual.raw_data().unwrap(), expected, "prepare count={count}, mode={mode:?}, depth={depth}");
+                            let expected = finish_values(&floating, &image, srgb, premultiply, values(&floating).unwrap()).unwrap();
+                            let actual = finish(&floating, &image, srgb, premultiply).unwrap();
+                            assert_eq!(
+                                actual.raw_data().unwrap(),
+                                expected.raw_data().unwrap(),
+                                "finish count={count}, mode={mode:?}, depth={depth}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn bounded_conversion_matches_full_image_intermediates() {

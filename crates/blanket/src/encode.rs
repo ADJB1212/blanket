@@ -1,3 +1,4 @@
+use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
 use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
@@ -41,6 +42,29 @@ pub(crate) fn _encode(
         exif: metadata_exif.unwrap_or_default(),
         xmp: metadata_xmp.unwrap_or_default(),
     };
+    if let Some(output) = output.as_ref()
+        && format == ImageFormat::Png
+        && compressor.is_none()
+        && target_size.is_none()
+        && !attach_metadata
+        && image.bit_depth == 8
+        && image.palette.is_none()
+        && matches!(image.mode, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+        && image.width > 0
+        && image.height > 0
+        && u64::from(image.width) * u64::from(image.height) * image.mode.channels() as u64 >= 256 * 1024
+    {
+        let pixels = image.pixel_data()?;
+        let path = output_path(py, output)?;
+        let file = py
+            .detach(|| std::fs::File::create(path).map_err(|error| (error.raw_os_error(), error.to_string())))
+            .map_err(|error| output_error(error, output))?;
+        let mut writer = BufWriter::with_capacity(64 * 1024, file);
+        py.detach(|| blanket_codecs::encode_png_to(image, pixels, compress_level, &mut writer))
+            .map_err(|error| blanket_codecs::encode_error(error, format.as_str()))?;
+        py.detach(|| writer.flush().map_err(|error| (error.raw_os_error(), error.to_string()))).map_err(|error| output_error(error, output))?;
+        return Ok(None);
+    }
     let encoded = encode_image(py, image, format, options, compressor).map_err(|error| blanket_codecs::encode_error(error, format.as_str()))?;
     let encoded = if attach_metadata && !(format == ImageFormat::Jpeg && jpeg_streamtype == 1) {
         py.detach(|| {
@@ -60,23 +84,31 @@ pub(crate) fn _encode(
         )));
     }
     if let Some(output) = output {
-        let path = if output.is_instance_of::<PyBytes>() {
-            py.import("os")?.call_method1("fsdecode", (&output,))?.extract::<PathBuf>()?
-        } else {
-            output.extract::<PathBuf>()?
-        };
-        if path.as_os_str().as_encoded_bytes().contains(&0) {
-            return Err(PyValueError::new_err("embedded null byte"));
-        }
-        py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string()))).map_err(|(errno, message)| {
-            match errno {
-                Some(errno) => PyOSError::new_err((errno, message, output.unbind())),
-                None => PyOSError::new_err(message),
-            }
-        })?;
+        let path = output_path(py, &output)?;
+        py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string())))
+            .map_err(|error| output_error(error, &output))?;
         return Ok(None);
     }
     Ok(Some(PyBytes::new(py, &encoded).unbind()))
+}
+
+fn output_path(py: Python<'_>, output: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
+    let path = if output.is_instance_of::<PyBytes>() {
+        py.import("os")?.call_method1("fsdecode", (output,))?.extract::<PathBuf>()?
+    } else {
+        output.extract::<PathBuf>()?
+    };
+    if path.as_os_str().as_encoded_bytes().contains(&0) {
+        return Err(PyValueError::new_err("embedded null byte"));
+    }
+    Ok(path)
+}
+
+fn output_error((errno, message): (Option<i32>, String), output: &Bound<'_, PyAny>) -> PyErr {
+    match errno {
+        Some(errno) => PyOSError::new_err((errno, message, output.clone().unbind())),
+        None => PyOSError::new_err(message),
+    }
 }
 
 fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: SaveOptions, compressor: Option<Compressor>) -> PyResult<Vec<u8>> {

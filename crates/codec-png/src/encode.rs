@@ -114,6 +114,12 @@ impl<W: Write> Write for IdatWriter<'_, W> {
 }
 
 pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8>> {
+    let mut output = Vec::new();
+    encode_to(image, pixels, level, &mut output)?;
+    Ok(output)
+}
+
+pub(super) fn encode_to(image: &Image, pixels: &[u8], level: u8, output: impl Write) -> PyResult<()> {
     let channels = image.mode.channels();
     let stride = image.width as usize * channels;
     if stride == 0 || image.height == 0 {
@@ -123,8 +129,7 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
     let rows = (4 * 1024 * 1024 / row_bytes).max(1).min(image.height as usize);
     let mut filtered = vec![0; row_bytes * rows];
     let zero = vec![0; stride];
-    let mut output = Vec::new();
-    let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
+    let mut encoder = png::Encoder::new(output, image.width, image.height);
     encoder.set_color(match image.mode {
         PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
         PixelMode::La => png::ColorType::GrayscaleAlpha,
@@ -157,7 +162,7 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
     sink.flush().map_err(codec_error)?;
     drop(sink);
     writer.finish().map_err(codec_error)?;
-    Ok(output)
+    Ok(())
 }
 
 #[cfg(test)]

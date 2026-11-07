@@ -1489,6 +1489,10 @@ impl Image {
                     gray.convert(py, mode, bit_depth)
                 };
             }
+            if bit_depth.is_none_or(|depth| depth == 8) && matches!(destination, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+                let pixels = py.detach(|| convert_pixels(source, self.mode, destination));
+                return Self::from_pixels(self.width, self.height, destination, pixels, None);
+            }
             let pixels = py.detach(|| convert_pixels(source, self.mode, PixelMode::Rgb));
             if destination == PixelMode::One {
                 if bit_depth.is_some_and(|depth| depth != 8) {
@@ -1901,16 +1905,14 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         return source.to_vec();
     }
     if matches!(from, PixelMode::Cmyk | PixelMode::YCbCr) {
-        let rgb = if from == PixelMode::Cmyk {
-            map_pixels::<4, 3>(source, |p| {
-                std::array::from_fn(|i| {
-                    let value = u32::from(255 - p[i]) * u32::from(255 - p[3]) + 128;
-                    (((value >> 8) + value) >> 8) as u8
-                })
-            })
-        } else {
-            map_pixels::<3, 3>(source, ycbcr_to_rgb)
-        };
+        if matches!(to, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+            return if from == PixelMode::Cmyk {
+                map_rgb_pixels::<4>(source, to, cmyk_to_rgb)
+            } else {
+                map_rgb_pixels::<3>(source, to, ycbcr_to_rgb)
+            };
+        }
+        let rgb = if from == PixelMode::Cmyk { map_pixels::<4, 3>(source, cmyk_to_rgb) } else { map_pixels::<3, 3>(source, ycbcr_to_rgb) };
         return if to == PixelMode::Rgb { rgb } else { convert_pixels(&rgb, PixelMode::Rgb, to) };
     }
     if matches!(to, PixelMode::Cmyk | PixelMode::YCbCr) {
@@ -2079,6 +2081,32 @@ fn map_pixels<const S: usize, const D: usize>(source: &[u8], convert: impl Fn([u
         }
     });
     output
+}
+
+fn map_rgb_pixels<const S: usize>(source: &[u8], to: PixelMode, rgb: impl Fn([u8; S]) -> [u8; 3] + Sync + Send) -> Vec<u8> {
+    match to {
+        PixelMode::L => map_pixels::<S, 1>(source, |p| {
+            let [r, g, b] = rgb(p);
+            [crate::simd::pillow_luma(r, g, b)]
+        }),
+        PixelMode::La => map_pixels::<S, 2>(source, |p| {
+            let [r, g, b] = rgb(p);
+            [crate::simd::pillow_luma(r, g, b), 255]
+        }),
+        PixelMode::Rgb => map_pixels::<S, 3>(source, rgb),
+        PixelMode::Rgba => map_pixels::<S, 4>(source, |p| {
+            let [r, g, b] = rgb(p);
+            [r, g, b, 255]
+        }),
+        _ => unreachable!(),
+    }
+}
+
+fn cmyk_to_rgb(pixel: [u8; 4]) -> [u8; 3] {
+    std::array::from_fn(|i| {
+        let value = u32::from(255 - pixel[i]) * u32::from(255 - pixel[3]) + 128;
+        (((value >> 8) + value) >> 8) as u8
+    })
 }
 
 fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {

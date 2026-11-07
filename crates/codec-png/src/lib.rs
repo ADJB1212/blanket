@@ -100,6 +100,15 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
     Ok(output)
 }
 
+pub fn encode_png_to(image: &Image, pixels: &[u8], compress_level: u8, output: impl Write) -> PyResult<()> {
+    if compress_level != 0 {
+        return encode::encode_to(image, pixels, compress_level, output);
+    }
+    PngEncoder::new_with_quality(output, CompressionType::Level(compress_level), FilterType::Adaptive)
+        .write_image(pixels, image.width, image.height, color_type(image.mode))
+        .map_err(codec_error)
+}
+
 pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let width = image.width as usize;
     let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, width, image.height as usize);
