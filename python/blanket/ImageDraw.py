@@ -14,7 +14,7 @@ from operator import index
 from typing import TYPE_CHECKING
 
 from . import Image
-from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
+from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_image_mask, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
 from ._color import color_pixel
 from ._draw_font import BitmapFont, PublicDomainFont
 from .ImageFont import load_default
@@ -393,12 +393,13 @@ class ImageDraw:
         """Draw ink through a bilevel, grayscale, or RGBA alpha mask."""
         x, y = xy
         mask = bitmap.getchannel("A") if bitmap.mode == "RGBA" else bitmap
-        if mask.mode == "1":
-            mask = mask.convert("L")
-        if mask.mode != "L":
+        if mask.mode not in ("1", "L"):
             raise ValueError("bad transparency mask")
         if bitmap.mode != "RGBA":
-            draw_mask(self.im._native, (int(x), int(y)), mask.size, mask.tobytes(), self._ink(fill), bool(self.blend), 0)
+            mask.load()
+            if mask._native is self.im._native:
+                mask = mask.copy()
+            draw_image_mask(self.im._native, (int(x), int(y)), mask._native, self._ink(fill), bool(self.blend))
             return
         position = (int(x), int(y), int(x) + mask.width, int(y) + mask.height)
         ink = Image.new(self.im.mode, mask.size, self._ink(fill))

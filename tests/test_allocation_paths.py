@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import pickle
 import struct
 
 import pytest
 
-from blanket import Image, ImageHash, _blanket
+from blanket import Image, ImageDraw, ImageHash, ImageOps, ImageStat, _blanket
 
 
 @pytest.mark.parametrize(
@@ -125,3 +126,134 @@ def test_putalpha_reuses_luma_without_changing_it(mode, count):
     assert image.mode == mode
     assert image.getchannel(0).tobytes() == before
     assert image.getchannel(1).tobytes() == alpha.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "RGBa", "La", "RGBX"])
+@pytest.mark.parametrize("size", [(0, 1), (17, 3), (16385, 1)])
+def test_constant_alpha_needs_no_temporary_band(mode, size, monkeypatch):
+    image = Image.new("RGB", size, (17, 31, 89)).convert(mode)
+    expected = image.copy()
+    expected.putalpha(Image.new("L", size, 149))
+
+    def no_band(*args, **kwargs):
+        pytest.fail("constant alpha allocated a temporary image")
+
+    monkeypatch.setattr(Image, "new", no_band)
+    image.putalpha(149)
+    assert image == expected
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+def test_high_depth_constant_alpha_matches_band(depth, mode):
+    samples = [0, 1, (1 << depth) - 1] * len(mode) * 17
+    image = Image.frombytes(mode, (51, 1), struct.pack(f"<{len(samples)}H", *samples), bit_depth=depth)
+    expected = image.copy()
+    value = (1 << depth) - 17
+    band = Image.frombytes("L", image.size, struct.pack("<H", value) * 51, bit_depth=depth)
+    expected.putalpha(band)
+    image.putalpha(value)
+    assert image == expected
+
+
+@pytest.mark.parametrize("mode", ["1", "L"])
+def test_bitmap_borrows_native_mask(mode, monkeypatch):
+    mask = Image.new(mode, (19, 7), 1 if mode == "1" else 149)
+    image = Image.new("RGB", (23, 11), (17, 31, 89))
+    expected = image.copy()
+    ImageDraw.Draw(expected).bitmap((-3, 2), mask.convert("L"), fill=(71, 113, 173))
+
+    def no_export(*args, **kwargs):
+        pytest.fail("bitmap exported or converted its mask")
+
+    monkeypatch.setattr(Image.Image, "tobytes", no_export)
+    monkeypatch.setattr(Image.Image, "convert", no_export)
+    ImageDraw.Draw(image).bitmap((-3, 2), mask, fill=(71, 113, 173))
+    assert image == expected
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA", "CMYK", "I", "I;16B"])
+def test_bitmap_normalizes_all_nonzero_bilevel_values(mode):
+    mask = Image.new("1", (19, 7))
+    mask.putdata(([0, 1, 2, 127, 255] * 27)[:133])
+    image = Image.new(mode, (23, 11))
+    expected = image.copy()
+    ImageDraw.Draw(expected).bitmap((-3, 2), mask.convert("L"), fill=71)
+    ImageDraw.Draw(image).bitmap((-3, 2), mask, fill=71)
+    assert image == expected
+
+
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
+def test_stat_retains_native_histogram_until_public_access(depth):
+    image = Image.new("RGB", (19, 7), (17, 31, 89))
+    if depth != 8:
+        image = image.convert("RGB", bit_depth=depth)
+    statistics = ImageStat.Stat(image)
+    reference = ImageStat.Stat(statistics.h.copy()) if depth == 8 else ImageStat.Stat(image)
+    statistics = ImageStat.Stat(image)
+    image.close()
+    for name in ("count", "extrema", "sum", "sum2", "mean", "median", "rms", "var", "stddev"):
+        assert getattr(statistics, name) == getattr(reference, name)
+        assert not isinstance(statistics._histogram, list)
+    assert isinstance(statistics.h, list)
+    del statistics.sum
+    statistics.h[:] = [0] * len(statistics.h)
+    assert statistics.sum == [0, 0, 0]
+
+
+def test_native_stat_histogram_can_be_pickled_without_materializing_original():
+    statistics = ImageStat.Stat(Image.new("RGB", (19, 7), (17, 31, 89)))
+    assert statistics.sum == [2261, 4123, 11837]
+    restored = pickle.loads(pickle.dumps(statistics))
+    assert not isinstance(statistics._histogram, list)
+    assert restored.h == statistics.h
+    assert restored.sum == statistics.sum
+    assert restored.mean == statistics.mean
+
+
+@pytest.mark.parametrize("operation,args", [(ImageOps.invert, ()), (ImageOps.posterize, (4,)), (ImageOps.solarize, (127,))])
+@pytest.mark.parametrize("mode", ["RGB", "RGBA"])
+def test_palette_lut_needs_no_temporary_image(operation, args, mode, monkeypatch):
+    image = Image.new("P", (19, 7), 31)
+    image.putpalette(bytes((i * 37) % 256 for i in range(256 * len(mode))), mode)
+    expected = operation(image, *args)
+
+    def no_import(*args, **kwargs):
+        pytest.fail("palette transform allocated a temporary image")
+
+    monkeypatch.setattr(Image, "frombytes", no_import)
+    assert operation(image, *args) == expected
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "LAB", "I", "F", "I;16B", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("size", [(0, 1), (17, 3)])
+def test_band_exports_need_no_channel_raster(mode, size, monkeypatch):
+    image = Image.new("RGB", size, (17, 31, 89)).convert(mode)
+    bands = [image.getchannel(c).getdata() for c in range(len(image.getbands()))]
+
+    def no_channel(*args, **kwargs):
+        pytest.fail("band export allocated a channel image")
+
+    monkeypatch.setattr(Image.Image, "getchannel", no_channel)
+    for c, expected in enumerate(bands):
+        assert image.getdata(c) == expected
+        assert image.get_flattened_data(c) == tuple(expected)
+
+
+@pytest.mark.parametrize("mode,color", [("1", 1), ("L", 71), ("LA", (71, 149)), ("P", 71), ("PA", (71, 149)), ("RGB", (71, 113, 173)), ("RGBA", (71, 113, 173, 149)), ("I", -1024), ("I;16B", 1024), ("F", -12.5), ("RGB;F", (0.1, 0.2, 0.3))])
+@pytest.mark.parametrize("box", [(-3, 2, 19, 11), (1, -2, 5, 7), (0, 0, 23, 13), (1, 1, 1, 1), (25, 17, 31, 21)])
+def test_paste_color_uses_one_pixel_source(mode, color, box, monkeypatch):
+    image = Image.new(mode, (23, 13))
+    expected = image.copy()
+    size = box[2] - box[0], box[3] - box[1]
+    source = Image.new(mode, size, color)
+    _blanket.image_paste(expected._native, source._native, box[:2], None, True)
+    original_new = Image.new
+
+    def small_source(mode, size, *args, **kwargs):
+        assert size == (1, 1)
+        return original_new(mode, size, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "new", small_source)
+    image.paste(color, box)
+    assert image == expected

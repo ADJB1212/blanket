@@ -108,28 +108,63 @@ fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
 
 type ColorCounts = [(u64, usize, usize); COLOR_TABLE_SIZE];
 
+fn pixel_sequence<'py>(
+    py: Python<'py>, items: impl ExactSizeIterator<Item = PyResult<Bound<'py, PyAny>>>, tuple: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    let len = isize::try_from(items.len()).map_err(|_| PyMemoryError::new_err("too many pixels"))?;
+    // The container stays private while its initially null slots are filled.
+    // CPython safely releases partially filled containers if conversion fails.
+    let result = unsafe { Bound::from_owned_ptr_or_err(py, if tuple { pyo3::ffi::PyTuple_New(len) } else { pyo3::ffi::PyList_New(len) }) }?;
+    for (i, item) in items.enumerate() {
+        let item = item?;
+        // Each in-bounds slot is assigned once, stealing the owned reference.
+        unsafe {
+            if tuple {
+                pyo3::ffi::PyTuple_SET_ITEM(result.as_ptr(), i as isize, item.into_ptr());
+            } else {
+                pyo3::ffi::PyList_SET_ITEM(result.as_ptr(), i as isize, item.into_ptr());
+            }
+        }
+    }
+    Ok(result)
+}
+
 fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8], tuple: bool) -> PyResult<Bound<'py, PyAny>> {
     let values: [_; 256] = std::array::from_fn(|v| (v as u8).into_pyobject(py).unwrap());
     let mut cache: [Option<([u8; C], Bound<'py, PyAny>)>; PIXEL_CACHE_SIZE] = std::array::from_fn(|_| None);
-    let items = data
-        .as_chunks::<C>()
-        .0
-        .iter()
-        .map(|pixel| {
-            let mut key = [0; 4];
-            key[..C].copy_from_slice(pixel);
-            let slot = (u32::from_le_bytes(key).wrapping_mul(PIXEL_HASH_MULTIPLIER) >> (u32::BITS - PIXEL_CACHE_BITS)) as usize;
-            let item = if let Some((_, item)) = cache[slot].as_ref().filter(|(key, _)| key == pixel) {
-                item.clone()
+    let items = data.as_chunks::<C>().0.iter().map(|pixel| {
+        let mut key = [0; 4];
+        key[..C].copy_from_slice(pixel);
+        let slot = (u32::from_le_bytes(key).wrapping_mul(PIXEL_HASH_MULTIPLIER) >> (u32::BITS - PIXEL_CACHE_BITS)) as usize;
+        let item = if let Some((_, item)) = cache[slot].as_ref().filter(|(key, _)| key == pixel) {
+            item.clone()
+        } else {
+            let item = PyTuple::new(py, pixel.iter().map(|&value| &values[value as usize]))?.into_any();
+            cache[slot] = Some((*pixel, item.clone()));
+            item
+        };
+        Ok(item)
+    });
+    pixel_sequence(py, items, tuple)
+}
+
+fn wide_pixel_data<'py>(py: Python<'py>, image: &Image, tuple: bool) -> PyResult<Bound<'py, PyAny>> {
+    let data = image.raw_data()?;
+    let channels = image.mode.channels();
+    let bytes = if image.mode.is_float() { 4 } else { 2 };
+    pixel_sequence(
+        py,
+        data.chunks_exact(channels * bytes).map(|pixel| {
+            if image.mode.is_float() {
+                Ok(PyTuple::new(py, pixel.as_chunks::<4>().0.iter().map(|bytes| float_value(bytes)))?.into_any())
+            } else if channels == 1 {
+                Ok(u16::from_le_bytes([pixel[0], pixel[1]]).into_pyobject(py)?.into_any())
             } else {
-                let item = PyTuple::new(py, pixel.iter().map(|&value| &values[value as usize]))?.into_any();
-                cache[slot] = Some((*pixel, item.clone()));
-                item
-            };
-            Ok(item)
-        })
-        .collect::<PyResult<Vec<_>>>()?;
-    if tuple { Ok(PyTuple::new(py, items)?.into_any()) } else { Ok(PyList::new(py, items)?.into_any()) }
+                Ok(PyTuple::new(py, pixel.as_chunks::<2>().0.iter().map(|&bytes| u16::from_le_bytes(bytes)))?.into_any())
+            }
+        }),
+        tuple,
+    )
 }
 
 fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
@@ -782,13 +817,7 @@ impl Image {
         if self.bit_depth == 8 {
             return Ok(PyList::new(py, data.iter().copied())?.unbind());
         }
-        let result = PyList::empty(py);
-        for y in 0..self.height {
-            for x in 0..self.width {
-                result.append(self.getpixel(py, (i64::from(x), i64::from(y)))?)?;
-            }
-        }
-        Ok(result.unbind())
+        Ok(wide_pixel_data(py, self, false)?.cast_into::<PyList>()?.unbind())
     }
 
     pub fn get_flattened_data(&self, py: Python<'_>) -> PyResult<Py<PyTuple>> {
@@ -811,7 +840,29 @@ impl Image {
         if self.bit_depth == 8 {
             return Ok(PyTuple::new(py, data.iter().copied())?.unbind());
         }
-        Ok(self.getdata(py)?.bind(py).to_tuple().unbind())
+        Ok(wide_pixel_data(py, self, true)?.cast_into::<PyTuple>()?.unbind())
+    }
+
+    pub fn getbanddata<'py>(&self, py: Python<'py>, channel: usize, tuple: bool) -> PyResult<Bound<'py, PyAny>> {
+        let data = self.raw_data()?;
+        if channel >= self.mode.channels() {
+            return Err(PyValueError::new_err("band index out of range"));
+        }
+        let stride = self.raw_bytes_per_pixel();
+        let sample_bytes = stride / self.mode.channels();
+        let items = data.chunks_exact(stride).map(|pixel| {
+            let sample = &pixel[channel * sample_bytes..(channel + 1) * sample_bytes];
+            if self.mode.is_float() {
+                Ok(float_value(sample).into_pyobject(py)?.into_any())
+            } else if self.mode.is_integer() {
+                Ok(integer_value(self.mode, sample).into_pyobject(py)?.into_any())
+            } else if sample_bytes == 2 {
+                Ok(u16::from_le_bytes([sample[0], sample[1]]).into_pyobject(py)?.into_any())
+            } else {
+                Ok(sample[0].into_pyobject(py)?.into_any())
+            }
+        });
+        pixel_sequence(py, items, tuple)
     }
 
     pub fn getcolors(&self, py: Python<'_>, maxcolors: usize) -> PyResult<Option<Py<PyList>>> {

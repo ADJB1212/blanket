@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyList;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_class::<StatHistogram>()?;
+    module.add_function(wrap_pyfunction!(stat_snapshot, module)?)?;
     module.add_function(wrap_pyfunction!(stat_histogram, module)?)?;
     module.add_function(wrap_pyfunction!(stat_count, module)?)?;
     module.add_function(wrap_pyfunction!(stat_extrema, module)?)?;
@@ -18,6 +20,53 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(stat_normalize, module)?)?;
     module.add_function(wrap_pyfunction!(stat_sqrt, module)?)?;
     Ok(())
+}
+
+#[pyclass(name = "_StatHistogram", module = "blanket._blanket", frozen)]
+struct StatHistogram {
+    values: Vec<u64>,
+}
+
+#[pymethods]
+impl StatHistogram {
+    fn tolist<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        PyList::new(py, self.values.iter().copied())
+    }
+
+    fn __len__(&self) -> usize {
+        self.values.len()
+    }
+}
+
+#[derive(FromPyObject)]
+enum Histogram<'py> {
+    Native(PyRef<'py, StatHistogram>),
+    List(Vec<u64>),
+}
+
+impl AsRef<[u64]> for Histogram<'_> {
+    fn as_ref(&self) -> &[u64] {
+        match self {
+            Self::Native(histogram) => &histogram.values,
+            Self::List(values) => values,
+        }
+    }
+}
+
+#[pyfunction]
+#[pyo3(signature = (image, mask=None))]
+fn stat_snapshot(py: Python<'_>, image: &blanket_core::Image, mask: Option<&blanket_core::Image>) -> PyResult<StatHistogram> {
+    let values = if blanket_core::samples::supported(image) {
+        stat_histogram(py, image, mask)?
+    } else if matches!(image.mode, blanket_core::PixelMode::I | blanket_core::PixelMode::F) {
+        if mask.is_some() {
+            return Err(PyValueError::new_err("image has wrong mode"));
+        }
+        blanket_ops::ops::wide_histogram(py, image, None, None)?
+    } else {
+        blanket_ops::ops::ops_histogram(py, image, mask)?
+    };
+    Ok(StatHistogram { values })
 }
 
 #[pyfunction]
@@ -114,7 +163,11 @@ fn exact_extrema(histogram: &Bound<'_, PyList>) -> PyResult<Option<Vec<(u8, u8)>
 
 #[pyfunction]
 #[pyo3(signature = (histogram, bins=256))]
-fn stat_count(histogram: &Bound<'_, PyList>, bins: usize) -> PyResult<Vec<u128>> {
+fn stat_count(histogram: &Bound<'_, PyAny>, bins: usize) -> PyResult<Vec<u128>> {
+    if let Ok(native) = histogram.extract::<PyRef<'_, StatHistogram>>() {
+        return Ok(sample_bands(&native.values, bins)?.map(blanket_core::pixels::histogram_count).collect());
+    }
+    let histogram = histogram.cast::<PyList>()?;
     if bins != 256 {
         let values = histogram.extract::<Vec<u64>>()?;
         return Ok(sample_bands(&values, bins)?.map(blanket_core::pixels::histogram_count).collect());
@@ -139,7 +192,14 @@ fn stat_count(histogram: &Bound<'_, PyList>, bins: usize) -> PyResult<Vec<u128>>
 
 #[pyfunction]
 #[pyo3(signature = (histogram, bins=256))]
-fn stat_extrema<'py>(histogram: &Bound<'py, PyList>, bins: usize) -> PyResult<Bound<'py, PyList>> {
+fn stat_extrema<'py>(histogram: &Bound<'py, PyAny>, bins: usize) -> PyResult<Bound<'py, PyList>> {
+    if let Ok(native) = histogram.extract::<PyRef<'_, StatHistogram>>() {
+        return PyList::new(
+            histogram.py(),
+            sample_bands(&native.values, bins)?.map(|band| blanket_core::pixels::histogram_bounds(band).unwrap_or((bins - 1, 0))),
+        );
+    }
+    let histogram = histogram.cast::<PyList>()?;
     if bins != 256 {
         let values = histogram.extract::<Vec<u64>>()?;
         return PyList::new(
@@ -203,8 +263,8 @@ fn weighted_sum(histogram: &[u64], squared: bool) -> f64 {
 
 #[pyfunction]
 #[pyo3(signature = (histogram, squared, bins=256))]
-fn stat_sum(py: Python<'_>, histogram: Vec<u64>, squared: bool, bins: usize) -> PyResult<Py<PyAny>> {
-    let bands = sample_bands(&histogram, bins)?;
+fn stat_sum(py: Python<'_>, histogram: Histogram<'_>, squared: bool, bins: usize) -> PyResult<Py<PyAny>> {
+    let bands = sample_bands(histogram.as_ref(), bins)?;
     if bins == 256 {
         let sums: Vec<u128> = py.detach(|| {
             bands
@@ -239,8 +299,8 @@ fn median(histogram: &[u64], count: u128) -> u16 {
 
 #[pyfunction]
 #[pyo3(signature = (histogram, counts, bins=256))]
-fn stat_median(py: Python<'_>, histogram: Vec<u64>, counts: Vec<u128>, bins: usize) -> PyResult<Vec<u16>> {
-    let bands = sample_bands(&histogram, bins)?;
+fn stat_median(py: Python<'_>, histogram: Histogram<'_>, counts: Vec<u128>, bins: usize) -> PyResult<Vec<u16>> {
+    let bands = sample_bands(histogram.as_ref(), bins)?;
     if bands.len() != counts.len() {
         return Err(PyValueError::new_err("band counts do not match histogram"));
     }
@@ -249,8 +309,8 @@ fn stat_median(py: Python<'_>, histogram: Vec<u64>, counts: Vec<u128>, bins: usi
 }
 
 #[pyfunction]
-fn stat_variance(py: Python<'_>, histogram: Vec<u64>, counts: Vec<u128>, sums: Vec<f64>, bins: usize) -> PyResult<Vec<f64>> {
-    let bands = sample_bands(&histogram, bins)?;
+fn stat_variance(py: Python<'_>, histogram: Histogram<'_>, counts: Vec<u128>, sums: Vec<f64>, bins: usize) -> PyResult<Vec<f64>> {
+    let bands = sample_bands(histogram.as_ref(), bins)?;
     if bands.len() != counts.len() || bands.len() != sums.len() {
         return Err(PyValueError::new_err("statistics have different band counts"));
     }

@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from functools import cached_property
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ._blanket import _StatHistogram
 
 from . import Image
-from ._blanket import stat_count, stat_extrema, stat_histogram, stat_median, stat_normalize, stat_sqrt, stat_sum, stat_variance
+from ._blanket import stat_count, stat_extrema, stat_histogram, stat_median, stat_normalize, stat_snapshot, stat_sqrt, stat_sum, stat_variance
 
 __all__ = ["Global", "Stat"]
 
@@ -42,20 +46,47 @@ class Stat:
             ```
         """
         self._bins = 256
+        self._histogram: list[int] | _StatHistogram
         if isinstance(image_or_list, list):
             self.h = image_or_list
         elif isinstance(image_or_list, Image.Image):
-            if image_or_list.bit_depth in (10, 12, 16):
+            if type(image_or_list) is Image.Image:
+                image_or_list.load()
+                if mask is not None:
+                    mask.load()
+                if image_or_list.bit_depth in (10, 12, 16):
+                    self._bins = 1 << image_or_list.bit_depth
+                self._histogram = stat_snapshot(image_or_list._native, mask._native if mask is not None else None)
+            elif image_or_list.bit_depth in (10, 12, 16):
                 self._bins = 1 << image_or_list.bit_depth
                 self.h = stat_histogram(image_or_list._native, mask._native if mask is not None else None)
             else:
                 self.h = image_or_list.histogram(mask)
         else:
             raise TypeError("first argument must be image or list")
-        length = len(self.h)
+        length = len(self._histogram)
         if length % self._bins:
             raise ValueError("histogram must contain 256 bins per band")
         self._band_count = length // self._bins
+
+    @property
+    def h(self) -> list[int]:
+        """Materialize the mutable histogram only when it is requested."""
+        histogram = self._histogram
+        if not isinstance(histogram, list):
+            histogram = histogram.tolist()
+            self._histogram = histogram
+        return histogram
+
+    @h.setter
+    def h(self, histogram: list[int]) -> None:
+        self._histogram = histogram
+
+    def __getstate__(self) -> dict[str, object]:
+        state = self.__dict__.copy()
+        histogram = self._histogram
+        state["_histogram"] = histogram if isinstance(histogram, list) else histogram.tolist()
+        return state
 
     @cached_property
     def bands(self) -> list[int]:
@@ -85,7 +116,7 @@ class Stat:
             print(statistics.extrema)
             ```
         """
-        return stat_extrema(self.h, self._bins)
+        return stat_extrema(self._histogram, self._bins)
 
     @cached_property
     def count(self) -> list[int]:
@@ -100,7 +131,7 @@ class Stat:
             print(statistics.count)
             ```
         """
-        return stat_count(self.h, self._bins)
+        return stat_count(self._histogram, self._bins)
 
     @cached_property
     def sum(self) -> list[int | float]:
@@ -115,7 +146,7 @@ class Stat:
             print(statistics.sum)
             ```
         """
-        return stat_sum(self.h, False, self._bins)
+        return stat_sum(self._histogram, False, self._bins)
 
     @cached_property
     def sum2(self) -> list[int | float]:
@@ -130,7 +161,7 @@ class Stat:
             print(statistics.sum2)
             ```
         """
-        return stat_sum(self.h, True, self._bins)
+        return stat_sum(self._histogram, True, self._bins)
 
     @cached_property
     def mean(self) -> list[float]:
@@ -160,7 +191,7 @@ class Stat:
             print(statistics.median)
             ```
         """
-        return stat_median(self.h, self.count, self._bins)
+        return stat_median(self._histogram, self.count, self._bins)
 
     @cached_property
     def rms(self) -> list[float]:
@@ -191,7 +222,7 @@ class Stat:
             ```
         """
         if self._bins > 256:
-            return stat_variance(self.h, self.count, self.sum, self._bins)
+            return stat_variance(self._histogram, self.count, self.sum, self._bins)
         return stat_normalize(self.sum2, self.count, self.sum)
 
     @cached_property

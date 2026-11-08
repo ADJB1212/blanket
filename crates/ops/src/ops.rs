@@ -162,7 +162,7 @@ fn validate_mask<'a>(mask: Option<&'a Image>, image: &Image) -> PyResult<Option<
 }
 
 #[pyfunction(signature = (image, mask=None, extrema=None))]
-fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
+pub fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
     let raw = image.raw_data()?;
     let mask_data = validate_mask(mask, image)?;
     py.detach(|| match image.mode {
@@ -524,20 +524,20 @@ fn ops_linear_gradient(mode: &str) -> PyResult<Image> {
 
 fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
     let count = |start: usize, bytes: &[u8]| {
-        let mut bins = vec![0_u64; C << 8];
+        let mut bins = [[0_u64; 256]; C];
         let pixels = bytes.as_chunks::<C>().0;
         // Hoist the mask decision out of the per-pixel loop.
         match mask {
             None => {
                 if let Some(pixel) = crate::ops_simd::constant_pixel::<C>(bytes) {
                     for c in 0..C {
-                        bins[c * 256 + usize::from(pixel[c])] = pixels.len() as u64;
+                        bins[c][usize::from(pixel[c])] = pixels.len() as u64;
                     }
                     return bins;
                 }
                 for pixel in pixels {
                     for c in 0..C {
-                        bins[c * 256 + usize::from(pixel[c])] += 1;
+                        bins[c][usize::from(pixel[c])] += 1;
                     }
                 }
             }
@@ -545,7 +545,7 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
                 for (pixel, &selected) in pixels.iter().zip(&mask[start..]) {
                     if selected != 0 {
                         for c in 0..C {
-                            bins[c * 256 + usize::from(pixel[c])] += 1;
+                            bins[c][usize::from(pixel[c])] += 1;
                         }
                     }
                 }
@@ -553,18 +553,20 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         }
         bins
     };
-    if !should_parallel(source.len(), CHUNK_PIXELS * C, MIN_PARALLEL_BYTES) {
-        return count(0, source);
-    }
-    source.par_chunks(CHUNK_PIXELS * C).enumerate().map(|(i, bytes)| count(i * CHUNK_PIXELS, bytes)).reduce(
-        || vec![0; C << 8],
-        |mut total, bins| {
-            for (a, b) in total.iter_mut().zip(bins) {
-                *a += b;
-            }
-            total
-        },
-    )
+    let bins = if should_parallel(source.len(), CHUNK_PIXELS * C, MIN_PARALLEL_BYTES) {
+        source.par_chunks(CHUNK_PIXELS * C).enumerate().map(|(i, bytes)| count(i * CHUNK_PIXELS, bytes)).reduce(
+            || [[0; 256]; C],
+            |mut total, bins| {
+                for (a, b) in total.as_flattened_mut().iter_mut().zip(bins.as_flattened()) {
+                    *a += b;
+                }
+                total
+            },
+        )
+    } else {
+        count(0, source)
+    };
+    bins.into_iter().flatten().collect()
 }
 
 /// Place the source on a filled canvas. Negative offsets clip the source.

@@ -10,9 +10,11 @@ use pyo3::prelude::*;
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_new, module)?)?;
     module.add_function(wrap_pyfunction!(image_paste, module)?)?;
+    module.add_function(wrap_pyfunction!(image_fill, module)?)?;
     module.add_function(wrap_pyfunction!(image_alpha_composite, module)?)?;
     module.add_function(wrap_pyfunction!(image_alpha_composite_inplace, module)?)?;
     module.add_function(wrap_pyfunction!(image_putalpha, module)?)?;
+    module.add_function(wrap_pyfunction!(image_putalpha_constant, module)?)?;
     Ok(())
 }
 
@@ -109,6 +111,42 @@ pub(crate) fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: u
     let right = position.0.saturating_add(i64::from(src_width)).clamp(0, dst_width as i64);
     let bottom = position.1.saturating_add(i64::from(src_height)).clamp(0, dst_height as i64);
     (left, top, right, bottom)
+}
+
+#[pyfunction]
+fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, i64), size: (u32, u32)) -> PyResult<()> {
+    if image.mode != color.mode || image.bit_depth != color.bit_depth || color.size() != (1, 1) {
+        return Err(PyValueError::new_err("images do not match"));
+    }
+    let bytes = color.raw_data()?;
+    image.raw_data()?;
+    let stride = image.raw_bytes_per_pixel();
+    let mut pixel = [0_u8; 16];
+    pixel[..stride].copy_from_slice(bytes);
+    if matches!(image.mode, PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
+        pixel[..2].fill(bytes[usize::from(image.mode.is_big_endian())]);
+    }
+    let tile: [u8; 48] = std::array::from_fn(|i| pixel[i % stride]);
+    let (left, top, right, bottom) = paste_bounds(position, image.width as usize, image.height as usize, size.0, size.1);
+    if left >= right || top >= bottom {
+        return Ok(());
+    }
+    image.ensure_owned();
+    let row_bytes = image.width as usize * stride;
+    let pixels = image.pixels.as_mut().unwrap();
+    py.detach(|| {
+        blanket_core::parallel::chunks_mut(&mut pixels[top as usize * row_bytes..bottom as usize * row_bytes], row_bytes * 32, |_, rows| {
+            for row in rows.chunks_exact_mut(row_bytes) {
+                let row = &mut row[left as usize * stride..right as usize * stride];
+                let (tiles, tail) = row.as_chunks_mut::<48>();
+                tiles.fill(tile);
+                for output in tail.chunks_exact_mut(stride) {
+                    output.copy_from_slice(&pixel[..stride]);
+                }
+            }
+        });
+    });
+    Ok(())
 }
 
 #[pyfunction]
@@ -371,6 +409,97 @@ fn composite_scalar(pixels: &mut [u8], source: &[u8]) {
         let value = alpha + 128;
         dst[3] = (((value >> 8) + value) >> 8) as u8;
     }
+}
+
+#[pyfunction]
+fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyResult<()> {
+    if !matches!(
+        image.mode,
+        PixelMode::One
+            | PixelMode::L
+            | PixelMode::La
+            | PixelMode::Pa
+            | PixelMode::Rgb
+            | PixelMode::Rgba
+            | PixelMode::PremulLa
+            | PixelMode::PremulRgba
+            | PixelMode::Rgbx
+    ) {
+        return Err(PyValueError::new_err("image has wrong mode"));
+    }
+    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
+        let converted = image.convert(py, if image.mode == PixelMode::PremulLa { "LA" } else { "RGBA" }, None)?;
+        image.pixels = converted.pixels;
+        image.mode = converted.mode;
+    }
+    if image.bit_depth > 8 && !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("high-depth putalpha requires RGB or RGBA"));
+    }
+    image.raw_data()?;
+    let bytes = alpha.to_le_bytes();
+    let sample_bytes = if image.bit_depth == 8 { 1 } else { 2 };
+    let alpha = &bytes[..sample_bytes];
+    if matches!(image.mode, PixelMode::La | PixelMode::Pa | PixelMode::Rgba) {
+        image.ensure_owned();
+        let stride = image.raw_bytes_per_pixel();
+        let pixels = image.pixels.as_mut().unwrap();
+        py.detach(|| match stride {
+            2 => set_constant_alpha::<2, 1>(pixels, alpha),
+            4 => set_constant_alpha::<4, 1>(pixels, alpha),
+            8 => set_constant_alpha::<8, 2>(pixels, alpha),
+            _ => unreachable!(),
+        });
+        return Ok(());
+    }
+    let source = image.raw_data()?;
+    let pixels = py.detach(|| match (image.mode.channels(), sample_bytes) {
+        (1, 1) => constant_alpha::<1, 2>(source, alpha, image.mode == PixelMode::One),
+        (3, 1) => constant_alpha::<3, 4>(source, alpha, false),
+        (3, 2) => constant_alpha::<6, 8>(source, alpha, false),
+        _ => unreachable!(),
+    })?;
+    image.pixels = Some(pixels);
+    image.shared_pixels = None;
+    image.mode = if image.mode.channels() == 3 {
+        PixelMode::Rgba
+    } else if image.palette.is_some() {
+        PixelMode::Pa
+    } else {
+        PixelMode::La
+    };
+    Ok(())
+}
+
+fn set_constant_alpha<const C: usize, const A: usize>(pixels: &mut [u8], alpha: &[u8]) {
+    let alpha: &[u8; A] = alpha.try_into().unwrap();
+    blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * C, |_, dst| {
+        for pixel in dst.as_chunks_mut::<C>().0 {
+            pixel[C - A..].copy_from_slice(alpha);
+        }
+    });
+}
+
+fn constant_alpha<const S: usize, const D: usize>(source: &[u8], alpha: &[u8], bilevel: bool) -> PyResult<Vec<u8>> {
+    let len = (source.len() / S).checked_mul(D).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
+    let mut pixels = blanket_core::buffers::reserved::<u8>(len)?;
+    blanket_core::parallel::chunks_mut_above(
+        &mut pixels.spare_capacity_mut()[..len],
+        16 * 1024 * D,
+        blanket_core::parallel::MIN_PARALLEL_BYTES,
+        |chunk, output| {
+            let start = chunk * 16 * 1024 * S;
+            for (src, dst) in source[start..].as_chunks::<S>().0.iter().zip(output.as_chunks_mut::<D>().0) {
+                dst[..S].write_copy_of_slice(src);
+                if bilevel {
+                    dst[0].write(u8::from(src[0] != 0) * 255);
+                }
+                dst[S..].write_copy_of_slice(alpha);
+            }
+        },
+    );
+    // Every color and alpha byte in each reserved pixel was initialized above.
+    unsafe { pixels.set_len(len) };
+    Ok(pixels)
 }
 
 #[pyfunction]

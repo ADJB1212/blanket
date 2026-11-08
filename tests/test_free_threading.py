@@ -115,3 +115,24 @@ def test_native_writer_rejects_concurrent_mutation() -> None:
     sink.writer = None
     assert sink.attempts > 0
     assert Image.open(BytesIO(sink.getvalue())).tobytes() == raw
+
+
+@pytest.mark.parametrize("mode,depth", [("RGB", 8), ("RGBA", 16), ("RGB;F", 32)])
+def test_pixel_exports_during_gc(mode: str, depth: int) -> None:
+    image = Image.new("RGB", (67, 37), (17, 31, 89)).convert(mode, bit_depth=depth)
+    expected = image.getdata()
+    band = image.getdata(0)
+    barrier = Barrier(4)
+
+    def run(index: int) -> None:
+        barrier.wait(timeout=30)
+        for _ in range(8):
+            if index == 0:
+                gc.collect()
+            else:
+                assert image.getdata() == expected
+                assert image.get_flattened_data() == tuple(expected)
+                assert image.getdata(0) == band
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(run, range(4)))

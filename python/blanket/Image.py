@@ -53,9 +53,11 @@ from ._blanket import (
     frombytes as _native_frombytes,
     image_alpha_composite,
     image_alpha_composite_inplace,
+    image_fill,
     image_new,
     image_paste,
     image_putalpha,
+    image_putalpha_constant,
     ops_affine,
     ops_canvas,
     ops_color_composite,
@@ -1435,8 +1437,13 @@ class Image:
             pixels = image.getdata()
             ```
         """
-        source = self if band is None else self.getchannel(index(band))
-        return source._native.getdata()
+        if band is None:
+            return self._native.getdata()
+        self.load()
+        band = index(band)
+        if not 0 <= band < len(self.getbands()):
+            raise ValueError("band index out of range")
+        return self._native.getbanddata(band, False)
 
     def get_flattened_data(self, band: int | None = None) -> tuple[int | float | tuple[int, ...], ...]:
         """Return an immutable flat pixel snapshot, as in recent Pillow versions.
@@ -1452,8 +1459,13 @@ class Image:
             pixels = image.get_flattened_data()
             ```
         """
-        source = self if band is None else self.getchannel(index(band))
-        return source._native.get_flattened_data()
+        if band is None:
+            return self._native.get_flattened_data()
+        self.load()
+        band = index(band)
+        if not 0 <= band < len(self.getbands()):
+            raise ValueError("band index out of range")
+        return self._native.getbanddata(band, True)
 
     def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
         """Write pixels in row order; scale/offset apply to single-band data.
@@ -1728,12 +1740,17 @@ class Image:
         else:
             if self.mode == "P" and isinstance(im, (str, tuple)) and not (isinstance(im, tuple) and len(im) == 1):
                 raise TypeError("color must be int or single-element tuple")
+            fill_size = (1, 1) if mask is None else size
             if self.bit_depth > 8 and self.mode in ("L", "RGB", "RGBA"):
                 color = color_pixel(im, self.mode, self.bit_depth)
                 raw = b"".join(value.to_bytes(2, "little") for value in color)
-                source = Image(image_new(self.mode, size, raw, self.bit_depth))
+                source = Image(image_new(self.mode, fill_size, raw, self.bit_depth))
             else:
-                source = new(self.mode, size, im)
+                source = new(self.mode, fill_size, im)
+            if mask is None:
+                self._ensure_mutable()
+                image_fill(self._native, source._native, box[:2], size)
+                return
         # Snapshot aliases before acquiring the native mutable destination borrow.
         source = source.copy() if source is self or source._native is self._native else source
         if mask is not None and (mask is self or mask._native is self._native):
@@ -1807,11 +1824,13 @@ class Image:
             raise ValueError("image has wrong mode")
         if isinstance(alpha, Image):
             band = alpha.convert("L") if alpha.mode == "1" else alpha
-        elif self.bit_depth > 8:
-            value = max(0, min((1 << self.bit_depth) - 1, index(alpha)))
-            band = Image(image_new("L", self.size, value.to_bytes(2, "little"), self.bit_depth))
         else:
-            band = new("L", self.size, index(alpha))
+            value = max(0, min((1 << self.bit_depth) - 1, index(alpha)))
+            self._ensure_mutable()
+            image_putalpha_constant(self._native, value)
+            self.readonly = 0
+            self._bands = _BANDS[self.mode]
+            return
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
         self._ensure_mutable()

@@ -19,6 +19,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(draw_path, module)?)?;
     module.add_function(wrap_pyfunction!(draw_ellipse, module)?)?;
     module.add_function(wrap_pyfunction!(draw_mask, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_image_mask, module)?)?;
     module.add_function(wrap_pyfunction!(raster_font_mask, module)?)?;
     module.add_function(wrap_pyfunction!(draw_floodfill, module)?)?;
     Ok(())
@@ -424,15 +425,30 @@ fn draw_path(
 }
 
 #[pyfunction]
+fn draw_image_mask(image: &mut Image, position: (i64, i64), mask: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
+    if !matches!(mask.mode, PixelMode::One | PixelMode::L) || mask.bit_depth != 8 || mask.palette.is_some() {
+        return Err(PyValueError::new_err("bad transparency mask"));
+    }
+    draw_mask_impl(image, position, (mask.width as usize, mask.height as usize), mask.pixel_data()?, value, blend, 0, mask.mode == PixelMode::One)
+}
+
+#[pyfunction]
 fn draw_mask(
     image: &mut Image, position: (i64, i64), size: (usize, usize), mask: &[u8], value: &Bound<'_, PyAny>, blend: bool, stroke: usize,
+) -> PyResult<()> {
+    draw_mask_impl(image, position, size, mask, value, blend, stroke, false)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_mask_impl(
+    image: &mut Image, position: (i64, i64), size: (usize, usize), mask: &[u8], value: &Bound<'_, PyAny>, blend: bool, stroke: usize, bilevel: bool,
 ) -> PyResult<()> {
     image.ensure_owned();
     let ink = ink(image, value, blend)?;
     if size.0.checked_mul(size.1) != Some(mask.len()) {
         return Err(PyValueError::new_err("invalid mask size"));
     }
-    if value.py().detach(|| mask.iter().any(|&sample| sample != 0 && sample != 255)) {
+    if !bilevel && value.py().detach(|| mask.iter().any(|&sample| sample != 0 && sample != 255)) {
         check_coverage(image)?;
     }
     let stroke = i64::try_from(stroke).map_err(|_| PyValueError::new_err("stroke is too large"))?;
@@ -458,15 +474,16 @@ fn draw_mask(
                 let start = ((position.1 + y) as usize * image.width as usize + (position.0 + left) as usize) * channels;
                 let dst = &mut image.pixels.as_mut().unwrap()[start..start + coverage.len() * channels];
                 match channels {
-                    1 => blanket_core::pixels::paint_mask::<1>(dst, coverage, &ink, blend),
-                    2 => blanket_core::pixels::paint_mask::<2>(dst, coverage, &ink, blend),
-                    3 => blanket_core::pixels::paint_mask::<3>(dst, coverage, &ink, blend),
-                    4 => blanket_core::pixels::paint_mask::<4>(dst, coverage, &ink, blend),
+                    1 => paint_bitmap_mask::<1>(dst, coverage, &ink, blend, bilevel),
+                    2 => paint_bitmap_mask::<2>(dst, coverage, &ink, blend, bilevel),
+                    3 => paint_bitmap_mask::<3>(dst, coverage, &ink, blend, bilevel),
+                    4 => paint_bitmap_mask::<4>(dst, coverage, &ink, blend, bilevel),
                     _ => unreachable!(),
                 }
                 continue;
             }
             for (x, &coverage) in (left..right).zip(coverage) {
+                let coverage = if bilevel { u8::from(coverage != 0) * 255 } else { coverage };
                 if image.mode == PixelMode::Rgba && coverage != 0 {
                     let offset = ((position.1 + y) as usize * image.width as usize + (position.0 + x) as usize) * 4;
                     let dst = &image.pixels.as_ref().unwrap()[offset..offset + 4];
@@ -483,6 +500,20 @@ fn draw_mask(
         }
     });
     Ok(())
+}
+
+fn paint_bitmap_mask<const C: usize>(dst: &mut [u8], mask: &[u8], ink: &[u8], blend: bool, bilevel: bool) {
+    if !bilevel {
+        blanket_core::pixels::paint_mask::<C>(dst, mask, ink, blend);
+        return;
+    }
+    let mut normalized = [0; 1024];
+    for (dst, mask) in dst.chunks_mut(1024 * C).zip(mask.chunks(1024)) {
+        for (dst, &sample) in normalized.iter_mut().zip(mask) {
+            *dst = u8::from(sample != 0) * 255;
+        }
+        blanket_core::pixels::paint_mask::<C>(dst, &normalized[..mask.len()], ink, blend);
+    }
 }
 
 fn mask_row(mask: &[u8], size: (usize, usize), origin: (i64, i64), stroke: i64, output: &mut [u8], queue: &mut VecDeque<(i64, u8)>) {

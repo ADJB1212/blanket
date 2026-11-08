@@ -142,7 +142,11 @@ class ImagePalette:
             ```
         """
         self._check_raw()
-        return self.palette if isinstance(self.palette, bytes) else array("B", self.palette).tobytes()
+        if isinstance(self.palette, bytes):
+            return self.palette
+        if isinstance(self.palette, bytearray):
+            return bytes(self.palette)
+        return array("B", self.palette).tobytes()
 
     tostring = tobytes
 

@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ._blanket import _Image
 
 from . import Image
-from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose
+from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose, palette_lut
 from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
@@ -75,10 +75,7 @@ def _lut(image: Image.Image, table: list[int], *, palette: bool = False) -> Imag
             raise ValueError("image has no palette")
         mode = result.palette.mode
         entries = result.palette.tobytes()
-        colors = Image.frombytes(mode, (len(entries) // len(mode), 1), entries)
-        tables = table if mode == "RGB" else table * 3 + list(range(256))
-        mapped = Image.Image(ops_lut(colors._native, tables))
-        result.putpalette(mapped.tobytes(), mode)
+        result.putpalette(palette_lut(entries, len(mode), table), mode)
         return result
     if image.mode not in ("L", "RGB"):
         raise OSError(f"not supported for mode {image.mode}")
@@ -124,7 +121,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     """
     if image.mode == "P":
         raise NotImplementedError("mode P support coming soon")
-    source = image.convert("L") if preserve_tone else image
+    source = image.convert("L") if preserve_tone and image.mode != "L" else image
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
     if len(tails) == 2 and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails) and isinstance(ignored, (tuple, list)) and all(isinstance(value, int) and -256 <= value < 256 for value in ignored):
