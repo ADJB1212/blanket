@@ -111,13 +111,13 @@ jobs:
         run: |
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build nasm liblcms2-dev
+          sudo apt-get install --no-install-recommends -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build nasm liblcms2-dev pkg-config
           echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif,use-system-lcms2,gpu-cuda" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif,gpu-cuda" >> "$GITHUB_ENV"
           echo "N_THREADS=4" >> "$GITHUB_ENV"
           if [ "$RUNNER_ARCH" = "ARM64" ]; then
             echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-lwebpdemux" >> "$GITHUB_ENV"
@@ -130,14 +130,17 @@ jobs:
       - name: Install Deps and Setup PATH (macOS)
         if: runner.os == 'macOS'
         run: |
-          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp jpeg-xl little-cms2
+          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp jpeg-xl little-cms2 pkgconf
+          echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
+          echo "LCMS2_LIB_DIR=/opt/homebrew/opt/little-cms2/lib" >> "$GITHUB_ENV"
+          echo "LCMS2_INCLUDE_DIR=/opt/homebrew/opt/little-cms2/include" >> "$GITHUB_ENV"
           echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
           echo "FUSE_LINKER=ld" >> "$GITHUB_ENV"
           echo "CC=clang" >> "$GITHUB_ENV"
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=no-vendored-webp,use-system-lcms2,gpu-metal" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
           echo "N_THREADS=3" >> "$GITHUB_ENV"
 
       - name: Run Clippy

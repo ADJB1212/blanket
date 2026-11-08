@@ -13,7 +13,6 @@ blanket-resample-kernels.workspace = true
 blanket-core.workspace = true
 blanket-kernels.workspace = true
 pyo3.workspace = true
-rayon.workspace = true
 
 [lib]
 doctest = false

@@ -13,14 +13,12 @@ blanket-convert-kernels.workspace = true
 blanket-modes.workspace = true
 blanket-kernels.workspace = true
 lcms2 = { version = "6", default-features = false }
-lcms2-sys = { version = "4", default-features = false, features = ["static-fallback", "parallel"] }
 pyo3.workspace = true
 rayon.workspace = true
 rustc-hash.workspace = true
 
 [features]
 default = []
-use-system-lcms2 = ["lcms2-sys/dynamic"]
 
 
 [lib]

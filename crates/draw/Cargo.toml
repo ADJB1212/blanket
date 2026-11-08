@@ -11,7 +11,6 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 pyo3.workspace = true
-rustc-hash.workspace = true
 
 [lib]
 doctest = false

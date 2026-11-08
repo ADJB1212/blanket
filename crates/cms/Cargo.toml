@@ -15,7 +15,6 @@ pyo3.workspace = true
 
 [features]
 default = []
-use-system-lcms2 = ["blanket-core/use-system-lcms2"]
 
 [lib]
 doctest = false
