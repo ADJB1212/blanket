@@ -407,7 +407,7 @@ def test_exif_edits_copy_and_orientation(mode: str) -> None:
     assert not empty
     assert image.getexif() is empty
     image.close()
-    assert_raises(ValueError, lambda: image.getexif(), match="closed")
+    assert_raises(ValueError, image.getexif, match="closed")
 
 
 @pytest.mark.parametrize("profile", [False, True])
@@ -431,7 +431,7 @@ def test_exif_cache_tracks_metadata_replacement(profile: bool) -> None:
     del image.info[key]
     assert not image.getexif()
     image.close()
-    assert_raises(ValueError, lambda: image.getexif(), match="closed")
+    assert_raises(ValueError, image.getexif, match="closed")
 
 
 def test_jpeg_multisegment_icc_and_size_limits() -> None:

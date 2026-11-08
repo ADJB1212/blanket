@@ -220,4 +220,4 @@ def test_jpeg_decode_stops_at_eof_and_handles_wide_scanlines() -> None:
         assert_raises(OSError, lambda: Image.decode(data[:cut]).load())
     parser = ImageFile.Parser()
     parser.feed(data[:-20])
-    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")
+    assert_raises(OSError, parser.close, match=r"incomplete|truncated")

@@ -52,7 +52,7 @@ def test_getxmp_namespaces(strip: bool) -> None:
 def test_getxmp_rejects_invalid_or_unsafe_xml(raw: bytes) -> None:
     image = Image.new("RGB", (1, 1))
     image.info["xmp"] = raw
-    assert_raises(ParseError, lambda: image.getxmp())
+    assert_raises(ParseError, image.getxmp)
 
 
 def test_getxmp_missing_metadata() -> None:

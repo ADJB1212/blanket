@@ -5,6 +5,7 @@ import struct
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
+from itertools import starmap
 
 import pytest
 from helpers import assert_image_properties, assert_raises, image_buffer, png_chunk
@@ -32,7 +33,7 @@ def png_chunks(width: int, height: int, depth: int, color: int, pixels: list[tup
                     packed[i * depth // 8] |= value << (8 - depth - i * depth % 8)
                 rows.extend(packed)
     header = struct.pack(">IIBBBBB", width, height, depth, color, 0, 0, int(interlaced))
-    return b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) + b"".join(png_chunk(kind, data) for kind, data in extra) + png_chunk(b"IDAT", zlib.compress(rows)) + png_chunk(b"IEND", b"")
+    return b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", header) + b"".join(starmap(png_chunk, extra)) + png_chunk(b"IDAT", zlib.compress(rows)) + png_chunk(b"IEND", b"")
 
 
 def test_png_raster_decode_preserves_separately_parsed_compressed_metadata() -> None:

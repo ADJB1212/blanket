@@ -45,7 +45,7 @@ def test_transfer_cancellation_before_execution(metal, monkeypatch):
             transfer = ImageGpu.from_image_async(Image.new("L", (17, 9), 57))
             assert transfer.cancel()
             assert transfer.cancelled() and transfer.done()
-            assert_raises(CancelledError, lambda: transfer.result())
+            assert_raises(CancelledError, transfer.result)
         finally:
             gate.set()
             blocker.result(timeout=10)
@@ -56,8 +56,8 @@ def test_async_errors_and_closed_images(metal):
     assert_raises(ValueError, lambda: failed.result(timeout=10), match="backend")
     gpu = ImageGpu.from_image(Image.new("L", (3, 5)))
     gpu.close()
-    assert_raises(ValueError, lambda: gpu.to_image_async(), match="closed")
-    assert_raises(ValueError, lambda: gpu.record_event(), match="closed")
+    assert_raises(ValueError, gpu.to_image_async, match="closed")
+    assert_raises(ValueError, gpu.record_event, match="closed")
 
 
 def test_native_stream_ordering_and_event_ownership(metal):

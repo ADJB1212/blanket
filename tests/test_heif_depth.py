@@ -148,12 +148,12 @@ def test_high_depth_validation_and_lifecycle(depth: int) -> None:
     assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), b"\x00", bit_depth=depth))
     assert_raises(ValueError, lambda: Image.frombytes("L", (1, 1), bytes(4), bit_depth=depth))
     assert_raises(ValueError, lambda: Image.fromarray(np.zeros((1, 1), dtype=np.uint16), bit_depth=9), match="bit_depth")
-    assert_raises(ValueError, lambda: image.to_pillow(), match="8-bit")
+    assert_raises(ValueError, image.to_pillow, match="8-bit")
     for format in ("JPEG", "WEBP"):
         assert_raises(ValueError, lambda: image.save(BytesIO(), format), match="high-bit-depth")
     image.close()
     for operation in (image.load, image.copy, image.tobytes):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
 
 
 def test_big_endian_strided_uint16() -> None:
@@ -178,7 +178,7 @@ def test_wide_array_storage_and_validation(mode: str, channels: int, depth: int,
     if depth < 16:
         samples.flat[-1] = 1 << depth
         for construct in (lambda: Image.fromarray(samples, mode, bit_depth=depth), lambda: Image.frombytes(mode, (23, 19), samples.astype("<u2").tobytes(), bit_depth=depth)):
-            assert_raises(ValueError, lambda: construct(), match="range")
+            assert_raises(ValueError, construct, match="range")
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "RGBA"])

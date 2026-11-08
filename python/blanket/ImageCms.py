@@ -6,11 +6,12 @@ support the requested modes. Only the current frame is transformed.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os", "math"}
+__lazy_modules__ = {"os", "math", "pathlib"}
 
 import os
 from enum import IntEnum, IntFlag
 from math import isfinite
+from pathlib import Path
 from typing import Protocol
 
 from . import Image
@@ -105,8 +106,7 @@ class ImageCmsProfile:
                 self._data = profile._data
             elif isinstance(profile, (str, bytes, os.PathLike)):
                 self.filename = os.fspath(profile)
-                with open(profile, "rb") as stream:
-                    self._data = stream.read()
+                self._data = Path(profile).read_bytes()
             else:
                 self._data = profile.read()
             self._description, self._manufacturer, self._model, self._copyright = _cms_profile_info(self._data)

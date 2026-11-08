@@ -104,7 +104,7 @@ def test_lazy_cache_lru_edits_and_close(monkeypatch):
     image.close()
     assert image._lazy_frames.data == b"" and not image._lazy_frames.cache
     for operation in (image.load, image.tell, lambda: image.seek(1)):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
     assert copied.n_frames == 1
     assert copied.getpixel((0, 0)) == (17, 29, 51, 255)
 

@@ -135,10 +135,10 @@ def test_exif_rejects_cycles_and_excessive_tags() -> None:
     nested = {}
     nested[34665] = nested
     exif[34665] = nested
-    assert_raises(ValueError, lambda: exif.tobytes(), match="cyclic")
+    assert_raises(ValueError, exif.tobytes, match="cyclic")
     exif = Image.Exif()
     exif.update(dict.fromkeys(range(65536), 0))
-    assert_raises(ValueError, lambda: exif.tobytes(), match="too many")
+    assert_raises(ValueError, exif.tobytes, match="too many")
 
 
 @pytest.mark.parametrize("options", [{"append_images": 1}, {"default_image": 1}, {"default_image": True}, {"duration": "20"}])

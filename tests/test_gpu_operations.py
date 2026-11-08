@@ -1,5 +1,7 @@
 import math
+import operator
 import struct
+from itertools import starmap
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
@@ -105,10 +107,10 @@ def test_float_arithmetic(runtime, mode):
     count = image.width * image.height * CHANNELS[mode]
     a = struct.unpack(f"{count}f", image.tobytes())
     b = struct.unpack(f"{count}f", other.tobytes())
-    operations = {"difference": lambda x, y: abs(x - y), "multiply": lambda x, y: x * y, "screen": lambda x, y: 1 - (1 - x) * (1 - y), "lighter": max, "darker": min, "add": lambda x, y: x + y, "subtract": lambda x, y: x - y}
+    operations = {"difference": lambda x, y: abs(x - y), "multiply": operator.mul, "screen": lambda x, y: 1 - (1 - x) * (1 - y), "lighter": max, "darker": min, "add": operator.add, "subtract": operator.sub}
     for name, operation in operations.items():
         actual = struct.unpack(f"{count}f", getattr(gpu, name)(rhs).to_image().tobytes())
-        expected = [operation(x, y) for x, y in zip(a, b, strict=True)]
+        expected = list(starmap(operation, zip(a, b, strict=True)))
         assert actual == pytest.approx(expected, rel=1e-5, abs=1e-6)
     inverted = struct.unpack(f"{count}f", gpu.invert().to_image().tobytes())
     assert inverted == pytest.approx([1 - v for v in a], rel=1e-5, abs=1e-6)
@@ -142,7 +144,7 @@ def test_validation_and_lifetimes(runtime):
     result = gpu.transpose(2).crop((-2, -2, 9, 7)).invert().offset(-7)
     gpu.close()
     assert result.to_image().size == (11, 9)
-    assert_raises(ValueError, lambda: gpu.invert(), match="closed")
+    assert_raises(ValueError, gpu.invert, match="closed")
 
 
 def test_torch_pipeline_does_not_stage_pixels(monkeypatch):

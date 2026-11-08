@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import UserList
+
 import pytest
 from helpers import assert_raises, new_pair, patterned_pair
 from PIL import Image as PILImage, ImageStat as PILStat

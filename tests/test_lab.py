@@ -123,7 +123,7 @@ def test_validation() -> None:
         assert_raises(ValueError, lambda: Image.new(mode, (1, 1)).convert("LAB", bit_depth=16))
     assert_raises(ValueError, lambda: Image.frombytes("LAB", (1, 1), bytes(6), bit_depth=16))
     assert_raises(ValueError, lambda: Image.frombytes("LAB", (1, 1), bytes(2)))
-    assert_raises(ValueError, lambda: image.quantize())
+    assert_raises(ValueError, image.quantize)
     assert_raises(OSError, lambda: image.save(BytesIO(), "PNG"))
     assert_raises(ValueError, lambda: image.save(BytesIO(), "TIFF", compressor=LosslessImageCompressor()))
     image.close()

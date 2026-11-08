@@ -111,7 +111,7 @@ def test_resident_reductions(runtime):
         assert actual["sum"] == sum(values)
         assert actual["mean"] == pytest.approx(sum(values) / len(values))
     statistics.close()
-    assert_raises(ValueError, lambda: statistics.to_cpu(), match="closed")
+    assert_raises(ValueError, statistics.to_cpu, match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])

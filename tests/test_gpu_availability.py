@@ -56,7 +56,7 @@ def test_cuda_missing_dependency_reports_install_command(monkeypatch: pytest.Mon
 
 def test_missing_torch_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "torch", None)
-    assert_raises(RuntimeError, lambda: ImageGpu._torch(), match="install 'torch")
+    assert_raises(RuntimeError, ImageGpu._torch, match="install 'torch")
 
 
 def test_cuda_context_failure_reports_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:

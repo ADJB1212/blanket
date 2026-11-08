@@ -33,7 +33,7 @@ def test_float_color_extrema_preserve_band_order_nan_and_signed_zero(mode: str, 
                 assert value == target and math.copysign(1, value) == math.copysign(1, target)
     assert image.tobytes() == raw
     image.close()
-    assert_raises(ValueError, lambda: image.getextrema(), match="closed")
+    assert_raises(ValueError, image.getextrema, match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -164,4 +164,4 @@ def test_mask_validation_and_closed_images() -> None:
         assert_raises(ValueError, lambda: image.entropy(mask))
     image.close()
     for operation in (image.split, image.entropy, lambda: image.reduce(2)):
-        assert_raises(ValueError, lambda: operation())
+        assert_raises(ValueError, operation)

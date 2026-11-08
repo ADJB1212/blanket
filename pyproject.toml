@@ -87,7 +87,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 fixable = ["ALL"]
-extend-select = ["B", "E", "F", "I", "Q", "S", "C4", "FA", "TC", "UP", "ANN", "ARG", "FLY", "ICN", "ISC", "PIE", "RET", "RUF", "SIM", "TCH", "TID", "D417", "FURB", "PERF"]
+extend-select = ["B", "E", "F", "I", "Q", "S", "C4", "FA", "TC", "UP", "ANN", "ARG", "FLY", "ICN", "ISC", "PIE", "RET", "RUF", "SIM", "TCH", "TID", "D417", "FURB", "PERF", "PT014"]
 ignore = ["B023", "C901", "E402", "E501", "F401", "N999", "BLE001", "SIM108", "TRY004"]
 future-annotations = true
 

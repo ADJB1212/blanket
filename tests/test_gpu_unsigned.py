@@ -111,7 +111,7 @@ def test_native_unsigned_transfer_validation_and_closed_images():
     source.close()
     assert_raises(ValueError, lambda: ImageGpu.from_image(source), match="closed")
     unsigned.close()
-    assert_raises(ValueError, lambda: unsigned.to_image(), match="closed")
+    assert_raises(ValueError, unsigned.to_image, match="closed")
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])

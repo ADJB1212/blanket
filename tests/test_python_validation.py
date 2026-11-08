@@ -96,7 +96,7 @@ def test_fill_color_validation(mode, color, expected, error) -> None:
     ],
 )
 def test_operation_validation(operation) -> None:
-    assert_raises((ValueError, TypeError), lambda: operation())
+    assert_raises((ValueError, TypeError), operation)
 
 
 def test_abstract_filter_contract() -> None:
@@ -168,7 +168,7 @@ def test_parser_preview_and_failed_close() -> None:
     assert preview.tobytes() == parser.close().tobytes()
     parser = ImageFile.Parser()
     assert_raises(OSError, lambda: parser.feed(b"not an image"))
-    assert_raises(ValueError, lambda: parser.close(), match="closed")
+    assert_raises(ValueError, parser.close, match="closed")
 
 
 @pytest.mark.parametrize("platform", ["darwin", "win32", "linux"])

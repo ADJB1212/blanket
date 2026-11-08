@@ -257,7 +257,7 @@ def test_validation(runtime):
     assert_raises(ValueError, lambda: gpu.putalpha(ImageGpu.from_image(source("F"), runtime=runtime)))
     assert_raises(ValueError, lambda: gpu.putalpha(ImageGpu.from_image(source("L", (1, 1)), runtime=runtime)))
     gpu.close()
-    assert_raises(ValueError, lambda: gpu.box_blur(), match="closed")
+    assert_raises(ValueError, gpu.box_blur, match="closed")
 
 
 def test_new_operations_remain_resident(monkeypatch):

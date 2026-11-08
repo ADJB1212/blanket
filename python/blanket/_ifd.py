@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"struct"}
+__lazy_modules__ = {"struct", "itertools"}
 
 import struct
 from collections.abc import Mapping, MutableMapping
+from itertools import starmap
 from typing import TYPE_CHECKING
 
 from .ExifTags import IFD
@@ -152,7 +153,7 @@ class Exif(MutableMapping[int, object]):
                 if length == 1:
                     value = IFDRational(*struct.unpack_from(fmt, data, start))
                 else:
-                    value = tuple(IFDRational(n, d) for n, d in struct.iter_unpack(fmt, memoryview(data)[start : start + size]))
+                    value = tuple(starmap(IFDRational, struct.iter_unpack(fmt, memoryview(data)[start : start + size])))
             else:
                 values = struct.unpack_from(f"{endian}{length}{_FORMATS[kind]}", data, start)
                 value = values[0] if length == 1 else values

@@ -274,7 +274,7 @@ def test_pieslice_no_spikes() -> None:
     cxs = [140] * 3 + list(range(140, 19, -20)) + [20] * 5 + list(range(20, 141, 20)) + [140] * 2
     cys = list(range(80, 141, 20)) + [140] * 5 + list(range(140, 19, -20)) + [20] * 5 + list(range(20, 80, 20))
 
-    for cx, cy, angle in zip(cxs, cys, range(0, 360, 15)):  # noqa: B905
+    for cx, cy, angle in zip(cxs, cys, range(0, 360, 15), strict=False):
         draw.pieslice([cx - 100, cy - 100, cx + 100, cy + 100], angle, angle + 1, fill="black")
         draw.point([cx, cy], fill="red")
 

@@ -66,7 +66,7 @@ def test_jxl_stream_retains_wide_samples(mode: str) -> None:
 def test_parser_rejects_truncated_input(cut: int) -> None:
     parser = ImageFile.Parser()
     parser.feed(encoded("RGB")[:cut])
-    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")
+    assert_raises(OSError, parser.close, match=r"incomplete|truncated")
 
 
 def test_parser_rejects_unsupported_and_corrupt_input() -> None:
@@ -140,9 +140,9 @@ def test_jpeg_progressive_previews_are_independent_and_refine() -> None:
 def test_jpeg_truncation_releases_parser(cut: int) -> None:
     parser = ImageFile.Parser()
     parser.feed(jpeg_encoded()[:cut])
-    assert_raises(OSError, lambda: parser.close(), match=r"incomplete|truncated")
+    assert_raises(OSError, parser.close, match=r"incomplete|truncated")
     assert parser.image is None
-    assert_raises(ValueError, lambda: parser.close(), match="closed")
+    assert_raises(ValueError, parser.close, match="closed")
 
 
 def test_jpeg_discards_metadata_and_ignores_trailing_bytes() -> None:
@@ -195,7 +195,7 @@ def test_jpeg_rejects_corrupt_later_scan_and_entropy() -> None:
     broken[2 + length - 1] = 0xFF
     assert_raises(OSError, lambda: parser.feed(broken), match="approximation")
     assert parser.image is None
-    assert_raises(ValueError, lambda: parser.close(), match="closed")
+    assert_raises(ValueError, parser.close, match="closed")
 
     start = data.index(b"\xff\xda")
     end = start + 2 + int.from_bytes(data[start + 2 : start + 4], "big")
@@ -255,7 +255,7 @@ def test_png_writer_validates_rows_and_close(tmp_path: Path) -> None:
     assert_raises(ValueError, lambda: writer.write(b"ab"), match="complete rows")
     assert_raises(ValueError, lambda: writer.write(b"abcdefghi"), match="complete rows")
     writer.write(b"abc")
-    assert_raises(OSError, lambda: writer.close(), match="incomplete")
+    assert_raises(OSError, writer.close, match="incomplete")
     assert_raises(ValueError, lambda: writer.write(b"def"), match="closed")
     with ImageFile.PngWriter(path, "L", (3, 2)) as writer:
         writer.write(b"abcdef")
@@ -333,7 +333,7 @@ def test_png_writer_preserves_late_sink_error(during_write: bool) -> None:
     else:
         writer.write(bytes(8192 * 32))
         output.failed = True
-        assert_raises(RuntimeError, lambda: writer.close(), match="late sink failure")
+        assert_raises(RuntimeError, writer.close, match="late sink failure")
 
 
 def test_png_writer_invalid_headers_preserve_existing_file(tmp_path: Path) -> None:
@@ -353,7 +353,7 @@ def test_png_callback_cannot_reenter_native_writer() -> None:
         def write(self, data: bytes) -> int:
             if self.writer is not None:
                 self.attempts += 1
-                assert_raises(RuntimeError, lambda: self.writer.abort(), match="borrowed")
+                assert_raises(RuntimeError, self.writer.abort, match="borrowed")
             return super().write(data)
 
     output = ReentrantSink()

@@ -58,7 +58,7 @@ def test_context_manager() -> None:
         assert entered is source
     assert source.tobytes() == pixels("RGBA")
     source.close()
-    assert_raises(ValueError, lambda: source.tobytes(), match="closed image")
+    assert_raises(ValueError, source.tobytes, match="closed image")
 
 
 def test_crop_metadata_is_independent() -> None:

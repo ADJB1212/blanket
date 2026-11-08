@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import operator
 import random
 from io import BytesIO
 
@@ -172,7 +173,7 @@ def test_jpeg_encodes_like_pillow(mode: str, size: tuple[int, int], quality: int
     if size[0] % 16 == 0 and size[1] % 16 == 0:
         assert actual.tobytes() == expected.tobytes()
     else:
-        assert max(PILChops.difference(actual, expected).getextrema(), key=lambda band: band[1])[1] <= 8
+        assert max(PILChops.difference(actual, expected).getextrema(), key=operator.itemgetter(1))[1] <= 8
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "CMYK", "F"])
@@ -209,7 +210,7 @@ def test_save_and_validation(mode: str) -> None:
     assert_raises(OSError, lambda: image.save(BytesIO(), "PNG"), match=f"cannot write mode {mode}")
     assert_raises(ValueError, lambda: image.convert(mode, bit_depth=16))
     assert_raises(ValueError, lambda: Image.frombytes(mode, (3, 2), bytes(6 * PIL.getmodebands(mode) * 2), bit_depth=16))
-    assert_raises(ValueError, lambda: image.quantize())
+    assert_raises(ValueError, image.quantize)
     assert image.convert("P").mode == "P"
     stream = image_buffer(image, "JPEG")
     assert PIL.open(BytesIO(stream.getvalue())).size == image.size

@@ -139,7 +139,7 @@ def test_native_exchange_validation() -> None:
     for layout in ("HW", "invalid"):
         assert_raises(ValueError, lambda: native.to_torch(layout=layout), match="layout")
     native.close()
-    assert_raises(ValueError, lambda: native.to_torch(), match="closed")
+    assert_raises(ValueError, native.to_torch, match="closed")
     assert_raises(ValueError, lambda: ImageGpu.from_torch(torch.zeros((7, 3), device="mps"), layout="HW", runtime="invalid"), match="runtime")
     for tensor in (torch.zeros((7, 3)), torch.zeros((7, 3), device="mps", requires_grad=True), torch.zeros((7, 3), dtype=torch.int32, device="mps")):
         assert_raises(ValueError, lambda: ImageGpu.from_torch(tensor, layout="HW", runtime="native"))

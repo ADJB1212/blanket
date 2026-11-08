@@ -44,7 +44,7 @@ def test_validation_and_empty_images() -> None:
     assert Image.new("RGBA", (0, 0)).getbbox() is None
     image.close()
     for operation in (image.getbbox, image.histogram, image.getextrema):
-        assert_raises(ValueError, lambda: operation())
+        assert_raises(ValueError, operation)
 
 
 def test_palette_and_independent_channel() -> None:
@@ -64,7 +64,7 @@ def test_high_depth_bbox(depth: int) -> None:
     image = Image.frombytes("RGBA", (2, 1), b"\x00" * 8 + b"\x00\x01" * 4, bit_depth=depth)
     assert image.getbbox() == (1, 0, 2, 1)
     assert image.getchannel("A").getpixel((1, 0)) == 256
-    assert_raises(ValueError, lambda: image.histogram(), match="8-bit")
+    assert_raises(ValueError, image.histogram, match="8-bit")
 
 
 def test_getbands_tracks_in_place_mode_changes() -> None:
@@ -145,7 +145,7 @@ def test_eager_verify_draft_and_core_shim() -> None:
     assert image.getim() is image.im
     assert image.size == (3, 2)
     image.close()
-    assert_raises(ValueError, lambda: image.verify(), match="closed")
+    assert_raises(ValueError, image.verify, match="closed")
 
 
 @pytest.mark.parametrize(

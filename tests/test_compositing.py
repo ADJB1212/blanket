@@ -134,11 +134,11 @@ def test_validation_and_closed_images():
         lambda: Image.alpha_composite(image, Image.new("RGBA", (1, 1))),
         lambda: image.alpha_composite(image, source=(-1, 0)),
     ]:
-        assert_raises((ValueError, TypeError), lambda: operation())
+        assert_raises((ValueError, TypeError), operation)
         assert image.tobytes() == before
     image.close()
     for operation in [lambda: image.paste(1, (0, 0, 3, 2)), lambda: image.putalpha(1), lambda: Image.alpha_composite(image, image)]:
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
 
 
 def test_high_depth_compositing():

@@ -220,7 +220,7 @@ def test_cuda_allocation_error_has_device_context(cuda, monkeypatch):
         raise RuntimeError("out of device memory")
 
     monkeypatch.setattr(cuda, "empty", fail_allocation)
-    assert_raises(RuntimeError, lambda: image.invert(), match=r"CUDA dispatch failed on device 0.*out of device memory")
+    assert_raises(RuntimeError, image.invert, match=r"CUDA dispatch failed on device 0.*out of device memory")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])

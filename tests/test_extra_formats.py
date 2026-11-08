@@ -89,15 +89,13 @@ def make_dng(cfa: bool = False) -> bytes:
     longs(278, 16)
     longs(279, 16 * 16 * (1 if cfa else 3) * 2)
     shorts(284, 1)
-    entries.append((50706, 1, 4, bytes([1, 4, 0, 0])))
-    entries.append((50707, 1, 4, bytes([1, 1, 0, 0])))
+    entries.extend(((50706, 1, 4, bytes([1, 4, 0, 0])), (50707, 1, 4, bytes([1, 1, 0, 0]))))
     longs(50717, *([65535] if cfa else [65535, 65535, 65535]))
     if cfa:
         shorts(33421, 2, 2)
         entries.append((33422, 1, 4, bytes([0, 1, 1, 2])))
     matrix = [1, 0, 0, 0, 1, 0, 0, 0, 1]
-    entries.append((50721, 10, 9, b"".join(struct.pack("<ii", v, 1) for v in matrix)))
-    entries.append((50728, 5, 3, struct.pack("<IIIIII", 1, 1, 1, 1, 1, 1)))
+    entries.extend(((50721, 10, 9, b"".join(struct.pack("<ii", v, 1) for v in matrix)), (50728, 5, 3, struct.pack("<IIIIII", 1, 1, 1, 1, 1, 1))))
     shorts(50778, 21)
     entries.sort()
     payload_offset = 8 + 2 + len(entries) * 12 + 4

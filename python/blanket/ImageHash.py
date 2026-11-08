@@ -8,8 +8,9 @@ fingerprints, not cryptographic hashes or guarantees of identical pixels.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"math"}
+__lazy_modules__ = {"math", "string"}
 
+import string
 from dataclasses import dataclass
 from math import isqrt
 
@@ -74,7 +75,7 @@ def hex_to_hash(hexstr: str, hash_size: int | None = None) -> ImageHash:
     """
     if not isinstance(hexstr, str):
         raise TypeError("hexstr must be a string")
-    if not hexstr or any(c not in "0123456789abcdefABCDEF" for c in hexstr):
+    if not hexstr or any(c not in string.hexdigits for c in hexstr):
         raise ValueError("expected hexadecimal digits")
     size = _size(isqrt(len(hexstr) * 4) if hash_size is None else hash_size)
     if len(hexstr) != (size**2 + 3) // 4:

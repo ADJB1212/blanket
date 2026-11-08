@@ -372,7 +372,7 @@ def test_empty_and_closed_images(mode, depth):
     assert statistics.mean == statistics.var == statistics.rms == [0.0] * channels
     empty.close()
     for operation in (lambda: empty.filter(ImageFilter.MedianFilter()), lambda: ImageStat.Stat(empty), lambda: ImageEnhance.Brightness(empty), lambda: Image.blend(empty, empty, 0)):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
 
 
 def test_mismatches_fail_before_mutating_destination():
@@ -387,7 +387,7 @@ def test_mismatches_fail_before_mutating_destination():
         lambda: Image.composite(image, image, Image.new("L", (1, 1))),
         lambda: Image.merge("RGBA", [image.getchannel(0)] * 3 + [make_image("L", 12)]),
     ):
-        assert_raises(ValueError, lambda: operation())
+        assert_raises(ValueError, operation)
         assert image.tobytes() == original
 
 

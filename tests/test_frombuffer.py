@@ -155,7 +155,7 @@ def test_frombuffer_keeps_export_alive_and_releases_on_close() -> None:
     image.close()
     gc.collect()
     assert reference() is None
-    assert_raises(ValueError, lambda: image.tobytes(), match="closed")
+    assert_raises(ValueError, image.tobytes, match="closed")
 
 
 @pytest.mark.parametrize("length", [6, 7])

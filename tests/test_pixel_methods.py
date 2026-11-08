@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, UserList
 from io import BytesIO
 from typing import SupportsIndex, overload
 
@@ -76,7 +76,7 @@ def test_pixel_access_lifetime_and_closed_image():
     pixels = image.load()
     image.close()
     for operation in (image.load, lambda: pixels[0, 0], lambda: pixels.__setitem__((0, 0), 7)):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
 
 
 @pytest.mark.parametrize("lazy", [False, True])
@@ -120,10 +120,10 @@ def test_pixel_snapshots_are_independent_and_immutable(mode: str, size: tuple[in
     actual.close()
     assert snapshot == expected.get_flattened_data()
     assert values == list(snapshot)
-    assert_raises(ValueError, lambda: actual.get_flattened_data(), match="closed")
+    assert_raises(ValueError, actual.get_flattened_data, match="closed")
 
 
-class ListValues(list[int]):
+class ListValues(UserList[int]):
     @overload
     def __getitem__(self, item: SupportsIndex) -> int: ...
 
@@ -351,4 +351,4 @@ def test_errors_and_empty() -> None:
     assert empty.getcolors() == []
     image.close()
     for method in (image.getdata, image.getcolors, image.getextrema):
-        assert_raises(ValueError, lambda: method())
+        assert_raises(ValueError, method)

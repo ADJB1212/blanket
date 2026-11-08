@@ -123,8 +123,8 @@ def test_shared_metal_handles_reject_closed_images() -> None:
     require_metal()
     gpu = ImageGpu.from_image(Image.new("RGBA", (3, 5)), runtime="native")
     gpu.close()
-    assert_raises(ValueError, lambda: gpu.to_memoryview(), match="closed")
-    assert_raises(ValueError, lambda: gpu.share(), match="closed")
+    assert_raises(ValueError, gpu.to_memoryview, match="closed")
+    assert_raises(ValueError, gpu.share, match="closed")
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
@@ -274,7 +274,7 @@ def test_upload_roundtrip_and_lifetime(mode):
     resident.close()
     assert result.to_image().tobytes() == Image.new(mode, (7, 13)).tobytes()
     assert result.to_image().info["description"] == "gpu"
-    assert_raises(ValueError, lambda: resident.to_image(), match="closed")
+    assert_raises(ValueError, resident.to_image, match="closed")
 
 
 @pytest.mark.parametrize("method", range(6))

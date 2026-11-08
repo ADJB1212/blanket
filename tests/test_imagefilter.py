@@ -353,7 +353,7 @@ def test_custom_filters_and_errors() -> None:
         assert image.filter(custom).tobytes() == image.tobytes()
     for invalid in (None, 1, "blur", object()):
         assert_raises(TypeError, lambda: image.filter(invalid), match=re.escape("filter argument should be ImageFilter.Filter instance or class"))
-    assert_raises(TypeError, lambda: ImageFilter.Filter())
+    assert_raises(TypeError, ImageFilter.Filter)
     image.close()
     assert_raises(ValueError, lambda: image.filter(ImageFilter.BLUR), match="closed")
 

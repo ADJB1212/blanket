@@ -70,7 +70,7 @@ def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     assert_raises(TypeError, lambda: image.seek(1.5))
     image.close()
     for operation in (lambda: image.seek(0), image.tell, image.load):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")
     assert copied.convert("RGBA").getpixel((0, 0)) == (50, 60, 70, 255)
 
 

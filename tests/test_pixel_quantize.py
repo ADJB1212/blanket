@@ -300,4 +300,4 @@ def test_closed_pixel_quantize_reduce() -> None:
     image = Image.frombytes("L", (1, 1), b"\x00")
     image.close()
     for operation in (lambda: image.getpixel((0, 0)), image.quantize, lambda: image.reduce(2)):
-        assert_raises(ValueError, lambda: operation(), match="closed")
+        assert_raises(ValueError, operation, match="closed")

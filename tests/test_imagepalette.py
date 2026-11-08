@@ -137,7 +137,7 @@ def test_raw_palette(rawmode: str) -> None:
         assert actual.tobytes() == bytes(data)
         return
     for operation in (actual.tobytes, actual.tostring, lambda: actual.getcolor((1, 2, 3)), lambda: actual.save(StringIO())):
-        assert_raises(ValueError, lambda: operation(), match="palette contains raw palette data")
+        assert_raises(ValueError, operation, match="palette contains raw palette data")
 
 
 @pytest.mark.parametrize("factory", ["wedge", "negative", "random"])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import operator
 import struct
 
 import pytest
@@ -101,7 +102,7 @@ def test_lambda_helpers_and_scalar_results() -> None:
     same(ImageMath.lambda_eval(expression, a=a), PILMath.lambda_eval(expression, a=pa))
     assert ImageMath.eval("(2 + n, 3.5)", n=4) == (6, 3.5)
     assert ImageMath.lambda_eval(lambda args: args["n"] + 1, n=4) == 5
-    assert ImageMath.lambda_eval(lambda args: args["a"], a=a) is a
+    assert ImageMath.lambda_eval(operator.itemgetter("a"), a=a) is a
     assert ImageMath.eval("not a", a=Image.new("I", (2, 2), 0)) is True
 
 

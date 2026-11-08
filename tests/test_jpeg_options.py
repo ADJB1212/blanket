@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections import UserList
 from io import BytesIO
 from typing import TYPE_CHECKING, Any, cast
 
@@ -499,7 +500,7 @@ class TestFileJpeg:
             assert_raises(ValueError, lambda: self.roundtrip(im, qtables=[[1, 2, 3, 4]]))
 
     def test_qtables_incorrect_length(self) -> None:
-        class IncorrectLength(list[list[int]]):
+        class IncorrectLength(UserList[list[int]]):
             def __len__(self) -> int:
                 return 4
 
@@ -532,7 +533,7 @@ class TestFileJpeg:
             # force 8x8 pixel MCUs
             subsampling=0,
         )
-        assert len(re.findall(b"\xff[\xd0-\xd7]", out.getvalue())) == markers
+        assert len(re.findall(rb"\xff[\xd0-\xd7]", out.getvalue())) == markers
 
     def test_MAXBLOCK_scaling(self, tmp_path: Path) -> None:
         im = self.gen_random_image((512, 512))
