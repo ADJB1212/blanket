@@ -1,0 +1,18 @@
+[package]
+name = "blanket-resample-kernels"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-kernels.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

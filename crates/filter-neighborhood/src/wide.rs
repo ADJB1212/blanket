@@ -69,10 +69,9 @@ fn convolve(source: &[i32], values: &mut [i32], size: usize, dimensions: (usize,
                     for ky in 0..size {
                         let start = i + radius * width - ky * width - radius;
                         let at = |kx| Simd::<i32, 16>::from_slice(&source[start + kx..]).cast::<f32>();
-                        let mut row =
-                            super::filter::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
+                        let mut row = super::kernel_add_simd(at(0), Simd::splat(weights[ky * size]), at(1) * Simd::splat(weights[ky * size + 1]));
                         for kx in 2..size {
-                            row = super::filter::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
+                            row = super::kernel_add_simd(at(kx), Simd::splat(weights[ky * size + kx]), row);
                         }
                         sum += row;
                     }
@@ -83,10 +82,9 @@ fn convolve(source: &[i32], values: &mut [i32], size: usize, dimensions: (usize,
                     let mut sum = offset + 0.5;
                     for ky in 0..size {
                         let start = i + radius * width - ky * width - radius;
-                        let mut row =
-                            super::filter::kernel_add(source[start] as f32, weights[ky * size], source[start + 1] as f32 * weights[ky * size + 1]);
+                        let mut row = super::kernel_add(source[start] as f32, weights[ky * size], source[start + 1] as f32 * weights[ky * size + 1]);
                         for kx in 2..size {
-                            row = super::filter::kernel_add(source[start + kx] as f32, weights[ky * size + kx], row);
+                            row = super::kernel_add(source[start + kx] as f32, weights[ky * size + kx], row);
                         }
                         sum += row;
                     }
@@ -139,14 +137,14 @@ fn integer_rank(source: Cow<'_, [i32]>, width: usize, height: usize, size: usize
         let mut queue = VecDeque::new();
         for (i, row) in rows.chunks_exact_mut(width).enumerate() {
             let input = &source[(band * 16 + i) * width..][..width];
-            super::filter::extrema_line(input, row, 1, 0, radius, maximum, &mut queue);
+            super::extrema_line(input, row, 1, 0, radius, maximum, &mut queue);
         }
     });
     let band_rows = 64.max(radius.min(height));
     blanket_core::parallel::chunks_mut_above(&mut source, width * band_rows, 256 * 1024, |band, rows| {
         let mut queue = VecDeque::new();
         for column in 0..width {
-            super::filter::extrema_line(&horizontal[column..], &mut rows[column..], width, band * band_rows, radius, maximum, &mut queue);
+            super::extrema_line(&horizontal[column..], &mut rows[column..], width, band * band_rows, radius, maximum, &mut queue);
         }
     });
     Ok(source)

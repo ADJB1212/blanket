@@ -2,9 +2,9 @@ use std::simd::cmp::{SimdOrd, SimdPartialEq};
 use std::simd::num::SimdUint;
 use std::simd::{Select, Simd};
 
-use crate::pixels::{load, store};
+use blanket_kernels::pixels::{load, store};
 
-pub(crate) fn convert<const C: usize>(source: &[u8], output: &mut [u8], premultiply: bool) {
+pub fn convert<const C: usize>(source: &[u8], output: &mut [u8], premultiply: bool) {
     let end = source.len() / (16 * C) * (16 * C);
     for offset in (0..end).step_by(16 * C) {
         let mut values = load::<C>(&source[offset..]);

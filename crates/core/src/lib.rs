@@ -1,5 +1,5 @@
 #![feature(default_field_values, portable_simd)]
-mod alpha;
+
 pub mod cache;
 pub mod color;
 pub mod float;
@@ -8,7 +8,8 @@ pub mod pixels;
 pub mod raster;
 mod raw;
 pub mod samples;
-pub mod simd;
+use blanket_convert_kernels::alpha;
+pub use blanket_convert_kernels::simd;
 
 pyo3::create_exception!(_blanket, UnidentifiedImageError, pyo3::exceptions::PyOSError);
 

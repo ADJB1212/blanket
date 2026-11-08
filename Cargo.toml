@@ -7,6 +7,9 @@ members = [
     "crates/bench-support",
     "crates/core",
     "crates/kernels",
+    "crates/modes",
+    "crates/convert-kernels",
+    "crates/resample-kernels",
     "crates/resample",
     "crates/font",
     "crates/cms",
@@ -33,6 +36,8 @@ members = [
     "crates/composite",
     "crates/enhance",
     "crates/filter",
+    "crates/filter-blur",
+    "crates/filter-neighborhood",
     "crates/palette",
     "crates/stat",
     "crates/draw",
@@ -54,6 +59,9 @@ blanket-gpu-metal = { path = "crates/gpu-metal" }
 blanket-gpu-cuda = { path = "crates/gpu-cuda" }
 blanket-gpu-python = { path = "crates/gpu-python" }
 blanket-kernels = { path = "crates/kernels" }
+blanket-modes = { path = "crates/modes" }
+blanket-convert-kernels = { path = "crates/convert-kernels" }
+blanket-resample-kernels = { path = "crates/resample-kernels" }
 blanket-resample = { path = "crates/resample" }
 blanket-font = { path = "crates/font" }
 blanket-bench-support = { path = "crates/bench-support" }
@@ -83,6 +91,8 @@ blanket-compressor = { path = "crates/compressor" }
 blanket-draw = { path = "crates/draw" }
 blanket-enhance = { path = "crates/enhance" }
 blanket-filter = { path = "crates/filter" }
+blanket-filter-blur = { path = "crates/filter-blur" }
+blanket-filter-neighborhood = { path = "crates/filter-neighborhood" }
 blanket-ops = { path = "crates/ops" }
 blanket-palette = { path = "crates/palette" }
 blanket-stat = { path = "crates/stat" }

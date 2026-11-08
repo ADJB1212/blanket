@@ -2,12 +2,12 @@ use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
-use crate::color::{luminance, luminance_simd};
-use crate::parallel::{CHUNK_PIXELS, chunks_mut};
-use crate::pixels::{Bytes, load, load_sample_bytes, load_u16, store, store_sample_bytes};
-use crate::raster::PixelMode;
+use blanket_kernels::color::{luminance, luminance_simd};
+use blanket_kernels::parallel::{CHUNK_PIXELS, chunks_mut};
+use blanket_kernels::pixels::{Bytes, load, load_sample_bytes, load_u16, store, store_sample_bytes};
+use blanket_modes::PixelMode;
 
-pub(crate) fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
+pub fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
     let maximum = ((1_u32 << bit_depth) - 1) as u16;
     let (blocks, tail) = source.as_chunks::<32>();
     blocks.iter().all(|block| load_u16::<false>(block).simd_le(Simd::splat(maximum)).all())
@@ -16,7 +16,7 @@ pub(crate) fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
 
 pub fn samples_to_be16(source: &[u8], output: &mut [u8], depth: u8) {
     fn convert<const DEPTH: u16>(source: &[u8], output: &mut [u8]) {
-        crate::parallel::chunks_mut_above(output, 128 * 1024, 4 * 1024 * 1024, |chunk, dst| {
+        blanket_kernels::parallel::chunks_mut_above(output, 128 * 1024, 4 * 1024 * 1024, |chunk, dst| {
             let src = &source[chunk * 128 * 1024..][..dst.len()];
             let (src_groups, src_tail) = src.as_chunks::<32>();
             let (dst_groups, dst_tail) = dst.as_chunks_mut::<32>();
@@ -49,7 +49,7 @@ pub fn samples_to_be16(source: &[u8], output: &mut [u8], depth: u8) {
 }
 
 pub fn samples_from_be16(samples: &mut [u8], depth: u8) {
-    crate::parallel::chunks_mut_above(samples, 128 * 1024, 4 * 1024 * 1024, |_, bytes| {
+    blanket_kernels::parallel::chunks_mut_above(samples, 128 * 1024, 4 * 1024 * 1024, |_, bytes| {
         let (groups, tail) = bytes.as_chunks_mut::<32>();
         for group in groups {
             let values = load_u16::<true>(group) >> u16::from(16 - depth);
@@ -421,7 +421,10 @@ fn narrow_integer_l<const N: usize>(values: Simd<i32, N>) -> Simd<u8, N> {
 fn u16_to_l<const BIG_ENDIAN: bool>(source: &[u8], output: &mut [u8]) {
     let end = output.len() / 16 * 16;
     for i in (0..end).step_by(16) {
-        crate::pixels::load_u16::<BIG_ENDIAN>(&source[i * 2..]).simd_min(Simd::splat(255)).cast::<u8>().copy_to_slice(&mut output[i..i + 16]);
+        blanket_kernels::pixels::load_u16::<BIG_ENDIAN>(&source[i * 2..])
+            .simd_min(Simd::splat(255))
+            .cast::<u8>()
+            .copy_to_slice(&mut output[i..i + 16]);
     }
     for (pixel, bytes) in output[end..].iter_mut().zip(source[end * 2..].as_chunks::<2>().0) {
         *pixel = if BIG_ENDIAN { u16::from_be_bytes(*bytes) } else { u16::from_le_bytes(*bytes) }.min(255) as u8;
@@ -444,7 +447,7 @@ pub fn integer_to_l(source: &[u8], mode: PixelMode) -> Vec<u8> {
     }
     let stride = mode.sample_bytes();
     let mut output = vec![0; source.len() / stride];
-    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 << 20, |chunk, dst| {
+    blanket_kernels::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS, 2 << 20, |chunk, dst| {
         let src = &source[chunk * CHUNK_PIXELS * stride..(chunk * CHUNK_PIXELS + dst.len()) * stride];
         match mode {
             PixelMode::I => {
@@ -481,7 +484,7 @@ fn integer_to_color_pixels<const C: usize>(source: &[u8], mode: PixelMode) -> Ve
         output.extend(blocks.iter().map(|block| {
             let values = Simd::<i32, 16>::from_array(std::array::from_fn(|i| i32::from_le_bytes(block[i * 4..i * 4 + 4].try_into().unwrap())));
             let mut pixels = [0; 48];
-            crate::pixels::store_gray_rgb(&mut pixels, narrow_integer_l(values));
+            blanket_kernels::pixels::store_gray_rgb(&mut pixels, narrow_integer_l(values));
             pixels
         }));
         let mut output = output.into_flattened();
@@ -497,7 +500,7 @@ fn integer_to_color_pixels<const C: usize>(source: &[u8], mode: PixelMode) -> Ve
     }
     let mut output = vec![0; source.len() / stride * C];
     const CHUNK: usize = 64 << 10;
-    crate::parallel::chunks_mut_above(&mut output, CHUNK * C, 256 << 10, |chunk, dst| {
+    blanket_kernels::parallel::chunks_mut_above(&mut output, CHUNK * C, 256 << 10, |chunk, dst| {
         let start = chunk * CHUNK * stride;
         let src = &source[start..start + dst.len() / C * stride];
         integer_to_color_chunk::<C>(src, dst, mode);
@@ -533,7 +536,7 @@ fn integer_to_color_samples<const C: usize, const S: usize>(src: &[[u8; S]], dst
         let input: &[[u8; S]; 16] = src[i..i + 16].try_into().unwrap();
         let values = Simd::<i32, 16>::from_array(input.map(&sample)).simd_clamp(Simd::splat(0), Simd::splat(255)).cast::<u8>();
         if C == 3 {
-            crate::pixels::store_gray_rgb(&mut dst[i * C..], values);
+            blanket_kernels::pixels::store_gray_rgb(&mut dst[i * C..], values);
         } else {
             store::<C>(&mut dst[i * C..], std::array::from_fn(|c| if c == 3 { Bytes::splat(255) } else { values }));
         }
@@ -623,7 +626,7 @@ pub fn convert_bilevel(source: &[u8], mode: PixelMode) -> Vec<u8> {
             match mode {
                 PixelMode::L => gray.copy_to_slice(&mut pixels),
                 PixelMode::F => gray.cast::<f32>().to_le_bytes().copy_to_slice(&mut pixels),
-                PixelMode::Rgb => crate::pixels::store_gray_rgb(&mut pixels, gray),
+                PixelMode::Rgb => blanket_kernels::pixels::store_gray_rgb(&mut pixels, gray),
                 PixelMode::Rgba => store(&mut pixels, [gray, gray, gray, Bytes::splat(255)]),
                 _ => unreachable!(),
             }
@@ -677,7 +680,7 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
     }
 }
 
-pub(crate) fn opaque_rgba(source: &[u8]) -> Vec<u8> {
+pub fn opaque_rgba(source: &[u8]) -> Vec<u8> {
     map_blocks::<4, 4>(source, 4 << 20, |p| [p[0], p[1], p[2], Bytes::splat(255)], |p| [p[0], p[1], p[2], 255])
 }
 
@@ -686,7 +689,7 @@ fn map_blocks<const S: usize, const D: usize>(
 ) -> Vec<u8> {
     let mut output = vec![0; source.len() / S * D];
     let chunk_pixels = 64 << 10;
-    crate::parallel::chunks_mut_above(&mut output, chunk_pixels * D, parallel_bytes, |i, dst| {
+    blanket_kernels::parallel::chunks_mut_above(&mut output, chunk_pixels * D, parallel_bytes, |i, dst| {
         let src = &source[i * chunk_pixels * S..(i * chunk_pixels + dst.len() / D) * S];
         let end = src.len() / S / 16 * 16;
         for i in (0..end).step_by(16) {
@@ -748,7 +751,7 @@ pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8>
         }
         let mut output = vec![0; source.len() / S];
         const CHUNK: usize = 64 << 10;
-        crate::parallel::chunks_mut_above(&mut output, CHUNK, 4 << 20, |i, dst| {
+        blanket_kernels::parallel::chunks_mut_above(&mut output, CHUNK, 4 << 20, |i, dst| {
             let src = &source[i * CHUNK * S..(i * CHUNK + dst.len()) * S];
             let end = dst.len() / 16 * 16;
             for offset in (0..end).step_by(16) {
@@ -795,7 +798,7 @@ pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     }
     let channels = to.channels();
     let mut output = vec![0; source.len() / 2 * channels];
-    crate::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 << 20, |chunk, dst| {
+    blanket_kernels::parallel::chunks_mut_above(&mut output, CHUNK_PIXELS * channels, 2 << 20, |chunk, dst| {
         let start = chunk * CHUNK_PIXELS * 2;
         let src = &source[start..start + dst.len() / channels * 2];
         let offset = src.len() / 2 / 16 * 16;
@@ -860,7 +863,7 @@ fn gray_to_rgb<const S: usize>(source: &[u8]) -> Vec<u8> {
     output.extend(blocks.iter().map(|block| {
         let gray = load::<S>(block.as_flattened())[0];
         let mut pixels = [0; 48];
-        crate::pixels::store_gray_rgb(&mut pixels, gray);
+        blanket_kernels::pixels::store_gray_rgb(&mut pixels, gray);
         pixels
     }));
     let mut output = output.into_flattened();
@@ -928,9 +931,8 @@ pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) ->
 }
 
 pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
+    use blanket_kernels::parallel::should_parallel;
     use rayon::prelude::*;
-
-    use crate::parallel::should_parallel;
 
     const CHUNK_PIXELS: usize = 64 << 10;
     const MEMORY_PARALLEL_BYTES: usize = 4 << 20;
@@ -967,11 +969,11 @@ mod tests {
             for len in [0, 1, 15, 16, 17, 31, 32, 33, 257] {
                 let input = &source[offset..offset + len];
                 let gray: Vec<u8> = input.iter().map(|&v| if v == 0 { 0 } else { 255 }).collect();
-                assert_eq!(super::convert_bilevel(input, crate::raster::PixelMode::L), gray);
-                for mode in [crate::raster::PixelMode::Rgb, crate::raster::PixelMode::Rgba] {
-                    assert_eq!(super::convert_bilevel(input, mode), super::convert(&gray, crate::raster::PixelMode::L, mode));
+                assert_eq!(super::convert_bilevel(input, blanket_modes::PixelMode::L), gray);
+                for mode in [blanket_modes::PixelMode::Rgb, blanket_modes::PixelMode::Rgba] {
+                    assert_eq!(super::convert_bilevel(input, mode), super::convert(&gray, blanket_modes::PixelMode::L, mode));
                 }
-                assert_eq!(super::convert_bilevel(input, crate::raster::PixelMode::F), super::gray_to_float(&gray));
+                assert_eq!(super::convert_bilevel(input, blanket_modes::PixelMode::F), super::gray_to_float(&gray));
             }
         }
     }
