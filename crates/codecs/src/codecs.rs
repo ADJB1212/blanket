@@ -1,7 +1,7 @@
 use blanket_codec_avif::{decode_avif, encode_avif};
 use blanket_codec_bmp_ico::{decode_bmp, decode_ico, encode_bmp, encode_ico};
 pub use blanket_codec_common::SaveOptions;
-use blanket_codec_common::{CodecErrorKind, decode_error};
+use blanket_codec_common::{CodecErrorKind, DecodeError, decode_error};
 use blanket_codec_extended::{decode_dds, decode_eps, decode_pnm, decode_qoi, decode_tga, encode_extended, encode_wide_pnm, is_tga};
 use blanket_codec_gif::{decode_gif, encode_gif};
 pub use blanket_codec_heif::{PreparedHeif, encode_heif_with_preset};
@@ -196,7 +196,7 @@ pub fn open_bytes(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> 
     if format == ImageFormat::Svg {
         return py.detach(|| blanket_codec_svg::decode(data)).map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"));
     }
-    py.detach(|| decode(data, format)).map_err(|message| decode_error(message, Some(format.as_str()), "decode"))
+    py.detach(|| decode(data, format)).map_err(|error| error.into_pyerr(Some(format.as_str())))
 }
 
 fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageFormat> {
@@ -308,7 +308,7 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
                 ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
                 ImageFormat::Png => blanket_codec_png::decode_sequence(data),
                 ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
-                _ => decode(data, format).map(Sequence::single),
+                _ => decode(data, format).map(Sequence::single).map_err(|error| error.to_string()),
             },
         })
         .map_err(|message| decode_error(message, Some(format.as_str()), "decode"))?;
@@ -432,8 +432,15 @@ pub fn _encode_sequence(
     Ok(PyBytes::new(py, &encoded).unbind())
 }
 
-pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
+pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {
     match format {
+        ImageFormat::Jxl => return decode_jxl(data),
+        ImageFormat::Png => return decode_png(data),
+        ImageFormat::Jpeg => return decode_jpeg(data),
+        ImageFormat::Heif => return decode_heif(data),
+        _ => {}
+    }
+    let result = match format {
         ImageFormat::Pcx
         | ImageFormat::Sgi
         | ImageFormat::Xbm
@@ -458,11 +465,12 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, String> {
         ImageFormat::Avif => decode_avif(data),
         ImageFormat::Tiff => decode_tiff(data),
         ImageFormat::Webp => decode_webp(data),
-        ImageFormat::Heif => decode_heif(data),
-        ImageFormat::Png => decode_png(data),
-        ImageFormat::Jpeg => decode_jpeg(data),
-        ImageFormat::Jxl => decode_jxl(data),
-    }
+        ImageFormat::Heif => unreachable!(),
+        ImageFormat::Png => unreachable!(),
+        ImageFormat::Jpeg => unreachable!(),
+        ImageFormat::Jxl => unreachable!(),
+    };
+    result.map_err(DecodeError::from)
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -587,7 +595,13 @@ mod tests {
             decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'><rect width='1' height='1' fill='red'/></svg>", format).unwrap();
         assert_eq!(image.format.as_deref(), Some("SVG"));
         assert_eq!(image.pixel_data().unwrap(), &[255, 0, 0, 255]);
-        assert!(decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='4097' height='1'/>", format).err().unwrap().contains("limit exceeded"));
+        assert!(
+            decode(b"<svg xmlns='http://www.w3.org/2000/svg' width='4097' height='1'/>", format)
+                .err()
+                .unwrap()
+                .to_string()
+                .contains("limit exceeded")
+        );
     }
 
     #[test]

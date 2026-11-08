@@ -111,9 +111,9 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, String>
         if reader.info().color_type == png::ColorType::Indexed
             || reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One
         {
-            return super::decode_png(data).map(Sequence::single);
+            return super::decode_png(data).map(Sequence::single).map_err(String::from);
         }
-        return super::decode_png_reader(reader, false).map(Sequence::single);
+        return super::decode_png_reader(reader, false).map(Sequence::single).map_err(String::from);
     };
     if reader.info().color_type == png::ColorType::Indexed {
         let reader = super::decoder(data).read_info().map_err(|error| error.to_string())?;
@@ -298,6 +298,9 @@ fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
 }
 
 pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
+    if sequence.frames.is_empty() {
+        return Err(PyValueError::new_err("empty sequence"));
+    }
     let size = (
         sequence.frames.iter().map(|frame| frame.image.borrow().width).max().unwrap(),
         sequence.frames.iter().map(|frame| frame.image.borrow().height).max().unwrap(),
@@ -308,7 +311,22 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
 pub fn encode_sequence_regions(
     sequence: &Sequence<impl Borrow<Image>>, options: SaveOptions, size: (u32, u32), offsets: &[(u32, u32)],
 ) -> PyResult<Vec<u8>> {
-    let first = sequence.frames[0].image.borrow();
+    let first = sequence.frames.first().ok_or_else(|| PyValueError::new_err("empty sequence"))?.image.borrow();
+    if offsets.len() != sequence.frames.len() || (sequence.default_image && sequence.frames.len() < 2) {
+        return Err(PyValueError::new_err("invalid animation frames or offsets"));
+    }
+    for (frame, &(x, y)) in sequence.frames.iter().zip(offsets) {
+        let image = frame.image.borrow();
+        if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+            || image.mode != first.mode
+            || image.bit_depth != first.bit_depth
+            || x.checked_add(image.width).is_none_or(|right| right > size.0)
+            || y.checked_add(image.height).is_none_or(|bottom| bottom > size.1)
+            || image.palette.as_ref().is_some_and(|(mode, _)| !matches!(mode, PixelMode::Rgb | PixelMode::Rgba))
+        {
+            return Err(PyValueError::new_err("invalid animation frame mode, depth, or bounds"));
+        }
+    }
     let mut output = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut output, size.0, size.1);
@@ -402,6 +420,18 @@ pub fn encode_sequence_regions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_public_encoder_inputs_return_errors() {
+        let sequence: Sequence<Image> = Sequence { frames: vec![], loop_count: None, default_image: false };
+        assert!(encode_sequence(&sequence, SaveOptions::default()).is_err());
+        assert!(encode_sequence_regions(&sequence, SaveOptions::default(), (1, 1), &[]).is_err());
+        let image = Image::from_pixels(1, 1, PixelMode::Rgb, vec![0; 3], None).unwrap();
+        assert!(super::super::encode_palette_png(&image, 1).is_err());
+        assert!(super::super::encode_png(&image, &[], 1).is_err());
+        let sequence = Sequence::single(image);
+        assert!(encode_sequence_regions(&sequence, SaveOptions::default(), (1, 1), &[]).is_err());
+    }
 
     #[test]
     fn canvas_packing_selects_output_channels_without_rgba_intermediate() {

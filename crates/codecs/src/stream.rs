@@ -1,4 +1,4 @@
-use blanket_codec_common::decode_error;
+use blanket_codec_common::{DecodeError, decode_error};
 use blanket_codec_jpeg::stream::JpegStreamDecoder;
 use blanket_codec_jxl::stream::JxlStreamDecoder;
 use blanket_core::Image;
@@ -25,31 +25,31 @@ impl Decoder {
             Self::Jpeg(_) => "JPEG",
         }
     }
-    fn feed(&mut self, data: &[u8]) -> Result<(), String> {
+    fn feed(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         match self {
             Self::Jxl(decoder) => decoder.feed(data),
-            Self::Jpeg(decoder) => decoder.feed(data),
+            Self::Jpeg(decoder) => decoder.feed(data).map_err(DecodeError::from),
         }
     }
 
-    fn image(&mut self) -> Result<Option<Image>, String> {
+    fn image(&mut self) -> Result<Option<Image>, DecodeError> {
         match self {
             Self::Jxl(decoder) => decoder.image(),
-            Self::Jpeg(decoder) => decoder.image(),
+            Self::Jpeg(decoder) => decoder.image().map_err(DecodeError::from),
         }
     }
 
     fn complete(&self) -> bool {
         match self {
-            Self::Jxl(decoder) => decoder.complete,
+            Self::Jxl(decoder) => decoder.is_complete(),
             Self::Jpeg(decoder) => decoder.complete,
         }
     }
 
-    fn finish(self) -> Result<Option<Image>, String> {
+    fn finish(self) -> Result<Option<Image>, DecodeError> {
         match self {
             Self::Jxl(decoder) => decoder.finish(),
-            Self::Jpeg(mut decoder) => decoder.image(),
+            Self::Jpeg(mut decoder) => decoder.image().map_err(DecodeError::from),
         }
     }
 }
@@ -64,9 +64,9 @@ impl StreamingDecoder {
         let decoder = py
             .detach(|| match format {
                 "JXL" => JxlStreamDecoder::new().map(Decoder::Jxl),
-                _ => JpegStreamDecoder::new().map(|decoder| Decoder::Jpeg(Box::new(decoder))),
+                _ => JpegStreamDecoder::new().map(|decoder| Decoder::Jpeg(Box::new(decoder))).map_err(DecodeError::from),
             })
-            .map_err(|message| decode_error(message, Some(format), "decode"))?;
+            .map_err(|error| error.into_pyerr(Some(format)))?;
         Ok(Self { decoder: Some(decoder) })
     }
 
@@ -76,7 +76,7 @@ impl StreamingDecoder {
         let result = py.detach(|| decoder.feed(data));
         if let Err(error) = result {
             self.decoder = None;
-            return Err(decode_error(error, Some(format), "decode"));
+            return Err(error.into_pyerr(Some(format)));
         }
         Ok(())
     }
@@ -85,7 +85,7 @@ impl StreamingDecoder {
     fn image(&mut self, py: Python<'_>) -> PyResult<Option<Image>> {
         let decoder = self.decoder.as_mut().ok_or_else(|| PyValueError::new_err("closed decoder"))?;
         let format = decoder.format();
-        py.detach(|| decoder.image()).map_err(|message| decode_error(message, Some(format), "decode"))
+        py.detach(|| decoder.image()).map_err(|error| error.into_pyerr(Some(format)))
     }
 
     fn close(&mut self, py: Python<'_>) -> PyResult<Image> {
@@ -95,7 +95,7 @@ impl StreamingDecoder {
             return Err(decode_error("truncated image stream".into(), Some(format), "decode"));
         }
         py.detach(move || decoder.finish())
-            .map_err(|message| decode_error(message, Some(format), "decode"))?
+            .map_err(|error| error.into_pyerr(Some(format)))?
             .ok_or_else(|| decode_error("image stream has no pixels".into(), Some(format), "decode"))
     }
 }

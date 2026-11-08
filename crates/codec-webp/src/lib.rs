@@ -17,7 +17,7 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     validate_dimensions(features.width, features.height)?;
     // Preserve the existing first-frame behavior for animated containers.
     if features.has_animation {
-        return decode_rust_image(data, RustFormat::WebP, "WEBP");
+        return decode_rust_image(data, RustFormat::WebP, "WEBP").map_err(String::from);
     }
     let limits = webpx::Limits::default();
     limits.check_input_size(data.len() as u64).map_err(|error| format!("WebP limit exceeded: {error}"))?;

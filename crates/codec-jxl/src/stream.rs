@@ -1,7 +1,7 @@
 use std::mem::MaybeUninit;
 use std::ptr;
 
-use blanket_codec_common::validate_dimensions;
+use blanket_codec_common::{DecodeError, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
@@ -21,28 +21,35 @@ pub struct JxlStreamDecoder {
     depth: u8 = 8,
     available: bool = false,
     failed: bool = false,
-    pub complete: bool = false,
+    complete: bool = false,
 }
 
 impl Drop for JxlStreamDecoder {
     fn drop(&mut self) {
-        // Destroy the decoder before releasing its registered output buffer.
+        // SAFETY: the decoder is owned and non-null; registered buffers are still alive.
         unsafe { JxlDecoderDestroy(self.decoder) };
     }
 }
 
-fn check(status: JxlDecoderStatus) -> Result<(), String> {
+fn check(status: JxlDecoderStatus) -> Result<(), DecodeError> {
     if status == JxlDecoderStatus::Success { Ok(()) } else { Err("JPEG XL streaming decoder error".into()) }
 }
 
 impl JxlStreamDecoder {
-    pub fn new() -> Result<Self, String> {
+    /// Whether the decoder has consumed a complete image.
+    pub fn is_complete(&self) -> bool {
+        self.complete
+    }
+
+    pub fn new() -> Result<Self, DecodeError> {
         let runner = ResizableRunner::new(None).ok_or("cannot allocate JPEG XL thread pool")?;
+        // SAFETY: null selects the default allocator.
         let decoder = unsafe { JxlDecoderCreate(ptr::null()) };
         if decoder.is_null() {
             return Err("cannot allocate JPEG XL decoder".into());
         }
         let stream = Self { decoder, runner, .. };
+        // SAFETY: the owned decoder and runner are live for these configuration calls.
         unsafe {
             check(JxlDecoderSetParallelRunner(decoder, stream.runner.runner(), stream.runner.as_opaque_ptr()))?;
             check(JxlDecoderSubscribeEvents(
@@ -54,7 +61,7 @@ impl JxlStreamDecoder {
         Ok(stream)
     }
 
-    pub fn feed(&mut self, data: &[u8]) -> Result<(), String> {
+    pub fn feed(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         if self.failed {
             return Err("failed JPEG XL decoder".into());
         }
@@ -63,12 +70,12 @@ impl JxlStreamDecoder {
         result
     }
 
-    fn process_input(&mut self, data: &[u8]) -> Result<(), String> {
+    fn process_input(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         if self.complete {
             return Ok(());
         }
         if self.input.is_empty() {
-            // Borrow complete chunks; retain only the unconsumed suffix.
+            // SAFETY: data stays alive until ReleaseInput; only its unconsumed suffix is retained.
             unsafe {
                 check(JxlDecoderSetInput(self.decoder, data.as_ptr(), data.len()))?;
                 let result = self.process();
@@ -80,7 +87,7 @@ impl JxlStreamDecoder {
             }
         }
         self.input.extend_from_slice(data);
-        // libjxl retains input only until ReleaseInput; output remains allocated
+        // SAFETY: libjxl retains input only until ReleaseInput; output remains allocated
         // until decoder destruction and is never resized after registration.
         unsafe {
             check(JxlDecoderSetInput(self.decoder, self.input.as_ptr(), self.input.len()))?;
@@ -95,8 +102,9 @@ impl JxlStreamDecoder {
         }
     }
 
-    unsafe fn process(&mut self) -> Result<(), String> {
+    unsafe fn process(&mut self) -> Result<(), DecodeError> {
         loop {
+            // SAFETY: input is registered by process_input and output remains allocated.
             let status = unsafe { JxlDecoderProcessInput(self.decoder) };
             match status {
                 JxlDecoderStatus::NeedMoreInput => return Ok(()),
@@ -104,9 +112,11 @@ impl JxlStreamDecoder {
                     self.complete = true;
                     return Ok(());
                 }
+                // SAFETY: BasicInfo permits querying the initialized header.
                 JxlDecoderStatus::BasicInfo => unsafe {
                     let mut info = MaybeUninit::<JxlBasicInfo>::uninit();
                     check(JxlDecoderGetBasicInfo(self.decoder, info.as_mut_ptr()))?;
+                    // SAFETY: GetBasicInfo succeeded and initialized every field.
                     let info = info.assume_init();
                     validate_dimensions(info.xsize, info.ysize)?;
                     self.runner.callback_basic_info(&info);
@@ -125,12 +135,14 @@ impl JxlStreamDecoder {
                     self.format.num_channels = self.mode.channels() as u32;
                     self.format.data_type = if self.depth == 16 { JxlDataType::Uint16 } else { JxlDataType::Uint8 };
                 },
+                // SAFETY: the buffer has the queried size and remains live until reset or drop.
                 JxlDecoderStatus::NeedImageOutBuffer => unsafe {
                     let mut size = 0;
                     check(JxlDecoderImageOutBufferSize(self.decoder, &raw const self.format, &raw mut size))?;
                     self.pixels = vec![0; size];
                     check(JxlDecoderSetImageOutBuffer(self.decoder, &raw const self.format, self.pixels.as_mut_ptr().cast(), size))?;
                 },
+                // SAFETY: the registered output buffer remains allocated during flushing.
                 JxlDecoderStatus::FrameProgression => unsafe {
                     check(JxlDecoderFlushImage(self.decoder))?;
                     self.available = true;
@@ -141,33 +153,33 @@ impl JxlStreamDecoder {
         }
     }
 
-    pub fn image(&self) -> Result<Option<Image>, String> {
+    pub fn image(&self) -> Result<Option<Image>, DecodeError> {
         if !self.available {
             return Ok(None);
         }
         self.output_image(self.pixels.clone()).map(Some)
     }
 
-    pub fn finish(mut self) -> Result<Option<Image>, String> {
+    pub fn finish(mut self) -> Result<Option<Image>, DecodeError> {
         if !self.complete {
             return Err("incomplete JPEG XL image".into());
         }
         if !self.available {
             return Ok(None);
         }
-        // Release libjxl's output reference before transferring the allocation.
+        // SAFETY: reset releases output references before transferring the allocation.
         unsafe { JxlDecoderReset(self.decoder) };
         let pixels = std::mem::take(&mut self.pixels);
         self.output_image(pixels).map(Some)
     }
 
-    fn output_image(&self, pixels: Vec<u8>) -> Result<Image, String> {
+    fn output_image(&self, pixels: Vec<u8>) -> Result<Image, DecodeError> {
         let image = if self.depth == 8 {
             Image::from_pixels(self.width, self.height, self.mode, pixels, Some("JXL".into()))
         } else {
             Image::from_sample_bytes(self.width, self.height, self.mode, pixels, self.depth, Some("JXL".into()))
         };
-        image.map_err(|error| error.to_string())
+        image.map_err(DecodeError::with_source)
     }
 }
 
@@ -177,6 +189,13 @@ mod tests {
     use jpegxl_sys::encoder::encode::*;
 
     use super::*;
+
+    #[test]
+    fn unfinished_stream_cannot_be_finished() {
+        let decoder = JxlStreamDecoder::new().unwrap();
+        assert!(!decoder.is_complete());
+        assert_eq!(decoder.finish().err().unwrap().to_string(), "incomplete JPEG XL image");
+    }
 
     #[test]
     fn progressive_passes_discard_input_and_match_eager_pixels() {
@@ -267,6 +286,6 @@ mod tests {
     fn failed_decoder_cannot_resume() {
         let mut decoder = JxlStreamDecoder::new().unwrap();
         assert!(decoder.feed(b"invalid JPEG XL stream").is_err());
-        assert!(decoder.feed(&[]).unwrap_err().contains("failed JPEG XL decoder"));
+        assert!(decoder.feed(&[]).unwrap_err().to_string().contains("failed JPEG XL decoder"));
     }
 }

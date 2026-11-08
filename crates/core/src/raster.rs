@@ -67,7 +67,7 @@ fn unpack_bilevel_bytes<const INVERT: bool>(data: &[u8], width: usize, height: u
             }
         }
     });
-    // Every reserved byte, including partial rows, was initialized above.
+    // SAFETY: Every reserved byte, including partial rows, was initialized above.
     unsafe { pixels.set_len(len) };
     pixels
 }
@@ -112,12 +112,11 @@ fn pixel_sequence<'py>(
     py: Python<'py>, items: impl ExactSizeIterator<Item = PyResult<Bound<'py, PyAny>>>, tuple: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let len = isize::try_from(items.len()).map_err(|_| PyMemoryError::new_err("too many pixels"))?;
-    // The container stays private while its initially null slots are filled.
-    // CPython safely releases partially filled containers if conversion fails.
+    // SAFETY: The container stays private while its initially null slots are filled.  CPython safely releases partially filled containers if conversion fails.
     let result = unsafe { Bound::from_owned_ptr_or_err(py, if tuple { pyo3::ffi::PyTuple_New(len) } else { pyo3::ffi::PyList_New(len) }) }?;
     for (i, item) in items.enumerate() {
         let item = item?;
-        // Each in-bounds slot is assigned once, stealing the owned reference.
+        // SAFETY: Each in-bounds slot is assigned once, stealing the owned reference.
         unsafe {
             if tuple {
                 pyo3::ffi::PyTuple_SET_ITEM(result.as_ptr(), i as isize, item.into_ptr());
@@ -344,7 +343,7 @@ fn put_pixels<const C: usize>(pixels: &mut [u8], data: &Bound<'_, PyAny>, length
     let mut write = |value: &Bound<'_, PyAny>| -> PyResult<()> {
         let pixel = if C == 1 {
             let number = if value.is_exact_instance_of::<PyInt>() {
-                // Avoid a temporary Python float. The exact integer stays alive.
+                // SAFETY: Avoid a temporary Python float. The exact integer stays alive.
                 let number = unsafe { pyo3::ffi::PyLong_AsDouble(value.as_ptr()) };
                 if number == -1.0
                     && let Some(error) = PyErr::take(value.py())
@@ -412,12 +411,12 @@ pub fn alloc_pixels(len: usize) -> PyResult<Vec<u8>> {
         return Ok(Vec::new());
     }
     let layout = std::alloc::Layout::array::<u8>(len).map_err(|_| PyMemoryError::new_err("cannot allocate image"))?;
-    // The nonzero layout matches Vec<u8>; all bytes are initialized to zero.
+    // SAFETY: The nonzero layout matches Vec<u8>; all bytes are initialized to zero.
     let pointer = unsafe { std::alloc::alloc_zeroed(layout) };
     if pointer.is_null() {
         return Err(PyMemoryError::new_err("cannot allocate image"));
     }
-    // Transfer the global allocation with its exact size and alignment.
+    // SAFETY: Transfer the global allocation with its exact size and alignment.
     Ok(unsafe { Vec::from_raw_parts(pointer, len, len) })
 }
 
@@ -543,7 +542,7 @@ impl Image {
         if alpha.is_some_and(|alpha| alpha.len() > 256) {
             return Err(PyValueError::new_err("invalid transparency table"));
         }
-        let mut output = Vec::with_capacity(256 * 4);
+        let mut output = crate::buffers::reserved(256 * 4)?;
         for i in 0..256 {
             let start = i * mode.channels();
             let entry = entries.get(start..start + mode.channels()).unwrap_or_else(|| &[0, 0, 0, 255][..mode.channels()]);
@@ -921,8 +920,9 @@ impl Image {
         if self.mode != PixelMode::F {
             return Err(PyValueError::new_err("point operation requires F mode"));
         }
-        let mut pixels = Vec::with_capacity(self.raw_data()?.len());
-        for bytes in self.raw_data()?.as_chunks::<4>().0 {
+        let source = self.raw_data()?;
+        let mut pixels = crate::buffers::reserved(source.len())?;
+        for bytes in source.as_chunks::<4>().0 {
             let value = function.call1((float_value(bytes),))?.extract::<f64>()? as f32;
             pixels.extend_from_slice(&value.to_le_bytes());
         }
@@ -1041,7 +1041,7 @@ impl Image {
 
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
-        let mut pixels = Vec::<u8>::with_capacity(source.len());
+        let mut pixels = crate::buffers::reserved::<u8>(source.len())?;
         let chunk = 256 * 1024;
         py.detach(|| {
             if source.len() < 4 << 20 {
@@ -1052,7 +1052,7 @@ impl Image {
                 dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
             });
         });
-        // Every byte is initialized above, including any partial final partition.
+        // SAFETY: Every byte is initialized above, including any partial final partition.
         unsafe { pixels.set_len(source.len()) };
         Ok(Self {
             width: self.width,
@@ -1060,7 +1060,7 @@ impl Image {
             mode: self.mode,
             pixels: Some(pixels),
             bit_depth: self.bit_depth,
-            palette: self.palette.clone(),
+            palette: self.palette.as_ref().map(|(mode, data)| crate::buffers::copy(data).map(|data| (*mode, data))).transpose()?,
             ..
         })
     }
@@ -1154,7 +1154,7 @@ impl Image {
             } else {
                 expand_palette::<4>(indices, &palette)
             }
-        });
+        })?;
         let result = Self::from_pixels(self.width, self.height, destination, pixels, None)?;
         if bit_depth.is_some_and(|depth| depth != 8) { result.convert(py, mode, bit_depth) } else { Ok(result) }
     }
@@ -1195,7 +1195,7 @@ impl Image {
                     }
                 }
             });
-            // Every reserved byte is initialized by its pixel's matrix row.
+            // SAFETY: Every reserved byte is initialized by its pixel's matrix row.
             unsafe { pixels.set_len(length) };
         });
         Self::from_pixels(self.width, self.height, destination, pixels, None)
@@ -1584,17 +1584,18 @@ impl Image {
                     if matches!(destination, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
                         return expand_pa(indices, *palette_mode, palette, destination);
                     }
-                    let mut rgba = Vec::with_capacity(indices.len() * 2);
+                    let len = indices.len().checked_mul(2).ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?;
+                    let mut rgba = crate::buffers::reserved(len)?;
                     for pair in indices.as_chunks::<2>().0 {
                         let entry = pair[0] as usize * palette_mode.channels();
                         let rgb = palette.get(entry..entry + 3).unwrap_or(&[0, 0, 0]);
                         rgba.extend_from_slice(rgb);
                         rgba.push(pair[1]);
                     }
-                    return convert_pixels(&rgba, PixelMode::Rgba, destination);
+                    return Ok(convert_pixels(&rgba, PixelMode::Rgba, destination));
                 }
                 convert_palette(indices, *palette_mode, palette, destination)
-            });
+            })?;
             return Self::from_pixels(self.width, self.height, destination, converted, None);
         }
         let source = self.mode;
@@ -1755,8 +1756,7 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
             ($($sample:ty),+ $(,)?) => {
                 $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
                     let mut pixels = alloc_pixels(buffer.len_bytes())?;
-                    // Numeric samples accept every bit pattern. Copying retains
-                    // the source byte order for the conversion that follows.
+                    // SAFETY: Numeric samples accept every bit pattern. Copying retains the source byte order for the conversion that follows.
                     let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<$sample>() };
                     if prefix.is_empty() && suffix.is_empty() {
                         buffer.copy_to_slice(obj.py(), values)?;
@@ -2209,13 +2209,13 @@ fn convert_pixel_generic(pixel: &[u8], out: &mut [u8], from: PixelMode, to: Pixe
 
 /// Resolve palette indices through a complete 256-entry table. Missing
 /// entries read as opaque black, as before.
-fn convert_palette(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> Vec<u8> {
+fn convert_palette(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> PyResult<Vec<u8>> {
     let table;
     let palette = if palette_mode == destination {
         palette
     } else {
         let channels = palette_mode.channels();
-        let mut complete = Vec::with_capacity(256 * channels);
+        let mut complete = crate::buffers::reserved(256 * channels)?;
         for index in 0..256 {
             complete.extend_from_slice(palette.get(index * channels..(index + 1) * channels).unwrap_or(&[0, 0, 0, 255][..channels]));
         }
@@ -2231,13 +2231,13 @@ fn convert_palette(indices: &[u8], palette_mode: PixelMode, palette: &[u8], dest
     }
 }
 
-fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> Vec<u8> {
+fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> PyResult<Vec<u8>> {
     let table: [[u8; C]; 256] = std::array::from_fn(|slot| {
         let mut color = [0; C];
         color.copy_from_slice(palette.get(slot * C..slot * C + C).unwrap_or(&[0, 0, 0, 255][..C]));
         color
     });
-    let mut expanded = Vec::<[u8; C]>::with_capacity(indices.len());
+    let mut expanded = crate::buffers::reserved::<[u8; C]>(indices.len())?;
     crate::parallel::chunks_mut_above(
         &mut expanded.spare_capacity_mut()[..indices.len()],
         crate::parallel::CHUNK_PIXELS,
@@ -2249,19 +2249,19 @@ fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> Vec<u8> {
             }
         },
     );
-    // Each reserved pixel was initialized by its palette lookup.
+    // SAFETY: Each reserved pixel was initialized by its palette lookup.
     unsafe { expanded.set_len(indices.len()) };
-    expanded.into_flattened()
+    Ok(expanded.into_flattened())
 }
 
-fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> Vec<u8> {
+fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> PyResult<Vec<u8>> {
     let table: [[u8; 3]; 256] = std::array::from_fn(|slot| {
         let entry = slot * palette_mode.channels();
         palette.get(entry..entry + 3).unwrap_or(&[0, 0, 0]).try_into().unwrap()
     });
     let channels = destination.channels();
-    let len = indices.len() / 2 * channels;
-    let mut output = Vec::<u8>::with_capacity(len);
+    let len = (indices.len() / 2).checked_mul(channels).ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?;
+    let mut output = crate::buffers::reserved::<u8>(len)?;
     crate::parallel::chunks_mut_above(
         &mut output.spare_capacity_mut()[..len],
         crate::parallel::CHUNK_PIXELS * channels,
@@ -2286,9 +2286,9 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
             }
         },
     );
-    // Each reserved output byte was initialized above, including alpha.
+    // SAFETY: Each reserved output byte was initialized above, including alpha.
     unsafe { output.set_len(len) };
-    output
+    Ok(output)
 }
 
 #[cfg(test)]
@@ -2358,7 +2358,8 @@ mod tests {
                     PixelMode::L => expand_palette::<1>(&indices, &palette),
                     PixelMode::Rgb => expand_palette::<3>(&indices, &palette),
                     _ => expand_palette::<4>(&indices, &palette),
-                };
+                }
+                .unwrap();
                 for target in [
                     PixelMode::One,
                     PixelMode::L,
@@ -2371,7 +2372,7 @@ mod tests {
                     PixelMode::YCbCr,
                 ] {
                     assert_eq!(
-                        convert_palette(&indices, mode, &palette, target),
+                        convert_palette(&indices, mode, &palette, target).unwrap(),
                         convert_pixels(&expanded, mode, target),
                         "mode={mode:?}, target={target:?}, count={count}"
                     );
@@ -2516,9 +2517,9 @@ mod tests {
     #[test]
     pub(super) fn expands_palette_indices_with_opaque_black_fallback() {
         let palette = [10, 20, 30, 40, 50, 60];
-        assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
-        assert_eq!(expand_palette::<4>(&[0, 1], &[1, 2, 3, 4]), [1, 2, 3, 4, 0, 0, 0, 255]);
-        assert!(expand_palette::<3>(&[], &palette).is_empty());
+        assert_eq!(expand_palette::<3>(&[1, 0, 5], &palette).unwrap(), [40, 50, 60, 10, 20, 30, 0, 0, 0]);
+        assert_eq!(expand_palette::<4>(&[0, 1], &[1, 2, 3, 4]).unwrap(), [1, 2, 3, 4, 0, 0, 0, 255]);
+        assert!(expand_palette::<3>(&[], &palette).unwrap().is_empty());
     }
 
     #[test]

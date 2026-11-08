@@ -62,6 +62,91 @@ pub fn encode_error(error: PyErr, format: &str) -> PyErr {
     })
 }
 
+/// A decoding failure with a machine-readable category and optional native cause.
+#[derive(Debug)]
+pub struct DecodeError {
+    kind: CodecErrorKind,
+    message: String,
+    source: Option<Box<dyn std::error::Error + Send + Sync + pyo3::marker::Ungil>>,
+}
+
+impl DecodeError {
+    /// Preserve a diagnostic chain when the native error cannot cross detached calls.
+    pub fn with_diagnostic_source(error: impl std::error::Error) -> Self {
+        fn snapshot(error: &dyn std::error::Error) -> DecodeError {
+            let mut result = DecodeError::from(error.to_string());
+            result.source = error.source().map(|source| Box::new(snapshot(source)) as _);
+            result
+        }
+        let mut result = Self::from(error.to_string());
+        result.source = Some(Box::new(snapshot(&error)));
+        result
+    }
+    /// Category used when translating this error to a Python codec exception.
+    pub fn kind(&self) -> CodecErrorKind {
+        self.kind
+    }
+
+    /// Retain a native cause that can safely cross a detached Python call.
+    pub fn with_source(error: impl std::error::Error + Send + Sync + pyo3::marker::Ungil + 'static) -> Self {
+        let mut result = Self::from(error.to_string());
+        result.source = Some(Box::new(error));
+        result
+    }
+
+    /// Convert the diagnostic to the matching Python exception category.
+    pub fn into_pyerr(self, format: Option<&str>) -> PyErr {
+        self.kind.into_pyerr(self.message, format, "decode")
+    }
+}
+
+impl From<String> for DecodeError {
+    fn from(message: String) -> Self {
+        Self { kind: diagnostic_kind(&message, CodecErrorKind::Corrupt), message, source: None }
+    }
+}
+
+impl From<&str> for DecodeError {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
+impl From<DecodeError> for String {
+    fn from(error: DecodeError) -> Self {
+        error.to_string()
+    }
+}
+
+impl std::fmt::Display for DecodeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+impl std::error::Error for DecodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        self.source.as_deref().map(|error| error as _)
+    }
+}
+
+#[cfg(test)]
+mod decode_error_tests {
+    use std::error::Error;
+
+    use super::*;
+
+    #[test]
+    fn decoding_errors_preserve_category_and_source() {
+        let cause = "invalid".parse::<u32>().unwrap_err();
+        let message = cause.to_string();
+        let error = DecodeError::with_source(cause);
+        assert_eq!(error.source().unwrap().to_string(), message);
+        assert_eq!(DecodeError::from("unsupported channel layout").kind(), CodecErrorKind::Unsupported);
+        assert_eq!(DecodeError::from("image exceeds Blanket limit").kind(), CodecErrorKind::ResourceLimit);
+    }
+}
+
 fn diagnostic_kind(message: &str, fallback: CodecErrorKind) -> CodecErrorKind {
     let message = message.to_ascii_lowercase();
     if message.starts_with("eps reading requires ghostscript (gs):") {

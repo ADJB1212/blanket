@@ -42,7 +42,7 @@ pub fn decode_pnm(data: &[u8]) -> Result<Image, String> {
             return Image::from_sample_bytes(width, height, mode, pixels, 16, Some("PPM".into())).map_err(|e| e.to_string());
         }
     }
-    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, matches!(data.get(1), Some(b'1' | b'4')))
+    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, matches!(data.get(1), Some(b'1' | b'4'))).map_err(String::from)
 }
 
 pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
@@ -70,7 +70,7 @@ pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
                 .map_err(|e| e.to_string());
         }
     }
-    decode_rust_image(data, ImageFormat::Tga, "TGA")
+    decode_rust_image(data, ImageFormat::Tga, "TGA").map_err(String::from)
 }
 
 fn encode_tga(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
@@ -109,11 +109,11 @@ pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageH
 }
 
 pub fn decode_dds(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, ImageFormat::Dds, "DDS")
+    decode_rust_image(data, ImageFormat::Dds, "DDS").map_err(String::from)
 }
 
 pub fn decode_qoi(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, ImageFormat::Qoi, "QOI")
+    decode_rust_image(data, ImageFormat::Qoi, "QOI").map_err(String::from)
 }
 
 pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {

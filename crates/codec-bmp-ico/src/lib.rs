@@ -73,11 +73,11 @@ pub fn decode_ico(data: &[u8]) -> Result<Image, String> {
     selected.extend_from_slice(entry);
     selected[18..22].copy_from_slice(&22_u32.to_le_bytes());
     selected.extend_from_slice(payload);
-    decode_rust_image(&selected, RustFormat::Ico, "ICO")
+    decode_rust_image(&selected, RustFormat::Ico, "ICO").map_err(String::from)
 }
 
 pub fn decode_bmp(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, RustFormat::Bmp, "BMP")
+    decode_rust_image(data, RustFormat::Bmp, "BMP").map_err(String::from)
 }
 
 pub fn encode_bmp(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {

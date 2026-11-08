@@ -8,7 +8,7 @@ pub mod stream;
 
 use std::cell::RefCell;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -83,9 +83,9 @@ pub fn transform_jpeg(
     transformer.transform_to_vec(&transform, input).map_err(codec_error)
 }
 
-pub fn decode_jpeg(data: &[u8]) -> Result<Image, String> {
+pub fn decode_jpeg(data: &[u8]) -> Result<Image, DecodeError> {
     // Abbreviated streams must not inherit another image's tables.
-    decode::Decoder::new()?.decode(data)
+    decode::Decoder::new()?.decode(data).map_err(DecodeError::from)
 }
 
 pub fn decode_scaled(data: &[u8], scale: u32, mode: &str) -> Result<Image, String> {

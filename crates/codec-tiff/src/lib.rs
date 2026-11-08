@@ -467,7 +467,8 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|error| error.to_string())?;
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let mut image = decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    let mut image =
+        decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF").map_err(String::from), Ok)?;
     if image.mode == PixelMode::L && image.bit_depth == 16 {
         image.mode = PixelMode::I16;
     }

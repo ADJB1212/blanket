@@ -3,7 +3,7 @@
 use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
 use blanket_core::raster::{Image, PixelMode};
 use blanket_kernels::ops as ops_simd;
-use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
 
@@ -51,7 +51,7 @@ impl LossyImageCompressor {
         if png {
             return self.optimize_png(image, options, output);
         }
-        let reference = codecs::decode(&output, format).map_err(PyOSError::new_err)?;
+        let reference = codecs::decode(&output, format).map_err(|error| error.into_pyerr(Some(format.as_str())))?;
         let mut lower = 1;
         let mut upper = options.quality.saturating_sub(1);
         let mut winner_quality = None;
@@ -64,7 +64,7 @@ impl LossyImageCompressor {
             }
             let quality = if bracketed { lower + (upper - lower) / 2 } else { options.quality.saturating_sub(drop).max(1) };
             let candidate = codecs::encode(image, format, SaveOptions { quality, ..options })?;
-            let decoded = codecs::decode(&candidate, format).map_err(PyOSError::new_err)?;
+            let decoded = codecs::decode(&candidate, format).map_err(|error| error.into_pyerr(Some(format.as_str())))?;
             if within_error(&decoded, &reference, self.max_rmse)? {
                 upper = quality - 1;
                 drop = drop.saturating_mul(2);

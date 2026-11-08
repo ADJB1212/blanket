@@ -7,7 +7,7 @@ mod chunked;
 mod encode;
 pub mod stream;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::decode::{Event, Events, PixelFormat};
 use jpegxl_rs::decoder_builder;
@@ -120,12 +120,12 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     })
 }
 
-pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
+pub fn decode_jxl(data: &[u8]) -> Result<Image, DecodeError> {
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness};
 
     let use_parallel = data.len() >= JXL_PARALLEL_MIN_BYTES;
 
-    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner_cell| -> Result<_, String> {
+    let (info, pixels) = JXL_DECODE_RUNNER.with(|runner_cell| -> Result<_, DecodeError> {
         let mut decoder = if use_parallel {
             let runner =
                 runner_cell.get_or_init(|| ResizableRunner::new(None)).as_ref().ok_or_else(|| "cannot allocate JPEG XL thread pool".to_owned())?;
@@ -133,15 +133,15 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
         } else {
             decoder_builder().build()
         }
-        .map_err(|error| error.to_string())?;
-        let mut session = decoder.session(Events::FULL_IMAGE).map_err(|error| error.to_string())?;
+        .map_err(DecodeError::with_source)?;
+        let mut session = decoder.session(Events::FULL_IMAGE).map_err(DecodeError::with_source)?;
         let mut input = data;
         let mut info = None;
         let mut pixels = None;
         let mut data_type = None;
         let mut channels = 0;
         loop {
-            match session.process(&mut input).map_err(|error| error.to_string())? {
+            match session.process(&mut input).map_err(DecodeError::with_source)? {
                 Event::BasicInfo(header) => {
                     validate_dimensions(header.xsize, header.ysize)?;
                     channels = match (header.num_color_channels, header.alpha_bits > 0) {
@@ -158,7 +158,7 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
                 }
                 Event::NeedImageOutBuffer => {
                     let format = PixelFormat { num_channels: channels, endianness: JxlEndianness::Little, ..PixelFormat::default() };
-                    session.alloc_image_buffer(format, data_type).map_err(|error| error.to_string())?;
+                    session.alloc_image_buffer(format, data_type).map_err(DecodeError::with_source)?;
                 }
                 Event::FullImage(image) => pixels = image,
                 Event::Success => break,
@@ -183,7 +183,7 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
         (1, true) => (PixelMode::Rgba, luma_alpha_to_rgba(&pixels.data)),
         (3, true) => (PixelMode::Rgba, pixels.data),
         (channels, has_alpha) => {
-            return Err(format!("unsupported JPEG XL channel layout: {channels} color channels, alpha={has_alpha}"));
+            return Err(format!("unsupported JPEG XL channel layout: {channels} color channels, alpha={has_alpha}").into());
         }
     };
     if wide {
@@ -191,7 +191,7 @@ pub fn decode_jxl(data: &[u8]) -> Result<Image, String> {
     } else {
         Image::from_pixels(info.xsize, info.ysize, mode, pixels, Some("JXL".into()))
     }
-    .map_err(|error| error.to_string())
+    .map_err(DecodeError::with_source)
 }
 
 fn luma_alpha_to_rgba(luma_alpha: &[u8]) -> Vec<u8> {
@@ -652,8 +652,8 @@ mod tests {
     #[test]
     fn oversized_header_is_rejected_without_frame_data() {
         let header = [0xff, 0x0a, 0xfc, 0x76, 0x01, 0xfe, 0xf9, 0x00, 0x22];
-        assert!(decode_jxl(&header[..8]).err().unwrap().contains("incomplete JPEG XL header"));
-        let error = decode_jxl(&header).err().unwrap();
+        assert!(decode_jxl(&header[..8]).err().unwrap().to_string().contains("incomplete JPEG XL header"));
+        let error = decode_jxl(&header).err().unwrap().to_string();
         assert!(error.contains("192000000 pixels"));
         assert!(error.contains("exceeds Blanket limit"));
     }

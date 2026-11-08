@@ -5,7 +5,7 @@ use std::io::{Cursor, Write};
 mod encode;
 pub mod stream;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::color_type;
 use blanket_core::{Image, PixelMode};
 use image::ImageEncoder;
@@ -37,7 +37,10 @@ fn decoder(data: &[u8]) -> png::Decoder<Cursor<&[u8]>> {
 
 pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
-    let (mode, palette) = image.palette.as_ref().expect("palette checked by caller");
+    let (mode, palette) = image.palette.as_ref().ok_or_else(|| PyValueError::new_err("image has no palette"))?;
+    if !matches!(mode, PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("unsupported PNG palette mode"));
+    }
     let mut encoded = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut encoded, image.width, image.height);
@@ -70,7 +73,7 @@ pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>
 }
 
 /// Decode packed rows of non-interlaced, opaque 1-bit grayscale PNGs.
-fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
+fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, DecodeError> {
     // IHDR bit depth, color type, and interlace method.
     if data.get(24..29).is_none_or(|header| header[0] != 1 || header[1] != 0 || header[4] != 0) {
         return Ok(None);
@@ -86,10 +89,11 @@ fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, String> {
     let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
     reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
     let pixels = blanket_core::raster::unpack_bilevel(&packed, width as usize, height as usize);
-    Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into())).map(Some).map_err(|error| error.to_string())
+    Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into())).map(Some).map_err(DecodeError::with_diagnostic_source)
 }
 
 pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<Vec<u8>> {
+    validate_encode_input(image, pixels)?;
     if compress_level != 0 {
         return encode::encode(image, pixels, compress_level);
     }
@@ -101,12 +105,24 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
 }
 
 pub fn encode_png_to(image: &Image, pixels: &[u8], compress_level: u8, output: impl Write) -> PyResult<()> {
+    validate_encode_input(image, pixels)?;
     if compress_level != 0 {
         return encode::encode_to(image, pixels, compress_level, output);
     }
     PngEncoder::new_with_quality(output, CompressionType::Level(compress_level), FilterType::Adaptive)
         .write_image(pixels, image.width, image.height, color_type(image.mode))
         .map_err(codec_error)
+}
+
+fn validate_encode_input(image: &Image, pixels: &[u8]) -> PyResult<()> {
+    if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(PyValueError::new_err("unsupported PNG mode"));
+    }
+    let length = (image.width as usize).checked_mul(image.height as usize).and_then(|n| n.checked_mul(image.mode.channels()));
+    if length != Some(pixels.len()) {
+        return Err(PyValueError::new_err("invalid PNG input buffer"));
+    }
+    Ok(())
 }
 
 pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
@@ -129,18 +145,18 @@ pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     Ok(output)
 }
 
-pub fn decode_png(data: &[u8]) -> Result<Image, String> {
+pub fn decode_png(data: &[u8]) -> Result<Image, DecodeError> {
     if let Some(image) = decode_bilevel_png(data)? {
         return Ok(image);
     }
     let mut decoder = decoder(data);
-    let header = decoder.read_header_info().map_err(|error| error.to_string())?;
+    let header = decoder.read_header_info().map_err(DecodeError::with_diagnostic_source)?;
     validate_dimensions(header.width, header.height)?;
     if header.color_type == png::ColorType::Indexed {
-        let mut reader = decoder.read_info().map_err(|error| error.to_string())?;
+        let mut reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
         let palette = reader.info().palette.as_deref().ok_or("missing PNG palette")?.to_vec();
         let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
-        let frame = reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
+        let frame = reader.next_frame(&mut packed).map_err(DecodeError::with_diagnostic_source)?;
         let bits = frame.bit_depth as usize;
         let pixels = if bits == 8 {
             packed.truncate(frame.buffer_size());
@@ -154,21 +170,22 @@ pub fn decode_png(data: &[u8]) -> Result<Image, String> {
             }
             pixels
         };
-        let mut image = Image::from_pixels(frame.width, frame.height, PixelMode::L, pixels, Some("PNG".into())).map_err(|error| error.to_string())?;
+        let mut image =
+            Image::from_pixels(frame.width, frame.height, PixelMode::L, pixels, Some("PNG".into())).map_err(DecodeError::with_diagnostic_source)?;
         image.palette = Some((PixelMode::Rgb, palette));
         return Ok(image);
     }
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
     decoder.set_transformations(png::Transformations::EXPAND);
-    let reader = decoder.read_info().map_err(|error| error.to_string())?;
+    let reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
     decode_png_reader(reader, bilevel)
 }
 
-fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> Result<Image, String> {
+fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> Result<Image, DecodeError> {
     let (width, height) = reader.info().size();
     validate_dimensions(width, height)?;
     let mut pixels = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
-    let frame = reader.next_frame(&mut pixels).map_err(|error| error.to_string())?;
+    let frame = reader.next_frame(&mut pixels).map_err(DecodeError::with_diagnostic_source)?;
     pixels.truncate(frame.buffer_size());
     let mode = match frame.color_type {
         png::ColorType::Grayscale if bilevel => PixelMode::One,
@@ -192,9 +209,10 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> R
         } else {
             blanket_core::simd::samples_from_be16(&mut pixels, depth);
         }
-        return Image::from_sample_bytes(frame.width, frame.height, mode, pixels, depth, Some("PNG".into())).map_err(|error| error.to_string());
+        return Image::from_sample_bytes(frame.width, frame.height, mode, pixels, depth, Some("PNG".into()))
+            .map_err(DecodeError::with_diagnostic_source);
     }
-    Image::from_pixels(frame.width, frame.height, mode, pixels, Some("PNG".into())).map_err(|error| error.to_string())
+    Image::from_pixels(frame.width, frame.height, mode, pixels, Some("PNG".into())).map_err(DecodeError::with_diagnostic_source)
 }
 
 pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {

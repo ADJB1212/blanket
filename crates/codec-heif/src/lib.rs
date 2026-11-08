@@ -1,6 +1,6 @@
 use std::sync::LazyLock;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -31,37 +31,37 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     )
 }
 
-pub fn decode_heif(data: &[u8]) -> Result<Image, String> {
+pub fn decode_heif(data: &[u8]) -> Result<Image, DecodeError> {
     use libheif_rs::HeifContext;
     let _lib = &*HEIF_LIBRARY;
-    let context = HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
-    let handle = context.primary_image_handle().map_err(|e| e.to_string())?;
+    let context = HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    let handle = context.primary_image_handle().map_err(DecodeError::with_source)?;
     decode_handle(&handle)
 }
 
-pub fn previews(data: &[u8]) -> Result<Vec<Image>, String> {
+pub fn previews(data: &[u8]) -> Result<Vec<Image>, DecodeError> {
     let _library = &*HEIF_LIBRARY;
-    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(|e| e.to_string())?;
-    let primary = context.primary_image_handle().map_err(|e| e.to_string())?;
+    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    let primary = context.primary_image_handle().map_err(DecodeError::with_source)?;
     let mut ids = vec![0; primary.number_of_thumbnails()];
     let count = primary.thumbnail_ids(&mut ids);
     let mut total = 0;
     let mut result = Vec::new();
     for id in ids.into_iter().take(count) {
-        let handle = primary.thumbnail(id).map_err(|e| e.to_string())?;
+        let handle = primary.thumbnail(id).map_err(DecodeError::with_source)?;
         blanket_codec_common::validate_frame_budget(&mut total, handle.width(), handle.height())?;
         result.push(decode_handle(&handle)?);
     }
     Ok(result)
 }
 
-fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, String> {
+fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, DecodeError> {
     use libheif_rs::{ColorSpace, DecodingOptions, RgbChroma};
     let lib = &*HEIF_LIBRARY;
     validate_dimensions(handle.width(), handle.height())?;
     let depth = handle.luma_bits_per_pixel();
     if !matches!(depth, 8 | 10 | 12 | 16) {
-        return Err(format!("unsupported HEIF bit depth: {depth}"));
+        return Err(format!("unsupported HEIF bit depth: {depth}").into());
     }
     let alpha = handle.has_alpha_channel();
     let chroma = match (depth > 8, alpha) {
@@ -79,7 +79,7 @@ fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, String> {
         1
     };
     options.set_num_codec_threads(threads as u32);
-    let decoded = lib.decode(handle, ColorSpace::Rgb(chroma), Some(options)).map_err(|e| e.to_string())?;
+    let decoded = lib.decode(handle, ColorSpace::Rgb(chroma), Some(options)).map_err(DecodeError::with_source)?;
     validate_dimensions(decoded.width(), decoded.height())?;
     let mode = if alpha { PixelMode::Rgba } else { PixelMode::Rgb };
     let plane = decoded.planes().interleaved.ok_or("missing HEIF pixel plane")?;
@@ -100,7 +100,7 @@ fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, String> {
     } else {
         Image::from_sample_bytes(decoded.width(), decoded.height(), mode, pixels, depth, Some("HEIF".into()))
     }
-    .map_err(|e| e.to_string())
+    .map_err(DecodeError::with_source)
 }
 
 pub fn encode_heif(image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -117,6 +117,7 @@ pub struct PreparedHeif {
     native: libheif_rs::Image,
     encoder: libheif_rs::Encoder<'static>,
     presets: bool,
+    has_icc_profile: bool,
 }
 
 impl PreparedHeif {
@@ -124,6 +125,9 @@ impl PreparedHeif {
         use libheif_rs::{Channel, ColorSpace, RgbChroma};
 
         let pixels = image.raw_data()?;
+        if !matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+            return Err(PyValueError::new_err("unsupported mode for HEIF"));
+        }
         if image.width == 0 || image.height == 0 {
             return Err(PyValueError::new_err("cannot encode empty HEIF image"));
         }
@@ -169,7 +173,7 @@ impl PreparedHeif {
         }
         let encoder = HEIF_LIBRARY.encoder_for_format(libheif_rs::CompressionFormat::Hevc).map_err(codec_error)?;
         let presets = encoder.name().starts_with("x265 ");
-        Ok(Self { native, encoder, presets })
+        Ok(Self { native, encoder, presets, has_icc_profile: false })
     }
 
     pub fn supports_presets(&self) -> bool {
@@ -178,6 +182,10 @@ impl PreparedHeif {
 
     pub fn encode(&mut self, options: SaveOptions, preset: &str) -> PyResult<Vec<u8>> {
         use libheif_rs::{EncoderParameterValue, EncoderQuality, HeifContext};
+
+        if options.icc_profile.is_empty() && self.has_icc_profile {
+            return Err(PyValueError::new_err("create a new PreparedHeif to encode without the previous ICC profile"));
+        }
 
         // Other HEVC plugins keep their defaults rather than receiving an
         // x265-specific parameter.
@@ -192,6 +200,7 @@ impl PreparedHeif {
             self.native
                 .set_color_profile_raw(&libheif_rs::ColorProfileRaw::new(libheif_rs::color_profile_types::PROF, options.icc_profile.to_vec()))
                 .map_err(codec_error)?;
+            self.has_icc_profile = true;
         }
         let handle = context.encode_image(&self.native, &mut self.encoder, None).map_err(codec_error)?;
         if !options.exif.is_empty() {
@@ -239,6 +248,25 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unsupported_modes_are_rejected_before_backend_use() {
+        for mode in [PixelMode::La, PixelMode::Cmyk] {
+            let image = Image::from_pixels(1, 1, mode, vec![0; mode.channels()], None).unwrap();
+            assert!(PreparedHeif::new(&image).is_err());
+        }
+    }
+
+    #[test]
+    fn reused_encoder_cannot_silently_retain_an_omitted_profile() {
+        if !backend_info().1 {
+            return;
+        }
+        let image = Image::from_pixels(16, 16, PixelMode::Rgb, vec![0; 16 * 16 * 3], None).unwrap();
+        let mut prepared = PreparedHeif::new(&image).unwrap();
+        prepared.encode(SaveOptions { icc_profile: b"test profile", ..Default::default() }, "fast").unwrap();
+        assert!(prepared.encode(SaveOptions::default(), "fast").is_err());
+    }
 
     #[test]
     fn embedded_previews_decode_only_thumbnail_handles_and_retain_precision() {

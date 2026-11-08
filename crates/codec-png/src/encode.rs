@@ -120,8 +120,15 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
 }
 
 pub(super) fn encode_to(image: &Image, pixels: &[u8], level: u8, output: impl Write) -> PyResult<()> {
+    if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+        return Err(codec_error("unsupported PNG mode"));
+    }
     let channels = image.mode.channels();
-    let stride = image.width as usize * channels;
+    let stride = (image.width as usize).checked_mul(channels).ok_or_else(|| codec_error("PNG row size overflow"))?;
+    let length = stride.checked_mul(image.height as usize).ok_or_else(|| codec_error("PNG buffer size overflow"))?;
+    if pixels.len() != length {
+        return Err(codec_error("invalid PNG input buffer"));
+    }
     if stride == 0 || image.height == 0 {
         return Err(codec_error("cannot encode empty PNG"));
     }

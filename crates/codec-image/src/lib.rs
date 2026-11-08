@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use blanket_codec_common::validate_dimensions;
+use blanket_codec_common::{DecodeError, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageFormat as RustFormat};
 
@@ -34,14 +34,14 @@ pub fn color_type(mode: PixelMode) -> ExtendedColorType {
     }
 }
 
-pub fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, String> {
+pub fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, DecodeError> {
     decode_with_metadata(data, format, format_name, None, false)
 }
 
 pub fn decode_with_metadata(
     data: &[u8], format: RustFormat, format_name: &str, significant_bits: Option<&[u8]>, bilevel: bool,
-) -> Result<Image, String> {
-    let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(|error| error.to_string())?;
+) -> Result<Image, DecodeError> {
+    let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(DecodeError::with_diagnostic_source)?;
     let dimensions = decoder.dimensions();
     validate_dimensions(dimensions.0, dimensions.1)?;
     let color = decoder.color_type();
@@ -54,18 +54,17 @@ pub fn decode_with_metadata(
         let depth = significant_bits
             .filter(|bits| bits.len() == mode.channels() && matches!(bits[0], 10 | 12) && bits.iter().all(|&b| b == bits[0]))
             .map_or(16, |bits| bits[0]);
-        let length = usize::try_from(decoder.total_bytes()).map_err(|error| error.to_string())?;
+        let length = usize::try_from(decoder.total_bytes()).map_err(DecodeError::with_source)?;
         let mut pixels = Vec::new();
-        pixels.try_reserve_exact(length).map_err(|error| error.to_string())?;
+        pixels.try_reserve_exact(length).map_err(DecodeError::with_source)?;
         pixels.resize(length, 0);
-        decoder.read_image(&mut pixels).map_err(|error| error.to_string())?;
+        decoder.read_image(&mut pixels).map_err(DecodeError::with_diagnostic_source)?;
         for bytes in pixels.as_chunks_mut::<2>().0 {
             *bytes = (u16::from_ne_bytes(*bytes) >> (16 - depth)).to_le_bytes();
         }
-        return Image::from_sample_bytes(dimensions.0, dimensions.1, mode, pixels, depth, Some(format_name.into()))
-            .map_err(|error| error.to_string());
+        return Image::from_sample_bytes(dimensions.0, dimensions.1, mode, pixels, depth, Some(format_name.into())).map_err(DecodeError::with_source);
     }
-    let image = image::DynamicImage::from_decoder(decoder).map_err(|error| error.to_string())?;
+    let image = image::DynamicImage::from_decoder(decoder).map_err(DecodeError::with_diagnostic_source)?;
     let (width, height) = (image.width(), image.height());
     if matches!(color, ColorType::L16 | ColorType::La16 | ColorType::Rgb16 | ColorType::Rgba16) {
         let (mode, mut samples) = match color {
@@ -81,7 +80,7 @@ pub fn decode_with_metadata(
                 *sample >>= 16 - depth;
             }
         }
-        return Image::from_samples(width, height, mode, samples, depth, Some(format_name.into())).map_err(|e| e.to_string());
+        return Image::from_samples(width, height, mode, samples, depth, Some(format_name.into())).map_err(DecodeError::with_source);
     }
     let (mode, pixels) = match color {
         ColorType::L8 | ColorType::L16 => {
@@ -92,5 +91,5 @@ pub fn decode_with_metadata(
         ColorType::Rgb8 | ColorType::Rgb16 | ColorType::Rgb32F => (PixelMode::Rgb, image.into_rgb8().into_raw()),
         _ => (PixelMode::Rgba, image.into_rgba8().into_raw()),
     };
-    Image::from_pixels(width, height, mode, pixels, Some(format_name.to_owned())).map_err(|error| error.to_string())
+    Image::from_pixels(width, height, mode, pixels, Some(format_name.to_owned())).map_err(DecodeError::with_source)
 }

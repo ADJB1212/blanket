@@ -29,7 +29,7 @@ pub fn view(image: &Image) -> PyResult<Cow<'_, [u16]>> {
 
 fn view_bytes(source: &[u8], big_endian: bool) -> PyResult<Cow<'_, [u16]>> {
     if big_endian == cfg!(target_endian = "big") {
-        // All u16 bit patterns are valid; align_to checks alignment and bounds.
+        // SAFETY: All u16 bit patterns are valid; align_to checks alignment and bounds.
         let (prefix, samples, suffix) = unsafe { source.align_to::<u16>() };
         if prefix.is_empty() && suffix.is_empty() {
             return Ok(Cow::Borrowed(samples));
@@ -54,7 +54,7 @@ fn decode(source: &[u8], big_endian: bool) -> PyResult<Vec<u16>> {
             dst.write(if big_endian { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) });
         }
     });
-    // Every sample, including the final partial partition, was initialized above.
+    // SAFETY: Every sample, including the final partial partition, was initialized above.
     unsafe { values.set_len(len) };
     Ok(values)
 }
@@ -75,7 +75,7 @@ pub(crate) fn encode(values: &[u16], big_endian: bool) -> PyResult<Vec<u8>> {
             dst.write_copy_of_slice(&if big_endian { value.to_be_bytes() } else { value.to_le_bytes() });
         }
     });
-    // Every byte, including the final partial partition, was initialized above.
+    // SAFETY: Every byte, including the final partial partition, was initialized above.
     unsafe { pixels.set_len(len) };
     Ok(pixels)
 }
@@ -96,7 +96,7 @@ pub fn output_bytes(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
 pub fn with_output(image: &Image, initialize: Option<&[u16]>, process: impl FnOnce(&mut [u16])) -> PyResult<Image> {
     let len = image.raw_data()?.len();
     let mut pixels = if let Some(source) = initialize { encode(source, cfg!(target_endian = "big"))? } else { crate::raster::alloc_pixels(len)? };
-    // All u16 bit patterns are valid; the output allocation is exclusively owned.
+    // SAFETY: All u16 bit patterns are valid; the output allocation is exclusively owned.
     let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<u16>() };
     if !prefix.is_empty() || !suffix.is_empty() {
         let mut values = vec![0; len / 2];

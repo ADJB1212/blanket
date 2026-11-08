@@ -11,7 +11,7 @@ pub fn decode_avif(data: &[u8]) -> Result<Image, String> {
         validate_av1(alpha)?;
     }
     drop(context);
-    decode_rust_image(data, RustFormat::Avif, "AVIF")
+    decode_rust_image(data, RustFormat::Avif, "AVIF").map_err(String::from)
 }
 
 fn validate_av1(mut data: &[u8]) -> Result<(), String> {

@@ -12,7 +12,7 @@ fn decode(encoded: &[u8], chunk_size: usize) -> Image {
     for chunk in encoded.chunks(chunk_size) {
         decoder.feed(chunk).unwrap();
     }
-    assert!(decoder.complete);
+    assert!(decoder.is_complete());
     decoder.image().unwrap().unwrap()
 }
 
