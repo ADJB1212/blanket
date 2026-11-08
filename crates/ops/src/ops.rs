@@ -167,7 +167,9 @@ pub fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extre
     let mask_data = validate_mask(mask, image)?;
     py.detach(|| match image.mode {
         PixelMode::I => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
-        PixelMode::F => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v))),
+        PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => {
+            sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v)))
+        }
         mode if mode.is_big_endian() => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
         _ => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
     })
@@ -193,7 +195,7 @@ fn sample_histogram<const N: usize>(
     }
     let scale = match mode {
         PixelMode::I => 255.0 / (high as i32).wrapping_sub(low as i32) as f32,
-        PixelMode::F => {
+        PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => {
             if high as f32 == low as f32 {
                 return Ok(bins);
             }
@@ -210,7 +212,7 @@ fn sample_histogram<const N: usize>(
             if value.is_finite() {
                 let position = match mode {
                     PixelMode::I => f64::from((value as i32).wrapping_sub(low as i32) as f32 * scale),
-                    PixelMode::F => f64::from((value as f32 - low as f32) * scale),
+                    PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => f64::from((value as f32 - low as f32) * scale),
                     _ => (value - low) * 255.0 / (high - low),
                 };
                 let slot = position.trunc() as i64;
@@ -242,6 +244,8 @@ fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
             4 => spread_pixels::<4>(source, spare, image.width as usize, distance, &mut state),
             6 => spread_pixels::<6>(source, spare, image.width as usize, distance, &mut state),
             8 => spread_pixels::<8>(source, spare, image.width as usize, distance, &mut state),
+            12 => spread_pixels::<12>(source, spare, image.width as usize, distance, &mut state),
+            16 => spread_pixels::<16>(source, spare, image.width as usize, distance, &mut state),
             _ => unreachable!("validated pixel layout"),
         }
     });
@@ -681,6 +685,33 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_float_histogram_decodes_samples_and_applies_pixel_masks() {
+        Python::initialize();
+        Python::attach(|py| {
+            for mode in [PixelMode::RgbF, PixelMode::RgbaF] {
+                let channels = mode.channels();
+                let values = [[0.0_f32, 0.25, 0.5, 0.75], [1.0, 0.75, 0.5, 0.25]];
+                let pixels = values.iter().flat_map(|pixel| pixel[..channels].iter().flat_map(|v| v.to_le_bytes())).collect();
+                let image = Image::from_color_float_bytes(2, 1, mode, pixels).unwrap();
+                let mask = Image::from_pixels(2, 1, PixelMode::L, vec![0, 255], None).unwrap();
+                for extrema in [None, Some((0.0, 1.0))] {
+                    for masked in [false, true] {
+                        let actual = wide_histogram(py, &image, masked.then_some(&mask), extrema).unwrap();
+                        let mut expected = vec![0; channels * 256];
+                        for pixel in &values[usize::from(masked)..] {
+                            for (channel, &value) in pixel[..channels].iter().enumerate() {
+                                expected[channel * 256 + (value * 255.0) as usize] += 1;
+                            }
+                        }
+                        assert_eq!(actual, expected);
+                    }
+                }
+            }
+        });
+    }
+
     #[test]
     fn histogram_matches_scalar_for_masks_repeated_bins_and_chunk_tails() {
         fn check<const C: usize>() {

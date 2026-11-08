@@ -102,14 +102,14 @@ impl CmsTransform {
     ) -> PyResult<Self> {
         py.detach(|| {
             let context = ThreadContext::new();
-            let input_profile = Profile::new_icc_context(&context, input).map_err(error)?;
-            let output_profile = Profile::new_icc_context(&context, output).map_err(error)?;
+            let input_profile = Profile::new_icc_context(&context, input).map_err(|e| error(format!("invalid input ICC profile: {e}")))?;
+            let output_profile = Profile::new_icc_context(&context, output).map_err(|e| error(format!("invalid output ICC profile: {e}")))?;
             let input = PixelMode::parse(input_mode)?;
             let output = PixelMode::parse(output_mode)?;
             let mut options = Flags::default();
             options.0 = flags;
             let transform = if let Some(proof) = proof {
-                let proof = Profile::new_icc_context(&context, proof).map_err(error)?;
+                let proof = Profile::new_icc_context(&context, proof).map_err(|e| error(format!("invalid proof ICC profile: {e}")))?;
                 Transform::new_proofing_context(
                     &context,
                     &input_profile,
@@ -178,6 +178,27 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_transform_profiles_identify_the_argument() {
+        Python::initialize();
+        Python::attach(|py| {
+            let context = ThreadContext::new();
+            let valid = Profile::new_srgb_context(&context).icc().unwrap();
+            let invalid = b"invalid ICC".as_slice();
+            for (input, output, proof, role) in [
+                (invalid, valid.as_slice(), None, "input"),
+                (valid.as_slice(), invalid, None, "output"),
+                (valid.as_slice(), valid.as_slice(), Some(invalid), "proof"),
+            ] {
+                let err = CmsTransform::new(py, input, output, "RGB", "RGB", 0, 0, proof, 0).err().expect("invalid profile must fail");
+                assert!(err.is_instance_of::<PyValueError>(py));
+                let message = err.value(py).to_string();
+                assert!(message.starts_with(&format!("invalid {role} ICC profile: ")), "{message}");
+                assert!(message.contains("Could not create the object"), "{message}");
+            }
+        });
+    }
 
     #[test]
     fn grayscale_profile_transform() {

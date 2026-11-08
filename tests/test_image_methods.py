@@ -152,7 +152,8 @@ def test_eager_verify_draft_and_core_shim() -> None:
     ("mode", "depth", "sample_bytes"),
     [(mode, 8, channels) for mode, channels in (("1", 1), ("L", 1), ("LA", 2), ("P", 1), ("PA", 2), ("RGB", 3), ("RGBA", 4), ("HSV", 3), ("CMYK", 4), ("YCbCr", 3), ("LAB", 3))]
     + [(mode, 32 if mode in ("I", "F") else 16, 4 if mode in ("I", "F") else 2) for mode in ("I", "F", "I;16", "I;16L", "I;16B")]
-    + [(mode, depth, channels * 2) for mode, channels in (("L", 1), ("RGB", 3), ("RGBA", 4)) for depth in (10, 12, 16)],
+    + [(mode, depth, channels * 2) for mode, channels in (("L", 1), ("RGB", 3), ("RGBA", 4)) for depth in (10, 12, 16)]
+    + [("RGB;F", 32, 12), ("RGBA;F", 32, 16)],
 )
 def test_spread_keeps_complete_samples_within_neighborhood(mode: str, depth: int, sample_bytes: int, subtests: pytest.Subtests) -> None:
     for size in [(1, 1), (1, 17), (17, 1), (7, 5), (0, 3)]:

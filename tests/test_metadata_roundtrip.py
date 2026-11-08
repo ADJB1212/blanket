@@ -14,6 +14,7 @@ from PIL import Image as PILImage, ImageCms, PngImagePlugin as PILPng
 from PIL.TiffImagePlugin import IFDRational
 
 from blanket import Image, ImageChops, ImageEnhance, ImageOps, PngImagePlugin
+from blanket._blanket import _write_metadata
 from blanket._exif import read_metadata
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
@@ -67,6 +68,24 @@ def exif_tags() -> Image.Exif:
     exif[34665] = {36867: "2026:10:23 10:00:00", 33434: Fraction(1, 125), 37500: b"opaque maker note", 40965: {1: "R98"}}
     exif[34853] = {1: "N", 2: (IFDRational(40), IFDRational(30), IFDRational(15, 2))}
     return exif
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+def test_tiff_metadata_preserves_all_pages(endian: str) -> None:
+    frames = [PILImage.new("I;16" if endian == "<" else "I;16B", (3, 2), value) for value in (17, 83, 191)]
+    stream = BytesIO()
+    frames[0].save(stream, "TIFF", save_all=True, append_images=frames[1:])
+    data = _write_metadata(stream.getvalue(), "TIFF", b"", b"<title>kept</title>", b"", [])
+    for module in (Image, PILImage):
+        with module.open(BytesIO(data)) as restored, module.open(BytesIO(stream.getvalue())) as original:
+            assert restored.n_frames == len(frames)
+            assert restored.getexif()[700] == b"<title>kept</title>"
+            for index, frame in enumerate(frames):
+                restored.seek(index)
+                original.seek(index)
+                assert restored.size == frame.size
+                assert restored.mode == original.mode
+                assert restored.tobytes() == original.tobytes()
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])

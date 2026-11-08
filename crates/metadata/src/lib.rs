@@ -266,6 +266,9 @@ fn write_metadata_buffer(data: Cow<'_, [u8]>, format: &str, exif: &[u8], xmp: &[
                 header
             } else {
                 let (width, height, alpha) = webp_dimensions(&data)?;
+                if width == 0 || height == 0 {
+                    return Err(codec_error("invalid WebP dimensions"));
+                }
                 let mut header = vec![if alpha { 0x10 } else { 0 }, 0, 0, 0];
                 header.extend_from_slice(&(width - 1).to_le_bytes()[..3]);
                 header.extend_from_slice(&(height - 1).to_le_bytes()[..3]);
@@ -497,7 +500,7 @@ fn write_ifd(output: &mut Vec<u8>, mut entries: Vec<[u8; 12]>, following: u32, l
 fn write_tiff(data: Cow<'_, [u8]>, exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyResult<Vec<u8>> {
     let source = Tiff::new(&data)?;
     let little = source.little;
-    let (base, _) = source.entries(source.number(4, 4)? as usize)?;
+    let (base, next_page) = source.entries(source.number(4, 4)? as usize)?;
     let extra = exif.len() + xmp.len() + icc.len() + 128;
     let mut output = match data {
         Cow::Owned(mut data) => {
@@ -541,7 +544,7 @@ fn write_tiff(data: Cow<'_, [u8]>, exif: &[u8], xmp: &[u8], icc: &[u8]) -> PyRes
             entries.push(record(tag, 1, count, field, little));
         }
     }
-    let root = write_ifd(&mut output, entries, 0, little)?;
+    let root = write_ifd(&mut output, entries, next_page as u32, little)?;
     output[4..8].copy_from_slice(&word(root, little));
     Ok(output)
 }
@@ -683,6 +686,21 @@ mod tests {
         assert_eq!(u32::from_le_bytes(output[4..8].try_into().unwrap()) as usize, output.len() - 8);
         data.extend_from_slice(b"JUNK\xff\xff\xff\xff");
         assert!(write_metadata(&data, "WEBP", &[], b"xmp", &[], &[]).is_err());
+    }
+
+    #[test]
+    fn webp_rejects_zero_dimensions_before_creating_extended_header() {
+        for (width, height) in [(0_u16, 1_u16), (1, 0), (0, 0)] {
+            let mut payload = vec![0; 6];
+            payload.extend_from_slice(&width.to_le_bytes());
+            payload.extend_from_slice(&height.to_le_bytes());
+            let mut data = b"RIFF\0\0\0\0WEBP".to_vec();
+            chunk(&mut data, b"VP8 ", &payload, true).unwrap();
+            let size = (data.len() - 8) as u32;
+            data[4..8].copy_from_slice(&size.to_le_bytes());
+            assert!(write_metadata(&data, "WEBP", &[], b"xmp", &[], &[]).is_err());
+            assert!(encode_metadata(data, "WEBP", &[], b"xmp", &[], &[]).is_err());
+        }
     }
 
     #[test]
