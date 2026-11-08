@@ -78,10 +78,17 @@ def test_bitwise_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
             same(ImageMath.eval(expression, a=a), PILMath.unsafe_eval(expression, a=pa))
 
 
-@pytest.mark.parametrize("expression", ["a + b", "b - a", "a / b", "a < b", "equal(a, b)"])
-def test_mixed_modes(expression: str) -> None:
-    a, pa = pair("I")
-    b, pb = pair("F")
+@pytest.mark.parametrize("expression", ["a + b", "b - a", "a * b", "a / b", "b % a", "a < b", "equal(a, b)", "min(a, b)", "max(b, a)"])
+@pytest.mark.parametrize("mode", ["1", "L", "I"])
+@pytest.mark.parametrize("size", [(0, 1), (17, 3), (17003, 5)])
+def test_mixed_modes(expression: str, mode: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
+    a, pa = pair(mode, size)
+    b, pb = pair("F", (size[0] + 2, size[1]))
+
+    def no_conversion(*args, **kwargs):
+        pytest.fail("mixed math allocated a converted image")
+
+    monkeypatch.setattr(Image.Image, "convert", no_conversion)
     same(ImageMath.eval(expression, a=a, b=b), PILMath.unsafe_eval(expression, a=pa, b=pb))
 
 
@@ -134,15 +141,19 @@ def test_closed_image(mode: str) -> None:
 
 
 @pytest.mark.parametrize("value", [17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf")])
+@pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
 @pytest.mark.parametrize("expression", ["a + n", "n + a", "a - n", "n - a", "a * n", "n * a", "a / n", "n / a", "a % n", "n % a", "a ** n", "n ** a", "a < n", "n < a", "min(a, n)", "max(a, n)", "equal(a, n)", "notequal(a, n)"])
-def test_float_scalars_without_constant_images(expression: str, value: float, monkeypatch: pytest.MonkeyPatch) -> None:
-    a, pa = pair("F", (17, 1))
+def test_float_scalars_without_constant_images(expression: str, value: float, mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    if isinstance(value, int) and mode != "F":
+        value = float(value)
+    a, pa = pair(mode, (17, 1))
     expected = PILMath.unsafe_eval(expression, a=pa, n=value)
 
     def constant_image(*args: object, **kwargs: object) -> None:
         raise AssertionError("float scalar math must not allocate a constant image")
 
     monkeypatch.setattr(Image, "new", constant_image)
+    monkeypatch.setattr(Image.Image, "convert", constant_image)
     same(ImageMath.unsafe_eval(expression, a=a, n=value), expected)
 
 

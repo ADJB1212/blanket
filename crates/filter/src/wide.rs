@@ -9,9 +9,19 @@ use pyo3::exceptions::PyMemoryError;
 use pyo3::prelude::*;
 
 pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weights: &[f32]) -> PyResult<Image> {
-    let source = integer_view(image.raw_data()?);
-    let mut values = source.to_vec();
+    let bytes = image.raw_data()?;
+    let source = integer_view(bytes);
     let (width, height) = (image.width as usize, image.height as usize);
+    if cfg!(target_endian = "little") {
+        let mut pixels = blanket_core::buffers::copy(bytes)?;
+        // All i32 bit patterns are valid; keep the allocation owned as bytes.
+        let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<i32>() };
+        if prefix.is_empty() && suffix.is_empty() {
+            convolve(&source, values, size, (width, height), scale, offset, weights);
+            return Image::from_integer_bytes(image.width, image.height, image.mode, pixels);
+        }
+    }
+    let mut values = source.to_vec();
     convolve(&source, &mut values, size, (width, height), scale, offset, weights);
     drop(source);
     Image::from_integer_bytes(image.width, image.height, image.mode, values.into_iter().map(i32::to_le_bytes).collect::<Vec<_>>().into_flattened())
@@ -43,7 +53,11 @@ fn convolve(source: &[i32], values: &mut [i32], size: usize, dimensions: (usize,
     let (width, height) = dimensions;
     if width >= size && height >= size {
         let radius = size / 2;
-        let weights: Vec<f32> = weights.iter().map(|weight| weight / scale).collect();
+        let mut normalized = [0.0; 25];
+        for (dst, weight) in normalized.iter_mut().zip(weights) {
+            *dst = weight / scale;
+        }
+        let weights = &normalized[..weights.len()];
         blanket_core::parallel::chunks_mut_above(&mut values[radius * width..(height - radius) * width], width * 16, 256 * 1024, |band, rows| {
             for (row_index, output) in rows.chunks_exact_mut(width).enumerate() {
                 let y = radius + band * 16 + row_index;

@@ -768,8 +768,12 @@ impl Image {
                 return Err(PyValueError::new_err("band index out of range"));
             }
             let data = self.raw_data()?;
-            let pixels =
-                py.detach(|| data.chunks_exact(self.raw_bytes_per_pixel()).flat_map(|p| p[channel * 4..channel * 4 + 4].iter().copied()).collect());
+            let pixels = py.detach(|| {
+                data.chunks_exact(self.raw_bytes_per_pixel())
+                    .map(|p| <[u8; 4]>::try_from(&p[channel * 4..channel * 4 + 4]).unwrap())
+                    .collect::<Vec<_>>()
+                    .into_flattened()
+            });
             return Self::from_float_bytes(self.width, self.height, pixels);
         }
         if self.mode.is_wide_scalar() {
@@ -1858,6 +1862,21 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         if let Ok(raw) = view.call_method1("cast", ("B",)) {
             return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
         }
+        macro_rules! copy_typed {
+            ($($sample:ty),+ $(,)?) => {
+                $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
+                    let mut pixels = alloc_pixels(buffer.len_bytes())?;
+                    // Numeric samples accept every bit pattern. Copying retains
+                    // the source byte order for the conversion that follows.
+                    let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<$sample>() };
+                    if prefix.is_empty() && suffix.is_empty() {
+                        buffer.copy_to_slice(obj.py(), values)?;
+                        return Ok(pixels);
+                    }
+                })+
+            };
+        }
+        copy_typed!(u8, u16, i32, f32, f64);
         let bytes = view.call_method0("tobytes")?;
         return crate::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes());
     }
@@ -1898,11 +1917,16 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
         if bit_depth.is_some_and(|depth| depth != 32) {
             return Err(PyValueError::new_err("bit_depth does not match float mode"));
         }
-        let raw = array_bytes(obj)?;
+        let mut raw = array_bytes(obj)?;
         return py.detach(|| {
             let pixels = match typestr.as_str() {
                 "<f4" | "=f4" => raw,
-                ">f4" => raw.as_chunks::<4>().0.iter().map(|bytes| f32::from_be_bytes(*bytes).to_le_bytes()).collect::<Vec<_>>().into_flattened(),
+                ">f4" => {
+                    for bytes in raw.as_chunks_mut::<4>().0 {
+                        bytes.reverse();
+                    }
+                    raw
+                }
                 "<f8" | "=f8" => {
                     raw.as_chunks::<8>().0.iter().map(|bytes| (f64::from_le_bytes(*bytes) as f32).to_le_bytes()).collect::<Vec<_>>().into_flattened()
                 }
@@ -2324,14 +2348,21 @@ fn expand_palette<const C: usize>(indices: &[u8], palette: &[u8]) -> Vec<u8> {
         color.copy_from_slice(palette.get(slot * C..slot * C + C).unwrap_or(&[0, 0, 0, 255][..C]));
         color
     });
-    let mut expanded = vec![0; indices.len() * C];
-    crate::parallel::chunks_mut(&mut expanded, crate::parallel::CHUNK_PIXELS * C, |chunk, dst| {
-        let start = chunk * crate::parallel::CHUNK_PIXELS;
-        for (pixel, &slot) in dst.as_chunks_mut::<C>().0.iter_mut().zip(&indices[start..]) {
-            *pixel = table[usize::from(slot)];
-        }
-    });
-    expanded
+    let mut expanded = Vec::<[u8; C]>::with_capacity(indices.len());
+    crate::parallel::chunks_mut_above(
+        &mut expanded.spare_capacity_mut()[..indices.len()],
+        crate::parallel::CHUNK_PIXELS,
+        crate::parallel::MIN_PARALLEL_BYTES,
+        |chunk, dst| {
+            let start = chunk * crate::parallel::CHUNK_PIXELS;
+            for (pixel, &slot) in dst.iter_mut().zip(&indices[start..]) {
+                pixel.write(table[usize::from(slot)]);
+            }
+        },
+    );
+    // Each reserved pixel was initialized by its palette lookup.
+    unsafe { expanded.set_len(indices.len()) };
+    expanded.into_flattened()
 }
 
 fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destination: PixelMode) -> Vec<u8> {
@@ -2340,20 +2371,34 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
         palette.get(entry..entry + 3).unwrap_or(&[0, 0, 0]).try_into().unwrap()
     });
     let channels = destination.channels();
-    let mut output = vec![0; indices.len() / 2 * channels];
-    crate::parallel::chunks_mut(&mut output, crate::parallel::CHUNK_PIXELS * channels, |chunk, dst| {
-        let start = chunk * crate::parallel::CHUNK_PIXELS * 2;
-        let source = &indices[start..start + dst.len() / channels * 2];
-        for (pair, pixel) in source.as_chunks::<2>().0.iter().zip(dst.chunks_mut(channels)) {
-            let rgb = table[pair[0] as usize];
-            match destination {
-                PixelMode::L => pixel[0] = crate::simd::pillow_luma(rgb[0], rgb[1], rgb[2]),
-                PixelMode::Rgb => pixel.copy_from_slice(&rgb),
-                PixelMode::Rgba => pixel.copy_from_slice(&[rgb[0], rgb[1], rgb[2], pair[1]]),
-                _ => unreachable!(),
+    let len = indices.len() / 2 * channels;
+    let mut output = Vec::<u8>::with_capacity(len);
+    crate::parallel::chunks_mut_above(
+        &mut output.spare_capacity_mut()[..len],
+        crate::parallel::CHUNK_PIXELS * channels,
+        crate::parallel::MIN_PARALLEL_BYTES,
+        |chunk, dst| {
+            let start = chunk * crate::parallel::CHUNK_PIXELS * 2;
+            let source = &indices[start..start + dst.len() / channels * 2];
+            for (pair, pixel) in source.as_chunks::<2>().0.iter().zip(dst.chunks_mut(channels)) {
+                let rgb = table[pair[0] as usize];
+                match destination {
+                    PixelMode::L => {
+                        pixel[0].write(crate::simd::pillow_luma(rgb[0], rgb[1], rgb[2]));
+                    }
+                    PixelMode::Rgb => {
+                        pixel.write_copy_of_slice(&rgb);
+                    }
+                    PixelMode::Rgba => {
+                        pixel.write_copy_of_slice(&[rgb[0], rgb[1], rgb[2], pair[1]]);
+                    }
+                    _ => unreachable!(),
+                }
             }
-        }
-    });
+        },
+    );
+    // Each reserved output byte was initialized above, including alpha.
+    unsafe { output.set_len(len) };
     output
 }
 

@@ -399,11 +399,17 @@ fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult
     ops_lut(py, image, table)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (image, histogram_image, mask, cutoff, ignore, preserve_tone=false))]
 fn ops_autocontrast(
-    py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>,
+    py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>, preserve_tone: bool,
 ) -> PyResult<Image> {
-    let mut bins = ops_histogram(py, histogram_image, mask)?;
+    let mut bins = if preserve_tone && histogram_image.mode == PixelMode::Rgb {
+        let source = histogram_image.pixel_data()?;
+        let mask = validate_mask(mask, histogram_image)?;
+        py.detach(|| luminance_histogram(source, mask))
+    } else {
+        ops_histogram(py, histogram_image, mask)?
+    };
     check_tone_mode(image)?;
     if cutoff.iter().any(|&value| !(0.0..=100.0).contains(&value)) {
         return Err(PyValueError::new_err("cutoff must be between 0 and 100"));
@@ -445,6 +451,43 @@ fn ops_autocontrast(
         }
     }
     ops_lut(py, image, table)
+}
+
+fn luminance_histogram(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
+    use std::simd::num::SimdUint;
+    let count = |start: usize, source: &[u8]| {
+        let mut bins = [0_u64; 256];
+        let end = source.len() / 48 * 48;
+        for i in (0..end).step_by(48) {
+            let [r, g, b] = blanket_core::pixels::load::<3>(&source[i..]);
+            let values = blanket_core::color::luminance_simd(r.cast(), g.cast(), b.cast()).to_array();
+            for (lane, value) in values.into_iter().enumerate() {
+                if mask.is_none_or(|mask| mask[start + i / 3 + lane] != 0) {
+                    bins[value as usize] += 1;
+                }
+            }
+        }
+        for (i, pixel) in source[end..].as_chunks::<3>().0.iter().enumerate() {
+            if mask.is_none_or(|mask| mask[start + end / 3 + i] != 0) {
+                bins[usize::from(blanket_core::simd::pillow_luma(pixel[0], pixel[1], pixel[2]))] += 1;
+            }
+        }
+        bins
+    };
+    let bins = if should_parallel(source.len(), CHUNK_PIXELS * 3, MIN_PARALLEL_BYTES) {
+        source.par_chunks(CHUNK_PIXELS * 3).enumerate().map(|(i, source)| count(i * CHUNK_PIXELS, source)).reduce(
+            || [0; 256],
+            |mut total, bins| {
+                for (total, value) in total.iter_mut().zip(bins) {
+                    *total += value;
+                }
+                total
+            },
+        )
+    } else {
+        count(0, source)
+    };
+    bins.into()
 }
 
 #[pyfunction]

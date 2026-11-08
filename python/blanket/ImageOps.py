@@ -121,12 +121,14 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     """
     if image.mode == "P":
         raise NotImplementedError("mode P support coming soon")
-    source = image.convert("L") if preserve_tone and image.mode != "L" else image
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
     if len(tails) == 2 and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails) and isinstance(ignored, (tuple, list)) and all(isinstance(value, int) and -256 <= value < 256 for value in ignored):
-        return _result(image, ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored))
+        native_tone = preserve_tone and image.mode == "RGB" and image.bit_depth == 8
+        source = image.convert("L") if preserve_tone and image.mode != "L" and not native_tone else image
+        return _result(image, ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored, native_tone))
     # Retain Python's permissive cutoff and index semantics outside the native fast path.
+    source = image.convert("L") if preserve_tone and image.mode != "L" else image
     histogram = ops_histogram(source._native, None if mask is None else mask._native)
     table = []
     for offset in range(0, len(histogram), 256):

@@ -1,6 +1,8 @@
 //! Image arithmetic for ImageMath.
 
-use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut, chunks_mut_above};
+#[cfg(test)]
+use blanket_core::parallel::chunks_mut;
+use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut_above};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyMemoryError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -50,7 +52,16 @@ mod tests {
                         apply_pixels(&mut expected, &a, b, [width, left_width, right_width], scalar, |_, _, _| 0);
                         apply_pixels(&mut actual, &a, b, [width, left_width, right_width], scalar, |out, a, b| simd::apply(out, a, b, op, float));
                         if float {
-                            let result = float_pixels(expected.len(), &a, b, [width, left_width, right_width], None, op, false).unwrap();
+                            let result = float_pixels(
+                                expected.len(),
+                                simd::FloatInput::new(&a, PixelMode::F),
+                                b.map(|b| simd::FloatInput::new(b, PixelMode::F)),
+                                [width, left_width, right_width],
+                                None,
+                                op,
+                                false,
+                            )
+                            .unwrap();
                             for (actual, expected) in result.as_chunks::<4>().0.iter().zip(expected.as_chunks::<4>().0) {
                                 if f32::from_le_bytes(*expected).is_nan() {
                                     assert!(f32::from_le_bytes(*actual).is_nan(), "{name}");
@@ -250,6 +261,7 @@ impl Operation {
     }
 }
 
+#[cfg(test)]
 fn apply_pixels(
     output: &mut [u8], a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3],
     operation: impl Fn([u8; 4], [u8; 4]) -> [u8; 4] + Sync + Send,
@@ -313,7 +325,8 @@ fn integer_pixels<const OP: usize>(
 }
 
 fn float_pixels(
-    len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, op: Operation, reverse: bool,
+    len: usize, a: simd::FloatInput<'_>, b: Option<simd::FloatInput<'_>>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>,
+    op: Operation, reverse: bool,
 ) -> PyResult<Vec<u8>> {
     macro_rules! dispatch {
         ($($variant:ident),+ $(,)?) => {
@@ -327,11 +340,10 @@ fn float_pixels(
 }
 
 fn float_pixels_impl<const OP: usize>(
-    len: usize, a: &[u8], b: Option<&[u8]>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>, reverse: bool,
+    len: usize, a: simd::FloatInput<'_>, b: Option<simd::FloatInput<'_>>, [width, left_width, right_width]: [usize; 3], scalar: Option<f32>,
+    reverse: bool,
 ) -> PyResult<Vec<u8>> {
     let mut output = blanket_core::buffers::reserved::<[u8; 4]>(len / 4)?;
-    let a = a.as_chunks::<4>().0;
-    let b = b.map(|b| b.as_chunks::<4>().0);
     const CHUNK: usize = 64 << 10;
     let threshold = if matches!(Operation::ALL[OP], Operation::Mod | Operation::Pow) { 256 << 10 } else { 4 << 20 };
     chunks_mut_above(&mut output.spare_capacity_mut()[..len / 4], CHUNK, threshold, |chunk, dst| {
@@ -347,7 +359,7 @@ fn float_pixels_impl<const OP: usize>(
                 (y * left_width + x, y * right_width + x, dst.len().min(width - x))
             };
             let (span, rest) = dst.split_at_mut(count);
-            simd::apply_float(span, &a[ai..ai + count], b.map(|b| &b[bi..bi + count]), scalar, Operation::ALL[OP], reverse);
+            simd::apply_float(span, a.slice(ai, count), b.map(|b| b.slice(bi, count)), scalar, Operation::ALL[OP], reverse);
             index += count;
             dst = rest;
         }
@@ -369,9 +381,6 @@ fn math_apply(
     if op.unary() != (right.is_none() && !has_scalar) || (right.is_some() && has_scalar) || (scalar.is_some() && integer_scalar.is_some()) {
         return Err(PyValueError::new_err("wrong number of image math operands"));
     }
-    if scalar.is_some() && left.mode != PixelMode::F {
-        return Err(PyValueError::new_err("scalar image math requires F mode"));
-    }
     let scalar = scalar
         .map(|value| {
             let sample = value as f32;
@@ -384,14 +393,11 @@ fn math_apply(
     if integer_scalar.is_some() && !integer_group(left.mode) {
         return Err(PyValueError::new_err("integer scalar image math requires 1, L, or I mode"));
     }
-    if left_byte || right_byte {
-        if !integer_group(left.mode) || right.is_some_and(|r| !integer_group(r.mode)) {
-            return Err(PyValueError::new_err("image math requires matching I or F operands"));
-        }
-    } else if !matches!(left.mode, PixelMode::I | PixelMode::F) || right.is_some_and(|r| r.mode != left.mode) {
+    let supported = |mode| integer_group(mode) || mode == PixelMode::F;
+    if !supported(left.mode) || right.is_some_and(|r| !supported(r.mode)) {
         return Err(PyValueError::new_err("image math requires matching I or F operands"));
     }
-    let float = left.mode == PixelMode::F;
+    let float = left.mode == PixelMode::F || right.is_some_and(|r| r.mode == PixelMode::F) || scalar.is_some();
     if float && op.integer_only() {
         return Err(PyTypeError::new_err(format!("bad operand type for '{operation}'")));
     }
@@ -401,15 +407,24 @@ fn math_apply(
     let height = right.map_or(left.height, |r| r.height.min(left.height)) as usize;
     let len = width.checked_mul(height).and_then(|n| n.checked_mul(4)).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     if float {
-        let output =
-            py.detach(|| float_pixels(len, a_raw, b_raw, [width, left.width as usize, right.map_or(0, |r| r.width as usize)], scalar, op, reverse))?;
+        let output = py.detach(|| {
+            float_pixels(
+                len,
+                simd::FloatInput::new(a_raw, left.mode),
+                b_raw.zip(right).map(|(data, image)| simd::FloatInput::new(data, image.mode)),
+                [width, left.width as usize, right.map_or(0, |r| r.width as usize)],
+                scalar,
+                op,
+                reverse,
+            )
+        })?;
         return if integer_output {
             Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
         } else {
             Image::from_float_bytes(width as u32, height as u32, output)
         };
     }
-    if left_byte || right_byte || integer_scalar.is_some() {
+    {
         let mut output = blanket_core::buffers::reserved::<[u8; 4]>(len / 4)?;
         py.detach(|| {
             let dimensions = [width, left.width as usize, right.map_or(0, |r| r.width as usize)];
@@ -427,24 +442,6 @@ fn math_apply(
         });
         // Every output pixel was initialized by its disjoint partition.
         unsafe { output.set_len(len / 4) };
-        return Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output.into_flattened());
+        Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output.into_flattened())
     }
-    let mut output = blanket_core::buffers::reserved(len)?;
-    output.resize(len, 0);
-    py.detach(|| {
-        let dimensions = [width, left.width as usize, right.map_or(0, |r| r.width as usize)];
-        macro_rules! dispatch {
-            ($($variant:ident),+ $(,)?) => {
-                match op {
-                    $(Operation::$variant => {
-                        apply_pixels(&mut output, a_raw, b_raw, dimensions, |a, b| {
-                            Operation::$variant.integer(i32::from_le_bytes(a), i32::from_le_bytes(b)).to_le_bytes()
-                        }, |out, a, b| simd::apply(out, a, b, Operation::$variant, false));
-                    }),+
-                }
-            }
-        }
-        dispatch!(Abs, Neg, Invert, Add, Sub, Mul, Div, Mod, Pow, And, Or, Xor, Lshift, Rshift, Eq, Ne, Lt, Le, Gt, Ge, Min, Max);
-    });
-    Image::from_integer_bytes(width as u32, height as u32, PixelMode::I, output)
 }

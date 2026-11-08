@@ -67,7 +67,7 @@ def _png_regions(
         prepared[0] = prepared[0].crop((0, 0, *canvas))
     offsets = [(0, 0)] * int(default_image)
     for record in records:
-        prepared.append(record.image if record.bbox is None else record.image.crop(record.bbox))
+        prepared.append(record.image if record.bbox is None or record.bbox == (0, 0, *record.image.size) else record.image.crop(record.bbox))
         offsets.append((0, 0) if record.bbox is None else record.bbox[:2])
     if prepared[0].size != canvas:
         prepared[0] = prepared[0].crop((0, 0, *canvas))

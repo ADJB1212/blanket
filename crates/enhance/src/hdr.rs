@@ -115,13 +115,32 @@ fn hdr_tone_map(
     let mut output = alloc_pixels(source.len() / input_bytes * output_bytes)?;
     let maximum = if image.mode == PixelMode::F { 1.0 } else { ((1_u64 << image.bit_depth) - 1) as f64 };
     let exposure_scale = exposure.exp2();
+    let colors = if matches!(mode, PixelMode::La | PixelMode::Rgba) { channels - 1 } else { channels };
+    let gamma = 1.2 + 0.42 * (peak / 1000.0).log10();
     py.detach(|| {
+        let table_size = if image.bit_depth == 8 { 256 } else { 65536 };
+        let table = if image.mode != PixelMode::F && transfer != "linear" && source.len() / input_bytes * colors >= table_size * 2 {
+            (0..table_size).map(|value| linearize(value as f64 / maximum, transfer, reference_white).min(1e30)).collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
         chunks_mut(&mut output, CHUNK_PIXELS * output_bytes, |chunk, dst| {
             for (i, pixel) in dst.chunks_exact_mut(output_bytes).enumerate() {
                 let start = (chunk * CHUNK_PIXELS + i) * input_bytes;
                 let data = &source[start..start + input_bytes];
                 let mut values = [0.0; 4];
                 for (c, value) in values.iter_mut().enumerate().take(channels) {
+                    if c < colors && !table.is_empty() {
+                        let sample = if image.mode.is_big_endian() {
+                            u16::from_be_bytes(data.try_into().unwrap()) as usize
+                        } else if image.bit_depth > 8 {
+                            u16::from_le_bytes([data[c * 2], data[c * 2 + 1]]) as usize
+                        } else {
+                            usize::from(data[c])
+                        };
+                        *value = table[sample];
+                        continue;
+                    }
                     *value = match image.mode {
                         PixelMode::F => f64::from(f32::from_le_bytes(data.try_into().unwrap())),
                         mode if mode.is_big_endian() => f64::from(u16::from_be_bytes(data.try_into().unwrap())) / maximum,
@@ -129,9 +148,10 @@ fn hdr_tone_map(
                         _ => f64::from(data[c]) / maximum,
                     };
                 }
-                let colors = if matches!(mode, PixelMode::La | PixelMode::Rgba) { channels - 1 } else { channels };
-                for value in &mut values[..colors] {
-                    *value = linearize(*value, transfer, reference_white).min(1e30);
+                if table.is_empty() {
+                    for value in &mut values[..colors] {
+                        *value = linearize(*value, transfer, reference_white).min(1e30);
+                    }
                 }
                 if transfer == "hlg" {
                     // BT.2100 display OOTF, with peak-dependent system gamma.
@@ -142,7 +162,6 @@ fn hdr_tone_map(
                     } else {
                         values[0]
                     };
-                    let gamma = 1.2 + 0.42 * (peak / 1000.0).log10();
                     let factor = luminance.powf(gamma - 1.0);
                     for value in &mut values[..colors] {
                         *value = (*value * factor * peak / reference_white).min(1e30);

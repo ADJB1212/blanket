@@ -33,11 +33,17 @@ fn image_new(py: Python<'_>, mode: &str, size: (u32, u32), color: Vec<u8>, bit_d
             .checked_mul(size.1 as usize)
             .and_then(|n| n.checked_mul(color.len()))
             .ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
-        let mut pixels = blanket_core::raster::alloc_pixels(len)?;
+        let mut pixels = blanket_core::buffers::reserved::<u8>(len)?;
         py.detach(|| {
-            for pixel in pixels.chunks_exact_mut(color.len()) {
-                pixel.copy_from_slice(&color);
+            let spare = &mut pixels.spare_capacity_mut()[..len];
+            match mode.channels() {
+                1 => fill_pixels::<2>(spare, &color),
+                3 => fill_pixels::<6>(spare, &color),
+                4 => fill_pixels::<8>(spare, &color),
+                _ => unreachable!(),
             }
+            // Each complete sample pixel was initialized by the fill kernel.
+            unsafe { pixels.set_len(len) };
         });
         return Image::from_sample_bytes(size.0, size.1, mode, pixels, bit_depth, None);
     }

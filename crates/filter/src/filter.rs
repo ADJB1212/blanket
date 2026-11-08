@@ -168,6 +168,12 @@ pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyRes
     if rank < 0 || i64::from(rank) >= count {
         return Err(PyValueError::new_err("bad rank value"));
     }
+    if size == 1 {
+        if !blanket_core::samples::supported(image) && !matches!(image.mode, PixelMode::I | PixelMode::F) {
+            image.pixel_data()?;
+        }
+        return image.copy(py);
+    }
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::neighborhood(image, (size / 2) as usize, Some(rank as u64)));
     }
@@ -272,15 +278,14 @@ pub(crate) fn extrema_line<T: Copy + Ord>(
 
 fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>) -> PyResult<Image> {
     let source = image.pixel_data()?;
+    if radius == 0 {
+        return output(image, py.detach(|| blanket_core::buffers::copy(source))?);
+    }
     let mut pixels = alloc_pixels(source.len())?;
     let width = image.width as usize;
     let height = image.height as usize;
     let channels = image.mode.channels();
     if pixels.is_empty() {
-        return output(image, pixels);
-    }
-    if radius == 0 {
-        pixels.copy_from_slice(source);
         return output(image, pixels);
     }
     py.detach(|| {

@@ -43,7 +43,7 @@ class _Operand:
     def _apply(self, operation: str, left: _Operand | float, right: _Operand | float | None = None, *, integer_output: bool = False) -> _Operand:
         """Apply a native math operation to operands or scalars."""
         operand, value, reverse = (left, right, False) if isinstance(left, _Operand) else (right, left, True)
-        if isinstance(operand, _Operand) and operand.im.mode == "F" and isinstance(value, (int, float)):
+        if isinstance(operand, _Operand) and (operand.im.mode == "F" or isinstance(value, float)) and isinstance(value, (int, float)):
             operand.im.load()
             return _Operand(Image.Image(math_apply(operation, operand.im._native, integer_output=integer_output, scalar=float(value), reverse=reverse)))
         if isinstance(operand, _Operand) and operand.im.mode in _INTEGER_MODES and isinstance(value, int):
@@ -52,9 +52,6 @@ class _Operand:
             return _Operand(Image.Image(math_apply(operation, operand.im._native, integer_output=integer_output, integer_scalar=value, reverse=reverse)))
         first = self._coerce(left)
         second = None if right is None else self._coerce(right)
-        if second is not None and first.mode != second.mode and not {first.mode, second.mode} <= _INTEGER_MODES:
-            first = first.convert("F")
-            second = second.convert("F")
         first.load()
         if second is not None:
             second.load()

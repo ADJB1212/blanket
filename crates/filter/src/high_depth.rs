@@ -17,7 +17,11 @@ fn kernel_values(image: &Image, source: &[u16], values: &mut [u16], size: usize,
     let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
     let radius = size / 2;
     if width >= size && height >= size {
-        let weights: Vec<f32> = weights.iter().map(|weight| weight / scale).collect();
+        let mut normalized = [0.0; 25];
+        for (dst, weight) in normalized.iter_mut().zip(weights) {
+            *dst = weight / scale;
+        }
+        let weights = &normalized[..weights.len()];
         let stride = width * channels;
         blanket_core::parallel::chunks_mut_above(&mut values[radius * stride..(height - radius) * stride], stride * 16, 256 * 1024, |band, rows| {
             for (row_index, output) in rows.chunks_exact_mut(stride).enumerate() {

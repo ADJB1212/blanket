@@ -6,6 +6,55 @@ import struct
 import pytest
 
 from blanket import Image, ImageDraw, ImageHash, ImageOps, ImageStat, _blanket
+from blanket._sequence import _png_regions
+
+
+def test_apng_full_frame_deltas_reuse_prepared_images(monkeypatch):
+    first = Image.new("RGBA", (17, 3), (17, 31, 89, 255))
+    second = Image.new("RGBA", first.size, (71, 113, 173, 149))
+
+    def no_crop(*args, **kwargs):
+        pytest.fail("full-frame APNG delta copied the raster")
+
+    monkeypatch.setattr(Image.Image, "crop", no_crop)
+    frames, durations, disposals, blends, regions = _png_regions([first, second], [10, 20], [0, 0], [0, 0], False, True)
+    assert frames[0] is first and frames[1] is second
+    assert (durations, disposals, blends, regions) == ([10, 20], [0, 0], [0, 0], ((17, 3), [(0, 0), (0, 0)]))
+
+
+@pytest.mark.parametrize("size", [(0, 1), (17, 3), (17003, 5)])
+@pytest.mark.parametrize("masked", [False, True])
+@pytest.mark.parametrize("cutoff,ignore", [(0, None), ((1, 3), [0, -1]), (100, 17)])
+def test_tone_preserving_autocontrast_needs_no_grayscale_image(size, masked, cutoff, ignore, monkeypatch):
+    image = Image.frombytes("RGB", size, bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * 3)))
+    mask = Image.frombytes("L", size, bytes(i % 3 for i in range(size[0] * size[1]))) if masked else None
+    ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
+    tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
+    expected = Image.Image(_blanket.ops_autocontrast(image._native, image.convert("L")._native, None if mask is None else mask._native, tails, ignored))
+
+    def no_conversion(*args, **kwargs):
+        pytest.fail("autocontrast allocated a grayscale image")
+
+    monkeypatch.setattr(Image.Image, "convert", no_conversion)
+    assert ImageOps.autocontrast(image, cutoff, ignore, mask, preserve_tone=True) == expected
+
+
+@pytest.mark.parametrize("dtype", [">f4", "<f8", ">f8", "<i4", ">u2"])
+@pytest.mark.parametrize("layout", ["contiguous", "strided", "reversed", "transposed"])
+def test_array_snapshots_preserve_samples_and_source(dtype, layout):
+    np = pytest.importorskip("numpy")
+    source = np.arange(17 * 6, dtype=np.float64).astype(dtype).reshape(6, 17)
+    if "f" in dtype:
+        source[0, :5] = [-0.0, -1.25, float("nan"), float("inf"), -float("inf")]
+    view = {"contiguous": source, "strided": source[::2, ::2], "reversed": source[::-1, ::-1], "transposed": source.T}[layout]
+    before = source.tobytes()
+    expected = view.astype("<f4").tobytes() if "f" in dtype else view.tobytes()
+    image = Image.fromarray(view)
+    assert image.size == (view.shape[1], view.shape[0])
+    assert image.tobytes() == expected
+    assert source.tobytes() == before
+    source.fill(0)
+    assert image.tobytes() == expected
 
 
 @pytest.mark.parametrize(

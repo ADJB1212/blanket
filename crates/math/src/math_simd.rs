@@ -58,39 +58,80 @@ pub(super) fn apply_integer(output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: In
 
 #[inline(always)]
 pub(super) fn apply_float(
-    output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, scalar: Option<f32>, op: Operation, reverse: bool,
+    output: &mut [std::mem::MaybeUninit<[u8; 4]>], a: FloatInput<'_>, b: Option<FloatInput<'_>>, scalar: Option<f32>, op: Operation, reverse: bool,
 ) {
-    assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
     let end = if matches!(op, Operation::Mod | Operation::Pow) { 0 } else { output.len() / 4 * 4 };
-    let write = |dst: &mut [std::mem::MaybeUninit<[u8; 4]>; 4], left: &[[u8; 4]; 4], right| {
-        let left = f32x4::from_array(left.map(f32::from_le_bytes));
+    let write = |dst: &mut [std::mem::MaybeUninit<[u8; 4]>; 4], left, right| {
         let (left, right) = if reverse { (right, left) } else { (left, right) };
         *dst = float_operation(op, left, right).to_array().map(|v| std::mem::MaybeUninit::new(v.to_le_bytes()));
     };
     let dst = output[..end].as_chunks_mut::<4>().0;
-    let left = a[..end].as_chunks::<4>().0;
-    if let Some(value) = scalar {
-        let value = f32x4::splat(value);
-        for (dst, left) in dst.iter_mut().zip(left) {
-            write(dst, left, value);
+    match (a, b) {
+        (FloatInput::Float(left), None) => {
+            let right = f32x4::splat(scalar.unwrap_or(0.0));
+            for (dst, left) in dst.iter_mut().zip(left[..end].as_chunks::<4>().0) {
+                write(dst, f32x4::from_array(left.map(f32::from_le_bytes)), right);
+            }
         }
-    } else if let Some(b) = b {
-        for ((dst, left), right) in dst.iter_mut().zip(left).zip(b[..end].as_chunks::<4>().0) {
-            write(dst, left, f32x4::from_array(right.map(f32::from_le_bytes)));
+        (FloatInput::Float(left), Some(FloatInput::Float(right))) => {
+            for ((dst, left), right) in dst.iter_mut().zip(left[..end].as_chunks::<4>().0).zip(right[..end].as_chunks::<4>().0) {
+                write(dst, f32x4::from_array(left.map(f32::from_le_bytes)), f32x4::from_array(right.map(f32::from_le_bytes)));
+            }
         }
-    } else {
-        for (dst, left) in dst.iter_mut().zip(left) {
-            write(dst, left, f32x4::splat(0.0));
+        _ => {
+            for (i, dst) in dst.iter_mut().enumerate() {
+                let index = i << 2;
+                let right = b.map_or_else(|| f32x4::splat(scalar.unwrap_or(0.0)), |b| b.vector(index));
+                write(dst, a.vector(index), right);
+            }
         }
     }
-    for i in end..output.len() {
-        let left = f32::from_le_bytes(a[i]);
-        let right = scalar.unwrap_or_else(|| b.map_or(0.0, |b| f32::from_le_bytes(b[i])));
+    for (i, out) in output.iter_mut().enumerate().skip(end) {
+        let left = a.sample(i);
+        let right = scalar.unwrap_or_else(|| b.map_or(0.0, |b| b.sample(i)));
         let (left, right) = if reverse { (right, left) } else { (left, right) };
-        output[i].write(op.float(left, right).to_le_bytes());
+        out.write(op.float(left, right).to_le_bytes());
     }
 }
 
+#[derive(Clone, Copy)]
+pub(super) enum FloatInput<'a> {
+    Float(&'a [[u8; 4]]),
+    Integer(IntegerInput<'a>),
+}
+
+impl<'a> FloatInput<'a> {
+    pub(super) fn new(data: &'a [u8], mode: blanket_core::PixelMode) -> Self {
+        if mode == blanket_core::PixelMode::F {
+            Self::Float(data.as_chunks::<4>().0)
+        } else {
+            Self::Integer(IntegerInput::new(data, mode != blanket_core::PixelMode::I))
+        }
+    }
+
+    pub(super) fn slice(self, start: usize, len: usize) -> Self {
+        match self {
+            Self::Float(data) => Self::Float(&data[start..start + len]),
+            Self::Integer(data) => Self::Integer(data.slice(start, len)),
+        }
+    }
+
+    fn vector(self, index: usize) -> f32x4 {
+        match self {
+            Self::Float(data) => f32x4::from_array(std::array::from_fn(|lane| f32::from_le_bytes(data[index + lane]))),
+            Self::Integer(data) => data.vector(index).cast(),
+        }
+    }
+
+    fn sample(self, index: usize) -> f32 {
+        match self {
+            Self::Float(data) => f32::from_le_bytes(data[index]),
+            Self::Integer(data) => data.sample(index) as f32,
+        }
+    }
+}
+
+#[cfg(test)]
 #[inline]
 pub(super) fn apply(output: &mut [[u8; 4]], a: &[[u8; 4]], b: Option<&[[u8; 4]]>, op: Operation, float: bool) -> usize {
     assert!(a.len() >= output.len() && b.is_none_or(|b| b.len() >= output.len()));
@@ -274,6 +315,38 @@ mod tests {
     }
 
     #[test]
+    fn mixed_float_inputs_preserve_integer_rounding_tails_and_guards() {
+        let integers = [i32::MIN, i32::MAX, -16777217, 16777217, -1, 0, 1];
+        for len in [0, 1, 3, 4, 5, 17, 67] {
+            let bytes: Vec<u8> = (0..len + 1).map(|i| (i * 79) as u8).collect();
+            let wide: Vec<u8> = std::iter::once(0).chain((0..len).flat_map(|i| integers[i % integers.len()].to_le_bytes())).collect();
+            let floats: Vec<_> = (0..len).map(|i| (integers[i % integers.len()] as f32 / 3.0).to_le_bytes()).collect();
+            let right = FloatInput::Float(&floats);
+            for left in [FloatInput::new(&bytes[1..], blanket_core::PixelMode::L), FloatInput::new(&wide[1..], blanket_core::PixelMode::I)] {
+                for reverse in [false, true] {
+                    for op in Operation::ALL.into_iter().filter(|op| !op.integer_only()) {
+                        let mut output = vec![std::mem::MaybeUninit::new([0xa5; 4]); len + 2];
+                        apply_float(&mut output[1..len + 1], left, Some(right), None, op, reverse);
+                        // Every output sample was initialized by the kernel.
+                        let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                        assert_eq!(output[0], [0xa5; 4]);
+                        assert_eq!(output[len + 1], [0xa5; 4]);
+                        for (i, value) in output[1..len + 1].iter().enumerate() {
+                            let (a, b) = if reverse { (right.sample(i), left.sample(i)) } else { (left.sample(i), right.sample(i)) };
+                            let expected = op.float(a, b);
+                            if expected.is_nan() {
+                                assert!(f32::from_le_bytes(*value).is_nan());
+                            } else {
+                                assert_eq!(*value, expected.to_le_bytes());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn scalar_broadcast_preserves_operand_order_tails_and_guards() {
         let values = [f32::NAN, f32::NEG_INFINITY, -3.5, -0.0, 0.0, 1.0, f32::INFINITY, f32::from_bits(1)];
         for name in ["add", "sub", "mul", "div", "mod", "pow", "eq", "ne", "lt", "le", "gt", "ge", "min", "max"] {
@@ -286,7 +359,7 @@ mod tests {
                                 std::iter::repeat_n(0, offset).chain((0..len).flat_map(|i| values[i % values.len()].to_le_bytes())).collect();
                             let input = source[offset..].as_chunks::<4>().0;
                             let mut uninit = vec![std::mem::MaybeUninit::new([0xa5; 4]); len + 2];
-                            apply_float(&mut uninit[1..len + 1], input, None, Some(value), op, reverse);
+                            apply_float(&mut uninit[1..len + 1], FloatInput::Float(input), None, Some(value), op, reverse);
                             // SAFETY: the guarded elements started initialized and the kernel wrote every output sample.
                             let initialized: Vec<_> = uninit.iter().map(|sample| unsafe { sample.assume_init() }).collect();
                             assert_eq!(initialized[0], [0xa5; 4]);

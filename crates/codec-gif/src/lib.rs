@@ -99,7 +99,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             } else if transparent_background {
                 Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|error| error.to_string())?
             } else {
-                let pixels = canvas.as_chunks::<4>().0.iter().flat_map(|pixel| pixel[..3].iter().copied()).collect();
+                let pixels = canvas.as_chunks::<4>().0.iter().map(|pixel| [pixel[0], pixel[1], pixel[2]]).collect::<Vec<_>>().into_flattened();
                 Image::from_pixels(width, height, PixelMode::Rgb, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
             };
             sequence.frames.push(Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 });

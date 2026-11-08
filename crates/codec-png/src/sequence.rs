@@ -52,7 +52,7 @@ impl CanvasSample for u16 {
         value as u16
     }
     fn pack(canvas: &[[Self; 4]], _mode: PixelMode) -> Vec<u8> {
-        canvas.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+        canvas.iter().map(|pixel| pixel.map(u16::to_le_bytes)).collect::<Vec<_>>().into_flattened().into_flattened()
     }
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
         for (src, dst) in source.as_chunks::<8>().0.iter().zip(canvas) {

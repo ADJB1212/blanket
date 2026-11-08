@@ -15,6 +15,24 @@ from blanket._exif import read_metadata
 MASTERING = (0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290, 1000.0, 0.0005)
 
 
+@pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("RGB", 10), ("RGBA", 16), ("I;16B", 16)])
+@pytest.mark.parametrize("transfer", ["srgb", "pq", "hlg"])
+@pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])
+def test_transfer_tables_match_small_image_calculations(mode, depth, transfer, operator):
+    channels = Image.getmodebands(mode)
+    maximum = (1 << depth) - 1
+    samples = [(i * 719 + i // 3) & maximum for i in range(17 * channels)]
+    raw = bytes(samples) if depth == 8 else struct.pack(f"{'>' if mode == 'I;16B' else '<'}{len(samples)}H", *samples)
+    small = Image.frombytes(mode, (17, 1), raw, bit_depth=depth if mode != "I;16B" else 8)
+    repeats = 8193 if depth > 8 else 33
+    large = Image.frombytes(mode, (17 * repeats, 1), raw * repeats, bit_depth=depth if mode != "I;16B" else 8)
+    options = {"operator": operator, "transfer": transfer, "primaries": "bt2020", "exposure": 0.75, "reference_white": 100.0, "peak_luminance": 2000.0, "bit_depth": 8 if mode == "LA" else 16}
+    expected = ImageHdr.tone_map(small, **options)
+    result = ImageHdr.tone_map(large, **options)
+    assert result.tobytes() == expected.tobytes() * repeats
+    assert large.tobytes() == raw * repeats
+
+
 def curve(value, operator):
     if operator == "reinhard":
         return value / (1 + value)
