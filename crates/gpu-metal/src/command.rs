@@ -1,6 +1,7 @@
 use std::ptr::NonNull;
 use std::sync::{Arc, Condvar, Mutex, Weak};
 
+use blanket_gpu::GpuError;
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
@@ -62,11 +63,14 @@ impl Submission {
     fn retain_buffer(&mut self, buffer: &ProtocolObject<dyn MTLBuffer>) {
         self.make_resident(buffer);
         self.buffers.entry(std::ptr::from_ref(buffer) as usize).or_insert_with(|| {
-            // Encoding callers provide a live buffer.
+            // SAFETY: Encoding callers provide a live buffer.
             unsafe { Retained::retain(std::ptr::from_ref(buffer).cast_mut()) }.unwrap()
         });
     }
 
+    /// # Safety
+    /// `bytes` must be readable for `len` bytes and not overlap the control pages.
+    /// The device must own this submission's resources.
     unsafe fn copy_controls(&mut self, device: &ProtocolObject<dyn MTLDevice>, bytes: NonNull<std::ffi::c_void>, len: usize) -> Option<u64> {
         let size = len.checked_add(CONTROL_ALIGNMENT - 1)? / CONTROL_ALIGNMENT * CONTROL_ALIGNMENT;
         while self.controls.get(self.control_page).is_some_and(|page| size > page.length().saturating_sub(self.control_offset)) {
@@ -81,7 +85,7 @@ impl Submission {
         if size > page.length() {
             return None;
         }
-        // Each control slice owns a distinct aligned range until GPU completion.
+        // SAFETY: Each control slice owns a distinct aligned range until GPU completion.
         unsafe { std::ptr::copy_nonoverlapping(bytes.cast::<u8>().as_ptr(), page.contents().cast::<u8>().as_ptr().add(offset), len) };
         self.control_offset += size;
         self.make_resident(&page);
@@ -107,7 +111,7 @@ impl Submission {
 // Completion records remain independent when their Metal storage is recycled.
 struct Completion {
     status: MTLCommandBufferStatus,
-    error: Option<String>,
+    error: Option<GpuError>,
 }
 
 #[derive(Default)]
@@ -116,7 +120,7 @@ struct QueueState {
     storage: Mutex<Vec<Submission>>,
 }
 
-// Submission storage is exclusively owned while encoding or cached under a lock.
+// SAFETY: Submission storage is exclusively owned while encoding or cached under a lock.
 unsafe impl Send for Submission {}
 
 pub(super) struct Queue {
@@ -134,8 +138,9 @@ pub(super) struct CommandBuffer {
     state: Arc<QueueState>,
 }
 
-// Encoding is private to one caller; submitted resources survive through feedback.
+// SAFETY: Encoding is private to one caller; submitted resources survive through feedback.
 unsafe impl Send for CommandBuffer {}
+// SAFETY: Submission mutation is locked; shared completion queries use a separate lock.
 unsafe impl Sync for CommandBuffer {}
 
 pub(super) struct Encoder {
@@ -144,8 +149,8 @@ pub(super) struct Encoder {
 }
 
 impl Queue {
-    pub(super) fn new(device: &Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self, String> {
-        let queue = device.newMTL4CommandQueue().ok_or("cannot allocate Metal 4 command queue")?;
+    pub(super) fn new(device: &Retained<ProtocolObject<dyn MTLDevice>>) -> Result<Self, GpuError> {
+        let queue = device.newMTL4CommandQueue().ok_or_else(|| GpuError::allocation("cannot allocate Metal 4 command queue"))?;
         Ok(Self { device: device.clone(), queue, state: Arc::default() })
     }
 
@@ -155,6 +160,7 @@ impl Queue {
         submission.buffer.beginCommandBufferWithAllocator(&submission.allocator);
         submission.buffer.useResidencySet(&submission.residency);
         for slot in 0..6 {
+            // SAFETY: Slots 0 through 5 are valid for the six-entry argument table; zero unbinds each slot.
             unsafe { submission.table.setAddress_atIndex(0, slot) };
         }
         Some(Arc::new(CommandBuffer {
@@ -167,7 +173,7 @@ impl Queue {
         }))
     }
 
-    pub(super) fn wait_idle(&self) -> Result<(), String> {
+    pub(super) fn wait_idle(&self) -> Result<(), GpuError> {
         let commands: Vec<_> = self.state.pending.lock().unwrap_or_else(|error| error.into_inner()).iter().filter_map(Weak::upgrade).collect();
         let mut failure = None;
         for command in commands {
@@ -199,7 +205,7 @@ impl CommandBuffer {
         self.completion.lock().unwrap_or_else(|error| error.into_inner()).status
     }
 
-    pub(super) fn error(&self) -> Option<String> {
+    pub(super) fn error(&self) -> Option<GpuError> {
         self.completion.lock().unwrap_or_else(|error| error.into_inner()).error.clone()
     }
 
@@ -225,13 +231,19 @@ impl CommandBuffer {
         }
         let command = Arc::clone(self);
         let feedback = RcBlock::new(move |feedback: NonNull<ProtocolObject<dyn MTL4CommitFeedback>>| {
-            // Metal owns the feedback object for the duration of this callback.
-            let error = unsafe { feedback.as_ref() }.error().map(|error| error.to_string());
-            command.complete(error);
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                // SAFETY: Metal owns the feedback object for the duration of this callback.
+                let error = unsafe { feedback.as_ref() }.error().map(super::metal_error);
+                command.complete(error);
+            }));
+            if result.is_err() {
+                command.record_completion(Some(GpuError::execution("Metal completion callback panicked")));
+            }
         });
         let options = MTL4CommitOptions::new();
         let mut buffer = NonNull::from(&*storage.buffer);
-        // Keep storage locked until commit returns, even if feedback arrives earlier.
+        // SAFETY: the single buffer pointer and feedback block stay live through commit;
+        // the locked submission retains GPU resources even if feedback arrives earlier.
         unsafe {
             options.addFeedbackHandler((&raw const *feedback).cast_mut());
             self.queue.commit_count_options(NonNull::from(&mut buffer), 1, &options);
@@ -239,7 +251,7 @@ impl CommandBuffer {
         drop(submission);
     }
 
-    fn complete(&self, error: Option<String>) {
+    fn complete(&self, error: Option<GpuError>) {
         let storage = self.submission.lock().unwrap_or_else(|error| error.into_inner()).take();
         if let Some(mut storage) = storage {
             storage.recycle();
@@ -251,6 +263,10 @@ impl CommandBuffer {
                 drop(cache);
             }
         }
+        self.record_completion(error);
+    }
+
+    fn record_completion(&self, error: Option<GpuError>) {
         let mut completion = self.completion.lock().unwrap_or_else(|error| error.into_inner());
         completion.status = if error.is_some() { MTLCommandBufferStatus::Error } else { MTLCommandBufferStatus::Completed };
         completion.error = error;
@@ -258,7 +274,7 @@ impl CommandBuffer {
         self.completed.notify_all();
     }
 
-    fn encoding_error(&self, error: String) {
+    fn encoding_error(&self, error: GpuError) {
         self.completion.lock().unwrap_or_else(|error| error.into_inner()).error.get_or_insert(error);
     }
 
@@ -276,12 +292,16 @@ impl Encoder {
         self.encoder.setComputePipelineState(pipeline);
         let mut submission = self.command.submission.lock().unwrap_or_else(|error| error.into_inner());
         submission.as_mut().unwrap().pipelines.entry(std::ptr::from_ref(pipeline) as usize).or_insert_with(|| {
-            // The pipeline belongs to the context and remains live during encoding.
+            // SAFETY: The pipeline belongs to the context and remains live during encoding.
             unsafe { Retained::retain(std::ptr::from_ref(pipeline).cast_mut()) }.unwrap()
         });
         drop(submission);
     }
 
+    /// # Safety
+    /// `slot` must be below six and the buffer must belong to this command's device.
+    /// Every shader access must fit the bound range. External writes must be ordered
+    /// before submission; sources must not be modified during execution.
     pub(super) unsafe fn set_buffer(&self, buffer: Option<&ProtocolObject<dyn MTLBuffer>>, offset: usize, slot: usize) {
         let mut submission = self.command.submission.lock().unwrap_or_else(|error| error.into_inner());
         let storage = submission.as_mut().unwrap();
@@ -289,18 +309,23 @@ impl Encoder {
             storage.retain_buffer(buffer);
             buffer.gpuAddress() + offset as u64
         });
+        // SAFETY: The caller guarantees a valid slot and range; the locked submission retains the buffer.
         unsafe { storage.table.setAddress_atIndex(address, slot) };
         drop(submission);
     }
 
+    /// # Safety
+    /// `slot` must be below six. `bytes` must be readable for `len` bytes, with a
+    /// layout and length covering every shader access. The data is copied now.
     pub(super) unsafe fn set_bytes(&self, bytes: NonNull<std::ffi::c_void>, len: usize, slot: usize) {
         let mut submission = self.command.submission.lock().unwrap_or_else(|error| error.into_inner());
         let storage = submission.as_mut().unwrap();
-        // The encoding caller supplies a readable slice of the stated length.
+        // SAFETY: The encoding caller supplies a readable slice of the stated length.
         if let Some(address) = unsafe { storage.copy_controls(&self.command.device, bytes, len) } {
+            // SAFETY: The caller guarantees a valid slot and range; the locked submission retains the buffer.
             unsafe { storage.table.setAddress_atIndex(address, slot) };
         } else {
-            self.command.encoding_error("cannot allocate Metal 4 control storage".into());
+            self.command.encoding_error(GpuError::allocation("cannot allocate Metal 4 control storage"));
         }
         drop(submission);
     }
@@ -324,6 +349,9 @@ impl Encoder {
         }
     }
 
+    /// # Safety
+    /// Both buffers must belong to this command's device. The ranges must be
+    /// in bounds, nonoverlapping, and ordered against other GPU/CPU accesses.
     pub(super) unsafe fn copy_buffer(
         &self, source: &ProtocolObject<dyn MTLBuffer>, source_offset: usize, destination: &ProtocolObject<dyn MTLBuffer>, destination_offset: usize,
         len: usize,
@@ -333,6 +361,7 @@ impl Encoder {
         storage.retain_buffer(source);
         storage.retain_buffer(destination);
         drop(submission);
+        // SAFETY: The caller validates ranges, devices, and access ordering; storage retains both buffers.
         unsafe {
             self.encoder.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(source, source_offset, destination, destination_offset, len)
         };
@@ -390,6 +419,7 @@ mod tests {
         let command = context.queue.command_buffer().unwrap();
         let encoder = command.compute_encoder().unwrap();
         let controls = vec![0u8; MAX_CACHED_SUBMISSION_BYTES as usize + CONTROL_ALIGNMENT];
+        // SAFETY: The live byte slice covers the copied controls and slot 3 is valid.
         unsafe { encoder.set_bytes(NonNull::from(controls.as_slice()).cast(), controls.len(), 3) };
         encoder.end_encoding();
         command.commit();

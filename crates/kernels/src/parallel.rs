@@ -14,6 +14,7 @@ const CANDIDATE_INPUT_BUDGET: usize = 64 * 1024 * 1024;
 
 /// Live exclusive bound. Encoders may recheck it after expensive work, before
 /// copying or decoding a candidate that a concurrent job has already beaten.
+#[derive(Debug)]
 pub struct CandidateLimit(AtomicUsize);
 
 impl CandidateLimit {

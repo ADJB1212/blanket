@@ -5,6 +5,7 @@ use blanket_core::{Image, PixelMode};
 pub use safety::{Document, Error, Limits, RenderOptions, detect, parse};
 
 impl Error {
+    #[must_use]
     pub fn kind(&self) -> CodecErrorKind {
         match self {
             Self::Corrupt(_) => CodecErrorKind::Corrupt,
@@ -19,13 +20,13 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
 }
 
 pub fn decode_options(data: &[u8], options: RenderOptions) -> Result<Image, Error> {
-    let document = safety::parse_options(data, Limits::default(), options, true)?;
+    let document = safety::parse_options(data, Limits::default(), options, safety::SampleValidation::Decode)?;
     let (width, height) = document.size();
     Image::from_pixels(width, height, PixelMode::Rgba, document.render()?, Some("SVG".into())).map_err(|_| Error::Corrupt("invalid rendered image"))
 }
 
 pub fn inspect(data: &[u8]) -> Result<ImageHeader, Error> {
-    let document = safety::parse_options(data, Limits::default(), RenderOptions::default(), false)?;
+    let document = safety::parse_options(data, Limits::default(), RenderOptions::default(), safety::SampleValidation::Header)?;
     let (width, height) = document.size();
     ImageHeader::new(width, height, "RGBA", 8).map_err(|_| Error::Corrupt("invalid SVG header"))
 }

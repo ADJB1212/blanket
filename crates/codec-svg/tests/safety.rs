@@ -12,7 +12,7 @@ fn check(xml: &str, limits: Limits) -> Result<Document, Error> {
 }
 
 fn error(xml: &str, limits: Limits) -> Error {
-    check(xml, limits).err().expect("expected rejection")
+    check(xml, limits).expect_err("expected rejection")
 }
 
 fn embedded(mime: &str, data: &[u8]) -> String {

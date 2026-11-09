@@ -126,7 +126,7 @@ mod tests {
             for count in [0, 1, 15, 16, 17, 131073] {
                 let source: Vec<u16> = (0..count).map(|i| (i * 719) as u16).collect();
                 let image = output_bytes(
-                    &Image { width: count as u32, height: 1, mode, bit_depth: 16, pixels: None, .. },
+                    &Image::from_raw_bytes(count as u32, 1, mode, vec![0; count * 2], 16).unwrap(),
                     encode(&source, mode.is_big_endian()).unwrap(),
                 )
                 .unwrap();

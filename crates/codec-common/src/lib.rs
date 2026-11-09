@@ -5,7 +5,7 @@ use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use zerocopy::IntoBytes;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum CodecErrorKind {
     Unsupported,
     Corrupt,
@@ -64,6 +64,7 @@ pub fn encode_error(error: PyErr, format: &str) -> PyErr {
 
 /// A decoding failure with a machine-readable category and optional native cause.
 #[derive(Debug)]
+#[must_use]
 pub struct DecodeError {
     kind: CodecErrorKind,
     message: String,
@@ -83,6 +84,7 @@ impl DecodeError {
         result
     }
     /// Category used when translating this error to a Python codec exception.
+    #[must_use]
     pub fn kind(&self) -> CodecErrorKind {
         self.kind
     }
@@ -210,9 +212,10 @@ fn diagnostic_kind(message: &str, fallback: CodecErrorKind) -> CodecErrorKind {
     }
 }
 
+/// Maximum decoded pixels per image or sequence, matching Pillow's hard limit.
 pub const MAX_IMAGE_PIXELS: usize = 178_956_970;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageHeader {
     pub width: u32,
     pub height: u32,
@@ -230,6 +233,7 @@ impl ImageHeader {
 }
 
 #[expect(unevaluated_default_field_value)]
+#[derive(Clone)]
 pub struct Frame<I = Image> {
     pub image: I,
     pub duration: Option<f64> = None,
@@ -237,11 +241,32 @@ pub struct Frame<I = Image> {
     pub blend: u8 = 0,
 }
 
+impl<I> std::fmt::Debug for Frame<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Frame")
+            .field("duration", &self.duration)
+            .field("disposal", &self.disposal)
+            .field("blend", &self.blend)
+            .finish_non_exhaustive()
+    }
+}
+
 #[expect(unevaluated_default_field_value)]
+#[derive(Clone)]
 pub struct Sequence<I = Image> {
     pub frames: Vec<Frame<I>> = Vec::new(),
     pub loop_count: Option<u32> = None,
     pub default_image: bool = false,
+}
+
+impl<I> std::fmt::Debug for Sequence<I> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Sequence")
+            .field("frame_count", &self.frames.len())
+            .field("loop_count", &self.loop_count)
+            .field("default_image", &self.default_image)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<I> Default for Sequence<I> {
@@ -251,12 +276,13 @@ impl<I> Default for Sequence<I> {
 }
 
 impl Sequence {
+    #[must_use]
     pub fn single(image: Image) -> Self {
         Self { frames: vec![Frame { image, .. }], .. }
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SequenceInfo {
     pub count: usize,
     pub loop_count: Option<u32>,
@@ -272,7 +298,7 @@ pub fn validate_frame_budget(total: &mut usize, width: u32, height: u32) -> Resu
     Ok(())
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct SaveOptions<'a> {
     pub quality: u8 = 90,
     pub compress_level: u8 = 6,
@@ -307,6 +333,7 @@ pub fn codec_error(error: impl std::fmt::Display) -> PyErr {
 }
 
 /// Borrow native-endian sample bytes without copying the sample buffer.
+#[must_use]
 pub fn u16_bytes(samples: &[u16]) -> &[u8] {
     samples.as_bytes()
 }

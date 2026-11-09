@@ -8,6 +8,8 @@ use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use rayon::prelude::*;
+#[cfg(target_endian = "little")]
+use zerocopy::FromBytes;
 
 pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option<Image>, String> {
     use tiff::tags::Tag;
@@ -387,6 +389,7 @@ const IFD_ENTRY_BYTES: usize = 12;
 
 // Read only the bounded directory, never scan compressed image payloads for tag bytes.
 // Reject DNG containers instead of opening their previews as ordinary TIFFs.
+#[must_use]
 pub fn is_dng(data: &[u8]) -> bool {
     if !data.starts_with(b"II*\0") && !data.starts_with(b"MM\0*") {
         return false;
@@ -614,12 +617,9 @@ pub fn encode_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 fn float_samples(bytes: &[u8]) -> Cow<'_, [f32]> {
-    if cfg!(target_endian = "little") {
-        // SAFETY: all f32 bit patterns are valid; align_to checks the bounds.
-        let (prefix, values, suffix) = unsafe { bytes.align_to::<f32>() };
-        if prefix.is_empty() && suffix.is_empty() {
-            return Cow::Borrowed(values);
-        }
+    #[cfg(target_endian = "little")]
+    if let Ok(values) = <[f32]>::ref_from_bytes(bytes) {
+        return Cow::Borrowed(values);
     }
     Cow::Owned(bytes.as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect())
 }

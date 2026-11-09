@@ -24,6 +24,19 @@ pub struct JxlStreamDecoder {
     complete: bool = false,
 }
 
+impl std::fmt::Debug for JxlStreamDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JxlStreamDecoder")
+            .field("size", &(self.width, self.height))
+            .field("mode", &self.mode)
+            .field("depth", &self.depth)
+            .field("available", &self.available)
+            .field("failed", &self.failed)
+            .field("complete", &self.complete)
+            .finish_non_exhaustive()
+    }
+}
+
 impl Drop for JxlStreamDecoder {
     fn drop(&mut self) {
         // SAFETY: the decoder is owned and non-null; registered buffers are still alive.
@@ -37,6 +50,7 @@ fn check(status: JxlDecoderStatus) -> Result<(), DecodeError> {
 
 impl JxlStreamDecoder {
     /// Whether the decoder has consumed a complete image.
+    #[must_use]
     pub fn is_complete(&self) -> bool {
         self.complete
     }
@@ -102,6 +116,8 @@ impl JxlStreamDecoder {
         }
     }
 
+    /// # Safety
+    /// Input must remain registered and live until this method returns.
     unsafe fn process(&mut self) -> Result<(), DecodeError> {
         loop {
             // SAFETY: input is registered by process_input and output remains allocated.
@@ -202,12 +218,13 @@ mod tests {
         struct Encoder(*mut JxlEncoder);
         impl Drop for Encoder {
             fn drop(&mut self) {
+                // SAFETY: the test guard exclusively owns the live encoder.
                 unsafe { JxlEncoderDestroy(self.0) };
             }
         }
 
         let mut data = vec![0; 256 * 1024];
-        // All encoder buffers outlive processing; the owner frees libjxl state.
+        // SAFETY: all encoder buffers outlive processing; the owner frees libjxl state.
         unsafe {
             let encoder = Encoder(JxlEncoderCreate(ptr::null()));
             assert!(!encoder.0.is_null());

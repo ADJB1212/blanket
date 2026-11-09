@@ -1,6 +1,33 @@
+#![deny(clippy::undocumented_unsafe_blocks)]
+
+use blanket_gpu::{BlurKind, GpuError};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+
+fn gpu_exception(error: GpuError, create: impl FnOnce(String) -> PyErr) -> PyErr {
+    fn cause(source: &dyn std::error::Error) -> PyErr {
+        let error = pyo3::exceptions::PyRuntimeError::new_err(source.to_string());
+        if let Some(source) = source.source() {
+            Python::attach(|py| error.set_cause(py, Some(cause(source))));
+        }
+        error
+    }
+    let result = create(error.to_string());
+    if let Some(source) = std::error::Error::source(&error) {
+        Python::attach(|py| result.set_cause(py, Some(cause(source))));
+    }
+    result
+}
+
+fn gpu_value_error(error: GpuError) -> PyErr {
+    gpu_exception(error, PyValueError::new_err)
+}
+
+#[cfg(target_os = "macos")]
+fn gpu_runtime_error(error: GpuError) -> PyErr {
+    gpu_exception(error, pyo3::exceptions::PyRuntimeError::new_err)
+}
 
 fn unsigned_transfer(data: &[u8], output: &mut [u8], depth: u8, encode: bool) {
     let maximum = f32::from(u16::MAX >> (16 - depth));
@@ -60,17 +87,18 @@ fn _gpu_unsigned_image(py: Python<'_>, image: &blanket_core::Image, depth: u8, e
 #[pyfunction]
 #[pyo3(signature = (input, output, method, floating=false))]
 fn _gpu_weights(py: Python<'_>, input: u32, output: u32, method: u8, floating: bool) -> PyResult<(u32, Vec<f32>)> {
-    py.detach(|| blanket_gpu::resize_weights(input, output, method, floating)).map_err(PyValueError::new_err)
+    py.detach(|| blanket_gpu::resize_weights(input, output, method, floating)).map_err(gpu_value_error)
 }
 
 #[pyfunction]
 fn _gpu_blur_parameters(radius: f32, gaussian: bool) -> PyResult<(u32, [f32; 2])> {
-    blanket_gpu::blur_parameters(radius, gaussian).map_err(PyValueError::new_err)
+    let kind = if gaussian { BlurKind::Gaussian } else { BlurKind::Box };
+    blanket_gpu::blur_parameters(radius, kind).map_err(gpu_value_error)
 }
 
 #[pyfunction]
 fn _gpu_lut_controls(py: Python<'_>, size: [u32; 3], channels: u32, table: Vec<f32>, floating: bool) -> PyResult<Vec<f32>> {
-    py.detach(|| blanket_gpu::lut_controls(size, channels, &table, floating)).map_err(PyValueError::new_err)
+    py.detach(|| blanket_gpu::lut_controls(size, channels, &table, floating)).map_err(gpu_value_error)
 }
 
 type PlanStep = (u32, u32, u32, Vec<f32>);
@@ -81,8 +109,8 @@ fn _gpu_prepare_plan(
     width: u32, height: u32, channels: u32, float: bool, steps: Vec<PlanStep>, memory_limit: usize,
 ) -> PyResult<(Vec<PlanStep>, PlanInfo)> {
     let steps = steps.into_iter().map(|(operation, kernel, axis, values)| blanket_gpu::plan::Step { operation, kernel, axis, values }).collect();
-    let plan = blanket_gpu::plan::Plan::new(blanket_gpu::Descriptor { width, height, channels, float }, steps, memory_limit)
-        .map_err(PyValueError::new_err)?;
+    let plan =
+        blanket_gpu::plan::Plan::new(blanket_gpu::Descriptor { width, height, channels, float }, steps, memory_limit).map_err(gpu_value_error)?;
     let steps = plan.steps().iter().map(|step| (step.operation, step.kernel, step.axis, step.values.clone())).collect();
     Ok((steps, (plan.steps().len(), plan.tile(), plan.halo(), plan.scratch_bytes())))
 }
@@ -98,21 +126,20 @@ mod native {
     };
     use blanket_gpu::{Backend, Descriptor, Dispatch};
     use blanket_gpu_metal::{Context, Image};
-    use pyo3::exceptions::PyRuntimeError;
     use pyo3::types::PyBytes;
 
     use super::*;
 
-    static CONTEXT: OnceLock<Result<Context, String>> = OnceLock::new();
+    static CONTEXT: OnceLock<Result<Context, GpuError>> = OnceLock::new();
     fn context() -> PyResult<&'static Context> {
-        CONTEXT.get_or_init(Context::new).as_ref().map_err(|error| PyRuntimeError::new_err(error.clone()))
+        CONTEXT.get_or_init(Context::new).as_ref().map_err(|error| gpu_runtime_error(error.clone()))
     }
     #[pyclass(frozen)]
     pub(super) struct MetalImage {
         context: &'static Context,
         image: Image,
     }
-    // This wrapper contains only immutable Rust/Metal state. Completion waits
+    // SAFETY: This wrapper contains only immutable Rust/Metal state. Completion waits
     // and downloads do not access Python objects while the GIL is released.
     unsafe impl pyo3::marker::Ungil for MetalImage {}
     #[pyclass(frozen)]
@@ -120,6 +147,7 @@ mod native {
         context: &'static Context,
         plan: blanket_gpu_metal::Plan,
     }
+    // SAFETY: The plan holds immutable Rust/Metal state and detached execution does not access Python.
     unsafe impl pyo3::marker::Ungil for MetalPlan {}
 
     #[pymethods]
@@ -131,10 +159,10 @@ mod native {
             let steps =
                 steps.into_iter().map(|(operation, kernel, axis, values)| blanket_gpu::plan::Step { operation, kernel, axis, values }).collect();
             let geometry =
-                blanket_gpu::plan::Plan::new(Descriptor { width, height, channels, float }, steps, memory_limit).map_err(PyValueError::new_err)?;
+                blanket_gpu::plan::Plan::new(Descriptor { width, height, channels, float }, steps, memory_limit).map_err(gpu_value_error)?;
             py.detach(|| {
                 let context = context()?;
-                let plan = context.prepare_plan(geometry).map_err(PyRuntimeError::new_err)?;
+                let plan = context.prepare_plan(geometry).map_err(gpu_runtime_error)?;
                 Ok(Self { context, plan })
             })
         }
@@ -150,18 +178,18 @@ mod native {
                     .execute_plan(&self.plan, &sources)
                     .map(|outputs| outputs.into_iter().map(|image| MetalImage { context: self.context, image }).collect())
             })
-            .map_err(PyRuntimeError::new_err)
+            .map_err(gpu_runtime_error)
         }
     }
 
     impl MetalImage {
-        fn wait_bytes(&self) -> Result<&[u8], String> {
+        fn wait_bytes(&self) -> Result<&[u8], GpuError> {
             self.context.download_bytes(&self.image)
         }
-        fn wait_download(&self) -> Result<Vec<u8>, String> {
+        fn wait_download(&self) -> Result<Vec<u8>, GpuError> {
             self.context.download(&self.image)
         }
-        fn wait_completion(&self) -> Result<(), String> {
+        fn wait_completion(&self) -> Result<(), GpuError> {
             self.context.synchronize(&self.image)
         }
     }
@@ -184,7 +212,7 @@ mod native {
         let [height, width, channels]: [u32; 3] =
             tensor.getattr("shape")?.extract().map_err(|_| PyValueError::new_err("Metal exchange requires HWC tensor storage"))?;
         let descriptor = Descriptor { width, height, channels, float };
-        let len = descriptor.byte_len().map_err(PyValueError::new_err)?;
+        let len = descriptor.byte_len().map_err(gpu_value_error)?;
         let offset = tensor
             .call_method0("storage_offset")?
             .extract::<usize>()?
@@ -208,7 +236,7 @@ mod native {
     }
     impl blanket_core::raster::SharedPixels for SharedMetalPixels {
         fn bytes(&self) -> &[u8] {
-            // The owner retains immutable Metal storage; GPU writes completed
+            // SAFETY: The owner retains immutable Metal storage; GPU writes completed
             // before publication and CPU mutations detach into a separate Vec.
             unsafe { std::slice::from_raw_parts(self.address as *const u8, self.len) }
         }
@@ -223,32 +251,32 @@ mod native {
             let (descriptor, address, offset) = torch_buffer(tensor)?;
             tensor.py().detach(|| {
                 let context = context()?;
-                // torch_buffer validates MPS storage and drains its producers.
+                // SAFETY: torch_buffer validates MPS storage and drains its producers.
                 // The tensor owner remains alive until the GPU copy completes.
-                let image = unsafe { context.import_buffer(descriptor, address, offset) }.map_err(PyRuntimeError::new_err)?;
+                let image = unsafe { context.import_buffer(descriptor, address, offset) }.map_err(gpu_runtime_error)?;
                 Ok(Self { context, image })
             })
         }
         fn copy_to_torch(&self, tensor: &Bound<'_, PyAny>) -> PyResult<()> {
             let (descriptor, address, offset) = torch_buffer(tensor)?;
-            if descriptor != self.image.descriptor {
+            if descriptor != self.image.descriptor() {
                 return Err(PyValueError::new_err("Metal export tensor does not match image storage"));
             }
             tensor.py().detach(|| {
-                // The destination is retained by the caller and its queue is
+                // SAFETY: The destination is retained by the caller and its queue is
                 // idle. Completion precedes publication to PyTorch consumers.
-                unsafe { self.context.export_buffer(&self.image, address, offset) }.map_err(PyRuntimeError::new_err)
+                unsafe { self.context.export_buffer(&self.image, address, offset) }.map_err(gpu_runtime_error)
             })
         }
         fn shared_image(slf: Bound<'_, Self>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
             let image = slf.borrow();
-            let d = image.image.descriptor;
+            let d = image.image.descriptor();
             if mode.channels() != d.channels as usize || mode.is_float() != d.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
             let native: &MetalImage = &image;
-            let data = slf.py().detach(|| native.wait_bytes()).map_err(PyRuntimeError::new_err)?;
+            let data = slf.py().detach(|| native.wait_bytes()).map_err(gpu_runtime_error)?;
             let storage = SharedMetalPixels { owner: slf.clone().unbind(), address: data.as_ptr() as usize, len: data.len() };
             blanket_core::Image::from_shared(d.width, d.height, mode, if d.float { 32 } else { 8 }, std::sync::Arc::new(storage))
         }
@@ -256,10 +284,12 @@ mod native {
         fn shared_resource(py: Python<'_>, image: &blanket_core::Image) -> Option<Py<Self>> {
             image.shared_pixels()?.as_any().downcast_ref::<SharedMetalPixels>().map(|storage| storage.owner.clone_ref(py))
         }
+        /// # Safety
+        /// CPython must supply a writable Py_buffer and valid buffer-request flags.
         unsafe fn __getbuffer__(slf: Bound<'_, Self>, view: *mut pyo3::ffi::Py_buffer, flags: std::ffi::c_int) -> PyResult<()> {
             let image = slf.borrow();
-            let data = image.context.download_bytes(&image.image).map_err(PyRuntimeError::new_err)?;
-            // FillInfo retains the exporter. Pixels are immutable and remain out of
+            let data = image.context.download_bytes(&image.image).map_err(gpu_runtime_error)?;
+            // SAFETY: FillInfo retains the exporter. Pixels are immutable and remain out of
             // the allocation pool until the last Python buffer view is released.
             let result = unsafe { pyo3::ffi::PyBuffer_FillInfo(view, slf.as_ptr(), data.as_ptr().cast_mut().cast(), data.len() as isize, 1, flags) };
             if result == -1 {
@@ -276,14 +306,13 @@ mod native {
             }
             let descriptor = Descriptor { width: image.width(), height: image.height(), channels: image.pixel_mode().channels() as u32, float: true };
             let data = image.raw_data()?;
-            if descriptor.byte_len().map_err(PyValueError::new_err)? / 2 != data.len() {
+            if descriptor.byte_len().map_err(gpu_value_error)? / 2 != data.len() {
                 return Err(PyValueError::new_err("incorrect unsigned upload length"));
             }
             py.detach(|| {
                 let context = context()?;
-                let native = context
-                    .upload_with(descriptor, |output| unsigned_transfer(data, output, image.bit_depth(), false))
-                    .map_err(PyRuntimeError::new_err)?;
+                let native =
+                    context.upload_with(descriptor, |output| unsigned_transfer(data, output, image.bit_depth(), false)).map_err(gpu_runtime_error)?;
                 Ok(Self { context, image: native })
             })
         }
@@ -306,17 +335,17 @@ mod native {
             let data = image.raw_data()?;
             py.detach(|| {
                 let context = context()?;
-                let image = context.upload(descriptor, data).map_err(PyValueError::new_err)?;
+                let image = context.upload(descriptor, data).map_err(gpu_value_error)?;
                 Ok(Self { context, image })
             })
         }
         fn download_image(&self, py: Python<'_>, mode: &str) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
-            let descriptor = self.image.descriptor;
+            let descriptor = self.image.descriptor();
             if mode.channels() != descriptor.channels as usize || mode.is_float() != descriptor.float {
                 return Err(PyValueError::new_err("GPU image mode does not match storage"));
             }
-            let pixels = py.detach(|| self.wait_download()).map_err(PyRuntimeError::new_err)?;
+            let pixels = py.detach(|| self.wait_download()).map_err(gpu_runtime_error)?;
             if descriptor.float {
                 blanket_core::Image::from_color_float_bytes(descriptor.width, descriptor.height, mode, pixels)
             } else {
@@ -325,7 +354,7 @@ mod native {
         }
         fn download_unsigned_image(&self, py: Python<'_>, mode: &str, depth: u8) -> PyResult<blanket_core::Image> {
             let mode = blanket_core::PixelMode::parse(mode)?;
-            let d = self.image.descriptor;
+            let d = self.image.descriptor();
             if !matches!(mode, blanket_core::PixelMode::L | blanket_core::PixelMode::Rgb | blanket_core::PixelMode::Rgba)
                 || !matches!(depth, 10 | 12 | 16)
                 || mode.channels() != d.channels as usize
@@ -338,38 +367,38 @@ mod native {
                     let data = self.wait_bytes()?;
                     let mut pixels = vec![0; data.len() / 2];
                     unsigned_transfer(data, &mut pixels, depth, true);
-                    Ok::<_, String>(pixels)
+                    Ok::<_, GpuError>(pixels)
                 })
-                .map_err(PyRuntimeError::new_err)?;
+                .map_err(gpu_runtime_error)?;
             blanket_core::Image::from_sample_bytes(d.width, d.height, mode, pixels, depth, None)
         }
         #[new]
         fn new(width: u32, height: u32, channels: u32, float: bool, data: &[u8]) -> PyResult<Self> {
             let context = context()?;
-            let image = context.upload(Descriptor { width, height, channels, float }, data).map_err(PyValueError::new_err)?;
+            let image = context.upload(Descriptor { width, height, channels, float }, data).map_err(gpu_value_error)?;
             Ok(Self { context, image })
         }
         fn paste(&self, source: &Self, mask: Option<&Self>, position: [i32; 2]) -> PyResult<Self> {
-            let image = self.context.paste(&self.image, &source.image, mask.map(|mask| &mask.image), position).map_err(PyValueError::new_err)?;
+            let image = self.context.paste(&self.image, &source.image, mask.map(|mask| &mask.image), position).map_err(gpu_value_error)?;
             Ok(Self { context: self.context, image })
         }
         fn resize_axis(&self, py: Python<'_>, target: u32, method: u8, axis: u32) -> PyResult<Self> {
-            let d = self.image.descriptor;
+            let d = self.image.descriptor();
             if axis > VERTICAL {
                 return Err(PyValueError::new_err("invalid resize axis"));
             }
             let output = if axis == HORIZONTAL { Descriptor { width: target, ..d } } else { Descriptor { height: target, ..d } };
-            output.byte_len().map_err(PyValueError::new_err)?;
+            output.byte_len().map_err(gpu_value_error)?;
             py.detach(|| {
                 let input = if axis == HORIZONTAL { d.width } else { d.height };
-                let (kernel, values) = blanket_gpu::resize_weights(input, target, method, d.float).map_err(PyValueError::new_err)?;
+                let (kernel, values) = blanket_gpu::resize_weights(input, target, method, d.float).map_err(gpu_value_error)?;
                 self.run(self, [d.width, d.height, d.channels, output.width, output.height, operation::RESIZE, kernel, axis], values)
             })
         }
         fn color_lut(&self, py: Python<'_>, size: [u32; 3], channels: u32, table: Vec<f32>, output_format: u32) -> PyResult<Self> {
-            let d = self.image.descriptor;
+            let d = self.image.descriptor();
             py.detach(|| {
-                let values = blanket_gpu::lut_controls(size, channels, &table, d.float).map_err(PyValueError::new_err)?;
+                let values = blanket_gpu::lut_controls(size, channels, &table, d.float).map_err(gpu_value_error)?;
                 self.run(self, [d.width, d.height, d.channels, d.width, d.height, operation::COLOR_LUT, channels, output_format], values)
             })
         }
@@ -377,7 +406,8 @@ mod native {
             py.detach(|| {
                 let mut steps = Vec::new();
                 for (axis, radius) in radii.into_iter().enumerate() {
-                    let (kernel, values) = blanket_gpu::blur_parameters(radius, gaussian).map_err(PyValueError::new_err)?;
+                    let kind = if gaussian { BlurKind::Gaussian } else { BlurKind::Box };
+                    let (kernel, values) = blanket_gpu::blur_parameters(radius, kind).map_err(gpu_value_error)?;
                     if radius == 0.0 {
                         continue;
                     }
@@ -385,7 +415,7 @@ mod native {
                         steps.push(blanket_gpu::plan::Step { operation: operation::BOX_BLUR, kernel, axis: axis as u32, values: values.to_vec() });
                     }
                 }
-                let d = self.image.descriptor;
+                let d = self.image.descriptor();
                 if steps.iter().any(|step| step.kernel > i32::MAX as u32 / 2) {
                     // Tiled plans have a stricter kernel limit than individual blur dispatches.
                     let mut result: Option<Self> = None;
@@ -399,16 +429,16 @@ mod native {
                     }
                     return Ok(result.expect("a large blur kernel requires at least one pass"));
                 }
-                let memory_limit = d.byte_len().map_err(PyValueError::new_err)? * 2;
-                let geometry = blanket_gpu::plan::Plan::new(d, steps, memory_limit).map_err(PyValueError::new_err)?;
-                let plan = self.context.prepare_plan(geometry).map_err(PyRuntimeError::new_err)?;
-                let mut images = self.context.execute_plan(&plan, &[&self.image]).map_err(PyRuntimeError::new_err)?;
+                let memory_limit = d.byte_len().map_err(gpu_value_error)? * 2;
+                let geometry = blanket_gpu::plan::Plan::new(d, steps, memory_limit).map_err(gpu_value_error)?;
+                let plan = self.context.prepare_plan(geometry).map_err(gpu_runtime_error)?;
+                let mut images = self.context.execute_plan(&plan, &[&self.image]).map_err(gpu_runtime_error)?;
                 let image = images.pop().expect("one blur input produces one output");
                 Ok(Self { context: self.context, image })
             })
         }
         fn run(&self, other: &Self, parameters: [u32; PARAMETER_COUNT], values: Vec<f32>) -> PyResult<Self> {
-            let d = self.image.descriptor;
+            let d = self.image.descriptor();
             let mut output = Descriptor { width: parameters[parameter::OUTPUT_WIDTH], height: parameters[parameter::OUTPUT_HEIGHT], ..d };
             let source_shape = [parameters[parameter::SOURCE_WIDTH], parameters[parameter::SOURCE_HEIGHT], parameters[parameter::CHANNELS]];
             if source_shape != [d.width, d.height, d.channels] || !std::ptr::eq(self.context, other.context) {
@@ -454,9 +484,9 @@ mod native {
                         && values.iter().all(|v| v.is_finite())
                         && output == d
                 }
-                operation::BLEND => values.len() == 1 && values[0].is_finite() && output == d && other.image.descriptor == d,
+                operation::BLEND => values.len() == 1 && values[0].is_finite() && output == d && other.image.descriptor() == d,
                 operation::ALPHA_COMPOSITE => {
-                    matches!(d.channels, GRAY_ALPHA_CHANNELS | COLOR_ALPHA_CHANNELS) && output == d && other.image.descriptor == d
+                    matches!(d.channels, GRAY_ALPHA_CHANNELS | COLOR_ALPHA_CHANNELS) && output == d && other.image.descriptor() == d
                 }
                 operation::PREMULTIPLY | operation::UNPREMULTIPLY => matches!(d.channels, GRAY_ALPHA_CHANNELS | COLOR_ALPHA_CHANNELS) && output == d,
                 operation::COPY => output == d,
@@ -480,7 +510,7 @@ mod native {
                 }
                 operation::BINARY => {
                     output == d
-                        && other.image.descriptor == d
+                        && other.image.descriptor() == d
                         && k <= BINARY_SUBTRACT
                         && values.len() == BINARY_CONTROL_LEN
                         && values.iter().all(|v| v.is_finite())
@@ -500,7 +530,7 @@ mod native {
                         && d.float
                         && values.len() == 1
                         && matches!(values[0], 1.0 | 255.0)
-                        && other.image.descriptor == Descriptor { channels: 1, ..d }
+                        && other.image.descriptor() == Descriptor { channels: 1, ..d }
                 }
                 operation::WARP => {
                     k <= 2 && values.len() == blanket_gpu::protocol::WARP_COEFFICIENTS + d.channels as usize && values.iter().all(|v| v.is_finite())
@@ -509,10 +539,10 @@ mod native {
                     k <= 2
                         && values.len() == blanket_gpu::protocol::WARP_COEFFICIENTS + d.channels as usize
                         && values.iter().all(|v| v.is_finite())
-                        && other.image.descriptor == Descriptor { width: output.width, height: output.height, channels: 3, float: true }
+                        && other.image.descriptor() == Descriptor { width: output.width, height: output.height, channels: 3, float: true }
                 }
                 operation::CHANNEL => same_size && k < d.channels as usize,
-                operation::REPLACE_CHANNEL => output == d && k < d.channels as usize && other.image.descriptor == Descriptor { channels: 1, ..d },
+                operation::REPLACE_CHANNEL => output == d && k < d.channels as usize && other.image.descriptor() == Descriptor { channels: 1, ..d },
                 operation::SET_ALPHA => {
                     output == d && matches!(d.channels, GRAY_ALPHA_CHANNELS | COLOR_ALPHA_CHANNELS) && values.len() == 1 && values[0].is_finite()
                 }
@@ -524,7 +554,7 @@ mod native {
                         && values.iter().all(|v| v.is_finite() && (0.0..=blanket_gpu::protocol::BOX_WEIGHT_SCALE as f32).contains(v))
                 }
                 operation::RANK => output == d && (1..=MAX_RANK_SIZE).contains(&k) && k % 2 == 1 && parameters[parameter::AXIS_OR_Y] < (k * k) as u32,
-                operation::UNSHARP => output == d && other.image.descriptor == d && values.len() == 1 && values[0].is_finite(),
+                operation::UNSHARP => output == d && other.image.descriptor() == d && values.len() == 1 && values[0].is_finite(),
                 operation::LUMINANCE_REDUCE => {
                     let valid_input = match k {
                         reduction::BYTE_INPUT => !d.float,
@@ -542,7 +572,7 @@ mod native {
                         && values.len() == 1
                         && values[0].is_finite()
                         && (k != enhancement::CONTRAST
-                            || other.image.descriptor == Descriptor { width: 1, height: 1, channels: COLOR_ALPHA_CHANNELS, float: true })
+                            || other.image.descriptor() == Descriptor { width: 1, height: 1, channels: COLOR_ALPHA_CHANNELS, float: true })
                         && (k != enhancement::CONTRAST || u64::from(parameters[parameter::AXIS_OR_Y]) == u64::from(d.width) * u64::from(d.height))
                 }
                 operation::TRANSFER => output == d && d.float && matches!(d.channels, 3 | COLOR_ALPHA_CHANNELS) && k <= 1,
@@ -570,17 +600,17 @@ mod native {
             if !valid {
                 return Err(PyValueError::new_err("invalid GPU dispatch"));
             }
-            // Validation above checks shader bounds, layouts, and the shared context.
-            let image = unsafe { self.context.dispatch(&self.image, &other.image, &Dispatch { output, parameters, values }) }
-                .map_err(PyRuntimeError::new_err)?;
+            // SAFETY: Validation above checks shader bounds, layouts, and the shared context.
+            let image =
+                unsafe { self.context.dispatch(&self.image, &other.image, &Dispatch { output, parameters, values }) }.map_err(gpu_runtime_error)?;
             Ok(Self { context: self.context, image })
         }
         fn download<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
-            let data = py.detach(|| self.wait_bytes()).map_err(PyRuntimeError::new_err)?;
+            let data = py.detach(|| self.wait_bytes()).map_err(gpu_runtime_error)?;
             Ok(PyBytes::new(py, data))
         }
         fn synchronize(&self, py: Python<'_>) -> PyResult<()> {
-            py.detach(|| self.wait_completion()).map_err(PyRuntimeError::new_err)
+            py.detach(|| self.wait_completion()).map_err(gpu_runtime_error)
         }
         fn done(&self) -> bool {
             self.context.is_complete(&self.image)
@@ -588,7 +618,7 @@ mod native {
     }
     #[pyfunction]
     pub(super) fn _gpu_synchronize(py: Python<'_>) -> PyResult<()> {
-        py.detach(|| context()?.wait_idle().map_err(PyRuntimeError::new_err))
+        py.detach(|| context()?.wait_idle().map_err(gpu_runtime_error))
     }
     #[pyfunction]
     pub(super) fn _gpu_available() -> bool {
@@ -596,7 +626,7 @@ mod native {
     }
     #[pyfunction]
     pub(super) fn _gpu_diagnostic() -> Option<String> {
-        CONTEXT.get_or_init(Context::new).as_ref().err().cloned()
+        CONTEXT.get_or_init(Context::new).as_ref().err().map(ToString::to_string)
     }
     #[pyfunction]
     pub(super) fn _gpu_configure_cache(image_bytes: usize, control_bytes: usize) -> PyResult<()> {

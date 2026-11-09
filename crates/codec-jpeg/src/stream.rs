@@ -44,6 +44,17 @@ pub struct JpegStreamDecoder {
     pub complete: bool = false,
 }
 
+impl std::fmt::Debug for JpegStreamDecoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JpegStreamDecoder")
+            .field("progressive", &self.progressive)
+            .field("started", &self.started)
+            .field("failed", &self.failed)
+            .field("complete", &self.complete)
+            .finish_non_exhaustive()
+    }
+}
+
 impl JpegStreamDecoder {
     pub fn new() -> Result<Self, String> {
         Ok(Self { input: Vec::with_capacity(INPUT_LIMIT), .. })

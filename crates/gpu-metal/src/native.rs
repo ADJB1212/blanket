@@ -2,10 +2,10 @@ use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use blanket_gpu::protocol::operation;
-use blanket_gpu::{Backend, Descriptor, Dispatch};
+use blanket_gpu::{Backend, Descriptor, Dispatch, GpuError, GpuErrorKind};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::ProtocolObject;
-use objc2_foundation::NSString;
+use objc2_foundation::{NSError, NSString};
 use objc2_metal::{
     MTLBuffer, MTLCommandBufferStatus, MTLComputePipelineState, MTLCreateSystemDefaultDevice, MTLDataType, MTLDevice, MTLFunctionConstantValues,
     MTLGPUFamily, MTLLanguageVersion, MTLLibrary, MTLLibraryOptimizationLevel, MTLMathMode, MTLResource, MTLResourceOptions, MTLSize,
@@ -51,6 +51,10 @@ const CONTROL_MAX_BYTES: usize = 16 * 1024 * 1024;
 #[path = "command.rs"]
 mod command;
 use command::{Command, Encoder, Queue};
+fn metal_error(error: Retained<NSError>) -> GpuError {
+    GpuError::with_source(GpuErrorKind::Execution, error.to_string(), &*error)
+}
+
 type Pipeline = Retained<ProtocolObject<dyn MTLComputePipelineState>>;
 type ControlEntry = (Vec<u32>, Retained<ProtocolObject<dyn MTLBuffer>>);
 
@@ -120,7 +124,7 @@ struct PoolEntry {
     uses: Vec<Command>,
 }
 
-// Entries own closed images and only committed commands. Moving them transfers
+// SAFETY: Entries own closed images and only committed commands. Moving them transfers
 // ownership; CPU access waits for completion and GPU writes follow queue order.
 unsafe impl Send for PoolEntry {}
 
@@ -150,6 +154,7 @@ struct ControlCache {
     bytes: usize,
     limit: usize = CONTROL_MAX_BYTES,
 }
+// SAFETY: Control buffers are immutable; entries are accessed only under the context's mutex.
 unsafe impl Send for ControlCache {}
 
 pub struct Context {
@@ -157,8 +162,8 @@ pub struct Context {
     max_buffer_length: usize,
     queue: Queue,
     library: Retained<ProtocolObject<dyn MTLLibrary>>,
-    precise_library: OnceLock<Result<Retained<ProtocolObject<dyn MTLLibrary>>, String>>,
-    pipelines: [[OnceLock<Result<Pipeline, String>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
+    precise_library: OnceLock<Result<Retained<ProtocolObject<dyn MTLLibrary>>, GpuError>>,
+    pipelines: [[OnceLock<Result<Pipeline, GpuError>>; PIPELINE_VARIANTS]; OPERATION_COUNT],
     pool: Arc<Mutex<BufferPool>>,
     controls: Mutex<ControlCache>,
     tile_pipelines: [Pipeline; SAMPLE_FORMAT_COUNT],
@@ -171,7 +176,7 @@ pub struct Context {
     paste: [Pipeline; SAMPLE_FORMAT_COUNT],
 }
 pub struct Image {
-    pub descriptor: Descriptor,
+    descriptor: Descriptor,
     buffer: Retained<ProtocolObject<dyn MTLBuffer>>,
     completion: Option<Command>,
     pool: Arc<Mutex<BufferPool>>,
@@ -181,16 +186,41 @@ pub struct Plan {
     geometry: blanket_gpu::plan::Plan,
     controls: Vec<Retained<ProtocolObject<dyn MTLBuffer>>>,
 }
-// Control buffers are immutable after preparation.
+
+impl std::fmt::Debug for Context {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Context").field("max_buffer_length", &self.max_buffer_length).finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image").field("descriptor", &self.descriptor).finish_non_exhaustive()
+    }
+}
+
+impl std::fmt::Debug for Plan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Plan").field("geometry", &self.geometry).finish_non_exhaustive()
+    }
+}
+// SAFETY: Control buffers are immutable after preparation.
 unsafe impl Send for Plan {}
+// SAFETY: Prepared geometry and control buffers are immutable and Metal buffers support shared access.
 unsafe impl Sync for Plan {}
 
-// Published buffers are immutable. Reader tracking and pool access are locked;
+// SAFETY: Published buffers are immutable. Reader tracking and pool access are locked;
 // command status and completion waits may be queried from any CPU thread.
 unsafe impl Send for Image {}
+// SAFETY: Pixel buffers are immutable and all reader tracking and completion state is synchronized.
 unsafe impl Sync for Image {}
 
 impl Image {
+    #[must_use]
+    pub fn descriptor(&self) -> Descriptor {
+        self.descriptor
+    }
+
     fn track_read(&self, command: &Command) {
         let mut uses = self.uses.lock().unwrap_or_else(|error| error.into_inner());
         while uses.front().is_some_and(finished) {
@@ -212,26 +242,26 @@ impl Context {
     fn copy_buffer(
         &self, source: &ProtocolObject<dyn MTLBuffer>, source_offset: usize, destination: &ProtocolObject<dyn MTLBuffer>, destination_offset: usize,
         len: usize,
-    ) -> Result<(), String> {
+    ) -> Result<(), GpuError> {
         if source.device().registryID() != self.device.registryID() || destination.device().registryID() != self.device.registryID() {
-            return Err("Metal/PyTorch exchange requires the same Metal device".into());
+            return Err(GpuError::invalid("Metal/PyTorch exchange requires the same Metal device"));
         }
         if source_offset.checked_add(len).is_none_or(|end| end > source.length())
             || destination_offset.checked_add(len).is_none_or(|end| end > destination.length())
         {
-            return Err("Metal/PyTorch exchange exceeds buffer bounds".into());
+            return Err(GpuError::invalid("Metal/PyTorch exchange exceeds buffer bounds"));
         }
         autoreleasepool(|_| {
-            let command = self.queue.command_buffer().ok_or("cannot allocate Metal exchange command buffer")?;
-            let encoder = command.compute_encoder().ok_or("cannot allocate Metal exchange encoder")?;
-            // Both ranges are checked, owners outlive completion, and the caller
+            let command = self.queue.command_buffer().ok_or_else(|| GpuError::allocation("cannot allocate Metal exchange command buffer"))?;
+            let encoder = command.compute_encoder().ok_or_else(|| GpuError::allocation("cannot allocate Metal exchange encoder"))?;
+            // SAFETY: Both ranges are checked, owners outlive completion, and the caller
             // orders access from external queues before entering this method.
             unsafe { encoder.copy_buffer(source, source_offset, destination, destination_offset, len) };
             encoder.end_encoding();
             command.commit();
             command.wait_until_completed();
             if command.status() == MTLCommandBufferStatus::Error {
-                return Err(command.error().unwrap_or_else(|| "Metal exchange failed".into()));
+                return Err(command.error().unwrap_or_else(|| GpuError::execution("Metal exchange failed")));
             }
             Ok(())
         })
@@ -242,10 +272,11 @@ impl Context {
     /// # Safety
     /// `address` must point to a live MTLBuffer with no concurrent writers.
     /// The owner must remain alive until this call returns.
-    pub unsafe fn import_buffer(&self, descriptor: Descriptor, address: usize, offset: usize) -> Result<Image, String> {
+    pub unsafe fn import_buffer(&self, descriptor: Descriptor, address: usize, offset: usize) -> Result<Image, GpuError> {
         let len = descriptor.byte_len()?;
-        // The caller supplies a live MTLBuffer; retain it through GPU completion.
-        let source = unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or("null Metal buffer")?;
+        // SAFETY: The caller supplies a live MTLBuffer; retain it through GPU completion.
+        let source =
+            unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or_else(|| GpuError::invalid("null Metal buffer"))?;
         let buffer = self.allocate_image(len)?;
         self.copy_buffer(&source, offset, &buffer, 0, len)?;
         Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
@@ -256,24 +287,26 @@ impl Context {
     /// # Safety
     /// `address` must point to a live, exclusively writable MTLBuffer.
     /// The owner must remain alive until this call returns.
-    pub unsafe fn export_buffer(&self, image: &Image, address: usize, offset: usize) -> Result<(), String> {
+    pub unsafe fn export_buffer(&self, image: &Image, address: usize, offset: usize) -> Result<(), GpuError> {
         self.synchronize(image)?;
-        // The caller supplies a live MTLBuffer; retain it through GPU completion.
-        let destination = unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or("null Metal buffer")?;
+        // SAFETY: The caller supplies a live MTLBuffer; retain it through GPU completion.
+        let destination =
+            unsafe { Retained::retain(address as *mut ProtocolObject<dyn MTLBuffer>) }.ok_or_else(|| GpuError::invalid("null Metal buffer"))?;
         self.copy_buffer(&image.buffer, 0, &destination, offset, image.descriptor.byte_len()?)
     }
 
-    pub fn upload_with(&self, descriptor: Descriptor, initialize: impl FnOnce(&mut [u8])) -> Result<Image, String> {
+    pub fn upload_with(&self, descriptor: Descriptor, initialize: impl FnOnce(&mut [u8])) -> Result<Image, GpuError> {
         let len = descriptor.byte_len()?;
         let buffer = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len, true);
         let buffer = buffer.map_or_else(|| self.allocate_bytes(len), Ok)?;
-        // CPU reuse requires completed GPU readers and exclusive buffer ownership.
+        // SAFETY: the pool only returns CPU-writable storage after its GPU accesses
+        // complete, and this call exclusively owns the buffer of validated length.
         let bytes = unsafe { std::slice::from_raw_parts_mut(buffer.contents().cast().as_ptr(), len) };
         initialize(bytes);
         Ok(Image { descriptor, buffer, completion: None, pool: Arc::clone(&self.pool), uses: Mutex::default() })
     }
 
-    pub fn prepare_plan(&self, geometry: blanket_gpu::plan::Plan) -> Result<Plan, String> {
+    pub fn prepare_plan(&self, geometry: blanket_gpu::plan::Plan) -> Result<Plan, GpuError> {
         let controls = geometry
             .steps()
             .iter()
@@ -281,7 +314,7 @@ impl Context {
                 self.operation_pipeline(step.operation, geometry.descriptor().float, geometry.descriptor().channels)?;
                 self.control_buffer(if step.values.is_empty() { &[0.0] } else { &step.values })
             })
-            .collect::<Result<Vec<_>, String>>()?;
+            .collect::<Result<Vec<_>, GpuError>>()?;
         Ok(Plan { geometry, controls })
     }
     pub fn plan_info(plan: &Plan) -> (usize, [u32; 2], [u32; 2], usize) {
@@ -295,7 +328,7 @@ impl Context {
     ) {
         let pipeline = &self.tile_pipelines[usize::from(floating)];
         encoder.set_pipeline(pipeline);
-        // The plan bounds source/destination rectangles and retains every buffer.
+        // SAFETY: The plan bounds source/destination rectangles and retains every buffer.
         unsafe {
             encoder.set_buffer(Some(src), 0, SOURCE_SLOT);
             encoder.set_buffer(Some(dst), 0, OUTPUT_SLOT);
@@ -307,14 +340,14 @@ impl Context {
             MTLSize { width: THREADGROUP_THREADS.min(pipeline.maxTotalThreadsPerThreadgroup()), height: 1, depth: 1 },
         );
     }
-    pub fn execute_plan(&self, plan: &Plan, sources: &[&Image]) -> Result<Vec<Image>, String> {
+    pub fn execute_plan(&self, plan: &Plan, sources: &[&Image]) -> Result<Vec<Image>, GpuError> {
         autoreleasepool(|_| {
             let geometry = &plan.geometry;
             let d = geometry.descriptor();
             let tile = geometry.tile();
             let halo = geometry.halo();
             if sources.len() > 1024 || sources.iter().any(|source| source.descriptor != d || !Arc::ptr_eq(&source.pool, &self.pool)) {
-                return Err("GPU plan inputs must match its descriptor and execution context (at most 1024 images)".into());
+                return Err(GpuError::invalid("GPU plan inputs must match its descriptor and execution context (at most 1024 images)"));
             }
             if sources.is_empty() {
                 return Ok(Vec::new());
@@ -322,7 +355,7 @@ impl Context {
             let direct = tile == [d.width, d.height];
             let scratch_count = if direct { usize::from(geometry.steps().len() > 1) } else { 2 };
             let scratch = (0..scratch_count).map(|_| self.allocate_image(geometry.scratch_bytes() / 2)).collect::<Result<Vec<_>, _>>()?;
-            let buffers = sources.iter().map(|_| self.allocate_image(d.byte_len()?)).collect::<Result<Vec<_>, String>>()?;
+            let buffers = sources.iter().map(|_| self.allocate_image(d.byte_len()?)).collect::<Result<Vec<_>, GpuError>>()?;
             let pipelines = geometry
                 .steps()
                 .iter()
@@ -333,10 +366,10 @@ impl Context {
                         self.operation_pipeline(step.operation, d.float, d.channels)
                     }
                 })
-                .collect::<Result<Vec<_>, String>>()?;
-            let command = self.queue.command_buffer().ok_or("cannot allocate Metal plan command buffer")?;
+                .collect::<Result<Vec<_>, GpuError>>()?;
+            let command = self.queue.command_buffer().ok_or_else(|| GpuError::allocation("cannot allocate Metal plan command buffer"))?;
             // Encoder barriers complete each dispatch before the next begins.
-            let encoder = command.compute_encoder().ok_or("cannot allocate Metal plan encoder")?;
+            let encoder = command.compute_encoder().ok_or_else(|| GpuError::allocation("cannot allocate Metal plan encoder"))?;
             let mut outputs = Vec::with_capacity(sources.len());
             for (source, output) in sources.iter().zip(buffers) {
                 for y in (0..d.height).step_by(tile[1] as usize) {
@@ -375,7 +408,7 @@ impl Context {
                             } else {
                                 (&scratch[index % 2], &scratch[(index + 1) % 2])
                             };
-                            // Encoder barriers complete writes before reusing intermediate storage.
+                            // SAFETY: Encoder barriers complete writes before reusing intermediate storage.
                             unsafe {
                                 encoder.set_buffer(Some(src), 0, SOURCE_SLOT);
                                 encoder.set_buffer(Some(dst), 0, OUTPUT_SLOT);
@@ -424,7 +457,7 @@ impl Context {
         image.completion.as_ref().is_none_or(finished)
     }
 
-    pub fn paste(&self, background: &Image, source: &Image, mask: Option<&Image>, position: [i32; 2]) -> Result<Image, String> {
+    pub fn paste(&self, background: &Image, source: &Image, mask: Option<&Image>, position: [i32; 2]) -> Result<Image, GpuError> {
         let d = background.descriptor;
         let s = source.descriptor;
         if d.channels != s.channels
@@ -438,13 +471,13 @@ impl Context {
                     || !Arc::ptr_eq(&mask.pool, &self.pool)
             })
         {
-            return Err("incompatible GPU paste images".into());
+            return Err(GpuError::invalid("incompatible GPU paste images"));
         }
         autoreleasepool(|_| {
             let buffer = self.allocate_image(d.byte_len()?)?;
             let pipeline = &self.paste[usize::from(d.float)];
-            let command = self.queue.command_buffer().ok_or("cannot allocate Metal command buffer")?;
-            let encoder = command.compute_encoder().ok_or("cannot allocate Metal compute encoder")?;
+            let command = self.queue.command_buffer().ok_or_else(|| GpuError::allocation("cannot allocate Metal command buffer"))?;
+            let encoder = command.compute_encoder().ok_or_else(|| GpuError::allocation("cannot allocate Metal compute encoder"))?;
             let parameters = [
                 d.width,
                 d.height,
@@ -456,7 +489,7 @@ impl Context {
                 mask.map_or(0, |mask| if mask.descriptor.float { 2 } else { 1 }),
             ];
             encoder.set_pipeline(pipeline);
-            // Shapes and contexts are checked above; commands retain every input.
+            // SAFETY: Shapes and contexts are checked above; commands retain every input.
             unsafe {
                 encoder.set_buffer(Some(&background.buffer), 0, SOURCE_SLOT);
                 encoder.set_buffer(Some(&buffer), 0, OUTPUT_SLOT);
@@ -479,13 +512,13 @@ impl Context {
         })
     }
 
-    pub fn wait_idle(&self) -> Result<(), String> {
+    pub fn wait_idle(&self) -> Result<(), GpuError> {
         self.queue.wait_idle()
     }
     /// Borrow completed pixel storage until the image is released.
-    pub fn download_bytes<'a>(&self, image: &'a Image) -> Result<&'a [u8], String> {
+    pub fn download_bytes<'a>(&self, image: &'a Image) -> Result<&'a [u8], GpuError> {
         self.synchronize(image)?;
-        // Images are immutable; completion precedes reads and image owns the buffer.
+        // SAFETY: Images are immutable; completion precedes reads and image owns the buffer.
         Ok(unsafe { std::slice::from_raw_parts(image.buffer.contents().cast().as_ptr(), image.buffer.length()) })
     }
 
@@ -496,11 +529,11 @@ impl Context {
         })
     }
 
-    pub fn new() -> Result<Self, String> {
+    pub fn new() -> Result<Self, GpuError> {
         autoreleasepool(|_| {
-            let device = MTLCreateSystemDefaultDevice().ok_or("Metal device unavailable")?;
+            let device = MTLCreateSystemDefaultDevice().ok_or_else(|| GpuError::unavailable("Metal device unavailable"))?;
             if !objc2::available!(macos = 26.0) || !device.supportsFamily(MTLGPUFamily::Metal4) {
-                return Err("Metal 4 requires macOS 26 or later and a supported GPU".into());
+                return Err(GpuError::unavailable("Metal 4 requires macOS 26 or later and a supported GPU"));
             }
             let options = objc2_metal::MTLCompileOptions::new();
             options.setLanguageVersion(MTLLanguageVersion::Version4_0);
@@ -508,10 +541,12 @@ impl Context {
             options.setMathMode(MTLMathMode::Relaxed);
             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
             let source = NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
-            let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())?;
+            let library = device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(metal_error)?;
             let pipeline = |name| {
-                let function = library.newFunctionWithName(&NSString::from_str(name)).ok_or_else(|| format!("Metal kernel unavailable: {name}"))?;
-                device.newComputePipelineStateWithFunction_error(&function).map_err(|error| error.to_string())
+                let function = library
+                    .newFunctionWithName(&NSString::from_str(name))
+                    .ok_or_else(|| GpuError::unavailable(format!("Metal kernel unavailable: {name}")))?;
+                device.newComputePipelineStateWithFunction_error(&function).map_err(metal_error)
             };
             let pipelines = std::array::from_fn(|_| std::array::from_fn(|_| OnceLock::new()));
             let conversions =
@@ -546,8 +581,8 @@ impl Context {
             })
         })
     }
-    fn operation_pipeline(&self, operation: u32, floating: bool, channels: u32) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, String> {
-        let slots = self.pipelines.get(operation as usize).ok_or("invalid GPU operation")?;
+    fn operation_pipeline(&self, operation: u32, floating: bool, channels: u32) -> Result<&ProtocolObject<dyn MTLComputePipelineState>, GpuError> {
+        let slots = self.pipelines.get(operation as usize).ok_or_else(|| GpuError::invalid("invalid GPU operation"))?;
         let packed = packed_operation(operation, floating, channels);
         let variant = (if floating {
             8
@@ -560,7 +595,7 @@ impl Context {
         slots[variant]
             .get_or_init(|| {
                 let constants = MTLFunctionConstantValues::new();
-                // Metal copies one uint into the shader's operation constant at index zero.
+                // SAFETY: Metal copies one uint into the shader's operation constant at index zero.
                 unsafe {
                     constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&operation).cast(), MTLDataType::UInt, OPERATION_CONSTANT);
                     constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&channels).cast(), MTLDataType::UInt, CHANNELS_CONSTANT);
@@ -587,28 +622,29 @@ impl Context {
                             options.setOptimizationLevel(MTLLibraryOptimizationLevel::Default);
                             let source =
                                 NSString::from_str(&format!("#define BLANKET_METAL_SPECIALIZE\n{}\n{}", super::SHADERS, super::NATIVE_SHADERS));
-                            self.device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(|error| error.to_string())
+                            self.device.newLibraryWithSource_options_error(&source, Some(&options)).map_err(metal_error)
                         })
                         .as_ref()
                         .map_err(Clone::clone)?
                 } else {
                     &self.library
                 };
-                let function =
-                    library.newFunctionWithName_constantValues_error(&NSString::from_str(name), &constants).map_err(|error| error.to_string())?;
-                self.device.newComputePipelineStateWithFunction_error(&function).map_err(|error| error.to_string())
+                let function = library.newFunctionWithName_constantValues_error(&NSString::from_str(name), &constants).map_err(metal_error)?;
+                self.device.newComputePipelineStateWithFunction_error(&function).map_err(metal_error)
             })
             .as_ref()
             .map(|pipeline| &**pipeline)
             .map_err(Clone::clone)
     }
-    fn allocate_bytes(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    fn allocate_bytes(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, GpuError> {
         if len > self.max_buffer_length {
-            return Err("image exceeds Metal buffer limit".into());
+            return Err(GpuError::allocation("image exceeds Metal buffer limit"));
         }
-        self.device.newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared).ok_or_else(|| "cannot allocate Metal buffer".into())
+        self.device
+            .newBufferWithLength_options(len, MTLResourceOptions::StorageModeShared)
+            .ok_or_else(|| GpuError::allocation("cannot allocate Metal buffer"))
     }
-    fn allocate_image(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    fn allocate_image(&self, len: usize) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, GpuError> {
         let cached = self.pool.lock().unwrap_or_else(|error| error.into_inner()).take(len, false);
         cached.map_or_else(|| self.allocate_bytes(len), Ok)
     }
@@ -628,7 +664,7 @@ impl Context {
         let controls = self.controls.lock().unwrap_or_else(|error| error.into_inner());
         (pool.bytes, pool.limit, controls.bytes, controls.limit)
     }
-    fn control_buffer(&self, values: &[f32]) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, String> {
+    fn control_buffer(&self, values: &[f32]) -> Result<Retained<ProtocolObject<dyn MTLBuffer>>, GpuError> {
         let key: Vec<u32> = values.iter().map(|value| value.to_bits()).collect();
         let mut cache = self.controls.lock().unwrap_or_else(|error| error.into_inner());
         if let Some(index) = cache.entries.iter().position(|entry| entry.0 == key) {
@@ -639,7 +675,7 @@ impl Context {
         }
         let len = std::mem::size_of_val(values);
         let buffer = self.allocate_bytes(len)?;
-        // New storage is exclusively owned until published to the cache.
+        // SAFETY: New storage is exclusively owned until published to the cache.
         unsafe {
             std::ptr::copy_nonoverlapping(values.as_ptr(), buffer.contents().cast().as_ptr(), values.len());
         }
@@ -658,13 +694,13 @@ impl Context {
 
 impl Backend for Context {
     type Image = Image;
-    fn upload(&self, descriptor: Descriptor, bytes: &[u8]) -> Result<Image, String> {
+    fn upload(&self, descriptor: Descriptor, bytes: &[u8]) -> Result<Image, GpuError> {
         if descriptor.byte_len()? != bytes.len() {
-            return Err("incorrect upload length".into());
+            return Err(GpuError::invalid("incorrect upload length"));
         }
         self.upload_with(descriptor, |output| output.copy_from_slice(bytes))
     }
-    unsafe fn dispatch(&self, source: &Image, other: &Image, request: &Dispatch) -> Result<Image, String> {
+    unsafe fn dispatch(&self, source: &Image, other: &Image, request: &Dispatch) -> Result<Image, GpuError> {
         autoreleasepool(|_| {
             let output_bytes = request.output.byte_len()?;
             let buffer = self.allocate_image(output_bytes)?;
@@ -676,8 +712,8 @@ impl Backend for Context {
             } else {
                 None
             };
-            let command = self.queue.command_buffer().ok_or("cannot allocate Metal command buffer")?;
-            let encoder = command.compute_encoder().ok_or("cannot allocate Metal compute encoder")?;
+            let command = self.queue.command_buffer().ok_or_else(|| GpuError::allocation("cannot allocate Metal command buffer"))?;
+            let encoder = command.compute_encoder().ok_or_else(|| GpuError::allocation("cannot allocate Metal compute encoder"))?;
             let op = request.parameters[blanket_gpu::protocol::parameter::OPERATION];
             let pipeline = if op == operation::CONVERT {
                 &*self.conversions[usize::from(source.descriptor.float)][usize::from(request.output.float)]
@@ -697,7 +733,7 @@ impl Backend for Context {
                 parameters[7] = blocks as u32;
             }
             encoder.set_pipeline(pipeline);
-            // The caller validates shader bounds and layouts; the command retains all buffers.
+            // SAFETY: The caller validates shader bounds and layouts; the command retains all buffers.
             unsafe {
                 encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
                 encoder.set_buffer(Some(partials.as_ref().unwrap_or(&buffer)), 0, OUTPUT_SLOT);
@@ -719,7 +755,7 @@ impl Backend for Context {
                 );
                 if let Some(partials) = &partials {
                     encoder.set_pipeline(&self.finish_statistics);
-                    // The encoder barrier completes partial writes before the merge.
+                    // SAFETY: The encoder barrier completes partial writes before the merge.
                     unsafe {
                         encoder.set_buffer(Some(partials), 0, SOURCE_SLOT);
                         encoder.set_buffer(Some(&buffer), 0, OUTPUT_SLOT);
@@ -751,16 +787,16 @@ impl Backend for Context {
             Ok(Image { descriptor: request.output, buffer, completion: Some(command), pool: Arc::clone(&self.pool), uses: Mutex::default() })
         })
     }
-    fn synchronize(&self, image: &Image) -> Result<(), String> {
+    fn synchronize(&self, image: &Image) -> Result<(), GpuError> {
         if let Some(command) = &image.completion {
             command.wait_until_completed();
             if command.status() == MTLCommandBufferStatus::Error {
-                return Err(command.error().unwrap_or_else(|| "Metal command execution failed".into()));
+                return Err(command.error().unwrap_or_else(|| GpuError::execution("Metal command execution failed")));
             }
         }
         Ok(())
     }
-    fn download(&self, image: &Image) -> Result<Vec<u8>, String> {
+    fn download(&self, image: &Image) -> Result<Vec<u8>, GpuError> {
         self.download_bytes(image).map(<[u8]>::to_vec)
     }
 }
@@ -783,6 +819,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn oversized_allocations_report_a_typed_error() {
+        let Some(context) = test_context() else { return };
+        let error = context.allocate_bytes(usize::MAX).unwrap_err();
+        assert_eq!(error.kind(), GpuErrorKind::Allocation);
+    }
+
+    #[test]
     fn cache_defaults_preserve_memory_limits() {
         let pool = BufferPool::default();
         assert!(pool.entries.is_empty());
@@ -800,8 +843,8 @@ mod tests {
         if Context::is_available() {
             assert!(Context::new().is_ok());
         } else {
-            let error = Context::new().err().expect("unsupported Metal 4 hosts must reject context creation");
-            assert!(matches!(error.as_str(), "Metal device unavailable" | "Metal 4 requires macOS 26 or later and a supported GPU"));
+            let error = Context::new().expect_err("unsupported Metal 4 hosts must reject context creation");
+            assert_eq!(error.kind(), GpuErrorKind::Unavailable);
         }
     }
 
@@ -813,14 +856,16 @@ mod tests {
             assert!(context.device.supportsFamily(MTLGPUFamily::Metal4));
             let source = context.upload(descriptor, &vec![127; descriptor.byte_len().unwrap()]).unwrap();
             let request = Dispatch { output: descriptor, parameters: [1025, 17, 4, 1025, 17, operation::BRIGHTNESS, 0, 0], values: vec![0.5] };
+            // SAFETY: The request matches the uploaded RGBA shape, has one finite brightness factor, and uses this context.
             let first = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
             let request = Dispatch { output: descriptor, parameters: [1025, 17, 4, 1025, 17, operation::INVERT, 0, 0], values: vec![] };
+            // SAFETY: The immutable input and invert request have identical validated layouts and need no controls.
             unsafe { context.dispatch(&first, &first, &request) }.unwrap()
         };
         let completion = result.completion.as_ref().unwrap();
         completion.wait_until_completed();
         assert_eq!(completion.status(), MTLCommandBufferStatus::Completed);
-        // Completion precedes CPU reads, and the image owns this immutable storage.
+        // SAFETY: Completion precedes CPU reads, and the image owns this immutable storage.
         let bytes: &[u8] = unsafe { std::slice::from_raw_parts(result.buffer.contents().cast().as_ptr(), descriptor.byte_len().unwrap()) };
         assert!(bytes.as_chunks::<4>().0.iter().all(|pixel| pixel == &[192, 192, 192, 128]));
     }
@@ -837,6 +882,7 @@ mod tests {
         for (index, output) in outputs.iter().enumerate() {
             let parameters = [33, 17, 1, 33, 17, operation::BRIGHTNESS, 0, 0];
             let factor = (index % 4 + 1) as f32 * 0.25;
+            // SAFETY: live input/output buffers cover the request; both inline control layouts match the shader.
             unsafe {
                 encoder.set_buffer(Some(&source.buffer), 0, SOURCE_SLOT);
                 encoder.set_buffer(Some(&source.buffer), 0, OTHER_SLOT);
@@ -861,6 +907,7 @@ mod tests {
         let descriptor = Descriptor { width: 1025, height: 257, channels: 4, float: false };
         let source = context.upload(descriptor, &vec![71; descriptor.byte_len().unwrap()]).unwrap();
         let request = Dispatch { output: descriptor, parameters: [1025, 257, 4, 1025, 257, operation::INVERT, 0, 0], values: vec![] };
+        // SAFETY: The invert request matches this context's immutable RGBA image and needs no controls.
         let results: Vec<_> = (0..16).map(|_| unsafe { context.dispatch(&source, &source, &request) }.unwrap()).collect();
         drop(source);
         context.wait_idle().unwrap();
@@ -878,20 +925,22 @@ mod tests {
             let bytes: Vec<u8> = (0..len + 6).map(|i| i as u8).collect();
             let external = context.upload(Descriptor { width: len + 6, ..descriptor }, &bytes).unwrap();
             let address = Retained::as_ptr(&external.buffer) as usize;
-            // The external image owns an idle buffer throughout each copy.
+            // SAFETY: The external image owns an idle buffer throughout each copy.
             let imported = unsafe { context.import_buffer(descriptor, address, 3) }.unwrap();
             assert_eq!(context.download(&imported).unwrap(), bytes[3..len as usize + 3]);
             let output = context.upload(Descriptor { width: len + 6, ..descriptor }, &vec![99; len as usize + 6]).unwrap();
             let destination = Retained::as_ptr(&output.buffer) as usize;
-            // No other queue accesses the destination; export waits for completion.
+            // SAFETY: No other queue accesses the destination; export waits for completion.
             unsafe { context.export_buffer(&imported, destination, 1) }.unwrap();
             let actual = context.download(&output).unwrap();
             assert_eq!(actual[0], 99);
             assert_eq!(actual[1..len as usize + 1], bytes[3..len as usize + 3]);
             assert!(actual[len as usize + 1..].iter().all(|&byte| byte == 99));
             for offset in [7, usize::MAX] {
-                assert!(unsafe { context.import_buffer(descriptor, address, offset) }.err().unwrap().contains("bounds"));
-                assert!(unsafe { context.export_buffer(&imported, destination, offset) }.unwrap_err().contains("bounds"));
+                // SAFETY: The live external buffer has no writers; invalid offsets are rejected before copying.
+                assert!(unsafe { context.import_buffer(descriptor, address, offset) }.err().unwrap().to_string().contains("bounds"));
+                // SAFETY: The destination is live and idle; invalid offsets are rejected before copying.
+                assert!(unsafe { context.export_buffer(&imported, destination, offset) }.unwrap_err().to_string().contains("bounds"));
             }
         }
     }
@@ -962,7 +1011,7 @@ mod tests {
         let request = Dispatch { output: descriptor, parameters: [257, 129, 4, 257, 129, operation::INVERT, 0, 0], values: vec![] };
         for _ in 0..64 {
             addresses.insert(image.buffer.contents());
-            // Matching immutable inputs and output dimensions satisfy shader bounds.
+            // SAFETY: Matching immutable inputs and output dimensions satisfy shader bounds.
             image = unsafe { context.dispatch(&image, &image, &request) }.unwrap();
         }
         assert_eq!(addresses.len(), 2);
@@ -986,14 +1035,14 @@ mod tests {
                 input[4..4 + data.len()].copy_from_slice(&data);
                 let source = context.upload(guarded, &input).unwrap();
                 for radius in [32.0, 32.5, 128.5, 16_777_216.0] {
-                    let (radius, values) = blanket_gpu::blur_parameters(radius, false).unwrap();
+                    let (radius, values) = blanket_gpu::blur_parameters(radius, blanket_gpu::BlurKind::Box).unwrap();
                     for axis in [0, 1] {
                         let output = context.upload(guarded, &vec![0xa5; input.len()]).unwrap();
                         let parameters = [width, height, channels, width, height, operation::BOX_BLUR, radius, axis];
                         let command = context.queue.command_buffer().unwrap();
                         let encoder = command.compute_encoder().unwrap();
                         encoder.set_pipeline(pipeline);
-                        // Four-byte offsets satisfy Metal alignment but misalign packed RGB rows.
+                        // SAFETY: Four-byte offsets satisfy Metal alignment but misalign packed RGB rows.
                         unsafe {
                             encoder.set_buffer(Some(&source.buffer), 4, SOURCE_SLOT);
                             encoder.set_buffer(Some(&output.buffer), 4, OUTPUT_SLOT);
@@ -1047,6 +1096,7 @@ mod tests {
                     let output = Descriptor { width: statistics::HISTOGRAM_BINS, height: channels, channels: 1, float: true };
                     let request =
                         Dispatch { output, parameters: [width, 1, channels, output.width, channels, operation::STATISTICS, 1, 0], values: vec![] };
+                    // SAFETY: The test constructs matching source/output layouts and operation-specific controls for this context.
                     let result = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
                     let counts = floats(&context.download(&result).unwrap());
                     for band in 0..channels as usize {
@@ -1081,7 +1131,7 @@ mod tests {
                     let command = context.queue.command_buffer().unwrap();
                     let encoder = command.compute_encoder().unwrap();
                     encoder.set_pipeline(pipeline);
-                    // Offset bindings leave guards around input and output, including RGB tails.
+                    // SAFETY: Offset bindings leave guards around input and output, including RGB tails.
                     unsafe {
                         encoder.set_buffer(Some(&source.buffer), 4, SOURCE_SLOT);
                         encoder.set_buffer(Some(&result.buffer), 4, OUTPUT_SLOT);
@@ -1130,6 +1180,7 @@ mod tests {
             let source = context.upload(descriptor, &data).unwrap();
             let output = Descriptor { width: width.div_ceil(256), ..descriptor };
             let request = Dispatch { output, parameters: [width, 1, 4, output.width, 1, operation::LUMINANCE_REDUCE, 2, 0], values: vec![] };
+            // SAFETY: The test constructs matching source/output layouts and operation-specific controls for this context.
             let result = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
             let actual = floats(&context.download(&result).unwrap());
             for (index, block) in values.chunks(256).enumerate() {
@@ -1151,9 +1202,11 @@ mod tests {
             let parameters = |output: Descriptor, kind| [width, height, 3, output.width, output.height, operation::STATISTICS, kind, 0];
             let output = Descriptor { width: statistics::HISTOGRAM_BINS, height: 3, channels: 1, float: true };
             let request = Dispatch { output, parameters: parameters(output, 1), values: vec![] };
+            // SAFETY: The byte histogram request allocates all 256 bins for each of the three source channels.
             let counts = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
             let output = Descriptor { width: statistics::FIELDS, height: 3, channels: 1, float: true };
             let request = Dispatch { output, parameters: parameters(output, 0), values: vec![] };
+            // SAFETY: The statistics request allocates all seven result fields per source channel.
             let fields = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
             for band in 0..3 {
                 let values: Vec<u32> = data.iter().skip(band).step_by(3).map(|&value| u32::from(value)).collect();
@@ -1175,6 +1228,7 @@ mod tests {
         let image = context.upload(descriptor, &samples.iter().flat_map(|value| value.to_ne_bytes()).collect::<Vec<_>>()).unwrap();
         let output = Descriptor { width: statistics::FIELDS, height: 1, channels: 1, float: true };
         let request = Dispatch { output, parameters: [999, 1, 1, output.width, 1, operation::STATISTICS, 0, 0], values: vec![] };
+        // SAFETY: The statistics request allocates all seven result fields per source channel.
         let fields = floats(&context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap());
         assert!(fields[0].is_nan() && fields[1].is_nan());
     }
@@ -1190,6 +1244,7 @@ mod tests {
             let values: Vec<f32> = (0..6).flat_map(|x| [x as f32, 4.0].into_iter().chain(weights)).collect();
             let output = Descriptor { width: 6, ..descriptor };
             let request = Dispatch { output, parameters: [9, 2, channels, 6, 2, operation::RESIZE, 6, 0], values };
+            // SAFETY: Resize rows cover each output pixel, reference valid source taps, and match the source channels.
             let actual = context.download(&unsafe { context.dispatch(&image, &image, &request) }.unwrap()).unwrap();
             let fixed = weights.map(|weight| (weight * (1 << 22) as f32).round() as i64);
             let expected: Vec<u8> = (0..actual.len())

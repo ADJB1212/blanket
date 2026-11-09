@@ -6,6 +6,12 @@ use turbojpeg::raw;
 
 pub(super) struct Decoder(raw::tjhandle);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum OutputColor {
+    Original,
+    Grayscale,
+}
+
 impl Drop for Decoder {
     fn drop(&mut self) {
         // SAFETY: this guard exclusively owns a non-null decoder.
@@ -55,10 +61,10 @@ impl Decoder {
     }
 
     pub(super) fn decode(&mut self, data: &[u8]) -> Result<Image, String> {
-        self.decode_scaled(data, 1, false)
+        self.decode_scaled(data, 1, OutputColor::Original)
     }
 
-    pub(super) fn decode_scaled(&mut self, data: &[u8], scale: u32, grayscale: bool) -> Result<Image, String> {
+    pub(super) fn decode_scaled(&mut self, data: &[u8], scale: u32, color: OutputColor) -> Result<Image, String> {
         let data = super::markers::combine(data);
         let header = self.header(&data)?;
         validate_dimensions(header.width, header.height)?;
@@ -73,7 +79,7 @@ impl Decoder {
         let (mode, format) = match header.mode {
             "L" => (PixelMode::L, raw::TJPF_TJPF_GRAY),
             "CMYK" => (PixelMode::Cmyk, raw::TJPF_TJPF_CMYK),
-            _ if grayscale => (PixelMode::L, raw::TJPF_TJPF_GRAY),
+            _ if color == OutputColor::Grayscale => (PixelMode::L, raw::TJPF_TJPF_GRAY),
             _ => (PixelMode::Rgb, raw::TJPF_TJPF_RGB),
         };
         let pitch = (width as usize).checked_mul(mode.channels()).ok_or("JPEG row size overflow")?;

@@ -138,7 +138,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
 }
 
 pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>) -> PyResult<Vec<u8>> {
-    let first = sequence.frames[0].image.borrow();
+    let first = sequence.frames.first().ok_or_else(|| PyValueError::new_err("empty sequence"))?.image.borrow();
     if first.width() == 0 || first.height() == 0 || first.width() > 65535 || first.height() > 65535 {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
@@ -246,4 +246,15 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_animation_returns_an_error() {
+        let sequence = blanket_codec_common::Sequence::<Image>::default();
+        assert!(encode_sequence(&sequence).is_err());
+    }
 }

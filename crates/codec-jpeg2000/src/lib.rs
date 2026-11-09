@@ -39,6 +39,9 @@ struct Buffer<'a> {
     writing: bool = false,
 }
 
+/// # Safety
+/// `context` must exclusively reference a live Buffer. `buffer` must be writable
+/// for `count` bytes and must not overlap the input slice.
 unsafe extern "C" fn read(buffer: *mut c_void, count: usize, context: *mut c_void) -> usize {
     // SAFETY: OpenJPEG supplies a writable count-byte buffer and the live Buffer context.
     unsafe {
@@ -53,6 +56,9 @@ unsafe extern "C" fn read(buffer: *mut c_void, count: usize, context: *mut c_voi
     }
 }
 
+/// # Safety
+/// `context` must exclusively reference a live Buffer. `buffer` must be readable
+/// for `count` bytes and must not overlap the output allocation.
 unsafe extern "C" fn write(buffer: *mut c_void, count: usize, context: *mut c_void) -> usize {
     // SAFETY: OpenJPEG supplies count readable bytes and the live Buffer context.
     unsafe {
@@ -72,6 +78,8 @@ unsafe extern "C" fn write(buffer: *mut c_void, count: usize, context: *mut c_vo
     }
 }
 
+/// # Safety
+/// `context` must exclusively reference a live Buffer.
 unsafe extern "C" fn seek(position: i64, context: *mut c_void) -> i32 {
     // SAFETY: The context is the Buffer registered on this synchronous stream.
     let state = unsafe { &mut *context.cast::<Buffer<'_>>() };
@@ -85,6 +93,8 @@ unsafe extern "C" fn seek(position: i64, context: *mut c_void) -> i32 {
     }
 }
 
+/// # Safety
+/// `context` must exclusively reference a live Buffer.
 unsafe extern "C" fn skip(offset: i64, context: *mut c_void) -> i64 {
     // SAFETY: The context is live; seek validates the resulting position.
     unsafe {
@@ -97,8 +107,8 @@ unsafe extern "C" fn skip(offset: i64, context: *mut c_void) -> i64 {
 }
 
 impl Handles {
-    fn configure_threads(&self, parallel: bool) {
-        if parallel && std::env::var_os("OPJ_NUM_THREADS").is_none() {
+    fn configure_threads(&self) {
+        if std::env::var_os("OPJ_NUM_THREADS").is_none() {
             let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(8));
             if threads > 1 {
                 // SAFETY: The codec is live and has not created a tile coder yet.
@@ -132,6 +142,7 @@ impl Handles {
     }
 }
 
+#[must_use]
 pub fn backend_version() -> String {
     // SAFETY: OpenJPEG returns a static, nul-terminated version string.
     unsafe { format!("OpenJPEG {}", CStr::from_ptr(opj_version()).to_string_lossy()) }
@@ -187,7 +198,9 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
         if opj_setup_decoder(handles.codec, &raw mut parameters) == 0 {
             return Err("invalid JPEG 2000 decoder parameters".into());
         }
-        handles.configure_threads(data.len() >= 32 * 1024);
+        if data.len() >= 32 * 1024 {
+            handles.configure_threads();
+        }
         if opj_read_header(handles.stream, handles.codec, &raw mut handles.image) == 0 || handles.image.is_null() {
             return Err("invalid JPEG 2000 header".into());
         }
@@ -326,7 +339,9 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
         if opj_setup_encoder(handles.codec, &raw mut parameters, handles.image) == 0 {
             return Err(PyOSError::new_err("could not configure JPEG 2000 encoder"));
         }
-        handles.configure_threads(u64::from(image.width()) * u64::from(image.height()) >= 256 * 1024);
+        if u64::from(image.width()) * u64::from(image.height()) >= 256 * 1024 {
+            handles.configure_threads();
+        }
         if opj_start_compress(handles.codec, handles.image, handles.stream) == 0
             || opj_encode(handles.codec, handles.stream) == 0
             || opj_end_compress(handles.codec, handles.stream) == 0

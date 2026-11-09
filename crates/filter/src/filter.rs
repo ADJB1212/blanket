@@ -2,6 +2,7 @@
 
 use blanket_core::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
+use blanket_filter_blur::filter_blur_python;
 pub use blanket_filter_blur::{filter_blur, filter_unsharp};
 pub use blanket_filter_neighborhood::filter_rank;
 use blanket_filter_neighborhood::{filter_kernel, filter_mode};
@@ -12,7 +13,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(filter_kernel, module)?)?;
     module.add_function(wrap_pyfunction!(filter_rank, module)?)?;
     module.add_function(wrap_pyfunction!(filter_mode, module)?)?;
-    module.add_function(wrap_pyfunction!(filter_blur, module)?)?;
+    module.add_function(wrap_pyfunction!(filter_blur_python, module)?)?;
     module.add_function(wrap_pyfunction!(filter_unsharp, module)?)?;
     module.add_function(wrap_pyfunction!(filter_lut, module)?)?;
     module.add_function(wrap_pyfunction!(filter_merge, module)?)?;

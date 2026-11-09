@@ -15,7 +15,7 @@ fn blur(c: &mut Criterion) {
                     let mut group = c.benchmark_group(format!("blur/{}-{depth}/{width}x{height}", mode.as_str()));
                     group.throughput(Throughput::Elements(u64::from(width) * u64::from(height)));
                     group.bench_function("gaussian-blur-radius-2", |b| {
-                        b.iter(|| filter_blur(py, black_box(&image), black_box((2.0, 2.0)), true).unwrap());
+                        b.iter(|| filter_blur(py, black_box(&image), black_box((2.0, 2.0)), blanket_filter_blur::BlurKind::Gaussian).unwrap());
                     });
                     group.finish();
                 }

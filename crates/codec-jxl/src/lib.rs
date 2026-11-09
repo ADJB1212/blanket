@@ -24,9 +24,12 @@ use pyo3::prelude::*;
 #[cfg(target_endian = "little")]
 use zerocopy::FromBytes;
 
+/// Minimum raw sample bytes for pooled candidate encoding; smaller inputs run serially.
 pub const JXL_PARALLEL_MIN_BYTES: usize = 32 << 10;
 
+#[must_use]
 pub fn backend_version() -> String {
+    // SAFETY: querying the version requires no initialized state or pointers.
     let version = unsafe { jpegxl_sys::decode::JxlDecoderVersion() };
     format!("{}.{}.{}", version / 1_000_000, version / 1_000 % 1_000, version % 1_000)
 }
@@ -409,7 +412,6 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
                         result.push((k.into(), std::mem::take(&mut buffer)));
                     }
                 }
-                #[allow(clippy::unnecessary_cast)]
                 match status {
                     JxlDecoderStatus::ColorEncoding => {
                         let mut size = 0;
@@ -430,7 +432,8 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
                     JxlDecoderStatus::Box => {
                         let mut kind = JxlBoxType([0; 4]);
                         check(JxlDecoderGetBoxType(dec, &mut kind, true.into()))?;
-                        key = match kind.0.map(|v| v as u8) {
+                        // c_char is signed on some targets; preserve the byte representation.
+                        key = match kind.0.map(|v| v.to_ne_bytes()[0]) {
                             [b'E', b'x', b'i', b'f'] => Some("exif"),
                             [b'x', b'm', b'l', b' '] => Some("xmp"),
                             _ => None,
@@ -468,6 +471,7 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
 /// encode concurrently on the Rayon pool. libjxl parallelizes over 256-pixel
 /// groups, so more threads than groups would only add synchronization.
 #[inline]
+#[must_use]
 pub fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
     let groups = (image.width() as usize).div_ceil(256) * (image.height() as usize).div_ceil(256);
     (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
@@ -484,6 +488,16 @@ pub struct PreparedJxl<'a> {
     image: &'a Image,
     samples: PreparedSamples<'a>,
     raw_len: usize,
+}
+
+impl std::fmt::Debug for PreparedJxl<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedJxl")
+            .field("size", &self.image.size())
+            .field("bit_depth", &self.image.bit_depth())
+            .field("raw_len", &self.raw_len)
+            .finish_non_exhaustive()
+    }
 }
 
 fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {

@@ -128,6 +128,7 @@ pub fn reduce_float_two(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize 
 }
 
 /// Reusable byte gather map for an axis-aligned nearest transform.
+#[derive(Debug)]
 pub struct NearestL {
     columns: Vec<usize>,
     blocks: Vec<Option<(usize, Bytes)>>,

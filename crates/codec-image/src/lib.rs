@@ -23,6 +23,7 @@ pub fn inspect_rust_image(data: &[u8], format: RustFormat) -> Result<blanket_cod
     blanket_codec_common::ImageHeader::new(width, height, mode, depth)
 }
 
+#[must_use]
 pub fn color_type(mode: PixelMode) -> ExtendedColorType {
     match mode {
         PixelMode::One | PixelMode::L => ExtendedColorType::L8,
@@ -35,11 +36,18 @@ pub fn color_type(mode: PixelMode) -> ExtendedColorType {
 }
 
 pub fn decode_rust_image(data: &[u8], format: RustFormat, format_name: &str) -> Result<Image, DecodeError> {
-    decode_with_metadata(data, format, format_name, None, false)
+    decode_with_metadata(data, format, format_name, None, LumaMode::Grayscale)
+}
+
+/// Interpretation of decoded single-channel pixels.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LumaMode {
+    Grayscale,
+    Bilevel,
 }
 
 pub fn decode_with_metadata(
-    data: &[u8], format: RustFormat, format_name: &str, significant_bits: Option<&[u8]>, bilevel: bool,
+    data: &[u8], format: RustFormat, format_name: &str, significant_bits: Option<&[u8]>, luma: LumaMode,
 ) -> Result<Image, DecodeError> {
     let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(DecodeError::with_diagnostic_source)?;
     let dimensions = decoder.dimensions();
@@ -84,7 +92,10 @@ pub fn decode_with_metadata(
     }
     let (mode, pixels) = match color {
         ColorType::L8 | ColorType::L16 => {
-            let mode = if bilevel { PixelMode::One } else { PixelMode::L };
+            let mode = match luma {
+                LumaMode::Grayscale => PixelMode::L,
+                LumaMode::Bilevel => PixelMode::One,
+            };
             (mode, image.into_luma8().into_raw())
         }
         ColorType::La8 => (PixelMode::La, image.into_luma_alpha8().into_raw()),

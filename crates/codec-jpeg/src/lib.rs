@@ -34,11 +34,19 @@ fn with_codec<T, R, E>(cache: &RefCell<Option<T>>, create: impl FnOnce() -> Resu
     result
 }
 
-pub fn transform_jpeg(
-    data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,
-) -> PyResult<Vec<u8>> {
+/// Controls for a lossless coefficient transform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TransformOptions {
+    pub method: Option<u8>,
+    pub crop: Option<(usize, usize, usize, usize)>,
+    pub trim: bool,
+    pub preserve_metadata: bool,
+}
+
+pub fn transform_jpeg(data: &[u8], options: TransformOptions) -> PyResult<Vec<u8>> {
     use turbojpeg::{Transform, TransformCrop, TransformOp, Transformer};
 
+    let TransformOptions { method, crop, trim, preserve_metadata } = options;
     let op = match method {
         None => TransformOp::None,
         Some(0) => TransformOp::Hflip,
@@ -104,7 +112,8 @@ pub fn decode_scaled(data: &[u8], scale: u32, mode: &str) -> Result<Image, Strin
         return Image::from_pixels(decoded.width as u32, decoded.height as u32, PixelMode::YCbCr, decoded.data, Some("JPEG".into()))
             .map_err(|error| error.to_string());
     }
-    decode::Decoder::new()?.decode_scaled(data, scale, mode == "L")
+    let color = if mode == "L" { decode::OutputColor::Grayscale } else { decode::OutputColor::Original };
+    decode::Decoder::new()?.decode_scaled(data, scale, color)
 }
 
 #[cfg(test)]
@@ -183,7 +192,7 @@ fn encode_jpeg_configured(image: &Image, pixels: &[u8], options: SaveOptions, co
             with_codec(cache, || Compressor::new().map_err(codec_error), |encoder| encode_jpeg_with(encoder, image, pixels, options, coding))
         })?
     };
-    markers::separate(encoded, options.jpeg_streamtype, coding.optimize || coding.progressive)
+    markers::separate(encoded, options.jpeg_streamtype, coding)
 }
 
 fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {

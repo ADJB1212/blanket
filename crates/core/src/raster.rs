@@ -1,3 +1,5 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -426,6 +428,21 @@ pub trait SharedPixels: std::any::Any + Send + Sync + pyo3::marker::Ungil {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
+#[derive(Debug)]
+struct SampleValidation(AtomicBool);
+
+impl SampleValidation {
+    const fn new() -> Self {
+        Self(AtomicBool::new(true))
+    }
+}
+
+impl Clone for SampleValidation {
+    fn clone(&self) -> Self {
+        Self(AtomicBool::new(self.0.load(Ordering::Relaxed)))
+    }
+}
+
 #[pyclass(name = "_Image", module = "blanket._blanket")]
 #[derive(Clone)]
 pub struct Image {
@@ -437,6 +454,18 @@ pub struct Image {
     pub(crate) bit_depth: u8 = 8,
     pub format: Option<String> = None,
     pub(crate) palette: Option<(PixelMode, Vec<u8>)> = None,
+    sample_validation: SampleValidation = SampleValidation::new(),
+}
+
+impl std::fmt::Debug for Image {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Image")
+            .field("size", &self.size())
+            .field("mode", &self.mode)
+            .field("bit_depth", &self.bit_depth)
+            .field("format", &self.format)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Image {
@@ -465,7 +494,11 @@ impl Image {
     }
 
     /// Mutable owned samples, without allowing the storage length to change.
+    /// Modified 10/12-bit samples are validated on their next read.
     pub fn pixels_mut(&mut self) -> Option<&mut [u8]> {
+        if matches!(self.bit_depth, 10 | 12) {
+            self.sample_validation.0.store(false, Ordering::Relaxed);
+        }
         self.pixels.as_deref_mut()
     }
 
@@ -488,6 +521,7 @@ impl Image {
         self.bit_depth = image.bit_depth;
         self.pixels = image.pixels;
         self.shared_pixels = image.shared_pixels;
+        self.sample_validation = image.sample_validation;
         Ok(())
     }
 
@@ -567,6 +601,10 @@ impl Image {
 
     pub fn raw_data(&self) -> PyResult<&[u8]> {
         if let Some(pixels) = &self.pixels {
+            if !self.sample_validation.0.load(Ordering::Relaxed) {
+                validate_raw_data(self.width, self.height, self.mode, self.bit_depth, pixels)?;
+                self.sample_validation.0.store(true, Ordering::Relaxed);
+            }
             return Ok(pixels);
         }
         let pixels = self.shared_pixels.as_ref().ok_or_else(|| PyValueError::new_err("operation on closed image"))?.bytes();
@@ -2394,6 +2432,28 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mutable_high_depth_samples_are_revalidated_and_cloned_independently() {
+        use super::{Image, PixelMode};
+
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
+            for depth in [10, 12] {
+                let mut image = Image::from_samples(1, 1, mode, vec![0; mode.channels()], depth, None).unwrap();
+                image.pixels_mut().unwrap()[..2].copy_from_slice(&u16::MAX.to_le_bytes());
+                let mut cloned = image.clone();
+                assert!(image.raw_data().is_err());
+                assert!(cloned.raw_data().is_err());
+                cloned.pixels_mut().unwrap()[..2].copy_from_slice(&1_u16.to_le_bytes());
+                assert!(cloned.raw_data().is_ok());
+                assert!(image.raw_data().is_err());
+                image.pixels_mut().unwrap()[..2].copy_from_slice(&0_u16.to_le_bytes());
+                assert!(image.raw_data().is_ok());
+                image.pixels_mut().unwrap()[..2].copy_from_slice(&(1_u16 << depth).to_le_bytes());
+                assert!(image.raw_data().is_err());
+            }
+        }
+    }
+
     struct Storage(Vec<u8>);
 
     impl super::SharedPixels for Storage {
@@ -2673,7 +2733,7 @@ mod tests {
     pub(super) fn validates_buffer_length() {
         Python::initialize();
         Python::attach(|_| {
-            let error = Image::from_pixels(2, 2, PixelMode::Rgb, vec![0; 11], None).err().expect("invalid buffer should fail");
+            let error = Image::from_pixels(2, 2, PixelMode::Rgb, vec![0; 11], None).expect_err("invalid buffer should fail");
             assert!(error.to_string().contains("expected 12 bytes"));
         });
     }

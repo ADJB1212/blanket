@@ -8,7 +8,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use blanket_codec_common::{codec_error, validate_dimensions};
-use blanket_codec_image::{color_type, decode_rust_image, decode_with_metadata};
+use blanket_codec_image::{LumaMode, color_type, decode_rust_image, decode_with_metadata};
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ImageDecoder, ImageEncoder, ImageFormat};
 use pyo3::exceptions::PyOSError;
@@ -42,7 +42,8 @@ pub fn decode_pnm(data: &[u8]) -> Result<Image, String> {
             return Image::from_sample_bytes(width, height, mode, pixels, 16, Some("PPM".into())).map_err(|e| e.to_string());
         }
     }
-    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, matches!(data.get(1), Some(b'1' | b'4'))).map_err(String::from)
+    let luma = if matches!(data.get(1), Some(b'1' | b'4')) { LumaMode::Bilevel } else { LumaMode::Grayscale };
+    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, luma).map_err(String::from)
 }
 
 pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
@@ -116,18 +117,24 @@ pub fn decode_qoi(data: &[u8]) -> Result<Image, String> {
     decode_rust_image(data, ImageFormat::Qoi, "QOI").map_err(String::from)
 }
 
-pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PnmFormat {
+    Ppm,
+    Pam,
+}
+
+pub fn encode_wide_pnm(image: &Image, format: PnmFormat) -> PyResult<Vec<u8>> {
     if image.width() == 0 || image.height() == 0 {
         return Err(PyOSError::new_err("cannot encode an empty image"));
     }
     let (magic, tuple) = match image.pixel_mode() {
         PixelMode::L => ("P5", "GRAYSCALE"),
         PixelMode::Rgb => ("P6", "RGB"),
-        PixelMode::Rgba if pam => ("P7", "RGB_ALPHA"),
+        PixelMode::Rgba if format == PnmFormat::Pam => ("P7", "RGB_ALPHA"),
         _ => return Err(PyOSError::new_err("PPM supports modes 1, L, and RGB; use PAM for alpha")),
     };
     let samples = image.raw_data()?;
-    let header = if pam {
+    let header = if format == PnmFormat::Pam {
         format!(
             "P7\nWIDTH {}\nHEIGHT {}\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n",
             image.width(),
@@ -144,6 +151,7 @@ pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {
     Ok(output)
 }
 
+#[must_use]
 pub fn is_tga(data: &[u8]) -> bool {
     data.len() >= 18
         && data[1] <= 1
@@ -191,6 +199,7 @@ pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<V
     Ok(output)
 }
 
+#[must_use]
 pub fn ghostscript_available() -> bool {
     Command::new("gs").arg("--version").stdout(Stdio::null()).stderr(Stdio::null()).status().is_ok_and(|status| status.success())
 }

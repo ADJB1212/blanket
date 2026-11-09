@@ -13,7 +13,7 @@ struct Sink {
     active: Arc<AtomicBool>,
 }
 
-// Python objects are accessed only inside Python::attach in Write::write.
+// SAFETY: Python objects are accessed only inside Python::attach in Write::write.
 unsafe impl pyo3::marker::Ungil for Sink {}
 
 impl Write for Sink {
@@ -52,6 +52,17 @@ pub struct PngStreamWriter {
     remaining: usize,
     depth: u8,
     converted: Vec<u8>,
+}
+
+impl std::fmt::Debug for PngStreamWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PngStreamWriter")
+            .field("open", &self.writer.is_some())
+            .field("stride", &self.stride)
+            .field("remaining", &self.remaining)
+            .field("depth", &self.depth)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Drop for PngStreamWriter {

@@ -2,6 +2,7 @@ use super::*;
 
 fn scalar_pipeline(context: &Context, op: u32, channels: u32, floating: bool) -> Pipeline {
     let constants = MTLFunctionConstantValues::new();
+    // SAFETY: Metal copies two live u32 values into valid operation and channel constant slots.
     unsafe {
         constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&op).cast(), MTLDataType::UInt, OPERATION_CONSTANT);
         constants.setConstantValue_type_atIndex(std::ptr::NonNull::from(&channels).cast(), MTLDataType::UInt, CHANNELS_CONSTANT);
@@ -28,6 +29,7 @@ fn guarded_dispatch(
     let encoder = command.compute_encoder().unwrap();
     let values = if request.values.is_empty() { &[0.0][..] } else { &request.values };
     encoder.set_pipeline(pipeline);
+    // SAFETY: Guard offsets and allocation sizes cover all accesses; live controls match the shader layout.
     unsafe {
         encoder.set_buffer(Some(&source.buffer), 16, SOURCE_SLOT);
         encoder.set_buffer(Some(&output.buffer), 16, OUTPUT_SLOT);
@@ -231,6 +233,7 @@ fn packed_float_convolution_plans_match_direct_dispatch() {
             let values = [vec![0.0, -0.375], vec![1.0 / (kernel * kernel) as f32; (kernel * kernel) as usize]].concat();
             let request =
                 Dispatch { output: descriptor, parameters: [37, 29, channels, 37, 29, operation::CONVOLVE, kernel, 0], values: values.clone() };
+            // SAFETY: The convolution request matches the source, with a supported kernel and complete controls.
             let direct = unsafe { context.dispatch(&source, &source, &request) }.unwrap();
             let expected = context.download(&direct).unwrap();
             for limit in [4096, 1_000_000] {

@@ -70,6 +70,7 @@ fn encode_webp_config(image: &Image, pixels: &[u8], options: SaveOptions, config
     Ok(encoded.to_vec())
 }
 
+#[must_use]
 pub fn backend_version() -> String {
     let (major, minor, patch) = webpx::version();
     format!("{major}.{minor}.{patch}")
@@ -146,7 +147,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
 }
 
 pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
-    let first = sequence.frames[0].image.borrow();
+    let first = sequence.frames.first().ok_or_else(|| PyValueError::new_err("empty sequence"))?.image.borrow();
     let mut encoder =
         webpx::AnimationEncoder::with_options(first.width(), first.height(), false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
     encoder.set_quality(f32::from(options.quality));
@@ -162,6 +163,12 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_animation_returns_an_error() {
+        let sequence = blanket_codec_common::Sequence::<Image>::default();
+        assert!(encode_sequence(&sequence, SaveOptions::default()).is_err());
+    }
 
     #[test]
     fn grayscale_encoding_matches_rgb_import_for_lossy_and_lossless() {

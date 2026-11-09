@@ -17,14 +17,14 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "webp" => Some(blanket_codecs::webp_backend_version()),
         "littlecms2" => Some(blanket_cms::littlecms_version()),
         "libheif" | "heif" | "heif_decoder" | "heif_encoder" => {
-            let (decode, encode, version) = blanket_codecs::heif_backend_info();
+            let backend = blanket_codecs::heif_backend_info();
             let available = match feature {
                 "libheif" => true,
-                "heif_decoder" => decode,
-                "heif_encoder" => encode,
-                _ => decode && encode,
+                "heif_decoder" => backend.decode,
+                "heif_encoder" => backend.encode,
+                _ => backend.decode && backend.encode,
             };
-            return Some((available, available.then_some(version)));
+            return Some((available, available.then_some(backend.version)));
         }
         "pdf" | "pcx" | "sgi" | "xbm" | "xpm" | "fits" | "spider" | "pixar" | "msp" | "palm" | "sun" => None,
         "pil" | "tkinter" | "freetype2" | "zlib" | "raqm" | "fribidi" | "harfbuzz" | "mozjpeg" | "zlib_ng" | "libimagequant" | "xcb" => {

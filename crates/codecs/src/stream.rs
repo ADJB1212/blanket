@@ -6,16 +6,18 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 #[pyclass(unsendable)]
+#[derive(Debug)]
 pub struct StreamingDecoder {
     decoder: Option<Decoder>,
 }
 
+#[derive(Debug)]
 enum Decoder {
     Jxl(JxlStreamDecoder),
     Jpeg(Box<JpegStreamDecoder>),
 }
 
-// Native decoder state has no Python references. Detach keeps it on this thread.
+// SAFETY: native decoder state has no Python references. Detach keeps it on this thread.
 unsafe impl pyo3::marker::Ungil for Decoder {}
 
 impl Decoder {

@@ -6,6 +6,8 @@ use blanket_core::pixels::Samples;
 use blanket_core::{Image, samples};
 use pyo3::prelude::*;
 
+use super::BlurKind;
+
 fn box_pass(source: &[u16], output: &mut [u16], width: usize, height: usize, channels: usize, radius: f32, vertical: bool) {
     if output.is_empty() {
         return;
@@ -182,12 +184,12 @@ fn box_sample_column<const R: usize>(source: &[u16], output: &mut [u16], y: usiz
     }
 }
 
-fn blur_into(image: &Image, source: &[u16], values: &mut [u16], radii: (f32, f32), gaussian: bool) {
+fn blur_into(image: &Image, source: &[u16], values: &mut [u16], radii: (f32, f32), kind: BlurKind) {
     if source.is_empty() || radii == (0.0, 0.0) {
         values.copy_from_slice(source);
         return;
     }
-    let passes = if gaussian { 3 } else { 1 };
+    let passes = if kind == BlurKind::Gaussian { 3 } else { 1 };
     let horizontal = if radii.0 > 0.0 { passes } else { 0 };
     let total = horizontal + if radii.1 > 0.0 { passes } else { 0 };
     let mut scratch = if total > 1 { vec![0; source.len()] } else { Vec::new() };
@@ -208,25 +210,25 @@ fn blur_into(image: &Image, source: &[u16], values: &mut [u16], radii: (f32, f32
     }
 }
 
-pub(crate) fn blur(image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+pub(crate) fn blur(image: &Image, radii: (f32, f32), kind: BlurKind) -> PyResult<Image> {
     let bytes = image.raw_data()?;
-    let radii = super::blur_radii(radii, gaussian)?;
+    let radii = super::blur_radii(radii, kind)?;
     if radii == (0.0, 0.0) {
         return samples::output_bytes(image, blanket_core::buffers::copy(bytes)?);
     }
     let source = samples::view(image)?;
-    samples::with_output(image, None, |values| blur_into(image, &source, values, radii, gaussian))
+    samples::with_output(image, None, |values| blur_into(image, &source, values, radii, kind))
 }
 
 pub(crate) fn unsharp(image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
     if percent == 0 || threshold >= i32::from(samples::maximum(image)) || radius == 0.0 {
-        super::blur_radii((radius, radius), true)?;
+        super::blur_radii((radius, radius), BlurKind::Gaussian)?;
         return samples::output_bytes(image, image.raw_data()?.to_vec());
     }
     let source = samples::view(image)?;
-    let radii = super::blur_radii((radius, radius), true)?;
+    let radii = super::blur_radii((radius, radius), BlurKind::Gaussian)?;
     samples::with_output(image, None, |values| {
-        blur_into(image, &source, values, radii, true);
+        blur_into(image, &source, values, radii, BlurKind::Gaussian);
         sharpen(&source, values, percent, threshold, samples::maximum(image));
     })
 }

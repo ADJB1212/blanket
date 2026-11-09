@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use crate::compressor::LosslessImageCompressor;
 
 #[pyclass(name = "_LossyImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LossyImageCompressor {
     #[pyo3(get)]
     max_rmse: f64,

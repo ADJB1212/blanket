@@ -1,8 +1,9 @@
 //! Backend-independent GPU image descriptors and operation preparation.
 
+mod error;
 pub mod plan;
 pub mod protocol;
-
+pub use error::{GpuError, GpuErrorKind};
 use protocol::{PARAMETER_COUNT, resampling, weights};
 
 // Match Blanket's CPU decoded-image pixel ceiling.
@@ -27,17 +28,19 @@ pub struct Descriptor {
 }
 
 impl Descriptor {
-    pub fn byte_len(self) -> Result<usize, String> {
+    pub fn byte_len(self) -> Result<usize, GpuError> {
         let pixels = u64::from(self.width) * u64::from(self.height);
         if pixels == 0 || pixels > MAX_PIXELS || !(1..=MAX_CHANNELS).contains(&self.channels) {
-            return Err("invalid GPU image dimensions or channel count".into());
+            return Err(GpuError::invalid("invalid GPU image dimensions or channel count"));
         }
         let sample_bytes = if self.float { size_of::<f32>() } else { size_of::<u8>() };
-        usize::try_from(pixels * u64::from(self.channels) * sample_bytes as u64).map_err(|_| "GPU image allocation overflow".into())
+        usize::try_from(pixels * u64::from(self.channels) * sample_bytes as u64)
+            .map_err(|error| GpuError::with_source(GpuErrorKind::InvalidInput, "GPU image allocation overflow", &error))
     }
 }
 
 /// All arrays are small CPU control data, never image pixels.
+#[derive(Debug)]
 pub struct Dispatch {
     pub output: Descriptor,
     pub parameters: [u32; PARAMETER_COUNT],
@@ -46,20 +49,26 @@ pub struct Dispatch {
 
 pub trait Backend {
     type Image;
-    fn upload(&self, descriptor: Descriptor, bytes: &[u8]) -> Result<Self::Image, String>;
+    fn upload(&self, descriptor: Descriptor, bytes: &[u8]) -> Result<Self::Image, GpuError>;
     /// # Safety
     /// Validate shader indices, control lengths, sample layouts, and device compatibility.
     /// Sources must not be modified concurrently with GPU execution.
-    unsafe fn dispatch(&self, source: &Self::Image, other: &Self::Image, request: &Dispatch) -> Result<Self::Image, String>;
-    fn download(&self, image: &Self::Image) -> Result<Vec<u8>, String>;
-    fn synchronize(&self, image: &Self::Image) -> Result<(), String>;
+    unsafe fn dispatch(&self, source: &Self::Image, other: &Self::Image, request: &Dispatch) -> Result<Self::Image, GpuError>;
+    fn download(&self, image: &Self::Image) -> Result<Vec<u8>, GpuError>;
+    fn synchronize(&self, image: &Self::Image) -> Result<(), GpuError>;
 }
 
-pub fn blur_parameters(radius: f32, gaussian: bool) -> Result<(u32, [f32; 2]), String> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlurKind {
+    Box,
+    Gaussian,
+}
+
+pub fn blur_parameters(radius: f32, kind: BlurKind) -> Result<(u32, [f32; 2]), GpuError> {
     if !radius.is_finite() || radius < 0.0 {
-        return Err("radius must be finite and nonnegative".into());
+        return Err(GpuError::invalid("radius must be finite and nonnegative"));
     }
-    let radius = if gaussian {
+    let radius = if kind == BlurKind::Gaussian {
         let variance = radius * radius / protocol::GAUSSIAN_PASSES as f32;
         // Three fractional box passes approximate the requested Gaussian variance.
         let length = (12.0 * f64::from(variance) + 1.0).sqrt() as f32;
@@ -71,7 +80,7 @@ pub fn blur_parameters(radius: f32, gaussian: bool) -> Result<(u32, [f32; 2]), S
         radius
     };
     if !radius.is_finite() || radius < 0.0 || radius >= i32::MAX as f32 {
-        return Err("blur radius is too large".into());
+        return Err(GpuError::invalid("blur radius is too large"));
     }
     let integer = radius as u32;
     let weight = (protocol::BOX_WEIGHT_SCALE as f32 / (radius * 2.0 + 1.0)) as u32;
@@ -79,27 +88,27 @@ pub fn blur_parameters(radius: f32, gaussian: bool) -> Result<(u32, [f32; 2]), S
     Ok((integer, [weight as f32, far_weight as f32]))
 }
 
-pub fn lut_controls(size: [u32; 3], channels: u32, table: &[f32], floating: bool) -> Result<Vec<f32>, String> {
+pub fn lut_controls(size: [u32; 3], channels: u32, table: &[f32], floating: bool) -> Result<Vec<f32>, GpuError> {
     use protocol::lut;
     if !(3..=4).contains(&channels) || size.iter().any(|&v| !(lut::MIN_SIZE..=lut::MAX_SIZE).contains(&(v as usize))) {
-        return Err("3D LUT requires 3 or 4 channels and dimensions from 2 to 65".into());
+        return Err(GpuError::invalid("3D LUT requires 3 or 4 channels and dimensions from 2 to 65"));
     }
     let expected = size.iter().fold(channels as usize, |count, &v| count * v as usize);
     if table.len() != expected {
-        return Err("3D LUT table must have the expected number of finite samples".into());
+        return Err(GpuError::invalid("3D LUT table must have the expected number of finite samples"));
     }
     let mut values = Vec::with_capacity(lut::HEADER_LEN + table.len());
     values.extend(size.map(|v| v as f32));
     values.extend(size.map(|v| ((f64::from(v - 1) / f64::from(u8::MAX) * f64::from(1 << lut::POSITION_BITS)) as u32) as f32));
     if floating {
         if table.iter().any(|v| !v.is_finite()) {
-            return Err("3D LUT table must have the expected number of finite samples".into());
+            return Err(GpuError::invalid("3D LUT table must have the expected number of finite samples"));
         }
         values.extend_from_slice(table);
     } else {
         for &value in table {
             if !value.is_finite() {
-                return Err("3D LUT table must have the expected number of finite samples".into());
+                return Err(GpuError::invalid("3D LUT table must have the expected number of finite samples"));
             }
             values.push(((value * lut::SAMPLE_SCALE).round() as i32).clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as f32);
         }
@@ -107,9 +116,9 @@ pub fn lut_controls(size: [u32; 3], channels: u32, table: &[f32], floating: bool
     Ok(values)
 }
 
-pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Result<(u32, Vec<f32>), String> {
+pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Result<(u32, Vec<f32>), GpuError> {
     if input == 0 || output == 0 || method > resampling::HAMMING {
-        return Err("invalid resize arguments".into());
+        return Err(GpuError::invalid("invalid resize arguments"));
     }
     let scale = f64::from(input) / f64::from(output);
     let support = match method {
@@ -121,7 +130,7 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
     } * scale.max(1.0);
     // Include the row header and one extra tap for rounded support endpoints.
     let stride = ((2.0 * support).ceil() as usize + weights::HEADER_LEN + 1).min(input as usize + weights::HEADER_LEN);
-    let mut result = vec![0.0; stride.checked_mul(output as usize).ok_or("resize weights overflow")?];
+    let mut result = vec![0.0; stride.checked_mul(output as usize).ok_or_else(|| GpuError::invalid("resize weights overflow"))?];
     if method == resampling::NEAREST {
         // Byte resize follows Pillow's accumulated coordinates; float resize uses direct coordinates.
         let mut position = 0.5 * scale;
@@ -186,7 +195,8 @@ mod tests {
     use super::*;
     #[test]
     fn validates_allocations() {
-        assert!(Descriptor { width: u32::MAX, height: u32::MAX, channels: 4, float: true }.byte_len().is_err());
+        let error = Descriptor { width: u32::MAX, height: u32::MAX, channels: 4, float: true }.byte_len().unwrap_err();
+        assert_eq!(error.kind(), GpuErrorKind::InvalidInput);
         assert_eq!(Descriptor { width: 3, height: 2, channels: 4, float: true }.byte_len().unwrap(), 96);
     }
     #[test]
@@ -228,12 +238,12 @@ mod tests {
     }
     #[test]
     fn blur_controls_match_fractional_box_weights() {
-        assert_eq!(blur_parameters(0.0, false).unwrap(), (0, [protocol::BOX_WEIGHT_SCALE as f32, 0.0]));
-        let (radius, weights) = blur_parameters(1.5, false).unwrap();
+        assert_eq!(blur_parameters(0.0, BlurKind::Box).unwrap(), (0, [protocol::BOX_WEIGHT_SCALE as f32, 0.0]));
+        let (radius, weights) = blur_parameters(1.5, BlurKind::Box).unwrap();
         assert_eq!(radius, 1);
         assert_eq!(weights, [4_194_304.0, 2_097_152.0]);
         for invalid in [-1.0, f32::INFINITY, f32::NAN, f32::MAX] {
-            assert!(blur_parameters(invalid, true).is_err());
+            assert!(blur_parameters(invalid, BlurKind::Gaussian).is_err());
         }
     }
     #[test]

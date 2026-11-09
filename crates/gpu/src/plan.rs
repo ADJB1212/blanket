@@ -1,8 +1,8 @@
 //! Reusable, same-size unary pipelines and bounded tile geometry.
-use crate::Descriptor;
 use crate::protocol::operation;
+use crate::{Descriptor, GpuError};
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Step {
     pub operation: u32,
     pub kernel: u32,
@@ -10,6 +10,7 @@ pub struct Step {
     pub values: Vec<f32>,
 }
 
+#[derive(Debug)]
 pub struct Plan {
     descriptor: Descriptor,
     steps: Vec<Step>,
@@ -19,10 +20,10 @@ pub struct Plan {
 }
 
 impl Plan {
-    pub fn new(descriptor: Descriptor, steps: Vec<Step>, memory_limit: usize) -> Result<Self, String> {
+    pub fn new(descriptor: Descriptor, steps: Vec<Step>, memory_limit: usize) -> Result<Self, GpuError> {
         descriptor.byte_len()?;
         if steps.len() > 1024 {
-            return Err("GPU plans support at most 1024 steps".into());
+            return Err(GpuError::invalid("GPU plans support at most 1024 steps"));
         }
         let mut halo = [0u32; 2];
         let mut fused: Vec<Step> = Vec::new();
@@ -45,7 +46,7 @@ impl Plan {
                 _ => false,
             };
             if !valid {
-                return Err("unsupported or invalid GPU plan step".into());
+                return Err(GpuError::invalid("unsupported or invalid GPU plan step"));
             }
             let radius = match step.operation {
                 operation::CONVOLVE | operation::RANK => [step.kernel / 2; 2],
@@ -57,7 +58,7 @@ impl Plan {
                 _ => [0; 2],
             };
             for axis in 0..2 {
-                halo[axis] = halo[axis].checked_add(radius[axis]).ok_or("GPU plan halo overflow")?;
+                halo[axis] = halo[axis].checked_add(radius[axis]).ok_or_else(|| GpuError::invalid("GPU plan halo overflow"))?;
             }
             if step.operation == operation::COPY {
                 continue;
@@ -89,11 +90,11 @@ impl Plan {
         while fits(tile[0], tile[1]).is_none_or(|bytes| bytes > memory_limit) {
             let axis = usize::from(tile[1] > tile[0]);
             if tile[axis] == 1 {
-                return Err("GPU working-memory limit cannot hold one tile and its filter halos".into());
+                return Err(GpuError::invalid("GPU working-memory limit cannot hold one tile and its filter halos"));
             }
             tile[axis] = tile[axis].div_ceil(2);
         }
-        let scratch_bytes = fits(tile[0], tile[1]).ok_or("GPU scratch size overflow")?;
+        let scratch_bytes = fits(tile[0], tile[1]).ok_or_else(|| GpuError::invalid("GPU scratch size overflow"))?;
         Ok(Self { descriptor, steps: fused, tile, halo, scratch_bytes })
     }
 

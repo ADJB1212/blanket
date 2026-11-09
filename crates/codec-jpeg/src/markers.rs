@@ -3,7 +3,7 @@ use std::borrow::Cow;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 
-pub(super) fn separate(data: Vec<u8>, streamtype: i32, optimized: bool) -> PyResult<Vec<u8>> {
+pub(super) fn separate(data: Vec<u8>, streamtype: i32, coding: super::JpegCoding) -> PyResult<Vec<u8>> {
     if !matches!(streamtype, 1 | 2) {
         return Ok(data);
     }
@@ -40,7 +40,7 @@ pub(super) fn separate(data: Vec<u8>, streamtype: i32, optimized: bool) -> PyRes
             }
         }
         let table = matches!(marker, 0xc4 | 0xcc | 0xdb);
-        if table == (streamtype == 1) || (streamtype == 2 && optimized && marker == 0xc4) {
+        if table == (streamtype == 1) || (streamtype == 2 && (coding.optimize || coding.progressive) && marker == 0xc4) {
             output.extend_from_slice(&data[start..position]);
         }
     }
@@ -102,8 +102,8 @@ mod tests {
         let image = Image::from_pixels(33, 19, PixelMode::Rgb, pixels, None).unwrap();
         for coding in [JpegCoding::BASELINE, JpegCoding { progressive: true, optimize: true }] {
             let full = encode_jpeg_variant(&image, SaveOptions { .. }, coding).unwrap();
-            let tables = separate(full.clone(), 1, coding.progressive).unwrap();
-            let body = separate(full.clone(), 2, coding.progressive).unwrap();
+            let tables = separate(full.clone(), 1, coding).unwrap();
+            let body = separate(full.clone(), 2, coding).unwrap();
             let expected = decode_jpeg(&full).unwrap();
             assert!(decode_jpeg(&body).is_err());
             let combined = [tables.as_slice(), body.as_slice()].concat();

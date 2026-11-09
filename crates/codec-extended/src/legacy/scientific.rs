@@ -1,9 +1,15 @@
 use blanket_core::{Image, PixelMode};
 use rustc_hash::FxHashMap;
 
-use super::{bytes, dimensions, image};
+use super::{ByteOrder, bytes, dimensions, image};
 
-fn samples(w: usize, h: usize, data: &[u8], bits: i32, big: bool, flip: bool, format: &str) -> Result<Image, String> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RowOrder {
+    TopDown,
+    BottomUp,
+}
+
+fn samples(w: usize, h: usize, data: &[u8], bits: i32, order: ByteOrder, rows: RowOrder, format: &str) -> Result<Image, String> {
     let size = bits.unsigned_abs() as usize / 8;
     if !matches!(bits, 8 | 16 | 32 | -32 | -64) {
         return Err("unsupported sample type".into());
@@ -12,23 +18,23 @@ fn samples(w: usize, h: usize, data: &[u8], bits: i32, big: bool, flip: bool, fo
     let output_size = size.min(4);
     let mut pixels = vec![0; w * h * output_size];
     for (y, row) in pixels.chunks_exact_mut(w * output_size).enumerate() {
-        let sy = if flip { h - 1 - y } else { y };
+        let sy = if rows == RowOrder::BottomUp { h - 1 - y } else { y };
         let source = &source[sy * w * size..(sy + 1) * w * size];
         match bits {
             8 => row.copy_from_slice(source),
             16 => {
                 for (src, dst) in source.as_chunks::<2>().0.iter().zip(row.as_chunks_mut::<2>().0) {
-                    *dst = if big { u16::from_be_bytes(*src) } else { u16::from_le_bytes(*src) }.to_le_bytes();
+                    *dst = if order == ByteOrder::Big { u16::from_be_bytes(*src) } else { u16::from_le_bytes(*src) }.to_le_bytes();
                 }
             }
             32 | -32 => {
                 for (src, dst) in source.as_chunks::<4>().0.iter().zip(row.as_chunks_mut::<4>().0) {
-                    *dst = if big { u32::from_be_bytes(*src) } else { u32::from_le_bytes(*src) }.to_le_bytes();
+                    *dst = if order == ByteOrder::Big { u32::from_be_bytes(*src) } else { u32::from_le_bytes(*src) }.to_le_bytes();
                 }
             }
             -64 => {
                 for (src, dst) in source.as_chunks::<8>().0.iter().zip(row.as_chunks_mut::<4>().0) {
-                    let value = if big { f64::from_be_bytes(*src) } else { f64::from_le_bytes(*src) };
+                    let value = if order == ByteOrder::Big { f64::from_be_bytes(*src) } else { f64::from_le_bytes(*src) };
                     *dst = (value as f32).to_le_bytes();
                 }
             }
@@ -95,17 +101,17 @@ pub(super) fn decode_fits(data: &[u8]) -> Result<Image, String> {
     let (w, h, bits, start) = fits_header(data)?;
     let (w, h) = dimensions(w, h)?;
     let source = bytes(data, start, data.len().saturating_sub(start))?;
-    samples(w, h, source, bits, true, true, "FITS")
+    samples(w, h, source, bits, ByteOrder::Big, RowOrder::BottomUp, "FITS")
 }
 
-pub(super) fn spider_header(data: &[u8]) -> Option<(bool, usize, u32, u32)> {
+pub(super) fn spider_header(data: &[u8]) -> Option<(ByteOrder, usize, u32, u32)> {
     if data.len() < 108 {
         return None;
     }
-    for big in [true, false] {
+    for order in [ByteOrder::Big, ByteOrder::Little] {
         let f = |i: usize| {
             let v = data[(i - 1) * 4..i * 4].try_into().unwrap();
-            if big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) }
+            if order == ByteOrder::Big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) }
         };
         if [1, 2, 5, 12, 13, 22, 23, 24, 27].iter().any(|&i| !f(i).is_finite() || f(i).fract() != 0.0 || f(i) < 0.0) {
             continue;
@@ -113,16 +119,16 @@ pub(super) fn spider_header(data: &[u8]) -> Option<(bool, usize, u32, u32)> {
         if f(5) != 1.0 || f(1) != 1.0 || f(12) < 1.0 || f(2) < 1.0 || f(22) < 108.0 || f(23) != f(12) * 4.0 || f(22) != f(13) * f(23) {
             continue;
         }
-        return Some((big, f(22) as usize, f(12) as u32, f(2) as u32));
+        return Some((order, f(22) as usize, f(12) as u32, f(2) as u32));
     }
     None
 }
 
 pub(super) fn decode_spider(data: &[u8]) -> Result<Image, String> {
-    let (big, header, w, h) = spider_header(data).ok_or("invalid SPIDER header")?;
+    let (order, header, w, h) = spider_header(data).ok_or("invalid SPIDER header")?;
     let (w, h) = dimensions(w, h)?;
     let v = bytes(data, 92, 4)?.try_into().unwrap();
-    let stack = if big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) };
+    let stack = if order == ByteOrder::Big { f32::from_be_bytes(v) } else { f32::from_le_bytes(v) };
     let start = header.checked_mul(if stack > 0.0 { 2 } else { 1 }).ok_or("invalid SPIDER header length")?;
-    samples(w, h, bytes(data, start, w * h * 4)?, -32, big, false, "SPIDER")
+    samples(w, h, bytes(data, start, w * h * 4)?, -32, order, RowOrder::TopDown, "SPIDER")
 }

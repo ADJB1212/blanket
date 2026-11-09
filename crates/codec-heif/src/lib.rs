@@ -10,13 +10,21 @@ use pyo3::prelude::*;
 // Contexts, encoders, and pixel planes remain local to each operation.
 static HEIF_LIBRARY: LazyLock<libheif_rs::LibHeif> = LazyLock::new(libheif_rs::LibHeif::new);
 
-pub fn backend_info() -> (bool, bool, String) {
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BackendInfo {
+    pub decode: bool,
+    pub encode: bool,
+    pub version: String,
+}
+
+#[must_use]
+pub fn backend_info() -> BackendInfo {
     let lib = &*HEIF_LIBRARY;
     let format = Some(libheif_rs::CompressionFormat::Hevc);
     let decode = !lib.decoder_descriptors(1, format).is_empty();
     let encode = !lib.encoder_descriptors(1, format, None).is_empty();
     let [major, minor, patch] = lib.version();
-    (decode, encode, format!("{major}.{minor}.{patch}"))
+    BackendInfo { decode, encode, version: format!("{major}.{minor}.{patch}") }
 }
 
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
@@ -120,6 +128,12 @@ pub struct PreparedHeif {
     has_icc_profile: bool,
 }
 
+impl std::fmt::Debug for PreparedHeif {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PreparedHeif").field("presets", &self.presets).field("has_icc_profile", &self.has_icc_profile).finish_non_exhaustive()
+    }
+}
+
 impl PreparedHeif {
     pub fn new(image: &Image) -> PyResult<Self> {
         use libheif_rs::{Channel, ColorSpace, RgbChroma};
@@ -134,7 +148,7 @@ impl PreparedHeif {
         if !matches!(image.bit_depth(), 8 | 10 | 12) {
             return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
         }
-        if !backend_info().1 {
+        if !backend_info().encode {
             return Err(blanket_codec_common::CodecErrorKind::MissingBackend.into_pyerr(
                 "HEIF encode backend is unavailable".into(),
                 Some("HEIF"),
@@ -176,6 +190,7 @@ impl PreparedHeif {
         Ok(Self { native, encoder, presets, has_icc_profile: false })
     }
 
+    #[must_use]
     pub fn supports_presets(&self) -> bool {
         self.presets
     }
@@ -259,7 +274,7 @@ mod tests {
 
     #[test]
     fn reused_encoder_cannot_silently_retain_an_omitted_profile() {
-        if !backend_info().1 {
+        if !backend_info().encode {
             return;
         }
         let image = Image::from_pixels(16, 16, PixelMode::Rgb, vec![0; 16 * 16 * 3], None).unwrap();
@@ -270,7 +285,7 @@ mod tests {
 
     #[test]
     fn embedded_previews_decode_only_thumbnail_handles_and_retain_precision() {
-        if !backend_info().1 {
+        if !backend_info().encode {
             return;
         }
         for depth in [8, 10, 12] {

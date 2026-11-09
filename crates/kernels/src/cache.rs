@@ -10,6 +10,12 @@ pub struct ByteLru<K, V, S = FxBuildHasher> {
     limit: usize,
 }
 
+impl<K, V, S> std::fmt::Debug for ByteLru<K, V, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ByteLru").field("bytes", &self.bytes).field("limit", &self.limit).finish_non_exhaustive()
+    }
+}
+
 impl<K: Hash + Eq, V> ByteLru<K, V, FxBuildHasher> {
     pub fn new(entries: NonZeroUsize, limit: usize) -> Self {
         Self { entries: LruCache::with_hasher(entries, FxBuildHasher), bytes: 0, limit }

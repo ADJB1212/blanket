@@ -271,7 +271,13 @@ fn draw_ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'
     if antialias {
         check_coverage(image)?;
     }
-    if !antialias && bounds.2 - bounds.0 <= 1_000_000 && bounds.3 - bounds.1 <= 1_000_000 {
+    if bounds.2 < 0 || bounds.3 < 0 || bounds.0 >= i64::from(image.width()) || bounds.1 >= i64::from(image.height()) {
+        return Ok(());
+    }
+    let extent_x = i128::from(bounds.2) - i128::from(bounds.0);
+    let extent_y = i128::from(bounds.3) - i128::from(bounds.1);
+    if !antialias && (0..=1_000_000).contains(&extent_x) && (0..=1_000_000).contains(&extent_y) {
+        let width = width.min(extent_x.max(extent_y) as i64 + 1);
         value.py().detach(|| crate::pillow::ellipse(image, bounds, width, &ink, blend));
         return Ok(());
     }

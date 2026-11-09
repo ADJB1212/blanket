@@ -23,6 +23,7 @@ impl Default for RenderOptions {
     }
 }
 
+#[must_use]
 pub fn detect(data: &[u8]) -> bool {
     let mut reader = quick_xml::NsReader::from_reader(&data[..data.len().min(64 << 10)]);
     for _ in 0..Limits::default().xml_nodes {
@@ -70,7 +71,8 @@ impl Default for Limits {
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[must_use]
 pub enum Error {
     Corrupt(&'static str),
     Unsupported(&'static str),
@@ -95,7 +97,14 @@ pub struct Document {
     height: u32,
 }
 
+impl std::fmt::Debug for Document {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Document").field("width", &self.width).field("height", &self.height).finish_non_exhaustive()
+    }
+}
+
 impl Document {
+    #[must_use]
     pub fn size(&self) -> (u32, u32) {
         (self.width, self.height)
     }
@@ -138,10 +147,16 @@ fn charge<T: Copy + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + Part
 }
 
 pub fn parse(input: &[u8], limits: Limits) -> Result<Document, Error> {
-    parse_options(input, limits, RenderOptions::default(), true)
+    parse_options(input, limits, RenderOptions::default(), SampleValidation::Decode)
 }
 
-pub(super) fn parse_options(input: &[u8], limits: Limits, options: RenderOptions, validate_samples: bool) -> Result<Document, Error> {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SampleValidation {
+    Header,
+    Decode,
+}
+
+pub(super) fn parse_options(input: &[u8], limits: Limits, options: RenderOptions, validation: SampleValidation) -> Result<Document, Error> {
     if !options.dpi.is_finite() || options.dpi <= 0.0 {
         return Err(Error::Unsupported("DPI must be finite and positive"));
     }
@@ -159,6 +174,7 @@ pub(super) fn parse_options(input: &[u8], limits: Limits, options: RenderOptions
     {
         return Err(Error::Unsupported("limits may only be lowered"));
     }
+    let validate_samples = validation == SampleValidation::Decode;
     parse_inner(input, &mut Budget { limits, input: 0, nodes: 0, images: 0, pixels: 0, working: 0, options, validate_samples }, 0)
 }
 

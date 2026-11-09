@@ -1,4 +1,4 @@
-use blanket_convert_kernels::float::{alpha, decode_values, quantize_into, transfer_colors};
+use blanket_convert_kernels::float::{AlphaOperation, alpha, decode_values, quantize_into, transfer_colors};
 pub use blanket_convert_kernels::float::{composite, quantize, transfer};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -196,7 +196,7 @@ pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> 
                 transfer_colors(values, channels, true);
             }
             if channels == 4 {
-                alpha(values, false, premultiply);
+                alpha(values, if premultiply { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
             }
             for (value, dst) in values.iter().zip(dst.as_chunks_mut::<4>().0) {
                 *dst = value.to_le_bytes();
@@ -216,7 +216,7 @@ pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<
         transfer_colors(&mut values, channels, true);
     }
     if channels == 4 {
-        alpha(&mut values, false, premultiply);
+        alpha(&mut values, if premultiply { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
     }
     Ok(values)
 }
@@ -254,7 +254,7 @@ pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) ->
             let src = &source[start + block * 256 * channels * sample_bytes..][..count * sample_bytes];
             decode_values(src, image.mode.is_float(), image.bit_depth, values);
             if channels == 4 {
-                alpha(values, true, premultiply);
+                alpha(values, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
             }
             if srgb {
                 transfer_colors(values, channels, false);
@@ -279,7 +279,7 @@ pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) ->
 
 pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: bool, mut values: Vec<f32>) -> PyResult<Image> {
     if image.mode.channels() == 4 {
-        alpha(&mut values, true, premultiply);
+        alpha(&mut values, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
     }
     if srgb {
         transfer_colors(&mut values, image.mode.channels(), false);
@@ -390,7 +390,7 @@ mod tests {
                             for premultiply in [false, true] {
                                 let mut expected = values(&image).unwrap();
                                 if mode.channels() == 4 {
-                                    alpha(&mut expected, true, premultiply);
+                                    alpha(&mut expected, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
                                 }
                                 if srgb {
                                     transfer_colors(&mut expected, mode.channels(), false);

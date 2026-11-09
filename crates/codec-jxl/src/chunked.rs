@@ -89,7 +89,11 @@ extern "C-unwind" fn release_output(opaque: *mut c_void, written: usize) {
 
 extern "C-unwind" fn finalized(_: *mut c_void, _: u64) {}
 
-pub(super) fn encode(
+/// # Safety
+/// `settings` must belong to `encoder`, configured with the supplied width,
+/// pixel format and height implied by `length`. `pixels` must remain readable
+/// for `length` bytes until this synchronous call returns.
+pub(super) unsafe fn encode(
     encoder: &super::encode::Encoder, settings: *const JxlEncoderFrameSettings, pixels: *const c_void, length: usize, format: JxlPixelFormat,
     width: u32,
 ) -> PyResult<Vec<u8>> {
@@ -106,7 +110,8 @@ pub(super) fn encode(
     // jxl/encode.h. transmute also checks their sizes at compile time.
     let source = unsafe { std::mem::transmute::<InputSource, JxlChunkedFrameInputSource>(source) };
     let sink = unsafe { std::mem::transmute::<OutputProcessor, JxlEncoderOutputProcessor>(sink) };
-    // SAFETY: input samples and both callback contexts live through synchronous
+    // SAFETY: the caller guarantees live input samples and matching settings.
+    // Both callback contexts live through synchronous
     // AddChunkedFrame. Reset clears all references before the contexts drop,
     // including on failure; the outer Session also resets the cached encoder.
     let status = unsafe {

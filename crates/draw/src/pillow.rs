@@ -239,13 +239,18 @@ fn draw_curve(
     let ink = super::draw::ink(image, value, blend)?;
     image.ensure_owned()?;
     let (start, end) = normalize(start, end);
-    let (a, b) = (bounds.2 - bounds.0, bounds.3 - bounds.1);
+    let (a, b) = (i128::from(bounds.2) - i128::from(bounds.0), i128::from(bounds.3) - i128::from(bounds.1));
     if start == end || a < 0 || b < 0 || (!filled && width < 1) {
         return Ok(());
     }
     if a > 1_000_000 || b > 1_000_000 {
         return Err(PyValueError::new_err("ellipse bounds are too large"));
     }
+    if bounds.2 < 0 || bounds.3 < 0 || bounds.0 >= i64::from(image.width()) || bounds.1 >= i64::from(image.height()) {
+        return Ok(());
+    }
+    let (a, b) = (a as i64, b as i64);
+    let width = width.min(a.max(b) + 1);
     value.py().detach(|| {
         if end == start + 360.0 {
             ellipse(image, bounds, if filled { 0 } else { width }, &ink, blend);
@@ -303,11 +308,11 @@ impl Edge {
             xmax: a.0.max(b.0),
             ymin: a.1.min(b.1),
             ymax: a.1.max(b.1),
-            slope: if a.1 == b.1 { 0.0 } else { (b.0 - a.0) as f32 / (b.1 - a.1) as f32 },
+            slope: if a.1 == b.1 { 0.0 } else { (i128::from(b.0) - i128::from(a.0)) as f32 / (i128::from(b.1) - i128::from(a.1)) as f32 },
         }
     }
     fn at(&self, y: i64) -> f32 {
-        let offset = (y - self.y) as f32;
+        let offset = (i128::from(y) - i128::from(self.y)) as f32;
         if cfg!(target_arch = "aarch64") { offset.mul_add(self.slope, self.x as f32) } else { offset * self.slope + self.x as f32 }
     }
 }
@@ -413,7 +418,7 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
         let mut kept = 0;
         for i in 0..spans.len() {
             let (l, r) = spans[i];
-            if kept != 0 && spans[kept - 1].1 + 1 >= l {
+            if kept != 0 && spans[kept - 1].1.saturating_add(1) >= l {
                 spans[kept - 1].1 = spans[kept - 1].1.max(r);
             } else {
                 spans[kept] = (l, r);
@@ -428,7 +433,7 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
 }
 
 fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool, emit: &mut impl FnMut(i64, i64, i64)) {
-    let (dx, dy) = ((b.0 - a.0) as f64, (b.1 - a.1) as f64);
+    let (dx, dy) = ((i128::from(b.0) - i128::from(a.0)) as f64, (i128::from(b.1) - i128::from(a.1)) as f64);
     if dx == 0.0 && dy == 0.0 {
         emit(a.0, a.1, a.0);
         return;
@@ -437,7 +442,17 @@ fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool,
     let max = half.round() / dx.hypot(dy);
     let min = round_down(half) as f64 / dx.hypot(dy);
     let (xmin, xmax, ymin, ymax) = (round_down(min * dy), round_down(max * dy), round_down(min * dx), round_down(max * dx));
-    polygon_spans(&[(a.0 - xmin, a.1 + ymax), (b.0 - xmin, b.1 + ymax), (b.0 + xmax, b.1 - ymin), (a.0 + xmax, a.1 - ymin)], height, blend, emit);
+    polygon_spans(
+        &[
+            (a.0.saturating_sub(xmin), a.1.saturating_add(ymax)),
+            (b.0.saturating_sub(xmin), b.1.saturating_add(ymax)),
+            (b.0.saturating_add(xmax), b.1.saturating_sub(ymin)),
+            (a.0.saturating_add(xmax), a.1.saturating_sub(ymin)),
+        ],
+        height,
+        blend,
+        emit,
+    );
 }
 
 #[pyfunction]

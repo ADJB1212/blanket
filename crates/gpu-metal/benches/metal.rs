@@ -57,7 +57,7 @@ mod benchmarks {
                 for channels in [1, 2, 3, 4] {
                     let descriptor = Descriptor { width, height, channels, float: false };
                     let source = context.upload(descriptor, &fixture(descriptor)).unwrap();
-                    let (radius, controls) = blur_parameters(32.5, false).unwrap();
+                    let (radius, controls) = blur_parameters(32.5, blanket_gpu::BlurKind::Box).unwrap();
                     for (axis, name) in [(0, "horizontal"), (1, "vertical")] {
                         let request = request(descriptor, descriptor, operation::BOX_BLUR, radius, axis, controls.to_vec());
                         complete(&context, dispatch(&context, &source, &source, &request));
@@ -113,7 +113,7 @@ mod benchmarks {
 
                 let brightness = request(descriptor, descriptor, operation::BRIGHTNESS, 0, 0, vec![1.2]);
                 let invert = request(descriptor, descriptor, operation::INVERT, 0, 0, vec![]);
-                let (radius, controls) = blur_parameters(2.5, false).unwrap();
+                let (radius, controls) = blur_parameters(2.5, blanket_gpu::BlurKind::Box).unwrap();
                 let small = Descriptor { width: width / 2, ..descriptor };
                 let resized = Descriptor { height: height / 2, ..small };
                 let (stride, weights) = resize_weights(width, small.width, resampling::LANCZOS, descriptor.float).unwrap();
@@ -163,7 +163,7 @@ mod benchmarks {
                     ),
                 ];
                 for radius in [8.5, 32.5, 128.5] {
-                    let (kernel, controls) = blur_parameters(radius, false).unwrap();
+                    let (kernel, controls) = blur_parameters(radius, blanket_gpu::BlurKind::Box).unwrap();
                     cases.push((
                         match kernel {
                             8 => "box_blur_r8",

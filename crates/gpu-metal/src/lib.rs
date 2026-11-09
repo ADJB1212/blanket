@@ -1,4 +1,5 @@
 #![allow(unused_features)]
+#![deny(clippy::undocumented_unsafe_blocks)]
 #![feature(default_field_values)]
 
 // Shared helpers precede the scalar entry points used by native Metal and MPS.

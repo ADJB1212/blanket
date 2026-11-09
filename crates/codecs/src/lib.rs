@@ -19,6 +19,7 @@ pub fn _draft_jpeg(py: pyo3::Python<'_>, data: &[u8], scale: u32, mode: &str) ->
 pub fn _transform_jpeg<'py>(
     py: pyo3::Python<'py>, data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,
 ) -> pyo3::PyResult<pyo3::Bound<'py, pyo3::types::PyBytes>> {
-    let output = py.detach(|| blanket_codec_jpeg::transform_jpeg(data, method, crop, trim, preserve_metadata))?;
+    let options = blanket_codec_jpeg::TransformOptions { method, crop, trim, preserve_metadata };
+    let output = py.detach(|| blanket_codec_jpeg::transform_jpeg(data, options))?;
     Ok(pyo3::types::PyBytes::new(py, &output))
 }

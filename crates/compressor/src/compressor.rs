@@ -25,7 +25,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<crate::lossy_compressor::LossyImageCompressor>()
 }
 
-#[derive(FromPyObject)]
+#[derive(Debug, FromPyObject)]
 pub enum Compressor {
     Lossless(LosslessImageCompressor),
     Lossy(crate::lossy_compressor::LossyImageCompressor),
@@ -41,7 +41,7 @@ impl Compressor {
 }
 
 #[pyclass(name = "_LosslessImageCompressor", module = "blanket._blanket", frozen, from_py_object)]
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct LosslessImageCompressor {
     #[pyo3(get)]
     pub effort: u8,

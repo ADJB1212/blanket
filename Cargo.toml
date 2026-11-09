@@ -65,7 +65,6 @@ blanket-resample-kernels = { path = "crates/resample-kernels" }
 blanket-resample = { path = "crates/resample" }
 blanket-font = { path = "crates/font" }
 blanket-bench-support = { path = "crates/bench-support" }
-criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon", "html_reports"] }
 blanket-codec-common = { path = "crates/codec-common" }
 blanket-codec-avif = { path = "crates/codec-avif" }
 blanket-codec-bmp-ico = { path = "crates/codec-bmp-ico" }
@@ -103,6 +102,7 @@ turbojpeg = { version = "1", default-features = false, features = ["cmake", "req
 rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
 zerocopy = { version = "0.8", default-features = false, features = ["std", "simd-nightly", "float-nightly"]}
 flate2 = { version = "1", default-features = false, features = ["rust_backend", "zlib-rs"] }
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon"] }
 
 [profile.release]
 opt-level = 3
@@ -146,6 +146,8 @@ lto = "off"
 codegen-units = 32
 
 [workspace.lints.rust]
+missing_debug_implementations = "deny"
+unsafe_op_in_unsafe_fn = "deny"
 warnings = { level = "deny", priority = -1 }
 unused_mut = "deny"
 unused_assignments = "deny"

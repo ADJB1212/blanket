@@ -10,14 +10,26 @@ fn bytes(data: &[u8], offset: usize, length: usize) -> Result<&[u8], String> {
     data.get(offset..offset.checked_add(length).ok_or("invalid image offset")?).ok_or_else(|| "truncated image data".into())
 }
 
-fn word(data: &[u8], offset: usize, big: bool) -> Result<u16, String> {
-    let v = bytes(data, offset, 2)?.try_into().unwrap();
-    Ok(if big { u16::from_be_bytes(v) } else { u16::from_le_bytes(v) })
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ByteOrder {
+    Little,
+    Big,
 }
 
-fn long(data: &[u8], offset: usize, big: bool) -> Result<u32, String> {
+fn word(data: &[u8], offset: usize, order: ByteOrder) -> Result<u16, String> {
+    let v = bytes(data, offset, 2)?.try_into().unwrap();
+    Ok(match order {
+        ByteOrder::Big => u16::from_be_bytes(v),
+        ByteOrder::Little => u16::from_le_bytes(v),
+    })
+}
+
+fn long(data: &[u8], offset: usize, order: ByteOrder) -> Result<u32, String> {
     let v = bytes(data, offset, 4)?.try_into().unwrap();
-    Ok(if big { u32::from_be_bytes(v) } else { u32::from_le_bytes(v) })
+    Ok(match order {
+        ByteOrder::Big => u32::from_be_bytes(v),
+        ByteOrder::Little => u32::from_le_bytes(v),
+    })
 }
 
 fn dimensions(width: u32, height: u32) -> Result<(usize, usize), String> {
@@ -38,6 +50,7 @@ fn indexed(width: usize, height: usize, pixels: Vec<u8>, palette: Vec<u8>, forma
     Ok(result)
 }
 
+#[must_use]
 pub fn detect(data: &[u8]) -> Option<&'static str> {
     if data.starts_with(b"\x0a") && data.get(1).is_some_and(|v| matches!(v, 0 | 2 | 3 | 5)) {
         Some("PCX")
@@ -67,8 +80,8 @@ pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageH
     let (width, height, mode, depth) = match format {
         "PCX" => {
             bytes(data, 0, 128)?;
-            let w = i32::from(word(data, 8, false)?) - i32::from(word(data, 4, false)?) + 1;
-            let h = i32::from(word(data, 10, false)?) - i32::from(word(data, 6, false)?) + 1;
+            let w = i32::from(word(data, 8, ByteOrder::Little)?) - i32::from(word(data, 4, ByteOrder::Little)?) + 1;
+            let h = i32::from(word(data, 10, ByteOrder::Little)?) - i32::from(word(data, 6, ByteOrder::Little)?) + 1;
             let (mode, depth) = match (data[3], data[65]) {
                 (1, 1) => ("1", 1),
                 (1, 2..=4) => ("P", 1),
@@ -80,7 +93,7 @@ pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageH
         }
         "SGI" => {
             bytes(data, 0, 512)?;
-            let mode = match word(data, 10, true)? {
+            let mode = match word(data, 10, ByteOrder::Big)? {
                 1 => "L",
                 3 => "RGB",
                 4 => "RGBA",
@@ -89,26 +102,26 @@ pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageH
             if !matches!(data[3], 1 | 2) {
                 return Err("unsupported SGI depth".into());
             }
-            (u32::from(word(data, 6, true)?), u32::from(word(data, 8, true)?), mode, data[3] * 8)
+            (u32::from(word(data, 6, ByteOrder::Big)?), u32::from(word(data, 8, ByteOrder::Big)?), mode, data[3] * 8)
         }
         "MSP" => {
             bytes(data, 0, 32)?;
-            (u32::from(word(data, 4, false)?), u32::from(word(data, 6, false)?), "1", 1)
+            (u32::from(word(data, 4, ByteOrder::Little)?), u32::from(word(data, 6, ByteOrder::Little)?), "1", 1)
         }
         "SUN" => {
             bytes(data, 0, 32)?;
-            let (mode, depth) = match long(data, 12, true)? {
+            let (mode, depth) = match long(data, 12, ByteOrder::Big)? {
                 1 => ("1", 1),
                 4 => ("P", 4),
-                8 => (if long(data, 28, true)? > 0 { "P" } else { "L" }, 8),
+                8 => (if long(data, 28, ByteOrder::Big)? > 0 { "P" } else { "L" }, 8),
                 24 | 32 => ("RGB", 8),
                 _ => return Err("unsupported Sun depth".into()),
             };
-            (long(data, 4, true)?, long(data, 8, true)?, mode, depth)
+            (long(data, 4, ByteOrder::Big)?, long(data, 8, ByteOrder::Big)?, mode, depth)
         }
         "PIXAR" => {
             bytes(data, 0, 1024)?;
-            (u32::from(word(data, 418, false)?), u32::from(word(data, 416, false)?), "RGB", 8)
+            (u32::from(word(data, 418, ByteOrder::Little)?), u32::from(word(data, 416, ByteOrder::Little)?), "RGB", 8)
         }
         "SPIDER" => {
             let (_, _, w, h) = scientific::spider_header(data).ok_or("invalid SPIDER header")?;
@@ -133,8 +146,8 @@ pub fn decode(data: &[u8], format: &str) -> Result<Image, String> {
         "FITS" => scientific::decode_fits(data),
         "SPIDER" => scientific::decode_spider(data),
         "PIXAR" => {
-            let (w, h) = dimensions(u32::from(word(data, 418, false)?), u32::from(word(data, 416, false)?))?;
-            if word(data, 424, false)? != 14 || word(data, 426, false)? != 2 {
+            let (w, h) = dimensions(u32::from(word(data, 418, ByteOrder::Little)?), u32::from(word(data, 416, ByteOrder::Little)?))?;
+            if word(data, 424, ByteOrder::Little)? != 14 || word(data, 426, ByteOrder::Little)? != 2 {
                 return Err("unsupported Pixar mode".into());
             }
             image(w, h, PixelMode::Rgb, bytes(data, 1024, w * h * 3)?.to_vec(), format)
@@ -157,15 +170,15 @@ pub fn encode(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, String
 
 fn decode_pcx(data: &[u8]) -> Result<Image, String> {
     bytes(data, 0, 128)?;
-    let w = i32::from(word(data, 8, false)?) - i32::from(word(data, 4, false)?) + 1;
-    let h = i32::from(word(data, 10, false)?) - i32::from(word(data, 6, false)?) + 1;
+    let w = i32::from(word(data, 8, ByteOrder::Little)?) - i32::from(word(data, 4, ByteOrder::Little)?) + 1;
+    let h = i32::from(word(data, 10, ByteOrder::Little)?) - i32::from(word(data, 6, ByteOrder::Little)?) + 1;
     let (w, h) = dimensions(w.try_into().map_err(|_| "invalid PCX width")?, h.try_into().map_err(|_| "invalid PCX height")?)?;
     let bits = data[3];
     let planes = usize::from(data[65]);
     if !matches!((bits, planes), (1, 1 | 2 | 4) | (8, 1 | 3)) || data[2] > 1 {
         return Err("unsupported PCX layout".into());
     }
-    let stride = usize::from(word(data, 66, false)?);
+    let stride = usize::from(word(data, 66, ByteOrder::Little)?);
     if stride < (w * usize::from(bits)).div_ceil(8) {
         return Err("invalid PCX stride".into());
     }
@@ -307,10 +320,10 @@ fn encode_pcx(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
 
 fn decode_sgi(data: &[u8]) -> Result<Image, String> {
     bytes(data, 0, 512)?;
-    let (w, h) = dimensions(u32::from(word(data, 6, true)?), u32::from(word(data, 8, true)?))?;
-    let channels = usize::from(word(data, 10, true)?);
+    let (w, h) = dimensions(u32::from(word(data, 6, ByteOrder::Big)?), u32::from(word(data, 8, ByteOrder::Big)?))?;
+    let channels = usize::from(word(data, 10, ByteOrder::Big)?);
     let bpc = usize::from(data[3]);
-    if !matches!(channels, 1 | 3 | 4) || !matches!(bpc, 1 | 2) || data[2] > 1 || long(data, 104, true)? != 0 {
+    if !matches!(channels, 1 | 3 | 4) || !matches!(bpc, 1 | 2) || data[2] > 1 || long(data, 104, ByteOrder::Big)? != 0 {
         return Err("unsupported SGI layout".into());
     }
     let mode = match channels {
@@ -339,14 +352,14 @@ fn decode_sgi(data: &[u8]) -> Result<Image, String> {
             let row = if data[2] == 0 {
                 bytes(data, 512 + (c * h + y) * w * bpc, w * bpc)?
             } else {
-                let offset = long(data, 512 + (c * h + y) * 4, true)? as usize;
-                let length = long(data, 512 + h * channels * 4 + (c * h + y) * 4, true)? as usize;
+                let offset = long(data, 512 + (c * h + y) * 4, ByteOrder::Big)? as usize;
+                let length = long(data, 512 + h * channels * 4 + (c * h + y) * 4, ByteOrder::Big)? as usize;
                 let source = bytes(data, offset, length)?;
                 decoded_row.clear();
                 let row = &mut decoded_row;
                 let mut pos = 0;
                 loop {
-                    let control = if bpc == 1 { u16::from(bytes(source, pos, 1)?[0]) } else { word(source, pos, true)? };
+                    let control = if bpc == 1 { u16::from(bytes(source, pos, 1)?[0]) } else { word(source, pos, ByteOrder::Big)? };
                     pos += bpc;
                     let count = usize::from(control & 127);
                     if count == 0 {
@@ -426,10 +439,10 @@ fn encode_sgi(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
 
 fn decode_msp(data: &[u8]) -> Result<Image, String> {
     bytes(data, 0, 32)?;
-    if (0..32).step_by(2).try_fold(0, |v, i| word(data, i, false).map(|w| v ^ w))? != 0 {
+    if (0..32).step_by(2).try_fold(0, |v, i| word(data, i, ByteOrder::Little).map(|w| v ^ w))? != 0 {
         return Err("invalid MSP checksum".into());
     }
-    let (w, h) = dimensions(u32::from(word(data, 4, false)?), u32::from(word(data, 6, false)?))?;
+    let (w, h) = dimensions(u32::from(word(data, 4, ByteOrder::Little)?), u32::from(word(data, 6, ByteOrder::Little)?))?;
     let stride = w.div_ceil(8);
     let mut packed = Vec::new();
     if data.starts_with(b"DanM") {
@@ -438,7 +451,7 @@ fn decode_msp(data: &[u8]) -> Result<Image, String> {
         let mut pos = 32 + h * 2;
         bytes(data, 32, h * 2)?;
         for y in 0..h {
-            let length = usize::from(word(data, 32 + y * 2, false)?);
+            let length = usize::from(word(data, 32 + y * 2, ByteOrder::Little)?);
             if length == 0 {
                 packed.resize(packed.len() + stride, 255);
                 continue;
@@ -528,11 +541,11 @@ fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, Str
 }
 
 fn decode_sun(data: &[u8]) -> Result<Image, String> {
-    let (w, h) = dimensions(long(data, 4, true)?, long(data, 8, true)?)?;
-    let depth = long(data, 12, true)? as usize;
-    let kind = long(data, 20, true)?;
-    let map = long(data, 24, true)?;
-    let maplen = long(data, 28, true)? as usize;
+    let (w, h) = dimensions(long(data, 4, ByteOrder::Big)?, long(data, 8, ByteOrder::Big)?)?;
+    let depth = long(data, 12, ByteOrder::Big)? as usize;
+    let kind = long(data, 20, ByteOrder::Big)?;
+    let map = long(data, 24, ByteOrder::Big)?;
+    let maplen = long(data, 28, ByteOrder::Big)? as usize;
     if !matches!(depth, 1 | 4 | 8 | 24 | 32) || kind > 5 || maplen > 768 || (maplen != 0 && (map != 1 || !maplen.is_multiple_of(3))) {
         return Err("unsupported Sun raster layout".into());
     }

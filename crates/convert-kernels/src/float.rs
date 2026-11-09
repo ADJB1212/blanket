@@ -20,7 +20,17 @@ pub fn composite(background: &mut [f32], foreground: &[f32]) {
     }
 }
 
-pub fn alpha(values: &mut [f32], divide: bool, premultiply: bool) {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AlphaOperation {
+    ClampInput,
+    Premultiply,
+    ClampOutput,
+    Unpremultiply,
+}
+
+pub fn alpha(values: &mut [f32], operation: AlphaOperation) {
+    let divide = matches!(operation, AlphaOperation::ClampOutput | AlphaOperation::Unpremultiply);
+    let premultiply = matches!(operation, AlphaOperation::Premultiply | AlphaOperation::Unpremultiply);
     let end = values.len() / 16 * 16;
     let zero = Simd::<f32, 16>::splat(0.0);
     let one = Simd::splat(1.0);
@@ -246,7 +256,13 @@ mod tests {
                         }
                         let mut guarded = vec![123.0; offset + original.len() + 4];
                         guarded[offset..offset + original.len()].copy_from_slice(&original);
-                        alpha(&mut guarded[offset..offset + original.len()], divide, premultiply);
+                        let operation = match (divide, premultiply) {
+                            (false, false) => AlphaOperation::ClampInput,
+                            (false, true) => AlphaOperation::Premultiply,
+                            (true, false) => AlphaOperation::ClampOutput,
+                            (true, true) => AlphaOperation::Unpremultiply,
+                        };
+                        alpha(&mut guarded[offset..offset + original.len()], operation);
                         equal(&guarded[offset..offset + original.len()], &expected);
                         assert!(guarded[..offset].iter().chain(&guarded[offset + original.len()..]).all(|&v| v == 123.0));
                     }

@@ -1,7 +1,7 @@
 use std::hint::black_box;
 
 use blanket_gpu::protocol::resampling;
-use blanket_gpu::{blur_parameters, lut_controls, resize_weights};
+use blanket_gpu::{BlurKind, blur_parameters, lut_controls, resize_weights};
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 
 fn preparation(c: &mut Criterion) {
@@ -38,8 +38,8 @@ fn preparation(c: &mut Criterion) {
     }
 
     let mut group = c.benchmark_group("gpu/preparation/blur");
-    for (name, gaussian) in [("box", false), ("gaussian", true)] {
-        group.bench_function(name, |b| b.iter(|| blur_parameters(black_box(2.5), gaussian).unwrap()));
+    for (name, kind) in [("box", BlurKind::Box), ("gaussian", BlurKind::Gaussian)] {
+        group.bench_function(name, |b| b.iter(|| blur_parameters(black_box(2.5), kind).unwrap()));
     }
     group.finish();
 }

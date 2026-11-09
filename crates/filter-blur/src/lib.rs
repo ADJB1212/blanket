@@ -8,6 +8,12 @@ use pyo3::prelude::*;
 mod high_depth;
 mod simd;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlurKind {
+    Box,
+    Gaussian,
+}
+
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
     let mut result = Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)?;
     result.copy_palette_from(image);
@@ -136,25 +142,25 @@ fn box_vertical(source: &[u8], pixels: &mut [u8], stride: usize, radius: f32) {
     });
 }
 
-pub(crate) fn blur_radii(radii: (f32, f32), gaussian: bool) -> PyResult<(f32, f32)> {
+pub(crate) fn blur_radii(radii: (f32, f32), kind: BlurKind) -> PyResult<(f32, f32)> {
     if <[f32; 2]>::from(radii).iter().any(|value| !value.is_finite() || value.abs() >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and less than 2**31"));
     }
-    let radii = if gaussian { (gaussian_radius(radii.0), gaussian_radius(radii.1)) } else { radii };
+    let radii = if kind == BlurKind::Gaussian { (gaussian_radius(radii.0), gaussian_radius(radii.1)) } else { radii };
     if <[f32; 2]>::from(radii).iter().any(|r| !r.is_finite() || *r < 0.0 || *r >= i32::MAX as f32) {
         return Err(PyValueError::new_err("radius must be finite and >= 0"));
     }
     Ok(radii)
 }
 
-fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f32, f32), kind: BlurKind) -> PyResult<Vec<u8>> {
     debug_assert_eq!(source.len(), width * height * C);
-    let radii = blur_radii(radii, gaussian)?;
+    let radii = blur_radii(radii, kind)?;
     let mut pixels = alloc_pixels(source.len())?;
     if pixels.is_empty() {
         return Ok(pixels);
     }
-    let passes = if gaussian { 3 } else { 1 };
+    let passes = if kind == BlurKind::Gaussian { 3 } else { 1 };
     let horizontal_passes = if radii.0 > 0.0 { passes } else { 0 };
     let vertical_passes = if radii.1 > 0.0 { passes } else { 0 };
     if horizontal_passes + vertical_passes == 0 {
@@ -181,24 +187,28 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
     Ok(pixels)
 }
 
-fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
+fn blur(image: &Image, source: &[u8], radii: (f32, f32), kind: BlurKind) -> PyResult<Vec<u8>> {
     let (width, height) = (image.width() as usize, image.height() as usize);
     match image.pixel_mode() {
-        PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
-        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => blurred::<3>(source, width, height, radii, gaussian),
-        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, gaussian),
+        PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, kind),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => blurred::<2>(source, width, height, radii, kind),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => blurred::<3>(source, width, height, radii, kind),
+        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => blurred::<4>(source, width, height, radii, kind),
         _ => unreachable!(),
     }
 }
 
-#[pyfunction]
-pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+#[pyfunction(name = "filter_blur")]
+pub fn filter_blur_python(py: Python<'_>, image: &Image, radii: (f32, f32), gaussian: bool) -> PyResult<Image> {
+    filter_blur(py, image, radii, if gaussian { BlurKind::Gaussian } else { BlurKind::Box })
+}
+
+pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), kind: BlurKind) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
-        return py.detach(|| crate::high_depth::blur(image, radii, gaussian));
+        return py.detach(|| crate::high_depth::blur(image, radii, kind));
     }
     let source = image.pixel_data()?;
-    let pixels = py.detach(|| blur(image, source, radii, gaussian))?;
+    let pixels = py.detach(|| blur(image, source, radii, kind))?;
     output(image, pixels)
 }
 
@@ -211,11 +221,11 @@ pub fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, 
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
         if percent == 0 || threshold >= 255 || radius == 0.0 {
             if !source.is_empty() {
-                blur_radii((radius, radius), true)?;
+                blur_radii((radius, radius), BlurKind::Gaussian)?;
             }
             return blanket_core::buffers::copy(source);
         }
-        let mut pixels = blur(image, source, (radius, radius), true)?;
+        let mut pixels = blur(image, source, (radius, radius), BlurKind::Gaussian)?;
         chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
             for (&original, blurred) in source[chunk * CHUNK_PIXELS..].iter().zip(dst) {
                 let difference = i32::from(original) - i32::from(*blurred);
@@ -250,8 +260,8 @@ mod tests {
     #[test]
     fn vertical_blur_matches_horizontal_pass() {
         // A 1x3 column blurred vertically equals the 3x1 row blurred horizontally.
-        let column = blurred::<1>(&[0, 90, 0], 1, 3, (0.0, 1.0), false).unwrap();
-        let row = blurred::<1>(&[0, 90, 0], 3, 1, (1.0, 0.0), false).unwrap();
+        let column = blurred::<1>(&[0, 90, 0], 1, 3, (0.0, 1.0), BlurKind::Box).unwrap();
+        let row = blurred::<1>(&[0, 90, 0], 3, 1, (1.0, 0.0), BlurKind::Box).unwrap();
         assert_eq!(column, row);
         assert_eq!(column, [30; 3]);
     }

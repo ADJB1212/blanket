@@ -25,8 +25,8 @@ use pyo3::types::PyBytes;
 fn check_backend(format: ImageFormat, operation: &str) -> PyResult<()> {
     let available = match format {
         ImageFormat::Heif => {
-            let (decode, encode, _) = crate::heif_backend_info();
-            if operation == "encode" { encode } else { decode }
+            let backend = crate::heif_backend_info();
+            if operation == "encode" { backend.encode } else { backend.decode }
         }
         _ => true,
     };
@@ -317,7 +317,7 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
 }
 
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
+#[expect(clippy::too_many_arguments, reason = "Python sequence API accepts parallel frame arrays and encoding options")]
 #[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None))]
 pub fn _encode_sequence(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
@@ -514,7 +514,8 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
     }
     if image.bit_depth() > 8 {
         if matches!(format, ImageFormat::Ppm | ImageFormat::Pam) {
-            return encode_wide_pnm(image, format == ImageFormat::Pam);
+            let pnm = if format == ImageFormat::Pam { blanket_codec_extended::PnmFormat::Pam } else { blanket_codec_extended::PnmFormat::Ppm };
+            return encode_wide_pnm(image, pnm);
         }
         return encode_wide(image, format, options);
     }
