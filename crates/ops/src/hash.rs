@@ -91,7 +91,7 @@ fn image_hash(py: Python<'_>, pixels: &[u8], size: usize, side: usize, algorithm
 
 #[pyfunction]
 fn image_hash_native<'py>(py: Python<'py>, image: &Image, size: usize, side: usize, algorithm: &str) -> PyResult<Bound<'py, PyBytes>> {
-    if image.mode != PixelMode::L {
+    if image.pixel_mode() != PixelMode::L {
         return Err(PyValueError::new_err("hash thumbnail must be 8-bit L"));
     }
     let pixels = image.pixel_data()?;

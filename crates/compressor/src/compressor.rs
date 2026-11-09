@@ -62,7 +62,7 @@ impl LosslessImageCompressor {
 impl LosslessImageCompressor {
     pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
         match format {
-            ImageFormat::Png if image.bit_depth == 8 => self.optimize_png(image, options.compress_level),
+            ImageFormat::Png if image.bit_depth() == 8 => self.optimize_png(image, options.compress_level),
             ImageFormat::Jpeg => self.optimize_jpeg(image, options),
             ImageFormat::Webp => self.optimize_webp(image, options),
             ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options),
@@ -214,7 +214,7 @@ impl LosslessImageCompressor {
         // whole deflate runs, so one queue keeps every worker busy instead of
         // draining the pool between representations.
         let mut candidates = vec![PngCandidate {
-            color: match image.mode {
+            color: match image.pixel_mode() {
                 PixelMode::L => png::ColorType::Grayscale,
                 PixelMode::Rgb => png::ColorType::Rgb,
                 PixelMode::Rgba => png::ColorType::Rgba,
@@ -301,9 +301,9 @@ impl LosslessImageCompressor {
     }
 
     fn gray_or_key_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>, properties: Option<(bool, bool)>) {
-        let channels = image.mode.channels();
+        let channels = image.pixel_mode().channels();
         let (grayscale, opaque) = properties.unwrap_or_else(|| pixels::properties(pixels, channels));
-        if image.mode == PixelMode::Rgba && (opaque || grayscale) {
+        if image.pixel_mode() == PixelMode::Rgba && (opaque || grayscale) {
             // Retain every alpha and hidden color sample. Gray+alpha supports
             // arbitrary transparency even when a single tRNS key cannot.
             let (color, reduced) = if opaque {
@@ -314,7 +314,7 @@ impl LosslessImageCompressor {
             candidates.push(PngCandidate { color, pixels: Cow::Owned(reduced), .. });
         }
         let mut key: Option<&[u8]> = None;
-        if image.mode == PixelMode::Rgba && !opaque {
+        if image.pixel_mode() == PixelMode::Rgba && !opaque {
             let first = pixels.as_chunks::<4>().0.iter().find(|p| p[3] != 255).expect("non-opaque image");
             if first[3] != 0 || !pixels::matches_key(pixels, [first[0], first[1], first[2]]) {
                 return;
@@ -334,7 +334,7 @@ impl LosslessImageCompressor {
         let depths: &[usize] = if grayscale { &[1, 2, 4, 8] } else { &[8] };
         let minimum_depth = if grayscale { pixels::min_gray_depth(&gray) } else { 8 };
         for &bits in depths {
-            if bits == 8 && image.mode == PixelMode::L {
+            if bits == 8 && image.pixel_mode() == PixelMode::L {
                 // The unchanged source representation is already a candidate.
                 continue;
             }
@@ -346,7 +346,7 @@ impl LosslessImageCompressor {
             }
             let step = 255 / ((1 << bits) - 1);
             let packed = if grayscale && bits < 8 {
-                Cow::Owned(pixels::pack_gray_rows(&gray, image.width as usize, bits))
+                Cow::Owned(pixels::pack_gray_rows(&gray, image.width() as usize, bits))
             } else if grayscale {
                 // Eight bits is the last depth, so hand over the samples.
                 std::mem::replace(&mut gray, Cow::Borrowed(&[][..]))
@@ -370,7 +370,7 @@ impl LosslessImageCompressor {
 
     /// Build an exact palette, never quantizing or discarding invisible colors.
     fn palette_candidates<'a>(&self, image: &Image, pixels: &'a [u8], candidates: &mut Vec<PngCandidate<'a>>) -> Option<(bool, bool)> {
-        let channels = image.mode.channels();
+        let channels = image.pixel_mode().channels();
         let (lookup, entries) = palette_entries_with_lookup(pixels, channels)?;
         // Every source color is present, including hidden RGB samples.
         // Inspect at most 256 entries instead of scanning the image again.
@@ -504,9 +504,9 @@ impl LosslessImageCompressor {
                         None => indices.clone(),
                     }
                 } else if fuse_mapping {
-                    pixels::pack_mapped_rows(&indices, image.width as usize, depth, &mapping)
+                    pixels::pack_mapped_rows(&indices, image.width() as usize, depth, &mapping)
                 } else {
-                    pack_rows(remapped.as_deref().unwrap_or(&indices), image.width as usize, depth)
+                    pack_rows(remapped.as_deref().unwrap_or(&indices), image.width() as usize, depth)
                 };
                 candidates.push(PngCandidate {
                     color: png::ColorType::Indexed,
@@ -750,8 +750,8 @@ impl PngCandidate<'_> {
         // Deflate sees every packed sample plus one filter byte per row, and
         // a length-258 match against a 1-bit literal/length and 1-bit
         // distance code is its densest encoding: 258 bytes per 2 bits.
-        let row_bytes = (image.width as usize * self.color.samples() * self.depth as usize).div_ceil(8);
-        let raw = image.height as usize * (1 + row_bytes);
+        let row_bytes = (image.width() as usize * self.color.samples() * self.depth as usize).div_ceil(8);
+        let raw = image.height() as usize * (1 + row_bytes);
         containers + 6 + raw.div_ceil(258 * 4)
     }
 
@@ -771,7 +771,7 @@ impl PngCandidate<'_> {
         let initial_cap = self.minimum_size(image).min(limit.get().saturating_sub(1));
         let mut output = CandidateWriter { bytes: Vec::with_capacity(initial_cap), limit, .. };
         let result = (|| {
-            let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
+            let mut encoder = png::Encoder::new(&mut output, image.width(), image.height());
             encoder.set_color(self.color);
             encoder.set_depth(self.depth);
             encoder.set_filter(filter);
@@ -872,7 +872,8 @@ fn keep_equivalent(output: &mut Vec<u8>, candidate: Vec<u8>, reference: &Image, 
 
 fn equivalent(candidate: &[u8], reference: &Image, format: ImageFormat) -> PyResult<bool> {
     let decoded = codecs::decode(candidate, format).map_err(codec_error)?;
-    Ok((decoded.width, decoded.height, decoded.mode, decoded.bit_depth) == (reference.width, reference.height, reference.mode, reference.bit_depth)
+    Ok((decoded.width(), decoded.height(), decoded.pixel_mode(), decoded.bit_depth())
+        == (reference.width(), reference.height(), reference.pixel_mode(), reference.bit_depth())
         && pixels::equal(decoded.raw_data()?, reference.raw_data()?))
 }
 
@@ -1115,7 +1116,7 @@ mod tests {
                 let compressor = LosslessImageCompressor { effort };
                 for compress_level in [0, 6, 9] {
                     let mut candidates = vec![PngCandidate {
-                        color: match image.mode {
+                        color: match image.pixel_mode() {
                             PixelMode::L => png::ColorType::Grayscale,
                             PixelMode::Rgb => png::ColorType::Rgb,
                             PixelMode::Rgba => png::ColorType::Rgba,
@@ -1127,7 +1128,7 @@ mod tests {
                     }];
                     let properties = compressor.palette_candidates(image, pixels, &mut candidates);
                     if let Some(properties) = properties {
-                        assert_eq!(properties, pixels::properties(pixels, image.mode.channels()));
+                        assert_eq!(properties, pixels::properties(pixels, image.pixel_mode().channels()));
                     }
                     compressor.gray_or_key_candidates(image, pixels, &mut candidates, None);
                     // Reference: the normal save, then each representation's
@@ -1144,11 +1145,11 @@ mod tests {
                     for threads in [1, 4] {
                         let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap();
                         let output = pool.install(|| compressor.encode(image, ImageFormat::Png, SaveOptions { compress_level, .. })).unwrap();
-                        assert_eq!(output, expected, "{:?} effort {effort} level {compress_level} threads {threads}", image.mode);
+                        assert_eq!(output, expected, "{:?} effort {effort} level {compress_level} threads {threads}", image.pixel_mode());
                     }
                     let decoded = codecs::decode(&expected, ImageFormat::Png).unwrap();
-                    assert_eq!(decoded.width, image.width);
-                    assert_eq!(decoded.height, image.height);
+                    assert_eq!(decoded.width(), image.width());
+                    assert_eq!(decoded.height(), image.height());
                 }
             }
         }
@@ -1418,12 +1419,10 @@ mod tests {
     fn rejects_smaller_candidates_that_change_samples_or_layout() {
         let reference = Image::from_pixels(2, 1, PixelMode::Rgba, vec![1, 2, 3, 0, 4, 5, 6, 255], None).unwrap();
         let mut invisible_color = reference.clone();
-        invisible_color.pixels.as_mut().unwrap()[0] = 0;
+        invisible_color.pixels_mut().unwrap()[0] = 0;
         let mut alpha = reference.clone();
-        alpha.pixels.as_mut().unwrap()[3] = 1;
-        let mut layout = reference.clone();
-        layout.width = 1;
-        layout.height = 2;
+        alpha.pixels_mut().unwrap()[3] = 1;
+        let layout = Image::from_pixels(1, 2, PixelMode::Rgba, reference.raw_data().unwrap().to_vec(), None).unwrap();
         for changed in [invisible_color, alpha, layout] {
             let candidate = codecs::encode_png(&changed, changed.pixel_data().unwrap(), 6).unwrap();
             let mut output = vec![42; candidate.len() + 1];

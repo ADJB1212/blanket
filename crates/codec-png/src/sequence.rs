@@ -228,7 +228,7 @@ fn decode_animation<T: CanvasSample>(
             }
             .map_err(|e| e.to_string())?;
             if color_type == png::ColorType::Indexed {
-                image.palette = Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?));
+                image.set_palette_data(Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?))).map_err(|error| error.to_string())?;
             }
             sequence.frames.push(Frame {
                 image,
@@ -302,8 +302,8 @@ pub fn encode_sequence(sequence: &Sequence<impl Borrow<Image>>, options: SaveOpt
         return Err(PyValueError::new_err("empty sequence"));
     }
     let size = (
-        sequence.frames.iter().map(|frame| frame.image.borrow().width).max().unwrap(),
-        sequence.frames.iter().map(|frame| frame.image.borrow().height).max().unwrap(),
+        sequence.frames.iter().map(|frame| frame.image.borrow().width()).max().unwrap(),
+        sequence.frames.iter().map(|frame| frame.image.borrow().height()).max().unwrap(),
     );
     encode_sequence_regions(sequence, options, size, &vec![(0, 0); sequence.frames.len()])
 }
@@ -317,12 +317,12 @@ pub fn encode_sequence_regions(
     }
     for (frame, &(x, y)) in sequence.frames.iter().zip(offsets) {
         let image = frame.image.borrow();
-        if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
-            || image.mode != first.mode
-            || image.bit_depth != first.bit_depth
-            || x.checked_add(image.width).is_none_or(|right| right > size.0)
-            || y.checked_add(image.height).is_none_or(|bottom| bottom > size.1)
-            || image.palette.as_ref().is_some_and(|(mode, _)| !matches!(mode, PixelMode::Rgb | PixelMode::Rgba))
+        if !matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+            || image.pixel_mode() != first.pixel_mode()
+            || image.bit_depth() != first.bit_depth()
+            || x.checked_add(image.width()).is_none_or(|right| right > size.0)
+            || y.checked_add(image.height()).is_none_or(|bottom| bottom > size.1)
+            || image.palette().as_ref().is_some_and(|(mode, _)| !matches!(mode, PixelMode::Rgb | PixelMode::Rgba))
         {
             return Err(PyValueError::new_err("invalid animation frame mode, depth, or bounds"));
         }
@@ -330,17 +330,17 @@ pub fn encode_sequence_regions(
     let mut output = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut output, size.0, size.1);
-        encoder.set_color(if first.palette.is_some() {
+        encoder.set_color(if first.palette().is_some() {
             png::ColorType::Indexed
         } else {
-            match first.mode {
+            match first.pixel_mode() {
                 PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
                 PixelMode::La => png::ColorType::GrayscaleAlpha,
                 PixelMode::Rgb => png::ColorType::Rgb,
                 _ => png::ColorType::Rgba,
             }
         });
-        if let Some((mode, entries)) = &first.palette {
+        if let Some((mode, entries)) = &first.palette() {
             let mut rgb = Vec::new();
             let mut alpha = Vec::new();
             for entry in entries.chunks_exact(mode.channels()) {
@@ -363,9 +363,9 @@ pub fn encode_sequence_regions(
                 encoder.set_trns(alpha);
             }
         }
-        encoder.set_depth(if first.bit_depth > 8 {
+        encoder.set_depth(if first.bit_depth() > 8 {
             png::BitDepth::Sixteen
-        } else if first.mode == PixelMode::One {
+        } else if first.pixel_mode() == PixelMode::One {
             png::BitDepth::One
         } else {
             png::BitDepth::Eight
@@ -387,7 +387,7 @@ pub fn encode_sequence_regions(
         for (i, frame) in sequence.frames.iter().enumerate() {
             let image = frame.image.borrow();
             writer.reset_frame_position().map_err(codec_error)?;
-            writer.set_frame_dimension(image.width, image.height).map_err(codec_error)?;
+            writer.set_frame_dimension(image.width(), image.height()).map_err(codec_error)?;
             writer.set_frame_position(offsets[i].0, offsets[i].1).map_err(codec_error)?;
             if !(sequence.default_image && i == 0) {
                 let duration = frame.duration.unwrap_or(0.0);
@@ -400,13 +400,13 @@ pub fn encode_sequence_regions(
                     .set_blend_op(png::BlendOp::from_u8(frame.blend).ok_or_else(|| PyValueError::new_err("invalid APNG blend"))?)
                     .map_err(codec_error)?;
             }
-            if first.bit_depth > 8 {
+            if first.bit_depth() > 8 {
                 let raw = image.raw_data()?;
                 pixels.resize(raw.len(), 0);
-                blanket_core::simd::samples_to_be16(raw, &mut pixels, image.bit_depth);
+                blanket_core::simd::samples_to_be16(raw, &mut pixels, image.bit_depth());
                 writer.write_image_data(&pixels).map_err(codec_error)?;
-            } else if image.mode == PixelMode::One {
-                let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, image.width as usize, image.height as usize);
+            } else if image.pixel_mode() == PixelMode::One {
+                let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, image.width() as usize, image.height() as usize);
                 writer.write_image_data(&packed).map_err(codec_error)?;
             } else {
                 writer.write_image_data(image.pixel_data()?).map_err(codec_error)?;
@@ -490,7 +490,7 @@ mod tests {
                             _ => PixelMode::Rgba,
                         }
                     };
-                    assert_eq!(frame.image.mode, mode);
+                    assert_eq!(frame.image.pixel_mode(), mode);
                     assert_eq!(frame.image.raw_data().unwrap(), expected);
                 }
             }
@@ -548,7 +548,7 @@ mod tests {
                     expected[row as usize * 19 + x as usize..row as usize * 19 + (x + w) as usize].fill(color);
                 }
                 let image = &sequence.frames[i].image;
-                assert_eq!(image.bit_depth, if wide { 16 } else { 8 });
+                assert_eq!(image.bit_depth(), if wide { 16 } else { 8 });
                 assert_eq!(image.raw_data().unwrap(), pack(&expected, false));
             }
         }

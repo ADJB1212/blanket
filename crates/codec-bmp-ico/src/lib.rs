@@ -62,7 +62,7 @@ pub fn decode_ico(data: &[u8]) -> Result<Image, String> {
     if payload.starts_with(PNG_SIGNATURE) {
         let mut image = blanket_codec_png::decode_png(payload)?;
         image.format = Some("ICO".into());
-        if image.width != dimension(entry[0]) || image.height != dimension(entry[1]) {
+        if image.width() != dimension(entry[0]) || image.height() != dimension(entry[1]) {
             return Err("ICO directory and PNG dimensions differ".into());
         }
         return Ok(image);
@@ -81,21 +81,25 @@ pub fn decode_bmp(data: &[u8]) -> Result<Image, String> {
 }
 
 pub fn encode_bmp(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(PyValueError::new_err("cannot encode an empty image"));
     }
     let mut output = Vec::new();
-    image::codecs::bmp::BmpEncoder::new(&mut output).write_image(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
+    image::codecs::bmp::BmpEncoder::new(&mut output)
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .map_err(codec_error)?;
     Ok(output)
 }
 pub fn encode_ico(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(PyValueError::new_err("cannot encode an empty image"));
     }
-    if image.width > 256 || image.height > 256 {
+    if image.width() > 256 || image.height() > 256 {
         return Err(PyValueError::new_err("ICO dimensions must be between 1 and 256"));
     }
     let mut output = Vec::new();
-    image::codecs::ico::IcoEncoder::new(&mut output).write_image(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
+    image::codecs::ico::IcoEncoder::new(&mut output)
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+        .map_err(codec_error)?;
     Ok(output)
 }

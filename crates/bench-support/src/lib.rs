@@ -91,9 +91,14 @@ pub fn codec_fixtures(modes: &[PixelMode], wide: bool, sizes: &[(u32, u32)], mut
 pub fn measure_codec(
     c: &mut Criterion, name: &str, image: &Image, content: &str, encode: impl Fn(&Image) -> Vec<u8>, decode: impl Fn(&[u8]) -> Image,
 ) {
-    let mut group =
-        c.benchmark_group(format!("codecs/{name}/{}-{}/{content}/{}x{}", image.mode.as_str(), image.bit_depth, image.width, image.height));
-    group.throughput(Throughput::Elements(u64::from(image.width) * u64::from(image.height)));
+    let mut group = c.benchmark_group(format!(
+        "codecs/{name}/{}-{}/{content}/{}x{}",
+        image.pixel_mode().as_str(),
+        image.bit_depth(),
+        image.width(),
+        image.height()
+    ));
+    group.throughput(Throughput::Elements(u64::from(image.width()) * u64::from(image.height())));
     group.bench_function("encode", |b| {
         b.iter(|| encode(black_box(image)));
     });

@@ -125,13 +125,13 @@ impl PreparedHeif {
         use libheif_rs::{Channel, ColorSpace, RgbChroma};
 
         let pixels = image.raw_data()?;
-        if !matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+        if !matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
             return Err(PyValueError::new_err("unsupported mode for HEIF"));
         }
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(PyValueError::new_err("cannot encode empty HEIF image"));
         }
-        if !matches!(image.bit_depth, 8 | 10 | 12) {
+        if !matches!(image.bit_depth(), 8 | 10 | 12) {
             return Err(PyValueError::new_err("HEIF encoding supports 8, 10, or 12 bits per channel"));
         }
         if !backend_info().1 {
@@ -142,23 +142,23 @@ impl PreparedHeif {
             ));
         }
         let _library = &*HEIF_LIBRARY;
-        let chroma = match (image.bit_depth > 8, image.mode == PixelMode::Rgba) {
+        let chroma = match (image.bit_depth() > 8, image.pixel_mode() == PixelMode::Rgba) {
             (false, false) => RgbChroma::Rgb,
             (false, true) => RgbChroma::Rgba,
             (true, false) => RgbChroma::HdrRgbLe,
             (true, true) => RgbChroma::HdrRgbaLe,
         };
-        let grayscale = image.mode == PixelMode::L;
+        let grayscale = image.pixel_mode() == PixelMode::L;
         let color_space = if grayscale { ColorSpace::Monochrome } else { ColorSpace::Rgb(chroma) };
         let channel = if grayscale { Channel::Y } else { Channel::Interleaved };
-        let mut native = libheif_rs::Image::new(image.width, image.height, color_space).map_err(codec_error)?;
-        native.create_plane(channel, image.width, image.height, image.bit_depth).map_err(codec_error)?;
-        let row = image.width as usize * image.mode.channels() * if image.bit_depth > 8 { 2 } else { 1 };
+        let mut native = libheif_rs::Image::new(image.width(), image.height(), color_space).map_err(codec_error)?;
+        native.create_plane(channel, image.width(), image.height(), image.bit_depth()).map_err(codec_error)?;
+        let row = image.width() as usize * image.pixel_mode().channels() * if image.bit_depth() > 8 { 2 } else { 1 };
         let planes = native.planes_mut();
         let plane = if grayscale { planes.y } else { planes.interleaved }.ok_or_else(|| PyOSError::new_err("missing HEIF pixel plane"))?;
         // Monochrome HEVC avoids RGB expansion, color conversion, and encoding
         // two constant chroma planes. Wide monochrome planes use native endian.
-        if grayscale && image.bit_depth > 8 && cfg!(target_endian = "big") {
+        if grayscale && image.bit_depth() > 8 && cfg!(target_endian = "big") {
             for (source, target) in pixels.chunks_exact(row).zip(plane.data.chunks_exact_mut(plane.stride)) {
                 for (sample, dest) in source.as_chunks::<2>().0.iter().zip(target[..row].as_chunks_mut::<2>().0) {
                     *dest = u16::from_le_bytes(*sample).to_ne_bytes();
@@ -287,8 +287,8 @@ mod tests {
             let data = context.write_to_bytes().unwrap();
             let images = previews(&data).unwrap();
             assert_eq!(images.len(), 1);
-            assert_eq!((images[0].width, images[0].height), size);
-            assert_eq!(images[0].bit_depth, depth);
+            assert_eq!((images[0].width(), images[0].height()), size);
+            assert_eq!(images[0].bit_depth(), depth);
             assert_ne!(size, (128, 96));
         }
     }

@@ -34,7 +34,7 @@ fn image(width: usize, height: usize, mode: PixelMode, pixels: Vec<u8>, format: 
 
 fn indexed(width: usize, height: usize, pixels: Vec<u8>, palette: Vec<u8>, format: &str) -> Result<Image, String> {
     let mut result = image(width, height, PixelMode::L, pixels, format)?;
-    result.palette = Some((PixelMode::Rgb, palette));
+    result.set_palette_data(Some((PixelMode::Rgb, palette))).map_err(|error| error.to_string())?;
     Ok(result)
 }
 
@@ -144,7 +144,7 @@ pub fn decode(data: &[u8], format: &str) -> Result<Image, String> {
 }
 
 pub fn encode(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, String> {
-    dimensions(im.width, im.height)?;
+    dimensions(im.width(), im.height())?;
     match format {
         "PCX" => encode_pcx(im, pixels),
         "SGI" => encode_sgi(im, pixels),
@@ -247,12 +247,12 @@ fn decode_pcx(data: &[u8]) -> Result<Image, String> {
 }
 
 fn encode_pcx(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
-    let (w, h) = (im.width as usize, im.height as usize);
-    if w > 65535 || h > 65535 || !matches!(im.mode, PixelMode::One | PixelMode::L | PixelMode::Rgb) {
+    let (w, h) = (im.width() as usize, im.height() as usize);
+    if w > 65535 || h > 65535 || !matches!(im.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::Rgb) {
         return Err("unsupported PCX mode or dimensions".into());
     }
-    let bits = if im.mode == PixelMode::One { 1 } else { 8 };
-    let planes = if im.mode == PixelMode::Rgb { 3 } else { 1 };
+    let bits = if im.pixel_mode() == PixelMode::One { 1 } else { 8 };
+    let planes = if im.pixel_mode() == PixelMode::Rgb { 3 } else { 1 };
     let stride = (w * bits).div_ceil(8).next_multiple_of(2);
     let stride16 = u16::try_from(stride).map_err(|_| "PCX row is too wide")?;
     let mut out = vec![0; 128];
@@ -292,7 +292,7 @@ fn encode_pcx(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     }
     if bits == 8 && planes == 1 {
         out.push(12);
-        if let Some((_, palette)) = &im.palette {
+        if let Some((_, palette)) = &im.palette() {
             let start = out.len();
             out.extend_from_slice(palette);
             out.resize(start + 768, 0);
@@ -400,10 +400,10 @@ fn merge_sgi_row<const C: usize>(source: &[u8], output: &mut [u8], start: usize,
 }
 
 fn encode_sgi(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
-    if !matches!(im.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) || im.width > 65535 || im.height > 65535 {
+    if !matches!(im.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) || im.width() > 65535 || im.height() > 65535 {
         return Err("unsupported SGI mode or dimensions".into());
     }
-    let (w, h, c) = (im.width as usize, im.height as usize, im.mode.channels());
+    let (w, h, c) = (im.width() as usize, im.height() as usize, im.pixel_mode().channels());
     let mut out = vec![0; 512 + pixels.len()];
     out[..4].copy_from_slice(&[1, 218, 0, 1]);
     for (offset, value) in [(4, if c == 1 { 2 } else { 3 }), (6, w), (8, h), (10, c)] {
@@ -476,8 +476,8 @@ fn decode_msp(data: &[u8]) -> Result<Image, String> {
 }
 
 fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, String> {
-    let (w, h) = (im.width as usize, im.height as usize);
-    if w > 65535 || h > 65535 || (im.mode != PixelMode::One && !(format == "PALM" && im.mode == PixelMode::L)) {
+    let (w, h) = (im.width() as usize, im.height() as usize);
+    if w > 65535 || h > 65535 || (im.pixel_mode() != PixelMode::One && !(format == "PALM" && im.pixel_mode() == PixelMode::L)) {
         return Err(format!("unsupported {format} mode or dimensions"));
     }
     let mut out;
@@ -489,7 +489,7 @@ fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, Str
         out = header.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>();
         stride = w.div_ceil(8);
     } else {
-        let bpp = if im.mode == PixelMode::One { 1 } else { 8 };
+        let bpp = if im.pixel_mode() == PixelMode::One { 1 } else { 8 };
         stride = (w * bpp).div_ceil(16) * 2;
         let stride16 = u16::try_from(stride).map_err(|_| "PALM row is too wide")?;
         out = vec![0; 16];
@@ -503,7 +503,7 @@ fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, Str
             out.extend_from_slice(&256_u16.to_be_bytes());
             for i in 0..256 {
                 out.push(i as u8);
-                if let Some((_, p)) = &im.palette {
+                if let Some((_, p)) = &im.palette() {
                     out.extend_from_slice(p.get(i * 3..i * 3 + 3).unwrap_or(&[0; 3]));
                 } else {
                     out.extend_from_slice(&[i as u8; 3]);
@@ -514,7 +514,7 @@ fn encode_bitmap(im: &Image, pixels: &[u8], format: &str) -> Result<Vec<u8>, Str
     let start = out.len();
     out.resize(start + stride * h, 0);
     for (source, row) in pixels.chunks_exact(w).zip(out[start..].chunks_exact_mut(stride)) {
-        if im.mode == PixelMode::One {
+        if im.pixel_mode() == PixelMode::One {
             if format == "PALM" {
                 blanket_core::pixels::pack_bilevel::<true>(source, row);
             } else {

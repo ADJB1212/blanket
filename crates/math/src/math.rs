@@ -387,32 +387,32 @@ fn math_apply(
             if value.is_finite() && !sample.is_finite() { Err(PyOverflowError::new_err("float too large to pack with f format")) } else { Ok(sample) }
         })
         .transpose()?;
-    let left_byte = matches!(left.mode, PixelMode::One | PixelMode::L);
-    let right_byte = right.is_some_and(|r| matches!(r.mode, PixelMode::One | PixelMode::L));
+    let left_byte = matches!(left.pixel_mode(), PixelMode::One | PixelMode::L);
+    let right_byte = right.is_some_and(|r| matches!(r.pixel_mode(), PixelMode::One | PixelMode::L));
     let integer_group = |mode: PixelMode| matches!(mode, PixelMode::One | PixelMode::L | PixelMode::I);
-    if integer_scalar.is_some() && !integer_group(left.mode) {
+    if integer_scalar.is_some() && !integer_group(left.pixel_mode()) {
         return Err(PyValueError::new_err("integer scalar image math requires 1, L, or I mode"));
     }
     let supported = |mode| integer_group(mode) || mode == PixelMode::F;
-    if !supported(left.mode) || right.is_some_and(|r| !supported(r.mode)) {
+    if !supported(left.pixel_mode()) || right.is_some_and(|r| !supported(r.pixel_mode())) {
         return Err(PyValueError::new_err("image math requires matching I or F operands"));
     }
-    let float = left.mode == PixelMode::F || right.is_some_and(|r| r.mode == PixelMode::F) || scalar.is_some();
+    let float = left.pixel_mode() == PixelMode::F || right.is_some_and(|r| r.pixel_mode() == PixelMode::F) || scalar.is_some();
     if float && op.integer_only() {
         return Err(PyTypeError::new_err(format!("bad operand type for '{operation}'")));
     }
     let a_raw = left.raw_data()?;
     let b_raw = right.map(Image::raw_data).transpose()?;
-    let width = right.map_or(left.width, |r| r.width.min(left.width)) as usize;
-    let height = right.map_or(left.height, |r| r.height.min(left.height)) as usize;
+    let width = right.map_or_else(|| left.width(), |r| r.width().min(left.width())) as usize;
+    let height = right.map_or_else(|| left.height(), |r| r.height().min(left.height())) as usize;
     let len = width.checked_mul(height).and_then(|n| n.checked_mul(4)).ok_or_else(|| PyMemoryError::new_err("image dimensions are too large"))?;
     if float {
         let output = py.detach(|| {
             float_pixels(
                 len,
-                simd::FloatInput::new(a_raw, left.mode),
-                b_raw.zip(right).map(|(data, image)| simd::FloatInput::new(data, image.mode)),
-                [width, left.width as usize, right.map_or(0, |r| r.width as usize)],
+                simd::FloatInput::new(a_raw, left.pixel_mode()),
+                b_raw.zip(right).map(|(data, image)| simd::FloatInput::new(data, image.pixel_mode())),
+                [width, left.width() as usize, right.map_or(0, |r| r.width() as usize)],
                 scalar,
                 op,
                 reverse,
@@ -427,7 +427,7 @@ fn math_apply(
     {
         let mut output = blanket_core::buffers::reserved::<[u8; 4]>(len / 4)?;
         py.detach(|| {
-            let dimensions = [width, left.width as usize, right.map_or(0, |r| r.width as usize)];
+            let dimensions = [width, left.width() as usize, right.map_or(0, |r| r.width() as usize)];
             let a = simd::IntegerInput::new(a_raw, left_byte);
             let b = b_raw.map_or_else(|| simd::IntegerInput::Scalar(integer_scalar.unwrap_or(0)), |data| simd::IntegerInput::new(data, right_byte));
             macro_rules! dispatch {

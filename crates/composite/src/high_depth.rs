@@ -48,7 +48,7 @@ impl MaskSamples<'_> {
 }
 
 fn matching(first: &Image, second: &Image) -> PyResult<()> {
-    if first.mode != second.mode || first.bit_depth != second.bit_depth {
+    if first.pixel_mode() != second.pixel_mode() || first.bit_depth() != second.bit_depth() {
         return Err(PyValueError::new_err("images do not match"));
     }
     Ok(())
@@ -60,32 +60,32 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
     image.raw_data()?;
     let mask_values = mask
         .map(|mask| {
-            if mask.palette.is_some()
-                || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba)
-                || (mask.width, mask.height) != (source.width, source.height)
-                || mask.bit_depth != 8 && mask.bit_depth != image.bit_depth
+            if mask.palette().is_some()
+                || !matches!(mask.pixel_mode(), PixelMode::L | PixelMode::Rgba)
+                || (mask.width(), mask.height()) != (source.width(), source.height())
+                || mask.bit_depth() != 8 && mask.bit_depth() != image.bit_depth()
             {
                 return Err(PyValueError::new_err("bad transparency mask"));
             }
-            let values = if mask.bit_depth == 8 { MaskSamples::Bytes(mask.pixel_data()?) } else { MaskSamples::Wide(samples::view(mask)?) };
-            Ok((values, mask.mode.channels(), (1_u64 << mask.bit_depth) - 1))
+            let values = if mask.bit_depth() == 8 { MaskSamples::Bytes(mask.pixel_data()?) } else { MaskSamples::Wide(samples::view(mask)?) };
+            Ok((values, mask.pixel_mode().channels(), (1_u64 << mask.bit_depth()) - 1))
         })
         .transpose()?;
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     let (left, top, right, bottom) =
-        super::composite::paste_bounds(position, image.width as usize, image.height as usize, source.width, source.height);
+        super::composite::paste_bounds(position, image.width() as usize, image.height() as usize, source.width(), source.height());
     if right <= left || bottom <= top {
         return Ok(());
     }
     let source_values = if mask.is_some() { samples::view(source)? } else { std::borrow::Cow::Borrowed(&[][..]) };
-    let big_endian = image.mode.is_big_endian();
-    let width = image.width as usize;
-    image.ensure_owned();
-    let pixels = image.pixels.as_mut().unwrap();
+    let big_endian = image.pixel_mode().is_big_endian();
+    let width = image.width() as usize;
+    image.ensure_owned()?;
+    let pixels = image.pixels_mut().unwrap();
     let count = (right - left) as usize;
     let mut values = if mask.is_some() { vec![0_u16; count * channels] } else { Vec::new() };
     for y in top..bottom {
-        let src_start = ((y - position.1) as usize * source.width as usize + (left - position.0) as usize) * channels;
+        let src_start = ((y - position.1) as usize * source.width() as usize + (left - position.0) as usize) * channels;
         let dst_start = (y as usize * width + left as usize) * channels * 2;
         let destination = &mut pixels[dst_start..dst_start + count * channels * 2];
         if mask.is_none() {
@@ -110,7 +110,7 @@ pub(crate) fn paste(image: &mut Image, source: &Image, position: (i64, i64), mas
             count
         };
         for x in left + end as i64..right {
-            let src = ((y - position.1) as usize * source.width as usize + (x - position.0) as usize) * channels;
+            let src = ((y - position.1) as usize * source.width() as usize + (x - position.0) as usize) * channels;
             let dst = (x - left) as usize * channels;
             let (alpha, maximum) = mask_values
                 .as_ref()
@@ -176,8 +176,8 @@ pub(crate) fn composite_inplace(background: &mut Image, overlay: &Image) -> PyRe
     background.raw_data()?;
     let source = samples::view(overlay)?;
     let maximum = u64::from(samples::maximum(background));
-    background.ensure_owned();
-    let pixels = background.pixels.as_mut().expect("validated open image");
+    background.ensure_owned()?;
+    let pixels = background.pixels_mut().expect("validated open image");
     blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
         let source = &source[chunk * 16 * 1024 * 4..][..dst.len() / 2];
         let end = dst.len() / 128 * 128;
@@ -249,15 +249,15 @@ fn composite_values(dst: [Samples; 4], src: [Samples; 4], maximum: u64) -> [Samp
 }
 
 pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
-    if alpha.bit_depth != 8 && alpha.bit_depth != image.bit_depth {
+    if alpha.bit_depth() != 8 && alpha.bit_depth() != image.bit_depth() {
         return Err(PyValueError::new_err("images do not match"));
     }
     let maximum = u32::from(samples::maximum(image));
-    let alpha_values = if alpha.bit_depth == 8 { MaskSamples::Bytes(alpha.pixel_data()?) } else { MaskSamples::Wide(samples::view(alpha)?) };
-    if image.mode == PixelMode::Rgba {
+    let alpha_values = if alpha.bit_depth() == 8 { MaskSamples::Bytes(alpha.pixel_data()?) } else { MaskSamples::Wide(samples::view(alpha)?) };
+    if image.pixel_mode() == PixelMode::Rgba {
         image.raw_data()?;
-        image.ensure_owned();
-        let pixels = image.pixels.as_mut().expect("validated open image");
+        image.ensure_owned()?;
+        let pixels = image.pixels_mut().expect("validated open image");
         blanket_core::parallel::chunks_mut(pixels, 16 * 1024 * 8, |chunk, dst| {
             let alpha = alpha_values.slice(chunk * 16 * 1024);
             let end = dst.len() / (16 * 8) * 16;
@@ -282,15 +282,13 @@ pub(crate) fn putalpha(image: &mut Image, alpha: &Image) -> PyResult<()> {
     }
     let source = samples::view(image)?;
     let mut pixels = blanket_core::buffers::buffer(image.size(), 8)?;
-    match image.mode.channels() {
+    match image.pixel_mode().channels() {
         3 => putalpha_samples::<3>(&source, &alpha_values, &mut pixels, maximum),
         4 => putalpha_samples::<4>(&source, &alpha_values, &mut pixels, maximum),
         _ => unreachable!(),
     }
-    let result = Image::from_sample_bytes(image.width, image.height, PixelMode::Rgba, pixels, image.bit_depth, None)?;
-    image.pixels = result.pixels;
-    image.mode = PixelMode::Rgba;
-    Ok(())
+    let result = Image::from_sample_bytes(image.width(), image.height(), PixelMode::Rgba, pixels, image.bit_depth(), None)?;
+    image.replace_storage(result)
 }
 
 fn putalpha_samples<const C: usize>(source: &[u16], alpha: &MaskSamples<'_>, output: &mut [u8], maximum: u32) {

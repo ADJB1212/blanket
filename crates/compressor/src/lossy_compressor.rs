@@ -44,7 +44,7 @@ impl LossyImageCompressor {
         if self.max_rmse == 0.0 || options.lossless {
             return Ok(output);
         }
-        let png = format == ImageFormat::Png && image.bit_depth == 8;
+        let png = format == ImageFormat::Png && image.bit_depth() == 8;
         if !png && !matches!(format, ImageFormat::Jpeg | ImageFormat::Jxl | ImageFormat::Webp | ImageFormat::Avif | ImageFormat::Heif) {
             return Ok(output);
         }
@@ -91,10 +91,10 @@ impl LossyImageCompressor {
     }
 
     fn optimize_png(&self, image: &Image, options: SaveOptions, mut output: Vec<u8>) -> PyResult<Vec<u8>> {
-        let channels = image.mode.channels();
+        let channels = image.pixel_mode().channels();
         let pixels = image.raw_data()?;
         let histogram = png_rounding_histogram(pixels, channels);
-        let limit = self.max_rmse * self.max_rmse * f64::from(image.width) * f64::from(image.height) * 3.0;
+        let limit = self.max_rmse * self.max_rmse * f64::from(image.width()) * f64::from(image.height()) * 3.0;
         let mut tried = vec![std::array::from_fn(|sample| sample as u8)];
         let mut rounded = None;
         let mut winner = None;
@@ -110,17 +110,17 @@ impl LossyImageCompressor {
                 tried.push(color_table);
                 if rounded.is_none() {
                     let mut scratch = Image::from_pixels(
-                        image.width,
-                        image.height,
-                        image.mode,
+                        image.width(),
+                        image.height(),
+                        image.pixel_mode(),
                         blanket_core::raster::alloc_pixels(pixels.len())?,
                         image.format.clone(),
                     )?;
-                    scratch.palette.clone_from(&image.palette);
+                    scratch.copy_palette_from(image);
                     rounded = Some(scratch);
                 }
                 let rounded = rounded.as_mut().expect("initialized PNG rounding scratch");
-                let destination = rounded.pixels.as_mut().expect("validated image");
+                let destination = rounded.pixels_mut().expect("validated image");
                 round_png_pixels(pixels, destination, channels, &color_table);
                 let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;
                 if candidate.len() < smallest {
@@ -137,7 +137,7 @@ impl LossyImageCompressor {
             }
         }
         if let (Some(color_table), Some(mut winner)) = (winner, rounded) {
-            round_png_pixels(pixels, winner.pixels.as_mut().expect("validated image"), channels, &color_table);
+            round_png_pixels(pixels, winner.pixels_mut().expect("validated image"), channels, &color_table);
             let optimized = LosslessImageCompressor { effort: self.effort }.encode(&winner, ImageFormat::Png, options)?;
             if optimized.len() < output.len() {
                 output = optimized;
@@ -179,15 +179,15 @@ fn png_centroid_table(histogram: &[u64; 256], step: usize) -> [u8; 256] {
 }
 
 fn within_error(candidate: &Image, reference: &Image, max_rmse: f64) -> PyResult<bool> {
-    if (candidate.width, candidate.height) != (reference.width, reference.height) {
+    if (candidate.width(), candidate.height()) != (reference.width(), reference.height()) {
         return Ok(false);
     }
     let candidate_data = candidate.raw_data()?;
     let reference_data = reference.raw_data()?;
-    let count = candidate.width as usize * candidate.height as usize;
+    let count = candidate.width() as usize * candidate.height() as usize;
     let limit = max_rmse * max_rmse * count as f64 * 3.0;
-    if candidate.bit_depth == 8 && reference.bit_depth == 8 && candidate.mode == reference.mode {
-        return Ok(within_error_8bit(candidate_data, reference_data, candidate.mode.channels(), limit));
+    if candidate.bit_depth() == 8 && reference.bit_depth() == 8 && candidate.pixel_mode() == reference.pixel_mode() {
+        return Ok(within_error_8bit(candidate_data, reference_data, candidate.pixel_mode().channels(), limit));
     }
     let mut error = 0.0;
     for index in 0..count {
@@ -287,17 +287,17 @@ fn within_error_8bit(actual: &[u8], expected: &[u8], channels: usize, limit: f64
 }
 
 fn rgba_sample(image: &Image, data: &[u8], index: usize) -> [f64; 4] {
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     let sample = |channel| {
         let offset = index * channels + channel;
-        if image.bit_depth == 8 {
+        if image.bit_depth() == 8 {
             f64::from(data[offset])
         } else {
             let offset = offset * 2;
-            f64::from(u16::from_le_bytes([data[offset], data[offset + 1]])) * 255.0 / f64::from((1_u32 << image.bit_depth) - 1)
+            f64::from(u16::from_le_bytes([data[offset], data[offset + 1]])) * 255.0 / f64::from((1_u32 << image.bit_depth()) - 1)
         }
     };
-    match image.mode {
+    match image.pixel_mode() {
         PixelMode::One | PixelMode::L => [sample(0), sample(0), sample(0), 255.0],
         PixelMode::La | PixelMode::Pa => [sample(0), sample(0), sample(0), sample(1)],
         PixelMode::Rgb => [sample(0), sample(1), sample(2), 255.0],

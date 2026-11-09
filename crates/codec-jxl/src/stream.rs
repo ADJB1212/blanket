@@ -274,8 +274,8 @@ mod tests {
                 for decoder in [first, second] {
                     assert!(decoder.complete);
                     let actual = decoder.image().unwrap().unwrap();
-                    assert_eq!(actual.mode, mode);
-                    assert_eq!(actual.bit_depth, depth);
+                    assert_eq!(actual.pixel_mode(), mode);
+                    assert_eq!(actual.bit_depth(), depth);
                     assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
                 }
             }

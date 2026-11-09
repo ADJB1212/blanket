@@ -10,9 +10,9 @@ use pyo3::prelude::*;
 pub(crate) fn lut(image: &Image, mode: &str, channels: usize, size: (usize, usize, usize), table: &[f32]) -> PyResult<Image> {
     let target = PixelMode::parse(mode)?;
     let dimensions = <[usize; 3]>::from(size);
-    let input_channels = image.mode.channels();
+    let input_channels = image.pixel_mode().channels();
     let output_channels = target.channels();
-    if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba)
+    if !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba)
         || !matches!(target, PixelMode::Rgb | PixelMode::Rgba)
         || !(3..=4).contains(&channels)
         || output_channels < channels
@@ -93,5 +93,5 @@ pub(crate) fn lut(image: &Image, mode: &str, channels: usize, size: (usize, usiz
             *dst = (value * maximum).round().clamp(0.0, maximum) as u16;
         }
     }
-    Image::from_samples(image.width, image.height, target, values, image.bit_depth, None)
+    Image::from_samples(image.width(), image.height(), target, values, image.bit_depth(), None)
 }

@@ -471,9 +471,9 @@ impl JpegStreamDecoder {
             .as_ref()
             .map(|image| {
                 Image::from_pixels(
-                    image.width,
-                    image.height,
-                    image.mode,
+                    image.width(),
+                    image.height(),
+                    image.pixel_mode(),
                     image.pixel_data().map_err(|e| e.to_string())?.to_vec(),
                     Some("JPEG".into()),
                 )

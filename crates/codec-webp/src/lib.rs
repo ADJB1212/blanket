@@ -54,15 +54,15 @@ pub fn encode_webp_variant(image: &Image, options: SaveOptions, method: u8) -> P
 }
 
 fn encode_webp_config(image: &Image, pixels: &[u8], options: SaveOptions, config: webpx::EncoderConfig) -> PyResult<Vec<u8>> {
-    let argb = (image.mode == PixelMode::L).then(|| pixels.iter().map(|&v| 0xff00_0000 | (u32::from(v) * 0x0001_0101)).collect::<Vec<_>>());
-    let encoder = match image.mode {
-        PixelMode::L => webpx::Encoder::new_argb(argb.as_deref().expect("grayscale pixels expanded above"), image.width, image.height),
-        PixelMode::Rgb => webpx::Encoder::new_rgb(pixels, image.width, image.height),
-        PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width, image.height),
+    let argb = (image.pixel_mode() == PixelMode::L).then(|| pixels.iter().map(|&v| 0xff00_0000 | (u32::from(v) * 0x0001_0101)).collect::<Vec<_>>());
+    let encoder = match image.pixel_mode() {
+        PixelMode::L => webpx::Encoder::new_argb(argb.as_deref().expect("grayscale pixels expanded above"), image.width(), image.height()),
+        PixelMode::Rgb => webpx::Encoder::new_rgb(pixels, image.width(), image.height()),
+        PixelMode::Rgba => webpx::Encoder::new_rgba(pixels, image.width(), image.height()),
         _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
     };
     let encoder = encoder.config(config).lossless(options.lossless).quality(if options.lossless { 75.0 } else { f32::from(options.quality) });
-    if image.mode != PixelMode::L {
+    if image.pixel_mode() != PixelMode::L {
         return encoder.encode(webpx::Unstoppable).map_err(codec_error);
     }
     let encoded = encoder.encode_owned(webpx::Unstoppable).map_err(codec_error)?;
@@ -148,7 +148,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
 pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
     let first = sequence.frames[0].image.borrow();
     let mut encoder =
-        webpx::AnimationEncoder::with_options(first.width, first.height, false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
+        webpx::AnimationEncoder::with_options(first.width(), first.height(), false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
     encoder.set_quality(f32::from(options.quality));
     encoder.set_lossless(options.lossless);
     let mut timestamp: i32 = 0;

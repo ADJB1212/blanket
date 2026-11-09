@@ -120,24 +120,24 @@ pub(super) fn encode(image: &Image, pixels: &[u8], level: u8) -> PyResult<Vec<u8
 }
 
 pub(super) fn encode_to(image: &Image, pixels: &[u8], level: u8, output: impl Write) -> PyResult<()> {
-    if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+    if !matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
         return Err(codec_error("unsupported PNG mode"));
     }
-    let channels = image.mode.channels();
-    let stride = (image.width as usize).checked_mul(channels).ok_or_else(|| codec_error("PNG row size overflow"))?;
-    let length = stride.checked_mul(image.height as usize).ok_or_else(|| codec_error("PNG buffer size overflow"))?;
+    let channels = image.pixel_mode().channels();
+    let stride = (image.width() as usize).checked_mul(channels).ok_or_else(|| codec_error("PNG row size overflow"))?;
+    let length = stride.checked_mul(image.height() as usize).ok_or_else(|| codec_error("PNG buffer size overflow"))?;
     if pixels.len() != length {
         return Err(codec_error("invalid PNG input buffer"));
     }
-    if stride == 0 || image.height == 0 {
+    if stride == 0 || image.height() == 0 {
         return Err(codec_error("cannot encode empty PNG"));
     }
     let row_bytes = stride + 1;
-    let rows = (4 * 1024 * 1024 / row_bytes).max(1).min(image.height as usize);
+    let rows = (4 * 1024 * 1024 / row_bytes).max(1).min(image.height() as usize);
     let mut filtered = vec![0; row_bytes * rows];
     let zero = vec![0; stride];
-    let mut encoder = png::Encoder::new(output, image.width, image.height);
-    encoder.set_color(match image.mode {
+    let mut encoder = png::Encoder::new(output, image.width(), image.height());
+    encoder.set_color(match image.pixel_mode() {
         PixelMode::One | PixelMode::L => png::ColorType::Grayscale,
         PixelMode::La => png::ColorType::GrayscaleAlpha,
         PixelMode::Rgb => png::ColorType::Rgb,
@@ -149,8 +149,8 @@ pub(super) fn encode_to(image: &Image, pixels: &[u8], level: u8, output: impl Wr
     let mut writer = encoder.write_header().map_err(codec_error)?;
     let sink = BufWriter::with_capacity((1024 * 1024).min(pixels.len().saturating_add(1024)), IdatWriter(&mut writer));
     let mut compressor = flate2::write::ZlibEncoder::new(sink, flate2::Compression::new(u32::from(level)));
-    for start in (0..image.height as usize).step_by(rows) {
-        let count = rows.min(image.height as usize - start);
+    for start in (0..image.height() as usize).step_by(rows) {
+        let count = rows.min(image.height() as usize - start);
         let batch = &mut filtered[..row_bytes * count];
         chunks_mut_above(batch, row_bytes * 16, 256 * 1024, |chunk, output| {
             for (row, dst) in output.chunks_exact_mut(row_bytes).enumerate() {

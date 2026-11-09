@@ -27,30 +27,30 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[pyfunction]
 #[pyo3(signature = (image, alpha=None, table=None))]
 fn palette_to_pa(py: Python<'_>, image: &Image, alpha: Option<&Image>, table: Option<Vec<u8>>) -> PyResult<Image> {
-    if image.mode != PixelMode::L || image.bit_depth != 8 {
+    if image.pixel_mode() != PixelMode::L || image.bit_depth() != 8 {
         return Err(PyValueError::new_err("indexed image required"));
     }
     let indices = image.pixel_data()?;
     let alpha = alpha
         .map(|alpha| {
-            if !matches!(alpha.mode, PixelMode::La | PixelMode::Rgba) || alpha.bit_depth != 8 || alpha.size() != image.size() {
+            if !matches!(alpha.pixel_mode(), PixelMode::La | PixelMode::Rgba) || alpha.bit_depth() != 8 || alpha.size() != image.size() {
                 return Err(PyValueError::new_err("alpha image has wrong mode or size"));
             }
-            Ok((alpha.pixel_data()?, alpha.mode.channels()))
+            Ok((alpha.pixel_data()?, alpha.pixel_mode().channels()))
         })
         .transpose()?;
     let table: [u8; 256] = if let Some(table) = table {
         table.try_into().map_err(|_| PyValueError::new_err("translation table must be 256 characters long"))?
     } else {
-        std::array::from_fn(|index| match &image.palette {
+        std::array::from_fn(|index| match &image.palette() {
             Some((PixelMode::Rgba, entries)) => entries.get(index * 4 + 3).copied().unwrap_or(255),
             _ => 255,
         })
     };
     py.detach(|| {
         let pixels = pa_pixels(indices, alpha, &table, image.size())?;
-        let mut result = Image::from_pixels(image.width, image.height, PixelMode::Pa, pixels, None)?;
-        result.palette.clone_from(&image.palette);
+        let mut result = Image::from_pixels(image.width(), image.height(), PixelMode::Pa, pixels, None)?;
+        result.copy_palette_from(image);
         Ok(result)
     })
 }

@@ -9,7 +9,7 @@ fn decoded_raster_matches_inspection_and_straight_alpha() {
     let header = inspect(SVG).unwrap();
     assert_eq!((header.width, header.height, header.mode, header.bit_depth), (2, 1, "RGBA", 8));
     let image = decode(SVG).unwrap();
-    assert_eq!((image.width, image.height, image.mode, image.bit_depth), (2, 1, PixelMode::Rgba, 8));
+    assert_eq!((image.width(), image.height(), image.pixel_mode(), image.bit_depth()), (2, 1, PixelMode::Rgba, 8));
     assert_eq!(image.format.as_deref(), Some("SVG"));
     assert_eq!(image.pixel_data().unwrap(), &[128, 64, 32, 128, 0, 0, 0, 0]);
 }
@@ -43,7 +43,7 @@ fn detection_is_bounded_and_namespace_aware() {
 
 #[test]
 fn render_options_are_checked_before_allocation() {
-    assert_eq!(decode_options(SVG, RenderOptions { size: Some((20, 10)), ..Default::default() }).unwrap().width, 20);
+    assert_eq!(decode_options(SVG, RenderOptions { size: Some((20, 10)), ..Default::default() }).unwrap().width(), 20);
     for size in [(0, 1), (4097, 1), (4096, 4096)] {
         assert!(decode_options(SVG, RenderOptions { size: Some(size), ..Default::default() }).is_err());
     }

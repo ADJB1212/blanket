@@ -47,12 +47,12 @@ pub(crate) fn _encode(
         && compressor.is_none()
         && target_size.is_none()
         && !attach_metadata
-        && image.bit_depth == 8
-        && image.palette.is_none()
-        && matches!(image.mode, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
-        && image.width > 0
-        && image.height > 0
-        && u64::from(image.width) * u64::from(image.height) * image.mode.channels() as u64 >= 256 * 1024
+        && image.bit_depth() == 8
+        && image.palette().is_none()
+        && matches!(image.pixel_mode(), PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+        && image.width() > 0
+        && image.height() > 0
+        && u64::from(image.width()) * u64::from(image.height()) * image.pixel_mode().channels() as u64 >= 256 * 1024
     {
         let pixels = image.pixel_data()?;
         let path = output_path(py, output)?;
@@ -116,12 +116,12 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
         return Err(PyValueError::new_err("compression optimization requires a complete JPEG stream"));
     }
     let compress_level = options.compress_level;
-    if image.mode == PixelMode::One && format == ImageFormat::Png {
+    if image.pixel_mode() == PixelMode::One && format == ImageFormat::Png {
         return py.detach(|| codecs::encode_one_png(image, compress_level));
     }
-    if matches!(image.mode, PixelMode::One | PixelMode::La | PixelMode::Pa)
+    if matches!(image.pixel_mode(), PixelMode::One | PixelMode::La | PixelMode::Pa)
         && !matches!(
-            (image.mode, format),
+            (image.pixel_mode(), format),
             (
                 PixelMode::One,
                 ImageFormat::Ppm
@@ -134,9 +134,9 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
             ) | (PixelMode::La, ImageFormat::Pam | ImageFormat::Tga | ImageFormat::Jpeg2000)
         )
     {
-        let target = if image.mode == PixelMode::One {
+        let target = if image.pixel_mode() == PixelMode::One {
             "L"
-        } else if format == ImageFormat::Png && image.mode == PixelMode::La && compressor.is_none() {
+        } else if format == ImageFormat::Png && image.pixel_mode() == PixelMode::La && compressor.is_none() {
             "LA"
         } else {
             "RGBA"
@@ -149,11 +149,11 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
             });
         }
     }
-    if let Some((palette_mode, _)) = image.palette {
+    if let Some((palette_mode, _)) = image.palette() {
         if format == ImageFormat::Gif && compressor.is_none() {
             return py.detach(|| codecs::encode(image, format, options));
         }
-        if matches!(format, ImageFormat::Pcx | ImageFormat::Palm) && palette_mode == PixelMode::Rgb {
+        if matches!(format, ImageFormat::Pcx | ImageFormat::Palm) && *palette_mode == PixelMode::Rgb {
             return py.detach(|| codecs::encode(image, format, options));
         }
         if format == ImageFormat::Png {

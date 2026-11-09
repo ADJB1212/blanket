@@ -330,26 +330,26 @@ pub fn _encode_sequence(
     }
     let mut total = 0;
     let first = &images[0];
-    let canvas = regions.as_ref().map_or((first.width, first.height), |(size, _)| *size);
+    let canvas = regions.as_ref().map_or_else(|| first.size(), |(size, _)| *size);
     if regions.as_ref().is_some_and(|(_, offsets)| offsets.len() != images.len()) {
         return Err(PyValueError::new_err("invalid animation regions"));
     }
     for (i, image) in images.iter().enumerate() {
-        let (width, height) = if format == ImageFormat::Png { canvas } else { (image.width, image.height) };
+        let (width, height) = if format == ImageFormat::Png { canvas } else { (image.width(), image.height()) };
         validate_frame_budget(&mut total, width, height)
             .map_err(|message| CodecErrorKind::ResourceLimit.into_pyerr(message, Some(format.as_str()), "encode"))?;
         image.raw_data()?;
-        if image.width == 0 || image.height == 0 {
+        if image.width() == 0 || image.height() == 0 {
             return Err(PyValueError::new_err("cannot encode empty image"));
         }
         let valid_mode = if format == ImageFormat::Png {
-            matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+            matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
         } else if format == ImageFormat::Pdf {
-            matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::Cmyk)
+            matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::Cmyk)
         } else {
-            image.mode == PixelMode::Rgba
+            image.pixel_mode() == PixelMode::Rgba
         };
-        if !valid_mode || (format != ImageFormat::Png && image.bit_depth != 8) {
+        if !valid_mode || (format != ImageFormat::Png && image.bit_depth() != 8) {
             return Err(CodecErrorKind::Unsupported.into_pyerr(
                 "unsupported multi-frame mode or sample depth".into(),
                 Some(format.as_str()),
@@ -358,14 +358,14 @@ pub fn _encode_sequence(
         }
         let offset = regions.as_ref().map_or((0, 0), |(_, offsets)| offsets[i]);
         if format == ImageFormat::Png
-            && (offset.0.checked_add(image.width).is_none_or(|right| right > canvas.0)
-                || offset.1.checked_add(image.height).is_none_or(|bottom| bottom > canvas.1)
-                || image.bit_depth != first.bit_depth)
+            && (offset.0.checked_add(image.width()).is_none_or(|right| right > canvas.0)
+                || offset.1.checked_add(image.height()).is_none_or(|bottom| bottom > canvas.1)
+                || image.bit_depth() != first.bit_depth())
         {
             return Err(PyValueError::new_err("animation frames must fit the canvas and have matching sample depths"));
         }
         if !matches!(format, ImageFormat::Pdf | ImageFormat::Png)
-            && (image.width != first.width || image.height != first.height || image.bit_depth != first.bit_depth)
+            && (image.width() != first.width() || image.height() != first.height() || image.bit_depth() != first.bit_depth())
         {
             return Err(PyValueError::new_err("animation frames must have matching dimensions and sample depths"));
         }
@@ -407,11 +407,11 @@ pub fn _encode_sequence(
             ImageFormat::Png => {
                 if sequence.frames.len() == 1 && !default_image {
                     let image = sequence.frames[0].image;
-                    if image.bit_depth > 8 {
+                    if image.bit_depth() > 8 {
                         blanket_codec_png::encode_wide_png(image, image.raw_data()?, options)
-                    } else if image.palette.is_some() {
+                    } else if image.palette().is_some() {
                         blanket_codec_png::encode_palette_png(image, options.compress_level)
-                    } else if image.mode == PixelMode::One {
+                    } else if image.pixel_mode() == PixelMode::One {
                         blanket_codec_png::encode_one_png(image, options.compress_level)
                     } else {
                         blanket_codec_png::encode_png(image, image.pixel_data()?, options.compress_level)
@@ -485,22 +485,22 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
     if format == ImageFormat::Tiff && options.tiff_compression != 0 {
         return blanket_codec_tiff::encode_compressed_tiff(image, options);
     }
-    if image.mode == PixelMode::Lab {
+    if image.pixel_mode() == PixelMode::Lab {
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode LAB as {}", format.as_str())));
         }
         return encode_lab_tiff(image);
     }
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr) {
-        match (image.mode, format) {
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr) {
+        match (image.pixel_mode(), format) {
             (_, ImageFormat::Jpeg) => return encode_jpeg_options(image, image.pixel_data()?, options),
             (PixelMode::Cmyk, ImageFormat::Tiff) => return encode_raw_tiff(image, image.pixel_data()?),
             (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?),
             _ => {}
         }
-        return Err(PyOSError::new_err(format!("cannot write mode {} as {}", image.mode.as_str(), format.as_str())));
+        return Err(PyOSError::new_err(format!("cannot write mode {} as {}", image.pixel_mode().as_str(), format.as_str())));
     }
-    if image.mode.is_float() {
+    if image.pixel_mode().is_float() {
         if format != ImageFormat::Tiff {
             return Err(PyOSError::new_err(format!("cannot write mode F as {}", format.as_str())));
         }
@@ -512,7 +512,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
     if format == ImageFormat::Jpeg2000 {
         return encode_jpeg2000(image);
     }
-    if image.bit_depth > 8 {
+    if image.bit_depth() > 8 {
         if matches!(format, ImageFormat::Ppm | ImageFormat::Pam) {
             return encode_wide_pnm(image, format == ImageFormat::Pam);
         }

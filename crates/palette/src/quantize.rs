@@ -159,16 +159,16 @@ fn map_colors<const C: usize>(source: &[u8], lookup: &FxHashMap<u32, u8>, indice
 }
 
 fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -> PyResult<Image> {
-    let (mode, data) = reference.palette.as_ref().ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
+    let (mode, data) = reference.palette().as_ref().ok_or_else(|| PyValueError::new_err("bad mode for palette image"))?;
     let mut entries: Vec<Color> = data.chunks_exact(mode.channels()).map(|v| [v[0], v[1], v[2], 255]).collect();
     if entries.is_empty() {
         entries.push([0, 0, 0, 255]);
     }
     let search = PaletteSearch::new(&entries);
-    let mut indices = vec![0; image.width as usize * image.height as usize];
-    if image.mode == PixelMode::L {
+    let mut indices = vec![0; image.width() as usize * image.height() as usize];
+    if image.pixel_mode() == PixelMode::L {
         indices.copy_from_slice(source);
-    } else if image.mode != PixelMode::Rgb {
+    } else if image.pixel_mode() != PixelMode::Rgb {
         return Err(PyValueError::new_err("only RGB or L mode images can be quantized to a palette"));
     } else if dither == 0 {
         // Each worker owns its cache and output. No atomics or per-pixel locks.
@@ -188,7 +188,7 @@ fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -
     } else if !indices.is_empty() {
         // Error diffusion is ordered across rows; parallelizing it changes the
         // result. Cache and SIMD accelerate palette searches within that order.
-        let width = image.width as usize;
+        let width = image.width() as usize;
         let mut cache = vec![256u16; 64 * 64 * 64];
         // Like Pillow, keep one error row: entry x + 1 still holds the previous
         // row's contribution to this pixel while entry x receives the next
@@ -215,8 +215,8 @@ fn fixed_palette(image: &Image, source: &[u8], reference: &Image, dither: i32) -
             errors[width] = [below[2], below_right[2], below_right[2]];
         }
     }
-    let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
-    result.palette.clone_from(&reference.palette);
+    let mut result = Image::from_pixels(image.width(), image.height(), PixelMode::L, indices, None)?;
+    result.copy_palette_from(reference);
     Ok(result)
 }
 
@@ -732,7 +732,7 @@ fn exact<const C: usize>(source: &[u8], colors: usize, method: u8, kmeans: u64) 
 #[pyfunction]
 #[pyo3(signature = (image, colors, method, kmeans, palette=None, dither=3))]
 fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u64, palette: Option<&Image>, dither: i32) -> PyResult<Image> {
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab) {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
     let source = image.pixel_data()?;
@@ -745,7 +745,7 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
     if method == 3 && palette.is_none() {
         return Err(PyRuntimeError::new_err("dependency required by this method was not enabled at compile time"));
     }
-    if image.mode == PixelMode::Rgba && method < 2 {
+    if image.pixel_mode() == PixelMode::Rgba && method < 2 {
         return Err(PyValueError::new_err("only FASTOCTREE and LIBIMAGEQUANT support RGBA"));
     }
     if let Some(palette) = palette {
@@ -755,26 +755,26 @@ fn quantize(py: Python<'_>, image: &Image, colors: usize, method: u8, kmeans: u6
         if let Some(reference) = palette {
             return fixed_palette(image, source, reference, dither);
         }
-        let palette_mode = if image.mode == PixelMode::Rgba { PixelMode::Rgba } else { PixelMode::Rgb };
+        let palette_mode = if image.pixel_mode() == PixelMode::Rgba { PixelMode::Rgba } else { PixelMode::Rgb };
         let (entries, indices) = if source.is_empty() {
             (Vec::new(), Vec::new())
         } else if method == 2 {
-            match image.mode {
+            match image.pixel_mode() {
                 PixelMode::L => octree::<1>(source, colors, false),
                 PixelMode::Rgb => octree::<3>(source, colors, false),
                 PixelMode::Rgba => octree::<4>(source, colors, true),
                 _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         } else {
-            match image.mode {
+            match image.pixel_mode() {
                 PixelMode::L => exact::<1>(source, colors, method, kmeans),
                 PixelMode::Rgb => exact::<3>(source, colors, method, kmeans),
                 PixelMode::Rgba => exact::<4>(source, colors, method, kmeans),
                 _ => return Err(PyValueError::new_err("unsupported mode for quantization")),
             }
         };
-        let mut result = Image::from_pixels(image.width, image.height, PixelMode::L, indices, None)?;
-        result.palette = Some((palette_mode, entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect()));
+        let mut result = Image::from_pixels(image.width(), image.height(), PixelMode::L, indices, None)?;
+        result.set_palette_data(Some((palette_mode, entries.iter().flat_map(|v| v[..palette_mode.channels()].iter().copied()).collect())))?;
         Ok(result)
     })
 }

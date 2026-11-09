@@ -39,7 +39,7 @@ pub fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
-    if pages.is_empty() || pages.iter().any(|(image, _)| image.width == 0 || image.height == 0) {
+    if pages.is_empty() || pages.iter().any(|(image, _)| image.width() == 0 || image.height() == 0) {
         return Err(PyValueError::new_err("cannot encode empty PDF image"));
     }
     let mut output = Vec::new();
@@ -71,12 +71,12 @@ pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
     for (image, _) in pages {
         use std::fmt::Write;
         write!(kids, "{page_id} 0 R ").unwrap();
-        page_id += if image.mode == PixelMode::Rgba { 4 } else { 3 };
+        page_id += if image.pixel_mode() == PixelMode::Rgba { 4 } else { 3 };
     }
     object(&format!("/Type /Pages /Kids [{kids}] /Count {}", pages.len()), None);
     page_id = 3;
     for &(image, pixels) in pages {
-        let (width, height) = (image.width, image.height);
+        let (width, height) = (image.width(), image.height());
         let content_id = page_id + 1;
         let image_id = page_id + 2;
         let mask_id = page_id + 3;
@@ -88,12 +88,12 @@ pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
         );
         let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
         object("", Some(Stream::Bytes(content.as_bytes())));
-        let color = match image.mode {
+        let color = match image.pixel_mode() {
             PixelMode::L => "DeviceGray",
             PixelMode::Cmyk => "DeviceCMYK",
             _ => "DeviceRGB",
         };
-        let (samples, mask) = if image.mode == PixelMode::Rgba {
+        let (samples, mask) = if image.pixel_mode() == PixelMode::Rgba {
             (Stream::Rgb(pixels.as_chunks::<4>().0), format!(" /SMask {mask_id} 0 R"))
         } else {
             (Stream::Bytes(pixels), String::new())
@@ -102,13 +102,13 @@ pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
             &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /{color} /BitsPerComponent 8{mask}"),
             Some(samples),
         );
-        if image.mode == PixelMode::Rgba {
+        if image.pixel_mode() == PixelMode::Rgba {
             object(
                 &format!("/Type /XObject /Subtype /Image /Width {width} /Height {height} /ColorSpace /DeviceGray /BitsPerComponent 8"),
                 Some(Stream::Alpha(pixels.as_chunks::<4>().0)),
             );
         }
-        page_id += if image.mode == PixelMode::Rgba { 4 } else { 3 };
+        page_id += if image.pixel_mode() == PixelMode::Rgba { 4 } else { 3 };
     }
     let xref = output.len();
     let size = offsets.len() + 1;

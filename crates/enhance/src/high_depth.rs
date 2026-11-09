@@ -11,12 +11,12 @@ use pyo3::prelude::*;
 
 pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyResult<Image> {
     let source = samples::view(image)?;
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     let luma = |pixel: &[u16]| -> u16 { if channels == 1 { pixel[0] } else { sample_luminance(pixel[0], pixel[1], pixel[2]) } };
     if operation == "sharpness" {
         return py.detach(|| {
             samples::with_output(image, Some(&source), |values| {
-                smooth(&source, values, image.width as usize, image.height as usize, channels);
+                smooth(&source, values, image.width() as usize, image.height() as usize, channels);
             })
         });
     }
@@ -46,7 +46,7 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
             let start = chunk * chunk_size / 2;
             let source = &source[start..start + dst.len() / 2];
             match channels {
-                1 => degenerate_bytes::<1>(source, dst, operation, mean, image.mode.is_big_endian()),
+                1 => degenerate_bytes::<1>(source, dst, operation, mean, image.pixel_mode().is_big_endian()),
                 3 => degenerate_bytes::<3>(source, dst, operation, mean, false),
                 4 => degenerate_bytes::<4>(source, dst, operation, mean, false),
                 _ => unreachable!(),
@@ -69,7 +69,7 @@ pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) 
     let b = samples::view(second)?;
     let maximum = samples::maximum(first);
     let mut pixels = blanket_core::raster::alloc_pixels(a.len() * 2)?;
-    py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.mode.is_big_endian()));
+    py.detach(|| blend_samples(&a, &b, &mut pixels, factor, maximum, first.pixel_mode().is_big_endian()));
     samples::output_bytes(first, pixels)
 }
 

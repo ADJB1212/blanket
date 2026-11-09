@@ -211,7 +211,7 @@ enum JxlSamples<'a> {
 }
 
 fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOptions, threads: JxlThreads) -> PyResult<Vec<u8>> {
-    if !matches!(image.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+    if !matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("unsupported mode for JPEG XL"));
     }
     jxl_encoder_speed(options.effort)?;
@@ -230,7 +230,7 @@ fn with_jxl_runner<T>(threads: JxlThreads, image: &Image, encode: impl FnOnce(Op
             encode(Some(&cached.as_ref().expect("pool cached above").1))
         }),
         JxlThreads::Pool => {
-            let (width, height) = (u64::from(image.width), u64::from(image.height));
+            let (width, height) = (u64::from(image.width()), u64::from(image.height()));
             // Single 256x256 group cannot parallelize across groups in libjxl.
             if width <= 256 && height <= 256 {
                 return encode(None);
@@ -268,15 +268,15 @@ fn encode_native(
     unsafe { JxlEncoderInitBasicInfo(info.as_mut_ptr()) };
     // SAFETY: initialized above.
     let mut info = unsafe { info.assume_init() };
-    info.xsize = image.width;
-    info.ysize = image.height;
+    info.xsize = image.width();
+    info.ysize = image.height();
     info.bits_per_sample = match pixels {
         JxlSamples::Byte(_) => 8,
         JxlSamples::Wide(_) => 16,
     };
-    info.num_color_channels = if image.mode == PixelMode::L { 1 } else { 3 };
+    info.num_color_channels = if image.pixel_mode() == PixelMode::L { 1 } else { 3 };
     info.uses_original_profile = (options.lossless || options.quality == 100 || !options.icc_profile.is_empty()).into();
-    if image.mode == PixelMode::Rgba {
+    if image.pixel_mode() == PixelMode::Rgba {
         info.num_extra_channels = 1;
         info.alpha_bits = info.bits_per_sample;
     }
@@ -284,7 +284,7 @@ fn encode_native(
         JxlSamples::Byte(raw) => (raw.as_ptr().cast(), raw.len(), JxlDataType::Uint8),
         JxlSamples::Wide(raw) => (raw.as_ptr().cast(), std::mem::size_of_val(raw), JxlDataType::Uint16),
     };
-    let format = JxlPixelFormat { num_channels: image.mode.channels() as u32, data_type, endianness: JxlEndianness::Native, align: 0 };
+    let format = JxlPixelFormat { num_channels: image.pixel_mode().channels() as u32, data_type, endianness: JxlEndianness::Native, align: 0 };
     // SAFETY: the encoder and all input buffers stay alive through processing.
     unsafe {
         if let Some(runner) = runner {
@@ -293,7 +293,7 @@ fn encode_native(
         check(JxlEncoderSetBasicInfo(encoder.0, &raw const info))?;
         if options.icc_profile.is_empty() {
             let mut color = std::mem::MaybeUninit::uninit();
-            JxlColorEncodingSetToSRGB(color.as_mut_ptr(), (image.mode == PixelMode::L).into());
+            JxlColorEncodingSetToSRGB(color.as_mut_ptr(), (image.pixel_mode() == PixelMode::L).into());
             check(JxlEncoderSetColorEncoding(encoder.0, color.as_ptr()))?;
         } else {
             check(JxlEncoderSetICCProfile(encoder.0, options.icc_profile.as_ptr(), options.icc_profile.len()))?;
@@ -306,14 +306,14 @@ fn encode_native(
         check(JxlEncoderSetFrameLossless(settings, options.lossless.into()))?;
         check(JxlEncoderSetFrameDistance(settings, JxlEncoderDistanceFromQuality(options.quality.into())))?;
         check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::DecodingSpeed, 0))?;
-        if image.width > 2048 || image.height > 2048 {
-            let expected = image.width as usize * image.height as usize * image.mode.channels() * (info.bits_per_sample as usize / 8);
+        if image.width() > 2048 || image.height() > 2048 {
+            let expected = image.width() as usize * image.height() as usize * image.pixel_mode().channels() * (info.bits_per_sample as usize / 8);
             if length != expected {
                 return Err(codec_error("invalid JPEG XL input buffer"));
             }
             check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::Buffering, 1))?;
             check(JxlEncoderFrameSettingsSetOption(settings, JxlEncoderFrameSettingId::OutputMode, 0))?;
-            return chunked::encode(encoder, settings, raw, length, format, image.width);
+            return chunked::encode(encoder, settings, raw, length, format, image.width());
         }
         check(JxlEncoderAddImageFrame(settings, &raw const format, raw, length))?;
         JxlEncoderCloseInput(encoder.0);
@@ -469,7 +469,7 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
 /// groups, so more threads than groups would only add synchronization.
 #[inline]
 pub fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
-    let groups = (image.width as usize).div_ceil(256) * (image.height as usize).div_ceil(256);
+    let groups = (image.width() as usize).div_ceil(256) * (image.height() as usize).div_ceil(256);
     (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
 }
 
@@ -500,7 +500,8 @@ impl<'a> PreparedJxl<'a> {
     pub fn new(image: &'a Image) -> PyResult<Self> {
         let raw = image.raw_data()?;
         let raw_len = raw.len();
-        let samples = if image.bit_depth > 8 { PreparedSamples::Wide(jxl_wide_samples(raw, image.bit_depth)) } else { PreparedSamples::Byte(raw) };
+        let samples =
+            if image.bit_depth() > 8 { PreparedSamples::Wide(jxl_wide_samples(raw, image.bit_depth())) } else { PreparedSamples::Byte(raw) };
         Ok(Self { image, samples, raw_len })
     }
 
@@ -632,7 +633,7 @@ mod tests {
                 let actual = decode_jxl(&encoded).unwrap();
                 assert_eq!(actual.size(), (17, 9));
                 assert_eq!(
-                    actual.mode,
+                    actual.pixel_mode(),
                     if alpha {
                         PixelMode::Rgba
                     } else if gray {
@@ -641,7 +642,7 @@ mod tests {
                         PixelMode::Rgb
                     }
                 );
-                assert_eq!(actual.bit_depth, if depth == 16 { 16 } else { 8 });
+                assert_eq!(actual.bit_depth(), if depth == 16 { 16 } else { 8 });
                 assert_eq!(actual.raw_data().unwrap(), expected, "{channels}/{depth}");
                 assert!(decode_jxl(&encoded[..encoded.len() / 2]).is_err());
                 assert_eq!(decode_jxl(&encoded).unwrap().raw_data().unwrap(), expected);

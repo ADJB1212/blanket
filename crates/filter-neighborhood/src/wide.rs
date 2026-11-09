@@ -11,20 +11,25 @@ use pyo3::prelude::*;
 pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weights: &[f32]) -> PyResult<Image> {
     let bytes = image.raw_data()?;
     let source = integer_view(bytes);
-    let (width, height) = (image.width as usize, image.height as usize);
+    let (width, height) = (image.width() as usize, image.height() as usize);
     if cfg!(target_endian = "little") {
         let mut pixels = blanket_core::buffers::copy(bytes)?;
         // All i32 bit patterns are valid; keep the allocation owned as bytes.
         let (prefix, values, suffix) = unsafe { pixels.align_to_mut::<i32>() };
         if prefix.is_empty() && suffix.is_empty() {
             convolve(&source, values, size, (width, height), scale, offset, weights);
-            return Image::from_integer_bytes(image.width, image.height, image.mode, pixels);
+            return Image::from_integer_bytes(image.width(), image.height(), image.pixel_mode(), pixels);
         }
     }
     let mut values = source.to_vec();
     convolve(&source, &mut values, size, (width, height), scale, offset, weights);
     drop(source);
-    Image::from_integer_bytes(image.width, image.height, image.mode, values.into_iter().map(i32::to_le_bytes).collect::<Vec<_>>().into_flattened())
+    Image::from_integer_bytes(
+        image.width(),
+        image.height(),
+        image.pixel_mode(),
+        values.into_iter().map(i32::to_le_bytes).collect::<Vec<_>>().into_flattened(),
+    )
 }
 
 fn integer_view(bytes: &[u8]) -> Cow<'_, [i32]> {
@@ -100,20 +105,20 @@ pub(crate) fn rank(image: &Image, size: usize, rank: usize) -> PyResult<Image> {
     if size == 1 {
         return blanket_core::buffers::output(image, image.size(), blanket_core::buffers::copy(bytes)?);
     }
-    let pixels = if image.mode == PixelMode::I {
+    let pixels = if image.pixel_mode() == PixelMode::I {
         let source = integer_view(bytes);
-        integer_rank(source, image.width as usize, image.height as usize, size, rank)?
+        integer_rank(source, image.width() as usize, image.height() as usize, size, rank)?
             .into_iter()
             .map(i32::to_le_bytes)
             .collect::<Vec<_>>()
             .into_flattened()
     } else {
         let source = float_view(bytes);
-        let values = rank_values(&source, image.width as usize, image.height as usize, size, rank)?;
+        let values = rank_values(&source, image.width() as usize, image.height() as usize, size, rank)?;
         drop(source);
         values.into_iter().map(f32::to_le_bytes).collect::<Vec<_>>().into_flattened()
     };
-    blanket_core::buffers::output(image, (image.width, image.height), pixels)
+    blanket_core::buffers::output(image, (image.width(), image.height()), pixels)
 }
 
 fn integer_rank(source: Cow<'_, [i32]>, width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<i32>> {

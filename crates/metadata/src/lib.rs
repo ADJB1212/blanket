@@ -19,7 +19,7 @@ pub fn _container_previews<'py>(py: Python<'py>, data: &[u8], format: &str) -> P
         if matches!(format, "HEIF" | "AVIF") {
             for image in blanket_codec_heif::previews(data).map_err(codec_error)? {
                 let pixels = image.raw_data()?;
-                let encoded = if image.bit_depth > 8 {
+                let encoded = if image.bit_depth() > 8 {
                     blanket_codec_png::encode_wide_png(&image, pixels, blanket_codec_common::SaveOptions::default())?
                 } else {
                     blanket_codec_png::encode_png(&image, pixels, 6)?
@@ -609,7 +609,7 @@ mod tests {
                     let actual = encode_metadata(input, format.as_str(), exif, xmp, &[], &[]).unwrap();
                     assert_eq!(actual, expected, "{format:?}, spare={spare}");
                     let decoded = decode(&actual, format).unwrap();
-                    assert_eq!(decoded.mode, original.mode);
+                    assert_eq!(decoded.pixel_mode(), original.pixel_mode());
                     assert_eq!(decoded.size(), original.size());
                     assert_eq!(decoded.raw_data().unwrap(), original.raw_data().unwrap());
                 }

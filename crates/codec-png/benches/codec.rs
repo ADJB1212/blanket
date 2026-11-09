@@ -16,7 +16,7 @@ fn codecs(c: &mut Criterion) {
                 image,
                 content,
                 |image| {
-                    if image.bit_depth > 8 {
+                    if image.bit_depth() > 8 {
                         encode_wide_png(image, image.raw_data().unwrap(), settings).unwrap()
                     } else {
                         encode_png(image, image.pixel_data().unwrap(), settings.compress_level).unwrap()

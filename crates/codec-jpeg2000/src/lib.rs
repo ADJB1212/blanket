@@ -264,21 +264,24 @@ pub fn decode_jpeg2000(data: &[u8]) -> Result<Image, String> {
 }
 
 pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
-    if image.width == 0
-        || image.height == 0
-        || !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+    if image.width() == 0
+        || image.height() == 0
+        || !matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
     {
         return Err(PyOSError::new_err("JPEG 2000 requires a nonempty grayscale or RGB image"));
     }
     let mut buffer = Buffer { writing: true, .. };
     let mut handles = Handles::new(CODEC_FORMAT::OPJ_CODEC_JP2, &mut buffer).map_err(codec_error)?;
-    let channels = image.mode.channels();
-    let depth = u32::from(image.bit_depth);
+    let channels = image.pixel_mode().channels();
+    let depth = u32::from(image.bit_depth());
     // SAFETY: OpenJPEG initializes all C structures, owns planar allocations, and
     // receives validated image dimensions. Handles frees resources on every exit.
     unsafe {
         let mut components =
-            vec![opj_image_cmptparm_t { dx: 1, dy: 1, w: image.width, h: image.height, x0: 0, y0: 0, prec: depth, bpp: depth, sgnd: 0 }; channels];
+            vec![
+                opj_image_cmptparm_t { dx: 1, dy: 1, w: image.width(), h: image.height(), x0: 0, y0: 0, prec: depth, bpp: depth, sgnd: 0 };
+                channels
+            ];
         handles.image = opj_image_create(
             channels as u32,
             components.as_mut_ptr(),
@@ -287,8 +290,8 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
         if handles.image.is_null() {
             return Err(PyOSError::new_err("could not allocate JPEG 2000 image"));
         }
-        (*handles.image).x1 = image.width;
-        (*handles.image).y1 = image.height;
+        (*handles.image).x1 = image.width();
+        (*handles.image).y1 = image.height();
         let planes = std::slice::from_raw_parts_mut((*handles.image).comps, channels);
         let pixels = image.raw_data()?;
         for (channel, plane) in planes.iter_mut().enumerate() {
@@ -296,7 +299,7 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
                 return Err(PyOSError::new_err("could not allocate JPEG 2000 samples"));
             }
             plane.alpha = u16::from(channel == channels - 1 && matches!(channels, 2 | 4));
-            let output = std::slice::from_raw_parts_mut(plane.data, image.width as usize * image.height as usize);
+            let output = std::slice::from_raw_parts_mut(plane.data, image.width() as usize * image.height() as usize);
             macro_rules! extract {
                 ($wide:literal) => {
                     match channels {
@@ -319,11 +322,11 @@ pub fn encode_jpeg2000(image: &Image) -> PyResult<Vec<u8>> {
         parameters.tcp_numlayers = 1;
         parameters.cp_disto_alloc = 1;
         parameters.tcp_rates[0] = 0.0;
-        parameters.numresolution = (image.width.min(image.height).ilog2() + 1).min(6) as i32;
+        parameters.numresolution = (image.width().min(image.height()).ilog2() + 1).min(6) as i32;
         if opj_setup_encoder(handles.codec, &raw mut parameters, handles.image) == 0 {
             return Err(PyOSError::new_err("could not configure JPEG 2000 encoder"));
         }
-        handles.configure_threads(u64::from(image.width) * u64::from(image.height) >= 256 * 1024);
+        handles.configure_threads(u64::from(image.width()) * u64::from(image.height()) >= 256 * 1024);
         if opj_start_compress(handles.codec, handles.image, handles.stream) == 0
             || opj_encode(handles.codec, handles.stream) == 0
             || opj_end_compress(handles.codec, handles.stream) == 0

@@ -9,8 +9,8 @@ mod high_depth;
 mod simd;
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
-    let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
-    result.palette.clone_from(&image.palette);
+    let mut result = Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)?;
+    result.copy_palette_from(image);
     Ok(result)
 }
 
@@ -182,8 +182,8 @@ fn blurred<const C: usize>(source: &[u8], width: usize, height: usize, radii: (f
 }
 
 fn blur(image: &Image, source: &[u8], radii: (f32, f32), gaussian: bool) -> PyResult<Vec<u8>> {
-    let (width, height) = (image.width as usize, image.height as usize);
-    match image.mode {
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    match image.pixel_mode() {
         PixelMode::One | PixelMode::L => blurred::<1>(source, width, height, radii, gaussian),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => blurred::<2>(source, width, height, radii, gaussian),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => blurred::<3>(source, width, height, radii, gaussian),

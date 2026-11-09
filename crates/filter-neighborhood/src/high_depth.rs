@@ -13,7 +13,7 @@ pub(crate) fn kernel(image: &Image, size: usize, scale: f32, offset: f32, weight
 }
 
 fn kernel_values(image: &Image, source: &[u16], values: &mut [u16], size: usize, scale: f32, offset: f32, weights: &[f32]) {
-    let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
+    let (width, height, channels) = (image.width() as usize, image.height() as usize, image.pixel_mode().channels());
     let radius = size / 2;
     if width >= size && height >= size {
         let mut normalized = [0.0; 25];
@@ -67,7 +67,7 @@ pub(crate) fn neighborhood(image: &Image, radius: usize, rank: Option<u64>) -> P
         return samples::output_bytes(image, blanket_core::buffers::copy(image.raw_data()?)?);
     }
     let source = samples::view(image)?;
-    let (width, height, channels) = (image.width as usize, image.height as usize, image.mode.channels());
+    let (width, height, channels) = (image.width() as usize, image.height() as usize, image.pixel_mode().channels());
     samples::with_output(image, rank.is_none().then_some(source.as_ref()), |values| {
         if radius > 2 && rank.is_some_and(|rank| rank == 0 || rank == (radius as u64 * 2 + 1).pow(2) - 1) {
             extrema(&source, values, width, height, channels, radius, rank != Some(0));

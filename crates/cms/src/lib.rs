@@ -138,11 +138,11 @@ impl CmsTransform {
     }
 
     fn apply(&self, py: Python<'_>, image: &Image) -> PyResult<Image> {
-        if image.mode != self.input {
+        if image.pixel_mode() != self.input {
             return Err(error("image mode does not match transform input mode"));
         }
         let source = image.pixel_data()?;
-        let mut pixels = alloc_pixels(image.width as usize * image.height as usize * self.output.channels())?;
+        let mut pixels = alloc_pixels(image.width() as usize * image.height() as usize * self.output.channels())?;
         py.detach(|| {
             self.transform.lock().map_err(|_| error("color transform lock poisoned"))?.0.transform_pixels(source, &mut pixels);
             if self.output == PixelMode::Rgba {
@@ -154,7 +154,7 @@ impl CmsTransform {
             }
             Ok::<_, PyErr>(())
         })?;
-        Image::from_pixels(image.width, image.height, self.output, pixels, None)
+        Image::from_pixels(image.width(), image.height(), self.output, pixels, None)
     }
 
     fn apply_in_place(&self, py: Python<'_>, image: &mut Image) -> PyResult<()> {
@@ -162,9 +162,7 @@ impl CmsTransform {
             return Err(error("in-place transforms require identical input and output modes"));
         }
         let result = self.apply(py, image)?;
-        image.pixels = result.pixels;
-        image.shared_pixels = None;
-        Ok(())
+        image.replace_storage(result)
     }
 }
 

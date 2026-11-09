@@ -32,11 +32,11 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[pyfunction]
 fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
-    if background.width != foreground.width
-        || background.height != foreground.height
-        || background.mode != foreground.mode
-        || background.bit_depth != foreground.bit_depth
-        || !matches!(background.mode, PixelMode::Rgba | PixelMode::RgbaF)
+    if background.width() != foreground.width()
+        || background.height() != foreground.height()
+        || background.pixel_mode() != foreground.pixel_mode()
+        || background.bit_depth() != foreground.bit_depth()
+        || !matches!(background.pixel_mode(), PixelMode::Rgba | PixelMode::RgbaF)
     {
         return Err(PyValueError::new_err("compositing requires matching RGBA images"));
     }
@@ -53,29 +53,29 @@ fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, s
 
 #[pyfunction]
 fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
-    if matches!(image.mode, PixelMode::RgbF | PixelMode::RgbaF) {
-        return (0..image.mode.channels()).map(|c| image.getchannel(py, c)).collect();
+    if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
+        return (0..image.pixel_mode().channels()).map(|c| image.getchannel(py, c)).collect();
     }
-    if image.mode.is_wide_scalar() {
+    if image.pixel_mode().is_wide_scalar() {
         return image.copy(py).map(|copy| vec![copy]);
     }
-    if image.bit_depth > 8 {
+    if image.bit_depth() > 8 {
         let source = image.raw_data()?;
         return py.detach(|| {
-            (0..image.mode.channels())
+            (0..image.pixel_mode().channels())
                 .map(|channel| {
-                    let pixels = blanket_core::simd::extract_sample_channel(source, image.mode.channels(), channel);
-                    Image::from_sample_bytes(image.width, image.height, PixelMode::L, pixels, image.bit_depth, None)
+                    let pixels = blanket_core::simd::extract_sample_channel(source, image.pixel_mode().channels(), channel);
+                    Image::from_sample_bytes(image.width(), image.height(), PixelMode::L, pixels, image.bit_depth(), None)
                 })
                 .collect()
         });
     }
     let source = image.pixel_data()?;
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     if channels == 1 {
-        return py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, source.to_vec(), None).map(|band| vec![band]));
+        return py.detach(|| Image::from_pixels(image.width(), image.height(), PixelMode::L, source.to_vec(), None).map(|band| vec![band]));
     }
-    let mut bands = (0..channels).map(|_| buffer((image.width, image.height), 1)).collect::<PyResult<Vec<_>>>()?;
+    let mut bands = (0..channels).map(|_| buffer((image.width(), image.height()), 1)).collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
         if let [luma, alpha] = bands.as_mut_slice() {
             let split = |offset: usize, luma: &mut [u8], alpha: &mut [u8]| {
@@ -124,12 +124,12 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
                 .for_each(|(i, ((r, g), b))| split(i * CHUNK_PIXELS, r, g, b, None));
         }
     });
-    bands.into_iter().map(|pixels| Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None)).collect()
+    bands.into_iter().map(|pixels| Image::from_pixels(image.width(), image.height(), PixelMode::L, pixels, None)).collect()
 }
 
 #[pyfunction(signature = (image, mask=None, extrema=None))]
 fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<f64> {
-    let bins = if image.bit_depth == 8 && !image.mode.is_wide_scalar() {
+    let bins = if image.bit_depth() == 8 && !image.pixel_mode().is_wide_scalar() {
         ops_histogram(py, image, mask)?
     } else {
         wide_histogram(py, image, mask, extrema)?
@@ -150,10 +150,10 @@ fn ops_entropy(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Opt
 
 fn validate_mask<'a>(mask: Option<&'a Image>, image: &Image) -> PyResult<Option<&'a [u8]>> {
     mask.map(|mask| {
-        if !matches!(mask.mode, PixelMode::One | PixelMode::L) || mask.bit_depth != 8 {
+        if !matches!(mask.pixel_mode(), PixelMode::One | PixelMode::L) || mask.bit_depth() != 8 {
             return Err(PyValueError::new_err("bad transparency mask"));
         }
-        if (mask.width, mask.height) != (image.width, image.height) {
+        if (mask.width(), mask.height()) != (image.width(), image.height()) {
             return Err(PyValueError::new_err("images do not match"));
         }
         mask.pixel_data()
@@ -165,13 +165,13 @@ fn validate_mask<'a>(mask: Option<&'a Image>, image: &Image) -> PyResult<Option<
 pub fn wide_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>, extrema: Option<(f64, f64)>) -> PyResult<Vec<u64>> {
     let raw = image.raw_data()?;
     let mask_data = validate_mask(mask, image)?;
-    py.detach(|| match image.mode {
-        PixelMode::I => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
+    py.detach(|| match image.pixel_mode() {
+        PixelMode::I => sample_histogram(raw, image.pixel_mode(), mask_data, extrema, |v| f64::from(i32::from_le_bytes(*v))),
         PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => {
-            sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v)))
+            sample_histogram(raw, image.pixel_mode(), mask_data, extrema, |v| f64::from(f32::from_le_bytes(*v)))
         }
-        mode if mode.is_big_endian() => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
-        _ => sample_histogram(raw, image.mode, mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
+        mode if mode.is_big_endian() => sample_histogram(raw, image.pixel_mode(), mask_data, extrema, |v| f64::from(u16::from_be_bytes(*v))),
+        _ => sample_histogram(raw, image.pixel_mode(), mask_data, extrema, |v| f64::from(u16::from_le_bytes(*v))),
     })
 }
 
@@ -229,29 +229,29 @@ fn sample_histogram<const N: usize>(
 fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
     let source = image.raw_data()?;
     let channels = image.raw_bytes_per_pixel();
-    let distance = distance.unsigned_abs().min(u64::from(image.width.max(image.height))) as i64;
-    if distance == 0 || image.width == 0 || image.height == 0 {
-        return output(image, (image.width, image.height), py.detach(|| source.to_vec()));
+    let distance = distance.unsigned_abs().min(u64::from(image.width().max(image.height()))) as i64;
+    if distance == 0 || image.width() == 0 || image.height() == 0 {
+        return output(image, (image.width(), image.height()), py.detach(|| source.to_vec()));
     }
     let mut state = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 | 1;
-    let mut pixels = reserved_buffer((image.width, image.height), channels)?;
+    let mut pixels = reserved_buffer((image.width(), image.height()), channels)?;
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..source.len()];
         match channels {
-            1 => spread_pixels::<1>(source, spare, image.width as usize, distance, &mut state),
-            2 => spread_pixels::<2>(source, spare, image.width as usize, distance, &mut state),
-            3 => spread_pixels::<3>(source, spare, image.width as usize, distance, &mut state),
-            4 => spread_pixels::<4>(source, spare, image.width as usize, distance, &mut state),
-            6 => spread_pixels::<6>(source, spare, image.width as usize, distance, &mut state),
-            8 => spread_pixels::<8>(source, spare, image.width as usize, distance, &mut state),
-            12 => spread_pixels::<12>(source, spare, image.width as usize, distance, &mut state),
-            16 => spread_pixels::<16>(source, spare, image.width as usize, distance, &mut state),
+            1 => spread_pixels::<1>(source, spare, image.width() as usize, distance, &mut state),
+            2 => spread_pixels::<2>(source, spare, image.width() as usize, distance, &mut state),
+            3 => spread_pixels::<3>(source, spare, image.width() as usize, distance, &mut state),
+            4 => spread_pixels::<4>(source, spare, image.width() as usize, distance, &mut state),
+            6 => spread_pixels::<6>(source, spare, image.width() as usize, distance, &mut state),
+            8 => spread_pixels::<8>(source, spare, image.width() as usize, distance, &mut state),
+            12 => spread_pixels::<12>(source, spare, image.width() as usize, distance, &mut state),
+            16 => spread_pixels::<16>(source, spare, image.width() as usize, distance, &mut state),
             _ => unreachable!("validated pixel layout"),
         }
     });
     // SAFETY: the spread kernel initializes every reserved pixel above.
     unsafe { pixels.set_len(source.len()) };
-    output(image, (image.width, image.height), pixels)
+    output(image, (image.width(), image.height()), pixels)
 }
 
 fn spread_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], width: usize, distance: i64, state: &mut u64) {
@@ -280,24 +280,24 @@ fn ops_remap_indices(py: Python<'_>, image: &Image, mapping: Vec<u8>) -> PyResul
 }
 
 fn remap_indices(image: &Image, mapping: &[u8]) -> PyResult<Image> {
-    if image.mode != PixelMode::L || mapping.len() != 256 {
+    if image.pixel_mode() != PixelMode::L || mapping.len() != 256 {
         return Err(PyValueError::new_err("invalid palette remapping"));
     }
     let source = image.pixel_data()?;
-    let mut pixels = buffer((image.width, image.height), 1)?;
+    let mut pixels = buffer((image.width(), image.height()), 1)?;
     apply_lut::<1>(source, &mut pixels, mapping);
-    Image::from_pixels(image.width, image.height, PixelMode::L, pixels, None)
+    Image::from_pixels(image.width(), image.height(), PixelMode::L, pixels, None)
 }
 
 #[pyfunction]
 fn ops_xbm_bits(image: &Image) -> PyResult<Vec<u8>> {
-    if image.mode != PixelMode::One {
+    if image.pixel_mode() != PixelMode::One {
         return Err(PyValueError::new_err("not a bitmap"));
     }
     let source = image.pixel_data()?;
-    let width = image.width as usize;
+    let width = image.width() as usize;
     let row_bytes = width.div_ceil(8);
-    let mut result = vec![0_u8; row_bytes * image.height as usize];
+    let mut result = vec![0_u8; row_bytes * image.height() as usize];
     for (y, row) in source.chunks(width.max(1)).enumerate() {
         for (x, &value) in row.iter().enumerate() {
             if value != 0 {
@@ -313,7 +313,8 @@ fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'p
     let data = py.detach(|| {
         let bits = ops_xbm_bits(image)?;
         let mut result =
-            format!("#define {name}_width {}\n#define {name}_height {}\nstatic char {name}_bits[] = {{\n", image.width, image.height).into_bytes();
+            format!("#define {name}_width {}\n#define {name}_height {}\nstatic char {name}_bits[] = {{\n", image.width(), image.height())
+                .into_bytes();
         result.reserve(bits.len() * 5 + 3);
         const HEX: &[u8; 16] = b"0123456789abcdef";
         for (i, value) in bits.into_iter().enumerate() {
@@ -333,7 +334,7 @@ fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'p
 #[pyfunction]
 fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     let source = image.pixel_data()?;
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     if lut.len() != 256 && lut.len() != 256 * channels {
         return Err(PyValueError::new_err("wrong number of lut entries"));
     }
@@ -341,7 +342,7 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
         let xor = lut[0];
         let mask = lut[255] ^ xor;
         if lut.iter().enumerate().all(|(value, &mapped)| mapped == (value as u8 & mask) ^ xor) {
-            let mut pixels = reserved_buffer((image.width, image.height), 1)?;
+            let mut pixels = reserved_buffer((image.width(), image.height()), 1)?;
             let len = source.len();
             const CHUNK: usize = 256 * 1024;
             py.detach(|| {
@@ -353,18 +354,18 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
             });
             // Every reserved byte was initialized by its disjoint partition.
             unsafe { pixels.set_len(len) };
-            return output(image, (image.width, image.height), pixels);
+            return output(image, (image.width(), image.height()), pixels);
         }
     }
-    let mut pixels = buffer((image.width, image.height), channels)?;
-    py.detach(|| match image.mode {
+    let mut pixels = buffer((image.width(), image.height()), channels)?;
+    py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => apply_lut::<1>(source, &mut pixels, &lut),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => apply_lut::<2>(source, &mut pixels, &lut),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => apply_lut::<3>(source, &mut pixels, &lut),
         PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => apply_lut::<4>(source, &mut pixels, &lut),
         _ => unreachable!(),
     });
-    output(image, (image.width, image.height), pixels)
+    output(image, (image.width(), image.height()), pixels)
 }
 
 fn apply_lut<const C: usize>(source: &[u8], output: &mut [u8], lut: &[u8]) {
@@ -375,8 +376,8 @@ fn apply_lut<const C: usize>(source: &[u8], output: &mut [u8], lut: &[u8]) {
 }
 
 fn check_tone_mode(image: &Image) -> PyResult<()> {
-    if !matches!(image.mode, PixelMode::L | PixelMode::Rgb) {
-        return Err(PyOSError::new_err(format!("not supported for mode {}", image.mode.as_str())));
+    if !matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb) {
+        return Err(PyOSError::new_err(format!("not supported for mode {}", image.pixel_mode().as_str())));
     }
     Ok(())
 }
@@ -407,7 +408,7 @@ fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult
 fn ops_autocontrast(
     py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>, preserve_tone: bool,
 ) -> PyResult<Image> {
-    let mut bins = if preserve_tone && histogram_image.mode == PixelMode::Rgb {
+    let mut bins = if preserve_tone && histogram_image.pixel_mode() == PixelMode::Rgb {
         let source = histogram_image.pixel_data()?;
         let mask = validate_mask(mask, histogram_image)?;
         py.detach(|| luminance_histogram(source, mask))
@@ -520,25 +521,25 @@ fn ops_colorize_stops(py: Python<'_>, image: &Image, stops: Vec<(usize, [u8; 3])
 
 #[pyfunction]
 fn ops_colorize(py: Python<'_>, image: &Image, tables: Vec<u8>) -> PyResult<Image> {
-    if image.mode != PixelMode::L || tables.len() != 768 {
+    if image.pixel_mode() != PixelMode::L || tables.len() != 768 {
         return Err(PyValueError::new_err("colorize requires L pixels and three 256-entry tables"));
     }
     let source = image.pixel_data()?;
-    let mut output = buffer((image.width, image.height), 3)?;
+    let mut output = buffer((image.width(), image.height()), 3)?;
     py.detach(|| {
         chunks_mut(&mut output, CHUNK_PIXELS * 3, |i, dst| {
             let start = i * CHUNK_PIXELS;
             crate::ops_simd::colorize(&source[start..start + dst.len() / 3], dst, &tables);
         })
     });
-    Image::from_pixels(image.width, image.height, PixelMode::Rgb, output, None)
+    Image::from_pixels(image.width(), image.height(), PixelMode::Rgb, output, None)
 }
 
 #[pyfunction(signature = (image, mask=None))]
 pub fn ops_histogram(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<Vec<u64>> {
     let source = image.pixel_data()?;
     let mask = validate_mask(mask, image)?;
-    Ok(py.detach(|| match image.mode {
+    Ok(py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => histogram::<1>(source, mask),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => histogram::<2>(source, mask),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => histogram::<3>(source, mask),
@@ -620,19 +621,19 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 #[pyfunction]
 fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64), fill: Vec<i64>) -> PyResult<Image> {
     let source = image.raw_data()?;
-    if fill.len() != image.mode.channels() * if image.mode.is_float() { 4 } else { 1 } {
+    if fill.len() != image.pixel_mode().channels() * if image.pixel_mode().is_float() { 4 } else { 1 } {
         return Err(PyValueError::new_err("invalid fill color"));
     }
-    let fill = if image.mode.is_integer() {
-        match image.mode {
+    let fill = if image.pixel_mode().is_integer() {
+        match image.pixel_mode() {
             PixelMode::I => (fill[0] as i32).to_le_bytes().to_vec(),
             mode if mode.is_big_endian() => (fill[0] as u16).to_be_bytes().to_vec(),
             _ => (fill[0] as u16).to_le_bytes().to_vec(),
         }
     } else {
         let fill = fill.into_iter().map(u8::try_from).collect::<Result<Vec<_>, _>>().map_err(|_| PyValueError::new_err("invalid fill color"))?;
-        if !image.mode.is_float() && image.bit_depth > 8 {
-            let maximum = (1_u32 << image.bit_depth) - 1;
+        if !image.pixel_mode().is_float() && image.bit_depth() > 8 {
+            let maximum = (1_u32 << image.bit_depth()) - 1;
             fill.into_iter().flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes()).collect()
         } else {
             fill
@@ -641,15 +642,15 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
     let channels = image.raw_bytes_per_pixel();
     if offset.0 <= 0
         && offset.1 <= 0
-        && offset.0.saturating_add(i64::from(image.width)) >= i64::from(size.0)
-        && offset.1.saturating_add(i64::from(image.height)) >= i64::from(size.1)
+        && offset.0.saturating_add(i64::from(image.width())) >= i64::from(size.0)
+        && offset.1.saturating_add(i64::from(image.height())) >= i64::from(size.1)
     {
         // An interior crop writes every byte directly into reserved storage.
         let mut pixels = reserved_buffer(size, channels)?;
         py.detach(|| {
             let row_bytes = size.0 as usize * channels;
             copy_rows(&mut pixels, row_bytes, size.1 as usize, |y| {
-                let start = (((y as i64 - offset.1) as usize * image.width as usize) + (-offset.0) as usize) * channels;
+                let start = (((y as i64 - offset.1) as usize * image.width() as usize) + (-offset.0) as usize) * channels;
                 &source[start..start + row_bytes]
             });
         });
@@ -658,9 +659,9 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
     let mut pixels = reserved_buffer(size, channels)?;
     py.detach(|| {
         let left = offset.0.max(0).min(i64::from(size.0));
-        let right = (offset.0.saturating_add(i64::from(image.width))).clamp(0, i64::from(size.0));
+        let right = (offset.0.saturating_add(i64::from(image.width()))).clamp(0, i64::from(size.0));
         let top = offset.1.max(0).min(i64::from(size.1));
-        let bottom = (offset.1.saturating_add(i64::from(image.height))).clamp(0, i64::from(size.1));
+        let bottom = (offset.1.saturating_add(i64::from(image.height()))).clamp(0, i64::from(size.1));
         let row_bytes = size.0 as usize * channels;
         let border = fill.repeat(size.0 as usize);
         // Append each byte once; a padded image is mostly source data and
@@ -670,7 +671,7 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
                 let lo = left as usize * channels;
                 let hi = right as usize * channels;
                 pixels.extend_from_slice(&border[..lo]);
-                let src = ((y - offset.1) as usize * image.width as usize + (left - offset.0) as usize) * channels;
+                let src = ((y - offset.1) as usize * image.width() as usize + (left - offset.0) as usize) * channels;
                 pixels.extend_from_slice(&source[src..src + hi - lo]);
                 pixels.extend_from_slice(&border[hi..]);
             } else {
@@ -754,7 +755,7 @@ mod tests {
         Python::attach(|py| {
             let image = Image::from_pixels(3, 2, PixelMode::L, vec![1, 2, 3, 4, 5, 6], None).unwrap();
             let rotated = ops_transpose(py, &image, 6).unwrap();
-            assert_eq!((rotated.width, rotated.height), (2, 3));
+            assert_eq!((rotated.width(), rotated.height()), (2, 3));
             assert_eq!(rotated.pixel_data().unwrap(), [4, 1, 5, 2, 6, 3]);
             let clipped = ops_canvas(py, &image, (3, 3), (-1, 1), vec![9]).unwrap();
             assert_eq!(clipped.pixel_data().unwrap(), [9, 9, 9, 2, 3, 9, 5, 6, 9]);
@@ -783,7 +784,7 @@ mod tests {
                         (value as u16).to_le_bytes().to_vec()
                     };
                     let result = ops_canvas(py, &image, (3, 1), (1, 0), vec![value]).unwrap();
-                    assert_eq!(result.mode, mode);
+                    assert_eq!(result.pixel_mode(), mode);
                     assert_eq!(result.raw_data().unwrap(), [expected.as_slice(), &source, &expected].concat());
                 }
                 assert_eq!(image.raw_data().unwrap(), source);
@@ -885,7 +886,7 @@ mod tests {
             let image = Image::from_pixels(3, 2, PixelMode::Rgb, (0..18).collect(), None).unwrap();
             assert_eq!(ops_spread(py, &image, 0).unwrap().pixel_data().unwrap(), image.pixel_data().unwrap());
             let spread = ops_spread(py, &image, 2).unwrap();
-            assert_eq!((spread.width, spread.height, spread.mode), (3, 2, PixelMode::Rgb));
+            assert_eq!((spread.width(), spread.height(), spread.pixel_mode()), (3, 2, PixelMode::Rgb));
             for pixel in spread.pixel_data().unwrap().as_chunks::<3>().0 {
                 assert!(image.pixel_data().unwrap().as_chunks::<3>().0.contains(pixel));
             }

@@ -209,7 +209,7 @@ fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Cl
     let (a, b) = (x1 - x0, y1 - y0);
     ellipse_spans(a, b, width, |l, y, r| {
         let row = y0 + (y + b) / 2;
-        if row < 0 || row >= i64::from(image.height) {
+        if row < 0 || row >= i64::from(image.height()) {
             return;
         }
         if matches!(clip, Clip::Pass) {
@@ -237,7 +237,7 @@ fn draw_curve(
         return Err(PyValueError::new_err("angles must be finite"));
     }
     let ink = super::draw::ink(image, value, blend)?;
-    image.ensure_owned();
+    image.ensure_owned()?;
     let (start, end) = normalize(start, end);
     let (a, b) = (bounds.2 - bounds.0, bounds.3 - bounds.1);
     if start == end || a < 0 || b < 0 || (!filled && width < 1) {
@@ -446,11 +446,11 @@ fn draw_polygon(
     image: &mut Image, points: Vec<(i64, i64)>, width: i64, filled: bool, closed: bool, value: &Bound<'_, PyAny>, blend: bool,
 ) -> PyResult<()> {
     let ink = super::draw::ink(image, value, blend)?;
-    image.ensure_owned();
+    image.ensure_owned()?;
     if points.is_empty() || (!filled && width < 1) {
         return Ok(());
     }
-    let (w, h) = (image.width as usize, image.height);
+    let (w, h) = (image.width() as usize, image.height());
     let mut mask = if closed && !filled && width > 1 { Some(blanket_core::raster::alloc_pixels(w * h as usize)?) } else { None };
     value.py().detach(|| {
         if !filled && width == 1 {

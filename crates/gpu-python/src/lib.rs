@@ -35,10 +35,10 @@ fn _gpu_unsigned_image(py: Python<'_>, image: &blanket_core::Image, depth: u8, e
     if !matches!(depth, 10 | 12 | 16) {
         return Err(PyValueError::new_err("invalid unsigned GPU transfer"));
     }
-    let mode = match (encode, image.mode) {
-        (false, PixelMode::L) if image.bit_depth == depth => PixelMode::F,
-        (false, PixelMode::Rgb) if image.bit_depth == depth => PixelMode::RgbF,
-        (false, PixelMode::Rgba) if image.bit_depth == depth => PixelMode::RgbaF,
+    let mode = match (encode, image.pixel_mode()) {
+        (false, PixelMode::L) if image.bit_depth() == depth => PixelMode::F,
+        (false, PixelMode::Rgb) if image.bit_depth() == depth => PixelMode::RgbF,
+        (false, PixelMode::Rgba) if image.bit_depth() == depth => PixelMode::RgbaF,
         (true, PixelMode::F) => PixelMode::L,
         (true, PixelMode::RgbF) => PixelMode::Rgb,
         (true, PixelMode::RgbaF) => PixelMode::Rgba,
@@ -50,9 +50,9 @@ fn _gpu_unsigned_image(py: Python<'_>, image: &blanket_core::Image, depth: u8, e
         let mut pixels = blanket_core::raster::alloc_pixels(len)?;
         unsigned_transfer(data, &mut pixels, depth, encode);
         if encode {
-            Image::from_sample_bytes(image.width, image.height, mode, pixels, depth, None)
+            Image::from_sample_bytes(image.width(), image.height(), mode, pixels, depth, None)
         } else {
-            Image::from_color_float_bytes(image.width, image.height, mode, pixels)
+            Image::from_color_float_bytes(image.width(), image.height(), mode, pixels)
         }
     })
 }
@@ -250,23 +250,11 @@ mod native {
             let native: &MetalImage = &image;
             let data = slf.py().detach(|| native.wait_bytes()).map_err(PyRuntimeError::new_err)?;
             let storage = SharedMetalPixels { owner: slf.clone().unbind(), address: data.as_ptr() as usize, len: data.len() };
-            Ok(blanket_core::Image {
-                width: d.width,
-                height: d.height,
-                mode,
-                pixels: None,
-                shared_pixels: Some(std::sync::Arc::new(storage)),
-                bit_depth: if d.float { 32 } else { 8 },
-                format: None,
-                palette: None,
-            })
+            blanket_core::Image::from_shared(d.width, d.height, mode, if d.float { 32 } else { 8 }, std::sync::Arc::new(storage))
         }
         #[staticmethod]
         fn shared_resource(py: Python<'_>, image: &blanket_core::Image) -> Option<Py<Self>> {
-            if image.pixels.is_some() {
-                return None;
-            }
-            image.shared_pixels.as_ref()?.as_any().downcast_ref::<SharedMetalPixels>().map(|storage| storage.owner.clone_ref(py))
+            image.shared_pixels()?.as_any().downcast_ref::<SharedMetalPixels>().map(|storage| storage.owner.clone_ref(py))
         }
         unsafe fn __getbuffer__(slf: Bound<'_, Self>, view: *mut pyo3::ffi::Py_buffer, flags: std::ffi::c_int) -> PyResult<()> {
             let image = slf.borrow();
@@ -281,12 +269,12 @@ mod native {
         }
         #[staticmethod]
         fn from_unsigned_image(py: Python<'_>, image: &blanket_core::Image) -> PyResult<Self> {
-            if !matches!(image.mode, blanket_core::PixelMode::L | blanket_core::PixelMode::Rgb | blanket_core::PixelMode::Rgba)
-                || !matches!(image.bit_depth, 10 | 12 | 16)
+            if !matches!(image.pixel_mode(), blanket_core::PixelMode::L | blanket_core::PixelMode::Rgb | blanket_core::PixelMode::Rgba)
+                || !matches!(image.bit_depth(), 10 | 12 | 16)
             {
                 return Err(PyValueError::new_err("unsupported unsigned GPU image mode or depth"));
             }
-            let descriptor = Descriptor { width: image.width, height: image.height, channels: image.mode.channels() as u32, float: true };
+            let descriptor = Descriptor { width: image.width(), height: image.height(), channels: image.pixel_mode().channels() as u32, float: true };
             let data = image.raw_data()?;
             if descriptor.byte_len().map_err(PyValueError::new_err)? / 2 != data.len() {
                 return Err(PyValueError::new_err("incorrect unsigned upload length"));
@@ -294,7 +282,7 @@ mod native {
             py.detach(|| {
                 let context = context()?;
                 let native = context
-                    .upload_with(descriptor, |output| unsigned_transfer(data, output, image.bit_depth, false))
+                    .upload_with(descriptor, |output| unsigned_transfer(data, output, image.bit_depth(), false))
                     .map_err(PyRuntimeError::new_err)?;
                 Ok(Self { context, image: native })
             })
@@ -303,14 +291,18 @@ mod native {
         fn from_image(py: Python<'_>, image: &blanket_core::Image) -> PyResult<Self> {
             use blanket_core::PixelMode;
             if !matches!(
-                image.mode,
+                image.pixel_mode(),
                 PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba | PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF
-            ) || (!image.mode.is_float() && image.bit_depth != 8)
+            ) || (!image.pixel_mode().is_float() && image.bit_depth() != 8)
             {
                 return Err(PyValueError::new_err("unsupported GPU image mode or depth"));
             }
-            let descriptor =
-                Descriptor { width: image.width, height: image.height, channels: image.mode.channels() as u32, float: image.mode.is_float() };
+            let descriptor = Descriptor {
+                width: image.width(),
+                height: image.height(),
+                channels: image.pixel_mode().channels() as u32,
+                float: image.pixel_mode().is_float(),
+            };
             let data = image.raw_data()?;
             py.detach(|| {
                 let context = context()?;

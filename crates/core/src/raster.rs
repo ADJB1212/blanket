@@ -429,23 +429,101 @@ pub trait SharedPixels: std::any::Any + Send + Sync + pyo3::marker::Ungil {
 #[pyclass(name = "_Image", module = "blanket._blanket")]
 #[derive(Clone)]
 pub struct Image {
-    pub width: u32,
-    pub height: u32,
-    pub mode: PixelMode,
-    pub pixels: Option<Vec<u8>>,
-    pub shared_pixels: Option<std::sync::Arc<dyn SharedPixels>> = None,
-    pub bit_depth: u8 = 8,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) mode: PixelMode,
+    pub(crate) pixels: Option<Vec<u8>>,
+    pub(crate) shared_pixels: Option<std::sync::Arc<dyn SharedPixels>> = None,
+    pub(crate) bit_depth: u8 = 8,
     pub format: Option<String> = None,
-    pub palette: Option<(PixelMode, Vec<u8>)> = None,
+    pub(crate) palette: Option<(PixelMode, Vec<u8>)> = None,
 }
 
 impl Image {
-    pub fn ensure_owned(&mut self) {
-        if self.pixels.is_none()
-            && let Some(shared) = self.shared_pixels.take()
+    pub fn pixel_mode(&self) -> PixelMode {
+        self.mode
+    }
+
+    pub fn palette(&self) -> &Option<(PixelMode, Vec<u8>)> {
+        &self.palette
+    }
+
+    pub fn copy_palette_from(&mut self, image: &Self) {
+        self.palette.clone_from(&image.palette);
+    }
+
+    pub fn set_palette_data(&mut self, palette: Option<(PixelMode, Vec<u8>)>) -> PyResult<()> {
+        if let Some((mode, data)) = &palette
+            && (!matches!(mode, PixelMode::Rgb | PixelMode::Rgba)
+                || data.len() > 256 * mode.channels()
+                || !data.len().is_multiple_of(mode.channels()))
         {
-            self.pixels = Some(shared.bytes().to_vec());
+            return Err(PyValueError::new_err("invalid palette"));
         }
+        self.palette = palette;
+        Ok(())
+    }
+
+    /// Mutable owned samples, without allowing the storage length to change.
+    pub fn pixels_mut(&mut self) -> Option<&mut [u8]> {
+        self.pixels.as_deref_mut()
+    }
+
+    pub fn shared_pixels(&self) -> Option<&dyn SharedPixels> {
+        self.shared_pixels.as_deref()
+    }
+
+    pub fn into_pixels(mut self) -> PyResult<Vec<u8>> {
+        self.raw_data()?;
+        self.ensure_owned()?;
+        self.pixels.take().ok_or_else(|| PyValueError::new_err("operation on closed image"))
+    }
+
+    /// Replace samples and their layout while preserving this image's metadata.
+    pub fn replace_storage(&mut self, image: Self) -> PyResult<()> {
+        if self.size() != image.size() {
+            return Err(PyValueError::new_err("replacement image dimensions do not match"));
+        }
+        self.mode = image.mode;
+        self.bit_depth = image.bit_depth;
+        self.pixels = image.pixels;
+        self.shared_pixels = image.shared_pixels;
+        Ok(())
+    }
+
+    /// Reinterpret existing samples only when their length and depth fit the new mode.
+    pub fn reinterpret_mode(&mut self, mode: PixelMode) -> PyResult<()> {
+        validate_raw_data(self.width, self.height, mode, self.bit_depth, self.raw_data()?)?;
+        self.mode = mode;
+        Ok(())
+    }
+
+    /// Construct owned storage using the same mode/depth checks as typed constructors.
+    pub fn from_raw_bytes(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, bit_depth: u8) -> PyResult<Self> {
+        if mode.is_float() && bit_depth == 32 {
+            Self::from_color_float_bytes(width, height, mode, pixels)
+        } else if mode.is_integer() && bit_depth as usize == mode.sample_bytes() * 8 {
+            Self::from_integer_bytes(width, height, mode, pixels)
+        } else if bit_depth == 8 {
+            Self::from_pixels(width, height, mode, pixels, None)
+        } else {
+            Self::from_sample_bytes(width, height, mode, pixels, bit_depth, None)
+        }
+    }
+
+    /// Construct an image backed by immutable external storage.
+    pub fn from_shared(width: u32, height: u32, mode: PixelMode, bit_depth: u8, storage: std::sync::Arc<dyn SharedPixels>) -> PyResult<Self> {
+        validate_raw_data(width, height, mode, bit_depth, storage.bytes())?;
+        Ok(Self { width, height, mode, pixels: None, shared_pixels: Some(storage), bit_depth, .. })
+    }
+
+    pub fn ensure_owned(&mut self) -> PyResult<()> {
+        if self.pixels.is_none() && self.shared_pixels.is_some() {
+            let pixels = self.raw_data()?.to_vec();
+            self.pixels = Some(pixels);
+            self.shared_pixels = None;
+        }
+        Ok(())
     }
     pub fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
         if mode.is_wide_scalar() {
@@ -488,10 +566,12 @@ impl Image {
     }
 
     pub fn raw_data(&self) -> PyResult<&[u8]> {
-        self.pixels
-            .as_deref()
-            .or_else(|| self.shared_pixels.as_ref().map(|shared| shared.bytes()))
-            .ok_or_else(|| PyValueError::new_err("operation on closed image"))
+        if let Some(pixels) = &self.pixels {
+            return Ok(pixels);
+        }
+        let pixels = self.shared_pixels.as_ref().ok_or_else(|| PyValueError::new_err("operation on closed image"))?.bytes();
+        validate_raw_data(self.width, self.height, self.mode, self.bit_depth, pixels)?;
+        Ok(pixels)
     }
 
     /// Bytes occupied by one pixel in raw storage: accounts for wide scalars,
@@ -811,7 +891,7 @@ impl Image {
     }
 
     pub fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {
-        self.ensure_owned();
+        self.ensure_owned()?;
         self.raw_data()?;
         let x = if xy.0 < 0 { xy.0 + i64::from(self.width) } else { xy.0 };
         let y = if xy.1 < 0 { xy.1 + i64::from(self.height) } else { xy.1 };
@@ -855,7 +935,7 @@ impl Image {
     }
 
     pub fn putdata(&mut self, data: &Bound<'_, PyAny>, scale: f64, offset: f64) -> PyResult<()> {
-        self.ensure_owned();
+        self.ensure_owned()?;
         self.raw_data()?;
         let length = data.len()?;
         if length > self.width as usize * self.height as usize {
@@ -1910,6 +1990,27 @@ fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
     Err(PyTypeError::new_err(format!("cannot handle this data type: {type_shape:?}, {typestr}")))
 }
 
+fn validate_raw_data(width: u32, height: u32, mode: PixelMode, bit_depth: u8, pixels: &[u8]) -> PyResult<()> {
+    let sample_bytes = if mode.is_wide_scalar() {
+        if bit_depth as usize != mode.sample_bytes() * 8 {
+            return Err(PyValueError::new_err("invalid sample bit depth"));
+        }
+        mode.sample_bytes()
+    } else if bit_depth == 8 {
+        1
+    } else if matches!(mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(bit_depth, 10 | 12 | 16) {
+        2
+    } else {
+        return Err(PyValueError::new_err("invalid sample bit depth"));
+    };
+    let expected =
+        expected_len(width, height, mode)?.checked_mul(sample_bytes).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+    if pixels.len() != expected || matches!(bit_depth, 10 | 12) && !crate::simd::samples_in_range(pixels, bit_depth) {
+        return Err(PyValueError::new_err("invalid image data"));
+    }
+    Ok(())
+}
+
 fn expected_len(width: u32, height: u32, mode: PixelMode) -> PyResult<usize> {
     let pixels = (width as usize).checked_mul(height as usize).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
     pixels.checked_mul(mode.channels()).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))
@@ -2293,22 +2394,106 @@ fn expand_pa(indices: &[u8], palette_mode: PixelMode, palette: &[u8], destinatio
 
 #[cfg(test)]
 mod tests {
+    struct Storage(Vec<u8>);
+
+    impl super::SharedPixels for Storage {
+        fn bytes(&self) -> &[u8] {
+            &self.0
+        }
+
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
     #[test]
-    fn shared_pixels_detach_on_write_and_close_independently() {
-        struct Storage(Vec<u8>);
-        impl super::SharedPixels for Storage {
-            fn bytes(&self) -> &[u8] {
-                &self.0
+    fn shared_storage_validates_layout_without_copying() {
+        Python::initialize();
+        for (mode, depth) in [
+            (PixelMode::One, 8),
+            (PixelMode::L, 8),
+            (PixelMode::Rgb, 10),
+            (PixelMode::Rgb, 12),
+            (PixelMode::Rgba, 16),
+            (PixelMode::I, 32),
+            (PixelMode::I16, 16),
+            (PixelMode::I16B, 16),
+            (PixelMode::F, 32),
+            (PixelMode::RgbF, 32),
+            (PixelMode::RgbaF, 32),
+        ] {
+            let length = 6 * mode.channels() * usize::from(depth).div_ceil(8);
+            let storage = std::sync::Arc::new(Storage(vec![0; length]));
+            let pointer = storage.0.as_ptr();
+            let image = Image::from_shared(3, 2, mode, depth, storage).unwrap();
+            assert_eq!(image.raw_data().unwrap().as_ptr(), pointer);
+            assert_eq!(image.raw_bytes_per_pixel(), length / 6);
+            assert_eq!(image.into_pixels().unwrap(), vec![0; length]);
+            for invalid in [length - 1, length + 1] {
+                assert!(Image::from_shared(3, 2, mode, depth, std::sync::Arc::new(Storage(vec![0; invalid]))).is_err());
             }
+        }
+        for (mode, depth) in [(PixelMode::Rgb, 32), (PixelMode::F, 8), (PixelMode::I, 16), (PixelMode::La, 16), (PixelMode::L, 9)] {
+            assert!(Image::from_shared(1, 1, mode, depth, std::sync::Arc::new(Storage(vec![0; 4]))).is_err());
+            assert!(Image::from_raw_bytes(1, 1, mode, vec![0; 4], depth).is_err());
+        }
+        for depth in [10, 12] {
+            let data = (1_u16 << depth).to_le_bytes().to_vec();
+            assert!(Image::from_shared(1, 1, PixelMode::L, depth, std::sync::Arc::new(Storage(data))).is_err());
+        }
+        assert!(Image::from_shared(u32::MAX, u32::MAX, PixelMode::RgbaF, 32, std::sync::Arc::new(Storage(Vec::new()))).is_err());
+    }
+
+    #[test]
+    fn storage_replacement_and_reinterpretation_preserve_invariants() {
+        Python::initialize();
+        let mut image = Image::from_pixels(2, 1, PixelMode::L, vec![1, 2], Some("PNG".into())).unwrap();
+        let replacement = Image::from_pixels(1, 2, PixelMode::L, vec![3, 4], None).unwrap();
+        assert!(image.replace_storage(replacement).is_err());
+        assert_eq!(image.raw_data().unwrap(), [1, 2]);
+        assert!(image.reinterpret_mode(PixelMode::Rgb).is_err());
+        assert_eq!(image.pixel_mode(), PixelMode::L);
+        let replacement = Image::from_raw_bytes(2, 1, PixelMode::L, vec![0, 1, 0, 2], 16).unwrap();
+        image.replace_storage(replacement).unwrap();
+        image.reinterpret_mode(PixelMode::I16).unwrap();
+        assert_eq!(image.bit_depth(), 16);
+        assert_eq!(image.format(), Some("PNG"));
+        assert_eq!(image.raw_data().unwrap(), [0, 1, 0, 2]);
+    }
+
+    #[test]
+    fn changing_shared_storage_cannot_bypass_validation_on_detach() {
+        struct ChangingStorage(std::sync::atomic::AtomicBool);
+
+        impl SharedPixels for ChangingStorage {
+            fn bytes(&self) -> &[u8] {
+                if self.0.load(std::sync::atomic::Ordering::Relaxed) { &[1] } else { &[1, 2] }
+            }
+
             fn as_any(&self) -> &dyn std::any::Any {
                 self
             }
         }
-        let mut image = super::Image::from_pixels(3, 1, super::PixelMode::L, vec![1, 2, 3], None).unwrap();
-        image.shared_pixels = Some(std::sync::Arc::new(Storage(image.pixels.take().unwrap())));
+
+        Python::initialize();
+        let storage = std::sync::Arc::new(ChangingStorage(std::sync::atomic::AtomicBool::new(false)));
+        let shared = std::sync::Arc::clone(&storage);
+        let mut image = Image::from_shared(2, 1, PixelMode::L, 8, shared).unwrap();
+        storage.0.store(true, std::sync::atomic::Ordering::Relaxed);
+        assert!(image.raw_data().is_err());
+        assert!(image.ensure_owned().is_err());
+        assert!(image.pixels_mut().is_none());
+        storage.0.store(false, std::sync::atomic::Ordering::Relaxed);
+        image.ensure_owned().unwrap();
+        assert_eq!(image.raw_data().unwrap(), [1, 2]);
+    }
+
+    #[test]
+    fn shared_pixels_detach_on_write_and_close_independently() {
+        let mut image = Image::from_shared(3, 1, PixelMode::L, 8, std::sync::Arc::new(Storage(vec![1, 2, 3]))).unwrap();
         let mut sibling = image.clone();
         assert_eq!(image.raw_data().unwrap(), [1, 2, 3]);
-        image.ensure_owned();
+        image.ensure_owned().unwrap();
         image.pixels.as_mut().unwrap()[0] = 9;
         assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
         assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);

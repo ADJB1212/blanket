@@ -26,6 +26,17 @@ def test_recognized_corrupt_input(data: bytes, format: str, operation: str) -> N
     assert caught.value.operation == operation
 
 
+def test_native_decode_preserves_error_cause() -> None:
+    from blanket import _blanket
+
+    with pytest.raises(CorruptImageError) as caught:
+        _blanket.open_bytes(b"\x89PNG\r\n\x1a\n", None)
+    assert caught.value.format == "PNG"
+    assert caught.value.operation == "decode"
+    assert isinstance(caught.value.__cause__, OSError)
+    assert str(caught.value.__cause__) == str(caught.value)
+
+
 @pytest.mark.parametrize("mode,format,depth", [("RGBA", "JPEG", 8), ("LAB", "PNG", 8), ("HSV", "TIFF", 8), ("RGB", "WEBP", 16)])
 def test_unsupported_encoding(mode: str, format: str, depth: int) -> None:
     image = Image.new(mode, (8, 8))

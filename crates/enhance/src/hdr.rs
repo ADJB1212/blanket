@@ -100,8 +100,8 @@ fn hdr_tone_map(
     {
         return Err(PyValueError::new_err("invalid HDR exposure, luminance, or output depth"));
     }
-    let mode = match image.mode {
-        PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba => image.mode,
+    let mode = match image.pixel_mode() {
+        PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba => image.pixel_mode(),
         PixelMode::F | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B | PixelMode::I16N => PixelMode::L,
         _ => return Err(PyValueError::new_err("tone mapping requires L, LA, RGB, RGBA, F, or I;16 pixels")),
     };
@@ -113,13 +113,13 @@ fn hdr_tone_map(
     let input_bytes = image.raw_bytes_per_pixel();
     let output_bytes = channels * usize::from(bit_depth / 8);
     let mut output = alloc_pixels(source.len() / input_bytes * output_bytes)?;
-    let maximum = if image.mode == PixelMode::F { 1.0 } else { ((1_u64 << image.bit_depth) - 1) as f64 };
+    let maximum = if image.pixel_mode() == PixelMode::F { 1.0 } else { ((1_u64 << image.bit_depth()) - 1) as f64 };
     let exposure_scale = exposure.exp2();
     let colors = if matches!(mode, PixelMode::La | PixelMode::Rgba) { channels - 1 } else { channels };
     let gamma = 1.2 + 0.42 * (peak / 1000.0).log10();
     py.detach(|| {
-        let table_size = if image.bit_depth == 8 { 256 } else { 65536 };
-        let table = if image.mode != PixelMode::F && transfer != "linear" && source.len() / input_bytes * colors >= table_size * 2 {
+        let table_size = if image.bit_depth() == 8 { 256 } else { 65536 };
+        let table = if image.pixel_mode() != PixelMode::F && transfer != "linear" && source.len() / input_bytes * colors >= table_size * 2 {
             (0..table_size).map(|value| linearize(value as f64 / maximum, transfer, reference_white).min(1e30)).collect::<Vec<_>>()
         } else {
             Vec::new()
@@ -131,9 +131,9 @@ fn hdr_tone_map(
                 let mut values = [0.0; 4];
                 for (c, value) in values.iter_mut().enumerate().take(channels) {
                     if c < colors && !table.is_empty() {
-                        let sample = if image.mode.is_big_endian() {
+                        let sample = if image.pixel_mode().is_big_endian() {
                             u16::from_be_bytes(data.try_into().unwrap()) as usize
-                        } else if image.bit_depth > 8 {
+                        } else if image.bit_depth() > 8 {
                             u16::from_le_bytes([data[c * 2], data[c * 2 + 1]]) as usize
                         } else {
                             usize::from(data[c])
@@ -141,10 +141,10 @@ fn hdr_tone_map(
                         *value = table[sample];
                         continue;
                     }
-                    *value = match image.mode {
+                    *value = match image.pixel_mode() {
                         PixelMode::F => f64::from(f32::from_le_bytes(data.try_into().unwrap())),
                         mode if mode.is_big_endian() => f64::from(u16::from_be_bytes(data.try_into().unwrap())) / maximum,
-                        _ if image.bit_depth > 8 => f64::from(u16::from_le_bytes([data[c * 2], data[c * 2 + 1]])) / maximum,
+                        _ if image.bit_depth() > 8 => f64::from(u16::from_le_bytes([data[c * 2], data[c * 2 + 1]])) / maximum,
                         _ => f64::from(data[c]) / maximum,
                     };
                 }
@@ -191,9 +191,9 @@ fn hdr_tone_map(
         });
     });
     if bit_depth == 8 {
-        Image::from_pixels(image.width, image.height, mode, output, None)
+        Image::from_pixels(image.width(), image.height(), mode, output, None)
     } else {
-        Image::from_sample_bytes(image.width, image.height, mode, output, bit_depth, None)
+        Image::from_sample_bytes(image.width(), image.height(), mode, output, bit_depth, None)
     }
 }
 

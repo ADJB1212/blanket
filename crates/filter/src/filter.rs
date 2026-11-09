@@ -34,7 +34,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
     }
     let source = image.pixel_data()?;
     let target = PixelMode::parse(mode)?;
-    let input_channels = image.mode.channels();
+    let input_channels = image.pixel_mode().channels();
     let output_channels = target.channels();
     if !(3..=4).contains(&channels)
         || input_channels < 3
@@ -63,8 +63,8 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
             )
         })
     });
-    let len = (image.width as usize)
-        .checked_mul(image.height as usize)
+    let len = (image.width() as usize)
+        .checked_mul(image.height() as usize)
         .and_then(|n| n.checked_mul(output_channels))
         .ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?;
     let mut pixels = alloc_pixels(len)?;
@@ -92,7 +92,7 @@ fn filter_lut(py: Python<'_>, image: &Image, mode: &str, channels: usize, size: 
             }
         });
     });
-    Image::from_pixels(image.width, image.height, target, pixels, None)
+    Image::from_pixels(image.width(), image.height(), target, pixels, None)
 }
 
 #[pyfunction]
@@ -101,14 +101,14 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
     if bands.len() != mode.channels() {
         return Err(PyValueError::new_err("wrong number of bands"));
     }
-    let (width, height) = (bands[0].width, bands[0].height);
-    if bands.iter().any(|b| b.mode != PixelMode::L || b.width != width || b.height != height || b.bit_depth != bands[0].bit_depth) {
+    let (width, height) = (bands[0].width(), bands[0].height());
+    if bands.iter().any(|b| b.pixel_mode() != PixelMode::L || b.width() != width || b.height() != height || b.bit_depth() != bands[0].bit_depth()) {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(&bands[0]) {
         if mode == PixelMode::L {
             let source = bands[0].raw_data()?;
-            return Image::from_sample_bytes(width, height, mode, py.detach(|| source.to_vec()), bands[0].bit_depth, None);
+            return Image::from_sample_bytes(width, height, mode, py.detach(|| source.to_vec()), bands[0].bit_depth(), None);
         }
         let sources = bands.iter().map(|b| blanket_core::samples::view(b)).collect::<PyResult<Vec<_>>>()?;
         let pixels = py.detach(|| match mode {
@@ -116,7 +116,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
             PixelMode::Rgba => Ok(merge_samples::<4>(&sources)),
             _ => Err(PyValueError::new_err("this mode requires 8-bit pixels")),
         })?;
-        return Image::from_sample_bytes(width, height, mode, pixels, bands[0].bit_depth, None);
+        return Image::from_sample_bytes(width, height, mode, pixels, bands[0].bit_depth(), None);
     }
     let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
     if matches!(mode, PixelMode::One | PixelMode::L) {

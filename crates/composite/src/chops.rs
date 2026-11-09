@@ -24,10 +24,10 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 fn _difference_bbox(py: Python<'_>, first: &Image, second: &Image) -> PyResult<Option<(usize, usize, usize, usize)>> {
     let a = first.pixel_data()?;
     let b = second.pixel_data()?;
-    if first.mode != second.mode {
+    if first.pixel_mode() != second.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
-    Ok(py.detach(|| difference_bbox(a, b, first.size(), second.size(), first.mode.channels())))
+    Ok(py.detach(|| difference_bbox(a, b, first.size(), second.size(), first.pixel_mode().channels())))
 }
 
 fn difference_bbox(a: &[u8], b: &[u8], a_size: (u32, u32), b_size: (u32, u32), channels: usize) -> Option<(usize, usize, usize, usize)> {
@@ -238,16 +238,16 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
     }
     let a = first.pixel_data()?;
     let b = second.pixel_data()?;
-    if first.mode != second.mode {
+    if first.pixel_mode() != second.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
     // Like Pillow, differently sized inputs use their top-left intersection.
-    let width = first.width.min(second.width);
-    let height = first.height.min(second.height);
-    let channels = first.mode.channels();
+    let width = first.width().min(second.width());
+    let height = first.height().min(second.height());
+    let channels = first.pixel_mode().channels();
     let row = width as usize * channels;
     let length = row * height as usize;
-    if matches!(operation, Operation::And | Operation::Or | Operation::Xor) && first.width == second.width {
+    if matches!(operation, Operation::And | Operation::Or | Operation::Xor) && first.width() == second.width() {
         let mut pixels = reserved_buffer(length)?;
         pixels.resize(length, 0);
         py.detach(|| {
@@ -263,7 +263,7 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
                 }
             });
         });
-        return Image::from_pixels(width, height, first.mode, pixels, None);
+        return Image::from_pixels(width, height, first.pixel_mode(), pixels, None);
     }
     let mut pixels = reserved_buffer(length)?;
     let rows_per_chunk = (CHUNK_PIXELS / (width as usize).max(1)).max(1);
@@ -277,8 +277,8 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
         chunks_mut_above(output, row.max(1) * rows_per_chunk, threshold, |chunk, dst| {
             for (i, output_row) in dst.chunks_exact_mut(row).enumerate() {
                 let y = chunk * rows_per_chunk + i;
-                let a_start = y * first.width as usize * channels;
-                let b_start = y * second.width as usize * channels;
+                let a_start = y * first.width() as usize * channels;
+                let b_start = y * second.width() as usize * channels;
                 // Dispatch outside the pixel loop so each simple operation
                 // can be vectorized without a per-sample enum branch.
                 macro_rules! apply {
@@ -316,9 +316,9 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
     });
     // Every output sample is initialized by the disjoint row partitions.
     unsafe { pixels.set_len(length) };
-    let mut result = Image::from_pixels(width, height, first.mode, pixels, None)?;
+    let mut result = Image::from_pixels(width, height, first.pixel_mode(), pixels, None)?;
     // Channel arithmetic creates an empty output palette, as Pillow does.
-    result.palette = first.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
+    result.set_palette_data(first.palette().as_ref().map(|_| (PixelMode::Rgb, Vec::new())))?;
     Ok(result)
 }
 
@@ -337,13 +337,13 @@ fn sample_row<const M: u64>(a: &[u16], b: &[u16], output: &mut [u8], operation: 
 }
 
 fn binary_samples(first: &Image, second: &Image, operation: Operation, scale: f32, offset: i32) -> PyResult<Image> {
-    if first.mode != second.mode || first.bit_depth != second.bit_depth {
+    if first.pixel_mode() != second.pixel_mode() || first.bit_depth() != second.bit_depth() {
         return Err(PyValueError::new_err("images do not match"));
     }
     let a = blanket_core::samples::view(first)?;
     let b = blanket_core::samples::view(second)?;
-    let (width, height) = (first.width.min(second.width), first.height.min(second.height));
-    let channels = first.mode.channels();
+    let (width, height) = (first.width().min(second.width()), first.height().min(second.height()));
+    let channels = first.pixel_mode().channels();
     let row = width as usize * channels;
     let maximum = blanket_core::samples::maximum(first);
     let mut pixels = blanket_core::raster::alloc_pixels(row * height as usize * 2)?;
@@ -351,21 +351,21 @@ fn binary_samples(first: &Image, second: &Image, operation: Operation, scale: f3
         chunks_mut_above(&mut pixels, row * 2 * 16, 256 * 1024, |band, rows| {
             for (i, dst) in rows.chunks_exact_mut(row * 2).enumerate() {
                 let y = band * 16 + i;
-                let a = &a[y * first.width as usize * channels..][..row];
-                let b = &b[y * second.width as usize * channels..][..row];
+                let a = &a[y * first.width() as usize * channels..][..row];
+                let b = &b[y * second.width() as usize * channels..][..row];
                 match maximum {
-                    1023 => sample_row::<1023>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
-                    4095 => sample_row::<4095>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
-                    65535 => sample_row::<65535>(a, b, dst, operation, (scale, offset), first.mode.is_big_endian()),
+                    1023 => sample_row::<1023>(a, b, dst, operation, (scale, offset), first.pixel_mode().is_big_endian()),
+                    4095 => sample_row::<4095>(a, b, dst, operation, (scale, offset), first.pixel_mode().is_big_endian()),
+                    65535 => sample_row::<65535>(a, b, dst, operation, (scale, offset), first.pixel_mode().is_big_endian()),
                     _ => unreachable!(),
                 }
             }
         });
     }
-    if first.mode.is_wide_scalar() {
-        Image::from_integer_bytes(width, height, first.mode, pixels)
+    if first.pixel_mode().is_wide_scalar() {
+        Image::from_integer_bytes(width, height, first.pixel_mode(), pixels)
     } else {
-        Image::from_sample_bytes(width, height, first.mode, pixels, first.bit_depth, None)
+        Image::from_sample_bytes(width, height, first.pixel_mode(), pixels, first.bit_depth(), None)
     }
 }
 
@@ -381,12 +381,12 @@ pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
                 let end = source.len() / 16 * 16;
                 for i in (0..end).step_by(16) {
                     let value = Samples::splat(maximum) - Samples::from_slice(&source[i..]);
-                    let bytes = if image.mode.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
+                    let bytes = if image.pixel_mode().is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
                     bytes.copy_to_slice(&mut dst[i * 2..i * 2 + 32]);
                 }
                 for (dst, &sample) in dst[end * 2..].as_chunks_mut::<2>().0.iter_mut().zip(&source[end..]) {
                     let value = maximum - sample;
-                    *dst = if image.mode.is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
+                    *dst = if image.pixel_mode().is_big_endian() { value.to_be_bytes() } else { value.to_le_bytes() };
                 }
             });
             blanket_core::samples::output_bytes(image, pixels)
@@ -403,8 +403,8 @@ pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
     });
     // The loop initializes exactly source.len() bytes, including the tail.
     unsafe { pixels.set_len(source.len()) };
-    let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
-    result.palette = image.palette.as_ref().map(|_| (PixelMode::Rgb, Vec::new()));
+    let mut result = Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)?;
+    result.set_palette_data(image.palette().as_ref().map(|_| (PixelMode::Rgb, Vec::new())))?;
     Ok(result)
 }
 
@@ -412,12 +412,12 @@ pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
 fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> PyResult<Image> {
     let source = image.raw_data()?;
     let mut pixels = reserved_buffer(source.len())?;
-    if image.width != 0 && image.height != 0 {
+    if image.width() != 0 && image.height() != 0 {
         let bytes_per_pixel = image.raw_bytes_per_pixel();
-        let row = image.width as usize * bytes_per_pixel;
-        let head = xoffset.rem_euclid(i64::from(image.width)) as usize * bytes_per_pixel;
-        let shift_y = yoffset.rem_euclid(i64::from(image.height)) as usize;
-        let height = image.height as usize;
+        let row = image.width() as usize * bytes_per_pixel;
+        let head = xoffset.rem_euclid(i64::from(image.width())) as usize * bytes_per_pixel;
+        let shift_y = yoffset.rem_euclid(i64::from(image.height())) as usize;
+        let height = image.height() as usize;
         py.detach(|| {
             let tail = row - head;
             if head.min(tail) <= row / 8 && source.len() < 4 << 20 {
@@ -454,16 +454,9 @@ fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> Py
             }
         });
     }
-    Ok(Image {
-        width: image.width,
-        height: image.height,
-        mode: image.mode,
-        pixels: Some(pixels),
-        bit_depth: image.bit_depth,
-        format: None,
-        palette: image.palette.clone(),
-        shared_pixels: None,
-    })
+    let mut result = Image::from_raw_bytes(image.width(), image.height(), image.pixel_mode(), pixels, image.bit_depth())?;
+    result.copy_palette_from(image);
+    Ok(result)
 }
 
 #[cfg(test)]

@@ -113,15 +113,15 @@ fn sequence_dimensions(data: &[u8]) -> Result<(u32, u32), String> {
 
 pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
     let rgb;
-    let (pixels, color) = if image.mode == PixelMode::L {
+    let (pixels, color) = if image.pixel_mode() == PixelMode::L {
         rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
         (rgb.as_slice(), ExtendedColorType::Rgb8)
     } else {
-        (pixels, color_type(image.mode))
+        (pixels, color_type(image.pixel_mode()))
     };
     let mut output = Vec::new();
     image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, 11 - options.effort, options.quality)
-        .write_image(pixels, image.width, image.height, color)
+        .write_image(pixels, image.width(), image.height(), color)
         .map_err(codec_error)?;
     Ok(output)
 }

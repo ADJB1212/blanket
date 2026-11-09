@@ -68,14 +68,14 @@ pub(super) fn decode_xbm(data: &[u8]) -> Result<Image, String> {
 }
 
 pub(super) fn encode_xbm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
-    if im.mode != PixelMode::One {
+    if im.pixel_mode() != PixelMode::One {
         return Err("XBM requires mode 1".into());
     }
-    let mut out = format!("#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n", im.width, im.height).into_bytes();
-    let packed = blanket_core::raster::pack_bilevel(pixels, im.width as usize, im.height as usize);
-    out.reserve(packed.len() * 5 + im.height as usize + 3);
+    let mut out = format!("#define im_width {}\n#define im_height {}\nstatic char im_bits[] = {{\n", im.width(), im.height()).into_bytes();
+    let packed = blanket_core::raster::pack_bilevel(pixels, im.width() as usize, im.height() as usize);
+    out.reserve(packed.len() * 5 + im.height() as usize + 3);
     let hex = b"0123456789abcdef";
-    for row in packed.chunks_exact((im.width as usize).div_ceil(8)) {
+    for row in packed.chunks_exact((im.width() as usize).div_ceil(8)) {
         for &v in row {
             let v = v.reverse_bits();
             out.extend_from_slice(&[b'0', b'x', hex[(v >> 4) as usize], hex[(v & 15) as usize], b',']);
@@ -218,13 +218,13 @@ pub(super) fn decode_xpm(data: &[u8]) -> Result<Image, String> {
 }
 
 pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
-    if !matches!(im.mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+    if !matches!(im.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
         return Err("XPM requires L, RGB, or RGBA".into());
     }
     let mut palette = FxHashMap::default();
     let mut colors = Vec::new();
-    let channels = im.mode.channels();
-    let rgba = |p: &[u8]| match im.mode {
+    let channels = im.pixel_mode().channels();
+    let rgba = |p: &[u8]| match im.pixel_mode() {
         PixelMode::L => [p[0], p[0], p[0], 255],
         PixelMode::Rgb => [p[0], p[1], p[2], 255],
         _ => [p[0], p[1], p[2], p[3]],
@@ -240,14 +240,14 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
         });
     }
     let cpp = format!("{:x}", colors.len() - 1).len();
-    let mut out = format!("/* XPM */\nstatic char *im[] = {{\n\"{} {} {} {cpp}\",\n", im.width, im.height, colors.len());
+    let mut out = format!("/* XPM */\nstatic char *im[] = {{\n\"{} {} {} {cpp}\",\n", im.width(), im.height(), colors.len());
     for (i, p) in colors.iter().enumerate() {
         let c = if p[3] == 0 { "None".into() } else { format!("#{:02x}{:02x}{:02x}", p[0], p[1], p[2]) };
         out.push_str(&format!("\"{i:0cpp$x} c {c}\",\n"));
     }
-    out.reserve(im.width as usize * im.height as usize * cpp + im.height as usize * 4 + 3);
+    out.reserve(im.width() as usize * im.height() as usize * cpp + im.height() as usize * 4 + 3);
     let hex = b"0123456789abcdef";
-    for row in pixels.chunks_exact(im.width as usize * channels) {
+    for row in pixels.chunks_exact(im.width() as usize * channels) {
         out.push('"');
         for pixel in row.chunks_exact(channels) {
             let index = palette[&rgba(pixel)];

@@ -58,7 +58,7 @@ impl AsRef<[u64]> for Histogram<'_> {
 fn stat_snapshot(py: Python<'_>, image: &blanket_core::Image, mask: Option<&blanket_core::Image>) -> PyResult<StatHistogram> {
     let values = if blanket_core::samples::supported(image) {
         stat_histogram(py, image, mask)?
-    } else if matches!(image.mode, blanket_core::PixelMode::I | blanket_core::PixelMode::F) {
+    } else if matches!(image.pixel_mode(), blanket_core::PixelMode::I | blanket_core::PixelMode::F) {
         if mask.is_some() {
             return Err(PyValueError::new_err("image has wrong mode"));
         }
@@ -79,14 +79,16 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
     let source = image.raw_data()?;
     let mask = mask
         .map(|mask| {
-            if !matches!(mask.mode, PixelMode::One | PixelMode::L) || mask.bit_depth != 8 || (mask.width, mask.height) != (image.width, image.height)
+            if !matches!(mask.pixel_mode(), PixelMode::One | PixelMode::L)
+                || mask.bit_depth() != 8
+                || (mask.width(), mask.height()) != (image.width(), image.height())
             {
                 return Err(PyValueError::new_err("bad mask mode or size"));
             }
             mask.pixel_data()
         })
         .transpose()?;
-    let channels = image.mode.channels();
+    let channels = image.pixel_mode().channels();
     let bins = usize::from(samples::maximum(image)) + 1;
     Ok(py.detach(|| {
         let mut histogram = vec![0; bins * channels];
@@ -95,7 +97,7 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
                 continue;
             }
             for (c, &bytes) in pixel.as_chunks::<2>().0.iter().enumerate() {
-                let value = if image.mode.is_big_endian() { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
+                let value = if image.pixel_mode().is_big_endian() { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
                 histogram[c * bins + usize::from(value)] += 1;
             }
         }

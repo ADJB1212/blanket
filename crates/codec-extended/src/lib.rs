@@ -74,15 +74,15 @@ pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
 }
 
 fn encode_tga(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    let width = u16::try_from(image.width).map_err(|_| PyOSError::new_err("TGA width exceeds 65535"))?;
-    let height = u16::try_from(image.height).map_err(|_| PyOSError::new_err("TGA height exceeds 65535"))?;
-    let channels = image.mode.channels();
+    let width = u16::try_from(image.width()).map_err(|_| PyOSError::new_err("TGA width exceeds 65535"))?;
+    let height = u16::try_from(image.height()).map_err(|_| PyOSError::new_err("TGA height exceeds 65535"))?;
+    let channels = image.pixel_mode().channels();
     let mut output = vec![0; 18 + pixels.len()];
     output[2] = if channels <= 2 { 3 } else { 2 };
     output[12..14].copy_from_slice(&width.to_le_bytes());
     output[14..16].copy_from_slice(&height.to_le_bytes());
     output[16] = (channels * 8) as u8;
-    output[17] = if matches!(image.mode, PixelMode::La | PixelMode::Rgba) { 0x28 } else { 0x20 };
+    output[17] = if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba) { 0x28 } else { 0x20 };
     match channels {
         3 => pixels::swap_red_blue::<3>(pixels, &mut output[18..]),
         4 => pixels::swap_red_blue::<4>(pixels, &mut output[18..]),
@@ -117,10 +117,10 @@ pub fn decode_qoi(data: &[u8]) -> Result<Image, String> {
 }
 
 pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(PyOSError::new_err("cannot encode an empty image"));
     }
-    let (magic, tuple) = match image.mode {
+    let (magic, tuple) = match image.pixel_mode() {
         PixelMode::L => ("P5", "GRAYSCALE"),
         PixelMode::Rgb => ("P6", "RGB"),
         PixelMode::Rgba if pam => ("P7", "RGB_ALPHA"),
@@ -128,14 +128,19 @@ pub fn encode_wide_pnm(image: &Image, pam: bool) -> PyResult<Vec<u8>> {
     };
     let samples = image.raw_data()?;
     let header = if pam {
-        format!("P7\nWIDTH {}\nHEIGHT {}\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n", image.width, image.height, image.mode.channels())
+        format!(
+            "P7\nWIDTH {}\nHEIGHT {}\nDEPTH {}\nMAXVAL 65535\nTUPLTYPE {tuple}\nENDHDR\n",
+            image.width(),
+            image.height(),
+            image.pixel_mode().channels()
+        )
     } else {
-        format!("{magic}\n{} {}\n65535\n", image.width, image.height)
+        format!("{magic}\n{} {}\n65535\n", image.width(), image.height())
     };
     let mut output = header.into_bytes();
     let start = output.len();
     output.resize(start + samples.len(), 0);
-    blanket_core::simd::samples_to_be16(samples, &mut output[start..], image.bit_depth);
+    blanket_core::simd::samples_to_be16(samples, &mut output[start..], image.bit_depth());
     Ok(output)
 }
 
@@ -153,32 +158,32 @@ pub fn is_tga(data: &[u8]) -> bool {
 }
 
 pub fn encode_extended(image: &Image, pixels: &[u8], format: &str) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(PyOSError::new_err("cannot encode an empty image"));
     }
     let mut output = Vec::new();
-    let color = color_type(image.mode);
+    let color = color_type(image.pixel_mode());
     match format {
         "TGA" => return encode_tga(image, pixels),
-        "QOI" => image::codecs::qoi::QoiEncoder::new(&mut output).write_image(pixels, image.width, image.height, color).map_err(codec_error)?,
+        "QOI" => image::codecs::qoi::QoiEncoder::new(&mut output).write_image(pixels, image.width(), image.height(), color).map_err(codec_error)?,
         "PPM" | "PAM" => {
-            if format == "PPM" && image.mode == PixelMode::One {
-                output.extend_from_slice(format!("P4\n{} {}\n", image.width, image.height).as_bytes());
-                let row_bytes = (image.width as usize).div_ceil(8);
+            if format == "PPM" && image.pixel_mode() == PixelMode::One {
+                output.extend_from_slice(format!("P4\n{} {}\n", image.width(), image.height()).as_bytes());
+                let row_bytes = (image.width() as usize).div_ceil(8);
                 let start = output.len();
-                output.resize(start + row_bytes * image.height as usize, 0);
-                for (row, dst) in pixels.chunks_exact(image.width as usize).zip(output[start..].chunks_exact_mut(row_bytes)) {
+                output.resize(start + row_bytes * image.height() as usize, 0);
+                for (row, dst) in pixels.chunks_exact(image.width() as usize).zip(output[start..].chunks_exact_mut(row_bytes)) {
                     blanket_core::pixels::pack_bilevel::<true>(row, dst);
                 }
             } else {
                 use image::codecs::pnm::{PnmEncoder, PnmSubtype, SampleEncoding};
-                let subtype = match (format, image.mode) {
+                let subtype = match (format, image.pixel_mode()) {
                     ("PAM", _) => PnmSubtype::ArbitraryMap,
                     (_, PixelMode::L) => PnmSubtype::Graymap(SampleEncoding::Binary),
                     (_, PixelMode::Rgb) => PnmSubtype::Pixmap(SampleEncoding::Binary),
                     _ => return Err(PyOSError::new_err("PPM supports modes 1, L, and RGB; use PAM for alpha")),
                 };
-                PnmEncoder::new(&mut output).with_subtype(subtype).write_image(pixels, image.width, image.height, color).map_err(codec_error)?;
+                PnmEncoder::new(&mut output).with_subtype(subtype).write_image(pixels, image.width(), image.height(), color).map_err(codec_error)?;
             }
         }
         _ => return Err(PyOSError::new_err(format!("{format} is a read-only format"))),

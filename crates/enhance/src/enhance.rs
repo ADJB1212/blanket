@@ -21,7 +21,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
-    Image::from_pixels(image.width, image.height, image.mode, pixels, None)
+    Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)
 }
 
 fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
@@ -32,7 +32,11 @@ fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
 /// Pillow's core blend uses a single-precision alpha and truncates toward zero.
 #[pyfunction]
 pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
-    if first.mode != second.mode || first.width != second.width || first.height != second.height || first.bit_depth != second.bit_depth {
+    if first.pixel_mode() != second.pixel_mode()
+        || first.width() != second.width()
+        || first.height() != second.height()
+        || first.bit_depth() != second.bit_depth()
+    {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(first) {
@@ -50,8 +54,8 @@ pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32)
     let len = first_pixels.len();
     let mut pixels = blanket_core::buffers::reserved(len)?;
     py.detach(|| {
-        chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK_PIXELS * first.mode.channels(), MIN_PARALLEL_BYTES, |i, dst| {
-            let start = i * CHUNK_PIXELS * first.mode.channels();
+        chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], CHUNK_PIXELS * first.pixel_mode().channels(), MIN_PARALLEL_BYTES, |i, dst| {
+            let start = i * CHUNK_PIXELS * first.pixel_mode().channels();
             blend_bytes_uninit(&first_pixels[start..start + dst.len()], &second_pixels[start..start + dst.len()], dst, factor);
         });
         // Every reserved byte is written by the SIMD kernel or its scalar tail.
@@ -106,22 +110,22 @@ fn blend_bytes_scalar(first: &[u8], second: &[u8], output: &mut [u8], factor: f3
 
 #[pyfunction]
 pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
-    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba) {
+    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba) {
         return Err(PyValueError::new_err("color enhancement does not support premultiplied modes"));
     }
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "color");
     }
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
-        return image.convert(py, "L", None)?.convert(py, image.mode.as_str(), None);
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
+        return image.convert(py, "L", None)?.convert(py, image.pixel_mode().as_str(), None);
     }
     let source = image.pixel_data()?;
-    if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
+    if matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
         return py.detach(|| copy(image, source));
     }
 
     let mut pixels = alloc_pixels(source.len())?;
-    py.detach(|| match image.mode {
+    py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
         PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels),
         PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels),
@@ -152,32 +156,32 @@ fn luminance(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
 
 #[pyfunction]
 pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
-    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba) {
+    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba) {
         return Err(PyValueError::new_err("contrast enhancement does not support premultiplied modes"));
     }
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "contrast");
     }
-    if matches!(image.mode, PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
         let gray = image.convert(py, "L", None)?;
         let source = gray.pixel_data()?;
         let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8 });
-        let gray = py.detach(|| Image::from_pixels(image.width, image.height, PixelMode::L, vec![mean; source.len()], None))?;
-        return gray.convert(py, image.mode.as_str(), None);
+        let gray = py.detach(|| Image::from_pixels(image.width(), image.height(), PixelMode::L, vec![mean; source.len()], None))?;
+        return gray.convert(py, image.pixel_mode().as_str(), None);
     }
     let source = image.pixel_data()?;
-    let sum = py.detach(|| match image.mode {
+    let sum = py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => byte_sum(source),
         PixelMode::La | PixelMode::Pa => source.as_chunks::<2>().0.iter().map(|pixel| u64::from(pixel[0])).sum(),
         PixelMode::Rgb | PixelMode::Hsv => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
         _ => unreachable!(),
     });
-    let pixel_count = source.len() / image.mode.channels();
+    let pixel_count = source.len() / image.pixel_mode().channels();
     let mean = if pixel_count == 0 { 0 } else { (sum as f64 / pixel_count as f64 + 0.5) as u8 };
 
     let mut pixels = alloc_pixels(source.len())?;
-    py.detach(|| match image.mode {
+    py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => pixels.fill(mean),
         PixelMode::La | PixelMode::Pa => {
             for (src, dst) in source.as_chunks::<2>().0.iter().zip(pixels.as_chunks_mut::<2>().0) {
@@ -232,12 +236,12 @@ pub fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return crate::high_depth::degenerate(py, image, "brightness");
     }
     let mut pixels = alloc_pixels(
-        (image.width as usize)
-            .checked_mul(image.height as usize)
-            .and_then(|count| count.checked_mul(image.mode.channels()))
+        (image.width() as usize)
+            .checked_mul(image.height() as usize)
+            .and_then(|count| count.checked_mul(image.pixel_mode().channels()))
             .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?,
     )?;
-    if image.mode == PixelMode::Rgba {
+    if image.pixel_mode() == PixelMode::Rgba {
         let source = image.pixel_data()?;
         py.detach(|| {
             chunks_mut(&mut pixels, CHUNK_PIXELS * 4, |i, dst| {
@@ -258,12 +262,12 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     }
     let source = image.pixel_data()?;
     let mut pixels = py.detach(|| blanket_core::buffers::copy(source))?;
-    if image.width < 3 || image.height < 3 {
+    if image.width() < 3 || image.height() < 3 {
         return output(image, pixels);
     }
 
-    let width = image.width as usize;
-    py.detach(|| match image.mode {
+    let width = image.width() as usize;
+    py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => smooth::<1, 1>(source, &mut pixels, width),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, &mut pixels, width),

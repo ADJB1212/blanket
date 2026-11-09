@@ -156,7 +156,7 @@ pub fn encode_jpeg_options(image: &Image, pixels: &[u8], options: SaveOptions) -
 /// entropy coder, so this equals losslessly transforming the normal save while
 /// avoiding a second entropy decode and re-encode of the whole image.
 pub fn encode_jpeg_variant(image: &Image, options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
-    if image.bit_depth > 8 {
+    if image.bit_depth() > 8 {
         image.raw_data()?;
         return Err(PyValueError::new_err(
             "high-bit-depth saving supports HEIF, PNG, TIFF, or JXL; convert to bit_depth=8 explicitly for this format",
@@ -175,7 +175,7 @@ fn encode_jpeg_configured(image: &Image, pixels: &[u8], options: SaveOptions, co
         || options.jpeg_smooth != 0
         || options.jpeg_restart_marker_blocks != 0
         || options.jpeg_restart_marker_rows != 0
-        || (matches!(image.mode, PixelMode::L | PixelMode::Cmyk) && options.jpeg_subsampling > 0)
+        || (matches!(image.pixel_mode(), PixelMode::L | PixelMode::Cmyk) && options.jpeg_subsampling > 0)
     {
         encode::configured(image, pixels, options, coding)?
     } else {
@@ -187,11 +187,11 @@ fn encode_jpeg_configured(image: &Image, pixels: &[u8], options: SaveOptions, co
 }
 
 fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
-    if image.mode == PixelMode::Rgba {
+    if image.pixel_mode() == PixelMode::Rgba {
         return Err(PyOSError::new_err("cannot write mode RGBA as JPEG"));
     }
 
-    let keep_rgb = options.jpeg_keep_rgb && image.mode == PixelMode::Rgb;
+    let keep_rgb = options.jpeg_keep_rgb && image.pixel_mode() == PixelMode::Rgb;
     if keep_rgb && !matches!(options.jpeg_subsampling, -1 | 0) {
         return Err(PyOSError::new_err("RGB JPEG does not support chroma subsampling"));
     }
@@ -202,28 +202,28 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], opti
         1 => Subsamp::Sub2x1,
         _ => return Err(PyValueError::new_err("subsampling must be -1, 0, 1, or 2")),
     };
-    let (format, subsampling) = match image.mode {
+    let (format, subsampling) = match image.pixel_mode() {
         PixelMode::L => (PixelFormat::GRAY, Subsamp::Gray),
         // Match the default used by Pillow/libjpeg for RGB JPEG output.
         PixelMode::Rgb | PixelMode::YCbCr => (PixelFormat::RGB, subsampling),
         PixelMode::Cmyk => (PixelFormat::CMYK, Subsamp::None),
         PixelMode::Rgba => unreachable!("RGBA is rejected above"),
-        _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.mode.as_str()))),
+        _ => return Err(PyOSError::new_err(format!("cannot write mode {} as JPEG", image.pixel_mode().as_str()))),
     };
     encoder.set_quality(i32::from(options.quality)).map_err(codec_error)?;
     encoder.set_subsamp(subsampling).map_err(codec_error)?;
     encoder.set_optimize(coding.optimize).map_err(codec_error)?;
     encoder.set_progressive(coding.progressive).map_err(codec_error)?;
     encoder
-        .set_colorspace(match image.mode {
+        .set_colorspace(match image.pixel_mode() {
             PixelMode::L => Colorspace::Gray,
             PixelMode::Cmyk => Colorspace::CMYK,
             PixelMode::Rgb if keep_rgb => Colorspace::RGB,
             _ => Colorspace::YCbCr,
         })
         .map_err(codec_error)?;
-    if image.mode == PixelMode::YCbCr {
-        let (width, height) = (image.width as usize, image.height as usize);
+    if image.pixel_mode() == PixelMode::YCbCr {
+        let (width, height) = (image.width() as usize, image.height() as usize);
         let planes = match subsampling {
             Subsamp::Sub2x2 => ycbcr_planes(pixels, width, height),
             _ => ycbcr_horizontal_planes(pixels, width, height, subsampling == Subsamp::Sub2x1),
@@ -245,7 +245,7 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], opti
             .map_err(codec_error);
     }
     let inverted;
-    let pixels = if image.mode == PixelMode::Cmyk {
+    let pixels = if image.pixel_mode() == PixelMode::Cmyk {
         // Like Pillow, store inverted Adobe CMYK without a YCCK transform.
         encoder.set_colorspace(Colorspace::CMYK).map_err(codec_error)?;
         inverted = invert_samples(pixels);
@@ -256,9 +256,9 @@ fn encode_jpeg_with(encoder: &mut Compressor, image: &Image, pixels: &[u8], opti
     encoder
         .compress_to_vec(turbojpeg::Image {
             pixels,
-            width: image.width as usize,
-            pitch: image.width as usize * format.size(),
-            height: image.height as usize,
+            width: image.width() as usize,
+            pitch: image.width() as usize * format.size(),
+            height: image.height() as usize,
             format,
         })
         .map_err(codec_error)
@@ -408,7 +408,7 @@ mod tests {
                         let expected = decode_jpeg_with(&mut Decompressor::new().unwrap(), &actual).unwrap();
                         let decoded = decode_jpeg(&actual).unwrap();
                         assert_eq!(decoded.size(), expected.size());
-                        assert_eq!(decoded.mode, expected.mode);
+                        assert_eq!(decoded.pixel_mode(), expected.pixel_mode());
                         assert_eq!(decoded.raw_data().unwrap(), expected.raw_data().unwrap());
                         assert!(decode_jpeg(&actual[..actual.len() / 2]).is_err());
                         assert_eq!(decode_jpeg(&actual).unwrap().raw_data().unwrap(), expected.raw_data().unwrap());

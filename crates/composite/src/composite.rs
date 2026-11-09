@@ -100,13 +100,13 @@ fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], c
 
 fn paste_mask<'a>(mask: Option<&'a Image>, source: &Image) -> PyResult<Option<(&'a [u8], usize)>> {
     mask.map(|mask| {
-        if mask.palette.is_some() || !matches!(mask.mode, PixelMode::L | PixelMode::Rgba) {
+        if mask.palette().is_some() || !matches!(mask.pixel_mode(), PixelMode::L | PixelMode::Rgba) {
             return Err(PyValueError::new_err("bad transparency mask"));
         }
-        if (mask.width, mask.height) != (source.width, source.height) {
+        if (mask.width(), mask.height()) != (source.width(), source.height()) {
             return Err(PyValueError::new_err("images do not match"));
         }
-        Ok((mask.pixel_data()?, mask.mode.channels()))
+        Ok((mask.pixel_data()?, mask.pixel_mode().channels()))
     })
     .transpose()
 }
@@ -121,7 +121,7 @@ pub(crate) fn paste_bounds(position: (i64, i64), dst_width: usize, dst_height: u
 
 #[pyfunction]
 fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, i64), size: (u32, u32)) -> PyResult<()> {
-    if image.mode != color.mode || image.bit_depth != color.bit_depth || color.size() != (1, 1) {
+    if image.pixel_mode() != color.pixel_mode() || image.bit_depth() != color.bit_depth() || color.size() != (1, 1) {
         return Err(PyValueError::new_err("images do not match"));
     }
     let bytes = color.raw_data()?;
@@ -129,17 +129,17 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
     let stride = image.raw_bytes_per_pixel();
     let mut pixel = [0_u8; 16];
     pixel[..stride].copy_from_slice(bytes);
-    if matches!(image.mode, PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
-        pixel[..2].fill(bytes[usize::from(image.mode.is_big_endian())]);
+    if matches!(image.pixel_mode(), PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
+        pixel[..2].fill(bytes[usize::from(image.pixel_mode().is_big_endian())]);
     }
     let tile: [u8; 48] = std::array::from_fn(|i| pixel[i % stride]);
-    let (left, top, right, bottom) = paste_bounds(position, image.width as usize, image.height as usize, size.0, size.1);
+    let (left, top, right, bottom) = paste_bounds(position, image.width() as usize, image.height() as usize, size.0, size.1);
     if left >= right || top >= bottom {
         return Ok(());
     }
-    image.ensure_owned();
-    let row_bytes = image.width as usize * stride;
-    let pixels = image.pixels.as_mut().unwrap();
+    image.ensure_owned()?;
+    let row_bytes = image.width() as usize * stride;
+    let pixels = image.pixels_mut().unwrap();
     py.detach(|| {
         blanket_core::parallel::chunks_mut(&mut pixels[top as usize * row_bytes..bottom as usize * row_bytes], row_bytes * 32, |_, rows| {
             for row in rows.chunks_exact_mut(row_bytes) {
@@ -158,33 +158,33 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
 #[pyfunction]
 #[pyo3(signature = (image, source, position, mask=None, fill=false))]
 fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
-    image.ensure_owned();
-    if fill && image.mode.is_integer() {
+    image.ensure_owned()?;
+    if fill && image.pixel_mode().is_integer() {
         return paste_integer(py, image, source, position, mask, true);
     }
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::paste(image, source, position, mask, fill));
     }
-    if image.mode.is_wide_scalar() {
+    if image.pixel_mode().is_wide_scalar() {
         return paste_integer(py, image, source, position, mask, fill);
     }
     image.pixel_data()?;
     let source_pixels = source.pixel_data()?;
-    if image.mode != source.mode {
+    if image.pixel_mode() != source.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
     let mask_pixels = paste_mask(mask, source)?;
-    let c = image.mode.channels();
-    let width = image.width as usize;
-    let height = image.height as usize;
-    let pixels = image.pixels.as_mut().expect("validated open image");
+    let c = image.pixel_mode().channels();
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let pixels = image.pixels_mut().expect("validated open image");
     py.detach(|| {
-        let (left, top, right, bottom) = paste_bounds(position, width, height, source.width, source.height);
+        let (left, top, right, bottom) = paste_bounds(position, width, height, source.width(), source.height());
         if right <= left || bottom <= top {
             return;
         }
         let count = (right - left) as usize;
-        if mask_pixels.is_none() && count == width && count == source.width as usize {
+        if mask_pixels.is_none() && count == width && count == source.width() as usize {
             let s = (top - position.1) as usize * count * c;
             let d = top as usize * width * c;
             let len = (bottom - top) as usize * count * c;
@@ -192,7 +192,7 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
             return;
         }
         for y in top..bottom {
-            let s = (y - position.1) as usize * source.width as usize + (left - position.0) as usize;
+            let s = (y - position.1) as usize * source.width() as usize + (left - position.0) as usize;
             let d = (y as usize * width + left as usize) * c;
             let dst = &mut pixels[d..d + count * c];
             let src = &source_pixels[s * c..(s + count) * c];
@@ -205,7 +205,7 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
                     (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
                     (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
                     (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
-                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill && source.mode == PixelMode::Rgba),
+                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill && source.pixel_mode() == PixelMode::Rgba),
                     (4, 4) => paste_masked::<4, 4>(dst, src, mask, fill),
                     _ => unreachable!("validated modes"),
                 }
@@ -218,37 +218,44 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
 }
 
 fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
-    if image.mode != source.mode {
+    if image.pixel_mode() != source.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
     let source_pixels = source.raw_data()?;
     let filled;
-    let source_pixels = if fill && matches!(source.mode, PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
-        filled = source_pixels.as_chunks::<2>().0.iter().flat_map(|pixel| [pixel[usize::from(source.mode.is_big_endian())]; 2]).collect::<Vec<_>>();
+    let source_pixels = if fill && matches!(source.pixel_mode(), PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
+        filled = source_pixels
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .flat_map(|pixel| [pixel[usize::from(source.pixel_mode().is_big_endian())]; 2])
+            .collect::<Vec<_>>();
         &filled
     } else {
         source_pixels
     };
     let mask_pixels = paste_mask(mask, source)?;
     let stride = image.raw_bytes_per_pixel();
-    let width = image.width as i64;
-    let pixels = image.pixels.as_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
+    let width = image.width() as i64;
+    let bounds = paste_bounds(position, image.width() as usize, image.height() as usize, source.width(), source.height());
+    let floating = image.pixel_mode().is_float();
+    let pixels = image.pixels_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
     py.detach(|| {
-        let (left, top, right, bottom) = paste_bounds(position, image.width as usize, image.height as usize, source.width, source.height);
+        let (left, top, right, bottom) = bounds;
         if right <= left || bottom <= top {
             return;
         }
         if mask_pixels.is_none() {
             let row_bytes = (right - left) as usize * stride;
-            if left == 0 && right == width && image.width == source.width {
+            if left == 0 && right == width && width as u32 == source.width() {
                 let src = (top - position.1) as usize * row_bytes;
                 let dst = top as usize * row_bytes;
                 let length = (bottom - top) as usize * row_bytes;
                 pixels[dst..dst + length].copy_from_slice(&source_pixels[src..src + length]);
             } else {
                 for y in top..bottom {
-                    let src = ((y - position.1) as usize * source.width as usize + (left - position.0) as usize) * stride;
-                    let dst = (y as usize * image.width as usize + left as usize) * stride;
+                    let src = ((y - position.1) as usize * source.width() as usize + (left - position.0) as usize) * stride;
+                    let dst = (y as usize * width as usize + left as usize) * stride;
                     pixels[dst..dst + row_bytes].copy_from_slice(&source_pixels[src..src + row_bytes]);
                 }
             }
@@ -256,13 +263,13 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
         }
         for y in top..bottom {
             let count = (right - left) as usize;
-            let source_pixel = (y - position.1) as usize * source.width as usize + (left - position.0) as usize;
-            let destination = (y as usize * image.width as usize + left as usize) * stride;
+            let source_pixel = (y - position.1) as usize * source.width() as usize + (left - position.0) as usize;
+            let destination = (y as usize * width as usize + left as usize) * stride;
             let (mask, mc) = mask_pixels.unwrap();
             let mask = &mask[source_pixel * mc..(source_pixel + count) * mc];
             let src = &source_pixels[source_pixel * stride..(source_pixel + count) * stride];
             let dst = &mut pixels[destination..destination + count * stride];
-            if image.mode.is_float() {
+            if floating {
                 paste_float(dst, src, mask, stride / 4, mc);
             } else {
                 match (stride, mc) {
@@ -319,10 +326,14 @@ fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask
 
 #[pyfunction]
 pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image) -> PyResult<Image> {
-    if background.mode != PixelMode::Rgba || overlay.mode != PixelMode::Rgba || background.palette.is_some() || overlay.palette.is_some() {
+    if background.pixel_mode() != PixelMode::Rgba
+        || overlay.pixel_mode() != PixelMode::Rgba
+        || background.palette().is_some()
+        || overlay.palette().is_some()
+    {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if (background.width, background.height) != (overlay.width, overlay.height) {
+    if (background.width(), background.height()) != (overlay.width(), overlay.height()) {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(background) {
@@ -335,16 +346,16 @@ pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image
         composite_pixels(&mut pixels, source);
         pixels
     });
-    Image::from_pixels(background.width, background.height, PixelMode::Rgba, pixels, None)
+    Image::from_pixels(background.width(), background.height(), PixelMode::Rgba, pixels, None)
 }
 
 #[pyfunction]
 fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image) -> PyResult<()> {
-    image.ensure_owned();
-    if image.mode != PixelMode::Rgba || overlay.mode != PixelMode::Rgba || image.palette.is_some() || overlay.palette.is_some() {
+    image.ensure_owned()?;
+    if image.pixel_mode() != PixelMode::Rgba || overlay.pixel_mode() != PixelMode::Rgba || image.palette().is_some() || overlay.palette().is_some() {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if (image.width, image.height) != (overlay.width, overlay.height) {
+    if (image.width(), image.height()) != (overlay.width(), overlay.height()) {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(image) {
@@ -352,7 +363,7 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
     }
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
-    let pixels = image.pixels.as_mut().expect("validated open image");
+    let pixels = image.pixels_mut().expect("validated open image");
     py.detach(|| composite_pixels(pixels, source));
     Ok(())
 }
@@ -420,7 +431,7 @@ fn composite_scalar(pixels: &mut [u8], source: &[u8]) {
 #[pyfunction]
 fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyResult<()> {
     if !matches!(
-        image.mode,
+        image.pixel_mode(),
         PixelMode::One
             | PixelMode::L
             | PixelMode::La
@@ -433,22 +444,21 @@ fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyR
     ) {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
-        let converted = image.convert(py, if image.mode == PixelMode::PremulLa { "LA" } else { "RGBA" }, None)?;
-        image.pixels = converted.pixels;
-        image.mode = converted.mode;
+    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
+        let converted = image.convert(py, if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" }, None)?;
+        image.replace_storage(converted)?;
     }
-    if image.bit_depth > 8 && !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+    if image.bit_depth() > 8 && !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("high-depth putalpha requires RGB or RGBA"));
     }
     image.raw_data()?;
     let bytes = alpha.to_le_bytes();
-    let sample_bytes = if image.bit_depth == 8 { 1 } else { 2 };
+    let sample_bytes = if image.bit_depth() == 8 { 1 } else { 2 };
     let alpha = &bytes[..sample_bytes];
-    if matches!(image.mode, PixelMode::La | PixelMode::Pa | PixelMode::Rgba) {
-        image.ensure_owned();
+    if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Pa | PixelMode::Rgba) {
+        image.ensure_owned()?;
         let stride = image.raw_bytes_per_pixel();
-        let pixels = image.pixels.as_mut().unwrap();
+        let pixels = image.pixels_mut().unwrap();
         py.detach(|| match stride {
             2 => set_constant_alpha::<2, 1>(pixels, alpha),
             4 => set_constant_alpha::<4, 1>(pixels, alpha),
@@ -458,22 +468,20 @@ fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyR
         return Ok(());
     }
     let source = image.raw_data()?;
-    let pixels = py.detach(|| match (image.mode.channels(), sample_bytes) {
-        (1, 1) => constant_alpha::<1, 2>(source, alpha, image.mode == PixelMode::One),
+    let pixels = py.detach(|| match (image.pixel_mode().channels(), sample_bytes) {
+        (1, 1) => constant_alpha::<1, 2>(source, alpha, image.pixel_mode() == PixelMode::One),
         (3, 1) => constant_alpha::<3, 4>(source, alpha, false),
         (3, 2) => constant_alpha::<6, 8>(source, alpha, false),
         _ => unreachable!(),
     })?;
-    image.pixels = Some(pixels);
-    image.shared_pixels = None;
-    image.mode = if image.mode.channels() == 3 {
+    let mode = if image.pixel_mode().channels() == 3 {
         PixelMode::Rgba
-    } else if image.palette.is_some() {
+    } else if image.palette().is_some() {
         PixelMode::Pa
     } else {
         PixelMode::La
     };
-    Ok(())
+    image.replace_storage(Image::from_raw_bytes(image.width(), image.height(), mode, pixels, image.bit_depth())?)
 }
 
 fn set_constant_alpha<const C: usize, const A: usize>(pixels: &mut [u8], alpha: &[u8]) {
@@ -510,9 +518,9 @@ fn constant_alpha<const S: usize, const D: usize>(source: &[u8], alpha: &[u8], b
 
 #[pyfunction]
 fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<()> {
-    image.ensure_owned();
+    image.ensure_owned()?;
     if !matches!(
-        image.mode,
+        image.pixel_mode(),
         PixelMode::One
             | PixelMode::L
             | PixelMode::La
@@ -525,25 +533,24 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     ) {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if alpha.mode != PixelMode::L || alpha.palette.is_some() || (alpha.width, alpha.height) != (image.width, image.height) {
+    if alpha.pixel_mode() != PixelMode::L || alpha.palette().is_some() || (alpha.width(), alpha.height()) != (image.width(), image.height()) {
         return Err(PyValueError::new_err("illegal image mode or size for alpha"));
     }
-    if matches!(image.mode, PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
-        let mode = if image.mode == PixelMode::PremulLa { "LA" } else { "RGBA" };
+    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
+        let mode = if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" };
         let converted = image.convert(py, mode, None)?;
-        image.pixels = converted.pixels;
-        image.mode = converted.mode;
+        image.replace_storage(converted)?;
     }
     if blanket_core::samples::supported(image) {
-        if !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
+        if !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba) {
             return Err(PyValueError::new_err("high-depth putalpha requires RGB or RGBA"));
         }
         return py.detach(|| crate::high_depth::putalpha(image, alpha));
     }
     let source = image.pixel_data()?;
     let alpha = alpha.pixel_data()?;
-    if matches!(image.mode, PixelMode::La | PixelMode::Pa) {
-        let pixels = image.pixels.as_mut().expect("validated open image");
+    if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Pa) {
+        let pixels = image.pixels_mut().expect("validated open image");
         py.detach(|| {
             blanket_core::parallel::chunks_mut(pixels, 32 * 1024, |chunk, pixels| {
                 for (pixel, &value) in pixels.as_chunks_mut::<2>().0.iter_mut().zip(&alpha[chunk * 16 * 1024..]) {
@@ -553,10 +560,10 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
         });
         return Ok(());
     }
-    if matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
-        let channels = image.mode.channels();
-        let bilevel = image.mode == PixelMode::One;
-        let mode = if image.palette.is_some() || image.mode == PixelMode::Pa { PixelMode::Pa } else { PixelMode::La };
+    if matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
+        let channels = image.pixel_mode().channels();
+        let bilevel = image.pixel_mode() == PixelMode::One;
+        let mode = if image.palette().is_some() || image.pixel_mode() == PixelMode::Pa { PixelMode::Pa } else { PixelMode::La };
         let mut pixels = vec![0; alpha.len() * 2];
         py.detach(|| {
             let end = alpha.len() / 16 * 16;
@@ -571,11 +578,10 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
                 pixels[i * 2 + 1] = alpha[i];
             }
         });
-        image.pixels = Some(pixels);
-        image.mode = mode;
+        image.replace_storage(Image::from_pixels(image.width(), image.height(), mode, pixels, None)?)?;
         return Ok(());
     }
-    if image.mode == PixelMode::Rgb {
+    if image.pixel_mode() == PixelMode::Rgb {
         let mut pixels = vec![0; alpha.len() * 4];
         py.detach(|| {
             let offset = blanket_core::pixels::putalpha_rgb(source, alpha, &mut pixels);
@@ -585,11 +591,10 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
                 *dst = [src[0], src[1], src[2], a];
             }
         });
-        image.pixels = Some(pixels);
-        image.mode = PixelMode::Rgba;
+        image.replace_storage(Image::from_pixels(image.width(), image.height(), PixelMode::Rgba, pixels, None)?)?;
         return Ok(());
     }
-    let pixels = image.pixels.as_mut().expect("validated open image");
+    let pixels = image.pixels_mut().expect("validated open image");
     py.detach(|| {
         let offset = blanket_core::pixels::putalpha_rgba(pixels, alpha);
         for (pixel, &a) in pixels[offset * 4..].as_chunks_mut::<4>().0.iter_mut().zip(&alpha[offset..]) {

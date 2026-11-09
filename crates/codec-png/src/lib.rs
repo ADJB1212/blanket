@@ -37,13 +37,13 @@ fn decoder(data: &[u8]) -> png::Decoder<Cursor<&[u8]>> {
 
 pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
     let pixels = image.pixel_data()?;
-    let (mode, palette) = image.palette.as_ref().ok_or_else(|| PyValueError::new_err("image has no palette"))?;
+    let (mode, palette) = image.palette().as_ref().ok_or_else(|| PyValueError::new_err("image has no palette"))?;
     if !matches!(mode, PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("unsupported PNG palette mode"));
     }
     let mut encoded = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut encoded, image.width, image.height);
+        let mut encoder = png::Encoder::new(&mut encoded, image.width(), image.height());
         encoder.set_color(png::ColorType::Indexed);
         encoder.set_depth(png::BitDepth::Eight);
         encoder.set_compression(match compress_level {
@@ -99,7 +99,7 @@ pub fn encode_png(image: &Image, pixels: &[u8], compress_level: u8) -> PyResult<
     }
     let mut output = Vec::new();
     PngEncoder::new_with_quality(&mut output, CompressionType::Level(compress_level), FilterType::Adaptive)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
         .map_err(codec_error)?;
     Ok(output)
 }
@@ -110,15 +110,15 @@ pub fn encode_png_to(image: &Image, pixels: &[u8], compress_level: u8, output: i
         return encode::encode_to(image, pixels, compress_level, output);
     }
     PngEncoder::new_with_quality(output, CompressionType::Level(compress_level), FilterType::Adaptive)
-        .write_image(pixels, image.width, image.height, color_type(image.mode))
+        .write_image(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
         .map_err(codec_error)
 }
 
 fn validate_encode_input(image: &Image, pixels: &[u8]) -> PyResult<()> {
-    if !matches!(image.mode, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+    if !matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("unsupported PNG mode"));
     }
-    let length = (image.width as usize).checked_mul(image.height as usize).and_then(|n| n.checked_mul(image.mode.channels()));
+    let length = (image.width() as usize).checked_mul(image.height() as usize).and_then(|n| n.checked_mul(image.pixel_mode().channels()));
     if length != Some(pixels.len()) {
         return Err(PyValueError::new_err("invalid PNG input buffer"));
     }
@@ -126,11 +126,11 @@ fn validate_encode_input(image: &Image, pixels: &[u8]) -> PyResult<()> {
 }
 
 pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
-    let width = image.width as usize;
-    let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, width, image.height as usize);
+    let width = image.width() as usize;
+    let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, width, image.height() as usize);
     let mut output = Vec::new();
     {
-        let mut encoder = png::Encoder::new(&mut output, image.width, image.height);
+        let mut encoder = png::Encoder::new(&mut output, image.width(), image.height());
         encoder.set_color(png::ColorType::Grayscale);
         encoder.set_depth(png::BitDepth::One);
         encoder.set_compression(match compress_level {
@@ -172,7 +172,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, DecodeError> {
         };
         let mut image =
             Image::from_pixels(frame.width, frame.height, PixelMode::L, pixels, Some("PNG".into())).map_err(DecodeError::with_diagnostic_source)?;
-        image.palette = Some((PixelMode::Rgb, palette));
+        image.set_palette_data(Some((PixelMode::Rgb, palette))).map_err(DecodeError::with_diagnostic_source)?;
         return Ok(image);
     }
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
@@ -218,9 +218,9 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> R
 pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
     let mut output = Vec::new();
     {
-        let mut info = png::Info::with_size(image.width, image.height);
+        let mut info = png::Info::with_size(image.width(), image.height());
         info.bit_depth = png::BitDepth::Sixteen;
-        info.color_type = match image.mode {
+        info.color_type = match image.pixel_mode() {
             PixelMode::L => png::ColorType::Grayscale,
             PixelMode::Rgb => png::ColorType::Rgb,
             PixelMode::Rgba => png::ColorType::Rgba,
@@ -234,12 +234,12 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
             png::DeflateCompression::Level(options.compress_level)
         });
         let mut writer = encoder.write_header().map_err(codec_error)?;
-        writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth; image.mode.channels()]).map_err(codec_error)?;
+        writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth(); image.pixel_mode().channels()]).map_err(codec_error)?;
         let mut stream = writer.stream_writer_with_size(128 * 1024).map_err(codec_error)?;
-        let stride = image.width as usize * image.mode.channels() * 2;
+        let stride = image.width() as usize * image.pixel_mode().channels() * 2;
         let mut samples = vec![0; stride];
         for row in pixels.chunks_exact(stride) {
-            blanket_core::simd::samples_to_be16(row, &mut samples, image.bit_depth);
+            blanket_core::simd::samples_to_be16(row, &mut samples, image.bit_depth());
             stream.write_all(&samples).map_err(codec_error)?;
         }
         stream.finish().map_err(codec_error)?;

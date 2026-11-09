@@ -194,7 +194,7 @@ fn blur_into(image: &Image, source: &[u16], values: &mut [u16], radii: (f32, f32
     let pass = |src: &[u16], dst: &mut [u16], index| {
         let vertical = index >= horizontal;
         let radius = if vertical { radii.1 } else { radii.0 };
-        box_pass(src, dst, image.width as usize, image.height as usize, image.mode.channels(), radius, vertical);
+        box_pass(src, dst, image.width() as usize, image.height() as usize, image.pixel_mode().channels(), radius, vertical);
     };
     for index in 0..total {
         // Choose the first destination so the final pass lands in the output.

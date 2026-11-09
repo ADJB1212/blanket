@@ -139,12 +139,12 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
 
 pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>) -> PyResult<Vec<u8>> {
     let first = sequence.frames[0].image.borrow();
-    if first.width == 0 || first.height == 0 || first.width > 65535 || first.height > 65535 {
+    if first.width() == 0 || first.height() == 0 || first.width() > 65535 || first.height() > 65535 {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
     let mut output = Vec::new();
     {
-        let mut encoder = gif::Encoder::new(&mut output, first.width as u16, first.height as u16, &[]).map_err(codec_error)?;
+        let mut encoder = gif::Encoder::new(&mut output, first.width() as u16, first.height() as u16, &[]).map_err(codec_error)?;
         if let Some(count) = sequence.loop_count {
             encoder.set_repeat(if count == 0 { gif::Repeat::Infinite } else { gif::Repeat::Finite(count as u16) }).map_err(codec_error)?;
         }
@@ -152,7 +152,7 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
         for frame in &sequence.frames {
             pixels.clear();
             pixels.extend_from_slice(frame.image.borrow().pixel_data()?);
-            let mut encoded = gif::Frame::from_rgba_speed(first.width as u16, first.height as u16, &mut pixels, 10);
+            let mut encoded = gif::Frame::from_rgba_speed(first.width() as u16, first.height() as u16, &mut pixels, 10);
             encoded.delay = (frame.duration.unwrap_or(0.0) / 10.0) as u16;
             encoded.dispose = gif::DisposalMethod::from_u8(frame.disposal).ok_or_else(|| PyValueError::new_err("invalid GIF disposal"))?;
             encoder.write_frame(&encoded).map_err(codec_error)?;
@@ -191,20 +191,20 @@ fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String
     if let Some(palette) = palette
         && palette.as_chunks::<3>().0.iter().enumerate().any(|(index, color)| *color != [index as u8; 3])
     {
-        image.palette = Some((PixelMode::Rgb, palette));
+        image.set_palette_data(Some((PixelMode::Rgb, palette))).map_err(|error| error.to_string())?;
     }
     Ok(blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 })
 }
 
 pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    if image.width == 0 || image.height == 0 {
+    if image.width() == 0 || image.height() == 0 {
         return Err(PyValueError::new_err("cannot encode an empty image"));
     }
-    if image.width > 65535 || image.height > 65535 {
+    if image.width() > 65535 || image.height() > 65535 {
         return Err(PyValueError::new_err("GIF dimensions must be between 1 and 65535"));
     }
     let mut output = Vec::new();
-    if let Some((mode, entries)) = &image.palette {
+    if let Some((mode, entries)) = &image.palette() {
         let mut palette = Vec::with_capacity(entries.len());
         let mut transparent = None;
         for (index, entry) in entries.chunks_exact(mode.channels()).enumerate() {
@@ -216,14 +216,14 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
         let required = usize::from(pixels.iter().copied().max().unwrap_or(0)) + 1;
         palette.resize(palette.len().max(required * 3), 0);
         let frame = gif::Frame {
-            width: image.width as u16,
-            height: image.height as u16,
+            width: image.width() as u16,
+            height: image.height() as u16,
             transparent,
             buffer: Cow::Borrowed(pixels),
             ..gif::Frame::default()
         };
         gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
-    } else if image.mode == PixelMode::L {
+    } else if image.pixel_mode() == PixelMode::L {
         let mut used = [false; 256];
         for &value in pixels {
             used[usize::from(value)] = true;
@@ -237,10 +237,12 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
             }
         }
         let buffer = if palette.len() == 768 { Cow::Borrowed(pixels) } else { Cow::Owned(pixels.iter().map(|&v| indices[usize::from(v)]).collect()) };
-        let frame = gif::Frame { width: image.width as u16, height: image.height as u16, buffer, ..gif::Frame::default() };
+        let frame = gif::Frame { width: image.width() as u16, height: image.height() as u16, buffer, ..gif::Frame::default() };
         gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
     } else {
-        image::codecs::gif::GifEncoder::new(&mut output).encode(pixels, image.width, image.height, color_type(image.mode)).map_err(codec_error)?;
+        image::codecs::gif::GifEncoder::new(&mut output)
+            .encode(pixels, image.width(), image.height(), color_type(image.pixel_mode()))
+            .map_err(codec_error)?;
     }
 
     Ok(output)

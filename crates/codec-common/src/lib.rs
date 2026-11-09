@@ -96,7 +96,18 @@ impl DecodeError {
 
     /// Convert the diagnostic to the matching Python exception category.
     pub fn into_pyerr(self, format: Option<&str>) -> PyErr {
-        self.kind.into_pyerr(self.message, format, "decode")
+        fn cause(py: Python<'_>, source: &dyn std::error::Error) -> PyErr {
+            let error = PyOSError::new_err(source.to_string());
+            if let Some(source) = source.source() {
+                error.set_cause(py, Some(cause(py, source)));
+            }
+            error
+        }
+        let error = self.kind.into_pyerr(self.message, format, "decode");
+        if let Some(source) = self.source {
+            Python::attach(|py| error.set_cause(py, Some(cause(py, source.as_ref()))));
+        }
+        error
     }
 }
 
@@ -144,6 +155,29 @@ mod decode_error_tests {
         assert_eq!(error.source().unwrap().to_string(), message);
         assert_eq!(DecodeError::from("unsupported channel layout").kind(), CodecErrorKind::Unsupported);
         assert_eq!(DecodeError::from("image exceeds Blanket limit").kind(), CodecErrorKind::ResourceLimit);
+    }
+
+    #[test]
+    fn python_conversion_preserves_native_source_chain() {
+        Python::initialize();
+        for snapshot in [false, true] {
+            let original = "invalid".parse::<u32>().unwrap_err();
+            let message = original.to_string();
+            let mut native = DecodeError::with_source(original);
+            native.message = "unsupported JPEG XL profile".into();
+            let error = if snapshot { DecodeError::with_diagnostic_source(native) } else { DecodeError::with_source(native) };
+            let error = error.into_pyerr(Some("JXL"));
+            Python::attach(|py| {
+                let cause = error.cause(py).expect("native cause");
+                assert!(cause.is_instance_of::<PyOSError>(py));
+                assert_eq!(cause.value(py).str().unwrap().to_str().unwrap(), "unsupported JPEG XL profile");
+                let source = cause.cause(py).expect("nested native cause");
+                assert_eq!(source.value(py).str().unwrap().to_str().unwrap(), message);
+                assert!(source.cause(py).is_none());
+            });
+            let plain = DecodeError::from("invalid JPEG XL stream").into_pyerr(Some("JXL"));
+            Python::attach(|py| assert!(plain.cause(py).is_none()));
+        }
     }
 }
 

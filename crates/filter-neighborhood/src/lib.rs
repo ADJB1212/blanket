@@ -16,17 +16,17 @@ mod simd;
 mod wide;
 
 fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
-    let mut result = Image::from_pixels(image.width, image.height, image.mode, pixels, None)?;
-    result.palette.clone_from(&image.palette);
+    let mut result = Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)?;
+    result.copy_palette_from(image);
     Ok(result)
 }
 
 #[pyfunction]
 pub fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32, offset: f32, mut kernel: Vec<f32>) -> PyResult<Image> {
-    if (image.palette.is_some() && image.mode != PixelMode::Pa) || image.mode == PixelMode::F {
+    if (image.palette().is_some() && image.pixel_mode() != PixelMode::Pa) || image.pixel_mode() == PixelMode::F {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if image.mode == PixelMode::I {
+    if image.pixel_mode() == PixelMode::I {
         if size.0 != size.1 || !matches!(size.0, 3 | 5) || kernel.len() != (size.0 * size.1) as usize {
             return Err(PyValueError::new_err("bad kernel size"));
         }
@@ -43,7 +43,7 @@ pub fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32
         return Err(PyValueError::new_err("bad kernel size"));
     }
     let mut pixels = py.detach(|| source.to_vec());
-    if i64::from(image.width) < i64::from(size.0) || i64::from(image.height) < i64::from(size.1) {
+    if i64::from(image.width()) < i64::from(size.0) || i64::from(image.height()) < i64::from(size.1) {
         return output(image, pixels);
     }
     if size.0 != size.1 || !matches!(size.0, 3 | 5) {
@@ -53,8 +53,8 @@ pub fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32
         *value /= scale;
     }
     let weights = kernel;
-    let width = image.width as usize;
-    py.detach(|| match (image.mode, size.0) {
+    let width = image.width() as usize;
+    py.detach(|| match (image.pixel_mode(), size.0) {
         (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
         (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
         (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
@@ -148,7 +148,7 @@ pub(crate) fn kernel_add(value: f32, weight: f32, sum: f32) -> f32 {
 
 #[pyfunction]
 pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyResult<Image> {
-    if image.palette.is_some() && image.mode != PixelMode::Pa {
+    if image.palette().is_some() && image.pixel_mode() != PixelMode::Pa {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
     if size < 1 || size % 2 == 0 {
@@ -162,7 +162,7 @@ pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyRes
         return Err(PyValueError::new_err("bad rank value"));
     }
     if size == 1 {
-        if !blanket_core::samples::supported(image) && !matches!(image.mode, PixelMode::I | PixelMode::F) {
+        if !blanket_core::samples::supported(image) && !matches!(image.pixel_mode(), PixelMode::I | PixelMode::F) {
             image.pixel_data()?;
         }
         return image.copy(py);
@@ -170,7 +170,7 @@ pub fn filter_rank(py: Python<'_>, image: &Image, size: i32, rank: i32) -> PyRes
     if blanket_core::samples::supported(image) {
         return py.detach(|| crate::high_depth::neighborhood(image, (size / 2) as usize, Some(rank as u64)));
     }
-    if matches!(image.mode, PixelMode::I | PixelMode::F) {
+    if matches!(image.pixel_mode(), PixelMode::I | PixelMode::F) {
         return py.detach(|| crate::wide::rank(image, size as usize, rank as usize));
     }
     match (size, rank) {
@@ -199,8 +199,8 @@ fn small_rank<const K: usize, const R: usize>(py: Python<'_>, image: &Image) -> 
     let source = image.pixel_data()?;
     let mut pixels = alloc_pixels(source.len())?;
     if !pixels.is_empty() {
-        let channels = image.mode.channels();
-        let stride = image.width as usize * channels;
+        let channels = image.pixel_mode().channels();
+        let stride = image.width() as usize * channels;
         py.detach(|| {
             chunks_mut(&mut pixels, stride * 16, |band, rows| {
                 for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
@@ -220,8 +220,8 @@ fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -
         if pixels.is_empty() {
             return Ok(pixels);
         }
-        let channels = image.mode.channels();
-        let stride = image.width as usize * channels;
+        let channels = image.pixel_mode().channels();
+        let stride = image.width() as usize * channels;
         chunks_mut(&mut horizontal, stride * 16, |band, rows| {
             let mut queue = VecDeque::new();
             for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
@@ -232,7 +232,7 @@ fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -
             }
         });
         // Growing bands with the radius bounds repeated window initialization.
-        let band_rows = 64.max(radius.min(image.height as usize));
+        let band_rows = 64.max(radius.min(image.height() as usize));
         chunks_mut(&mut pixels, stride * band_rows, |band, rows| {
             let mut queue = VecDeque::new();
             for column in 0..stride {
@@ -275,9 +275,9 @@ fn neighborhood(py: Python<'_>, image: &Image, radius: usize, rank: Option<u64>)
         return output(image, py.detach(|| blanket_core::buffers::copy(source))?);
     }
     let mut pixels = alloc_pixels(source.len())?;
-    let width = image.width as usize;
-    let height = image.height as usize;
-    let channels = image.mode.channels();
+    let width = image.width() as usize;
+    let height = image.height() as usize;
+    let channels = image.pixel_mode().channels();
     if pixels.is_empty() {
         return output(image, pixels);
     }
