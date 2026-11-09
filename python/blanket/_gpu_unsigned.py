@@ -142,7 +142,8 @@ class GpuUnsignedImage:
 
         Args:
             size: Positive output (width, height).
-            resample: Any Image.Resampling filter; defaults to BICUBIC.
+            resample: NEAREST, LANCZOS, BILINEAR, BICUBIC, BOX, or HAMMING;
+                defaults to BICUBIC. MKS2013/MKS2021 are CPU-only.
             linear_light: Decode sRGB color before filtering and encode afterward.
                 Requires RGB or RGBA input.
 

@@ -48,9 +48,17 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
     Names are case insensitive and accept feature aliases and format aliases.
     Unknown names raise ValueError. No images are allocated or encoded.
 
-    Example::
+    Args:
+        format: Format name or alias, matched case insensitively.
 
-        features.encoding_capabilities("PNG").mode_depths
+    Examples:
+        ```python
+        from blanket import features
+
+        capabilities = features.encoding_capabilities("PNG")
+        assert capabilities is not None
+        print(capabilities.mode_depths)
+        ```
     """
     if not isinstance(format, str):
         raise TypeError("format must be a string")

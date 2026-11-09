@@ -50,17 +50,58 @@ def _logical(image1: Image.Image, image2: Image.Image, operation: str) -> Image.
 
 
 def logical_and(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the bitwise AND of two bilevel images."""
+    """Return the bitwise AND of two bilevel images.
+
+    Args:
+        image1: First mode 1 image; output uses the top-left overlap.
+        image2: Second mode 1 image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        white = Image.new("1", (2, 2), 1)
+        black = Image.new("1", (2, 2), 0)
+        assert ImageChops.logical_and(white, black).getpixel((0, 0)) == 0
+        ```
+    """
     return _logical(image1, image2, "and")
 
 
 def logical_or(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the bitwise OR of two bilevel images."""
+    """Return the bitwise OR of two bilevel images.
+
+    Args:
+        image1: First mode 1 image; output uses the top-left overlap.
+        image2: Second mode 1 image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        white = Image.new("1", (2, 2), 1)
+        black = Image.new("1", (2, 2), 0)
+        assert ImageChops.logical_or(white, black).getpixel((0, 0)) == 255
+        ```
+    """
     return _logical(image1, image2, "or")
 
 
 def logical_xor(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Return the bitwise XOR of two bilevel images."""
+    """Return the bitwise XOR of two bilevel images.
+
+    Args:
+        image1: First mode 1 image; output uses the top-left overlap.
+        image2: Second mode 1 image.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageChops
+
+        white = Image.new("1", (2, 2), 1)
+        assert ImageChops.logical_xor(white, white).getpixel((0, 0)) == 0
+        ```
+    """
     return _logical(image1, image2, "xor")
 
 
@@ -77,7 +118,7 @@ def difference(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Return the absolute difference between corresponding channel values.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -93,10 +134,10 @@ def difference(image1: Image.Image, image2: Image.Image) -> Image.Image:
 
 
 def multiply(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Multiply corresponding channel values and divide by 255.
+    """Multiply channel values and divide by the sample maximum (255 at 8 bits).
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -115,7 +156,7 @@ def screen(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Invert, multiply, and invert again to lighten the inputs.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -134,7 +175,7 @@ def lighter(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Return the larger value in each channel.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -153,7 +194,7 @@ def darker(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Return the smaller value in each channel.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -169,10 +210,10 @@ def darker(image1: Image.Image, image2: Image.Image) -> Image.Image:
 
 
 def add(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: int = 0) -> Image.Image:
-    """Add channels, divide by scale, add offset, and clip to 0..255.
+    """Add channels, divide by scale, add offset, and clip to the sample range.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
         scale: Divisor applied before the offset; must be nonzero.
         offset: Value added after scaling.
@@ -190,10 +231,10 @@ def add(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: in
 
 
 def subtract(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: int = 0) -> Image.Image:
-    """Subtract channels, divide by scale, add offset, and clip to 0..255.
+    """Subtract channels, divide by scale, add offset, and clip to the sample range.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
         scale: Divisor applied before the offset; must be nonzero.
         offset: Value added after scaling.
@@ -211,10 +252,10 @@ def subtract(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offse
 
 
 def add_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Add channels with wraparound modulo 256.
+    """Add channels with wraparound modulo 2 ** bit_depth (256 at 8 bits).
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -230,10 +271,10 @@ def add_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
 
 
 def subtract_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
-    """Subtract channels with wraparound modulo 256.
+    """Subtract channels with wraparound modulo 2 ** bit_depth (256 at 8 bits).
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -252,7 +293,7 @@ def soft_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Combine images using Pillow's soft-light blend.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -271,7 +312,7 @@ def hard_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Multiply or screen according to the second image's channel values.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -290,7 +331,7 @@ def overlay(image1: Image.Image, image2: Image.Image) -> Image.Image:
     """Multiply or screen according to the first image's channel values.
 
     Args:
-        image1: First input image; its mode and dimensions must match the second image.
+        image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
     Examples:
@@ -306,7 +347,7 @@ def overlay(image1: Image.Image, image2: Image.Image) -> Image.Image:
 
 
 def invert(image: Image.Image) -> Image.Image:
-    """Subtract every channel, including alpha, from 255.
+    """Subtract every channel, including alpha, from the sample maximum.
 
     Args:
         image: Input image.

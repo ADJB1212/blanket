@@ -462,7 +462,7 @@ class Image:
     """An image whose pixels and supported operations live in Rust.
 
     Modes include `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGBX`, `HSV`, `CMYK`,
-    `YCbCr`, `LAB`, `I`, `I;16` variants, and `F`. Indexed, premultiplied, integer, and float
+    `YCbCr`, `LAB`, `I`, `I;16` variants, `F`, `RGB;F`, and `RGBA;F`. Indexed, premultiplied, integer, and float
     modes support a smaller operation set than 8-bit color modes.
     """
 
@@ -516,7 +516,7 @@ class Image:
 
     @property
     def bit_depth(self) -> int:
-        """Significant bits per channel (8, 10, 12, 16, or 32 for `I` and `F`).
+        """Sample depth: 8, 10, 12, 16, or 32 for signed integer and float modes.
 
         Examples:
             ```python
@@ -1613,7 +1613,7 @@ class Image:
             from blanket import Image
 
             image = Image.new("RGB", (2, 2))
-            image.frombytes(b"\xff\x00\x00" * 4)
+            image.frombytes(bytes([255, 0, 0]) * 4)
             ```
         """
         self.load()
@@ -2411,8 +2411,9 @@ class Image:
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
         """Save in a supported raster format or PDF; see the formats guide.
 
-        La, RGBa, and RGBX require explicit conversion before saving.
-        HSV cannot be saved. `F` and `LAB` write TIFF only. `YCbCr` writes
+        La and RGBa require explicit conversion before saving. RGBX writes
+        JPEG (discarding X); other formats require conversion first.
+        HSV cannot be saved. Float modes and `LAB` write TIFF only. `YCbCr` writes
         JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
         convert to `L` for encoding.
 
@@ -2604,7 +2605,19 @@ class Image:
 
 
 def linear_gradient(mode: str) -> Image:
-    """Return a 256 by 256 vertical L or F gradient."""
+    """Return a 256 by 256 vertical L or F gradient.
+
+    Args:
+        mode: Output mode, L or F.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        gradient = Image.linear_gradient("L")
+        assert gradient.getpixel((0, 255)) == 255
+        ```
+    """
     return Image(ops_linear_gradient(mode))
 
 
@@ -2612,7 +2625,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     """Create a supported-mode image filled with color.
 
     Args:
-        mode: Image mode: `1`, `L`, `LA`, `P`, `PA`, `RGB`, `RGBA`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, or an `I;16` variant.
+        mode: Image mode: `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGBX`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, `RGB;F`, `RGBA;F`, or an `I;16` variant.
         size: Output `(width, height)` in pixels.
         color: Fill value, channel tuple, or CSS color string.
 
@@ -2744,7 +2757,7 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
 
 
 def alpha_composite(im1: Image, im2: Image, *, linear_light: bool = False, transfer: str = "srgb") -> Image:
-    """Return im2 composited over im1; both must be equal-sized RGBA of matching depth.
+    """Return im2 over im1; inputs must be equal-sized RGBA or RGBA;F of matching depth.
 
     High-depth inputs use straight-alpha source-over with nearest-integer
     rounding and retain their sample depth.
@@ -3046,6 +3059,23 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
     strips or tiles. Other layouts require fallback="full", which eagerly
     opens the source and crops frame zero. The default rejects fallback.
     Encoded input is read in full; normal source dimension limits still apply.
+
+    Args:
+        fp: Image filename, path-like object, or binary stream.
+        box: Nonempty (left, top, right, bottom) rectangle inside the first image.
+        fallback: "error" raises NotImplementedError for unsupported layouts;
+            "full" permits full decoding followed by a crop.
+        formats: Optional allowlist of format names.
+
+    Examples:
+        ```python
+        from io import BytesIO
+        from blanket import Image
+
+        data = Image.new("RGB", (8, 8), "red").encode("TIFF")
+        region = Image.open_region(BytesIO(data), (1, 2, 5, 6))
+        assert region.size == (4, 4)
+        ```
     """
     if fallback not in ("error", "full"):
         raise ValueError("fallback must be 'error' or 'full'")
@@ -3100,10 +3130,10 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         mode: Image mode, including `1` (row-packed bits), indexed, integer, float, and 8-bit color modes.
         size: Output `(width, height)` in pixels.
         data: Contiguous packed pixel buffer. `I` uses little-endian int32, `F` uses little-endian float32, and `I;16B` uses big-endian uint16.
-        decoder_name: Only `raw` is supported.
+        decoder_name: `raw`, `hex`, or `packbits`.
         *args: Raw mode, byte stride (0 means packed), and orientation (1 top-down, -1 bottom-up).
             Supports the image mode at its sample depth, 8-bit BGR/BGRX to RGB, and BGRA to RGBA.
-        bit_depth: Significant bits per channel: 8, 10, 12, or 16 for high-bit-depth storage, or 32 for `I` and `F`.
+        bit_depth: Significant bits per channel: 8, 10, 12, or 16 for unsigned storage. Signed integer and float modes use 32 bits regardless of the default value.
 
     Examples:
         ```python
@@ -3135,6 +3165,25 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
     Source changes remain visible until an image mutation detaches its pixels.
     Instance frombytes writes through writable mappings. Other raw layouts and
     decoders create an independent image.
+
+    Args:
+        mode: Requested image mode; mapped layouts use rawmode as the mode.
+        size: Output (width, height) in pixels.
+        data: Contiguous pixel buffer, including final-row padding for mappings.
+        decoder_name: Decoder name; only raw layouts can be mapped.
+        *args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        pixels = bytearray([10, 20])
+        image = Image.frombuffer("L", (2, 1), pixels, "raw", "L", 0, 1)
+        pixels[0] = 30
+        assert image.getpixel((0, 0)) == 30
+        image.putpixel((0, 0), 40)
+        assert pixels[0] == 30
+        ```
     """
     if len(args) == 1 and isinstance(args[0], tuple):
         args = args[0]
