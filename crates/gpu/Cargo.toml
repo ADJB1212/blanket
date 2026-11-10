@@ -11,13 +11,5 @@ publish = false
 [lib]
 doctest = false
 
-[dev-dependencies]
-criterion.workspace = true
-blanket-bench-support.workspace = true
-
-[[bench]]
-name = "preparation"
-harness = false
-
 [lints]
 workspace = true

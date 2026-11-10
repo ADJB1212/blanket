@@ -4,7 +4,6 @@ members = [
     "crates/gpu-metal",
     "crates/gpu-cuda",
     "crates/gpu-python",
-    "crates/bench-support",
     "crates/core",
     "crates/kernels",
     "crates/modes",
@@ -64,7 +63,6 @@ blanket-convert-kernels = { path = "crates/convert-kernels" }
 blanket-resample-kernels = { path = "crates/resample-kernels" }
 blanket-resample = { path = "crates/resample" }
 blanket-font = { path = "crates/font" }
-blanket-bench-support = { path = "crates/bench-support" }
 blanket-codec-common = { path = "crates/codec-common" }
 blanket-codec-avif = { path = "crates/codec-avif" }
 blanket-codec-bmp-ico = { path = "crates/codec-bmp-ico" }
@@ -102,7 +100,6 @@ turbojpeg = { version = "1", default-features = false, features = ["cmake", "req
 rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
 zerocopy = { version = "0.8", default-features = false, features = ["std", "simd-nightly", "float-nightly"]}
 flate2 = { version = "1", default-features = false, features = ["rust_backend", "zlib-rs"] }
-criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support", "rayon"] }
 
 [profile.release]
 opt-level = 3
@@ -127,14 +124,6 @@ debug = "line-directives-only"
 split-debuginfo = "unpacked"
 lto = "off"
 codegen-units = 256
-
-[profile.bench]
-opt-level = 3
-debug = false
-lto = "fat"
-strip = true
-codegen-units = 1
-incremental = true
 
 [profile.ci]
 inherits = "dev"

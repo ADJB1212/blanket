@@ -31,7 +31,6 @@ Each operation crate owns its implementations, SIMD helpers, and unit tests.
 | `gpu-metal`     | Metal execution and resource caches                             | gpu                     |
 | `gpu-cuda`      | CUDA kernels and fatbinary builds                               | None                    |
 | `gpu-python`    | GPU bindings and image exchange                                 | core, gpu, GPU backends |
-| `bench-support` | Shared benchmark fixtures                                       | core                    |
 
 The table lists primary internal dependencies. Codec backend crates are listed
 in [Codec build layout](codecs/README.md). Shared image representations belong

@@ -228,7 +228,16 @@ mod tests {
 
         for mode in [PixelMode::L, PixelMode::La, PixelMode::Rgb, PixelMode::Rgba] {
             for size in [(17, 9), (1025, 1025)] {
-                let image = blanket_bench_support::fixture(size.0, size.1, mode, 8, 12345, false);
+                let (width, height) = (size.0 as usize, size.1 as usize);
+                let channels = mode.channels();
+                let pixels = (0..width * height * channels)
+                    .map(|i| {
+                        let x = i / channels % width;
+                        let y = i / channels / width;
+                        ((x * 255 / width + y * 127 / height + i % channels * 53 + (x / 32 + y / 32) % 2 * 32) % 256) as u8
+                    })
+                    .collect();
+                let image = Image::from_pixels(size.0, size.1, mode, pixels, None).unwrap();
                 let pixels = image.pixel_data().unwrap();
                 let actual = encode(&image, pixels, 1).unwrap();
                 let mut reference = Vec::new();

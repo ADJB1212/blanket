@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 blanket-codec-common.workspace = true
-resvg = { version = "0.49", default-features = false, features = ["text", "raster-images"] }
+resvg = { version = "0.49", default-features = false, features = ["raster-images"] }
 quick-xml = { version = "0.42", default-features = false }
 base64 = { version = "0.23", default-features = false, features = ["simd-unsafe", "std"] }
 svgtypes = { version = "0.16", default-features = false, features = ["std"] }

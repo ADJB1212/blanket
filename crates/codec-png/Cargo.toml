@@ -20,13 +20,5 @@ flate2.workspace = true
 [lib]
 doctest = false
 
-[dev-dependencies]
-blanket-bench-support.workspace = true
-criterion.workspace = true
-
-[[bench]]
-name = "codec"
-harness = false
-
 [lints]
 workspace = true

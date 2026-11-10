@@ -18,13 +18,5 @@ rayon.workspace = true
 [lib]
 doctest = false
 
-[dev-dependencies]
-blanket-bench-support.workspace = true
-criterion.workspace = true
-
-[[bench]]
-name = "histogram"
-harness = false
-
 [lints]
 workspace = true

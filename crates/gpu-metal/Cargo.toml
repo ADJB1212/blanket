@@ -21,13 +21,5 @@ objc2-metal = { version = "0.3", default-features = false, features = ["std", "b
 [lib]
 doctest = false
 
-[dev-dependencies]
-criterion.workspace = true
-blanket-bench-support.workspace = true
-
-[[bench]]
-name = "metal"
-harness = false
-
 [lints]
 workspace = true

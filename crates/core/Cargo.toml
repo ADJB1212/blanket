@@ -20,21 +20,8 @@ rustc-hash.workspace = true
 [features]
 default = []
 
-
 [lib]
 doctest = false
-
-[dev-dependencies]
-blanket-bench-support.workspace = true
-criterion.workspace = true
-
-[[bench]]
-name = "conversion"
-harness = false
-
-[[bench]]
-name = "pixels"
-harness = false
 
 [lints]
 workspace = true

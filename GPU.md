@@ -732,7 +732,7 @@ GPU DMA transfers. Native completion waits and image downloads release the GIL.
 Events also support PyTorch MPS images, but transfer futures currently require
 native Metal or CUDA; PyTorch MPS transfers remain explicitly blocking.
 
-## Native Rust benchmarks
+## Benchmarks
 
 Compare Blanket CPU and GPU public operations with:
 
@@ -761,15 +761,6 @@ samples, medians, speedups, actual GPU device/runtime, and environment metadata.
 Output uses Rich tables with colored speedups by default; set `NO_RICH=1`
 for plain text without importing Rich. Rendering happens outside timed samples.
 These are synchronized wall-clock timings rather than isolated kernel timings.
-
-Criterion suites exercise control preparation without a GPU and native Metal
-execution without Python or PyTorch:
-
-```sh
-cargo bench -p blanket-gpu --bench preparation
-cargo bench -p blanket-gpu-metal --bench metal
-BLANKET_BENCH_FULL=1 cargo bench -p blanket-gpu-metal --bench metal
-```
 
 ## Extending the backend
 
