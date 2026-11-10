@@ -1,7 +1,8 @@
 """ICC profile conversion and soft proofing through LittleCMS.
 
-Transforms accept 8-bit L, RGB, RGBA, CMYK, and LAB images when the profiles
-support the requested modes. Only the current frame is transformed.
+Transforms accept 8-bit L, RGB, RGBA, CMYK, and LAB; 16-bit L, RGB, RGBA,
+and I;16 variants; and float F, RGB;F, and RGBA;F with compatible profiles.
+Only the current frame is transformed.
 """
 
 from __future__ import annotations
@@ -293,8 +294,12 @@ def _intent(value: int) -> int:
 class ImageCmsTransform:
     """A reusable ICC conversion between fixed profile and pixel mode pairs.
 
-    Transforms operate on the current frame of 8-bit L, RGB, RGBA, CMYK,
-    or LAB images with compatible profiles. RGBA output retains input RGBA
+    Transforms operate on 8-bit L, RGB, RGBA, CMYK, and LAB; 16-bit L, RGB,
+    RGBA, and I;16 variants; and float F, RGB;F, and RGBA;F images. Integer
+    L/RGB/RGBA output retains the source integer depth, or uses 8 bits for
+    float input. I;16 output uses 16 bits and float output uses 32 bits.
+    Profiles determine transfer curves and extended-range behavior; float
+    samples are not clamped or quantized by Blanket. RGBA output retains input RGBA
     alpha, or receives fully opaque alpha for other input modes. Each result
     receives the output profile in info["icc_profile"].
 
@@ -338,8 +343,8 @@ class ImageCmsTransform:
         """Transform the current frame into a new or supplied output image.
 
         Args:
-            image: Open 8-bit image whose mode matches input_mode.
-            imOut: Optional open 8-bit destination with matching dimensions
+            image: Open image whose mode matches input_mode.
+            imOut: Optional open destination with matching dimensions, depth,
                 and output_mode. Passing image applies the transform in place
                 and requires identical input and output modes.
 
@@ -357,9 +362,11 @@ class ImageCmsTransform:
         try:
             if imOut is not None:
                 imOut.load()
-                if imOut.mode != self.output_mode or imOut.size != image.size or imOut.bit_depth != 8:
+                if imOut.mode != self.output_mode or imOut.size != image.size:
                     raise PyCMSError("output image must match transform mode, dimensions, and sample depth")
             native = self.transform.apply(image._native)
+            if imOut is not None and imOut.bit_depth != native.bit_depth:
+                raise PyCMSError("output image must match transform mode, dimensions, and sample depth")
         except (ValueError, TypeError) as error:
             raise PyCMSError(str(error)) from error
         result = Image.Image(native) if imOut is None else imOut
@@ -374,7 +381,7 @@ class ImageCmsTransform:
         """Replace the current frame's pixels and ICC profile in place.
 
         Args:
-            image: Open 8-bit image matching both transform modes. Other
+            image: Open image matching both transform modes. Other
                 frames and the current frame's other metadata are retained.
 
         Returns:
@@ -401,7 +408,8 @@ def buildTransform(inputProfile: _Profile, outputProfile: _Profile, inMode: str,
     Args:
         inputProfile: Source profile object, filesystem path, or binary stream.
         outputProfile: Destination profile object, path, or binary stream.
-        inMode: Source mode: L, RGB, RGBA, CMYK, or LAB, with 8-bit samples.
+        inMode: Source mode: L, RGB, RGBA, CMYK, LAB, I;16 variants,
+            F, RGB;F, or RGBA;F. L/RGB/RGBA accept 8- or 16-bit samples.
         outMode: Destination mode from the same supported set. Each profile
             must support its corresponding mode.
         renderingIntent: Intent enum value or integer from 0 to 3.
@@ -435,7 +443,7 @@ def buildProofTransform(
         inputProfile: Source profile object, filesystem path, or binary stream.
         outputProfile: Destination profile object, path, or binary stream.
         proofProfile: Profile of the device to simulate, such as a printer.
-        inMode: Source mode: L, RGB, RGBA, CMYK, or LAB, with 8-bit samples.
+        inMode: Source mode, with the same support as buildTransform().
         outMode: Destination mode supported by outputProfile.
         renderingIntent: Source-to-destination rendering intent, from 0 to 3.
         proofRenderingIntent: Rendering intent for the simulated device,
@@ -458,7 +466,7 @@ def applyTransform(im: Image.Image, transform: ImageCmsTransform, inPlace: bool 
     """Apply a previously built transform to the current image frame.
 
     Args:
-        im: Open 8-bit image matching the transform's input mode.
+        im: Open image matching the transform's input mode.
         transform: A transform returned by buildTransform() or
             buildProofTransform().
         inPlace: Replace the current frame's pixels and ICC profile. Requires
@@ -481,7 +489,7 @@ def profileToProfile(im: Image.Image, inputProfile: _Profile, outputProfile: _Pr
     """Convert the current frame between ICC profiles in a single call.
 
     Args:
-        im: Open 8-bit L, RGB, RGBA, CMYK, or LAB image.
+        im: Open image in a mode and depth supported by buildTransform().
         inputProfile: Source profile object, filesystem path, or binary stream.
         outputProfile: Destination profile object, path, or binary stream.
         renderingIntent: Intent enum value or integer from 0 to 3.
