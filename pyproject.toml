@@ -40,7 +40,7 @@ dev = [
   {include-group = "test"},
   {include-group = "docs"},
   {include-group = "bench"},
-  "ty>=0.0.98",
+  "ty>=0.0.100",
 ]
 test = [
     "numpy>=2.5",
@@ -129,7 +129,7 @@ not-subscriptable = "ignore"
 call-non-callable = "ignore"
 not-iterable = "ignore"
 no-matching-overload = "ignore"
-unresolved-attribute = "ignore"
+missing-attribute = "ignore"
 
 [tool.uv]
 compile-bytecode = true

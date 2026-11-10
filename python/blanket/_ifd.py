@@ -270,7 +270,7 @@ class Exif(MutableMapping[int, object]):
 
                         numbers = []
                         for item in items:
-                            rational = item if hasattr(item, "denominator") and not isinstance(item, int) else Fraction(item).limit_denominator(1000000)
+                            rational = item if hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int) else Fraction(item).limit_denominator(1000000)
                             numbers.extend((int(rational.numerator), int(rational.denominator)))
                         raw = struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers)
                     else:

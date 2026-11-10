@@ -74,7 +74,7 @@ class Event:
         self._resource: Any = resource
         self.runtime = runtime
         self.device = device
-        self._event = None
+        self._event: Any = None
         if runtime == "torch":
             from .ImageGpu import _torch
 

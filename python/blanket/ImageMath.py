@@ -157,11 +157,11 @@ class _Operand:
         """Shift bits right by another operand or scalar."""
         return self._apply("rshift", self, other)
 
-    def __eq__(self, other: object) -> _Operand:  # ty: ignore[invalid-method-override]
+    def __eq__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
         """Test equality with another operand or value."""
         return self._apply("eq", self, other)
 
-    def __ne__(self, other: object) -> _Operand:  # ty: ignore[invalid-method-override]
+    def __ne__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
         """Test inequality with another operand or value."""
         return self._apply("ne", self, other)
 

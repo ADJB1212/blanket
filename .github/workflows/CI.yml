@@ -71,7 +71,7 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('rust-toolchain.toml') }}
           restore-keys: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
 
       - name: Clean outdated Rust build artifacts
