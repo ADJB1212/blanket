@@ -34,11 +34,14 @@ fn append_rgba_channels<const C: usize>(output: &mut Vec<u8>, pixels: &[[u8; 4]]
 
 // PDF 1.4 image XObjects with an optional grayscale soft mask. Raw streams
 // retain exact samples without adding a runtime dependency or a lossy codec.
-pub fn encode_pdf(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
-    encode_pages(&[(image, pixels)])
+pub fn encode_pdf(image: &Image, pixels: &[u8], dpi: f64) -> PyResult<Vec<u8>> {
+    encode_pages(&[(image, pixels)], dpi)
 }
 
-pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
+pub fn encode_pages(pages: &[(&Image, &[u8])], dpi: f64) -> PyResult<Vec<u8>> {
+    if !dpi.is_finite() || dpi <= 0.0 {
+        return Err(PyValueError::new_err("dpi must be finite and positive"));
+    }
     if pages.is_empty() || pages.iter().any(|(image, _)| image.width() == 0 || image.height() == 0) {
         return Err(PyValueError::new_err("cannot encode empty PDF image"));
     }
@@ -80,13 +83,19 @@ pub fn encode_pages(pages: &[(&Image, &[u8])]) -> PyResult<Vec<u8>> {
         let content_id = page_id + 1;
         let image_id = page_id + 2;
         let mask_id = page_id + 3;
+        // MediaBox is in points (1/72 inch); scale pixel dimensions by 72/dpi.
+        let pts_w = f64::from(width) * 72.0 / dpi;
+        let pts_h = f64::from(height) * 72.0 / dpi;
+        if !pts_w.is_finite() || !pts_h.is_finite() {
+            return Err(PyValueError::new_err("dpi produces nonfinite PDF page dimensions"));
+        }
         object(
             &format!(
-                "/Type /Page /Parent 2 0 R /MediaBox [0 0 {width} {height}] /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R"
+                "/Type /Page /Parent 2 0 R /MediaBox [0 0 {pts_w} {pts_h}] /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R"
             ),
             None,
         );
-        let content = format!("q\n{width} 0 0 {height} 0 0 cm\n/Im0 Do\nQ\n");
+        let content = format!("q\n{pts_w} 0 0 {pts_h} 0 0 cm\n/Im0 Do\nQ\n");
         object("", Some(Stream::Bytes(content.as_bytes())));
         let color = match image.pixel_mode() {
             PixelMode::L => "DeviceGray",

@@ -318,10 +318,10 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
 
 #[pyfunction]
 #[expect(clippy::too_many_arguments, reason = "Python sequence API accepts parallel frame arrays and encoding options")]
-#[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None))]
+#[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None, pdf_dpi=72.0))]
 pub fn _encode_sequence(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
-    default_image: bool, quality: u8, compress_level: u8, lossless: bool, regions: Option<AnimationRegions>,
+    default_image: bool, quality: u8, compress_level: u8, lossless: bool, regions: Option<AnimationRegions>, pdf_dpi: f64,
 ) -> PyResult<Py<PyBytes>> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let format = ImageFormat::parse(format)?;
@@ -424,7 +424,7 @@ pub fn _encode_sequence(
             }
             ImageFormat::Pdf => {
                 let pages = sequence.frames.iter().map(|frame| Ok((frame.image, frame.image.pixel_data()?))).collect::<PyResult<Vec<_>>>()?;
-                blanket_codec_pdf::encode_pages(&pages)
+                blanket_codec_pdf::encode_pages(&pages, pdf_dpi)
             }
             _ => Err(PyValueError::new_err("unsupported multi-frame output format")),
         })
@@ -495,7 +495,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
         match (image.pixel_mode(), format) {
             (_, ImageFormat::Jpeg) => return encode_jpeg_options(image, image.pixel_data()?, options),
             (PixelMode::Cmyk, ImageFormat::Tiff) => return encode_raw_tiff(image, image.pixel_data()?),
-            (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?),
+            (PixelMode::Cmyk, ImageFormat::Pdf) => return encode_pdf(image, image.pixel_data()?, options.pdf_dpi),
             _ => {}
         }
         return Err(PyOSError::new_err(format!("cannot write mode {} as {}", image.pixel_mode().as_str(), format.as_str())));
@@ -538,7 +538,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
         ImageFormat::Bmp => encode_bmp(image, pixels),
         ImageFormat::Gif => encode_gif(image, pixels),
         ImageFormat::Ico => encode_ico(image, pixels),
-        ImageFormat::Pdf => encode_pdf(image, pixels),
+        ImageFormat::Pdf => encode_pdf(image, pixels, options.pdf_dpi),
         ImageFormat::Svg => unreachable!(),
         ImageFormat::Avif => encode_avif(image, pixels, options),
         ImageFormat::Heif => unreachable!(),

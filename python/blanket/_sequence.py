@@ -192,7 +192,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 prepared[0]._native.set_palette_alpha(index=transparency)
             elif isinstance(transparency, bytes):
                 prepared[0]._native.set_palette_alpha(alpha=transparency)
-    encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions))
+    encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions, values.get("pdf_dpi", 72.0)))
     if any(metadata):
         encoded = _write_metadata(encoded, format, *metadata)
     if fp is None:

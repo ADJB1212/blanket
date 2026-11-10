@@ -201,7 +201,7 @@ _SAVE_OPTIONS = {
     "JPEG": frozenset({"quality", "subsampling", "progressive", "progression", "optimize", "keep_rgb", "smooth", "qtables", "restart_marker_blocks", "restart_marker_rows", "streamtype"}),
     "JXL": frozenset({"quality", "lossless", "effort"}),
     "TIFF": frozenset({"compression", "quality"}),
-    "PDF": frozenset(),
+    "PDF": frozenset({"dpi"}),
     "WEBP": frozenset({"quality", "lossless"}),
     "HEIF": frozenset({"quality", "lossless"}),
     "AVIF": frozenset({"quality", "effort"}),
@@ -2417,6 +2417,9 @@ class Image:
         JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
         convert to `L` for encoding.
 
+        PDF accepts a finite positive scalar ``dpi`` (default 72), which sets
+        page size in inches without resampling pixels and applies to every page.
+
         Pass a ``LosslessImageCompressor`` or ``LossyImageCompressor`` to
         ``compressor`` to optimize this save.
         Omitting it (or passing None) uses the normal encoder settings.
@@ -3354,6 +3357,17 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
             if not isinstance(value, int):
                 raise TypeError(f"{name} must be an int")
             values[f"jpeg_{name}"] = bool(value)
+    if format == "PDF":
+        pdf_dpi = supplied.get("dpi", 72.0)
+        if isinstance(pdf_dpi, bool) or not isinstance(pdf_dpi, (int, float)):
+            raise TypeError("dpi must be a number")
+        try:
+            pdf_dpi = float(pdf_dpi)
+        except OverflowError as error:
+            raise ValueError("dpi must be finite and positive") from error
+        if not math.isfinite(pdf_dpi) or pdf_dpi <= 0:
+            raise ValueError("dpi must be finite and positive")
+        values["pdf_dpi"] = pdf_dpi
     if format == "TIFF":
         compression = supplied.get("compression", "raw")
         methods = {"raw": 0, "tiff_lzw": 1, "tiff_adobe_deflate": 2, "tiff_deflate": 2, "deflate": 2, "jpeg": 3}

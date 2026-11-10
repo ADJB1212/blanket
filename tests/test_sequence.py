@@ -253,18 +253,22 @@ def test_tiff_lzw_large_pages_preserve_strip_order() -> None:
         assert (actual.mode, actual.size, actual.tobytes()) == (frames[i].mode, frames[i].size, frames[i].tobytes())
 
 
-def test_multipage_pdf_and_save_positions() -> None:
+@pytest.mark.parametrize("dpi", [72, 144, 96.123456789])
+def test_multipage_pdf_and_save_positions(dpi: float) -> None:
     source = animation()
     source.seek(2)
     extra = Image.new("CMYK", (2, 3), (10, 20, 30, 40))
-    stream = image_buffer(source, "PDF", save_all=True, append_images=[extra])
+    stream = image_buffer(source, "PDF", save_all=True, append_images=[extra], dpi=dpi)
     assert source.tell() == 2
     assert extra.tell() == 0
     pdf = PdfParser.PdfParser(buf=stream.getvalue())
     assert len(pdf.pages) == 4
     for i, reference in enumerate(pdf.pages):
         page = pdf.read_indirect(reference)
-        assert page[b"MediaBox"] == ([0, 0, 9, 7] if i < 3 else [0, 0, 2, 3])
+        width, height = (9, 7) if i < 3 else extra.size
+        assert page[b"MediaBox"] == pytest.approx([0, 0, width * 72 / dpi, height * 72 / dpi])
+        content = pdf.read_indirect(page[b"Contents"]).decode()
+        assert list(map(float, content.splitlines()[1].split()[:6])) == pytest.approx([width * 72 / dpi, 0, 0, height * 72 / dpi, 0, 0])
         raster = pdf.read_indirect(page[b"Resources"][b"XObject"][b"Im0"])
         if i < 3:
             source.seek(i)

@@ -104,7 +104,7 @@ quote-style = "double"
 skip-magic-trailing-comma = true
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
-line-ending = "lf"
+line-ending = "auto"
 
 [tool.ruff.lint.isort]
 known-first-party = ["blanket"]

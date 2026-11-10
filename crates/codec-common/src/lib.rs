@@ -315,6 +315,7 @@ pub struct SaveOptions<'a> {
     pub jpeg_restart_marker_blocks: u32 = 0,
     pub jpeg_restart_marker_rows: u32 = 0,
     pub jpeg_streamtype: i32 = 0,
+    pub pdf_dpi: f64 = 72.0,
     pub icc_profile: &'a [u8] = &[],
     pub exif: &'a [u8] = &[],
     pub xmp: &'a [u8] = &[],
