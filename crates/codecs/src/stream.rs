@@ -51,7 +51,7 @@ impl Decoder {
     fn finish(self) -> Result<Option<Image>, DecodeError> {
         match self {
             Self::Jxl(decoder) => decoder.finish(),
-            Self::Jpeg(mut decoder) => decoder.image().map_err(DecodeError::from),
+            Self::Jpeg(decoder) => decoder.finish().map_err(DecodeError::from),
         }
     }
 }

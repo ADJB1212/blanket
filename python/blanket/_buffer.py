@@ -142,6 +142,10 @@ class MappedImage(Image):
 
         replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
         encoded = replacement.tobytes("raw", mapping.mode, 0, mapping.orientation)
+        view = memoryview(encoded)
         row_bytes = len(encoded) // mapping.size[1] if mapping.size[1] else 0
+        if row_bytes == mapping.stride:
+            mapping.data[: len(encoded)] = view
+            return
         for row in range(mapping.size[1]):
-            mapping.data[row * mapping.stride : row * mapping.stride + row_bytes] = encoded[row * row_bytes : (row + 1) * row_bytes]
+            mapping.data[row * mapping.stride : row * mapping.stride + row_bytes] = view[row * row_bytes : (row + 1) * row_bytes]

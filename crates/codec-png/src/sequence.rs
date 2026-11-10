@@ -11,6 +11,9 @@ trait CanvasSample: Copy + Into<u64> {
     fn read(bytes: &[u8]) -> Self;
     fn value(value: u64) -> Self;
     fn pack(canvas: &[[Self; 4]], mode: PixelMode) -> Vec<u8>;
+    fn pack_owned(canvas: Vec<[Self; 4]>, mode: PixelMode) -> Vec<u8> {
+        Self::pack(&canvas, mode)
+    }
     fn over(src: [Self; 4], dst: &mut [Self; 4]);
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]);
 }
@@ -34,6 +37,9 @@ impl CanvasSample for u8 {
     }
     fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
         canvas.as_flattened_mut().copy_from_slice(source);
+    }
+    fn pack_owned(canvas: Vec<[Self; 4]>, mode: PixelMode) -> Vec<u8> {
+        if mode == PixelMode::Rgba { canvas.into_flattened() } else { Self::pack(&canvas, mode) }
     }
     fn over(src: [Self; 4], dst: &mut [Self; 4]) {
         let sa = u32::from(src[3]);
@@ -220,7 +226,7 @@ fn decode_animation<T: CanvasSample>(
                     png::ColorType::Rgba => PixelMode::Rgba,
                 }
             };
-            let pixels = T::pack(&canvas, mode);
+            let pixels = if terminal { T::pack_owned(std::mem::take(&mut canvas), mode) } else { T::pack(&canvas, mode) };
             let mut image = if bytes == 2 {
                 Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
             } else {
@@ -242,6 +248,9 @@ fn decode_animation<T: CanvasSample>(
                 reader.finish().map_err(|e| e.to_string())?;
             }
             return Ok(sequence);
+        }
+        if terminal {
+            break;
         }
         if default_image && frame_index == 0 {
             canvas.fill([zero; 4]);
@@ -349,14 +358,13 @@ pub fn encode_sequence_regions(
                     alpha.push(entry[3]);
                 }
             }
-            let required = sequence
-                .frames
-                .iter()
-                .map(|frame| frame.image.borrow().pixel_data().map(|pixels| pixels.iter().copied().max().unwrap_or(0)))
-                .collect::<PyResult<Vec<_>>>()?
-                .into_iter()
-                .max()
-                .unwrap_or(0);
+            let mut required = 0;
+            for frame in &sequence.frames {
+                let pixels = frame.image.borrow().pixel_data()?;
+                if required < 255 {
+                    required = required.max(pixels.iter().copied().max().unwrap_or(0));
+                }
+            }
             rgb.resize(rgb.len().max((usize::from(required) + 1) * 3), 0);
             encoder.set_palette(rgb);
             if !alpha.is_empty() {

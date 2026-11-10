@@ -81,7 +81,8 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
                 *pixel = clear;
             }
         }
-        if frame.dispose == gif::DisposalMethod::Previous && w != 0 {
+        let terminal = target == Some(frame_index);
+        if !terminal && frame.dispose == gif::DisposalMethod::Previous && w != 0 {
             previous.clear();
             for row in y..y + h {
                 let start = (row as usize * width as usize + x as usize) * 4;
@@ -97,14 +98,15 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             let image = if frame_index == 0 {
                 decode_gif(data)?
             } else if transparent_background {
-                Image::from_pixels(width, height, PixelMode::Rgba, canvas.clone(), Some("GIF".into())).map_err(|error| error.to_string())?
+                let pixels = if terminal { std::mem::take(&mut canvas) } else { canvas.clone() };
+                Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
             } else {
                 let pixels = canvas.as_chunks::<4>().0.iter().map(|pixel| [pixel[0], pixel[1], pixel[2]]).collect::<Vec<_>>().into_flattened();
                 Image::from_pixels(width, height, PixelMode::Rgb, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
             };
             sequence.frames.push(Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 });
         }
-        if target == Some(frame_index) {
+        if terminal {
             return Ok(sequence);
         }
         frame_index += 1;

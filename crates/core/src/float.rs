@@ -221,6 +221,57 @@ pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<
     Ok(values)
 }
 
+pub fn composite_rgba(background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
+    if background.size() != foreground.size()
+        || background.mode != foreground.mode
+        || background.bit_depth != foreground.bit_depth
+        || !matches!(background.mode, PixelMode::Rgba | PixelMode::RgbaF)
+    {
+        return Err(PyValueError::new_err("compositing requires matching RGBA images"));
+    }
+    let back = background.raw_data()?;
+    let front = foreground.raw_data()?;
+    let depth = background.bit_depth;
+    let floating = background.mode.is_float();
+    let pixel_bytes = background.raw_bytes_per_pixel();
+    let mut pixels = crate::buffers::buffer(background.size(), pixel_bytes)?;
+    let chunk_bytes = crate::parallel::CHUNK_PIXELS * pixel_bytes;
+    let block_bytes = 256 * pixel_bytes;
+    crate::parallel::chunks_mut(&mut pixels, chunk_bytes, |chunk, dst| {
+        let mut back_values = [0.0; 1024];
+        let mut front_values = [0.0; 1024];
+        let start = chunk * chunk_bytes;
+        for (block, dst) in dst.chunks_mut(block_bytes).enumerate() {
+            let start = start + block * block_bytes;
+            let range = start..start + dst.len();
+            let count = dst.len() / pixel_bytes * 4;
+            let back_values = &mut back_values[..count];
+            let front_values = &mut front_values[..count];
+            decode_values(&back[range.clone()], floating, depth, back_values);
+            decode_values(&front[range], floating, depth, front_values);
+            for values in [&mut *back_values, &mut *front_values] {
+                if srgb {
+                    transfer_colors(values, 4, true);
+                }
+                alpha(values, AlphaOperation::Premultiply);
+            }
+            composite(back_values, front_values);
+            alpha(back_values, AlphaOperation::Unpremultiply);
+            if srgb {
+                transfer_colors(back_values, 4, false);
+            }
+            if floating {
+                for (value, dst) in back_values.iter().zip(dst.as_chunks_mut::<4>().0) {
+                    *dst = value.to_le_bytes();
+                }
+            } else {
+                quantize_into(back_values, dst, depth);
+            }
+        }
+    });
+    Image::from_raw_bytes(background.width, background.height, background.mode, pixels, depth)
+}
+
 pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
     if !image.mode.is_float() && !matches!(image.mode, PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("requires RGB or RGBA color"));
@@ -290,6 +341,26 @@ pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: b
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_composite_matches_full_image_intermediates() {
+        let width = 257;
+        for (mode, depth) in [(PixelMode::Rgba, 8), (PixelMode::Rgba, 10), (PixelMode::Rgba, 12), (PixelMode::Rgba, 16), (PixelMode::RgbaF, 32)] {
+            let build = |offset| {
+                let values: Vec<f32> = (0..width * 4).map(|i| ((i * 13 + offset) % 313) as f32 / 255.0).collect();
+                color_output(width, 1, mode, depth, &values).unwrap()
+            };
+            let back = build(7);
+            let front = build(17);
+            for srgb in [false, true] {
+                let mut values = prepare_values(&back, srgb, true).unwrap();
+                composite(&mut values, &prepare_values(&front, srgb, true).unwrap());
+                let expected = finish_values(&back, &back, srgb, true, values).unwrap();
+                let actual = composite_rgba(&back, &front, srgb).unwrap();
+                assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
+            }
+        }
+    }
 
     #[test]
     fn bounded_preparation_and_finish_match_full_image_intermediates() {

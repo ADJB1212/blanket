@@ -400,7 +400,7 @@ impl LosslessImageCompressor {
             5..=16 => 4,
             _ => 8,
         };
-        let mut indices = if channels == 1 {
+        let indices = if channels == 1 {
             pixels::remap(pixels, &gray_mapping)
         } else {
             let lookup = lookup.as_ref().expect("lookup populated for multi-channel images");
@@ -479,7 +479,7 @@ impl LosslessImageCompressor {
                 orders.push(color);
             }
         }
-        let order_count = orders.len();
+        let mut original_8bit = None;
         for (order_index, order) in orders.into_iter().enumerate() {
             let mut mapping = [0_u8; 256];
             let mut rgb = Vec::with_capacity(colors * 3);
@@ -500,8 +500,10 @@ impl LosslessImageCompressor {
                     match remapped.take() {
                         Some(remapped) => remapped,
                         None if fuse_mapping => pixels::remap(&indices, &mapping),
-                        None if order_index + 1 == order_count => std::mem::take(&mut indices),
-                        None => indices.clone(),
+                        None => {
+                            original_8bit = Some(candidates.len());
+                            Vec::new()
+                        }
                     }
                 } else if fuse_mapping {
                     pixels::pack_mapped_rows(&indices, image.width() as usize, depth, &mapping)
@@ -517,6 +519,9 @@ impl LosslessImageCompressor {
                     ..
                 });
             }
+        }
+        if let Some(index) = original_8bit {
+            candidates[index].pixels = Cow::Owned(indices);
         }
         Some(properties)
     }

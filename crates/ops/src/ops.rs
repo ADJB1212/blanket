@@ -32,21 +32,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[pyfunction]
 fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
-    if background.width() != foreground.width()
-        || background.height() != foreground.height()
-        || background.pixel_mode() != foreground.pixel_mode()
-        || background.bit_depth() != foreground.bit_depth()
-        || !matches!(background.pixel_mode(), PixelMode::Rgba | PixelMode::RgbaF)
-    {
-        return Err(PyValueError::new_err("compositing requires matching RGBA images"));
-    }
-    py.detach(|| {
-        let mut values = blanket_core::float::prepare_values(background, srgb, true)?;
-        let source = blanket_core::float::prepare_values(foreground, srgb, true)?;
-        blanket_core::float::composite(&mut values, &source);
-        drop(source);
-        blanket_core::float::finish_values(background, background, srgb, true, values)
-    })
+    py.detach(|| blanket_core::float::composite_rgba(background, foreground, srgb))
 }
 
 /// Copy complete rows into a reserved, empty image without first zeroing it.

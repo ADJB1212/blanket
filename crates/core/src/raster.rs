@@ -77,17 +77,22 @@ fn unpack_bilevel_bytes<const INVERT: bool>(data: &[u8], width: usize, height: u
 pub fn pack_bilevel(pixels: &[u8], width: usize, height: usize) -> Vec<u8> {
     let row_bytes = width.div_ceil(8);
     let mut packed = vec![0; row_bytes * height];
-    if width == 0 {
-        return packed;
+    pack_bilevel_into(pixels, width, &mut packed);
+    packed
+}
+
+fn pack_bilevel_into(pixels: &[u8], width: usize, packed: &mut [u8]) {
+    if packed.is_empty() {
+        return;
     }
+    let row_bytes = width.div_ceil(8);
     let rows_per_chunk = (BILEVEL_CHUNK_BYTES / width).max(1);
-    crate::parallel::chunks_mut_above(&mut packed, rows_per_chunk * row_bytes, PACK_PARALLEL_BYTES, |chunk, rows| {
+    crate::parallel::chunks_mut_above(packed, rows_per_chunk * row_bytes, PACK_PARALLEL_BYTES, |chunk, rows| {
         for (row_index, row) in rows.chunks_mut(row_bytes).enumerate() {
             let y = chunk * rows_per_chunk + row_index;
             crate::pixels::pack_bilevel::<false>(&pixels[y * width..(y + 1) * width], row);
         }
     });
-    packed
 }
 
 fn parse_pixel(value: &Bound<'_, PyAny>, channels: usize) -> PyResult<[u8; 4]> {
@@ -990,14 +995,32 @@ impl Image {
             return Ok(());
         }
         if self.mode.is_float() && self.mode.channels() > 1 {
+            let channels = self.mode.channels();
+            let stride = channels * 4;
+            let pixels = self.pixels.as_mut().unwrap();
             for (i, item) in data.try_iter()?.enumerate() {
                 if i >= length {
                     return Err(PyTypeError::new_err("too many data entries"));
                 }
-                let values: Vec<f64> = item?.extract()?;
-                let values = values.into_iter().map(|v| v * scale + offset).collect::<Vec<_>>();
-                let value = PyTuple::new(data.py(), values)?;
-                self.putpixel(((i % self.width as usize) as i64, (i / self.width as usize) as i64), value.as_any())?;
+                let item = item?;
+                let mut values = [0.0; 4];
+                let values = &mut values[..channels];
+                if let Ok(tuple) = item.cast_exact::<PyTuple>()
+                    && tuple.len() == channels
+                {
+                    for (c, value) in values.iter_mut().enumerate() {
+                        *value = tuple.get_borrowed_item(c)?.extract::<f64>()?;
+                    }
+                } else {
+                    let samples: Vec<f64> = item.extract()?;
+                    if samples.len() != channels {
+                        return Err(PyValueError::new_err("wrong number of color components"));
+                    }
+                    values.copy_from_slice(&samples);
+                }
+                for (&value, dst) in values.iter().zip(pixels[i * stride..(i + 1) * stride].as_chunks_mut::<4>().0) {
+                    *dst = ((value * scale + offset) as f32).to_le_bytes();
+                }
             }
             return Ok(());
         }
@@ -1146,6 +1169,31 @@ impl Image {
 
     pub fn load(&self) -> PyResult<()> {
         self.raw_data().map(|_| ())
+    }
+
+    fn _replace_pixels(&mut self, mut replacement: PyRefMut<'_, Self>) -> PyResult<()> {
+        if self.size() != replacement.size() || self.mode != replacement.mode || self.bit_depth != replacement.bit_depth {
+            return Err(PyValueError::new_err("replacement image layout does not match"));
+        }
+        self.raw_data()?;
+        replacement.raw_data()?;
+        std::mem::swap(&mut self.pixels, &mut replacement.pixels);
+        std::mem::swap(&mut self.shared_pixels, &mut replacement.shared_pixels);
+        std::mem::swap(&mut self.sample_validation, &mut replacement.sample_validation);
+        Ok(())
+    }
+
+    fn _copy_palette(&mut self, source: &Self) {
+        self.copy_palette_from(source);
+    }
+
+    fn _bilevel_array_bytes(&self, py: Python<'_>) -> PyResult<Py<PyBytes>> {
+        let source = self.raw_data()?;
+        PyBytes::new_with(py, source.len(), |output| {
+            py.detach(|| crate::simd::bilevel_to_l_into(source, output));
+            Ok(())
+        })
+        .map(Bound::unbind)
     }
 
     pub fn pixels_equal(&self, py: Python<'_>, other: &Self) -> PyResult<bool> {
@@ -1725,6 +1773,27 @@ impl Image {
     #[pyo3(signature = (rawmode=None, stride=0, orientation=1))]
     pub fn tobytes(&self, py: Python<'_>, rawmode: Option<&str>, stride: usize, orientation: i8) -> PyResult<Py<PyBytes>> {
         let pixels = self.raw_data()?;
+        if stride == 0 && orientation == 1 && rawmode.is_none_or(|mode| mode == self.mode.as_str() || self.mode == PixelMode::L && mode == "P") {
+            if self.mode == PixelMode::One {
+                let width = self.width as usize;
+                return PyBytes::new_with(py, width.div_ceil(8) * self.height as usize, |output| {
+                    py.detach(|| pack_bilevel_into(pixels, width, output));
+                    Ok(())
+                })
+                .map(Bound::unbind);
+            }
+            if self.mode == PixelMode::Lab {
+                return PyBytes::new_with(py, pixels.len(), |output| {
+                    py.detach(|| {
+                        output.copy_from_slice(pixels);
+                        lab_raw_bytes_mut(output);
+                    });
+                    Ok(())
+                })
+                .map(Bound::unbind);
+            }
+            return Ok(PyBytes::new(py, pixels).unbind());
+        }
         let packed;
         let source = if self.mode == PixelMode::Lab {
             packed = py.detach(|| lab_raw_bytes(pixels));
@@ -2207,13 +2276,19 @@ fn rgb_to_ycbcr(p: [u8; 3]) -> [u8; 3] {
 }
 
 fn ycbcr_to_rgb(p: [u8; 3]) -> [u8; 3] {
-    let term = |coefficient: f64, value: u8| (coefficient * f64::from(i32::from(value) - 128) * 64.0 + 0.5) as i32;
+    const fn table(coefficient: f64) -> [i32; 256] {
+        let mut values = [0; 256];
+        let mut i = 0;
+        while i < 256 {
+            values[i] = (coefficient * (i as f64 - 128.0) * 64.0 + 0.5) as i32;
+            i += 1;
+        }
+        values
+    }
+    static TERMS: [[i32; 256]; 4] = [table(1.402), table(-0.34414), table(-0.71414), table(1.772)];
     let [y, cb, cr] = p;
-    [
-        clip8(i32::from(y) + (term(1.402, cr) >> 6)),
-        clip8(i32::from(y) + ((term(-0.34414, cb) + term(-0.71414, cr)) >> 6)),
-        clip8(i32::from(y) + (term(1.772, cb) >> 6)),
-    ]
+    let (y, cb, cr) = (i32::from(y), usize::from(cb), usize::from(cr));
+    [clip8(y + (TERMS[0][cr] >> 6)), clip8(y + ((TERMS[1][cb] + TERMS[2][cr]) >> 6)), clip8(y + (TERMS[3][cb] >> 6))]
 }
 
 fn clip8(value: i32) -> u8 {

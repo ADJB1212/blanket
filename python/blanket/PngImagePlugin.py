@@ -10,6 +10,7 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Iterator
     from typing import BinaryIO, Self
 
 from ._io import write_all
@@ -23,11 +24,18 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
     """Strip invalid APNG control chunks and classify deferred frame errors."""
     if not data.startswith(_MAGIC):
         return data, None, None
+    for pos in _chunk_offsets(data):
+        if data.startswith(b"acTL", pos + 4):
+            break
+        if data.startswith((b"IDAT", b"IEND"), pos + 4):
+            return data, None, None
+    else:
+        return data, None, None
     pos = 8
+    view = memoryview(data)
     chunks: list[tuple[int, int, bytes, memoryview]] = []
     actl_indices: list[int] = []
     idat_seen = False
-    view = memoryview(data)
     while pos + 12 <= len(data):
         length = int.from_bytes(view[pos : pos + 4], "big")
         if pos + 12 + length > len(data):
@@ -105,6 +113,17 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
                 output.extend(view[start:end])
         return bytes(output), None, None
     return data, None, None
+
+
+def _chunk_offsets(data: bytes) -> Iterator[int]:
+    """Yield complete PNG chunks by offset."""
+    pos = 8
+    while pos + 12 <= len(data):
+        end = pos + 12 + struct.unpack_from(">I", data, pos)[0]
+        if end > len(data):
+            return
+        yield pos
+        pos = end
 
 
 class _Buffer:

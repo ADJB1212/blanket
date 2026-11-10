@@ -44,19 +44,17 @@ def _png_regions(
         if records:
             previous = records[-1]
             previous_disposal = 1 if previous.disposal == 2 and len(records) < 2 else previous.disposal
-            if previous_disposal == 1:
-                base = previous.image.copy()
-                base.paste(0, previous.bbox or (0, 0, *frames[0].size))
-            elif previous_disposal == 2:
-                base = records[-2].image
-            else:
-                base = previous.image
+            base = records[-2].image if previous_disposal == 2 else previous.image
+            clear = (previous.bbox or (0, 0, *frames[0].size)) if previous_disposal == 1 else None
             if frame.mode == base.mode and frame.mode in ("1", "L", "LA", "RGB", "RGBA") and frame.info.get("transparency") is None and base.info.get("transparency") is None:
-                current, comparison = frame, base
+                bbox = _difference_bbox(frame._native, base._native, clear)
             else:
+                if clear is not None:
+                    base = base.copy()
+                    base.paste(0, clear)
                 current = frame if frame.mode == "RGBA" else frame.convert("RGBA")
                 comparison = base if base.mode == "RGBA" else base.convert("RGBA")
-            bbox = _difference_bbox(current._native, comparison._native)
+                bbox = _difference_bbox(current._native, comparison._native)
             combined = previous.duration + duration
             if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
                 previous.duration = combined

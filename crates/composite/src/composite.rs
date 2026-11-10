@@ -98,12 +98,12 @@ fn fill_pixels_chunk<const C: usize>(pixels: &mut [std::mem::MaybeUninit<u8>], c
     pixels.as_chunks_mut::<C>().0.fill(value);
 }
 
-fn paste_mask<'a>(mask: Option<&'a Image>, source: &Image) -> PyResult<Option<(&'a [u8], usize)>> {
+fn paste_mask(mask: Option<&Image>, size: (u32, u32)) -> PyResult<Option<(&[u8], usize)>> {
     mask.map(|mask| {
         if mask.palette().is_some() || !matches!(mask.pixel_mode(), PixelMode::L | PixelMode::Rgba) {
             return Err(PyValueError::new_err("bad transparency mask"));
         }
-        if (mask.width(), mask.height()) != (source.width(), source.height()) {
+        if mask.size() != size {
             return Err(PyValueError::new_err("images do not match"));
         }
         Ok((mask.pixel_data()?, mask.pixel_mode().channels()))
@@ -156,8 +156,13 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
 }
 
 #[pyfunction]
-#[pyo3(signature = (image, source, position, mask=None, fill=false))]
-fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
+#[pyo3(signature = (image, source, position, mask=None, fill=false, fill_size=None))]
+fn image_paste(
+    py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool, fill_size: Option<(u32, u32)>,
+) -> PyResult<()> {
+    if fill_size.is_some() && (!fill || mask.is_none() || source.size() != (1, 1) || image.bit_depth() != 8) {
+        return Err(PyValueError::new_err("invalid masked fill"));
+    }
     image.ensure_owned()?;
     if fill && image.pixel_mode().is_integer() {
         return paste_integer(py, image, source, position, mask, true);
@@ -173,13 +178,15 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
     if image.pixel_mode() != source.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
-    let mask_pixels = paste_mask(mask, source)?;
+    let size = fill_size.unwrap_or_else(|| source.size());
+    let mask_pixels = paste_mask(mask, size)?;
     let c = image.pixel_mode().channels();
+    let fill_tile = fill_size.map(|_| std::array::from_fn::<_, 768, _>(|i| source_pixels[i % c]));
     let width = image.width() as usize;
     let height = image.height() as usize;
     let pixels = image.pixels_mut().expect("validated open image");
     py.detach(|| {
-        let (left, top, right, bottom) = paste_bounds(position, width, height, source.width(), source.height());
+        let (left, top, right, bottom) = paste_bounds(position, width, height, size.0, size.1);
         if right <= left || bottom <= top {
             return;
         }
@@ -192,25 +199,21 @@ fn image_paste(py: Python<'_>, image: &mut Image, source: &Image, position: (i64
             return;
         }
         for y in top..bottom {
-            let s = (y - position.1) as usize * source.width() as usize + (left - position.0) as usize;
+            let s = (y - position.1) as usize * size.0 as usize + (left - position.0) as usize;
             let d = (y as usize * width + left as usize) * c;
             let dst = &mut pixels[d..d + count * c];
-            let src = &source_pixels[s * c..(s + count) * c];
             if let Some((mask, mc)) = mask_pixels {
                 let mask = &mask[s * mc..(s + count) * mc];
-                match (c, mc) {
-                    (1, 1) => paste_masked::<1, 1>(dst, src, mask, fill),
-                    (1, 4) => paste_masked::<1, 4>(dst, src, mask, fill),
-                    (2, 1) => paste_masked::<2, 1>(dst, src, mask, fill),
-                    (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
-                    (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
-                    (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
-                    (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill && source.pixel_mode() == PixelMode::Rgba),
-                    (4, 4) => paste_masked::<4, 4>(dst, src, mask, fill),
-                    _ => unreachable!("validated modes"),
+                let fill = fill && source.pixel_mode() == PixelMode::Rgba;
+                if let Some(tile) = &fill_tile {
+                    for (dst, mask) in dst.chunks_mut(tile.len()).zip(mask.chunks(tile.len() / c * mc)) {
+                        paste_masked_row(dst, &tile[..dst.len()], mask, c, mc, fill);
+                    }
+                } else {
+                    paste_masked_row(dst, &source_pixels[s * c..(s + count) * c], mask, c, mc, fill);
                 }
             } else {
-                dst.copy_from_slice(src);
+                dst.copy_from_slice(&source_pixels[s * c..(s + count) * c]);
             }
         }
     });
@@ -234,7 +237,7 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
     } else {
         source_pixels
     };
-    let mask_pixels = paste_mask(mask, source)?;
+    let mask_pixels = paste_mask(mask, source.size())?;
     let stride = image.raw_bytes_per_pixel();
     let width = image.width() as i64;
     let bounds = paste_bounds(position, image.width() as usize, image.height() as usize, source.width(), source.height());
@@ -307,6 +310,20 @@ fn paste_float(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_ch
             let new = f32::from_le_bytes(src[i * 4..i * 4 + 4].try_into().unwrap());
             dst[i * 4..i * 4 + 4].copy_from_slice(&((old * f32::from(255 - a) + new * f32::from(a)) / 255.0).to_le_bytes());
         }
+    }
+}
+
+fn paste_masked_row(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_channels: usize, fill: bool) {
+    match (channels, mask_channels) {
+        (1, 1) => paste_masked::<1, 1>(dst, src, mask, fill),
+        (1, 4) => paste_masked::<1, 4>(dst, src, mask, fill),
+        (2, 1) => paste_masked::<2, 1>(dst, src, mask, fill),
+        (2, 4) => paste_masked::<2, 4>(dst, src, mask, fill),
+        (3, 1) => paste_masked::<3, 1>(dst, src, mask, fill),
+        (3, 4) => paste_masked::<3, 4>(dst, src, mask, fill),
+        (4, 1) => paste_masked::<4, 1>(dst, src, mask, fill),
+        (4, 4) => paste_masked::<4, 4>(dst, src, mask, fill),
+        _ => unreachable!("validated modes"),
     }
 }
 

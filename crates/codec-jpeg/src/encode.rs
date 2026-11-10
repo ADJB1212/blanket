@@ -135,7 +135,10 @@ fn chroma_table(quality: u8) -> [u16; 64] {
 fn smooth_planes(image: &Image, pixels: &[u8], horizontal: usize, vertical: usize, factor: i32, keep_rgb: bool) -> Vec<Vec<u8>> {
     let (width, height) = (image.width() as usize, image.height() as usize);
     let channels = image.pixel_mode().channels();
-    let mut planes = vec![Vec::with_capacity(width * height); channels];
+    if channels == 1 {
+        return vec![smooth_plane(pixels, width, height, 1, 1, factor)];
+    }
+    let mut planes: Vec<_> = (0..channels).map(|_| Vec::with_capacity(width * height)).collect();
     for pixel in pixels.chunks_exact(channels) {
         if image.pixel_mode() == PixelMode::Rgb && !keep_rgb {
             let [r, g, b] = [i32::from(pixel[0]), i32::from(pixel[1]), i32::from(pixel[2])];
@@ -157,7 +160,7 @@ fn smooth_planes(image: &Image, pixels: &[u8], horizontal: usize, vertical: usiz
         .into_iter()
         .enumerate()
         .map(|(index, plane)| {
-            let (h, v) = if index == 0 || channels == 1 { (1, 1) } else { (horizontal, vertical) };
+            let (h, v) = if index == 0 { (1, 1) } else { (horizontal, vertical) };
             smooth_plane(&plane, width, height, h, v, factor)
         })
         .collect()
@@ -166,6 +169,16 @@ fn smooth_planes(image: &Image, pixels: &[u8], horizontal: usize, vertical: usiz
 fn smooth_plane(plane: &[u8], width: usize, height: usize, horizontal: usize, vertical: usize, factor: i32) -> Vec<u8> {
     let output_width = width.div_ceil(horizontal).next_multiple_of(8);
     let output_height = height.div_ceil(vertical).next_multiple_of(8);
+    if factor == 0 && horizontal == 1 && vertical == 1 {
+        let mut output = Vec::with_capacity(output_width * output_height);
+        for y in 0..output_height {
+            let start = y.min(height - 1) * width;
+            let row = &plane[start..start + width];
+            output.extend_from_slice(row);
+            output.resize(output.len() + output_width - width, row[width - 1]);
+        }
+        return output;
+    }
     let sample = |x: isize, y: isize| i64::from(plane[y.clamp(0, height as isize - 1) as usize * width + x.clamp(0, width as isize - 1) as usize]);
     let factor = i64::from(factor);
     let mut output = vec![0; output_width * output_height];

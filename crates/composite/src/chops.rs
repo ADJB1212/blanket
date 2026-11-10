@@ -21,22 +21,60 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 }
 
 #[pyfunction]
-fn _difference_bbox(py: Python<'_>, first: &Image, second: &Image) -> PyResult<Option<(usize, usize, usize, usize)>> {
+#[pyo3(signature = (first, second, clear=None))]
+fn _difference_bbox(
+    py: Python<'_>, first: &Image, second: &Image, clear: Option<(u32, u32, u32, u32)>,
+) -> PyResult<Option<(usize, usize, usize, usize)>> {
     let a = first.pixel_data()?;
     let b = second.pixel_data()?;
     if first.pixel_mode() != second.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
-    Ok(py.detach(|| difference_bbox(a, b, first.size(), second.size(), first.pixel_mode().channels())))
+    Ok(py.detach(|| difference_bbox(a, b, first.size(), second.size(), first.pixel_mode().channels(), clear)))
 }
 
-fn difference_bbox(a: &[u8], b: &[u8], a_size: (u32, u32), b_size: (u32, u32), channels: usize) -> Option<(usize, usize, usize, usize)> {
+fn difference_bbox(
+    a: &[u8], b: &[u8], a_size: (u32, u32), b_size: (u32, u32), channels: usize, clear: Option<(u32, u32, u32, u32)>,
+) -> Option<(usize, usize, usize, usize)> {
     let width = a_size.0.min(b_size.0) as usize;
     let height = a_size.1.min(b_size.1) as usize;
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);
+    let clear = clear.map(|(x0, y0, x1, y1)| {
+        let start = (x0 as usize).min(width) * channels;
+        let end = (x1 as usize).min(width) * channels;
+        (start..end, y0 as usize..y1 as usize)
+    });
     for y in 0..height {
         let a = &a[y * a_size.0 as usize * channels..][..width * channels];
         let b = &b[y * b_size.0 as usize * channels..][..width * channels];
+        if let Some((columns, rows)) = &clear
+            && rows.contains(&y)
+            && !columns.is_empty()
+        {
+            let mut update = |x| {
+                left = left.min(x / channels);
+                right = right.max(x / channels + 1);
+                top = top.min(y);
+                bottom = y + 1;
+            };
+            for range in [0..columns.start, columns.end..a.len()] {
+                let mut changed = a[range.clone()].iter().zip(&b[range.clone()]).enumerate().filter(|(_, (a, b))| a != b);
+                if let Some((x, _)) = changed.next() {
+                    update(range.start + x);
+                    if let Some((x, _)) = changed.next_back() {
+                        update(range.start + x);
+                    }
+                }
+            }
+            let cleared = &a[columns.clone()];
+            if let Some(first) = cleared.iter().position(|&value| value != 0) {
+                update(columns.start + first);
+                if let Some(last) = cleared[first + 1..].iter().rposition(|&value| value != 0) {
+                    update(columns.start + first + 1 + last);
+                }
+            }
+            continue;
+        }
         if a == b {
             continue;
         }

@@ -610,10 +610,15 @@ fn widen_integer<const BIG_ENDIAN: bool>(source: &[u8]) -> Vec<u8> {
 
 pub fn bilevel_to_l(source: &[u8]) -> Vec<u8> {
     let mut output = vec![0; source.len()];
-    chunks_mut(&mut output, CHUNK_PIXELS, |chunk, row| {
+    bilevel_to_l_into(source, &mut output);
+    output
+}
+
+pub fn bilevel_to_l_into(source: &[u8], output: &mut [u8]) {
+    assert_eq!(source.len(), output.len());
+    chunks_mut(output, CHUNK_PIXELS, |chunk, row| {
         bilevel_to_l_chunk(&source[chunk * CHUNK_PIXELS..][..row.len()], row);
     });
-    output
 }
 
 pub fn convert_bilevel(source: &[u8], mode: PixelMode) -> Vec<u8> {

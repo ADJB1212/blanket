@@ -23,7 +23,6 @@ struct Scan {
 
 pub struct JpegStreamDecoder {
     input: Vec<u8> = Vec::new(),
-    input_start: usize = 0,
     coefficients: Option<JpegCoefficients> = None,
     dc: [Option<Huffman>; 4] = [const { None }; 4],
     ac: [Option<Huffman>; 4] = [const { None }; 4],
@@ -64,44 +63,46 @@ impl JpegStreamDecoder {
         if self.failed {
             return Err("failed JPEG decoder".into());
         }
-        let result = self.process_input(data);
+        let mut input = std::mem::take(&mut self.input);
+        let result = self.process_input(&mut input, data);
+        if !self.complete {
+            self.input = input;
+        }
         self.failed = result.is_err();
         result
     }
 
-    fn process_input(&mut self, mut data: &[u8]) -> Result<(), String> {
+    fn process_input(&mut self, input: &mut Vec<u8>, mut data: &[u8]) -> Result<(), String> {
         while !self.complete {
-            self.input.drain(..self.input_start);
-            self.input_start = 0;
-            let count = data.len().min(INPUT_LIMIT - self.input.len());
-            self.input.extend_from_slice(&data[..count]);
+            let count = data.len().min(INPUT_LIMIT - input.len());
+            input.extend_from_slice(&data[..count]);
             data = &data[count..];
+            let mut start = 0;
             loop {
-                let consumed = if self.scan.is_some() { self.consume_scan()? } else { self.consume_marker()? };
+                let remaining = &input[start..];
+                let consumed = if self.scan.is_some() { self.consume_scan(remaining)? } else { self.consume_marker(remaining)? };
                 let Some(consumed) = consumed else {
                     break;
                 };
-                self.input_start += consumed;
+                start += consumed;
                 if self.complete {
-                    self.input = Vec::new();
-                    self.input_start = 0;
                     return Ok(());
                 }
             }
-            if self.input.len() - self.input_start == INPUT_LIMIT {
+            if start != 0 {
+                input.drain(..start);
+            }
+            if input.len() == INPUT_LIMIT {
                 return Err("JPEG input exceeds streaming buffer limit".into());
             }
             if data.is_empty() {
-                self.input.drain(..self.input_start);
-                self.input_start = 0;
                 break;
             }
         }
         Ok(())
     }
 
-    fn consume_marker(&mut self) -> Result<Option<usize>, String> {
-        let input = &self.input[self.input_start..];
+    fn consume_marker(&mut self, input: &[u8]) -> Result<Option<usize>, String> {
         if input.is_empty() {
             return Ok(None);
         }
@@ -148,13 +149,12 @@ impl JpegStreamDecoder {
             }
             return Ok(None);
         }
-        // Move the bounded marker payload out so parsing can update decoder state.
-        let payload = input[offset + 3..end].to_vec();
+        let payload = &input[offset + 3..end];
         match marker {
-            0xc0..=0xc2 => self.frame(marker, &payload)?,
-            0xc4 => self.huffman(&payload)?,
-            0xdb => self.quantization(&payload)?,
-            0xda => self.start_scan(&payload)?,
+            0xc0..=0xc2 => self.frame(marker, payload)?,
+            0xc4 => self.huffman(payload)?,
+            0xdb => self.quantization(payload)?,
+            0xda => self.start_scan(payload)?,
             0xdd => {
                 if payload.len() != 2 {
                     return Err("invalid JPEG restart interval".into());
@@ -356,10 +356,10 @@ impl JpegStreamDecoder {
         Ok(())
     }
 
-    fn consume_scan(&mut self) -> Result<Option<usize>, String> {
+    fn consume_scan(&mut self, input: &[u8]) -> Result<Option<usize>, String> {
         let scan = self.scan.as_mut().unwrap();
         let coefficients = self.coefficients.as_mut().unwrap();
-        let mut reader = Reader { data: &self.input[self.input_start..], pos: 0, bits: scan.bits };
+        let mut reader = Reader { data: input, pos: 0, bits: scan.bits };
         let mut predictors = scan.predictors;
         let mut eob = scan.eob;
         let mut restart = scan.restart;
@@ -491,6 +491,13 @@ impl JpegStreamDecoder {
                 .map_err(|error| error.to_string())
             })
             .transpose()
+    }
+
+    pub fn finish(mut self) -> Result<Option<Image>, String> {
+        if self.seen_scan && self.pixels.is_none() {
+            self.render()?;
+        }
+        Ok(self.pixels)
     }
 }
 

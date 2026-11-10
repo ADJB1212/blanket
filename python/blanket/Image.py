@@ -735,7 +735,7 @@ class Image:
         """
         mode = self.mode
         if mode == "1":
-            data = self._native.convert("L").tobytes()
+            data = self._native._bilevel_array_bytes()
             typestr = "|b1"
         else:
             data = self.tobytes()
@@ -1618,7 +1618,12 @@ class Image:
         """
         self.load()
         replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
-        self.paste(replacement)
+        self._sync_palette()
+        if self.readonly:
+            replacement._native._copy_palette(self._native)
+            self._native = replacement._native
+        else:
+            self._native._replace_pixels(replacement._native)
         self.readonly = 0
 
     def tobitmap(self, name: str = "image") -> bytes:
@@ -1731,6 +1736,7 @@ class Image:
         if min(size) < 0:
             raise ValueError("invalid paste region")
         self._sync_palette()
+        fill_size = None
         if isinstance(im, Image):
             im.load()
             if im.size != size:
@@ -1740,13 +1746,15 @@ class Image:
         else:
             if self.mode == "P" and isinstance(im, (str, tuple)) and not (isinstance(im, tuple) and len(im) == 1):
                 raise TypeError("color must be int or single-element tuple")
-            fill_size = (1, 1) if mask is None else size
+            if mask is not None and self.bit_depth == 8:
+                fill_size = size
+            source_size = (1, 1) if mask is None or fill_size is not None else size
             if self.bit_depth > 8 and self.mode in ("L", "RGB", "RGBA"):
                 color = color_pixel(im, self.mode, self.bit_depth)
                 raw = b"".join(value.to_bytes(2, "little") for value in color)
-                source = Image(image_new(self.mode, fill_size, raw, self.bit_depth))
+                source = Image(image_new(self.mode, source_size, raw, self.bit_depth))
             else:
-                source = new(self.mode, fill_size, im)
+                source = new(self.mode, source_size, im)
             if mask is None:
                 self._ensure_mutable()
                 image_fill(self._native, source._native, box[:2], size)
@@ -1756,7 +1764,7 @@ class Image:
         if mask is not None and (mask is self or mask._native is self._native):
             mask = mask.copy()
         self._ensure_mutable()
-        image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image))
+        image_paste(self._native, source._native, box[:2], mask._native if mask is not None else None, not isinstance(im, Image), fill_size)
 
     def alpha_composite(self, im: Image, dest: tuple[int, int] = (0, 0), source: tuple[int, ...] = (0, 0), *, linear_light: bool = False, transfer: str = "srgb") -> None:
         """Composite an RGBA source region onto this image in place.
@@ -1789,17 +1797,25 @@ class Image:
         region = source + im.size if len(source) == 2 else source
         overlay = im if region == (0, 0, *im.size) else im.crop(region)
         box = (*dest, dest[0] + overlay.width, dest[1] + overlay.height)
+        full_image = box == (0, 0, *self.size)
         if linear_light or self.mode == "RGBA;F":
-            background = self.crop(box)
-            self.paste(alpha_composite(background, overlay, linear_light=linear_light, transfer=transfer), box)
+            if full_image and not self.readonly:
+                self.load()
+                if transfer not in ("srgb", "linear"):
+                    raise ValueError("transfer must be 'srgb' or 'linear'")
+                native = self._native
+                result = ops_color_composite(native, overlay._native, linear_light and transfer == "srgb")
+                native._replace_pixels(result)
+            else:
+                background = self.crop(box)
+                self.paste(alpha_composite(background, overlay, linear_light=linear_light, transfer=transfer), box)
             return
-        if box == (0, 0, *self.size):
+        if full_image:
             overlay = overlay.copy() if overlay is self or overlay._native is self._native else overlay
             self._ensure_mutable()
             image_alpha_composite_inplace(self._native, overlay._native)
             return
-        background = self if box == (0, 0, *self.size) else self.crop(box)
-        self.paste(alpha_composite(background, overlay), box)
+        self.paste(alpha_composite(self.crop(box), overlay), box)
 
     def putalpha(self, alpha: Image | int) -> None:
         """Replace alpha in place, promoting 1/L, P, and RGB to LA, PA, and RGBA.
@@ -3027,9 +3043,12 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     metadata = read_tiff_metadata(data, len(frames), decoded=True) if image.format == "TIFF" else None
     if metadata is None:
         image.info.update(read_metadata(data, image.format))
-    decoded = [Image(frame) for frame in frames]
+    decoded = [image] if len(frames) == 1 else [Image(frame) for frame in frames]
     for frame, (duration, disposal, blend) in zip(decoded, controls, strict=True):
-        frame._info.update(next(metadata) if metadata is not None else image.info)
+        if metadata is not None:
+            frame._info.update(next(metadata))
+        elif frame is not image:
+            frame._info.update(image.info)
         if duration is not None:
             frame._info["duration"] = duration
         if loop_count is not None:
@@ -3088,15 +3107,16 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
     if len(box) != 4:
         raise ValueError("box must contain four integers")
     data = _read_bytes(fp)
-    header = inspect(BytesIO(data), formats)
+    format, size, _, _ = _inspect(data, formats)
     left, top, right, bottom = box
-    if not (0 <= left < right <= header.size[0] and 0 <= top < bottom <= header.size[1]):
+    if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
         raise ValueError("region must be a nonempty rectangle inside the image")
     native = _decode_region(data, box, formats)
     if native is None:
         if fallback == "error":
             raise NotImplementedError("region decoding unavailable; use fallback='full'")
-        with open(BytesIO(data), formats=formats) as source:
+        _decompression_bomb_check(size, format=format)
+        with _decode(data, formats, False, 1) as source:
             result = source.crop(box)
     else:
         result = Image(native)

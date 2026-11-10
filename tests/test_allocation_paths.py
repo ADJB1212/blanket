@@ -22,6 +22,23 @@ def test_apng_full_frame_deltas_reuse_prepared_images(monkeypatch):
     assert (durations, disposals, blends, regions) == ([10, 20], [0, 0], [0, 0], ((17, 3), [(0, 0), (0, 0)]))
 
 
+def test_apng_background_disposal_compares_without_copying(monkeypatch):
+    first = Image.new("RGBA", (17, 3), (17, 31, 89, 255))
+    second = first.copy()
+    second.putpixel((5, 1), (71, 113, 173, 149))
+    third = second.copy()
+    third.putpixel((5, 1), (0, 0, 0, 0))
+    third.putpixel((8, 2), (1, 2, 3, 4))
+
+    def no_copy(*args, **kwargs):
+        pytest.fail("APNG disposal copied the raster")
+
+    monkeypatch.setattr(Image.Image, "copy", no_copy)
+    frames, _, _, _, regions = _png_regions([first, second, third], [10, 20, 30], [0, 1, 0], [0, 0, 0], False, True)
+    assert regions == ((17, 3), [(0, 0), (5, 1), (8, 2)])
+    assert frames[2].getdata() == [(1, 2, 3, 4)]
+
+
 @pytest.mark.parametrize("size", [(0, 1), (17, 3), (17003, 5)])
 @pytest.mark.parametrize("masked", [False, True])
 @pytest.mark.parametrize("cutoff,ignore", [(0, None), ((1, 3), [0, -1]), (100, 17)])
@@ -306,3 +323,63 @@ def test_paste_color_uses_one_pixel_source(mode, color, box, monkeypatch):
     monkeypatch.setattr(Image, "new", small_source)
     image.paste(color, box)
     assert image == expected
+
+
+@pytest.mark.parametrize(("mode", "color"), [("L", 71), ("LA", (71, 149)), ("RGB", (71, 113, 173)), ("RGBA", (71, 113, 173, 149)), ("RGBX", (71, 113, 173, 149))])
+@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
+def test_paste_masked_color_uses_one_pixel_source(mode, color, mask_mode, monkeypatch):
+    box = (-3, -1, 805, 4)
+    size = (808, 5)
+    mask = Image.frombytes(mask_mode, size, bytes(i % 256 for i in range(size[0] * size[1] * len(mask_mode))))
+    image = Image.new(mode, (801, 3))
+    expected = image.copy()
+    source = Image.new(mode, size, color)
+    _blanket.image_paste(expected._native, source._native, box[:2], mask._native, True)
+    original_new = Image.new
+
+    def small_source(mode, size, *args, **kwargs):
+        assert size == (1, 1)
+        return original_new(mode, size, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "new", small_source)
+    image.paste(color, box, mask)
+    assert image == expected
+
+
+def test_frombytes_replaces_storage_without_paste(monkeypatch):
+    image = Image.new("P", (2, 1))
+    image.putpalette([0, 0, 0, 71, 113, 173])
+    image.info["transparency"] = 0
+    access = image.load()
+
+    def no_paste(*args, **kwargs):
+        pytest.fail("frombytes copied the replacement raster")
+
+    monkeypatch.setattr(Image.Image, "paste", no_paste)
+    image.frombytes(b"\x01\x00")
+    assert access[0, 0] == 1
+    assert image.getpalette() == [0, 0, 0, 71, 113, 173]
+    assert image.info["transparency"] == 0
+
+
+def test_full_linear_composite_replaces_storage_without_crop_or_paste(monkeypatch):
+    image = Image.new("RGBA", (257, 3), (11, 29, 101, 255))
+    overlay = Image.new("RGBA", image.size, (173, 113, 71, 149))
+    expected = Image.alpha_composite(image, overlay, linear_light=True)
+    access = image.load()
+
+    def no_copy(*args, **kwargs):
+        pytest.fail("full-image linear composite copied a raster")
+
+    monkeypatch.setattr(Image.Image, "crop", no_copy)
+    monkeypatch.setattr(Image.Image, "paste", no_copy)
+    image.alpha_composite(overlay, linear_light=True)
+    assert image == expected
+    assert access[0, 0] == expected.getpixel((0, 0))
+
+
+@pytest.mark.parametrize("pixel", [(-0.25, 0.5, 3.0), [-0.25, 0.5, 3.0]])
+def test_scaled_float_color_putdata_writes_native_samples(pixel):
+    image = Image.new("RGB;F", (2, 1), 4.0)
+    image.putdata([pixel], scale=2.0, offset=0.25)
+    assert image.tobytes() == struct.pack("<6f", -0.25, 1.25, 6.25, 4, 4, 4)

@@ -55,13 +55,11 @@ class Parser:
         """
         if self._closed:
             raise ValueError("closed image parser")
-        view = memoryview(data).cast("B")
+        view = data if isinstance(data, bytes) else memoryview(data).cast("B")
         try:
-            if self._decoder is not None and isinstance(data, bytes):
-                if data:
-                    self._decoder.feed(data)
-                return
             if self._decoder is None:
+                if isinstance(view, bytes):
+                    view = memoryview(view)
                 count = min(12 - len(self._prefix), len(view))
                 self._prefix.extend(view[:count])
                 view = view[count:]
@@ -77,7 +75,7 @@ class Parser:
                 self._decoder.feed(prefix)
                 self._prefix.clear()
             if view:
-                self._decoder.feed(view.tobytes())
+                self._decoder.feed(view if isinstance(view, bytes) else view.tobytes())
         except Exception:
             self._closed = True
             self._decoder = None
