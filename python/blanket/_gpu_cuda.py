@@ -169,11 +169,11 @@ class CudaImage:
         except Exception as error:
             raise RuntimeError(f"CUDA execution failed on device {self.device}: {error}") from error
 
-    def download(self) -> bytes:
+    def download_buffer(self) -> memoryview:
         """Copy CUDA pixels through pinned host storage and wait for completion.
 
         Returns:
-            Packed CPU bytes in the array's dtype and shape order. The current
+            A byte view keeping the pinned host storage alive. The current
             stream waits for this resource's event before starting the transfer.
 
         Raises:
@@ -193,10 +193,14 @@ class CudaImage:
                 completion.record(stream)
                 completion.synchronize()
                 _collect_pending(self.device)
-                return host.tobytes()
+                return memoryview(host).cast("B")
             except Exception as error:
                 stream.synchronize()
                 raise RuntimeError(f"CUDA download failed on device {self.device}: {error}") from error
+
+    def download(self) -> bytes:
+        """Return packed CPU bytes."""
+        return self.download_buffer().tobytes()
 
     def to_torch(self) -> Tensor:
         """Export the CUDA array as a shared PyTorch tensor through DLPack.

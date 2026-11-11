@@ -5,6 +5,21 @@ from helpers import assert_raises
 from blanket import Image, ImageFilter, ImageGpu
 
 
+@pytest.mark.parametrize("mode", ["RGB", "RGB;F"])
+def test_torch_image_export_uses_packed_host_buffer(monkeypatch, mode: str) -> None:
+    import torch
+
+    floating = mode == "RGB;F"
+    tensor = torch.arange(18, dtype=torch.float32 if floating else torch.uint8).reshape(2, 3, 3).transpose(0, 1)
+    expected = tensor.numpy().tobytes()
+    monkeypatch.setattr(ImageGpu, "_torch", lambda: torch)
+    monkeypatch.setattr(torch.mps, "synchronize", lambda: None)
+    gpu = ImageGpu.GpuImage(tensor, (2, 3), mode, "torch", {})
+    result = gpu.to_image()
+    tensor.zero_()
+    assert result.tobytes() == expected
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
 def test_unified_memory_automatic_roundtrip_and_copy_on_write(mode: str) -> None:
     from blanket import ImageDraw

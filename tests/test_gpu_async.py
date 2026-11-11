@@ -232,7 +232,7 @@ def test_cuda_pinned_transfer_ordering_without_device(monkeypatch):
     try:
         assert not event.done()
         assert hosts[0]() is not None
-        assert resource.download() == bytes(range(24))
+        assert ImageGpu.GpuImage(resource, (3, 2), "RGBA", "cuda", {}).to_image().tobytes() == bytes(range(24))
         assert allocations == [24, 24]
         assert calls.index("wait") < calls.index("get") < calls.index("complete")
         assert not pending

@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use pyo3::buffer::PyBuffer;
 use pyo3::exceptions::{PyIndexError, PyMemoryError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyInt, PyList, PyMemoryView, PySlice, PyTuple};
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyInt, PyList, PyMemoryView, PySlice, PyTuple};
 use rustc_hash::FxHashMap;
 
 // Golden-ratio multipliers spread packed pixel keys across the high hash bits.
@@ -1287,19 +1287,23 @@ impl Image {
         .map(Bound::unbind)
     }
 
+    fn _writable_samples<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyByteArray>> {
+        Ok(PyByteArray::new(py, self.raw_data()?))
+    }
+
     pub fn pixels_equal(&self, py: Python<'_>, other: &Self) -> PyResult<bool> {
         let first = self.raw_data()?;
         let second = other.raw_data()?;
         if self.mode != other.mode || self.size() != other.size() || self.bit_depth != other.bit_depth {
             return Ok(false);
         }
+        if std::ptr::eq(first, second) {
+            return Ok(true);
+        }
         Ok(py.detach(|| if self.mode == PixelMode::One { first.iter().zip(second).all(|(&a, &b)| (a != 0) == (b != 0)) } else { first == second }))
     }
 
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
-        if std::ptr::eq(first, second) {
-            return Ok(true);
-        }
         let source = self.raw_data()?;
         let pixels = if let Some(pixels) = &self.pixels {
             py.detach(|| Arc::clone(pixels))
@@ -2043,16 +2047,16 @@ pub fn mapped_getpixel(
 }
 
 fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
-    if let Ok(view) = PyMemoryView::from(obj) {
-        if let Ok(raw) = view.call_method1("cast", ("B",)) {
-            return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
-        }
     if let Ok(bytes) = obj.cast::<PyBytes>() {
         return crate::buffers::copy(bytes.as_bytes());
     }
     if let Ok(buffer) = PyBuffer::<u8>::get(obj) {
         return buffer.to_vec(obj.py());
     }
+    if let Ok(view) = PyMemoryView::from(obj) {
+        if let Ok(raw) = view.call_method1("cast", ("B",)) {
+            return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
+        }
         macro_rules! copy_typed {
             ($($sample:ty),+ $(,)?) => {
                 $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
@@ -2752,10 +2756,6 @@ mod tests {
         assert!(sibling.shared_pixels.is_none());
         assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
     }
-    #[test]
-    fn zeroed_pixel_allocations_support_vec_mutation_and_growth() {
-        for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 1024 * 1024] {
-            let mut pixels = super::alloc_pixels(len).unwrap();
 
     #[test]
     fn owned_raster_copy_shares_storage_until_mutated() {
@@ -2771,6 +2771,10 @@ mod tests {
         assert_eq!(image.into_pixels().unwrap(), [9, 2, 3]);
     }
 
+    #[test]
+    fn zeroed_pixel_allocations_support_vec_mutation_and_growth() {
+        for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 1024 * 1024] {
+            let mut pixels = super::alloc_pixels(len).unwrap();
             assert_eq!(pixels.len(), len);
             assert!(pixels.iter().all(|&value| value == 0));
             pixels.fill(173);

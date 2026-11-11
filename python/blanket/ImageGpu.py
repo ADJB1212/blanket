@@ -282,7 +282,7 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
             resource = _blanket.MetalImage.from_image(image._native)
     else:
         torch = _torch()
-        resource = torch.frombuffer(bytearray(image.tobytes()), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
+        resource = torch.frombuffer(image._native._writable_samples(), dtype=torch.float32 if floating else torch.uint8).reshape(image.height, image.width, channels).to("mps")
     return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()), unified_memory=unified_memory)
 
 
@@ -1350,10 +1350,16 @@ class GpuImage:
             return result
         self._check()
         if self.runtime == "cuda":
-            data = self._resource.download()
+            data = self._resource.download_buffer()
         else:
             self.synchronize()
-            data = bytes(self._resource.resolve_neg().contiguous().view(_torch().uint8).cpu().flatten().tolist())
+            host = self._resource.resolve_neg().contiguous().view(_torch().uint8).cpu().flatten()
+            try:
+                data = memoryview(host.numpy())
+            except RuntimeError as error:
+                if "Numpy is not available" not in str(error):
+                    raise
+                data = bytes(host.tolist())
         result = Image.frombytes(self.mode, self.size, data)
         result.info.update(self.info)
         return result
