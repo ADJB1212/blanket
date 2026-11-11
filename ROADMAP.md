@@ -431,7 +431,7 @@ with new processing semantics exposed explicitly.
       configurable tiles and contrast limits
 - [ ] **Edge detection** — Sobel and Scharr gradients plus Canny edges with
       explicit threshold and output conventions
-- [ ] **Perceptual distortion metrics** — native SSIM, MS-SSIM, and SSIMULACRA2
+- [x] **Perceptual distortion metrics** — native SSIM, MS-SSIM, and SSIMULACRA2
       scoring for image quality evaluation and compressor tuning
 - [ ] **Content-aware seam carving** — aspect ratio retargeting via seam carving
       while preserving high-energy saliency regions

@@ -54,6 +54,8 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   XMP parsing, and metadata rewrites that leave the pixels alone.
 - **Encoding.** JPEG controls, coefficient transforms without a recompress,
   and save-time compression search.
+- **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
+  `ImageMetrics`, preserving integer sample depth.
 - **Interop.** Array imports, binary streams, perceptual hashes, an optional
   Pillow bridge, and explicit Metal/CUDA pipelines.
 

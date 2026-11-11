@@ -47,6 +47,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_filter::filter::register(module)?;
     blanket_ops::math::register(module)?;
     blanket_ops::hash::register(module)?;
+    blanket_ops::metrics::register(module)?;
     blanket_ops::ops::register(module)?;
     blanket_palette::palette::register(module)?;
     blanket_palette::quantize::register(module)?;

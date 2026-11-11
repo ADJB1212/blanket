@@ -14,6 +14,7 @@ blanket-core.workspace = true
 blanket-math.workspace = true
 pyo3.workspace = true
 rayon.workspace = true
+ssimulacra2 = { version = "0.5", default-features = false, features = ["rayon"] }
 
 [lib]
 doctest = false

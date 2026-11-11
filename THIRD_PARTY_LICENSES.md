@@ -61,3 +61,6 @@ Source: https://github.com/dhepper/font8x8/blob/master/font8x8_basic.h
 - unicode-bidi and unicode-script: MIT OR Apache-2.0
 
 Their full license texts accompany the wheels and corresponding-source archives.
+
+Perceptual quality scoring uses ssimulacra2 (BSD-2-Clause), with yuvxyb and
+yuvxyb-math (MIT). Their license texts accompany the wheels and source archives.
