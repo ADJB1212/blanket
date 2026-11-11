@@ -6,7 +6,7 @@ __lazy_modules__ = {"struct", "collections.abc"}
 
 import struct
 from operator import index
-from typing import TYPE_CHECKING, overload
+from typing import TYPE_CHECKING, cast, overload
 
 from ._blanket import path_bbox, path_compact, path_transform
 
@@ -46,7 +46,7 @@ class Path:
         if not hasattr(xy, "__getitem__") or isinstance(xy, str):
             raise TypeError("argument must be a coordinate sequence")
         values: list[float] = []
-        for value in xy:
+        for value in cast("Sequence[float | tuple[float, float]]", xy):
             if isinstance(value, (tuple, list)):
                 if len(value) != 2:
                     raise ValueError("coordinate list must contain exactly 2 coordinates")

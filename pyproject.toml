@@ -122,9 +122,6 @@ allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
 [tool.ty.rules]
 invalid-argument-type = "ignore"
-call-non-callable = "ignore"
-not-iterable = "ignore"
-no-matching-overload = "ignore"
 
 [tool.uv]
 compile-bytecode = true

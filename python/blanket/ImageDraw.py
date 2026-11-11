@@ -364,7 +364,7 @@ class ImageDraw:
         if not values:
             return []
         if isinstance(values[0], (tuple, list)):
-            return [(int(x), int(y)) for x, y in values]
+            return [(int(x), int(y)) for x, y in cast("Sequence[tuple[float, float]]", values)]
         if len(values) % 2:
             raise ValueError(f"wrong number of coordinates: {len(values)}")
         return [(int(values[i]), int(values[i + 1])) for i in range(0, len(values), 2)]

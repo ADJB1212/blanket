@@ -433,8 +433,9 @@ def save_metadata(image: Image, format: str, options: dict[str, object], *, stri
     values = []
     for key in ("exif", "xmp", "icc_profile"):
         value = options.pop(key) if key in options else b"" if format == "JPEG" and key == "xmp" else image._metadata_value(key)
-        if key == "exif" and hasattr(value, "tobytes"):
-            value = value.tobytes()
+        tobytes = getattr(value, "tobytes", None) if key == "exif" else None
+        if callable(tobytes):
+            value = tobytes()
         if key == "xmp" and isinstance(value, str):
             value = value.encode("utf-8")
         if value is None:

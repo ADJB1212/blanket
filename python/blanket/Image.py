@@ -1689,14 +1689,15 @@ class Image:
 
         self.load()
         operation = filter() if callable(filter) else filter
-        if not hasattr(operation, "filter"):
+        apply_filter = getattr(operation, "filter", None)
+        if not callable(apply_filter):
             raise TypeError("filter argument should be ImageFilter.Filter instance or class")
         neighborhood_filter = isinstance(operation, (RankFilter, ModeFilter)) and getattr(operation.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
         if self.mode in ("L", "I;16", "I;16L", "I;16B", "I;16N") or isinstance(operation, MultibandFilter) or neighborhood_filter:
-            result = Image(operation.filter(self._native))
+            result = Image(apply_filter(self._native))
             result.info.update(self._metadata_info())
             return result
-        bands = [operation.filter(band._native) for band in self.split()]
+        bands = [apply_filter(band._native) for band in self.split()]
         result = Image(filter_merge(self.mode, bands))
         result.info.update(self._metadata_info())
         return result
@@ -2176,7 +2177,7 @@ class Image:
         if isinstance(method, ImageTransformHandler):
             return method.transform(size, self, resample=resample, fill=fill)
         if hasattr(method, "getdata"):
-            method, data = method.getdata()
+            method, data = cast("SupportsGetData", method).getdata()
         if data is None:
             raise ValueError("missing method data")
         if method not in Transform:
@@ -2211,7 +2212,7 @@ class Image:
         else:
             if method == Transform.MESH:
                 mesh = []
-                for box, quad in data:
+                for box, quad in cast("Sequence[tuple[Sequence[int], Sequence[object]]]", data):
                     box = tuple(index(v) for v in box)
                     if len(box) != 4:
                         raise ValueError("mesh boxes require four coordinates")
@@ -2427,7 +2428,7 @@ class Image:
         result = PillowImage.frombytes(self.mode, self.size, self.tobytes())
         if self.palette is not None:
             result.putpalette(self.palette.tobytes(), self.palette.mode)
-        result.info.update(self._metadata_info())
+        cast("dict[object, object]", result.info).update(self._metadata_info())
         return result
 
     def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
@@ -3277,7 +3278,7 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
     return result
 
 
-def _output_format(fp: object, requested: str | None) -> str:
+def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, requested: str | None) -> str:
     """Resolve a supported save format from an explicit name or filename extension."""
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
@@ -3289,7 +3290,8 @@ def _output_format(fp: object, requested: str | None) -> str:
         return normalized
     if hasattr(fp, "write"):
         raise ValueError("unknown file extension; specify format")
-    extension = os.path.splitext(os.fsdecode(os.fspath(fp)))[1].lower()
+    filename = os.fspath(cast("str | bytes | os.PathLike[str] | os.PathLike[bytes]", fp))
+    extension = os.path.splitext(os.fsdecode(filename))[1].lower()
     try:
         return _EXTENSIONS[extension]
     except KeyError as error:

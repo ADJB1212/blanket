@@ -8,12 +8,13 @@ import struct
 from collections.abc import Mapping, MutableMapping
 from itertools import starmap
 from operator import index
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from .ExifTags import IFD
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from decimal import Decimal
     from typing import BinaryIO, Self
 
 _FORMATS = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 11: "f", 12: "d", 13: "I"}
@@ -275,7 +276,7 @@ class Exif(MutableMapping[int, object]):
 
                         numbers = []
                         for item in items:
-                            rational = item if hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int) else Fraction(item).limit_denominator(1000000)
+                            rational = item if hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int) else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
                             numbers.extend((int(rational.numerator), int(rational.denominator)))
                         raw = struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers)
                     else:

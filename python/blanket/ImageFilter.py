@@ -710,12 +710,15 @@ class Color3DLUT(MultibandFilter):
     @staticmethod
     def _check_size(size: int | tuple[int, int, int]) -> tuple[int, int, int]:
         """Validate 3D LUT dimensions and return a three-element tuple in the range [2, 65]."""
-        try:
-            x, y, z = size
-        except ValueError as error:
-            raise ValueError("Size should be either an integer or a tuple of three integers.") from error
-        except TypeError:
+        if isinstance(size, int):
             x = y = z = size
+        else:
+            try:
+                x, y, z = size
+            except ValueError as error:
+                raise ValueError("Size should be either an integer or a tuple of three integers.") from error
+            except TypeError:
+                x = y = z = size
         dimensions = int(x), int(y), int(z)
         if any(not 2 <= value <= 65 for value in dimensions):
             raise ValueError("Size should be in [2, 65] range.")
