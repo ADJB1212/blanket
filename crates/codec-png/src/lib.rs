@@ -234,7 +234,7 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
             png::DeflateCompression::Level(options.compress_level)
         });
         let mut writer = encoder.write_header().map_err(codec_error)?;
-        writer.write_chunk(png::chunk::sBIT, &vec![image.bit_depth(); image.pixel_mode().channels()]).map_err(codec_error)?;
+        writer.write_chunk(png::chunk::sBIT, &[image.bit_depth(); 4][..image.pixel_mode().channels()]).map_err(codec_error)?;
         let mut stream = writer.stream_writer_with_size(128 * 1024).map_err(codec_error)?;
         let stride = image.width() as usize * image.pixel_mode().channels() * 2;
         let mut samples = vec![0; stride];

@@ -123,7 +123,7 @@ impl PngStreamWriter {
             (|| {
                 let mut writer = encoder.write_header()?;
                 if matches!(depth, 10 | 12) {
-                    writer.write_chunk(png::chunk::sBIT, &vec![depth; channels])?;
+                    writer.write_chunk(png::chunk::sBIT, &[depth; 4][..channels])?;
                 }
                 writer.into_stream_writer()
             })()
@@ -142,7 +142,7 @@ impl PngStreamWriter {
         }
         let depth = self.depth;
         let stride = self.stride;
-        if depth > 8 && py.detach(|| data.as_chunks::<2>().0.iter().any(|&sample| u16::from_le_bytes(sample) as u32 >= (1_u32 << depth))) {
+        if matches!(depth, 10 | 12) && !py.detach(|| blanket_core::simd::samples_in_range(data, depth)) {
             return Err(PyValueError::new_err("sample exceeds bit depth"));
         }
         let writer = self.writer.as_mut().expect("writer checked above");

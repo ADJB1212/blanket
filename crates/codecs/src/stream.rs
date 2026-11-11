@@ -13,7 +13,7 @@ pub struct StreamingDecoder {
 
 #[derive(Debug)]
 enum Decoder {
-    Jxl(JxlStreamDecoder),
+    Jxl(Box<JxlStreamDecoder>),
     Jpeg(Box<JpegStreamDecoder>),
 }
 
@@ -65,7 +65,7 @@ impl StreamingDecoder {
         }
         let decoder = py
             .detach(|| match format {
-                "JXL" => JxlStreamDecoder::new().map(Decoder::Jxl),
+                "JXL" => JxlStreamDecoder::new().map(|decoder| Decoder::Jxl(Box::new(decoder))),
                 _ => JpegStreamDecoder::new().map(|decoder| Decoder::Jpeg(Box::new(decoder))).map_err(DecodeError::from),
             })
             .map_err(|error| error.into_pyerr(Some(format)))?;

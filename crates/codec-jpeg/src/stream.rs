@@ -478,19 +478,7 @@ impl JpegStreamDecoder {
         if self.seen_scan && self.pixels.is_none() {
             self.render()?;
         }
-        self.pixels
-            .as_ref()
-            .map(|image| {
-                Image::from_pixels(
-                    image.width(),
-                    image.height(),
-                    image.pixel_mode(),
-                    image.pixel_data().map_err(|e| e.to_string())?.to_vec(),
-                    Some("JPEG".into()),
-                )
-                .map_err(|error| error.to_string())
-            })
-            .transpose()
+        Ok(self.pixels.clone())
     }
 
     pub fn finish(mut self) -> Result<Option<Image>, String> {

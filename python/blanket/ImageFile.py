@@ -58,12 +58,10 @@ class Parser:
         view = data if isinstance(data, bytes) else memoryview(data).cast("B")
         try:
             if self._decoder is None:
-                if isinstance(view, bytes):
-                    view = memoryview(view)
+                whole_chunk = isinstance(view, bytes) and not self._prefix
                 count = min(12 - len(self._prefix), len(view))
                 self._prefix.extend(view[:count])
-                view = view[count:]
-                prefix = bytes(self._prefix)
+                prefix = self._prefix
                 if prefix.startswith(b"\xff\x0a") or prefix == b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a":
                     self._decoder = StreamingDecoder("JXL")
                 elif prefix.startswith(b"\xff\xd8"):
@@ -72,8 +70,13 @@ class Parser:
                     return
                 else:
                     raise UnidentifiedImageError("streaming decode supports JXL and JPEG")
-                self._decoder.feed(prefix)
+                if whole_chunk:
+                    self._decoder.feed(view)
+                    self._prefix.clear()
+                    return
+                self._decoder.feed(bytes(prefix))
                 self._prefix.clear()
+                view = memoryview(view)[count:] if isinstance(view, bytes) else view[count:]
             if view:
                 self._decoder.feed(view if isinstance(view, bytes) else view.tobytes())
         except Exception:

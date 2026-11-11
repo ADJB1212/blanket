@@ -214,6 +214,19 @@ def test_jxl_container_signature_and_payload_boundaries(chunk_size: int) -> None
     assert parser.close().tobytes() == Image.open(BytesIO(data)).tobytes()
 
 
+@pytest.mark.parametrize("format", ["JPEG", "JXL"])
+def test_completed_parser_snapshots_can_be_mutated_independently(format: str) -> None:
+    data = jpeg_encoded() if format == "JPEG" else encoded("RGB")
+    parser = ImageFile.Parser()
+    parser.feed(data)
+    preview = parser.image
+    assert preview is not None
+    expected = preview.tobytes()
+    preview.putpixel((0, 0), tuple(value ^ 255 for value in preview.getpixel((0, 0))))
+    assert preview.tobytes() != expected
+    assert parser.close().tobytes() == expected
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("compress_level", [0, 6, 9])
 @pytest.mark.parametrize("buffer_type", [bytes, bytearray, memoryview])

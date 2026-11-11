@@ -14,6 +14,7 @@ pub struct JxlStreamDecoder {
     runner: ResizableRunner<'static>,
     input: Vec<u8> = Vec::new(),
     pixels: Vec<u8> = Vec::new(),
+    preview: Option<Image> = None,
     format: JxlPixelFormat = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Little, align: 0 },
     width: u32 = 0,
     height: u32 = 0,
@@ -78,6 +79,9 @@ impl JxlStreamDecoder {
     pub fn feed(&mut self, data: &[u8]) -> Result<(), DecodeError> {
         if self.failed {
             return Err("failed JPEG XL decoder".into());
+        }
+        if !self.complete {
+            self.preview = None;
         }
         let result = self.process_input(data);
         self.failed = result.is_err();
@@ -169,11 +173,15 @@ impl JxlStreamDecoder {
         }
     }
 
-    pub fn image(&self) -> Result<Option<Image>, DecodeError> {
+    pub fn image(&mut self) -> Result<Option<Image>, DecodeError> {
         if !self.available {
             return Ok(None);
         }
-        self.output_image(self.pixels.clone()).map(Some)
+        if self.preview.is_none() {
+            let pixels = if self.complete { self.take_output() } else { self.pixels.clone() };
+            self.preview = Some(self.output_image(pixels)?);
+        }
+        Ok(self.preview.clone())
     }
 
     pub fn finish(mut self) -> Result<Option<Image>, DecodeError> {
@@ -183,10 +191,17 @@ impl JxlStreamDecoder {
         if !self.available {
             return Ok(None);
         }
-        // SAFETY: reset releases output references before transferring the allocation.
-        unsafe { JxlDecoderReset(self.decoder) };
-        let pixels = std::mem::take(&mut self.pixels);
+        if let Some(preview) = self.preview.take() {
+            return Ok(Some(preview));
+        }
+        let pixels = self.take_output();
         self.output_image(pixels).map(Some)
+    }
+
+    fn take_output(&mut self) -> Vec<u8> {
+        // SAFETY: Reset releases output references before transferring the allocation.
+        unsafe { JxlDecoderReset(self.decoder) };
+        std::mem::take(&mut self.pixels)
     }
 
     fn output_image(&self, pixels: Vec<u8>) -> Result<Image, DecodeError> {
@@ -288,7 +303,7 @@ mod tests {
                     first.feed(chunk).unwrap();
                     second.feed(chunk).unwrap();
                 }
-                for decoder in [first, second] {
+                for mut decoder in [first, second] {
                     assert!(decoder.complete);
                     let actual = decoder.image().unwrap().unwrap();
                     assert_eq!(actual.pixel_mode(), mode);
