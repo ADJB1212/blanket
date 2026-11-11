@@ -125,7 +125,7 @@ def test_inspection_and_diagnostics() -> None:
     assert Image.decode(SVG).get_format_mimetype() == "image/svg+xml"
     assert Image.registered_extensions()[".svg"] == "SVG"
     assert features.check("svg") and "svg" in features.get_supported()
-    assert features.version("svg") == "resvg 0.49.0"
+    assert features.version("svg") == "resvg 0.50.0"
     assert features.encoding_capabilities("SVG") is None
     output = StringIO()
     features.blanketinfo(output)

@@ -482,14 +482,15 @@ fn preflight(group: &usvg::Group, sx: f64, sy: f64, budget: &mut Budget, nested:
         if nested {
             return Err(Error::Unsupported("nested SVG layer"));
         }
-        let rect = group.abs_layer_bounding_box();
-        let w = (f64::from(rect.width()) * sx).ceil() + 6.0;
-        let h = (f64::from(rect.height()) * sy).ceil() + 6.0;
-        let bytes = w * h * 4.0;
-        if !bytes.is_finite() || bytes > budget.limits.working_bytes as f64 {
-            return Err(Error::Limit("layer bytes"));
+        if let Some(rect) = group.abs_layer_bounding_box() {
+            let w = (f64::from(rect.width()) * sx).ceil() + 6.0;
+            let h = (f64::from(rect.height()) * sy).ceil() + 6.0;
+            let bytes = w * h * 4.0;
+            if !bytes.is_finite() || bytes > budget.limits.working_bytes as f64 {
+                return Err(Error::Limit("layer bytes"));
+            }
+            charge(&mut budget.working, bytes as u64, budget.limits.working_bytes, "working bytes")?;
         }
-        charge(&mut budget.working, bytes as u64, budget.limits.working_bytes, "working bytes")?;
     }
     for node in group.children() {
         if let usvg::Node::Group(child) = node {

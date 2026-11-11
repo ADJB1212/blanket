@@ -132,7 +132,7 @@ opt-level = 1
 debug = false
 split-debuginfo = "unpacked"
 lto = "off"
-codegen-units = 32
+codegen-units = 16
 
 [workspace.lints.rust]
 missing_debug_implementations = "deny"
