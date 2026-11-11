@@ -9,7 +9,7 @@ import pytest
 from helpers import assert_image_properties, assert_pixels_equal, assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage, PdfParser
 
-from blanket import Image, ImageSequence, UnidentifiedImageError
+from blanket import Image, ImageSequence, PngImagePlugin, UnidentifiedImageError
 from blanket.Compressor import LosslessImageCompressor
 
 if TYPE_CHECKING:
@@ -283,9 +283,12 @@ def test_save_defaults_and_path(tmp_path: Path) -> None:
     source = animation()
     source.seek(1)
     path = tmp_path / "animated.apng"
-    source.save(bytes(path), save_all=True)
+    info = PngImagePlugin.PngInfo()
+    info.add_text("Author", "Blanket")
+    source.save(bytes(path), save_all=True, pnginfo=info)
     reopened = Image.open(path)
     assert reopened.n_frames == 3
+    assert reopened.info["Author"] == "Blanket"
     assert source.tell() == 1
     assert [frame.info["duration"] for frame in ImageSequence.Iterator(reopened)] == [20, 40, 60]
     stream = image_buffer(source, "PNG", save_all=False, append_images=[Image.new("RGB", (2, 2))])

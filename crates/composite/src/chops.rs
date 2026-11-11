@@ -36,6 +36,9 @@ fn _difference_bbox(
 fn difference_bbox(
     a: &[u8], b: &[u8], a_size: (u32, u32), b_size: (u32, u32), channels: usize, clear: Option<(u32, u32, u32, u32)>,
 ) -> Option<(usize, usize, usize, usize)> {
+    if clear.is_none() && a_size == b_size && std::ptr::eq(a, b) {
+        return None;
+    }
     let width = a_size.0.min(b_size.0) as usize;
     let height = a_size.1.min(b_size.1) as usize;
     let (mut left, mut top, mut right, mut bottom) = (width, height, 0, 0);

@@ -1,7 +1,6 @@
 use std::io::{BufWriter, Write};
-use std::path::PathBuf;
 
-use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
+use blanket_codecs::codecs::{self, ImageFormat, SaveOptions, output_error, output_path, write_path};
 use blanket_compressor::Compressor;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
@@ -85,31 +84,10 @@ pub(crate) fn _encode(
         )));
     }
     if let Some(output) = output {
-        let path = output_path(py, &output)?;
-        py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string())))
-            .map_err(|error| output_error(error, &output))?;
+        write_path(py, &output, encoded)?;
         return Ok(None);
     }
     Ok(Some(PyBytes::new(py, &encoded).unbind()))
-}
-
-fn output_path(py: Python<'_>, output: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
-    let path = if output.is_instance_of::<PyBytes>() {
-        py.import("os")?.call_method1("fsdecode", (output,))?.extract::<PathBuf>()?
-    } else {
-        output.extract::<PathBuf>()?
-    };
-    if path.as_os_str().as_encoded_bytes().contains(&0) {
-        return Err(PyValueError::new_err("embedded null byte"));
-    }
-    Ok(path)
-}
-
-fn output_error((errno, message): (Option<i32>, String), output: &Bound<'_, PyAny>) -> PyErr {
-    match errno {
-        Some(errno) => PyOSError::new_err((errno, message, output.clone().unbind())),
-        None => PyOSError::new_err(message),
-    }
 }
 
 fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: SaveOptions, compressor: Option<Compressor>) -> PyResult<Vec<u8>> {

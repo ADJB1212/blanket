@@ -79,10 +79,12 @@ def write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
 
 def write_all(stream: BinaryIO, data: bytes) -> None:
     """Write every byte, rejecting invalid counts and streams that would block."""
-    view = memoryview(data)
+    if not data:
+        return
     offset = 0
     pending = data
-    while pending:
+    view = None
+    while True:
         count = stream.write(pending)
         if count is None:
             raise BlockingIOError(errno.EAGAIN, "image output write made no progress")
@@ -91,4 +93,8 @@ def write_all(stream: BinaryIO, data: bytes) -> None:
         if count == 0:
             raise BlockingIOError(errno.EAGAIN, "image output write made no progress")
         offset += count
-        pending = bytes(view[offset : offset + 64 * 1024])
+        if offset == len(data):
+            return
+        if view is None:
+            view = memoryview(data)
+        pending = bytes(view[offset : offset + min(2 * count, 64 * 1024)])

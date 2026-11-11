@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use blanket_codec_avif::{decode_avif, encode_avif};
 use blanket_codec_bmp_ico::{decode_bmp, decode_ico, encode_bmp, encode_ico};
 pub use blanket_codec_common::SaveOptions;
@@ -318,11 +320,13 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
 
 #[pyfunction]
 #[expect(clippy::too_many_arguments, reason = "Python sequence API accepts parallel frame arrays and encoding options")]
-#[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None, pdf_dpi=72.0))]
+#[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None, pdf_dpi=72.0, output=None, metadata_exif=None, metadata_xmp=None, icc_profile=None, metadata_chunks=Vec::new()))]
 pub fn _encode_sequence(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
     default_image: bool, quality: u8, compress_level: u8, lossless: bool, regions: Option<AnimationRegions>, pdf_dpi: f64,
-) -> PyResult<Py<PyBytes>> {
+    output: Option<Bound<'_, PyAny>>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>, icc_profile: Option<&[u8]>,
+    metadata_chunks: Vec<crate::metadata::PngChunk>,
+) -> PyResult<Option<Py<PyBytes>>> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
     let format = ImageFormat::parse(format)?;
     if images.is_empty() || durations.len() != images.len() || disposals.len() != images.len() || blends.len() != images.len() {
@@ -429,7 +433,46 @@ pub fn _encode_sequence(
             _ => Err(PyValueError::new_err("unsupported multi-frame output format")),
         })
         .map_err(|error| blanket_codec_common::encode_error(error, format.as_str()))?;
-    Ok(PyBytes::new(py, &encoded).unbind())
+    let encoded = py.detach(|| {
+        crate::metadata::encode_metadata(
+            encoded,
+            format.as_str(),
+            metadata_exif.unwrap_or_default(),
+            metadata_xmp.unwrap_or_default(),
+            icc_profile.unwrap_or_default(),
+            &metadata_chunks,
+        )
+    })?;
+    if let Some(output) = output {
+        write_path(py, &output, encoded)?;
+        return Ok(None);
+    }
+    Ok(Some(PyBytes::new(py, &encoded).unbind()))
+}
+
+pub fn output_path(py: Python<'_>, output: &Bound<'_, PyAny>) -> PyResult<PathBuf> {
+    let path = if output.is_instance_of::<PyBytes>() {
+        py.import("os")?.call_method1("fsdecode", (output,))?.extract::<PathBuf>()?
+    } else {
+        output.extract::<PathBuf>()?
+    };
+    if path.as_os_str().as_encoded_bytes().contains(&0) {
+        return Err(PyValueError::new_err("embedded null byte"));
+    }
+    Ok(path)
+}
+
+pub fn output_error((errno, message): (Option<i32>, String), output: &Bound<'_, PyAny>) -> PyErr {
+    match errno {
+        Some(errno) => PyOSError::new_err((errno, message, output.clone().unbind())),
+        None => PyOSError::new_err(message),
+    }
+}
+
+pub fn write_path(py: Python<'_>, output: &Bound<'_, PyAny>, encoded: Vec<u8>) -> PyResult<()> {
+    let path = output_path(py, output)?;
+    py.detach(move || std::fs::write(path, encoded).map_err(|error| (error.raw_os_error(), error.to_string())))
+        .map_err(|error| output_error(error, output))
 }
 
 pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {

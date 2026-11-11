@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os", "collections.abc", "math", "fractions"}
+__lazy_modules__ = {"os", "collections.abc", "math", "fractions", "itertools"}
 
 import math
+import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fractions import Fraction
+from itertools import repeat
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import os
     from typing import BinaryIO
 
-from ._blanket import _difference_bbox, _encode_sequence, _write_metadata
+from ._blanket import _difference_bbox, _encode_sequence
 from ._exif import save_metadata
 from ._io import write_bytes
 from .errors import UnsupportedCodecError
@@ -49,20 +50,19 @@ def _png_regions(
             if frame.mode == base.mode and frame.mode in ("1", "L", "LA", "RGB", "RGBA") and frame.info.get("transparency") is None and base.info.get("transparency") is None:
                 bbox = _difference_bbox(frame._native, base._native, clear)
             else:
-                if clear is not None:
+                if clear is not None and base.mode != "RGBA":
                     base = base.copy()
                     base.paste(0, clear)
+                    clear = None
                 current = frame if frame.mode == "RGBA" else frame.convert("RGBA")
                 comparison = base if base.mode == "RGBA" else base.convert("RGBA")
-                bbox = _difference_bbox(current._native, comparison._native)
+                bbox = _difference_bbox(current._native, comparison._native, clear)
             combined = previous.duration + duration
             if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
                 previous.duration = combined
                 continue
         records.append(_PngFrame(frame, bbox, duration, disposal, blend))
     prepared = frames[: int(default_image)]
-    if default_image and prepared[0].size != canvas:
-        prepared[0] = prepared[0].crop((0, 0, *canvas))
     offsets = [(0, 0)] * int(default_image)
     for record in records:
         prepared.append(record.image if record.bbox is None or record.bbox == (0, 0, *record.image.size) else record.image.crop(record.bbox))
@@ -130,11 +130,13 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         if isinstance(supplied, (list, tuple)):
             if len(supplied) != count:
                 raise ValueError(f"{name} must have one value per animation frame")
-            result = list(supplied)
+            result = supplied
         elif supplied is not None:
-            result = [supplied] * count
+            result = repeat(supplied, count)
+        elif name == "duration":
+            result = (frames[i].info.get("duration", default) for i in range(start, len(frames)))
         else:
-            result = [frame.info.get("duration", default) if name == "duration" else default for frame in frames[start:]]
+            result = repeat(default, count)
         normalized: list[float | int] = [0] * start
         for value in result:
             if maximum is not None:
@@ -190,9 +192,28 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 prepared[0]._native.set_palette_alpha(index=transparency)
             elif isinstance(transparency, bytes):
                 prepared[0]._native.set_palette_alpha(alpha=transparency)
-    encoded = bytes(_encode_sequence([frame._native for frame in prepared], format, durations, disposals, blends, loop, default_image, values["quality"], values["compress_level"], values["lossless"], regions, values.get("pdf_dpi", 72.0)))
-    if any(metadata):
-        encoded = _write_metadata(encoded, format, *metadata)
+    output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
+    encoded = _encode_sequence(
+        [frame._native for frame in prepared],
+        format,
+        durations,
+        disposals,
+        blends,
+        loop,
+        default_image,
+        values["quality"],
+        values["compress_level"],
+        values["lossless"],
+        regions,
+        values.get("pdf_dpi", 72.0),
+        output=output,
+        metadata_exif=metadata[0],
+        metadata_xmp=metadata[1],
+        icc_profile=metadata[2],
+        metadata_chunks=metadata[3],
+    )
+    if encoded is None:
+        return b""
     if fp is None:
         return encoded
     write_bytes(fp, encoded)
