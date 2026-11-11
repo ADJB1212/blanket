@@ -8,7 +8,7 @@ import pytest
 from helpers import assert_raises, image_buffer, png_chunk
 
 from blanket import Image, ImageOps
-from blanket._exif import _png_metadata, read_metadata, transpose_metadata
+from blanket._exif import _png_metadata, read_metadata, read_tiff_metadata, transpose_metadata
 
 
 @pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])
@@ -120,6 +120,25 @@ def test_exif_mapping_stream_loading_and_signed_rationals() -> None:
     assert loaded[65000] == -0.5
     loaded.load_from_fp(BytesIO(data), int.from_bytes(data[4:8], "big"))
     assert loaded[65000] == -0.5
+
+
+@pytest.mark.parametrize("unit", [2, 3])
+@pytest.mark.parametrize("xres,yres", [("bad", 72), (72, "bad"), ((72, 73), 72), (72, (72, 73))])
+def test_tiff_ignores_invalid_resolution_values(unit: int, xres: object, yres: object) -> None:
+    exif = Image.Exif()
+    exif[282], exif[283], exif[296] = xres, yres, unit
+    info = next(read_tiff_metadata(exif.tobytes()[6:], 1))
+    assert "dpi" not in info
+    assert "exif" in info
+
+
+@pytest.mark.parametrize("resolution", [(), (72, 1, 2)])
+def test_jpeg_invalid_resolution_count_uses_default_dpi(resolution: tuple[int, ...]) -> None:
+    exif = Image.Exif()
+    exif[282], exif[296] = resolution, 2
+    payload = exif.tobytes()
+    data = b"\xff\xd8\xff\xe1" + struct.pack(">H", len(payload) + 2) + payload + b"\xff\xd9"
+    assert read_metadata(data, "JPEG")["dpi"] == (72, 72)
 
 
 @pytest.mark.parametrize(("kind", "length", "field", "expected"), [(0, 1, 0, {}), (7, 10, 1000, {})])

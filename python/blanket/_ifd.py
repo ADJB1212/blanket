@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"struct", "itertools"}
+__lazy_modules__ = {"struct", "itertools", "operator"}
 
 import struct
 from collections.abc import Mapping, MutableMapping
 from itertools import starmap
+from operator import index
 from typing import TYPE_CHECKING
 
 from .ExifTags import IFD
@@ -139,8 +140,8 @@ class Exif(MutableMapping[int, object]):
         result: dict[int, object] = {}
         types: dict[int, int] = {}
         entries: dict[int, tuple[int, object]] = {}
-        for index, (tag, kind, length, field) in enumerate(struct.iter_unpack(endian + "HHII", memoryview(data)[offset + 2 : end])):
-            pos = offset + 2 + index * 12
+        for entry_index, (tag, kind, length, field) in enumerate(struct.iter_unpack(endian + "HHII", memoryview(data)[offset + 2 : end])):
+            pos = offset + 2 + entry_index * 12
             size = _SIZES.get(kind, 0) * length
             if not size:
                 continue
@@ -258,7 +259,8 @@ class Exif(MutableMapping[int, object]):
                     elif any(isinstance(v, float) or (hasattr(v, "denominator") and not isinstance(v, int)) for v in items):
                         kind = 5 if all(float(v) >= 0 for v in items) else 10
                     else:
-                        kind = 3 if all(isinstance(v, int) and 0 <= v <= 65535 for v in items) else 9 if any(v < 0 for v in items) else 4
+                        integers = tuple(index(v) for v in items)
+                        kind = 3 if all(0 <= v <= 65535 for v in integers) else 9 if any(v < 0 for v in integers) else 4
                 if kind == 2:
                     raw = str(value).encode("ascii", "replace") + b"\0"
                     count = len(raw)

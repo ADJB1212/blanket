@@ -666,10 +666,11 @@ class Image:
         if frame == self._frame or (self._frames is None and self._lazy_frames is None):
             return
         self._sync_palette()
-        current = self._lazy_frames.cache[self._frame] if self._lazy_frames is not None else self._frames[self._frame]
+        frames = cast("list[Image]", self._frames)
+        current = self._lazy_frames.cache[self._frame] if self._lazy_frames is not None else frames[self._frame]
         current._native, current.palette, current._info = self._native, self.palette, self._info
         current._exif, current._exif_source = self._exif, self._exif_source
-        selected = self._lazy_frames.get(frame) if self._lazy_frames is not None else self._frames[frame]
+        selected = self._lazy_frames.get(frame) if self._lazy_frames is not None else frames[frame]
         self._native, self.palette, self._info = selected._native, selected.palette, selected._info
         self._exif, self._exif_source = selected._exif, selected._exif_source
         self._bands = _BANDS[self._native.mode]

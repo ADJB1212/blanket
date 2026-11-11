@@ -122,8 +122,6 @@ allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
 [tool.ty.rules]
 invalid-argument-type = "ignore"
-unsupported-operator = "ignore"
-not-subscriptable = "ignore"
 call-non-callable = "ignore"
 not-iterable = "ignore"
 no-matching-overload = "ignore"

@@ -157,12 +157,13 @@ class ImagePalette:
 
     def _new_color_index(self, image: Image | _PaletteImage | None = None, e: Exception | None = None) -> int:
         """Find an available palette slot while avoiding reserved image indices."""
-        if not isinstance(self.palette, bytearray):
-            self._palette = bytearray(self.palette)
+        palette = self.palette
+        if not isinstance(palette, bytearray):
+            palette = self._palette = bytearray(palette)
         slot = len(self.palette) // len(self.mode)
         reserved = (image.info.get("background"), image.info.get("transparency")) if image else ()
         while slot in reserved:
-            self._palette += bytearray(len(self.mode))
+            palette.extend(bytearray(len(self.mode)))
             slot += 1
         if slot >= 256 and image:
             histogram = ops_histogram(image._native, None) if isinstance(image, Image) else image.histogram()

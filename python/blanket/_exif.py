@@ -177,9 +177,11 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                 exif.load(cast("bytes", info["exif"]))
                 unit = exif[0x0128]
                 x_res = exif[0x011A]
-                try:
-                    dpi = float(x_res[0]) / x_res[1]  # type: ignore[index]
-                except TypeError:
+                if isinstance(x_res, (tuple, list)):
+                    if len(x_res) != 2:
+                        raise ValueError("DPI rational must contain two values")
+                    dpi = float(x_res[0]) / x_res[1]
+                else:
                     dpi = float(x_res)  # type: ignore[arg-type]
                 if math.isnan(dpi):
                     raise ValueError("DPI is not a number")
@@ -318,7 +320,7 @@ def read_tiff_metadata(data: bytes, count: int, *, decoded: bool = False) -> Ite
                 if value is not None:
                     info[key] = value if isinstance(value, bytes) else bytes(value if isinstance(value, tuple) else (value,))
             xres, yres = exif.get(282), exif.get(283)
-            if xres and yres:
+            if isinstance(xres, (int, float)) and isinstance(yres, (int, float)) and xres and yres:
                 unit = exif.get(296)
                 if unit == 2:
                     info["dpi"] = (xres, yres)

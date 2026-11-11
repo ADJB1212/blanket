@@ -20,10 +20,17 @@ from math import isfinite
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable, Iterator, Sequence
     from typing import Any, Protocol, Self
 
     from ._blanket import _Image
+
+    class _FlatTable(Protocol):
+        def __len__(self) -> int: ...
+
+        def __iter__(self) -> Iterator[float]: ...
+
+        def __getitem__(self, key: slice, /) -> Sequence[float]: ...
 
     class _ArrayTable(Protocol):
         @property
@@ -686,18 +693,19 @@ class Color3DLUT(MultibandFilter):
                 table = array
                 wrong_size = True
         else:
-            if copy_table:
-                table = list(table)
-            if table and isinstance(table[0], (list, tuple)):
+            entries = list(table) if copy_table else cast("Sequence[float | Sequence[float]]", table)
+            if entries and isinstance(entries[0], (list, tuple)):
                 flattened = []
-                for pixel in table:
+                for pixel in entries:
                     if len(pixel) != channels:
                         raise ValueError(f"The elements of the table should have a length of {channels}.")
                     flattened.extend(pixel)
                 table = flattened
+            else:
+                table = entries
         if wrong_size or len(table) != items * channels:
             raise ValueError(f"The table should have either channels * size**3 float items or size**3 items of channels-sized tuples with floats. Table should be: {channels}x{self.size[0]}x{self.size[1]}x{self.size[2]}. Actual length: {len(table)}")
-        self.table = table
+        self.table = cast("_FlatTable", table)
 
     @staticmethod
     def _check_size(size: int | tuple[int, int, int]) -> tuple[int, int, int]:

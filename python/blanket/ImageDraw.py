@@ -813,9 +813,9 @@ class ImageDraw:
         """Render a rounded rectangle with specified corner radii."""
         coordinates = list(xy)
         if len(coordinates) == 2:
-            (x0, y0), (x1, y1) = coordinates
+            (x0, y0), (x1, y1) = cast("Sequence[tuple[float, float]]", coordinates)
         else:
-            x0, y0, x1, y1 = coordinates
+            x0, y0, x1, y1 = cast("Sequence[float]", coordinates)
         diameter = min(x1 - x0, y1 - y0, radius * 2)
         x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
         full_x = full_y = False
