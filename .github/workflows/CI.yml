@@ -38,27 +38,35 @@ env:
   HOMEBREW_NO_ASK: "1"
   HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
   UV_NO_SYNC: "1"
+  RUSTUP_AUTO_INSTALL: "0"
+  RUSTUP_TOOLCHAIN: nightly-2026-11-11
 
 permissions:
   contents: read
   actions: write
 
 jobs:
-  test:
+  linux:
     timeout-minutes: 30
-    env:
-      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-26.04
-            python: "3.14"
-          - os: ubuntu-26.04-arm
-            python: "3.14"
-          - os: macos-latest
-            python: "3.14"
+        os: [ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
+    container:
+      image: ghcr.io/adjb1212/blanket-ci:v1
+    defaults:
+      run:
+        shell: bash
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+      FUSE_LINKER: mold
+      CC: clang
+      CXX: clang++
+      CMAKE_CC_COMPILER: clang
+      CMAKE_CXX_COMPILER: clang++
+      BUILD_FEATURES: jxl-vendored,no-vendored-webp,embedded-libheif,gpu-cuda
+      RUSTFLAGS: -C linker=clang -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@v7
 
@@ -67,19 +75,125 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: |
+            /opt/rustup/toolchains
+            /opt/cargo/registry/index
+            /opt/cargo/registry/cache
+            /opt/cargo/git/db
+            target
+          key: CI-Linux-container-v1-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: CI-Linux-container-v1-${{ runner.arch }}-cargo-
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
+
+      - name: Clean outdated Rust build artifacts
+        if: steps.cargo-cache-restore.outputs.cache-hit != 'true'
+        run: cargo clean --locked
+
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+        with:
+          version: "latest"
+          enable-cache: "false"
+          save-cache: "false"
+
+      - name: Set up Python 3.14 for PyO3
+        run: |
+          uv python install 3.14
+          python_executable=$(uv python find --managed-python 3.14)
+          python_libdir=$("$python_executable" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')
+          echo "PYO3_PYTHON=$python_executable" >> "$GITHUB_ENV"
+          echo "LD_LIBRARY_PATH=$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+
+      - name: Configure ARM64 linking
+        if: runner.arch == 'ARM64'
+        run: echo "RUSTFLAGS=$RUSTFLAGS -C link-arg=-lwebpdemux" >> "$GITHUB_ENV"
+
+      - name: Run Clippy
+        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES
+
+      - name: Run Rust Tests
+        run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
+
+      - name: Install project and test dependencies
+        run: |
+          uv tool install maturin
+          export PATH="$(uv tool dir --bin):$PATH"
+          uv sync --no-install-project --only-group test --managed-python
+          maturin develop -G test --uv --profile ci --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
+
+      - name: Verify GPU backend is compiled
+        run: uv run python -c 'from blanket import ImageGpu; info = ImageGpu.capabilities("cuda"); assert info["compiled"], info; print(info)'
+
+      - name: Test Python API
+        run: uv run pytest
+
+      - name: Verify Pillow behavior
+        run: uv run scripts/verify_behavior.py
+
+      - name: Delete stale Rust caches
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache-restore.outputs.cache-matched-key != steps.cargo-cache-restore.outputs.cache-primary-key
+        uses: actions/github-script@v8
+        env:
+          CACHE_PREFIX: CI-Linux-container-v1-${{ runner.arch }}-cargo-
+          CACHE_KEY: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
+        with:
+          script: |
+            const caches = await github.paginate(github.rest.actions.getActionsCacheList, {
+              ...context.repo,
+              key: process.env.CACHE_PREFIX,
+              ref: context.ref,
+              per_page: 100,
+            });
+            for (const cache of caches) {
+              if (cache.key !== process.env.CACHE_KEY) {
+                await github.rest.actions.deleteActionsCacheById({
+                  ...context.repo,
+                  cache_id: cache.id,
+                });
+              }
+            }
+
+      - name: Save Rust dependencies and build artifacts
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: |
+            /opt/rustup/toolchains
+            /opt/cargo/registry/index
+            /opt/cargo/registry/cache
+            /opt/cargo/git/db
+            target
+          key: ${{ steps.cargo-cache-restore.outputs.cache-primary-key }}
+
+  macos:
+    timeout-minutes: 30
+    env:
+      UV_CACHE_DIR: ${{ github.workspace }}/.uv-cache
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Restore Rust dependencies and build artifacts
+        id: cargo-cache-restore
+        uses: actions/cache/restore@v6
+        with:
+          path: |
+            ~/.rustup/toolchains
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target
-          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('rust-toolchain.toml') }}
+          key: CI-${{ runner.os }}-${{ runner.arch }}-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: CI-${{ runner.os }}-${{ runner.arch }}-cargo-
+
+      - name: Install pinned Rust toolchain
+        run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
 
       - name: Clean outdated Rust build artifacts
         if: steps.cargo-cache-restore.outputs.cache-hit != 'true'
         run: cargo clean --locked
 
       - name: Configure macOS toolchain
-        if: runner.os == 'macOS'
         run: |
           sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
 
@@ -95,40 +209,7 @@ jobs:
           enable-cache: "false"
           save-cache: "false"
 
-      - name: Set up Homebrew
-        if: runner.os == 'macOS'
-        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
-
-      - uses: rui314/setup-mold@da13e0b42e392e3a45d1215033a2270b849d7d36
-        if: runner.os == 'Linux'
-        with:
-          mold-version: 3.0.0
-          make-default: true
-
-      - name: Install Deps and Setup PATH (Linux)
-        timeout-minutes: 5
-        if: runner.os == 'Linux'
-        run: |
-          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y libwebp-dev libdav1d-dev libheif-dev libde265-dev libx265-dev libnuma-dev ninja-build nasm liblcms2-dev pkg-config
-          echo "FUSE_LINKER=mold" >> "$GITHUB_ENV"
-          echo "CC=clang" >> "$GITHUB_ENV"
-          echo "CXX=clang++" >> "$GITHUB_ENV"
-          echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
-          echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,embedded-libheif,gpu-cuda" >> "$GITHUB_ENV"
-          echo "N_THREADS=4" >> "$GITHUB_ENV"
-          if [ "$RUNNER_ARCH" = "ARM64" ]; then
-            echo "RUSTFLAGS=${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=-lwebpdemux" >> "$GITHUB_ENV"
-          fi
-
-      - name: Install CUDA compiler (Linux)
-        if: runner.os == 'Linux'
-        run: bash scripts/setup_cuda.sh
-
       - name: Install Deps and Setup PATH (macOS)
-        if: runner.os == 'macOS'
         run: |
           brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp jpeg-xl little-cms2 pkgconf
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
@@ -141,17 +222,11 @@ jobs:
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
-          echo "N_THREADS=3" >> "$GITHUB_ENV"
 
       - name: Run Clippy
-        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES -- -Z threads=$N_THREADS
-
-      - name: Run Rust Tests (Linux)
-        if: runner.os == 'Linux'
-        run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
+        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
 
       - name: Run Rust Tests (MacOS)
-        if: runner.os == 'macOS'
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
 
       - name: Install project and test dependencies
@@ -160,7 +235,7 @@ jobs:
           uv python install 3.14
           uv tool install maturin
           uv sync --no-install-project --only-group test --managed-python
-          maturin develop -G test --uv --profile ci --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER -Z threads=$N_THREADS
+          maturin develop -G test --uv --profile ci --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
 
       - name: Verify GPU backend is compiled
         run: uv run python -c 'import sys; from blanket import ImageGpu; backend = "metal" if sys.platform == "darwin" else "cuda"; info = ImageGpu.capabilities(backend); assert info["compiled"], info; print(info)'
@@ -183,6 +258,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: |
+            ~/.rustup/toolchains
             ~/.cargo/registry/index
             ~/.cargo/registry/cache
             ~/.cargo/git/db
