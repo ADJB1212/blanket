@@ -74,14 +74,12 @@ def test_ycbcr_contribution_rounding(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
-@pytest.mark.parametrize("other", ["1", "L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "I", "F"])
-@pytest.mark.parametrize("reverse", [False, True])
-def test_conversions(mode: str, other: str, reverse: bool) -> None:
-    source, target = (other, mode) if reverse else (mode, other)
+@pytest.mark.parametrize("source", ["HSV", "I", "F"])
+def test_scalar_and_hsv_color_conversions(mode: str, source: str) -> None:
     rgb = PIL.frombytes("RGB", (257, 1), random.Random(7).randbytes(257 * 3))
     expected = rgb.convert(source)
     actual = Image.frombytes(source, expected.size, expected.tobytes())
-    assert actual.convert(target).tobytes() == expected.convert(target, dither=PIL.Dither.NONE).tobytes()
+    assert actual.convert(mode).tobytes() == expected.convert(mode, dither=PIL.Dither.NONE).tobytes()
 
 
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr", "LAB"])

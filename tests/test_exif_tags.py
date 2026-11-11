@@ -9,15 +9,13 @@ from PIL import ExifTags as PillowTags, Image as PillowImage
 from blanket import ExifTags, Image
 
 
-@pytest.mark.parametrize("tag", list(ExifTags.Base))
-def test_base_tag_identifiers_match_pillow(tag: ExifTags.Base) -> None:
-    assert tag.value == PillowTags.Base[tag.name].value
-    assert ExifTags.TAGS[tag] == PillowTags.TAGS[tag.value]
+def test_base_tag_identifiers_match_pillow() -> None:
+    assert {tag.name: tag.value for tag in ExifTags.Base} == {tag.name: PillowTags.Base[tag.name].value for tag in ExifTags.Base}
+    assert {tag.value: ExifTags.TAGS[tag] for tag in ExifTags.Base} == {tag.value: PillowTags.TAGS[tag.value] for tag in ExifTags.Base}
 
 
-@pytest.mark.parametrize("tag", list(ExifTags.IFD))
-def test_ifd_identifiers_match_pillow(tag: ExifTags.IFD) -> None:
-    assert tag.value == PillowTags.IFD[tag.name].value
+def test_ifd_identifiers_match_pillow() -> None:
+    assert {tag.name: tag.value for tag in ExifTags.IFD} == {tag.name: PillowTags.IFD[tag.name].value for tag in ExifTags.IFD}
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])

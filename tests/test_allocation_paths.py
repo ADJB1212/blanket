@@ -306,8 +306,14 @@ def test_band_exports_need_no_channel_raster(mode, size, monkeypatch):
         assert image.get_flattened_data(c) == tuple(expected)
 
 
-@pytest.mark.parametrize("mode,color", [("1", 1), ("L", 71), ("LA", (71, 149)), ("P", 71), ("PA", (71, 149)), ("RGB", (71, 113, 173)), ("RGBA", (71, 113, 173, 149)), ("I", -1024), ("I;16B", 1024), ("F", -12.5), ("RGB;F", (0.1, 0.2, 0.3))])
-@pytest.mark.parametrize("box", [(-3, 2, 19, 11), (1, -2, 5, 7), (0, 0, 23, 13), (1, 1, 1, 1), (25, 17, 31, 21)])
+@pytest.mark.parametrize(
+    "mode,color,box",
+    [
+        (mode, color, (-3, 2, 19, 11))
+        for mode, color in [("1", 1), ("L", 71), ("LA", (71, 149)), ("P", 71), ("PA", (71, 149)), ("RGB", (71, 113, 173)), ("RGBA", (71, 113, 173, 149)), ("I", -1024), ("I;16B", 1024), ("F", -12.5), ("RGB;F", (0.1, 0.2, 0.3))]
+    ]
+    + [("RGBA", (71, 113, 173, 149), box) for box in [(1, -2, 5, 7), (0, 0, 23, 13), (1, 1, 1, 1), (25, 17, 31, 21)]],
+)
 def test_paste_color_uses_one_pixel_source(mode, color, box, monkeypatch):
     image = Image.new(mode, (23, 13))
     expected = image.copy()

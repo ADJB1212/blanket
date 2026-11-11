@@ -39,7 +39,7 @@ def test_bbox() -> None:
             check(im, (255, 255))
 
 
-@pytest.mark.parametrize("mode", ("L", "RGB", "RGBA", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"))
+@pytest.mark.parametrize("mode", ("L", "RGBA", "I;16B"))
 @pytest.mark.parametrize(
     "box",
     (

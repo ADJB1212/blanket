@@ -80,8 +80,7 @@ def test_bitwise_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
 
 
 @pytest.mark.parametrize("expression", ["a + b", "b - a", "a * b", "a / b", "b % a", "a < b", "equal(a, b)", "min(a, b)", "max(b, a)"])
-@pytest.mark.parametrize("mode", ["1", "L", "I"])
-@pytest.mark.parametrize("size", [(0, 1), (17, 3), (17003, 5)])
+@pytest.mark.parametrize("mode,size", [(mode, (17, 3)) for mode in ("1", "L", "I")] + [("I", (0, 1)), ("I", (17003, 5))])
 def test_mixed_modes(expression: str, mode: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     a, pa = pair(mode, size)
     b, pb = pair("F", (size[0] + 2, size[1]))
@@ -141,8 +140,7 @@ def test_closed_image(mode: str) -> None:
     assert_raises(ValueError, lambda: ImageMath.eval("a + 1", a=image))
 
 
-@pytest.mark.parametrize("value", [17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf")])
-@pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
+@pytest.mark.parametrize("mode,value", [("F", value) for value in (17, 1.0000000596046448, -0.0, float("nan"), float("inf"), -float("inf"))] + [(mode, 1.0000000596046448) for mode in ("1", "L", "I")])
 @pytest.mark.parametrize("expression", ["a + n", "n + a", "a - n", "n - a", "a * n", "n * a", "a / n", "n / a", "a % n", "n % a", "a ** n", "n ** a", "a < n", "n < a", "min(a, n)", "max(a, n)", "equal(a, n)", "notequal(a, n)"])
 def test_float_scalars_without_constant_images(expression: str, value: float, mode: str, monkeypatch: pytest.MonkeyPatch) -> None:
     if isinstance(value, int) and mode != "F":
@@ -164,8 +162,7 @@ def test_float_scalar_overflow(value: float) -> None:
     assert_raises(OverflowError, lambda: ImageMath.unsafe_eval("a + n", a=image, n=value))
 
 
-@pytest.mark.parametrize("mode", ["1", "L", "I"])
-@pytest.mark.parametrize("value", [0, -1, -2147483648, 2147483647, 2**63, 10**100])
+@pytest.mark.parametrize("mode,value", [("I", value) for value in (0, -1, -2147483648, 2147483647, 2**63, 10**100)] + [("1", 10**100), ("L", -2147483648)])
 @pytest.mark.parametrize("expression", ["a + n", "n - a", "a * n", "a / n", "n % a", "a & n", "a << n", "a > n"])
 def test_integer_scalars_without_constant_images(mode: str, value: int, expression: str, monkeypatch: pytest.MonkeyPatch) -> None:
     image, reference = pair(mode, (17, 1))

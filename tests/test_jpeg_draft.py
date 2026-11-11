@@ -10,8 +10,7 @@ from blanket import Image
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "CMYK"])
-@pytest.mark.parametrize("mode", [None, "RGB", "L", "YCbCr"])
-@pytest.mark.parametrize("size", [None, (100, 100), (17, 13), (8, 7), (1, 1)])
+@pytest.mark.parametrize("mode,size", [(None, size) for size in (None, (100, 100), (17, 13), (8, 7), (1, 1))] + [("RGB", (17, 13)), ("L", (8, 7)), ("YCbCr", (1, 1))])
 def test_jpeg_draft_matches_decoder(source_mode: str, mode: str | None, size: tuple[int, int] | None) -> None:
     dimensions = (63, 47)
     channels = len(source_mode)

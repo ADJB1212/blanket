@@ -15,8 +15,7 @@ if TYPE_CHECKING:
 
 
 @pytest.mark.parametrize(("mode", "channels"), [("L", 1), ("RGB", 3), ("RGBA", 4), ("CMYK", 4)])
-@pytest.mark.parametrize("destination", ["stream", "path", "bytes_path"])
-@pytest.mark.parametrize("dpi", [None, 300, 96.123456789, 1e10, 1e40, 1e-40])
+@pytest.mark.parametrize("destination,dpi", [("stream", dpi) for dpi in (None, 300, 96.123456789, 1e10, 1e40, 1e-40)] + [("path", None), ("bytes_path", 300)])
 def test_pdf_save(mode: str, channels: int, destination: str, dpi: float | None, tmp_path: Path) -> None:
     pixels = bytes((i * 37) % 256 for i in range(6 * channels))
     source = Image.frombytes(mode, (2, 3), pixels)

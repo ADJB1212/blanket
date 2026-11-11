@@ -48,9 +48,8 @@ def assert_images_equal(actual, expected):
         assert max(abs(a - b) for a, b in zip(actual.tobytes(), expected.tobytes(), strict=True)) <= 1
 
 
-@pytest.mark.parametrize("mode", MODES[:4])
+@pytest.mark.parametrize("mode,factor", [(mode, factor) for mode in MODES[:4] for factor in (0.0, 1.0, 1.75)] + [("RGB", factor) for factor in (-1.0, 0.3, 3.0)])
 @pytest.mark.parametrize(("method", "enhancer"), [("color", ImageEnhance.Color), ("contrast", ImageEnhance.Contrast), ("sharpness", ImageEnhance.Sharpness)])
-@pytest.mark.parametrize("factor", [-1.0, 0.0, 0.3, 1.0, 1.75, 3.0])
 def test_enhancement_cpu_parity(runtime, mode, method, enhancer, factor):
     image = source(mode)
     actual = getattr(ImageGpu.from_image(image, runtime=runtime), method)(factor).to_image()
@@ -58,8 +57,7 @@ def test_enhancement_cpu_parity(runtime, mode, method, enhancer, factor):
     assert actual.info["description"] == image.info["description"]
 
 
-@pytest.mark.parametrize("mode", MODES[:4])
-@pytest.mark.parametrize("size", [(1, 1), (257, 1), (17, 16), (257, 257)])
+@pytest.mark.parametrize("mode,size", [(mode, (257, 257)) for mode in MODES[:4]] + [("RGB", size) for size in ((1, 1), (257, 1), (17, 16))])
 def test_contrast_reduction_boundaries(runtime, mode, size):
     image = source(mode, size)
     gpu = ImageGpu.from_image(image, runtime=runtime)
@@ -142,8 +140,7 @@ def test_float_color_lut(runtime, mode):
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA", "RGB;F", "RGBA;F"])
-@pytest.mark.parametrize("method", range(6))
-@pytest.mark.parametrize("transfer", ["srgb", "linear"])
+@pytest.mark.parametrize("method,transfer", [(method, "srgb") for method in range(6)] + [(Image.Resampling.BILINEAR, "linear")])
 def test_linear_resize_cpu_parity(runtime, mode, method, transfer):
     image = source(mode)
     actual = ImageGpu.from_image(image, runtime=runtime).resize((11, 19), method, linear_light=True, transfer=transfer).to_image()

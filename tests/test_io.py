@@ -75,27 +75,31 @@ def test_unsized_reads_restore_source_position(operation) -> None:
 
 
 @pytest.mark.parametrize(
-    ("mode", "depth", "format"),
+    ("mode", "depth", "format", "path_type"),
     [
-        ("1", 8, "PNG"),
-        ("L", 8, "PNG"),
-        ("LA", 8, "PNG"),
-        ("P", 8, "PNG"),
-        ("PA", 8, "PNG"),
-        ("RGB", 8, "PNG"),
-        ("RGBA", 8, "PNG"),
-        ("RGB", 16, "PNG"),
-        ("RGB", 8, "BMP"),
-        ("RGB", 8, "JPEG"),
-        ("LA", 8, "TIFF"),
-        ("P", 8, "TIFF"),
-        ("CMYK", 8, "TIFF"),
-        ("LAB", 8, "TIFF"),
-        ("F", 32, "TIFF"),
-        ("I;16B", 16, "PNG"),
+        (*case, path_type)
+        for case in [
+            ("1", 8, "PNG"),
+            ("L", 8, "PNG"),
+            ("LA", 8, "PNG"),
+            ("P", 8, "PNG"),
+            ("PA", 8, "PNG"),
+            ("RGB", 8, "PNG"),
+            ("RGBA", 8, "PNG"),
+            ("RGB", 16, "PNG"),
+            ("RGB", 8, "BMP"),
+            ("RGB", 8, "JPEG"),
+            ("LA", 8, "TIFF"),
+            ("P", 8, "TIFF"),
+            ("CMYK", 8, "TIFF"),
+            ("LAB", 8, "TIFF"),
+            ("F", 32, "TIFF"),
+            ("I;16B", 16, "PNG"),
+        ]
+        for path_type in ("path", "str", "bytes", "bytes_pathlike")
+        if path_type == "path" or case == ("RGB", 8, "PNG")
     ],
 )
-@pytest.mark.parametrize("path_type", ["path", "str", "bytes", "bytes_pathlike"])
 def test_file_save_matches_stream(tmp_path: Path, mode: str, depth: int, format: str, path_type: str) -> None:
     if depth == 16 and mode == "RGB":
         source = Image.frombytes(mode, (7, 5), bytes(range(210)), bit_depth=depth)

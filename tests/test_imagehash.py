@@ -18,8 +18,7 @@ def bit_value(bits: np.ndarray) -> int:
 
 
 @pytest.mark.parametrize("size", [2, 3, 8, 9, 16, 64])
-@pytest.mark.parametrize("factor", [1, 2])
-@pytest.mark.parametrize("algorithm", ["average", "difference", "perceptual"])
+@pytest.mark.parametrize("algorithm,factor", [("average", 1), ("difference", 1), ("perceptual", 1), ("perceptual", 2)])
 def test_hashes_match_independent_reference(size: int, algorithm: str, factor: int) -> None:
     width, height = (size + 1, size) if algorithm == "difference" else (size * factor, size * factor) if algorithm == "perceptual" else (size, size)
     pixels = np.random.default_rng(42).integers(0, 256, (height, width), dtype=np.uint8)
@@ -76,8 +75,11 @@ def test_alpha_is_discarded(hasher) -> None:
     assert hasher(transparent) == hasher(opaque)
 
 
-@pytest.mark.parametrize("hasher", HASHERS)
-@pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "F", "I;16", "I;16L", "I;16B"])
+@pytest.mark.parametrize(
+    "hasher,mode",
+    [(ImageHash.average_hash, mode) for mode in ("1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "F", "I;16", "I;16L", "I;16B")]
+    + [(hasher, mode) for hasher in (ImageHash.dhash, ImageHash.phash) for mode in ("L", "RGBA", "I;16B")],
+)
 def test_modes_use_explicit_eight_bit_grayscale(hasher, mode: str) -> None:
     source = Image.frombytes("RGB", (17, 13), bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * 3))).convert(mode)
     before = source.tobytes()

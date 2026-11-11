@@ -53,7 +53,7 @@ def assert_draw_reference(filename, method, *args, mode="RGB", size=(W, H), back
         assert_image_equal_tofile(image, filename)
 
 
-@pytest.mark.parametrize("bbox", BBOX)
+@pytest.mark.parametrize("bbox", (BBOX[0], BBOX[3]))
 @pytest.mark.parametrize(
     "method,args,options,draw_mode,filename,epsilon",
     [

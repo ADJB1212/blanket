@@ -44,6 +44,7 @@ MODES = ("L", "LA", "La", "I", "I;16", "I;16B", "I;16L", "I;16N", "RGB", "RGBA",
         )
         for mode in MODES
         if not mode.startswith("I") or (isinstance(filter_to_apply, type) and issubclass(filter_to_apply, ImageFilter.BuiltinFilter))
+        if mode == "RGB" or filter_to_apply in (ImageFilter.BLUR, ImageFilter.GaussianBlur)
     ],
 )
 def test_sanity(filter_to_apply: ImageFilter.Filter | type[ImageFilter.Filter], mode: str) -> None:

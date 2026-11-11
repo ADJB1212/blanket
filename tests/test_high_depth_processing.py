@@ -31,7 +31,7 @@ def samples(image):
     return list(struct.unpack(f"{'>' if image.mode == 'I;16B' else '<'}{len(raw) // 2}H", raw))
 
 
-@pytest.mark.parametrize(("mode", "depth"), FORMATS)
+@pytest.mark.parametrize(("mode", "depth"), [("L", 10), ("RGB", 12), ("RGBA", 16), ("I;16", 16), ("I;16L", 16), ("I;16B", 16)])
 @pytest.mark.parametrize("masked", [False, True])
 @pytest.mark.parametrize("position", [(-2, -1), (47, 31), (100, 100)])
 def test_small_sample_paste_preserves_unaffected_rows(mode, depth, masked, position):

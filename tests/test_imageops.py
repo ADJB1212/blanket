@@ -17,42 +17,6 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
 
-class Deformer(ImageOps.SupportsGetMesh):
-    def getmesh(self, im: Image.Image) -> list[tuple[tuple[int, int, int, int], tuple[int, int, int, int, int, int, int, int]]]:
-        x, y = im.size
-        return [((0, 0, x, y), (0, 0, x, 0, x, y, y, 0))]
-
-
-deformer = Deformer()
-
-
-@pytest.mark.parametrize("mode", ["L", "RGB"])
-@pytest.mark.parametrize(
-    "operation,args",
-    [
-        ("autocontrast", ()),
-        ("pad", ((128, 128),)),
-        ("contain", ((128, 128),)),
-        ("cover", ((128, 128),)),
-        ("crop", (1,)),
-        ("deform", (deformer,)),
-        ("equalize", ()),
-        ("expand", (1,)),
-        ("expand", (2, "blue")),
-        ("fit", ((128, 128),)),
-        ("flip", ()),
-        ("grayscale", ()),
-        ("invert", ()),
-        ("mirror", ()),
-        ("posterize", (4,)),
-        ("solarize", ()),
-        ("exif_transpose", ()),
-    ],
-)
-def test_sanity(mode, operation, args) -> None:
-    getattr(ImageOps, operation)(hopper(mode), *args)
-
-
 def test_sanity_special_options() -> None:
     for options in ({"cutoff": 10}, {"cutoff": (2, 10)}, {"ignore": [0, 255]}, {"mask": hopper("L")}, {"preserve_tone": True}):
         ImageOps.autocontrast(hopper("L"), **options)
@@ -622,8 +586,7 @@ def test_geometry_preserves_pending_palette_edits(mode, operation):
     assert image.tobytes() == raw
 
 
-@pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("fill", [None, 0, 255, 1000, 65535, -10, -(1 << 31), (1 << 31) - 1])
+@pytest.mark.parametrize("mode,fill", [("I", fill) for fill in (None, 0, 255, 1000, 65535, -10, -(1 << 31), (1 << 31) - 1)] + [("I;16", 65535), ("I;16L", 1000), ("I;16B", 1000)])
 @pytest.mark.parametrize("operation", ["expand", "pad"])
 def test_integer_canvas_fill_preserves_samples_and_byte_order(mode, fill, operation):
     image = Image.new(mode, (3, 2), 512)

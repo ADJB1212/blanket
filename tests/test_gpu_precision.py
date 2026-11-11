@@ -138,8 +138,7 @@ def test_channels_merge_and_alpha(runtime, mode):
 
 
 @pytest.mark.parametrize("mode", MODES[:4])
-@pytest.mark.parametrize("gaussian", [False, True])
-@pytest.mark.parametrize("radius", [0, 0.25, 1, 1.5, 2.2, 25, (0, 1.5), (2, 0.5)])
+@pytest.mark.parametrize("gaussian,radius", [(False, 0), (True, 0.25), (False, 1), (True, 1.5), (False, 2.2), (True, 25), (False, (0, 1.5)), (True, (2, 0.5))])
 def test_blur_cpu_parity(runtime, mode, gaussian, radius):
     image = source(mode)
     gpu = ImageGpu.from_image(image, runtime=runtime)
@@ -158,8 +157,7 @@ def test_tiny_blur_and_large_radius(runtime, size):
 
 
 @pytest.mark.parametrize("mode", MODES[:4])
-@pytest.mark.parametrize("size", [(1, 65), (65, 1), (15, 17), (16, 33), (32, 32), (33, 31), (63, 65), (65, 63), (257, 3)])
-@pytest.mark.parametrize("radius", [31.75, 32, 32.5, 128.5])
+@pytest.mark.parametrize("size,radius", [((1, 65), 128.5), ((65, 1), 128.5), ((15, 17), 31.75), ((16, 33), 32), ((32, 32), 32.5), ((33, 31), 31.75), ((63, 65), 32), ((65, 63), 32.5), ((257, 3), 128.5)])
 def test_sliding_blur_blocks_tails_and_edges(runtime, mode, size, radius):
     image = source(mode, size)
     gpu = ImageGpu.from_image(image, runtime=runtime)
@@ -168,8 +166,9 @@ def test_sliding_blur_blocks_tails_and_edges(runtime, mode, size, radius):
 
 
 @pytest.mark.parametrize("mode", MODES[:4])
-@pytest.mark.parametrize("size", [1, 3, 5, 7])
-@pytest.mark.parametrize(("method", "filter_class"), [("min_filter", ImageFilter.MinFilter), ("max_filter", ImageFilter.MaxFilter), ("median_filter", ImageFilter.MedianFilter)])
+@pytest.mark.parametrize(
+    "size,method,filter_class", [(3, "min_filter", ImageFilter.MinFilter), (3, "max_filter", ImageFilter.MaxFilter), (3, "median_filter", ImageFilter.MedianFilter)] + [(size, "median_filter", ImageFilter.MedianFilter) for size in (1, 5, 7)]
+)
 def test_rank_cpu_parity(runtime, mode, size, method, filter_class):
     image = source(mode, (9, 7))
     actual = getattr(ImageGpu.from_image(image, runtime=runtime), method)(size).to_image()

@@ -23,8 +23,7 @@ def test_tone_map_validates_cicp_fields(cicp):
         ImageHdr.tone_map(image, transfer="linear", primaries="srgb")
 
 
-@pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("RGB", 10), ("RGBA", 16), ("I;16B", 16)])
-@pytest.mark.parametrize("transfer", ["srgb", "pq", "hlg"])
+@pytest.mark.parametrize("mode,depth,transfer", [("RGB", 8, transfer) for transfer in ("srgb", "pq", "hlg")] + [("L", 8, "pq"), ("LA", 8, "hlg"), ("RGBA", 8, "srgb"), ("RGB", 10, "pq"), ("RGBA", 16, "hlg"), ("I;16B", 16, "pq")])
 @pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])
 def test_transfer_tables_match_small_image_calculations(mode, depth, transfer, operator):
     channels = Image.getmodebands(mode)

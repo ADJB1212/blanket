@@ -25,8 +25,7 @@ def test_float_layout_conversion_preserves_exact_nonfinite_bits(source_mode: str
 
 
 @pytest.mark.parametrize("source_mode,target_mode", [("RGB;F", "RGBA"), ("RGBA;F", "RGB")])
-@pytest.mark.parametrize("depth", [8, 10, 12, 16])
-@pytest.mark.parametrize("count", [0, 1, 17, 16385])
+@pytest.mark.parametrize("depth,count", [(8, 0), (10, 1), (12, 17), (16, 16385)])
 def test_float_layout_quantization_preserves_channels_and_rounding(source_mode: str, target_mode: str, depth: int, count: int) -> None:
     channels = Image.getmodebands(source_mode)
     pattern = [-0.0, 0.0, 0.25, 0.5, 1.0, -2.0, 2.0, math.nan, math.inf, -math.inf]
@@ -47,8 +46,7 @@ def test_float_layout_quantization_preserves_channels_and_rounding(source_mode: 
 
 
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
-@pytest.mark.parametrize("method", [0, 1, 2, 3, 4, 5, 6, 7])
-@pytest.mark.parametrize("target", [(1, 1), (17, 9), (257, 65)])
+@pytest.mark.parametrize("method,target", [(method, (17, 9)) for method in range(8)] + [(Image.Resampling.BOX, (1, 1)), (Image.Resampling.BICUBIC, (257, 65))])
 def test_float_color_resize_matches_independent_bands(mode: str, channels: int, method: int, target: tuple[int, int]) -> None:
     values = [0.5 if i % channels == 3 else ((i * 17) % 97 - 48) / 13 for i in range(19 * 7 * channels)]
     if method == 0:

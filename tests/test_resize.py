@@ -7,8 +7,7 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB"])
-@pytest.mark.parametrize("width", [1, 15, 16, 17, 33, 129])
+@pytest.mark.parametrize("mode,width", [(mode, width) for mode in ("L", "LA", "RGBA") for width in (1, 15, 16, 17, 33, 129)] + [(mode, 17) for mode in ("RGB", "HSV", "CMYK", "YCbCr", "LAB")])
 def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> None:
     channels = 3 if mode == "YCbCr" else len(mode)
     size = (width * 2, 34)

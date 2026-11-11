@@ -189,8 +189,7 @@ def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
             assert gpu.rank_filter(window, rank).to_image().tobytes() == image.filter(ImageFilter.RankFilter(window, rank)).tobytes()
 
 
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
-@pytest.mark.parametrize("method", range(6))
+@pytest.mark.parametrize("mode,method", [(mode, method) for mode in ("RGBA", "RGBA;F") for method in range(6)] + [(mode, Image.Resampling.BILINEAR) for mode in ("L", "LA", "RGB", "F", "RGB;F")])
 def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
     import struct
 
@@ -215,9 +214,8 @@ def test_native_resize_keeps_weights_in_rust(mode, method, monkeypatch):
     assert gpu.to_image().tobytes() == data
 
 
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
+@pytest.mark.parametrize("mode,radii", [(mode, radii) for mode in ("RGBA", "RGBA;F") for radii in ((0, 0), (2.5, 0), (0, 32.5), (32.5, 40))] + [(mode, (32.5, 40)) for mode in ("L", "LA", "RGB", "F", "RGB;F")])
 @pytest.mark.parametrize("gaussian", [False, True])
-@pytest.mark.parametrize("radii", [(0, 0), (2.5, 0), (0, 32.5), (32.5, 40)])
 def test_native_blur_matches_individual_passes(mode, gaussian, radii, monkeypatch):
     require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())

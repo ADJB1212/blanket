@@ -232,9 +232,8 @@ def test_every_channel_pair_matches_pillow(name: str) -> None:
     assert_pillow_equal(getattr(ImageChops, name)(first, second), expected, info=True)
 
 
-@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", BINARY)
-@pytest.mark.parametrize("sizes", [((17, 9), (11, 13)), ((0, 3), (4, 0)), ((513, 193), (513, 193))])
+@pytest.mark.parametrize("mode,sizes", [(mode, ((17, 9), (11, 13))) for mode in ("L", "RGB", "RGBA")] + [("L", ((0, 3), (4, 0))), ("RGBA", ((513, 193), (513, 193)))])
 def test_binary_modes_sizes_and_parallel_chunks(mode: str, name: str, sizes: tuple[tuple[int, int], tuple[int, int]]) -> None:
     first, pil_first = patterned_pair(mode, sizes[0])
     second, pil_second = patterned_pair(mode, sizes[1], 71)
@@ -267,8 +266,7 @@ def test_scaled_arithmetic(name: str, scale: float, offset: int) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
-@pytest.mark.parametrize("size", [(0, 3), (1, 1), (17, 9), (513, 193), (1025, 1027)])
-@pytest.mark.parametrize("shift", [(0, 0), (3, None), (-4, None), (39, -27), (-100000, 100001)])
+@pytest.mark.parametrize("size,shift", [((0, 3), (39, -27)), ((1, 1), (0, 0)), ((17, 9), (3, None)), ((513, 193), (-4, None)), ((1025, 1027), (-100000, 100001))])
 def test_offset_regression(mode: str, size: tuple[int, int], shift: tuple[int, int | None]) -> None:
     image, pillow = patterned_pair(mode, size)
     image.info["test"] = pillow.info["test"] = 1

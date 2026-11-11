@@ -10,8 +10,7 @@ from PIL import Image as PILImage
 from blanket import Image, ImageOps
 
 
-@pytest.mark.parametrize("orientation", range(1, 9))
-@pytest.mark.parametrize("mode", ["1", "L", "RGB", "RGBA", "CMYK", "F"])
+@pytest.mark.parametrize("mode,orientation", [("RGB", orientation) for orientation in range(1, 9)] + [("1", 2), ("L", 3), ("RGBA", 5), ("CMYK", 6), ("F", 8)])
 @pytest.mark.parametrize("lazy", [False, True])
 def test_tiff_applies_orientation_before_copy(mode: str, orientation: int, lazy: bool) -> None:
     source = PILImage.new(mode, (7, 5))

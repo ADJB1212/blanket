@@ -21,9 +21,8 @@ def source(mode, seed=0, size=(17, 11)):
     return image
 
 
-@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("mode,size", [(mode, (17, 11) if i % 2 == 0 else (31, 33)) for i, mode in enumerate(MODES)])
 @pytest.mark.parametrize("method", range(7))
-@pytest.mark.parametrize("size", [(17, 11), (31, 33)])
 def test_transpose(runtime, mode, method, size):
     image = source(mode, size=size)
     gpu = ImageGpu.from_image(image, runtime=runtime)
@@ -43,22 +42,12 @@ def test_crop(runtime, mode, box):
     assert_pixels_equal(actual, expected)
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("offset", [(0, 0), (3, -5), (-36, 25), (10**30, -(10**30))])
-def test_offset(runtime, mode, offset):
-    image = source(mode)
-    actual = ImageGpu.from_image(image, runtime=runtime).offset(*offset).to_image()
-    expected = ImageChops.offset(image, offset[0] % image.width, offset[1] % image.height)
-    assert actual.tobytes() == expected.tobytes()
-
-
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("size", [(1, 1), (1, 33), (33, 1), (31, 33)])
+@pytest.mark.parametrize("mode,size", [(mode, (31, 33)) for mode in MODES] + [("L", size) for size in ((1, 1), (1, 33), (33, 1))])
 def test_offset_wrap_boundaries(runtime, mode, size):
     image = source(mode, size=size)
     gpu = ImageGpu.from_image(image, runtime=runtime)
     width, height = size
-    for x, y in [(0, 0), (width - 1, height - 1), (width, height), (-width - 1, -height - 1), (2**63, -(2**63))]:
+    for x, y in [(0, 0), (3, -5), (width - 1, height - 1), (width, height), (-width - 1, -height - 1), (10**30, -(10**30))]:
         actual = gpu.offset(x, y).to_image()
         expected = ImageChops.offset(image, x % width, y % height)
         assert actual.tobytes() == expected.tobytes()

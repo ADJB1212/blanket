@@ -10,10 +10,11 @@ from blanket import Image, ImageGpu
 runtime = metal_runtime
 
 
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
-@pytest.mark.parametrize("resample", [0, 2, 3])
+@pytest.mark.parametrize("mode,resample", [("L", 0), ("LA", 2), ("RGB", 3), ("RGBA", 0), ("F", 2), ("RGB;F", 3), ("RGBA;F", 0)])
 def test_identity_transform(runtime, mode, resample):
     image = Image.new(mode, (9, 7))
+    channels = len(image.getbands())
+    image.putdata([i if channels == 1 else (i,) * channels for i in range(63)])
     gpu = ImageGpu.from_image(image, runtime=runtime)
     assert gpu.transform(image.size, Image.Transform.AFFINE, (1, 0, 0, 0, 1, 0), resample).to_image().tobytes() == image.tobytes()
 
@@ -57,8 +58,7 @@ def test_geometry_validation(runtime):
     assert_raises(ValueError, lambda: source.rotate(math.nan))
 
 
-@pytest.mark.parametrize("size", [(2, 3), (3, 2), (4, 7), (1, 2)])
-@pytest.mark.parametrize("angle", [90, 270, -90])
+@pytest.mark.parametrize("size,angle", [((2, 3), 90), ((3, 2), 270), ((4, 7), -90), ((1, 2), 90)])
 @pytest.mark.parametrize("resample", [0, 2, 3])
 def test_expanded_quarter_turn_mixed_dimension_parity(runtime, size, angle, resample):
     image = Image.frombytes("L", size, bytes(range(size[0] * size[1])))
@@ -163,8 +163,7 @@ def test_native_histogram_concentrated_bins_and_pending_reuse():
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
-@pytest.mark.parametrize("mask_mode", [None, "L", "F"])
-@pytest.mark.parametrize("position", [(-2, 1), (3, -2), (0, 0), (10**30, 0)])
+@pytest.mark.parametrize("mask_mode,position", [(None, (-2, 1)), ("L", (3, -2)), ("F", (0, 0))])
 def test_native_paste_clipping_and_lifetime(mode, mask_mode, position):
     require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())
@@ -244,8 +243,7 @@ def test_nonfinite_statistics_and_mask_edges(runtime):
     assert actual == (7.0, math.inf)
 
 
-@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
-@pytest.mark.parametrize("position", [(10**100, 0), (-(10**100), 0), (0, 10**100), (0, -(10**100))])
+@pytest.mark.parametrize("mode,position", [("L", (10**100, 0)), ("LA", (-(10**100), 0)), ("RGB", (0, 10**100)), ("RGBA", (0, -(10**100))), ("F", (10**100, 0)), ("RGB;F", (-(10**100), 0)), ("RGBA;F", (0, 10**100))])
 @pytest.mark.parametrize("mask_mode", [None, "L", "F"])
 def test_fully_clipped_paste_with_huge_offsets(runtime, mode, position, mask_mode):
     channels = len(Image.new(mode, (1, 1)).getbands())

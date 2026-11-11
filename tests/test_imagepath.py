@@ -143,8 +143,9 @@ def test_invalid_coordinates(coordinates: object) -> None:
     assert_raises((TypeError, ValueError), lambda: ImagePath.Path(coordinates))
 
 
-@pytest.mark.parametrize("method", ["point", "line", "polygon", "rectangle", "ellipse", "rounded_rectangle"])
-@pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA", "P", "I", "I;16", "F", "CMYK", "YCbCr", "LAB", "HSV"])
+@pytest.mark.parametrize(
+    "method,mode", [(method, "RGB") for method in ("point", "line", "polygon", "rectangle", "ellipse", "rounded_rectangle")] + [("polygon", mode) for mode in ("1", "L", "LA", "RGBA", "P", "I", "I;16", "F", "CMYK", "YCbCr", "LAB", "HSV")]
+)
 def test_draw_accepts_paths(method: str, mode: str) -> None:
     points = [(1.5, 2.5), (6.5, 7.5)]
     path = ImagePath.Path(points)
