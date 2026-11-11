@@ -297,15 +297,19 @@ def load(filename: str | bytes | os.PathLike[str]) -> ImageFont:
     atlas = None
     for suffix in (".png", ".gif", ".pbm"):
         candidate = path.with_suffix(suffix)
-        if candidate.is_file():
-            with candidate.open("rb") as stream:
-                magic = stream.read(2)
+        try:
+            stream = candidate.open("rb")
+        except (FileNotFoundError, IsADirectoryError):
+            continue
+        with stream:
+            magic = stream.read(2)
+            stream.seek(0)
             if magic == b"P4":
-                atlas = _load_pbm(candidate)
+                atlas = _load_pbm(stream)
             else:
-                with Image.open(candidate) as image:
+                with Image.open(stream) as image:
                     atlas = image.convert("L")
-            break
+        break
     if atlas is None:
         raise OSError("PIL font atlas not found")
     font = ImageFont()
@@ -323,27 +327,26 @@ def load(filename: str | bytes | os.PathLike[str]) -> ImageFont:
     return font
 
 
-def _load_pbm(path: Path) -> Image.Image:
+def _load_pbm(stream: BinaryIO) -> Image.Image:
     """Load a binary PBM font atlas as an L coverage image."""
-    with path.open("rb") as stream:
-        if stream.readline().strip() != b"P4":
-            raise OSError("font atlas must be a binary PBM")
-        tokens: list[bytes] = []
-        while len(tokens) < 2:
-            line = stream.readline(65536)
-            if not line:
-                raise OSError("truncated PBM font atlas")
-            tokens.extend(line.split(b"#", 1)[0].split())
-        if len(tokens) != 2:
-            raise OSError("invalid PBM font atlas dimensions")
-        try:
-            width, height = map(int, tokens)
-        except ValueError as exc:
-            raise OSError("invalid PBM font atlas dimensions") from exc
-        if width <= 0 or height <= 0 or width * height > _MAX_MASK_PIXELS:
-            raise OSError("invalid PBM font atlas size")
-        length = (width + 7) // 8 * height
-        data = stream.read(length)
+    if stream.readline().strip() != b"P4":
+        raise OSError("font atlas must be a binary PBM")
+    tokens: list[bytes] = []
+    while len(tokens) < 2:
+        line = stream.readline(65536)
+        if not line:
+            raise OSError("truncated PBM font atlas")
+        tokens.extend(line.split(b"#", 1)[0].split())
+    if len(tokens) != 2:
+        raise OSError("invalid PBM font atlas dimensions")
+    try:
+        width, height = map(int, tokens)
+    except ValueError as exc:
+        raise OSError("invalid PBM font atlas dimensions") from exc
+    if width <= 0 or height <= 0 or width * height > _MAX_MASK_PIXELS:
+        raise OSError("invalid PBM font atlas size")
+    length = (width + 7) // 8 * height
+    data = stream.read(length)
     if len(data) != length:
         raise OSError("truncated PBM font atlas")
     return Image.frombytes("1", (width, height), data).convert("L").point([255 - value for value in range(256)])

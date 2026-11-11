@@ -13,9 +13,10 @@ Nonfinite convolution intermediates use saturating casts, with NaN becoming zero
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "blanket._blanket", "math"}
+__lazy_modules__ = {"collections.abc", "blanket._blanket", "itertools", "math"}
 
 from abc import ABC, abstractmethod
+from itertools import product
 from math import isfinite
 from typing import TYPE_CHECKING, cast
 
@@ -750,11 +751,9 @@ class Color3DLUT(MultibandFilter):
             raise ValueError("Only 3 or 4 output channels are supported")
         table = [0.0] * (dimensions[0] * dimensions[1] * dimensions[2] * channels)
         offset = 0
-        for b in range(dimensions[2]):
-            for g in range(dimensions[1]):
-                for r in range(dimensions[0]):
-                    table[offset : offset + channels] = callback(r / (dimensions[0] - 1), g / (dimensions[1] - 1), b / (dimensions[2] - 1))
-                    offset += channels
+        for b, g, r in product(range(dimensions[2]), range(dimensions[1]), range(dimensions[0])):
+            table[offset : offset + channels] = callback(r / (dimensions[0] - 1), g / (dimensions[1] - 1), b / (dimensions[2] - 1))
+            offset += channels
         return cls(dimensions, table, channels, target_mode, _copy_table=False)
 
     def transform(self, callback: Callable[..., tuple[float, ...]], with_normals: bool = False, channels: int | None = None, target_mode: str | None = None) -> Color3DLUT:
@@ -781,14 +780,12 @@ class Color3DLUT(MultibandFilter):
         channels = channels or self.channels
         table = [0.0] * (self.size[0] * self.size[1] * self.size[2] * channels)
         source = destination = 0
-        for b in range(self.size[2]):
-            for g in range(self.size[1]):
-                for r in range(self.size[0]):
-                    values = self.table[source : source + self.channels]
-                    normals = (r / (self.size[0] - 1), g / (self.size[1] - 1), b / (self.size[2] - 1)) if with_normals else ()
-                    table[destination : destination + channels] = callback(*normals, *values)
-                    source += self.channels
-                    destination += channels
+        for b, g, r in product(range(self.size[2]), range(self.size[1]), range(self.size[0])):
+            values = self.table[source : source + self.channels]
+            normals = (r / (self.size[0] - 1), g / (self.size[1] - 1), b / (self.size[2] - 1)) if with_normals else ()
+            table[destination : destination + channels] = callback(*normals, *values)
+            source += self.channels
+            destination += channels
         return type(self)(self.size, table, channels, target_mode or self.mode, _copy_table=False)
 
     def __repr__(self) -> str:

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"contextlib", "collections.abc", "array", "blanket._palette"}
+__lazy_modules__ = {"contextlib", "collections.abc", "array", "os", "pathlib", "blanket._palette"}
 
 import math
+import os
 from array import array
 from contextlib import nullcontext
+from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
@@ -222,7 +224,7 @@ class ImagePalette:
         self.dirty = 1
         return slot
 
-    def save(self, fp: str | IO[str]) -> None:
+    def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | IO[str]) -> None:
         """Write a 256-entry text palette to a filename or text stream.
 
         Args:
@@ -246,11 +248,12 @@ class ImagePalette:
         # each component of every output entry.
         values = list(palette[: 256 * channels])
         values.extend([0] * (256 * channels - len(values)))
-        with open(fp, "w") if isinstance(fp, str) else nullcontext(fp) as stream:
+        with Path(os.fsdecode(fp)).open("w", encoding="ascii") if isinstance(fp, (str, bytes, os.PathLike)) else nullcontext(fp) as stream:
             stream.write(f"# Palette\n# Mode: {self.mode}\n")
             for slot in range(256):
                 offset = slot * channels
-                stream.write(" ".join(map(str, (slot, *values[offset : offset + channels]))) + "\n")
+                entry = " ".join(map(str, (slot, *values[offset : offset + channels])))
+                stream.write(f"{entry}\n")
 
 
 def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:
@@ -381,7 +384,7 @@ def wedge(mode: str = "RGB") -> ImagePalette:
     return ImagePalette(mode, palette_ramp(len(mode), False))
 
 
-def load(filename: str) -> tuple[bytes, str]:
+def load(filename: str | bytes | os.PathLike[str] | os.PathLike[bytes]) -> tuple[bytes, str]:
     """Load a text palette, GIMP palette, or GIMP RGB gradient.
 
     Args:
@@ -399,5 +402,5 @@ def load(filename: str) -> tuple[bytes, str]:
             entries, mode = ImagePalette.load(path)
         ```
     """
-    with open(filename, "rb") as stream:
+    with Path(os.fsdecode(filename)).open("rb") as stream:
         return load_palette(stream)

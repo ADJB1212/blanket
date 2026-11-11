@@ -102,13 +102,14 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
         return Resolution(None, 1.0, None, None)
     preferred = list(reversed(candidates)) if conflict == "exif" else candidates
     selected = next((v for v in preferred if v.dpi is not None), preferred[0])
-    conflicts = tuple(
-        v.source
-        for v in candidates
-        if v is not selected
-        and v.source is not None
-        and (not math.isclose(v.pixel_aspect, selected.pixel_aspect, rel_tol=1e-3) or (v.dpi is not None and selected.dpi is not None and any(not math.isclose(a, b, rel_tol=1e-3) for a, b in zip(v.dpi, selected.dpi, strict=True))))
-    )
+    conflicts: list[str] = []
+    for candidate in candidates:
+        if candidate is selected or candidate.source is None:
+            continue
+        aspect_differs = not math.isclose(candidate.pixel_aspect, selected.pixel_aspect, rel_tol=1e-3)
+        dpi_differs = candidate.dpi is not None and selected.dpi is not None and any(not math.isclose(a, b, rel_tol=1e-3) for a, b in zip(candidate.dpi, selected.dpi, strict=True))
+        if aspect_differs or dpi_differs:
+            conflicts.append(candidate.source)
     if conflicts and conflict == "error":
         raise ValueError("conflicting resolution metadata")
-    return Resolution(selected.dpi, selected.pixel_aspect, selected.source, selected.unit, conflicts)
+    return Resolution(selected.dpi, selected.pixel_aspect, selected.source, selected.unit, tuple(conflicts))

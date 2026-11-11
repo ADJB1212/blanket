@@ -9,7 +9,7 @@ import os
 from collections.abc import Iterable
 from dataclasses import dataclass
 from fractions import Fraction
-from itertools import repeat
+from itertools import islice, repeat
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -37,8 +37,7 @@ def _png_regions(
     """Adapt APNG deltas and repeated frames using native raster operations."""
     canvas = (max(frame.width for frame in frames), max(frame.height for frame in frames))
     records: list[_PngFrame] = []
-    for position in range(int(default_image), len(frames)):
-        frame = frames[position]
+    for position, frame in enumerate(islice(frames, int(default_image), None), start=int(default_image)):
         bbox = None
         duration = float(durations[position])
         disposal, blend = int(disposals[position]), int(blends[position])
@@ -134,7 +133,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         elif supplied is not None:
             result = repeat(supplied, count)
         elif name == "duration":
-            result = (frames[i].info.get("duration", default) for i in range(start, len(frames)))
+            result = (frame.info.get("duration", default) for frame in islice(frames, start, None))
         else:
             result = repeat(default, count)
         normalized: list[float | int] = [0] * start

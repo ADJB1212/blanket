@@ -64,8 +64,12 @@ def _gimp_gradient(stream: BinaryIO) -> tuple[bytes, str]:
     segments: list[tuple[list[float], int]] = []
     for _ in range(int(count)):
         fields = stream.readline().split()
+        if len(fields) < 13:
+            raise ValueError(f"gradient segment requires at least 13 fields, got {len(fields)}")
         values = [float(value) for value in fields[:11]]
-        kind = (0, 1, 2, 3, 4)[int(fields[11])]
+        kind = int(fields[11])
+        if not 0 <= kind <= 4:
+            raise ValueError(f"gradient interpolation must be between 0 and 4, got {kind!r}")
         if int(fields[12]) != 0:
             raise OSError("cannot handle HSV colour space")
         segments.append((values, kind))

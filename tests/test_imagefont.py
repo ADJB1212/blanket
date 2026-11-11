@@ -418,10 +418,8 @@ def test_bitmap_font_rejects_missing_atlas_and_invalid_glyphs(tmp_path: Path, at
 
 
 @pytest.mark.parametrize("data", [b"P1\n", b"P4\n", b"P4\n1 1 1\n", b"P4\na b\n", b"P4\n0 1\n", b"P4\n1 1\n"])
-def test_invalid_pbm_font_atlas(tmp_path: Path, data: bytes) -> None:
-    path = tmp_path / "invalid.pbm"
-    path.write_bytes(data)
-    assert_raises(OSError, lambda: ImageFont._load_pbm(path), match="PBM")
+def test_invalid_pbm_font_atlas(data: bytes) -> None:
+    assert_raises(OSError, lambda: ImageFont._load_pbm(BytesIO(data)), match="PBM")
 
 
 @pytest.mark.parametrize("bounds", [(0, 0, 3, 2), (-1, -1, 2, 1), (1, 2, 4, 4)])

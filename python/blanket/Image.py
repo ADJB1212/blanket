@@ -678,7 +678,7 @@ class Image:
         self._frame = frame
 
     def _seek(self, frame: int) -> None:
-        """Internal seek ensuring sequential frame access."""
+        """Seek to frame zero or the next sequential frame."""
         self._native.load()
         if frame != 0 and frame != self._frame + 1:
             raise ValueError(f"cannot seek to frame {frame}")
@@ -807,7 +807,7 @@ class Image:
         self.load()
 
     def load_djpeg(self) -> None:
-        """Deprecated compatibility method that loads the image raster.
+        """Load the raster and emit a deprecation warning for this compatibility method.
 
         Examples:
             ```python

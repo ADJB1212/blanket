@@ -125,15 +125,16 @@ class MetadataPolicy:
                 raise TypeError(f"{name} must be a bool")
         for name, kind in (("exif_tags", int), ("xmp_fields", str), ("text_keys", str)):
             value = getattr(self, name)
-            if value is not None:
-                if isinstance(value, (str, bytes)):
-                    raise TypeError(f"{name} must be a collection of fields")
-                fields = frozenset(value)
-                if any(isinstance(v, bool) or not isinstance(v, kind) for v in fields):
-                    raise TypeError(f"invalid {name} field")
-                if name == "exif_tags" and any(not 0 <= v <= 65535 for v in fields):
-                    raise ValueError("EXIF tags must be between 0 and 65535")
-                object.__setattr__(self, name, fields)
+            if value is None:
+                continue
+            if isinstance(value, (str, bytes)):
+                raise TypeError(f"{name} must be a collection of fields")
+            fields = frozenset(value)
+            if any(isinstance(v, bool) or not isinstance(v, kind) for v in fields):
+                raise TypeError(f"invalid {name} field")
+            if name == "exif_tags" and any(not 0 <= v <= 65535 for v in fields):
+                raise ValueError("EXIF tags must be between 0 and 65535")
+            object.__setattr__(self, name, fields)
 
     def apply(self, info: Mapping[object, object]) -> dict[object, object]:
         """Return filtered metadata without changing the source mapping.

@@ -21,6 +21,21 @@ def test_gimp_palette_rejects_long_lines(tmp_path: Path) -> None:
     assert_raises(OSError, lambda: ImagePalette.load(path))
 
 
+def test_save_path(tmp_path: Path) -> None:
+    path = tmp_path / "palette.pal"
+    palette = ImagePalette.wedge()
+    palette.save(path)
+    assert ImagePalette.load(path) == (palette.tobytes(), palette.mode)
+
+
+@pytest.mark.parametrize("segment", [b"", b"0 .5 1", b"0 .5 1 0 0 0 1 1 1 1 1 0", b"0 .5 1 0 0 0 1 1 1 1 1 5 0"])
+def test_malformed_gradient_raises_oserror(tmp_path: Path, segment: bytes) -> None:
+    path = tmp_path / "invalid.ggr"
+    path.write_bytes(b"GIMP Gradient\n1\n" + segment + b"\n")
+    with pytest.raises(OSError, match="cannot load palette"):
+        ImagePalette.load(path)
+
+
 def assert_palette(actual: ImagePalette.ImagePalette, expected: PillowPalette.ImagePalette) -> None:
     assert (actual.mode, actual.rawmode, actual.dirty) == (expected.mode, expected.rawmode, expected.dirty)
     assert type(actual.palette) is type(expected.palette)
