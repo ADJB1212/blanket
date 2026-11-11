@@ -863,11 +863,11 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
         });
         return Ok(output);
     }
+    let alpha_mode = premultiply.then(|| image.pixel_mode());
     if size.1 == image.height() && b[1] == 0.0 && b[3] == f64::from(image.height()) {
-        let source = resample_source(source, image.pixel_mode(), premultiply);
         let mut output = buffer(size, C)?;
         let horizontal = weights(image.width(), size.0, b[0], b[2], method);
-        resample_horizontal::<C>(&source, &mut output, image.width() as usize, 0, &horizontal);
+        resample_horizontal::<C>(source, &mut output, image.width() as usize, &horizontal, alpha_mode);
         return Ok(output);
     }
     let vertical = weights(image.height(), size.1, b[1], b[3], method);
@@ -882,8 +882,8 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
     } else {
         let horizontal = weights(image.width(), size.0, b[0], b[2], method);
         let mut temp = buffer((size.0, (last_row - first_row) as u32), C)?;
-        let source = resample_source(&source[first_row * input_stride..last_row * input_stride], image.pixel_mode(), premultiply);
-        resample_horizontal::<C>(&source, &mut temp, image.width() as usize, 0, &horizontal);
+        let source = &source[first_row * input_stride..last_row * input_stride];
+        resample_horizontal::<C>(source, &mut temp, image.width() as usize, &horizontal, alpha_mode);
         Cow::Owned(temp)
     };
     let mut output = buffer(size, C)?;
@@ -904,7 +904,13 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
     Ok(output)
 }
 
-fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {
+fn horizontal_input(source: &[u8], input_stride: usize, band: usize, rows: usize, alpha_mode: Option<PixelMode>) -> Cow<'_, [u8]> {
+    let start = band * 16 * input_stride;
+    let source = &source[start..start + rows * input_stride];
+    if let Some(mode) = alpha_mode { resample_source(source, mode, true) } else { Cow::Borrowed(source) }
+}
+
+fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>) {
     let row_bytes = horizontal.bounds.len() * C;
     let input_stride = width * C;
     let narrow = horizontal.iter().all(|(_, coefficients)| {
@@ -925,9 +931,8 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
             .collect();
         if blocks.iter().any(Option::is_some) {
             chunks_mut(output, row_bytes * 16, |band, rows| {
-                for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                    let y = first_row + band * 16 + i;
-                    let src = &source[y * input_stride..(y + 1) * input_stride];
+                let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
+                for (src, dst) in input.chunks_exact(input_stride).zip(rows.chunks_exact_mut(row_bytes)) {
                     for (block, out) in dst.chunks_mut(16 * C).enumerate() {
                         if let Some(&(start, coefficients)) = blocks.get(block).and_then(Option::as_ref) {
                             crate::ops_simd::horizontal_half::<C>(&src[start * C..], out, coefficients);
@@ -953,13 +958,13 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
     }
     let batch_rows = narrow && (matches!(C, 2 | 3) || horizontal.iter().all(|(_, coefficients)| coefficients.len() <= 8));
     if batch_rows && output.len() >= row_bytes * 4 {
-        resample_horizontal_batched::<C>(source, output, width, first_row, horizontal);
+        resample_horizontal_batched::<C>(source, output, width, horizontal, alpha_mode);
         return;
     }
     chunks_mut(output, row_bytes << 4, |band, rows| {
-        for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
-            let y = first_row + band * 16 + i;
-            let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
+        let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
+        for (src, dst) in input.chunks_exact(input_stride).zip(rows.chunks_exact_mut(row_bytes)) {
+            let src = src.as_chunks::<C>().0;
             for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
                 if narrow {
                     let mut sums = [RESAMPLE_ROUND; C];
@@ -985,14 +990,17 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
     });
 }
 
-fn resample_horizontal_batched<const C: usize>(source: &[u8], output: &mut [u8], width: usize, first_row: usize, horizontal: &ResampleWeights) {
+fn resample_horizontal_batched<const C: usize>(
+    source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>,
+) {
     let row_bytes = horizontal.bounds.len() * C;
     let input_stride = width * C;
     chunks_mut(output, row_bytes * 16, |band, rows| {
+        let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
         let four = rows.len() / (row_bytes * 4) * 4;
         for group in 0..four / 4 {
-            let y = first_row + band * 16 + group * 4;
-            let src = std::array::from_fn::<_, 4, _>(|row| source[(y + row) * input_stride..(y + row + 1) * input_stride].as_chunks::<C>().0);
+            let y = group * 4;
+            let src = std::array::from_fn::<_, 4, _>(|row| input[(y + row) * input_stride..(y + row + 1) * input_stride].as_chunks::<C>().0);
             for (x, (start, coefficients)) in horizontal.iter().enumerate() {
                 let values = crate::ops_simd::horizontal_four::<C>(src.map(|row| &row[start..start + coefficients.len()]), coefficients);
                 for (row, value) in values.iter().enumerate() {
@@ -1001,9 +1009,8 @@ fn resample_horizontal_batched<const C: usize>(source: &[u8], output: &mut [u8],
                 }
             }
         }
-        for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate().skip(four) {
-            let y = first_row + band * 16 + i;
-            let src = source[y * input_stride..(y + 1) * input_stride].as_chunks::<C>().0;
+        for (src, dst) in input.chunks_exact(input_stride).zip(rows.chunks_exact_mut(row_bytes)).skip(four) {
+            let src = src.as_chunks::<C>().0;
             for ((start, coefficients), dst) in horizontal.iter().zip(dst.as_chunks_mut::<C>().0) {
                 let mut sums = [RESAMPLE_ROUND; C];
                 for (pixel, &weight) in src[start..start + coefficients.len()].iter().zip(coefficients) {
