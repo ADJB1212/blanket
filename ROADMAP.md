@@ -324,6 +324,9 @@ with new processing semantics exposed explicitly.
       and TIFF I/O, with defined negative and nonfinite sample handling
 - [x] **Linear-light processing** — opt-in resizing and source-over compositing
       with sRGB/linear transfer selection and explicit resize alpha premultiplication
+- [x] **Wide ICC transforms** — apply profiles to 16-bit and float images
+      without an 8-bit quantization step, including HDR transfer curves
+      where LittleCMS can represent them
 
 #### Large Images and Resource Control
 
@@ -366,6 +369,17 @@ with new processing semantics exposed explicitly.
       layouts, with explicit ownership, lifetime, mutability, and stride rules
 - [x] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
       aligned cropping of encoded JPEGs with explicit metadata handling
+- [ ] **Fused tensor export** — direct conversion to PyTorch/NumPy tensors with
+      fused channel transposition (HWC to CHW), float normalization, and
+      standardization (`(x - mean) / std`) in native Rust kernels
+- [ ] **Memory-mapped inputs** — opt-in `mmap` backing for reading uncompressed
+      rasters or large container slices directly from disk without redundant copies
+
+#### Machine Learning and Pipeline Acceleration
+
+- [ ] **Batched data augmentation** — thread-safe, composable geometric and
+      photometric augmentation primitives (random resized crop, affine,
+      color jitter, erase) optimized for training workers
 
 #### Codec Controls and Inspection
 
@@ -400,6 +414,8 @@ with new processing semantics exposed explicitly.
       joins, caps, dash patterns, and fill rules
 - [ ] **Gradient and pattern fills** — linear and radial gradients, repeated
       image patterns, and reusable clipping masks for drawing operations
+- [ ] **Vector export** — serialize path geometry, text runs, and basic shapes
+      to clean SVG documents
 - [ ] **Extended blend modes** — compositing operators such as multiply, screen,
       overlay, and soft light with defined alpha behavior
 - [ ] **Color glyph rendering** — support selected color-font formats with
@@ -415,6 +431,10 @@ with new processing semantics exposed explicitly.
       configurable tiles and contrast limits
 - [ ] **Edge detection** — Sobel and Scharr gradients plus Canny edges with
       explicit threshold and output conventions
+- [ ] **Perceptual distortion metrics** — native SSIM, MS-SSIM, and SSIMULACRA2
+      scoring for image quality evaluation and compressor tuning
+- [ ] **Content-aware seam carving** — aspect ratio retargeting via seam carving
+      while preserving high-energy saliency regions
 - [ ] **Lens correction and remapping** — radial distortion correction and
       reusable coordinate maps with configurable interpolation and borders
 
@@ -562,6 +582,12 @@ for cache limits, ownership, completion, and error contracts.
       operation contracts without requiring changes to CPU image storage
 - [ ] Define explicit cross-device transfers and capability negotiation for
       applications using multiple GPUs or backend types
+- [ ] Direct video and surface import — zero-copy ingestion of hardware video
+      decoder frames and platform surfaces (such as Apple IOSurface, Linux DMA-BUF,
+      or CUDA IPC pointers) directly into `ImageGpu`
+- [ ] Fused GPU batch augmentations — batched GPU transforms (crop, resize,
+      affine, normalize) for high-throughput PyTorch training ingestion directly
+      from device memory
 - [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
       and already-resident tensor pipelines; publish measured crossover sizes
 
