@@ -45,6 +45,9 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     if image.pixel_mode().is_wide_scalar() {
         return image.copy(py).map(|copy| vec![copy]);
     }
+    if image.pixel_mode().channels() == 1 {
+        return image.getchannel(py, 0).map(|band| vec![band]);
+    }
     if image.bit_depth() > 8 {
         let source = image.raw_data()?;
         return py.detach(|| {
@@ -58,9 +61,6 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     }
     let source = image.pixel_data()?;
     let channels = image.pixel_mode().channels();
-    if channels == 1 {
-        return py.detach(|| Image::from_pixels(image.width(), image.height(), PixelMode::L, source.to_vec(), None).map(|band| vec![band]));
-    }
     let mut bands = (0..channels).map(|_| buffer((image.width(), image.height()), 1)).collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
         if let [luma, alpha] = bands.as_mut_slice() {

@@ -137,10 +137,10 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
     if left >= right || top >= bottom {
         return Ok(());
     }
-    image.ensure_owned()?;
     let row_bytes = image.width() as usize * stride;
-    let pixels = image.pixels_mut().unwrap();
     py.detach(|| {
+        image.ensure_owned()?;
+        let pixels = image.pixels_mut().unwrap();
         blanket_core::parallel::chunks_mut(&mut pixels[top as usize * row_bytes..bottom as usize * row_bytes], row_bytes * 32, |_, rows| {
             for row in rows.chunks_exact_mut(row_bytes) {
                 let row = &mut row[left as usize * stride..right as usize * stride];
@@ -151,8 +151,8 @@ fn image_fill(py: Python<'_>, image: &mut Image, color: &Image, position: (i64, 
                 }
             }
         });
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 #[pyfunction]
@@ -163,7 +163,6 @@ fn image_paste(
     if fill_size.is_some() && (!fill || mask.is_none() || source.size() != (1, 1) || image.bit_depth() != 8) {
         return Err(PyValueError::new_err("invalid masked fill"));
     }
-    image.ensure_owned()?;
     if fill && image.pixel_mode().is_integer() {
         return paste_integer(py, image, source, position, mask, true);
     }
@@ -181,22 +180,26 @@ fn image_paste(
     let size = fill_size.unwrap_or_else(|| source.size());
     let mask_pixels = paste_mask(mask, size)?;
     let c = image.pixel_mode().channels();
-    let fill_tile = fill_size.map(|_| std::array::from_fn::<_, 768, _>(|i| source_pixels[i % c]));
     let width = image.width() as usize;
     let height = image.height() as usize;
-    let pixels = image.pixels_mut().expect("validated open image");
+    let (left, top, right, bottom) = paste_bounds(position, width, height, size.0, size.1);
+    if right <= left || bottom <= top {
+        return Ok(());
+    }
+    if mask_pixels.is_none() && position == (0, 0) && size == image.size() {
+        return image.replace_storage(source.copy(py)?);
+    }
+    let fill_tile = fill_size.map(|_| std::array::from_fn::<_, 768, _>(|i| source_pixels[i % c]));
     py.detach(|| {
-        let (left, top, right, bottom) = paste_bounds(position, width, height, size.0, size.1);
-        if right <= left || bottom <= top {
-            return;
-        }
+        image.ensure_owned()?;
+        let pixels = image.pixels_mut().expect("validated open image");
         let count = (right - left) as usize;
         if mask_pixels.is_none() && count == width && count == source.width() as usize {
             let s = (top - position.1) as usize * count * c;
             let d = top as usize * width * c;
             let len = (bottom - top) as usize * count * c;
             pixels[d..d + len].copy_from_slice(&source_pixels[s..s + len]);
-            return;
+            return Ok(());
         }
         for y in top..bottom {
             let s = (y - position.1) as usize * size.0 as usize + (left - position.0) as usize;
@@ -216,14 +219,15 @@ fn image_paste(
                 dst.copy_from_slice(&source_pixels[s * c..(s + count) * c]);
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i64, i64), mask: Option<&Image>, fill: bool) -> PyResult<()> {
     if image.pixel_mode() != source.pixel_mode() {
         return Err(PyValueError::new_err("images do not match"));
     }
+    image.raw_data()?;
     let source_pixels = source.raw_data()?;
     let filled;
     let source_pixels = if fill && matches!(source.pixel_mode(), PixelMode::I16 | PixelMode::I16L | PixelMode::I16B) {
@@ -240,14 +244,17 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
     let mask_pixels = paste_mask(mask, source.size())?;
     let stride = image.raw_bytes_per_pixel();
     let width = image.width() as i64;
-    let bounds = paste_bounds(position, image.width() as usize, image.height() as usize, source.width(), source.height());
+    let (left, top, right, bottom) = paste_bounds(position, image.width() as usize, image.height() as usize, source.width(), source.height());
+    if right <= left || bottom <= top {
+        return Ok(());
+    }
+    if !fill && mask_pixels.is_none() && position == (0, 0) && source.size() == image.size() {
+        return image.replace_storage(source.copy(py)?);
+    }
     let floating = image.pixel_mode().is_float();
-    let pixels = image.pixels_mut().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
     py.detach(|| {
-        let (left, top, right, bottom) = bounds;
-        if right <= left || bottom <= top {
-            return;
-        }
+        image.ensure_owned()?;
+        let pixels = image.pixels_mut().expect("validated open image");
         if mask_pixels.is_none() {
             let row_bytes = (right - left) as usize * stride;
             if left == 0 && right == width && width as u32 == source.width() {
@@ -262,7 +269,7 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
                     pixels[dst..dst + row_bytes].copy_from_slice(&source_pixels[src..src + row_bytes]);
                 }
             }
-            return;
+            return Ok(());
         }
         for y in top..bottom {
             let count = (right - left) as usize;
@@ -284,8 +291,8 @@ fn paste_integer(py: Python<'_>, image: &mut Image, source: &Image, position: (i
                 }
             }
         }
-    });
-    Ok(())
+        Ok(())
+    })
 }
 
 fn paste_float(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_channels: usize) {

@@ -271,8 +271,6 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     if resized.size == tuple(size):
         return resized
     offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
-    if resized.mode == "P":
-        resized = resized.copy()
     fill = _canvas_color(resized, color)
     return _result(resized, ops_canvas(resized._native, size, offset, fill))
 

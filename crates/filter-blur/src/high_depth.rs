@@ -221,10 +221,6 @@ pub(crate) fn blur(image: &Image, radii: (f32, f32), kind: BlurKind) -> PyResult
 }
 
 pub(crate) fn unsharp(image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
-    if percent == 0 || threshold >= i32::from(samples::maximum(image)) || radius == 0.0 {
-        super::blur_radii((radius, radius), BlurKind::Gaussian)?;
-        return samples::output_bytes(image, image.raw_data()?.to_vec());
-    }
     let source = samples::view(image)?;
     let radii = super::blur_radii((radius, radius), BlurKind::Gaussian)?;
     samples::with_output(image, None, |values| {

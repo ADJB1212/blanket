@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pyo3::buffer::PyBuffer;
@@ -454,7 +455,8 @@ pub struct Image {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) mode: PixelMode,
-    pub(crate) pixels: Option<Vec<u8>>,
+    // Owned snapshots share their allocation until a mutable borrow.
+    pixels: Option<Arc<Vec<u8>>>,
     pub(crate) shared_pixels: Option<std::sync::Arc<dyn SharedPixels>> = None,
     pub(crate) bit_depth: u8 = 8,
     pub format: Option<String> = None,
@@ -504,7 +506,7 @@ impl Image {
         if matches!(self.bit_depth, 10 | 12) {
             self.sample_validation.0.store(false, Ordering::Relaxed);
         }
-        self.pixels.as_deref_mut()
+        self.pixels.as_mut().map(|pixels| Arc::make_mut(pixels).as_mut_slice())
     }
 
     pub fn shared_pixels(&self) -> Option<&dyn SharedPixels> {
@@ -514,7 +516,11 @@ impl Image {
     pub fn into_pixels(mut self) -> PyResult<Vec<u8>> {
         self.raw_data()?;
         self.ensure_owned()?;
-        self.pixels.take().ok_or_else(|| PyValueError::new_err("operation on closed image"))
+        let pixels = self.pixels.take().ok_or_else(|| PyValueError::new_err("operation on closed image"))?;
+        match Arc::try_unwrap(pixels) {
+            Ok(pixels) => Ok(pixels),
+            Err(shared) => crate::buffers::copy(&shared),
+        }
     }
 
     /// Replace samples and their layout while preserving this image's metadata.
@@ -558,11 +564,20 @@ impl Image {
 
     pub fn ensure_owned(&mut self) -> PyResult<()> {
         if self.pixels.is_none() && self.shared_pixels.is_some() {
-            let pixels = self.raw_data()?.to_vec();
-            self.pixels = Some(pixels);
+            let pixels = crate::buffers::copy(self.raw_data()?)?;
+            self.pixels = Some(Arc::new(pixels));
             self.shared_pixels = None;
         }
         Ok(())
+    }
+
+    fn write_pixels(&mut self, py: Python<'_>) -> PyResult<&mut [u8]> {
+        let pixels = self.pixels.as_mut().expect("validated owned image");
+        if Arc::strong_count(pixels) > 1 {
+            let copy = py.detach(|| crate::buffers::copy(pixels.as_slice()))?;
+            *pixels = Arc::new(copy);
+        }
+        Ok(Arc::make_mut(pixels).as_mut_slice())
     }
     pub fn from_pixels(width: u32, height: u32, mode: PixelMode, pixels: Vec<u8>, format: Option<String>) -> PyResult<Self> {
         if mode.is_wide_scalar() {
@@ -572,7 +587,7 @@ impl Image {
         if pixels.len() != expected {
             return Err(PyValueError::new_err(format!("not enough image data: expected {expected} bytes, got {}", pixels.len())));
         }
-        Ok(Self { width, height, mode, pixels: Some(pixels), format, .. })
+        Ok(Self { width, height, mode, pixels: Some(Arc::new(pixels)), format, .. })
     }
 
     pub fn pixel_data(&self) -> PyResult<&[u8]> {
@@ -589,7 +604,7 @@ impl Image {
         if !mode.is_integer() || pixels.len() != expected {
             return Err(PyValueError::new_err("wrong amount of image data"));
         }
-        Ok(Self { width, height, mode, pixels: Some(pixels), bit_depth: (mode.sample_bytes() << 3) as u8, .. })
+        Ok(Self { width, height, mode, pixels: Some(Arc::new(pixels)), bit_depth: (mode.sample_bytes() << 3) as u8, .. })
     }
 
     pub fn from_float_bytes(width: u32, height: u32, pixels: Vec<u8>) -> PyResult<Self> {
@@ -601,7 +616,7 @@ impl Image {
         if !mode.is_float() || pixels.len() != expected {
             return Err(PyValueError::new_err("wrong amount of image data"));
         }
-        Ok(Self { width, height, mode, pixels: Some(pixels), bit_depth: 32, .. })
+        Ok(Self { width, height, mode, pixels: Some(Arc::new(pixels)), bit_depth: 32, .. })
     }
 
     pub fn raw_data(&self) -> PyResult<&[u8]> {
@@ -648,7 +663,7 @@ impl Image {
         {
             return Err(PyValueError::new_err("invalid sample count or sample outside bit_depth range"));
         }
-        Ok(Self { width, height, mode, pixels: Some(pixels), bit_depth, format, .. })
+        Ok(Self { width, height, mode, pixels: Some(Arc::new(pixels)), bit_depth, format, .. })
     }
 
     fn color_count_list<'py>(&self, py: Python<'py>, entries: impl IntoIterator<Item = (usize, usize)>) -> PyResult<Bound<'py, PyList>> {
@@ -795,10 +810,15 @@ impl Image {
         if channel >= channels {
             return Err(PyValueError::new_err("band index out of range"));
         }
+        if matches!(self.mode, PixelMode::One | PixelMode::L) {
+            let mut band = self.copy(py)?;
+            band.mode = PixelMode::L;
+            band.palette = None;
+            return Ok(band);
+        }
         py.detach(|| {
             if self.bit_depth == 8 {
                 let pixels = match self.mode {
-                    PixelMode::One | PixelMode::L => data.to_vec(),
                     PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => crate::simd::extract_two_channel(data, channel),
                     PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => crate::simd::extract_channel::<3>(data, channel),
                     PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => crate::simd::extract_channel::<4>(data, channel),
@@ -947,33 +967,36 @@ impl Image {
                 return Err(PyValueError::new_err("wrong number of color components"));
             }
             let start = (y as usize * self.width as usize + x as usize) * self.raw_bytes_per_pixel();
-            for (i, v) in values.iter().enumerate() {
-                self.pixels.as_mut().unwrap()[start + i * 4..start + i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+            let pixels = self.write_pixels(value.py())?;
+            for (sample, value) in pixels[start..start + values.len() * 4].as_chunks_mut::<4>().0.iter_mut().zip(values) {
+                *sample = value.to_le_bytes();
             }
             return Ok(());
         }
         if self.mode == PixelMode::F {
             let start = (y as usize * self.width as usize + x as usize) * 4;
-            self.pixels.as_mut().unwrap()[start..start + 4].copy_from_slice(&(value.extract::<f64>()? as f32).to_le_bytes());
+            let sample = value.extract::<f64>()? as f32;
+            self.write_pixels(value.py())?[start..start + 4].copy_from_slice(&sample.to_le_bytes());
             return Ok(());
         }
         if self.mode.is_integer() {
             let bytes = integer_bytes(self.mode, value.extract::<i64>()?);
-            let offset = (y as usize * self.width as usize + x as usize) * self.mode.sample_bytes();
-            self.pixels.as_mut().unwrap()[offset..offset + self.mode.sample_bytes()].copy_from_slice(&bytes[..self.mode.sample_bytes()]);
+            let stride = self.mode.sample_bytes();
+            let offset = (y as usize * self.width as usize + x as usize) * stride;
+            self.write_pixels(value.py())?[offset..offset + stride].copy_from_slice(&bytes[..stride]);
             return Ok(());
         }
         if crate::samples::supported(self) {
             let channels = self.mode.channels();
             let maximum = crate::samples::maximum(self);
             let start = (y as usize * self.width as usize + x as usize) * channels * 2;
-            return put_sample_pixel(&mut self.pixels.as_mut().unwrap()[start..start + channels * 2], value, channels, maximum, 1.0, 0.0);
+            return put_sample_pixel(&mut self.write_pixels(value.py())?[start..start + channels * 2], value, channels, maximum, 1.0, 0.0);
         }
         self.pixel_data()?;
         let channels = self.mode.channels();
         let pixel = if self.mode == PixelMode::One { [value.extract::<i64>()?.clamp(0, 255) as u8, 0, 0, 0] } else { parse_pixel(value, channels)? };
         let offset = (y as usize * self.width as usize + x as usize) * channels;
-        self.pixels.as_mut().unwrap()[offset..offset + channels].copy_from_slice(&pixel[..channels]);
+        self.write_pixels(value.py())?[offset..offset + channels].copy_from_slice(&pixel[..channels]);
         Ok(())
     }
 
@@ -984,10 +1007,29 @@ impl Image {
         if length > self.width as usize * self.height as usize {
             return Err(PyTypeError::new_err("too many data entries"));
         }
+        if length == 0 && !self.mode.is_float() && !self.mode.is_integer() {
+            return Ok(());
+        }
+        if self.bit_depth == 8
+            && self.mode.channels() == 1
+            && scale == 1.0
+            && offset == 0.0
+            && let Ok(bytes) = data.cast_exact::<PyBytes>()
+        {
+            let source = bytes.as_bytes();
+            let pixels = self.pixels.as_mut().unwrap();
+            if length == pixels.len() && Arc::strong_count(pixels) > 1 {
+                *pixels = Arc::new(data.py().detach(|| crate::buffers::copy(source))?);
+            } else {
+                let target = &mut self.write_pixels(data.py())?[..length];
+                data.py().detach(|| target.copy_from_slice(source));
+            }
+            return Ok(());
+        }
         if crate::samples::supported(self) && !self.mode.is_integer() {
             let channels = self.mode.channels();
             let maximum = crate::samples::maximum(self);
-            let pixels = self.pixels.as_mut().unwrap();
+            let pixels = self.write_pixels(data.py())?;
             for i in 0..length {
                 let start = i * channels * 2;
                 put_sample_pixel(&mut pixels[start..start + channels * 2], &data.get_item(i)?, channels, maximum, scale, offset)?;
@@ -997,7 +1039,7 @@ impl Image {
         if self.mode.is_float() && self.mode.channels() > 1 {
             let channels = self.mode.channels();
             let stride = channels * 4;
-            let pixels = self.pixels.as_mut().unwrap();
+            let pixels = self.write_pixels(data.py())?;
             for (i, item) in data.try_iter()?.enumerate() {
                 if i >= length {
                     return Err(PyTypeError::new_err("too many data entries"));
@@ -1025,30 +1067,34 @@ impl Image {
             return Ok(());
         }
         if self.mode == PixelMode::F {
+            let pixels = self.write_pixels(data.py())?;
             for (i, item) in data.try_iter()?.enumerate() {
                 if i >= length {
                     return Err(PyTypeError::new_err("too many data entries"));
                 }
                 let value = (item?.extract::<f64>()? * scale + offset) as f32;
-                self.pixels.as_mut().unwrap()[i * 4..i * 4 + 4].copy_from_slice(&value.to_le_bytes());
+                pixels[i * 4..i * 4 + 4].copy_from_slice(&value.to_le_bytes());
             }
             return Ok(());
         }
         if self.mode.is_integer() {
-            let stride = self.mode.sample_bytes();
+            let mode = self.mode;
+            let stride = mode.sample_bytes();
+            let pixels = self.write_pixels(data.py())?;
             for (i, item) in data.try_iter()?.enumerate() {
                 if i >= length {
                     return Err(PyTypeError::new_err("too many data entries"));
                 }
                 let value = (item?.extract::<f64>()? * scale + offset) as i64;
-                let bytes = integer_bytes(self.mode, value);
-                self.pixels.as_mut().unwrap()[i * stride..(i + 1) * stride].copy_from_slice(&bytes[..stride]);
+                let bytes = integer_bytes(mode, value);
+                pixels[i * stride..(i + 1) * stride].copy_from_slice(&bytes[..stride]);
             }
             return Ok(());
         }
         self.pixel_data()?;
-        let pixels = self.pixels.as_mut().unwrap();
-        match self.mode {
+        let mode = self.mode;
+        let pixels = self.write_pixels(data.py())?;
+        match mode {
             PixelMode::One | PixelMode::L => put_pixels::<1>(pixels, data, length, scale, offset),
             PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => put_pixels::<2>(pixels, data, length, scale, offset),
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => put_pixels::<3>(pixels, data, length, scale, offset),
@@ -1207,19 +1253,24 @@ impl Image {
 
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
-        let mut pixels = crate::buffers::reserved::<u8>(source.len())?;
-        let chunk = 256 * 1024;
-        py.detach(|| {
-            if source.len() < 4 << 20 {
-                pixels.extend_from_slice(source);
-                return;
-            }
-            crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
-                dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
+        let pixels = if let Some(pixels) = &self.pixels {
+            py.detach(|| Arc::clone(pixels))
+        } else {
+            let mut pixels = crate::buffers::reserved::<u8>(source.len())?;
+            let chunk = 256 * 1024;
+            py.detach(|| {
+                if source.len() < 4 << 20 {
+                    pixels.extend_from_slice(source);
+                    return;
+                }
+                crate::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], chunk, 4 << 20, |i, dst| {
+                    dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
+                });
             });
-        });
-        // SAFETY: Every byte is initialized above, including any partial final partition.
-        unsafe { pixels.set_len(source.len()) };
+            // SAFETY: Every byte is initialized above, including any partial final partition.
+            unsafe { pixels.set_len(source.len()) };
+            Arc::new(pixels)
+        };
         Ok(Self {
             width: self.width,
             height: self.height,
@@ -1251,6 +1302,9 @@ impl Image {
             return Ok(integer_value(self.mode, &pixels[start..start + self.mode.sample_bytes()]).into_pyobject(py)?.into_any().unbind());
         }
         if self.bit_depth > 8 {
+        if std::ptr::eq(first, second) {
+            return Ok(true);
+        }
             let sample = |i: usize| u16::from_le_bytes([pixels[2 * i], pixels[2 * i + 1]]);
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
@@ -1375,7 +1429,7 @@ impl Image {
         let mut image = self.convert(py, destination, None)?;
         let channels = image.mode.channels();
         let source = self.pixel_data()?;
-        let output = image.pixels.as_mut().unwrap();
+        let output = image.pixels_mut().unwrap();
         py.detach(|| {
             for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(channels)) {
                 output[channels - 1] = if pixel == key { 0 } else { 255 };
@@ -2629,7 +2683,7 @@ mod tests {
         let mut sibling = image.clone();
         assert_eq!(image.raw_data().unwrap(), [1, 2, 3]);
         image.ensure_owned().unwrap();
-        image.pixels.as_mut().unwrap()[0] = 9;
+        image.pixels_mut().unwrap()[0] = 9;
         assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
         assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);
         assert!(image.shared_pixels.is_none());
@@ -2702,6 +2756,21 @@ mod tests {
     }
 
     #[test]
+
+    #[test]
+    fn owned_raster_copy_shares_storage_until_mutated() {
+        Python::initialize();
+        let mut image = Image::from_pixels(3, 1, PixelMode::L, vec![1, 2, 3], Some("PNG".into())).unwrap();
+        let mut sibling = Python::attach(|py| image.copy(py)).unwrap();
+        assert!(std::ptr::eq(image.raw_data().unwrap(), sibling.raw_data().unwrap()));
+        assert_eq!(sibling.format(), None);
+        image.pixels_mut().unwrap()[0] = 9;
+        assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
+        assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);
+        sibling.close();
+        assert_eq!(image.into_pixels().unwrap(), [9, 2, 3]);
+    }
+
     fn bilevel_rows_preserve_partial_bytes_and_parallel_partitions() {
         for threads in [1, 4] {
             rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {

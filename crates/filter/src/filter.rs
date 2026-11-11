@@ -108,8 +108,7 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
     }
     if blanket_core::samples::supported(&bands[0]) {
         if mode == PixelMode::L {
-            let source = bands[0].raw_data()?;
-            return Image::from_sample_bytes(width, height, mode, py.detach(|| source.to_vec()), bands[0].bit_depth(), None);
+            return bands[0].getchannel(py, 0);
         }
         let sources = bands.iter().map(|b| blanket_core::samples::view(b)).collect::<PyResult<Vec<_>>>()?;
         let pixels = py.detach(|| match mode {
@@ -119,15 +118,14 @@ fn filter_merge(py: Python<'_>, mode: &str, bands: Vec<PyRef<'_, Image>>) -> PyR
         })?;
         return Image::from_sample_bytes(width, height, mode, pixels, bands[0].bit_depth(), None);
     }
-    let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
     if matches!(mode, PixelMode::One | PixelMode::L) {
-        // A single band only needs a copy, not a zeroed allocation followed by
-        // another full-buffer write. This matters once the band exceeds cache.
-        return Image::from_pixels(width, height, mode, py.detach(|| sources[0].to_vec()), None);
+        let mut band = bands[0].getchannel(py, 0)?;
+        band.reinterpret_mode(mode)?;
+        return Ok(band);
     }
+    let sources = bands.iter().map(|b| b.pixel_data()).collect::<PyResult<Vec<_>>>()?;
     let mut pixels = alloc_pixels(sources[0].len().checked_mul(bands.len()).ok_or_else(|| PyMemoryError::new_err("cannot allocate image"))?)?;
     py.detach(|| match mode {
-        PixelMode::One | PixelMode::L => pixels.copy_from_slice(sources[0]),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => merge::<2>(&sources, &mut pixels),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => merge::<3>(&sources, &mut pixels),
         PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => merge::<4>(&sources, &mut pixels),

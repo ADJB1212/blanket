@@ -205,9 +205,15 @@ pub fn filter_blur_python(py: Python<'_>, image: &Image, radii: (f32, f32), gaus
 
 pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), kind: BlurKind) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
+        if radii == (0.0, 0.0) {
+            return image.copy(py);
+        }
         return py.detach(|| crate::high_depth::blur(image, radii, kind));
     }
     let source = image.pixel_data()?;
+    if radii == (0.0, 0.0) {
+        return image.copy(py);
+    }
     let pixels = py.detach(|| blur(image, source, radii, kind))?;
     output(image, pixels)
 }
@@ -215,16 +221,20 @@ pub fn filter_blur(py: Python<'_>, image: &Image, radii: (f32, f32), kind: BlurK
 #[pyfunction]
 pub fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, threshold: i32) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
+        if percent == 0 || threshold >= i32::from(blanket_core::samples::maximum(image)) || radius == 0.0 {
+            blur_radii((radius, radius), BlurKind::Gaussian)?;
+            return image.copy(py);
+        }
         return py.detach(|| crate::high_depth::unsharp(image, radius, percent, threshold));
     }
     let source = image.pixel_data()?;
-    let pixels = py.detach(|| -> PyResult<Vec<u8>> {
-        if percent == 0 || threshold >= 255 || radius == 0.0 {
-            if !source.is_empty() {
-                blur_radii((radius, radius), BlurKind::Gaussian)?;
-            }
-            return blanket_core::buffers::copy(source);
+    if percent == 0 || threshold >= 255 || radius == 0.0 {
+        if !source.is_empty() {
+            blur_radii((radius, radius), BlurKind::Gaussian)?;
         }
+        return image.copy(py);
+    }
+    let pixels = py.detach(|| -> PyResult<Vec<u8>> {
         let mut pixels = blur(image, source, (radius, radius), BlurKind::Gaussian)?;
         chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
             for (&original, blurred) in source[chunk * CHUNK_PIXELS..].iter().zip(dst) {
