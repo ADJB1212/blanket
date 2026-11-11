@@ -20,8 +20,8 @@ from math import isfinite
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator, Sequence
-    from typing import Any, Protocol, Self
+    from collections.abc import Callable, Iterable, Iterator, Sequence
+    from typing import Any, Protocol, Self, SupportsInt
 
     from ._blanket import _Image
 
@@ -33,6 +33,8 @@ if TYPE_CHECKING:
         def __getitem__(self, key: slice, /) -> Sequence[float]: ...
 
     class _ArrayTable(Protocol):
+        def __len__(self) -> int: ...
+
         @property
         def shape(self) -> tuple[int, ...]: ...
 
@@ -693,10 +695,10 @@ class Color3DLUT(MultibandFilter):
                 table = array
                 wrong_size = True
         else:
-            entries = list(table) if copy_table else cast("Sequence[float | Sequence[float]]", table)
+            entries = list(cast("Iterable[float | Sequence[float]]", table)) if copy_table else cast("Sequence[float | Sequence[float]]", table)
             if entries and isinstance(entries[0], (list, tuple)):
                 flattened = []
-                for pixel in entries:
+                for pixel in cast("Sequence[Sequence[float]]", entries):
                     if len(pixel) != channels:
                         raise ValueError(f"The elements of the table should have a length of {channels}.")
                     flattened.extend(pixel)
@@ -718,7 +720,7 @@ class Color3DLUT(MultibandFilter):
             except ValueError as error:
                 raise ValueError("Size should be either an integer or a tuple of three integers.") from error
             except TypeError:
-                x = y = z = size
+                x = y = z = cast("SupportsInt", size)
         dimensions = int(x), int(y), int(z)
         if any(not 2 <= value <= 65 for value in dimensions):
             raise ValueError("Size should be in [2, 65] range.")

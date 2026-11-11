@@ -21,12 +21,17 @@ from .ImageFont import load_default
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Protocol
+    from typing import Protocol, TypedDict
 
     from .ImagePath import Path
 
     Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
     Color = int | float | str | tuple[int, ...] | None
+
+    class _FontOptions(TypedDict, total=False):
+        direction: str
+        features: Sequence[str]
+        language: str
 
     class _Mask(Protocol):
         size: tuple[int, int]
@@ -215,7 +220,7 @@ def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] 
     if len(bounding_circle) == 3:
         if not all(isinstance(i, (int, float)) and not isinstance(i, bool) for i in bounding_circle):
             raise ValueError(f"bounding_circle should only contain numeric data, got {bounding_circle!r}")
-        centroid_x, centroid_y, polygon_radius = (float(v) for v in bounding_circle)
+        centroid_x, centroid_y, polygon_radius = (float(v) for v in cast("Sequence[float]", bounding_circle))
     elif len(bounding_circle) == 2 and isinstance(bounding_circle[0], (list, tuple)):
         if len(bounding_circle[0]) != 2:
             raise ValueError("bounding_circle centre should contain 2D coordinates (e.g. (x, y))")
@@ -347,14 +352,14 @@ class ImageDraw:
                 raise ValueError("image has no palette")
             if isinstance(fill, str):
                 fill = tuple(color_pixel(fill, palette.mode))
-            ink = palette.getcolor(fill, self.im)
+            ink = palette.getcolor(cast("tuple[int, ...]", fill), self.im)
             self.im._sync_palette()
             return ink
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N", "P"):
             if isinstance(fill, str):
                 raise ValueError(f"drawing in mode {self.mode!r} requires a numeric ink, got {fill!r}")
             return fill
-        pixel = color_pixel(fill, self.mode)
+        pixel = color_pixel(cast("str | int | tuple[int, ...]", fill), self.mode)
         return pixel[0] if len(pixel) == 1 else tuple(pixel)
 
     @staticmethod
@@ -367,7 +372,8 @@ class ImageDraw:
             return [(int(x), int(y)) for x, y in cast("Sequence[tuple[float, float]]", values)]
         if len(values) % 2:
             raise ValueError(f"wrong number of coordinates: {len(values)}")
-        return [(int(values[i]), int(values[i + 1])) for i in range(0, len(values), 2)]
+        flat = cast("Sequence[float]", values)
+        return [(int(flat[i]), int(flat[i + 1])) for i in range(0, len(flat), 2)]
 
     def arc(self, xy: Coords, start: float, end: float, fill: Color = None, width: int = 1) -> None:
         """Draw the curved edge of an ellipse between two angles.
@@ -1035,9 +1041,16 @@ class ImageDraw:
         return PublicDomainFont(font_size)
 
     @staticmethod
-    def _font_options(direction: str | None, features: Sequence[str] | None, language: str | None) -> dict[str, object]:
+    def _font_options(direction: str | None, features: Sequence[str] | None, language: str | None) -> _FontOptions:
         """Collect only the explicitly supplied font shaping options."""
-        return {key: value for key, value in (("direction", direction), ("features", features), ("language", language)) if value is not None}
+        options: _FontOptions = {}
+        if direction is not None:
+            options["direction"] = direction
+        if features is not None:
+            options["features"] = features
+        if language is not None:
+            options["language"] = language
+        return options
 
     @staticmethod
     def _text_options(direction: str | None, features: Sequence[str] | None, language: str | None, embedded_color: bool) -> None:

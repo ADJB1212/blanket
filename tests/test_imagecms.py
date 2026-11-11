@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import struct
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
@@ -22,7 +23,7 @@ def test_profile_creation_serialization_and_metadata(space: str, tmp_path: Path)
     pillow = PillowCms.ImageCmsProfile(BytesIO(data))
     path = tmp_path / "profile.icc"
     path.write_bytes(data)
-    for source in (profile, BytesIO(data), path, str(path)):
+    for source in (profile, BytesIO(data), path, str(path), os.fsencode(path)):
         reopened = ImageCms.getOpenProfile(source)
         assert reopened.tobytes() == data
         assert ImageCms.getProfileDescription(reopened) == PillowCms.getProfileDescription(pillow)

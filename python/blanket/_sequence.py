@@ -13,7 +13,7 @@ from itertools import repeat
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from typing import BinaryIO
+    from ._typing import Writable
 
 from ._blanket import _difference_bbox, _encode_sequence
 from ._exif import save_metadata
@@ -72,7 +72,7 @@ def _png_regions(
     return (prepared, [0.0] * int(default_image) + [record.duration for record in records], [0] * int(default_image) + [record.disposal for record in records], [0] * int(default_image) + [record.blend for record in records], (canvas, offsets))
 
 
-def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:
+def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:
     """Encode or save frames, returning None for ordinary saves."""
     save_all = options.pop("save_all", False)
     if not isinstance(save_all, bool):

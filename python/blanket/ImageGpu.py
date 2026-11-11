@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from concurrent.futures import Future
     from types import ModuleType
+    from typing import SupportsIndex
 
     from torch import Tensor
 
@@ -583,8 +584,8 @@ class GpuImage:
         if len(fill) != channels:
             raise ValueError("fillcolor must match image channels")
         controls = coefficients + [_scalar(v) for v in fill]
-        sampling = {Image.Resampling.NEAREST: 0, Image.Resampling.BILINEAR: 1, Image.Resampling.BICUBIC: 2}[resample]
-        return self._run(26, size=size, k=sampling, values=controls)
+        sampling: dict[int, int] = {Image.Resampling.NEAREST: 0, Image.Resampling.BILINEAR: 1, Image.Resampling.BICUBIC: 2}
+        return self._run(26, size=size, k=sampling[resample], values=controls)
 
     def rotate(self, angle: float, resample: int = Image.Resampling.NEAREST, *, expand: bool = False, fillcolor: float | Sequence[float] = 0) -> GpuImage:
         """Rotate around the image center and return a resident result.
@@ -639,8 +640,8 @@ class GpuImage:
         fill = [fillcolor] * channels if isinstance(fillcolor, (int, float)) else list(fillcolor)
         if len(fill) != channels:
             raise ValueError("fillcolor must match image channels")
-        sampling = {Image.Resampling.NEAREST: 0, Image.Resampling.BILINEAR: 1, Image.Resampling.BICUBIC: 2}[resample]
-        return self._run(27, size=coordinates.size, other=coordinates, k=sampling, values=[0.0] * 8 + [_scalar(v) for v in fill])
+        sampling: dict[int, int] = {Image.Resampling.NEAREST: 0, Image.Resampling.BILINEAR: 1, Image.Resampling.BICUBIC: 2}
+        return self._run(27, size=coordinates.size, other=coordinates, k=sampling[resample], values=[0.0] * 8 + [_scalar(v) for v in fill])
 
     def paste(self, source: GpuImage, box: tuple[int, int] = (0, 0), mask: GpuImage | None = None) -> GpuImage:
         """Paste a resident source through an optional mask into a new image.
@@ -755,7 +756,7 @@ class GpuImage:
         result = self.convert(mode)
         if isinstance(alpha, GpuImage):
             return result._run(16, other=alpha, k=_MODES[mode][0] - 1)
-        value = min(1.0, max(0.0, _scalar(alpha))) if _MODES[mode][1] else float(min(255, max(0, index(alpha))))
+        value = min(1.0, max(0.0, _scalar(alpha))) if _MODES[mode][1] else float(min(255, max(0, index(cast("SupportsIndex", alpha)))))
         return result._run(17, values=[value])
 
     def _blur(self, radius: float | tuple[float, float], gaussian: bool) -> GpuImage:
@@ -941,7 +942,7 @@ class GpuImage:
             return self._run(6)
         return result._run(5) if alpha else (result._run(24) if clamp_alpha else result)
 
-    def convolve(self, kernel: list[float], *, size: int = 3, scale: float | None = None, offset: float = 0.0) -> GpuImage:
+    def convolve(self, kernel: Sequence[float], *, size: int = 3, scale: float | None = None, offset: float = 0.0) -> GpuImage:
         """Apply a square convolution kernel while copying border samples.
 
         Args:
@@ -1418,7 +1419,7 @@ class GpuImage:
         self._check()
         if self.runtime != "native":
             raise ValueError("shared mappings require native Metal storage")
-        return memoryview(self._resource)
+        return memoryview(cast("MetalImage", self._resource))
 
     def to_torch(self, *, layout: str = "HWC") -> Tensor:
         """Export GPU pixels to PyTorch without downloading them.

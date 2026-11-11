@@ -15,7 +15,9 @@ from .ExifTags import IFD
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from decimal import Decimal
-    from typing import BinaryIO, Self
+    from typing import BinaryIO, Self, SupportsIndex
+
+    from ._typing import BytesInput, FloatInput
 
 _FORMATS = {1: "B", 3: "H", 4: "I", 6: "b", 8: "h", 9: "i", 11: "f", 12: "d", 13: "I"}
 _SIZES = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 6: 1, 7: 1, 8: 2, 9: 4, 10: 8, 11: 4, 12: 8, 13: 4}
@@ -258,15 +260,15 @@ class Exif(MutableMapping[int, object]):
                     if isinstance(value, bytes):
                         kind = 7
                     elif any(isinstance(v, float) or (hasattr(v, "denominator") and not isinstance(v, int)) for v in items):
-                        kind = 5 if all(float(v) >= 0 for v in items) else 10
+                        kind = 5 if all(float(cast("FloatInput", v)) >= 0 for v in items) else 10
                     else:
-                        integers = tuple(index(v) for v in items)
+                        integers = tuple(index(cast("SupportsIndex", v)) for v in items)
                         kind = 3 if all(0 <= v <= 65535 for v in integers) else 9 if any(v < 0 for v in integers) else 4
                 if kind == 2:
                     raw = str(value).encode("ascii", "replace") + b"\0"
                     count = len(raw)
                 elif kind == 7 or (kind == 1 and isinstance(value, bytes)):
-                    raw = bytes(value)
+                    raw = bytes(cast("BytesInput", value))
                     count = len(raw)
                 else:
                     items = value if isinstance(value, (tuple, list)) else (value,)
@@ -277,7 +279,7 @@ class Exif(MutableMapping[int, object]):
                         numbers = []
                         for item in items:
                             rational = item if hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int) else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
-                            numbers.extend((int(rational.numerator), int(rational.denominator)))
+                            numbers.extend((int(cast("int | float | str", rational.numerator)), int(cast("int | float | str", rational.denominator))))
                         raw = struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers)
                     else:
                         raw = struct.pack(f"{endian}{count}{_FORMATS[kind]}", *items)

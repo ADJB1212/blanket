@@ -28,11 +28,12 @@ from typing import TYPE_CHECKING, Protocol, cast
 from .errors import CodecResourceLimitError, UnsupportedCodecError
 
 if TYPE_CHECKING:
-    from collections.abc import Buffer, Callable, Sequence
-    from typing import BinaryIO, Self
+    from collections.abc import Buffer, Callable, Iterable, Sequence
+    from typing import BinaryIO, Self, SupportsIndex
 
     from ._blanket import _Image
     from ._lazy_frames import LazyFrames
+    from ._typing import BytesInput, FloatInput, Writable
     from .ImageFilter import Filter
     from .ImagePalette import ImagePalette
 
@@ -958,7 +959,7 @@ class Image:
             return result
         transparency = self.info.get("transparency")
         if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None and self.bit_depth == 8:
-            key = [transparency] if isinstance(transparency, int) else list(transparency)
+            key = [transparency] if isinstance(transparency, int) else list(cast("Iterable[int]", transparency))
             result = Image(self._native.convert_transparent_alpha(mode, key))
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
@@ -1027,7 +1028,7 @@ class Image:
         elif self.mode == "L":
             result.info["transparency"] = transparency
         elif result.palette is not None:
-            color = key.convert("RGB").getpixel((0, 0))
+            color = cast("tuple[int, ...]", key.convert("RGB").getpixel((0, 0)))
             try:
                 result.info["transparency"] = result.palette.getcolor(color, result)
                 result._sync_palette()
@@ -1393,8 +1394,8 @@ class Image:
         result = Image(ops_remap_indices(self._native, bytes(mapping)))
         result.putpalette(b"".join(entries[value * channels : (value + 1) * channels] for value in positions), palette_mode)
         result.info.update(self._metadata_info())
-        if isinstance(self.info.get("transparency"), int):
-            old_transparency = self.info["transparency"]
+        old_transparency = self.info.get("transparency")
+        if isinstance(old_transparency, int):
             if old_transparency in positions:
                 result.info["transparency"] = mapping[old_transparency]
             else:
@@ -1531,7 +1532,7 @@ class Image:
         self.palette = palette
         self._bands = _BANDS["PA" if self.mode == "PA" else "P"]
 
-    def quantize(self, colors: int = 256, method: int | None = None, kmeans: int = 0, palette: Image | None = None, dither: Dither = Dither.FLOYDSTEINBERG) -> Image:
+    def quantize(self, colors: int = 256, method: int | None = None, kmeans: int = 0, palette: Image | None = None, dither: int = Dither.FLOYDSTEINBERG) -> Image:
         """Return an indexed P image using a generated or supplied palette.
 
         MEDIANCUT, MAXCOVERAGE, and FASTOCTREE run in the native backend.
@@ -1798,7 +1799,7 @@ class Image:
         if min(source) < 0:
             raise ValueError("Source must be non-negative")
         region = source + im.size if len(source) == 2 else source
-        overlay = im if region == (0, 0, *im.size) else im.crop(region)
+        overlay = im if region == (0, 0, *im.size) else im.crop((region[0], region[1], region[2], region[3]))
         box = (*dest, dest[0] + overlay.width, dest[1] + overlay.height)
         full_image = box == (0, 0, *self.size)
         if linear_light or self.mode == "RGBA;F":
@@ -2012,7 +2013,7 @@ class Image:
             return result
         if mode is not None and mode != self.mode:
             raise ValueError("point mode conversion is not supported")
-        values = [lut(i) for i in range(256)] * len(self.getbands()) if callable(lut) else list(lut)
+        values = [cast("Callable[[int], float]", lut)(i) for i in range(256)] * len(self.getbands()) if callable(lut) else list(cast("Sequence[float]", lut))
         if len(values) != 256 * len(self.getbands()):
             raise ValueError("wrong number of lut entries")
         result = Image(ops_lut(self._native, [max(0, min(255, round(v))) for v in values]))
@@ -2193,11 +2194,11 @@ class Image:
         if min(size) < 0:
             raise ValueError("width and height must be >= 0")
         self.load()
-        color = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
+        color = list(struct.pack("<f", 0.0 if fillcolor is None else float(cast("FloatInput", fillcolor)))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
 
         def coordinates(values: Sequence[object], count: int) -> tuple[float, ...]:
             """Validate and convert the expected number of finite float coordinates."""
-            values = tuple(float(v) for v in values[:count])
+            values = tuple(float(cast("FloatInput", v)) for v in values[:count])
             if len(values) != count or not all(math.isfinite(v) for v in values):
                 raise ValueError(f"transform requires {count} finite coordinates")
             return values
@@ -2314,7 +2315,7 @@ class Image:
         if transfer not in ("srgb", "linear"):
             raise ValueError("transfer must be 'srgb' or 'linear'")
         if not linear_light and self.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
-            crop_box = tuple(int(value) for value in box)
+            crop_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
             if method != Resampling.NEAREST and self.mode in ("LA", "RGBA") and box != (0, 0, self.width, self.height):
                 return self.convert("La" if self.mode == "LA" else "RGBa").crop(crop_box).convert(self.mode)
             return self.crop(crop_box)
@@ -2399,7 +2400,7 @@ class Image:
                 dx, dy = -(nw - w) / 2, -(nh - h) / 2
                 c, f = a * dx + b * dy + c, d * dx + e * dy + f
                 w, h = nw, nh
-            fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(fillcolor))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
+            fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(cast("FloatInput", fillcolor)))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
             result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill, isinstance(fillcolor, str)))
         result.info.update(self._metadata_info())
         return result
@@ -2431,7 +2432,7 @@ class Image:
         cast("dict[object, object]", result.info).update(self._metadata_info())
         return result
 
-    def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, format: str | None = None, **options: object) -> None:
+    def save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable, format: str | None = None, **options: object) -> None:
         """Save in a supported raster format or PDF; see the formats guide.
 
         La and RGBa require explicit conversion before saving. RGBX writes
@@ -2488,7 +2489,7 @@ class Image:
             raise TypeError("format must be a string")
         return cast("bytes", self._save(None, format, **options))
 
-    def _save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, format: str | None, **options: object) -> bytes | None:
+    def _save(self, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable | None, format: str | None, **options: object) -> bytes | None:
         """Share validation and encoding between byte, stream, and file outputs."""
         compressor = options.pop("compressor", None)
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
@@ -2565,7 +2566,7 @@ class Image:
         if fp is None:
             return encoded
         if hasattr(fp, "write"):
-            write_all(cast("BinaryIO", fp), encoded)
+            write_all(cast("Writable", fp), encoded)
         return None
 
     def __enter__(self) -> Self:
@@ -2671,7 +2672,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     if mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
         if isinstance(color, tuple) and len(color) == 1:
             color = color[0]
-        value = 0 if color is None else index(color)
+        value = 0 if color is None else index(cast("SupportsIndex", color))
         if mode == "I":
             pixel = (value & 0xFFFFFFFF).to_bytes(4, "little")
         else:
@@ -2680,7 +2681,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     if mode == "F":
         if isinstance(color, tuple) and len(color) == 1:
             color = color[0]
-        value = 0.0 if color is None else float(color)
+        value = 0.0 if color is None else float(cast("FloatInput", color))
         return Image(image_new(mode, dimensions, struct.pack("<f", value)))
     if mode in ("RGB;F", "RGBA;F"):
         channels = 3 if mode == "RGB;F" else 4
@@ -2694,7 +2695,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     if mode not in ("1", "L", "LA", "La", "RGB", "RGBA", "RGBa", "RGBX", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
-    result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else color, native_mode)))
+    result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else cast("str | int | tuple[int, ...] | None", color), native_mode)))
     if mode in ("P", "PA"):
         result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else b"")
     return result
@@ -3147,8 +3148,8 @@ def _raw_args(mode: str, codec_name: str, args: tuple[object, ...]) -> tuple[str
     rawmode = args[0] if args else mode
     if not isinstance(rawmode, str):
         raise TypeError("raw mode must be a string")
-    stride = index(args[1]) if len(args) > 1 else 0
-    orientation = index(args[2]) if len(args) > 2 else 1
+    stride = index(cast("SupportsIndex", args[1])) if len(args) > 1 else 0
+    orientation = index(cast("SupportsIndex", args[2])) if len(args) > 2 else 1
     if stride < 0:
         raise ValueError("stride must be nonnegative")
     if orientation not in (-1, 1):
@@ -3177,7 +3178,7 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
     """
     buffer_input = decoder_name == "raw" and type(data) in (bytearray, memoryview)
     try:
-        raw = memoryview(data) if buffer_input else bytes(data)
+        raw = memoryview(cast("Buffer", data)) if buffer_input else bytes(cast("BytesInput", data))
     except (TypeError, ValueError) as error:
         raise TypeError("data must be a bytes-like object") from error
     rawmode, stride, orientation = _raw_args(mode, "raw" if decoder_name in ("hex", "packbits") else decoder_name, args)
@@ -3268,7 +3269,7 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
             raise TypeError("array interface must provide typestr")
         if interface.get("strides") is not None and not callable(getattr(obj, "tobytes", None)):
             try:
-                memoryview(obj)
+                memoryview(cast("Buffer", obj))
             except TypeError as error:
                 raise ValueError("strided array interface requires a buffer or tobytes()") from error
     pixels = interface["data"] if type(obj) is Image and interface is not None else obj
@@ -3278,7 +3279,7 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
     return result
 
 
-def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO | None, requested: str | None) -> str:
+def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable | None, requested: str | None) -> str:
     """Resolve a supported save format from an explicit name or filename extension."""
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
@@ -3353,7 +3354,7 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
                 subsampling = {"4:4:4": 0, "4:2:2": 1, "4:2:0": 2, "4:1:1": 2}[subsampling]
             except KeyError as error:
                 raise TypeError("unsupported JPEG subsampling") from error
-        subsampling = index(subsampling)
+        subsampling = index(cast("SupportsIndex", subsampling))
         if not -(2**31) <= subsampling < 2**31:
             raise OverflowError("subsampling does not fit in a C int")
         if supplied.get("keep_rgb") and image is not None and image.mode in ("RGB", "RGBX") and subsampling not in (-1, 0):
@@ -3369,8 +3370,8 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
         values["jpeg_qtable_quality"] = quality if isinstance(requested_quality, int) and requested_quality != -1 else -1
         values["jpeg_keep_rgb"] = bool(supplied.get("keep_rgb", False))
         for name in ("restart_marker_blocks", "restart_marker_rows"):
-            values[f"jpeg_{name}"] = index(supplied.get(name, 0)) & 0xFFFFFFFF
-        streamtype = index(supplied.get("streamtype", 0))
+            values[f"jpeg_{name}"] = index(cast("SupportsIndex", supplied.get(name, 0))) & 0xFFFFFFFF
+        streamtype = index(cast("SupportsIndex", supplied.get("streamtype", 0)))
         if not -(2**31) <= streamtype < 2**31:
             raise OverflowError("streamtype does not fit in a C int")
         values["jpeg_streamtype"] = streamtype

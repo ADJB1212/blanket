@@ -8,7 +8,7 @@ import builtins
 from functools import lru_cache
 from operator import index
 from types import CodeType
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -159,11 +159,11 @@ class _Operand:
 
     def __eq__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
         """Test equality with another operand or value."""
-        return self._apply("eq", self, other)
+        return self._apply("eq", self, cast("_Operand | float", other))
 
     def __ne__(self, other: object) -> _Operand:  # ty: ignore[incompatible-method-override]
         """Test inequality with another operand or value."""
-        return self._apply("ne", self, other)
+        return self._apply("ne", self, cast("_Operand | float", other))
 
     def __lt__(self, other: _Operand | float) -> _Operand:
         """Test less-than comparison."""

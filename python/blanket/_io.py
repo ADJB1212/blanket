@@ -15,6 +15,8 @@ from ._blanket import UnidentifiedImageError
 if TYPE_CHECKING:
     from typing import BinaryIO
 
+    from ._typing import Writable
+
 
 def read_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, *, restore_position: bool = False) -> bytes:
     """Read encoded bytes, rewinding streams and optionally restoring position."""
@@ -68,16 +70,16 @@ def _read_stream(stream: BinaryIO) -> bytes:
     return head + rest
 
 
-def write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, data: bytes) -> None:
+def write_bytes(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable, data: bytes) -> None:
     """Write encoded bytes to a path or caller-owned stream."""
     if hasattr(fp, "write"):
-        write_all(cast("BinaryIO", fp), data)
+        write_all(cast("Writable", fp), data)
     else:
         with open(fp, "wb") as output:
             output.write(data)
 
 
-def write_all(stream: BinaryIO, data: bytes) -> None:
+def write_all(stream: Writable, data: bytes) -> None:
     """Write every byte, rejecting invalid counts and streams that would block."""
     if not data:
         return

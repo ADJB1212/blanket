@@ -36,7 +36,7 @@ class Path:
             self._points = xy._points.copy()
             return
         try:
-            buffer = memoryview(xy)
+            buffer = memoryview(cast("Buffer", xy))
         except TypeError:
             buffer = None
         if buffer is not None and buffer.c_contiguous:

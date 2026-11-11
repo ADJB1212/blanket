@@ -7,12 +7,14 @@ __lazy_modules__ = {"struct", "math"}
 import math
 import struct
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ._ifd import Exif
 
 if TYPE_CHECKING:
     from typing import Literal
+
+    from ._typing import FloatInput
 
 
 @dataclass(frozen=True)
@@ -89,7 +91,7 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
         try:
             exif = Exif()
             exif.load(raw)
-            x, y = float(exif[282]), float(exif[283])
+            x, y = float(cast("FloatInput", exif[282])), float(cast("FloatInput", exif[283]))
             unit = exif.get(296, 2)
             if isinstance(unit, int):
                 exif_resolution = _value(x, y, unit, "tiff" if format == "TIFF" else "exif", {1: ("relative", None), 2: ("inch", 1.0), 3: ("cm", 2.54)})

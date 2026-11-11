@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from typing import BinaryIO, Self
+    from typing import Self
+
+    from ._typing import Writable
 
 from ._io import write_all
 from ._plugin import PluginImage
@@ -199,7 +201,7 @@ def o32(value: int) -> bytes:
     return struct.pack(">I", value)
 
 
-def putchunk(fp: BinaryIO, cid: bytes, *data: bytes) -> None:
+def putchunk(fp: Writable, cid: bytes, *data: bytes) -> None:
     """Write a PNG chunk with its length and checksum."""
     payload = b"".join(data)
     checksum = zlib.crc32(payload, zlib.crc32(cid))

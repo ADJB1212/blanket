@@ -12,13 +12,14 @@ __lazy_modules__ = {"collections.abc", "struct"}
 
 import struct
 from operator import index
-from typing import TYPE_CHECKING, Protocol, overload
+from typing import TYPE_CHECKING, Protocol, cast, overload
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Literal
+    from typing import Literal, SupportsIndex
 
     from ._blanket import _Image
+    from ._typing import FloatInput
 
 from . import Image
 from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose, palette_lut
@@ -53,15 +54,15 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
                 raise ValueError("image has no palette")
             color = image.palette.getcolor(color, image)
             image._sync_palette()
-        return [0 if color is None else index(color)]
+        return [0 if color is None else index(cast("SupportsIndex", color))]
     if image.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
         if isinstance(color, tuple):
             if len(color) != 1:
                 raise TypeError("color must be an integer or a single-element tuple")
             color = color[0]
-        return [0 if color is None else index(color)]
+        return [0 if color is None else index(cast("SupportsIndex", color))]
     if image.mode == "F":
-        return list(struct.pack("<f", 0.0 if color is None else float(color)))
+        return list(struct.pack("<f", 0.0 if color is None else float(cast("FloatInput", color))))
     return color_pixel(color, image.mode)
 
 

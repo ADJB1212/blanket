@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
 
+    from ._typing import BytesInput, FloatInput
     from .Image import Image
 
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
@@ -182,7 +183,7 @@ def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[objec
                         raise ValueError("DPI rational must contain two values")
                     dpi = float(x_res[0]) / x_res[1]
                 else:
-                    dpi = float(x_res)  # type: ignore[arg-type]
+                    dpi = float(cast("FloatInput", x_res))
                 if math.isnan(dpi):
                     raise ValueError("DPI is not a number")
                 if unit == 3:
@@ -318,7 +319,7 @@ def read_tiff_metadata(data: bytes, count: int, *, decoded: bool = False) -> Ite
             for tag, key in ((700, "xmp"), (34675, "icc_profile")):
                 value = exif.get(tag)
                 if value is not None:
-                    info[key] = value if isinstance(value, bytes) else bytes(value if isinstance(value, tuple) else (value,))
+                    info[key] = value if isinstance(value, bytes) else bytes(cast("BytesInput", value if isinstance(value, tuple) else (value,)))
             xres, yres = exif.get(282), exif.get(283)
             if isinstance(xres, (int, float)) and isinstance(yres, (int, float)) and xres and yres:
                 unit = exif.get(296)

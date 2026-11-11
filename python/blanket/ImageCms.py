@@ -107,7 +107,7 @@ class ImageCmsProfile:
                 self._data = profile._data
             elif isinstance(profile, (str, bytes, os.PathLike)):
                 self.filename = os.fspath(profile)
-                self._data = Path(profile).read_bytes()
+                self._data = Path(os.fsdecode(profile)).read_bytes()
             else:
                 self._data = profile.read()
             self._description, self._manufacturer, self._model, self._copyright = _cms_profile_info(self._data)

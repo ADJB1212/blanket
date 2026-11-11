@@ -120,9 +120,6 @@ output-format = "concise"
 [tool.ty.analysis]
 allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
-[tool.ty.rules]
-invalid-argument-type = "ignore"
-
 [tool.uv]
 compile-bytecode = true
 upgrade = true
