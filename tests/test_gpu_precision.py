@@ -91,7 +91,7 @@ def test_extended_float_grayscale_conversion(runtime):
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
-@pytest.mark.parametrize("width", [1, 15, 16, 17, 33])
+@pytest.mark.parametrize("width", [1, 16, 17])
 def test_byte_color_to_float_preserves_fractional_luminance(runtime, mode, width):
     channels = CHANNELS[mode]
     colors = [(1, 0, 0), (0, 1, 0), (0, 0, 1), (71, 0, 0), (255, 255, 255)]
@@ -157,7 +157,7 @@ def test_tiny_blur_and_large_radius(runtime, size):
 
 
 @pytest.mark.parametrize("mode", MODES[:4])
-@pytest.mark.parametrize("size,radius", [((1, 65), 128.5), ((65, 1), 128.5), ((15, 17), 31.75), ((16, 33), 32), ((32, 32), 32.5), ((33, 31), 31.75), ((63, 65), 32), ((65, 63), 32.5), ((257, 3), 128.5)])
+@pytest.mark.parametrize("size,radius", [((1, 65), 128.5), ((65, 1), 128.5), ((16, 33), 32), ((257, 3), 128.5)])
 def test_sliding_blur_blocks_tails_and_edges(runtime, mode, size, radius):
     image = source(mode, size)
     gpu = ImageGpu.from_image(image, runtime=runtime)

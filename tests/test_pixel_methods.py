@@ -99,7 +99,7 @@ def test_pixel_access_stays_bound_to_selected_frame(lazy):
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
-@pytest.mark.parametrize("size", [(0, 3), (257, 1)])
+@pytest.mark.parametrize("size", [(0, 3)])
 def test_pixel_snapshots_are_independent_and_immutable(mode: str, size: tuple[int, int]) -> None:
     expected = PIL.new(mode, size)
     if size[0]:

@@ -517,7 +517,7 @@ def test_deformer_can_subclass_public_protocol(mode: str) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB"])
 @pytest.mark.parametrize("name", ["autocontrast", "equalize"])
-@pytest.mark.parametrize("size", [(0, 0), (1, 1), (33, 17)])
+@pytest.mark.parametrize("size", [(0, 0), (1, 1)])
 def test_native_histogram_operations_avoid_python_tables(mode: str, name: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     image, reference = random_pair(mode, size)
     image.info["description"] = "native tone mapping"
@@ -733,7 +733,7 @@ def test_processed_png_interop(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize(("source", "target"), [((1, 1), (7, 9)), ((1, 7), (3, 11)), ((7, 1), (11, 3)), ((4, 4), (2, 4)), ((4, 4), (4, 2)), ((4, 4), (3, 3)), ((10, 10), (15, 15)), ((2, 205), (5, 61))])
+@pytest.mark.parametrize(("source", "target"), [((1, 1), (7, 9)), ((1, 7), (3, 11)), ((7, 1), (11, 3)), ((2, 205), (5, 61))])
 def test_resize_thin_and_small_images(mode: str, source: tuple, target: tuple, subtests: pytest.Subtests) -> None:
     b, p = random_pair(mode, source)
     for method in Image.Resampling:

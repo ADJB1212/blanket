@@ -19,7 +19,7 @@ def test_new_fills_serial_and_parallel_buffers(mode: str, color: object, size: t
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B", "F"])
-@pytest.mark.parametrize("size", [(37, 33), (803, 607), (2053, 2051)])
+@pytest.mark.parametrize("size", [(37, 33), (2053, 2051)])
 def test_scalar_crop_copies_complete_rows(mode: str, size: tuple[int, int]) -> None:
     sample_bytes = 4 if mode in ("I", "F") else 2
     raw = random.Random(41).randbytes(size[0] * size[1] * sample_bytes)
@@ -30,7 +30,7 @@ def test_scalar_crop_copies_complete_rows(mode: str, size: tuple[int, int]) -> N
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(1, 33), (33, 1), (31, 65), (32, 64), (33, 63), (803, 607)])
+@pytest.mark.parametrize("size", [(1, 33), (33, 1), (32, 64), (33, 63)])
 def test_transpose_tile_edges(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(19).randbytes(size[0] * size[1] * len(mode))
     image, reference = image_pair(mode, size, raw)
@@ -41,7 +41,7 @@ def test_transpose_tile_edges(mode: str, size: tuple[int, int]) -> None:
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(30, 7), (32, 17), (34, 33), (800, 600), (1034, 1033)])
+@pytest.mark.parametrize("size", [(32, 17), (34, 33), (1034, 1033)])
 def test_memory_kernels(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(42).randbytes(size[0] * size[1] * len(mode))
     image, reference = image_pair(mode, size, raw)

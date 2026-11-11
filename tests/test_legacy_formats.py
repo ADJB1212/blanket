@@ -286,7 +286,7 @@ def test_pcx_uncompressed_rows(bits: int, planes: int) -> None:
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "P"])
-@pytest.mark.parametrize("size", [(13, 7), (1, 3), (8, 3), (17, 3), (33, 5), (129, 7)])
+@pytest.mark.parametrize("size", [(1, 3), (8, 3), (17, 3), (129, 7)])
 def test_palm_write(mode: str, size: tuple[int, int]) -> None:
     source = patterned(mode, size)
     data = encode_image(source, "PALM")

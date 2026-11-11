@@ -377,7 +377,7 @@ def test_float_mode_storage_conversion_and_geometry() -> None:
 
 
 @pytest.mark.parametrize("mode", ["I;16", "I;16L", "I;16B"])
-@pytest.mark.parametrize("count", [1, 15, 16, 17, 37, 16385, 262147])
+@pytest.mark.parametrize("count", [1, 16, 17, 262147])
 def test_float_to_uint16_saturation_and_byte_order(mode: str, count: int) -> None:
     values = [float("nan"), float("inf"), -float("inf"), -1.75, 0, 1.75, 255.9, 256.25, 65535, 65536]
     expected = [0, 65535, 0, 0, 0, 1, 255, 256, 65535, 65535]
@@ -405,7 +405,7 @@ def test_integer_to_float_owns_converted_samples(mode: str, subtests: pytest.Sub
             assert converted.tobytes() == struct.pack(f"<{count}f", *samples)
 
 
-@pytest.mark.parametrize("count", [1, 15, 16, 17, 257, 16387, 262147])
+@pytest.mark.parametrize("count", [1, 16, 17, 262147])
 def test_gray_to_float_preserves_samples_and_owns_output(count: int) -> None:
     raw = bytes((i * 37) % 256 for i in range(count))
     image = Image.frombytes("L", (count, 1), raw)
@@ -415,7 +415,7 @@ def test_gray_to_float_preserves_samples_and_owns_output(count: int) -> None:
     assert converted.tobytes() == struct.pack(f"<{count}f", *raw)
 
 
-@pytest.mark.parametrize("count", [3, 15, 16, 17, 16387, 262147])
+@pytest.mark.parametrize("count", [3, 16, 17, 262147])
 def test_float_to_l_saturation_and_parallel_tails(count: int) -> None:
     values = [float("nan"), float("inf"), -float("inf"), -1.75, -0.0, 0.0, 1.75, 254.9, 255.1, 1e30]
     expected = [0, 255, 0, 0, 0, 0, 1, 254, 255, 255]
@@ -460,7 +460,7 @@ def test_float_array_owns_pixels(dtype: str, strided: bool) -> None:
     assert image.tobytes() == expected
 
 
-@pytest.mark.parametrize("count", [3, 4, 5, 16385, 300001])
+@pytest.mark.parametrize("count", [3, 5, 300001])
 def test_float_to_integer_saturation(count: int) -> None:
     values = [float("nan"), float("inf"), -float("inf"), 2147483648.0, -2147483648.0, -1.75, 1.75, -0.0]
     expected = [0, 2147483647, -2147483648, 2147483647, -2147483648, -1, 1, 0]

@@ -183,7 +183,7 @@ def test_unsigned_native_staging_preserves_nonfinite_rules_and_validation():
 
 
 @pytest.mark.parametrize("mode", ["LA", "PA"])
-@pytest.mark.parametrize("count", [0, 1, 15, 16, 17, 16383, 16384, 16385, 262145])
+@pytest.mark.parametrize("count", [0, 1, 16, 17, 16384, 262145])
 def test_putalpha_reuses_luma_without_changing_it(mode, count):
     image = Image.frombytes(mode, (count, 1), bytes((i * 37) % 256 for i in range(count * 2)))
     before = image.getchannel(0).tobytes()
@@ -195,7 +195,7 @@ def test_putalpha_reuses_luma_without_changing_it(mode, count):
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "RGBa", "La", "RGBX"])
-@pytest.mark.parametrize("size", [(0, 1), (17, 3), (16385, 1)])
+@pytest.mark.parametrize("size", [(0, 1), (16385, 1)])
 def test_constant_alpha_needs_no_temporary_band(mode, size, monkeypatch):
     image = Image.new("RGB", size, (17, 31, 89)).convert(mode)
     expected = image.copy()

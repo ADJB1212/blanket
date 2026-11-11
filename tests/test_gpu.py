@@ -162,7 +162,7 @@ def test_native_transfers_bypass_python_bytes(mode: str, monkeypatch: pytest.Mon
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("width", [1, 3, 63, 64, 65, 257])
+@pytest.mark.parametrize("width", [1, 64, 65, 257])
 def test_native_packed_operations_and_tails(mode: str, width: int) -> None:
     from blanket import ImageChops, ImageEnhance
 

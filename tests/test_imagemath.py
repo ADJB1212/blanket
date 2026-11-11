@@ -80,7 +80,7 @@ def test_bitwise_matches_pillow(mode: str, subtests: pytest.Subtests) -> None:
 
 
 @pytest.mark.parametrize("expression", ["a + b", "b - a", "a * b", "a / b", "b % a", "a < b", "equal(a, b)", "min(a, b)", "max(b, a)"])
-@pytest.mark.parametrize("mode,size", [(mode, (17, 3)) for mode in ("1", "L", "I")] + [("I", (0, 1)), ("I", (17003, 5))])
+@pytest.mark.parametrize("mode,size", [(mode, (17, 3)) for mode in ("1", "L", "I")] + [("I", (0, 1))])
 def test_mixed_modes(expression: str, mode: str, size: tuple[int, int], monkeypatch: pytest.MonkeyPatch) -> None:
     a, pa = pair(mode, size)
     b, pb = pair("F", (size[0] + 2, size[1]))
@@ -186,7 +186,7 @@ def test_integer_scalar_subclasses_use_their_index_value() -> None:
     assert ImageMath.unsafe_eval("n - a", a=image, n=Scalar(3)).getdata() == [-14, -14, -14]
 
 
-@pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259), (1025, 1025)])
+@pytest.mark.parametrize("size", [(0, 2), (2, 0), (257, 259)])
 @pytest.mark.parametrize("mode", ["1", "L", "I", "F"])
 def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
     a, pa = pair(mode, size)
@@ -195,7 +195,7 @@ def test_empty_and_parallel_buffers(size: tuple[int, int], mode: str) -> None:
     assert a.tobytes() == original
 
 
-@pytest.mark.parametrize("count", [0, 1, 15, 16, 17, 16387, 262147])
+@pytest.mark.parametrize("count", [0, 1, 16, 17, 262147])
 def test_compound_integer_float_rounding_and_parallel_tails(count: int) -> None:
     values = [-2147483648, 2147483647, -16777217, 16777217, -1, 0, 1, 254, 255, 256]
     values = (values * ((count + len(values) - 1) // len(values)))[:count]

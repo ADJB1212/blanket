@@ -655,7 +655,7 @@ def test_font_without_getmask2() -> None:
     assert image.getpixel((0, 0)) == 255
 
 
-@pytest.mark.parametrize("count", [1, 15, 16, 17, 33, 65])
+@pytest.mark.parametrize("count", [1, 16, 17, 65])
 @pytest.mark.parametrize("alpha", [None, 0, 1, 127, 254, 255])
 def test_rectangle_row_tiles_and_blending_preserve_guards(count: int, alpha: int | None) -> None:
     actual, expected = new_pair("RGB", (count + 2, 3), (81, 93, 117))

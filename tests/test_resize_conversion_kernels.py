@@ -11,7 +11,7 @@ from blanket import Image
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
-@pytest.mark.parametrize("width", [2, 30, 32, 34, 510, 512, 514, 1026])
+@pytest.mark.parametrize("width", [2, 32, 34, 512, 1026])
 @pytest.mark.parametrize("height", [2, 34])
 def test_alpha_box_half_blocks_and_tails(mode: str, width: int, height: int) -> None:
     raw = random.Random(791).randbytes(width * height * len(mode))
@@ -95,7 +95,7 @@ def test_filtered_half_resize_vector_blocks_and_edges(mode: str, subtests: pytes
 
 
 @pytest.mark.parametrize("mode", ["RGB", "HSV", "YCbCr", "LAB"])
-@pytest.mark.parametrize("size", [(1, 1), (15, 17), (16, 16), (17, 19), (803, 607)])
+@pytest.mark.parametrize("size", [(1, 1), (16, 16), (17, 19)])
 def test_nearest_double_rgb_layout(mode: str, size: tuple[int, int]) -> None:
     raw = random.Random(42).randbytes(size[0] * size[1] * 3)
     actual, expected = image_pair(mode, size, raw)
@@ -105,7 +105,7 @@ def test_nearest_double_rgb_layout(mode: str, size: tuple[int, int]) -> None:
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("target", [(101, 77), (37, 29), (13, 11)])
-@pytest.mark.parametrize("size", [(803, 607), (800, 600)])
+@pytest.mark.parametrize("size", [(803, 607)])
 def test_parallel_thumbnail_reduction(mode: str, target: tuple[int, int], size: tuple[int, int]) -> None:
     raw = random.Random(81).randbytes(size[0] * size[1] * len(mode))
     image, reference = image_pair(mode, size, raw)

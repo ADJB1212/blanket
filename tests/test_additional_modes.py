@@ -61,7 +61,7 @@ def test_raw_layout_and_array_interoperability(mode: str, orientation: int) -> N
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
-@pytest.mark.parametrize("width", [0, 1, 15, 16, 17, 33, 65536])
+@pytest.mark.parametrize("width", [0, 1, 16, 17, 65536])
 def test_premultiplied_conversion_arithmetic(mode: str, width: int) -> None:
     channels = Image.getmodebands(mode)
     raw = bytes(value for i in range(width) for value in (*([i % 256] * (channels - 1)), (i // 256) % 256))

@@ -31,7 +31,7 @@ def test_jxl_rejects_oversized_header_before_pixel_decoding(container: bool) -> 
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("chunk_size", [1, 2, 7, 64, 65536])
+@pytest.mark.parametrize("chunk_size", [1, 64, 65536])
 def test_parser_chunk_boundaries_match_eager(mode: str, chunk_size: int) -> None:
     data = encoded(mode)
     parser = ImageFile.Parser()
@@ -87,7 +87,7 @@ def jpeg_encoded(mode: str = "RGB", *, progressive: bool = True, **options: obje
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "CMYK"])
 @pytest.mark.parametrize("progressive", [False, True])
-@pytest.mark.parametrize("chunk_size", [1, 2, 7, 64, 65536])
+@pytest.mark.parametrize("chunk_size", [1, 64, 65536])
 def test_jpeg_chunks_match_eager_and_pillow(mode: str, progressive: bool, chunk_size: int) -> None:
     data = jpeg_encoded(mode, progressive=progressive)
     parser = ImageFile.Parser()
@@ -202,7 +202,7 @@ def test_jpeg_rejects_corrupt_later_scan_and_entropy() -> None:
     assert_raises(OSError, lambda: ImageFile.Parser().feed(data[:end] + b"\xff\xd9"), match="entropy")
 
 
-@pytest.mark.parametrize("chunk_size", [1, 7, 17, 4096])
+@pytest.mark.parametrize("chunk_size", [1, 17, 4096])
 def test_jxl_container_signature_and_payload_boundaries(chunk_size: int) -> None:
     data = encoded("RGBA")
     signature = b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a"

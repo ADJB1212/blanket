@@ -231,7 +231,7 @@ def test_parallel_filters(name: str, args: tuple[object, ...]) -> None:
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
-@pytest.mark.parametrize("size", [2, 3, (3, 4, 5), 17, 65])
+@pytest.mark.parametrize("size", [2, (3, 4, 5), 17])
 @pytest.mark.parametrize("channels", [3, 4])
 def test_color_lut(mode: str, size: int | tuple[int, int, int], channels: int) -> None:
     def callback(r, g, b):

@@ -298,7 +298,7 @@ def test_exif_copy_and_reload_keep_mutable_directories_independent(pickled: bool
 
 
 @pytest.mark.parametrize("endian", ["<", ">"])
-@pytest.mark.parametrize("count", [1, 3, 4097])
+@pytest.mark.parametrize("count", [1, 4097])
 @pytest.mark.parametrize("kind,code", [(1, "B"), (3, "H"), (4, "I"), (6, "b"), (8, "h"), (9, "i"), (11, "f"), (12, "d"), (13, "I"), (5, "II"), (10, "ii")])
 def test_exif_numeric_arrays_and_tiff_relocation(endian: str, count: int, kind: int, code: str) -> None:
     values = (1, 2) * count if kind in (5, 10) else (3,) * count

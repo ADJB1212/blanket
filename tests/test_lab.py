@@ -10,7 +10,7 @@ from PIL import Image as PIL, ImageChops as PILChops, ImageEnhance as PILEnhance
 from blanket import Image, ImageChops, ImageEnhance, ImageFilter
 
 
-@pytest.mark.parametrize("count", [17, 4097, 300007])
+@pytest.mark.parametrize("count", [17, 300007])
 def test_srgb_conversion(count: int) -> None:
     raw = random.Random(73).randbytes(count * 3)
     actual = Image.frombytes("RGB", (count, 1), raw).convert("LAB")

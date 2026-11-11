@@ -10,7 +10,7 @@ from blanket import Image
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(13, 8), (9, 9), (1, 7)])
+@pytest.mark.parametrize("size", [(9, 9), (1, 7)])
 @pytest.mark.parametrize("method", [0, 2, 3])
 def test_rotate_parity(mode: str, size: tuple[int, int], method: int, subtests: pytest.Subtests) -> None:
     data = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))

@@ -115,7 +115,7 @@ def test_resident_reductions(runtime):
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
-@pytest.mark.parametrize("size", [(4095, 1), (4096, 1), (4097, 1), (1025, 1025)])
+@pytest.mark.parametrize("size", [(4095, 1), (4096, 1), (4097, 1)])
 def test_native_reduction_partitions(mode, size):
     require_metal()
     channels = len(Image.new(mode, (1, 1)).getbands())

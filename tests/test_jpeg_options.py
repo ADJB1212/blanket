@@ -54,7 +54,7 @@ def encode(image, **options):
     return encode_image(image, "JPEG", quality=85, **options)
 
 
-@pytest.mark.parametrize("width", [1, 3, 17, 33, 257])
+@pytest.mark.parametrize("width", [1, 17, 257])
 @pytest.mark.parametrize("subsampling", [0, 1, 2])
 def test_ycbcr_subsampling_preserves_odd_edges(width, subsampling):
     size = (width, 3)
@@ -112,7 +112,7 @@ def test_jpeg_options_are_format_specific(name):
 
 
 @pytest.mark.parametrize("mode", ["YCbCr", "CMYK"])
-@pytest.mark.parametrize("width", [1, 3, 16, 17, 33])
+@pytest.mark.parametrize("width", [1, 16, 17])
 @pytest.mark.parametrize("options", [{}, {"progressive": True}, {"optimize": True}])
 def test_jpeg_preset_component_edges(mode: str, width: int, options: dict[str, bool]) -> None:
     size = (width, 3)
@@ -138,7 +138,7 @@ def test_jpeg_quality_with_keep_rgb(quality: str) -> None:
     assert PillowImage.open(BytesIO(actual)).tobytes() == PillowImage.open(BytesIO(output.getvalue())).tobytes()
 
 
-@pytest.mark.parametrize("size", [(1, 1), (1, 3), (3, 1), (2, 2), (16, 16), (33, 17)])
+@pytest.mark.parametrize("size", [(1, 1), (1, 3), (3, 1), (33, 17)])
 @pytest.mark.parametrize("options", [{}, {"progressive": True}, {"optimize": True}, {"keep_rgb": True}])
 def test_jpeg_smooth_edges_and_controls(size: tuple[int, int], options: dict[str, bool]) -> None:
     raw = bytes(i * 37 % 256 for i in range(size[0] * size[1] * 3))

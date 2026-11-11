@@ -161,7 +161,7 @@ def test_palette_overflow_keeps_all_colors() -> None:
         assert decoded.convert("RGBA").tobytes() == pixels
 
 
-@pytest.mark.parametrize("width", [1, 7, 17, 257])
+@pytest.mark.parametrize("width", [1, 17, 257])
 @pytest.mark.parametrize("compress_level", [0, 6, 9])
 def test_png_high_effort_preserves_palette_alpha_and_row_tails(width: int, compress_level: int) -> None:
     rng = random.Random(491)

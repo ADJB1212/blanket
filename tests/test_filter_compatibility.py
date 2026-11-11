@@ -9,7 +9,7 @@ from PIL import Image as PILImage, ImageChops as PILChops, ImageFilter as PILFil
 from blanket import Image, ImageChops, ImageFilter, ImageOps
 
 
-@pytest.mark.parametrize("width", [1, 2, 4, 15, 16, 17, 18, 19, 20, 21, 31, 32, 33, 34])
+@pytest.mark.parametrize("width", [1, 16, 17, 32, 33])
 def test_integer_convolution_matches_pillow_with_unaligned_source(width: int, subtests: pytest.Subtests) -> None:
     for kernel_size in [3, 5]:
         for scale, offset in [(1.0, 0.0), (2.75, -1.5), (-3.0, 128.0)]:

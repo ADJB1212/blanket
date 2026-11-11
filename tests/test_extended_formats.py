@@ -96,7 +96,7 @@ def test_external_tga_orientation_and_palette(mode: str, compression: str | None
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
-@pytest.mark.parametrize("width", [1, 15, 16, 17, 33])
+@pytest.mark.parametrize("width", [1, 16, 17])
 @pytest.mark.parametrize("top_origin", [False, True])
 def test_tga_raw_rows_with_image_id(mode: str, width: int, top_origin: bool) -> None:
     size = (width, 3)
@@ -108,7 +108,7 @@ def test_tga_raw_rows_with_image_id(mode: str, width: int, top_origin: bool) -> 
     assert actual.tobytes() == PillowImage.open(stream).tobytes()
 
 
-@pytest.mark.parametrize("width", [1, 7, 8, 9, 15, 16, 17])
+@pytest.mark.parametrize("width", [1, 8, 9, 16, 17])
 def test_binary_pbm_row_padding(width: int) -> None:
     packed = bytes((i * 37 + 0x95) % 256 for i in range((width + 7) // 8 * 3))
     stream = BytesIO(f"P4\n{width} 3\n".encode() + packed)

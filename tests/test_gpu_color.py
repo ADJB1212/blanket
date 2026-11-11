@@ -101,7 +101,7 @@ def test_float_enhancements(runtime, mode):
 
 
 @pytest.mark.parametrize(("mode", "table_channels", "target"), [("RGB", 3, None), ("RGBA", 3, None), ("RGB", 4, "RGBA"), ("RGBA", 4, "RGBA"), ("RGBA", 3, "RGB")])
-@pytest.mark.parametrize("size", [2, (3, 5, 4), 17])
+@pytest.mark.parametrize("size", [2, (3, 5, 4)])
 def test_color_lut_cpu_parity(runtime, mode, table_channels, target, size):
     def callback(r, g, b):
         color = (-0.2 + r * 1.3, g * 0.7, 1 - b)

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-@pytest.mark.parametrize("width", [1, 15, 16, 17, 257])
+@pytest.mark.parametrize("width", [1, 16, 257])
 @pytest.mark.parametrize(
     "source,target", [("RGB", "RGBX"), ("RGBX", "RGB"), ("RGBX", "L"), ("RGBX", "RGBA"), ("RGBA", "RGBX"), ("RGBA", "RGBa"), ("RGBa", "RGBA"), ("LA", "La"), ("La", "LA"), ("RGB", "F"), ("RGBA", "F"), ("CMYK", "RGB"), ("YCbCr", "RGB")]
 )

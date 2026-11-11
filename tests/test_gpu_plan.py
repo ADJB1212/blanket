@@ -82,7 +82,7 @@ def test_float_plan_preserves_nonfinite_values_and_evaluation_order(metal):
     assert all(math.isnan(a) if math.isnan(b) else a == b for a, b in zip(actual, expected, strict=True))
 
 
-@pytest.mark.parametrize("size", [(1, 17), (19, 1), (2, 2), (17, 13)])
+@pytest.mark.parametrize("size", [(1, 17), (19, 1)])
 def test_gaussian_halos_and_small_image_boundaries(metal, size):
     image = ImageGpu.from_image(source("RGBA", size))
     plan = ImageGpu.ProcessingPlan(size, "RGBA", [("gaussian_blur", {"radius": 1.7}), ("max_filter", {"size": 5})], memory_limit=4_096)

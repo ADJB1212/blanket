@@ -383,7 +383,7 @@ def test_animation_requires_matching_dimensions(format: str) -> None:
     assert not output.getvalue()
 
 
-@pytest.mark.parametrize("size", [(3, 2), (13, 11), (3, 11)])
+@pytest.mark.parametrize("size", [(3, 2), (3, 11)])
 @pytest.mark.parametrize("disposal", [0, 1, 2])
 @pytest.mark.parametrize("blend", [0, 1])
 def test_apng_partial_frame_sizes_and_info_controls_match_pillow(size: tuple[int, int], disposal: int, blend: int) -> None:

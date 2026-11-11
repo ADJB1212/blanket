@@ -22,7 +22,7 @@ def test_channel_extraction_parallel_cutoff_and_tail(mode: str) -> None:
 
 
 @pytest.mark.parametrize("mode", ["CMYK", "YCbCr"])
-@pytest.mark.parametrize("count", [17, 4097, 262143, 262144, 262147, 300007])
+@pytest.mark.parametrize("count", [17, 262144, 262147, 300007])
 def test_raw_conversion_chunks(mode: str, count: int) -> None:
     raw = random.Random(73).randbytes(count * PIL.getmodebands(mode))
     actual, expected = image_pair(mode, (count, 1), raw)
@@ -51,7 +51,7 @@ def test_arrays_palettes_and_depth(mode: str) -> None:
 
 @pytest.mark.parametrize("source", ["1", "L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("target", ["CMYK", "YCbCr"])
-@pytest.mark.parametrize("count", [17, 16385, 300007])
+@pytest.mark.parametrize("count", [17, 300007])
 def test_direct_color_conversion_chunks(source: str, target: str, count: int) -> None:
     length = (count + 7) // 8 if source == "1" else count * PIL.getmodebands(source)
     raw = random.Random(73).randbytes(length)

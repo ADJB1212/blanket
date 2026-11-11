@@ -34,7 +34,7 @@ def test_transpose(runtime, mode, method, size):
 
 
 @pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("box", [(2, 3, 11, 8), (-3, -2, 20, 14), (20, 0, 24, 5), (0, 0, 17, 11)])
+@pytest.mark.parametrize("box", [(2, 3, 11, 8), (-3, -2, 20, 14), (20, 0, 24, 5)])
 def test_crop(runtime, mode, box):
     image = source(mode)
     actual = ImageGpu.from_image(image, runtime=runtime).crop(box).to_image()

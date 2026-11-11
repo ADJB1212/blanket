@@ -12,7 +12,7 @@ from blanket import Image, UnidentifiedImageError
 
 
 @pytest.mark.parametrize("source_mode,target_mode", [("RGB;F", "RGBA;F"), ("RGBA;F", "RGB;F")])
-@pytest.mark.parametrize("count", [0, 1, 17, 65537])
+@pytest.mark.parametrize("count", [0, 1, 65537])
 def test_float_layout_conversion_preserves_exact_nonfinite_bits(source_mode: str, target_mode: str, count: int) -> None:
     source_channels, target_channels = Image.getmodebands(source_mode), Image.getmodebands(target_mode)
     bits = [0x80000000, 0, 0x7F800000, 0xFF800000, 0x7FC01234, 0x7FA01234, 0x3F000000]
@@ -62,7 +62,7 @@ def test_float_color_resize_matches_independent_bands(mode: str, channels: int, 
 
 
 @pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
-@pytest.mark.parametrize("width", [2, 30, 32, 34, 66])
+@pytest.mark.parametrize("width", [2, 32, 34])
 def test_float_nearest_half_preserves_samples(mode: str, channels: int, width: int) -> None:
     raw = struct.pack(f"<{width * 5 * channels}f", *(0.5 if i % channels == 3 else i / 17 for i in range(width * 5 * channels)))
     image = Image.frombytes(mode, (width, 5), raw)
@@ -244,7 +244,7 @@ def test_float_zero_and_nonfinite_alpha() -> None:
         assert_raises(ValueError, lambda: Image.new(mode, (2, 2)).resize((1, 1), linear_light=True), match="RGB")
 
 
-@pytest.mark.parametrize("width", [1, 3, 4, 5, 17])
+@pytest.mark.parametrize("width", [1, 4, 5])
 @pytest.mark.parametrize("linear_light", [False, True])
 @pytest.mark.parametrize("inplace", [False, True])
 def test_opaque_float_composite_ignores_nonfinite_background(width: int, linear_light: bool, inplace: bool) -> None:

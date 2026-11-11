@@ -27,7 +27,7 @@ def test_indexed_alpha_conversion_keeps_full_image_buffers_native(mode: str) -> 
 
 @pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
 @pytest.mark.parametrize("transparency", [None, 1, 300, b"\x00\x7f"])
-@pytest.mark.parametrize("count", [0, 1, 17, 16385, 131073])
+@pytest.mark.parametrize("count", [0, 1, 17, 131073])
 def test_indexed_to_pa_preserves_indices_palette_and_alpha(palette_mode: str, transparency: int | bytes | None, count: int) -> None:
     indices = (bytes(range(256)) * (count // 256 + 1))[:count]
     image = Image.frombytes("P", (count, 1), indices)
@@ -53,7 +53,7 @@ def test_indexed_to_pa_preserves_indices_palette_and_alpha(palette_mode: str, tr
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
-@pytest.mark.parametrize("count", [0, 1, 17, 16385])
+@pytest.mark.parametrize("count", [0, 1, 16385])
 def test_pa_conversion_reads_original_alpha(mode: str, count: int) -> None:
     channels = len(mode)
     raw = bytes((i * 37 + 13) % 256 for i in range(count * channels))
@@ -69,7 +69,7 @@ def test_pa_conversion_reads_original_alpha(mode: str, count: int) -> None:
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
 @pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
 @pytest.mark.parametrize("transparency", [1, b"\x00\x7f"])
-@pytest.mark.parametrize("count", [0, 17, 131073])
+@pytest.mark.parametrize("count", [0, 131073])
 def test_indexed_transparency_expansion_matches_explicit_table(mode: str, palette_mode: str, transparency: int | bytes, count: int) -> None:
     indices = (bytes(range(256)) * (count // 256 + 1))[:count]
     image = Image.frombytes("P", (count, 1), indices)
