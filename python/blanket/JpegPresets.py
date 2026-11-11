@@ -6,6 +6,8 @@ from typing import TypedDict
 
 
 class Preset(TypedDict):
+    """Describe JPEG chroma subsampling and quantization tables for a preset."""
+
     subsampling: int
     quantization: list[list[int]]
 

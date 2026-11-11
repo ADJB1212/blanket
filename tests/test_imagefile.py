@@ -308,6 +308,26 @@ def test_png_writer_short_writes_and_sink_failures() -> None:
     assert_raises(RuntimeError, lambda: ImageFile.PngWriter(BrokenSink(), "L", (3, 2)), match="sink failure")
 
 
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+@pytest.mark.parametrize("owned", [False, True])
+def test_png_writer_initialization_failure_respects_stream_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException], owned: bool) -> None:
+    opened = []
+
+    class BrokenWriter:
+        validate = staticmethod(ImageFile.PngStreamWriter.validate)
+
+        def __init__(self, stream, *_args):
+            opened.append(stream)
+            raise error_type("initialization failed")
+
+    monkeypatch.setattr(ImageFile, "PngStreamWriter", BrokenWriter)
+    output = tmp_path / "rows.png" if owned else BytesIO()
+    with pytest.raises(error_type, match="initialization failed"):
+        ImageFile.PngWriter(output, "L", (3, 2))
+    assert len(opened) == 1
+    assert opened[0].closed is owned
+
+
 def test_png_writer_context_preserves_exception_and_borrowed_stream() -> None:
     output = BytesIO()
     with pytest.raises(RuntimeError, match="producer failed"), ImageFile.PngWriter(output, "L", (3, 2)):

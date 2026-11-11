@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from threading import RLock
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from . import _blanket, _gpu_cuda
 from .ImageGpu import _dispatch_threads
@@ -22,8 +22,8 @@ class _Cache:
         self.lock = RLock()
         self.image_limit = 128 * 1024 * 1024
         self.control_limit = 16 * 1024 * 1024
-        self.scratch: list[Any] = []
-        self.controls: OrderedDict[tuple[str, bytes], Any] = OrderedDict()
+        self.scratch: list[ndarray] = []
+        self.controls: OrderedDict[tuple[str, bytes], _gpu_cuda.CudaImage] = OrderedDict()
         self.scratch_bytes = 0
         self.control_bytes = 0
 
@@ -56,7 +56,7 @@ class _Cache:
         memory = cp.cuda.MemoryPointer(cp.cuda.Memory(size), 0)
         return cp.ndarray((size,), dtype=cp.uint8, memptr=memory)
 
-    def put(self, arrays: tuple[Any, ...]) -> None:
+    def put(self, arrays: tuple[ndarray, ...]) -> None:
         """Retain completed scratch buffers while respecting byte and entry limits."""
         with self.lock:
             for array in arrays:
@@ -117,7 +117,7 @@ def cache(device: int) -> _Cache:
 class _ScratchLease:
     """Hold plan scratch buffers until the associated completion event finishes."""
 
-    def __init__(self, state: _Cache, scratch: tuple[Any, ...]) -> None:
+    def __init__(self, state: _Cache, scratch: tuple[ndarray, ...]) -> None:
         """Retain scratch buffers and their cache until completion tracking releases them."""
         self.state, self.scratch = state, scratch
 
@@ -191,7 +191,7 @@ class CudaPlan:
         steps, tile, halo, scratch_bytes = self._info
         return steps, tile, halo, scratch_bytes // 2 * self.scratch_count
 
-    def run_batch(self, images: list[Any]) -> list[Any]:
+    def run_batch(self, images: list[_gpu_cuda.CudaImage]) -> list[_gpu_cuda.CudaImage]:
         """Submit resident CUDA inputs through the prepared tile schedule.
 
         Args:
@@ -214,7 +214,7 @@ class CudaPlan:
         cp = _gpu_cuda.cupy()
         with cp.cuda.Device(self.device):
             stream = cp.cuda.get_current_stream()
-            scratch: tuple[Any, ...] | None = None
+            scratch: tuple[ndarray, ...] | None = None
             try:
                 for image in [*images, self.parameters, *self.controls]:
                     stream.wait_event(image.event)

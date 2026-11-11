@@ -8,12 +8,19 @@ from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from functools import lru_cache
 from threading import local
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import TracebackType
-    from typing import Any, Self
+    from typing import Self
+
+    from cupy import cuda
+    from torch import Tensor
+    from torch.mps.event import Event as MpsEvent
+
+    from ._blanket import MetalImage
+    from ._gpu_cuda import CudaImage
 
 
 @lru_cache(maxsize=1)
@@ -60,7 +67,7 @@ class Event:
     work in a compatible execution context.
     """
 
-    def __init__(self, resource: object, runtime: str, device: str) -> None:
+    def __init__(self, resource: MetalImage | Tensor | CudaImage, runtime: str, device: str) -> None:
         """Retain a backend resource and capture its completion point.
 
         Args:
@@ -71,10 +78,10 @@ class Event:
         PyTorch MPS records an event on the current stream; other runtimes use
         the retained resource's existing completion point.
         """
-        self._resource: Any = resource
+        self._resource = resource
         self.runtime = runtime
         self.device = device
-        self._event: Any = None
+        self._event: MpsEvent | None = None
         if runtime == "torch":
             from .ImageGpu import _torch
 
@@ -88,13 +95,14 @@ class Event:
             True once the retained GPU work has completed, otherwise False.
         """
         if self.runtime == "native":
-            return self._resource.done()
+            return cast("MetalImage", self._resource).done()
         if self.runtime == "torch":
-            return self._event.query()
+            return cast("MpsEvent", self._event).query()
         from ._gpu_cuda import cupy
 
-        with cupy().cuda.Device(self._resource.device):
-            return self._resource.event.done
+        resource = cast("CudaImage", self._resource)
+        with cupy().cuda.Device(resource.device):
+            return resource.event.done
 
     def wait(self) -> None:
         """Block the CPU until this completion point finishes.
@@ -103,9 +111,9 @@ class Event:
             None. Pixels remain resident; backend execution errors propagate.
         """
         if self.runtime == "torch":
-            self._event.synchronize()
+            cast("MpsEvent", self._event).synchronize()
         else:
-            self._resource.synchronize()
+            cast("MetalImage | CudaImage", self._resource).synchronize()
 
 
 class Stream:
@@ -134,7 +142,7 @@ class Stream:
         _require(backend, device)
         self.backend = backend
         self.device = device
-        self._stream: Any = None
+        self._stream: cuda.Stream | None = None
         self._local = local()
         if backend == "cuda":
             from ._gpu_cuda import cupy
@@ -147,16 +155,12 @@ class Stream:
         if self._stream is not None:
             from ._gpu_cuda import cupy
 
-            stack = ExitStack()
-            try:
+            with ExitStack() as stack:
                 stack.enter_context(cupy().cuda.Device(self.device))
                 stack.enter_context(self._stream)
-            except BaseException:
-                stack.close()
-                raise
-            if not hasattr(self._local, "stacks"):
-                self._local.stacks = []
-            self._local.stacks.append(stack)
+                if not hasattr(self._local, "stacks"):
+                    self._local.stacks = []
+                self._local.stacks.append(stack.pop_all())
         return self
 
     def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None) -> None:
@@ -185,7 +189,7 @@ class Stream:
             from ._gpu_cuda import cupy
 
             with cupy().cuda.Device(self.device):
-                self._stream.wait_event(event._resource.event)
+                self._stream.wait_event(cast("CudaImage", event._resource).event)
         # Native images are already committed to the same ordered Metal queue.
 
     def synchronize(self) -> None:

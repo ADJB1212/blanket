@@ -80,9 +80,11 @@ class Stat:
 
     @h.setter
     def h(self, histogram: list[int]) -> None:
+        """Retain a mutable histogram for subsequent uncached calculations."""
         self._histogram = histogram
 
     def __getstate__(self) -> dict[str, object]:
+        """Serialize native histogram storage as a list for pickling."""
         state = self.__dict__.copy()
         histogram = self._histogram
         state["_histogram"] = histogram if isinstance(histogram, list) else histogram.tolist()

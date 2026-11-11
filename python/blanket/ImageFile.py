@@ -125,14 +125,10 @@ class PngWriter:
         if bit_depth not in (8, 10, 12, 16) or not 0 <= compress_level <= 9:
             raise ValueError("invalid bit depth or compression level")
         PngStreamWriter.validate(mode, size, bit_depth, compress_level)
-        self._stack = ExitStack()
-        self._fp = self._stack.enter_context(open(fp, "wb")) if not hasattr(fp, "write") else fp  # noqa: SIM115
-        self._writer: PngStreamWriter | None = None
-        try:
-            self._writer = PngStreamWriter(self._fp, mode, size, bit_depth, compress_level)
-        except Exception:
-            self._stack.close()
-            raise
+        with ExitStack() as stack:
+            self._fp = stack.enter_context(open(fp, "wb")) if not hasattr(fp, "write") else fp
+            self._writer: PngStreamWriter | None = PngStreamWriter(self._fp, mode, size, bit_depth, compress_level)
+            self._stack = stack.pop_all()
 
     def write(self, data: bytes | bytearray | memoryview) -> None:
         """Encode one or more complete rows, without exceeding the image height.

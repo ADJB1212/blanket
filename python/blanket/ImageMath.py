@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
-    from typing import Any
 
 from . import Image
 from ._blanket import math_apply
@@ -187,9 +186,9 @@ def _convert(value: _Operand, mode: str) -> _Operand:
     return _Operand(value.im.convert(mode))
 
 
-def _context(operands: dict[str, Any]) -> dict[str, Any]:
+def _context(operands: dict[str, object]) -> dict[str, object]:
     """Build the evaluation environment with operand wrappers and math helpers."""
-    context: dict[str, Any] = {
+    context: dict[str, object] = {
         "int": lambda value: _convert(value, "I"),
         "float": lambda value: _convert(value, "F"),
         "convert": _convert,
@@ -213,7 +212,7 @@ def _compile_expression(expression: str) -> CodeType:
     return compile(expression, "<ImageMath>", "eval")
 
 
-def lambda_eval(expression: Callable[[dict[str, Any]], object], **operands: object) -> object:
+def lambda_eval(expression: Callable[[dict[str, object]], object], **operands: object) -> object:
     """Evaluate a callable receiving a dictionary of images, values, and helpers.
 
     Helpers are int, float, convert, min, max, equal, and notequal. Image

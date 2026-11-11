@@ -159,12 +159,16 @@ class PngImageFile(PluginImage):
 
 
 class Disposal(IntEnum):
+    """Specify how to clear an APNG frame before rendering the next frame."""
+
     OP_NONE = 0
     OP_BACKGROUND = 1
     OP_PREVIOUS = 2
 
 
 class Blend(IntEnum):
+    """Specify how to combine an APNG frame with the existing canvas."""
+
     OP_SOURCE = 0
     OP_OVER = 1
 

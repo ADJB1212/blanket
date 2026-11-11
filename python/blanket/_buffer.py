@@ -14,6 +14,8 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class BufferMap:
+    """Retain external pixel storage and the layout needed for native reads."""
+
     data: memoryview
     mode: str
     size: tuple[int, int]

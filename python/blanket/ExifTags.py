@@ -10,6 +10,8 @@ from enum import IntEnum
 
 
 class Base(IntEnum):
+    """Identify common image and capture metadata tags by their EXIF numbers."""
+
     ImageWidth = 0x0100
     ImageLength = 0x0101
     BitsPerSample = 0x0102
@@ -58,6 +60,8 @@ class Base(IntEnum):
 
 
 class IFD(IntEnum):
+    """Identify nested EXIF directories accepted by Image.Exif.get_ifd."""
+
     Exif = 0x8769
     GPSInfo = 0x8825
     MakerNote = 0x927C

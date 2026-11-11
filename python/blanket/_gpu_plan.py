@@ -5,14 +5,16 @@ from __future__ import annotations
 __lazy_modules__ = {"collections.abc", "operator"}
 
 from operator import index
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from . import _blanket
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from typing import Any
 
+    from ._blanket import MetalPlan
+    from ._gpu_cuda import CudaImage
+    from ._gpu_cuda_plan import CudaPlan
     from ._gpu_unsigned import GpuUnsignedImage
     from .ImageGpu import GpuImage
 
@@ -51,7 +53,7 @@ class ProcessingPlan:
         >>> result = plan.run(resident_image)
     """
 
-    def __init__(self, size: tuple[int, int], mode: str, operations: Sequence[tuple[str, dict[str, Any]]], *, memory_limit: int = 64 * 1024 * 1024, bit_depth: int | None = None, backend: str = "metal", device: int = 0) -> None:
+    def __init__(self, size: tuple[int, int], mode: str, operations: Sequence[tuple[str, dict[str, object]]], *, memory_limit: int = 64 * 1024 * 1024, bit_depth: int | None = None, backend: str = "metal", device: int = 0) -> None:
         """Validate and prepare a resident processing plan.
 
         Args:
@@ -102,7 +104,7 @@ class ProcessingPlan:
             template = getattr(template, name)(**arguments)
         _require(backend, device)
         channels, floating = _MODES[working_mode]
-        self._resource: Any
+        self._resource: MetalPlan | CudaPlan | None
         if backend == "cuda":
             from ._gpu_cuda_plan import CudaPlan
 
@@ -117,10 +119,11 @@ class ProcessingPlan:
         self._working_mode = working_mode
         self.memory_limit = memory_limit
 
-    def _check(self) -> None:
-        """Raise ValueError if this processing plan has been closed."""
+    def _check(self) -> MetalPlan | CudaPlan:
+        """Return this plan's resource, raising ValueError if it has been closed."""
         if self._resource is None:
             raise ValueError("GPU plan is closed")
+        return self._resource
 
     def info(self) -> dict[str, object]:
         """Describe the prepared operations and bounded working geometry.
@@ -130,8 +133,8 @@ class ProcessingPlan:
             height), halo (horizontal, vertical), and scratch_bytes (total
             intermediate storage). Sizes and halos are measured in pixels.
         """
-        self._check()
-        steps, tile, halo, scratch_bytes = self._resource.info()
+        resource = self._check()
+        steps, tile, halo, scratch_bytes = resource.info()
         return {"steps": steps, "tile_size": tuple(tile), "halo": tuple(halo), "scratch_bytes": scratch_bytes}
 
     def run(self, image: GpuImage | GpuUnsignedImage) -> GpuImage | GpuUnsignedImage:
@@ -166,7 +169,7 @@ class ProcessingPlan:
         from ._gpu_unsigned import GpuUnsignedImage
         from .ImageGpu import GpuImage
 
-        self._check()
+        plan = self._check()
         images = list(images)
         if len(images) > 1024:
             raise ValueError("GPU plan batches support at most 1024 images")
@@ -180,7 +183,8 @@ class ProcessingPlan:
             if image.runtime != self.runtime or image.device != self.device or image.size != self.size or image.mode != self.mode or depth != self.bit_depth:
                 raise ValueError("GPU plan input must match size, mode, sample depth, runtime, and device")
             working.append(raster)
-        resources = self._resource.run_batch([image._resource for image in working])
+        inputs = [image._resource for image in working]
+        resources = cast("CudaPlan", plan).run_batch(cast("list[CudaImage]", inputs)) if self.runtime == "cuda" else cast("MetalPlan", plan).run_batch(inputs)
         results: list[GpuImage | GpuUnsignedImage] = []
         for resource, image in zip(resources, working, strict=True):
             result = GpuImage(resource, self.size, self._working_mode, self.runtime, image.info.copy(), unified_memory=image.unified_memory)

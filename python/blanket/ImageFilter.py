@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable, Iterator, Sequence
-    from typing import Any, Protocol, Self, SupportsInt
+    from typing import Protocol, Self, SupportsInt
 
     from ._blanket import _Image
 
@@ -396,7 +396,7 @@ class BoxBlur(MultibandFilter):
             result = image.filter(ImageFilter.BoxBlur(radius=2))
             ```
         """
-        xy: Any = radius if isinstance(radius, (tuple, list)) else (radius, radius)
+        xy = radius if isinstance(radius, (tuple, list)) else (cast("float", radius),) * 2
         if not all(value >= 0 for value in xy):
             raise ValueError("radius must be >= 0")
         if any(value >= 2**31 for value in xy):

@@ -3292,7 +3292,7 @@ def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Wri
     if hasattr(fp, "write"):
         raise ValueError("unknown file extension; specify format")
     filename = os.fspath(cast("str | bytes | os.PathLike[str] | os.PathLike[bytes]", fp))
-    extension = os.path.splitext(os.fsdecode(filename))[1].lower()
+    extension = Path(os.fsdecode(filename)).suffix.lower()
     try:
         return _EXTENSIONS[extension]
     except KeyError as error:

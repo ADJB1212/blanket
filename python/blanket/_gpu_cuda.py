@@ -17,12 +17,12 @@ from . import _blanket
 if TYPE_CHECKING:
     from collections.abc import Callable
     from types import ModuleType
-    from typing import Any
 
+    from cupy import cuda, ndarray
     from torch import Tensor
 
 
-_PENDING: dict[tuple[int, int], deque[tuple[Any, tuple[object, ...]]]] = {}
+_PENDING: dict[tuple[int, int], deque[tuple[cuda.Event, tuple[object, ...]]]] = {}
 _PENDING_LOCK = RLock()
 _PENDING_REGISTERED = False
 
@@ -133,7 +133,7 @@ class CudaImage:
     resource. Consumers order streams through events before reading its pixels.
     """
 
-    def __init__(self, array: object, *, owners: tuple[object, ...] = (), completion: object | None = None) -> None:
+    def __init__(self, array: ndarray, *, owners: tuple[object, ...] = (), completion: cuda.Event | None = None) -> None:
         """Retain CUDA storage and its completion dependencies.
 
         Args:
@@ -144,11 +144,11 @@ class CudaImage:
         """
         global _PENDING_REGISTERED
         cp = cupy()
-        self.array: Any = array
+        self.array = array
         self.device = int(self.array.device.id)
         with cp.cuda.Device(self.device):
-            self.stream: Any = cp.cuda.get_current_stream()
-            self.event: Any = cp.cuda.Event() if completion is None else completion
+            self.stream: cuda.Stream = cp.cuda.get_current_stream()
+            self.event: cuda.Event = cp.cuda.Event() if completion is None else completion
             if completion is None:
                 self.event.record(self.stream)
             _collect_pending(self.device, int(self.stream.ptr))
