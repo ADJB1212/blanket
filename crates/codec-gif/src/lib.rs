@@ -44,15 +44,14 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
         return Ok(Sequence { frames: vec![decode_first_frame(data)?], ..Sequence::default() });
     }
     let mut options = gif::DecodeOptions::new();
-    options.set_color_output(gif::ColorOutput::RGBA);
     options.check_frame_consistency(true);
     options.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap()));
     let mut decoder = options.read_info(std::io::Cursor::new(data)).map_err(|e| e.to_string())?;
     let (width, height) = (u32::from(decoder.width()), u32::from(decoder.height()));
     blanket_codec_common::validate_dimensions(width, height)?;
-    let background =
-        decoder.bg_color().and_then(|i| decoder.global_palette()?.get(i * 3..i * 3 + 3)).map(|p| [p[0], p[1], p[2], 255]).unwrap_or([0; 4]);
     let palette = decoder.global_palette().map(<[u8]>::to_vec);
+    let background_index = decoder.bg_color();
+    let background = background_index.and_then(|i| palette.as_deref()?.get(i * 3..i * 3 + 3)).map_or([0; 4], |p| [p[0], p[1], p[2], 255]);
     let mut canvas = blanket_core::raster::alloc_pixels(width as usize * height as usize * 4).map_err(|e| e.to_string())?;
     let mut sequence = Sequence::default();
     let mut total = 0;
@@ -65,21 +64,15 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
         if x + w > width || y + h > height {
             return Err("GIF frame outside canvas".into());
         }
+        let entries = frame.palette.as_deref().or(palette.as_deref()).ok_or("missing GIF palette")?;
         let clear = if let Some(index) = frame.transparent {
-            frame
-                .palette
-                .as_deref()
-                .or(palette.as_deref())
-                .and_then(|p| p.get(usize::from(index) * 3..usize::from(index) * 3 + 3))
-                .map_or([0; 4], |p| [p[0], p[1], p[2], 0])
+            entries.get(usize::from(index) * 3..usize::from(index) * 3 + 3).map_or([0; 4], |p| [p[0], p[1], p[2], 0])
         } else {
             background
         };
         if frame_index == 0 {
             transparent_background = frame.transparent.is_some();
-            for pixel in canvas.as_chunks_mut::<4>().0 {
-                *pixel = clear;
-            }
+            canvas.as_chunks_mut::<4>().0.fill(clear);
         }
         let terminal = target == Some(frame_index);
         if !terminal && frame.dispose == gif::DisposalMethod::Previous && w != 0 {
@@ -89,14 +82,27 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
                 previous.extend_from_slice(&canvas[start..start + w as usize * 4]);
             }
         }
+        let mut colors = [[0; 4]; 256];
+        for (dst, &[r, g, b]) in colors.iter_mut().zip(entries.as_chunks::<3>().0) {
+            *dst = [r, g, b, 255];
+        }
+        if let Some(index) = frame.transparent {
+            colors[usize::from(index)][3] = 0;
+        }
         for row in 0..h as usize {
-            let src = row * w as usize * 4;
-            let dst = ((y as usize + row) * width as usize + x as usize) * 4;
-            blanket_core::pixels::paste_nontransparent_rgba(&mut canvas[dst..dst + w as usize * 4], &frame.buffer[src..src + w as usize * 4]);
+            let src = row * w as usize;
+            let dst = (y as usize + row) * width as usize + x as usize;
+            let pixels = &mut canvas.as_chunks_mut::<4>().0[dst..dst + w as usize];
+            for (pixel, &index) in pixels.iter_mut().zip(&frame.buffer[src..src + w as usize]) {
+                let color = colors[usize::from(index)];
+                if color[3] != 0 {
+                    *pixel = color;
+                }
+            }
         }
         if target.is_none_or(|target| target == frame_index) {
             let image = if frame_index == 0 {
-                decode_gif(data)?
+                indexed_image(width, height, frame, Some(entries), background_index.unwrap_or(0) as u8)?
             } else if transparent_background {
                 let pixels = if terminal { std::mem::take(&mut canvas) } else { canvas.clone() };
                 Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
@@ -121,10 +127,8 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             }
         } else if frame.dispose == gif::DisposalMethod::Background {
             for row in y..y + h {
-                for col in x..x + w {
-                    let dst = (row as usize * width as usize + col as usize) * 4;
-                    canvas[dst..dst + 4].copy_from_slice(&clear);
-                }
+                let start = row as usize * width as usize + x as usize;
+                canvas.as_chunks_mut::<4>().0[start..start + w as usize].fill(clear);
             }
         }
     }
@@ -180,9 +184,14 @@ fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String
     if u32::from(frame.left) + u32::from(frame.width) > width || u32::from(frame.top) + u32::from(frame.height) > height {
         return Err("GIF frame outside canvas".into());
     }
-    let palette = frame.palette.as_ref().or(global_palette.as_ref()).cloned();
-    let mut pixels = blanket_core::raster::alloc_pixels(width as usize * height as usize).map_err(|error| error.to_string())?;
-    pixels.fill(frame.transparent.unwrap_or(background));
+    let palette = frame.palette.as_deref().or(global_palette.as_deref());
+    let image = indexed_image(width, height, frame, palette, background)?;
+    Ok(blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 })
+}
+
+fn indexed_image(width: u32, height: u32, frame: &gif::Frame<'_>, palette: Option<&[u8]>, background: u8) -> Result<Image, String> {
+    let mut pixels = blanket_core::buffers::reserved(width as usize * height as usize).map_err(|error| error.to_string())?;
+    pixels.resize(width as usize * height as usize, frame.transparent.unwrap_or(background));
     for row in 0..usize::from(frame.height) {
         let offset = row * usize::from(frame.width);
         let source = &frame.buffer[offset..offset + usize::from(frame.width)];
@@ -193,9 +202,9 @@ fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String
     if let Some(palette) = palette
         && palette.as_chunks::<3>().0.iter().enumerate().any(|(index, color)| *color != [index as u8; 3])
     {
-        image.set_palette_data(Some((PixelMode::Rgb, palette))).map_err(|error| error.to_string())?;
+        image.set_palette_data(Some((PixelMode::Rgb, palette.to_vec()))).map_err(|error| error.to_string())?;
     }
-    Ok(blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 })
+    Ok(image)
 }
 
 pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
