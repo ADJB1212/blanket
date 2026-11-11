@@ -209,6 +209,9 @@ def putchunk(fp: BinaryIO, cid: bytes, *data: bytes) -> None:
 class iTXt(str):
     """International text with its language and translated keyword."""
 
+    lang: str
+    tkey: str
+
     def __new__(cls, text: str, lang: str = "", tkey: str = "") -> Self:
         """Create a text value carrying a language tag and translated keyword."""
         result = super().__new__(cls, text)

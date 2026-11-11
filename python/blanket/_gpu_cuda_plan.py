@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from threading import RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from . import _blanket, _gpu_cuda
 from .ImageGpu import _dispatch_threads
+
+if TYPE_CHECKING:
+    from cupy import ndarray
 
 
 class _Cache:
@@ -41,7 +44,7 @@ class _Cache:
             self.controls.clear()
             self.scratch_bytes = self.control_bytes = 0
 
-    def take(self, size: int) -> object:
+    def take(self, size: int) -> ndarray:
         """Remove an exact-size scratch buffer from the cache or allocate new storage."""
         with self.lock:
             for i, array in enumerate(self.scratch):

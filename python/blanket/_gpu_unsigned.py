@@ -4,7 +4,7 @@ from __future__ import annotations
 
 __lazy_modules__ = {"torch", "collections.abc", "concurrent.futures"}
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from . import Image, _blanket
 
@@ -14,6 +14,7 @@ if TYPE_CHECKING:
 
     from torch import Tensor
 
+    from ._blanket import MetalImage
     from ._gpu_async import Event
     from .ImageGpu import GpuImage, GpuReduction
 
@@ -52,7 +53,7 @@ class GpuUnsignedImage:
         return self._image.size
 
     @property
-    def info(self) -> dict[str, object]:
+    def info(self) -> dict[object, object]:
         """Mutable metadata dictionary associated with this image handle."""
         return self._image.info
 
@@ -87,7 +88,7 @@ class GpuUnsignedImage:
         """
         if self.runtime == "native":
             self._image._check()
-            result = Image.Image(self._image._resource.download_unsigned_image(self.mode, self.bit_depth))
+            result = Image.Image(cast("MetalImage", self._image._resource).download_unsigned_image(self.mode, self.bit_depth))
             result.info.update(self.info)
             return result
         working = self._image.to_image()

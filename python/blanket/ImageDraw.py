@@ -11,7 +11,7 @@ __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font"
 
 from math import atan2, ceil, cos, degrees, floor, isfinite, pi, radians, sin
 from operator import index
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from . import Image
 from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_image_mask, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
@@ -21,11 +21,43 @@ from .ImageFont import load_default
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from typing import Protocol
 
     from .ImagePath import Path
 
     Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
     Color = int | float | str | tuple[int, ...] | None
+
+    class _Mask(Protocol):
+        size: tuple[int, int]
+
+        def __bytes__(self) -> bytes: ...
+
+    class _FontMetrics(Protocol):
+        def getlength(self, text: str, *, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> float: ...
+
+        def getbbox(self, text: str, *, anchor: str | None = None, stroke_width: float = 0, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> tuple[float, float, float, float]: ...
+
+    class _MaskFont(_FontMetrics, Protocol):
+        def getmask(self, text: str, mode: str, /, *, stroke_width: float = 0, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> _Mask: ...
+
+    class _OffsetFont(_FontMetrics, Protocol):
+        def getmask2(
+            self,
+            text: str,
+            mode: str,
+            /,
+            *,
+            anchor: str | None = None,
+            stroke_width: float = 0,
+            start: tuple[float, float] | None = None,
+            stroke_filled: bool = True,
+            direction: str | None = None,
+            features: Sequence[str] | None = None,
+            language: str | None = None,
+        ) -> tuple[_Mask, tuple[float, float]]: ...
+
+    _Font = _MaskFont | _OffsetFont
 
 __all__ = ["Draw", "ImageDraw", "Outline", "floodfill"]
 
@@ -154,10 +186,10 @@ class Outline:
             ```
         """
         if len(matrix) != 6:
-            raise TypeError("transform matrix must contain six values")
+            raise TypeError(f"transform matrix must contain six values, got {matrix!r}")
         a, b, c, d, e, f = (float(value) for value in matrix)
         if not all(isfinite(value) for value in (a, b, c, d, e, f)):
-            raise ValueError("transform matrix must be finite")
+            raise ValueError(f"transform matrix must be finite, got {matrix!r}")
 
         def point(x: float, y: float) -> tuple[int, int]:
             """Apply the affine matrix to coordinates (x, y)."""
@@ -175,29 +207,29 @@ _BINARY_TABLE = bytes([0] + [255] * 255)
 def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] | float], n_sides: int, rotation: float) -> list[tuple[float, float]]:
     """Generate a list of vertices for a 2D regular polygon."""
     if not isinstance(n_sides, int) or isinstance(n_sides, bool):
-        raise TypeError("n_sides should be an int")
+        raise TypeError(f"n_sides should be an int, got {n_sides!r}")
     if n_sides < 3:
-        raise ValueError("n_sides should be an int > 2")
+        raise ValueError(f"n_sides should be an int > 2, got {n_sides!r}")
     if not isinstance(bounding_circle, (list, tuple)):
-        raise TypeError("bounding_circle should be a sequence")
+        raise TypeError(f"bounding_circle should be a sequence, got {bounding_circle!r}")
     if len(bounding_circle) == 3:
         if not all(isinstance(i, (int, float)) and not isinstance(i, bool) for i in bounding_circle):
-            raise ValueError("bounding_circle should only contain numeric data")
+            raise ValueError(f"bounding_circle should only contain numeric data, got {bounding_circle!r}")
         centroid_x, centroid_y, polygon_radius = (float(v) for v in bounding_circle)
     elif len(bounding_circle) == 2 and isinstance(bounding_circle[0], (list, tuple)):
         if len(bounding_circle[0]) != 2:
             raise ValueError("bounding_circle centre should contain 2D coordinates (e.g. (x, y))")
         if not all(isinstance(i, (int, float)) and not isinstance(i, bool) for i in bounding_circle[0]) or not isinstance(bounding_circle[1], (int, float)) or isinstance(bounding_circle[1], bool):
-            raise ValueError("bounding_circle should only contain numeric data")
+            raise ValueError(f"bounding_circle should only contain numeric data, got {bounding_circle!r}")
         centroid_x, centroid_y = (float(v) for v in bounding_circle[0])
         polygon_radius = float(bounding_circle[1])
     else:
         raise ValueError("bounding_circle should contain 2D coordinates and a radius (e.g. (x, y, r) or ((x, y), r) )")
 
     if polygon_radius <= 0:
-        raise ValueError("bounding_circle radius should be > 0")
+        raise ValueError(f"bounding_circle radius should be > 0, got {polygon_radius!r}")
     if not isinstance(rotation, (int, float)) or isinstance(rotation, bool):
-        raise ValueError("rotation should be an int or float")
+        raise ValueError(f"rotation should be an int or float, got {rotation!r}")
 
     def _apply_rotation(point: tuple[float, float], deg: float) -> tuple[float, float]:
         """Rotate a 2D point around the centroid by given degrees."""
@@ -244,7 +276,7 @@ class ImageDraw:
             and `L` otherwise. Set to `1` to request binary font masks.
     """
 
-    font: object | None = None
+    font: _Font | None = None
 
     def __init__(self, im: Image.Image, mode: str | None = None, *, antialias: bool = False) -> None:
         """Configure a drawing context for `im`.
@@ -277,7 +309,7 @@ class ImageDraw:
         blend = 0
         if mode != im.mode:
             if im.mode != "RGB" or mode != "RGBA":
-                raise ValueError("mode mismatch")
+                raise ValueError(f"mode mismatch: drawing mode {mode!r}, image mode {im.mode!r}")
             blend = 1
         self.im = im
         self.mode = mode
@@ -285,9 +317,9 @@ class ImageDraw:
         self.fontmode = "1" if mode in ("1", "P") else "L"
         self.antialias = antialias
 
-    def getfont(self) -> object:
+    def getfont(self) -> _Font:
         """Return the active default font, initializing it on first access."""
-        if not self.font:
+        if self.font is None:
             self.font = load_default()
         return self.font
 
@@ -320,7 +352,7 @@ class ImageDraw:
             return ink
         if self.mode in ("I", "F", "I;16", "I;16L", "I;16B", "I;16N", "P"):
             if isinstance(fill, str):
-                raise ValueError("drawing in this mode requires a numeric ink")
+                raise ValueError(f"drawing in mode {self.mode!r} requires a numeric ink, got {fill!r}")
             return fill
         pixel = color_pixel(fill, self.mode)
         return pixel[0] if len(pixel) == 1 else tuple(pixel)
@@ -334,7 +366,7 @@ class ImageDraw:
         if isinstance(values[0], (tuple, list)):
             return [(int(x), int(y)) for x, y in values]
         if len(values) % 2:
-            raise ValueError("wrong number of coordinates")
+            raise ValueError(f"wrong number of coordinates: {len(values)}")
         return [(int(values[i]), int(values[i + 1])) for i in range(0, len(values), 2)]
 
     def arc(self, xy: Coords, start: float, end: float, fill: Color = None, width: int = 1) -> None:
@@ -468,7 +500,7 @@ class ImageDraw:
                 mode is unsupported.
         """
         if joint not in (None, "curve"):
-            raise ValueError("joint must be None or 'curve'")
+            raise ValueError(f"joint must be None or 'curve', got {joint!r}")
         width = index(width)
         if width == 0:
             width = 1
@@ -549,17 +581,17 @@ class ImageDraw:
         """Return two truncated, ordered bounding endpoints as four integers."""
         points = self._coords(xy)
         if len(points) != 2:
-            raise ValueError("bounding box requires exactly two coordinates")
+            raise ValueError(f"bounding box requires exactly two coordinates, got {points!r}")
         (x0, y0), (x1, y1) = points
         if x1 < x0 or y1 < y0:
-            raise ValueError("bounding coordinates must be ordered")
+            raise ValueError(f"bounding coordinates must be ordered, got {points!r}")
         return x0, y0, x1, y1
 
     def _curve(self, xy: Coords, start: float, end: float) -> list[tuple[float, float]]:
         """Sample a clockwise elliptical arc, returning no points for zero sweep."""
         x0, y0, x1, y1 = self._bounds(xy)
         if not isfinite(start) or not isfinite(end):
-            raise ValueError("angles must be finite")
+            raise ValueError(f"angles must be finite, got start={start!r}, end={end!r}")
         sweep = end - start
         sweep = 360 if sweep >= 360 else sweep % 360
         if sweep == 0:
@@ -760,7 +792,7 @@ class ImageDraw:
         """
         x0, y0, x1, y1 = self._bounds(xy)
         if not isfinite(radius) or radius < 0:
-            raise ValueError("radius must be finite and nonnegative")
+            raise ValueError(f"radius must be finite and nonnegative, got {radius!r}")
         corners = (True, True, True, True) if corners is None else corners
         if len(corners) != 4:
             raise ValueError("corners must contain four flags")
@@ -846,7 +878,7 @@ class ImageDraw:
         xy: tuple[float, float],
         text: str,
         fill: Color = None,
-        font: object | None = None,
+        font: _Font | None = None,
         anchor: str | None = None,
         spacing: float = 4,
         align: str = "left",
@@ -922,9 +954,9 @@ class ImageDraw:
             """Render one text or stroke mask at the requested anchor position."""
             native_stroke = outline if isinstance(font, BitmapFont) else 0
             if hasattr(font, "getmask2"):
-                mask, offset = font.getmask2(text, mode, anchor=anchor, stroke_width=outline - native_stroke, start=(xy[0] - int(xy[0]), xy[1] - int(xy[1])), stroke_filled=True, **options)
+                mask, offset = cast("_OffsetFont", font).getmask2(text, mode, anchor=anchor, stroke_width=outline - native_stroke, start=(xy[0] - int(xy[0]), xy[1] - int(xy[1])), stroke_filled=True, **options)
             else:
-                mask = font.getmask(text, mode, stroke_width=outline, **options)
+                mask = cast("_MaskFont", font).getmask(text, mode, stroke_width=outline, **options)
                 offset = font.getbbox(text, anchor=anchor, stroke_width=outline, **options)[:2]
             data = bytes(mask)
             if mode == "1" and not isinstance(font, BitmapFont):
@@ -944,7 +976,7 @@ class ImageDraw:
         xy: tuple[float, float],
         text: str,
         fill: Color = None,
-        font: object | None = None,
+        font: _Font | None = None,
         anchor: str | None = None,
         spacing: float = 4,
         align: str = "left",
@@ -994,7 +1026,7 @@ class ImageDraw:
         for position, line in lines:
             self.text(position, line, fill, font, anchor, direction=direction, features=features, language=language, stroke_width=stroke_width, stroke_fill=stroke_fill, embedded_color=embedded_color)
 
-    def _font(self, font: object | None, font_size: float | None) -> object:
+    def _font(self, font: _Font | None, font_size: float | None) -> _Font:
         """Resolve an explicit font, the context font, or the bitmap fallback."""
         if font is not None:
             return font
@@ -1014,7 +1046,7 @@ class ImageDraw:
             raise NotImplementedError("embedded color fonts are not supported")
 
     def _text_layout(
-        self, xy: tuple[float, float], text: str, font: object, anchor: str | None, spacing: float, align: str, direction: str | None, features: Sequence[str] | None, language: str | None, stroke_width: float
+        self, xy: tuple[float, float], text: str, font: _Font, anchor: str | None, spacing: float, align: str, direction: str | None, features: Sequence[str] | None, language: str | None, stroke_width: float
     ) -> list[tuple[tuple[float, float], str]]:
         """Return anchored line positions using font advances and line spacing."""
         if align not in ("left", "center", "right"):
@@ -1040,7 +1072,7 @@ class ImageDraw:
             positions.append(((x + shift, y + i * line_height), line))
         return positions
 
-    def textlength(self, text: str, font: object | None = None, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, embedded_color: bool = False, font_size: float | None = None) -> float:
+    def textlength(self, text: str, font: _Font | None = None, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, embedded_color: bool = False, font_size: float | None = None) -> float:
         """Return the single-line advance length in pixels.
 
         Font kerning is included when provided by the font. The advance
@@ -1054,7 +1086,7 @@ class ImageDraw:
             features: OpenType feature names passed to the font when specified.
             language: Language tag passed to the font when specified.
             embedded_color: Embedded-color font request. Currently unsupported.
-            font_size: Bitmap fallback height, scaled in multiples of seven
+            font_size: Bitmap fallback height, scaled in multiples of eight
                 pixels. Ignored when an explicit or context font is used.
 
         Returns:
@@ -1074,7 +1106,7 @@ class ImageDraw:
         self,
         xy: tuple[float, float],
         text: str,
-        font: object | None = None,
+        font: _Font | None = None,
         anchor: str | None = None,
         spacing: float = 4,
         align: str = "left",
@@ -1105,7 +1137,7 @@ class ImageDraw:
             stroke_width: Finite, nonnegative expansion passed to the font's
                 bounding-box calculation.
             embedded_color: Embedded-color font request. Currently unsupported.
-            font_size: Bitmap fallback height, scaled in multiples of seven
+            font_size: Bitmap fallback height, scaled in multiples of eight
                 pixels. Ignored when an explicit or context font is used.
 
         Returns:
@@ -1130,7 +1162,7 @@ class ImageDraw:
         self,
         xy: tuple[float, float],
         text: str,
-        font: object | None = None,
+        font: _Font | None = None,
         anchor: str | None = None,
         spacing: float = 4,
         align: str = "left",
@@ -1162,7 +1194,7 @@ class ImageDraw:
             stroke_width: Finite, nonnegative expansion passed to the font's
                 bounding-box calculation.
             embedded_color: Embedded-color font request. Currently unsupported.
-            font_size: Bitmap fallback height, scaled in multiples of seven
+            font_size: Bitmap fallback height, scaled in multiples of eight
                 pixels. Ignored when an explicit or context font is used.
 
         Returns:

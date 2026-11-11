@@ -15,6 +15,8 @@ if TYPE_CHECKING:
 class PluginImageMeta(type):
     """Recognize native images by format and construct them through open()."""
 
+    _format: str
+
     def __instancecheck__(cls, instance: object) -> bool:
         """Check if instance is an Image with matching format."""
         return isinstance(instance, Image) and instance.format == cls._format

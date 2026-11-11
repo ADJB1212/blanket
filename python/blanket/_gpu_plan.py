@@ -76,9 +76,10 @@ class ProcessingPlan:
 
         _validate_backend(backend, device)
 
-        size = tuple(index(value) for value in size)
-        if len(size) != 2:
+        dimensions = tuple(index(value) for value in size)
+        if len(dimensions) != 2:
             raise ValueError("GPU plan size requires two dimensions")
+        size = (dimensions[0], dimensions[1])
         _validate(size, mode)
         channels, floating = _MODES[mode]
         bit_depth = (32 if floating else 8) if bit_depth is None else index(bit_depth)

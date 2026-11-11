@@ -493,6 +493,7 @@ class Image:
         self._exif_source: object = None
         self._draft_source: bytes | None = None
         self._seek_error: BaseException | None = None
+        self._truncated_jpeg = False
         self._declared_frames: int | None = None
         palette_data = native.palette_data()
         if palette_data is not None:
@@ -712,12 +713,12 @@ class Image:
             ```
         """
         self._native.load()
-        if self._seek_error == "truncated_jpeg":
+        if self._truncated_jpeg:
             from . import ImageFile
 
             if not ImageFile.LOAD_TRUNCATED_IMAGES:
                 raise OSError("broken data stream when reading image file")
-            self._seek_error = None
+            self._truncated_jpeg = False
         elif self._seek_error is not None and self._frame == 0 and self._declared_frames is None:
             raise self._seek_error
         self._draft_source = None
@@ -1418,10 +1419,11 @@ class Image:
         """
         if self.mode == "P" and isinstance(value, tuple) and len(value) != 1:
             raise ValueError("palette putpixel requires an index")
+        coordinates: tuple[int, ...] = xy
         if type(xy) is not tuple or len(xy) != 2 or type(xy[0]) is not int or type(xy[1]) is not int:
-            xy = tuple(index(v) for v in xy)
+            coordinates = tuple(index(v) for v in xy)
         self._ensure_mutable()
-        self._native.putpixel(xy, value)
+        self._native.putpixel(coordinates, value)
 
     def getdata(self, band: int | None = None) -> list[int | float | tuple[int, ...]]:
         """Return a flat pixel snapshot, optionally selecting one band.
@@ -1685,16 +1687,15 @@ class Image:
         """
 
         self.load()
-        if callable(filter):
-            filter = filter()
-        if not hasattr(filter, "filter"):
+        operation = filter() if callable(filter) else filter
+        if not hasattr(operation, "filter"):
             raise TypeError("filter argument should be ImageFilter.Filter instance or class")
-        neighborhood_filter = isinstance(filter, (RankFilter, ModeFilter)) and getattr(filter.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
-        if self.mode in ("L", "I;16", "I;16L", "I;16B", "I;16N") or isinstance(filter, MultibandFilter) or neighborhood_filter:
-            result = Image(filter.filter(self._native))
+        neighborhood_filter = isinstance(operation, (RankFilter, ModeFilter)) and getattr(operation.filter, "__func__", None) in (RankFilter.filter, ModeFilter.filter)
+        if self.mode in ("L", "I;16", "I;16L", "I;16B", "I;16N") or isinstance(operation, MultibandFilter) or neighborhood_filter:
+            result = Image(operation.filter(self._native))
             result.info.update(self._metadata_info())
             return result
-        bands = [filter.filter(band._native) for band in self.split()]
+        bands = [operation.filter(band._native) for band in self.split()]
         result = Image(filter_merge(self.mode, bands))
         result.info.update(self._metadata_info())
         return result
@@ -1791,7 +1792,7 @@ class Image:
         if not isinstance(dest, (list, tuple)) or len(dest) != 2:
             raise ValueError("Destination must be a sequence of length 2")
         source = tuple(index(v) for v in source)
-        dest = tuple(index(v) for v in dest)
+        dest = (index(dest[0]), index(dest[1]))
         if min(source) < 0:
             raise ValueError("Source must be non-negative")
         region = source + im.size if len(source) == 2 else source
@@ -2074,14 +2075,16 @@ class Image:
 
         self.load()
         factor = factor if isinstance(factor, (list, tuple)) else (factor, factor)
-        factor = tuple(index(value) for value in factor)
-        if len(factor) != 2:
+        factors = tuple(index(value) for value in factor)
+        if len(factors) != 2:
             raise TypeError("factor must contain two integers")
+        factor = (factors[0], factors[1])
         if min(factor) < 1:
             raise ValueError("scale must be > 0")
-        box = (0, 0, self.width, self.height) if box is None else tuple(index(v) for v in box)
-        if len(box) != 4:
+        bounds = (0, 0, self.width, self.height) if box is None else tuple(index(v) for v in box)
+        if len(bounds) != 4:
             raise TypeError("box must contain four integers")
+        box = (bounds[0], bounds[1], bounds[2], bounds[3])
         if factor == (1, 1) and box == (0, 0, self.width, self.height):
             return self.crop()
         if self.mode == "P":
@@ -2181,9 +2184,10 @@ class Image:
             raise ValueError("transform supports NEAREST, BILINEAR and BICUBIC")
         if self.mode in ("1", "P", "PA"):
             resample = Resampling.NEAREST
-        size = tuple(index(v) for v in size)
-        if len(size) != 2:
+        dimensions = tuple(index(v) for v in size)
+        if len(dimensions) != 2:
             raise TypeError("size must contain two integers")
+        size = (dimensions[0], dimensions[1])
         if min(size) < 0:
             raise ValueError("width and height must be >= 0")
         self.load()
@@ -2286,9 +2290,10 @@ class Image:
             method = Resampling.NEAREST
         if reducing_gap is not None and reducing_gap < 1.0:
             raise ValueError("reducing_gap must be 1.0 or greater")
-        size = tuple(index(value) for value in size)
-        if len(size) != 2:
+        dimensions = tuple(index(value) for value in size)
+        if len(dimensions) != 2:
             raise TypeError("size must contain two integers")
+        size = (dimensions[0], dimensions[1])
         if min(size) <= 0:
             raise ValueError("height and width must be > 0")
         box = (0, 0, self.width, self.height) if box is None else tuple(box)
@@ -3009,6 +3014,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         _decompression_bomb_check(image.size, format="SVG")
         return image
     seek_error = None
+    truncated_jpeg = False
     declared_frames = None
     if data.startswith(b"\x89PNG\r\n\x1a\n") and (formats is None or any(str(f).upper() == "PNG" for f in formats)):
         from .PngImagePlugin import sanitize_apng
@@ -3021,7 +3027,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         data, truncated = sanitize_jpeg(data)
         if truncated and b"\xff\xda" in data:
             data = data + b"\xff\xd9"
-            seek_error = "truncated_jpeg"
+            truncated_jpeg = True
     if lazy:
         from ._lazy_frames import LazyFrames
 
@@ -3038,6 +3044,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None)
     image = Image(frames[0])
     image._seek_error = seek_error
+    image._truncated_jpeg = truncated_jpeg
     image._declared_frames = declared_frames
 
     metadata = read_tiff_metadata(data, len(frames), decoded=True) if image.format == "TIFF" else None
@@ -3103,12 +3110,13 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
         raise ValueError("fallback must be 'error' or 'full'")
     if formats is not None and not isinstance(formats, (list, tuple)):
         raise TypeError("formats must be a list or tuple")
-    box = tuple(index(v) for v in box)
-    if len(box) != 4:
+    bounds = tuple(index(v) for v in box)
+    if len(bounds) != 4:
         raise ValueError("box must contain four integers")
+    left, top, right, bottom = bounds
+    box = (left, top, right, bottom)
     data = _read_bytes(fp)
     format, size, _, _ = _inspect(data, formats)
-    left, top, right, bottom = box
     if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
         raise ValueError("region must be a nonempty rectangle inside the image")
     native = _decode_region(data, box, formats)
@@ -3217,9 +3225,10 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
         return frombytes(mode, size, data, decoder_name, *args)
     if mode not in _BANDS:
         raise ValueError("unrecognized image mode")
-    size = tuple(index(value) for value in size)
-    if len(size) != 2:
+    dimensions = tuple(index(value) for value in size)
+    if len(dimensions) != 2:
         raise ValueError("size must be a sequence of length 2")
+    size = (dimensions[0], dimensions[1])
     if min(size) < 0:
         raise ValueError("Width and height must be >= 0")
     view = memoryview(data).cast("B")

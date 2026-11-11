@@ -24,6 +24,9 @@ _TYPES = {274: 3, 282: 5, 283: 5, 296: 3, 513: 4, 514: 4, 531: 3, 33434: 5, 3343
 class IFDRational(float):
     """A TIFF rational, retaining its numerator and denominator."""
 
+    numerator: float
+    denominator: int
+
     def __new__(cls, numerator: float, denominator: int = 1) -> Self:
         """Create a rational float, using NaN when the denominator is zero."""
         value = super().__new__(cls, numerator / denominator if denominator else float("nan"))
@@ -95,16 +98,16 @@ class Exif(MutableMapping[int, object]):
         """Load an EXIF APP1 payload or a classic TIFF byte stream."""
         self.__init__()
         self._source = bytes(data)
-        data = memoryview(self._source)[6:] if self._source.startswith(b"Exif\0\0") else memoryview(self._source)
-        if not data:
+        view = memoryview(self._source)[6:] if self._source.startswith(b"Exif\0\0") else memoryview(self._source)
+        if not view:
             return
-        if len(data) < 8 or data[:2] not in (b"II", b"MM"):
+        if len(view) < 8 or view[:2] not in (b"II", b"MM"):
             raise ValueError("invalid EXIF header")
-        self.endian = "<" if data[:2] == b"II" else ">"
-        magic, offset = struct.unpack_from(self.endian + "HI", data, 2)
+        self.endian = "<" if view[:2] == b"II" else ">"
+        magic, offset = struct.unpack_from(self.endian + "HI", view, 2)
         if magic != 42:
             raise ValueError("only classic TIFF EXIF is supported")
-        self._raw = data
+        self._raw = view
         self._data, self._next = self._read_ifd(offset, 0)
         if self._next:
             self._load_thumbnail(self._next)

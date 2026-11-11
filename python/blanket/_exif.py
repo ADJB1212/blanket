@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, cast
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
 
+    from .Image import Image
+
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
 from ._jpeg import read_metadata as read_jpeg_metadata
@@ -396,7 +398,7 @@ def _png_metadata(info: dict[object, object], kind: bytes, payload: bytes, maxim
         return 0
 
 
-def save_metadata(image: object, format: str, options: dict[str, object], *, strip: bool = False) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
+def save_metadata(image: Image, format: str, options: dict[str, object], *, strip: bool = False) -> tuple[bytes, bytes, bytes, list[tuple[bytes, bytes, bool]]]:
     """Remove metadata options and resolve source defaults before encoding."""
     if strip:
         for key in ("metadata_policy", "exif", "xmp", "icc_profile", "pnginfo", "comment", "dpi", *HDR_KEYS.values()):

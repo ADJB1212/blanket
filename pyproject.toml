@@ -121,15 +121,12 @@ output-format = "concise"
 allowed-unresolved-imports = ["blanket._blanket", "cupy"]
 
 [tool.ty.rules]
-invalid-assignment = "ignore"
-missing-argument = "ignore"
 invalid-argument-type = "ignore"
 unsupported-operator = "ignore"
 not-subscriptable = "ignore"
 call-non-callable = "ignore"
 not-iterable = "ignore"
 no-matching-overload = "ignore"
-missing-attribute = "ignore"
 
 [tool.uv]
 compile-bytecode = true

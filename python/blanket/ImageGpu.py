@@ -12,7 +12,7 @@ import math
 import struct
 from functools import lru_cache
 from operator import index
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from . import Image, _blanket
 from ._gpu_async import Event, Stream, submit
@@ -22,10 +22,11 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from concurrent.futures import Future
     from types import ModuleType
-    from typing import Any
 
     from torch import Tensor
 
+    from ._blanket import MetalImage
+    from ._gpu_cuda import CudaImage
     from ._gpu_unsigned import GpuUnsignedImage
     from .ImageFilter import Color3DLUT
 
@@ -84,7 +85,7 @@ def _scalar(value: float) -> float:
     """Convert a control value to a finite number representable as float32."""
     value = float(value)
     if not math.isfinite(value) or abs(value) > 3.4028234663852886e38:
-        raise ValueError("GPU scalar must be finite and representable as float32")
+        raise ValueError(f"GPU scalar must be finite and representable as float32, got {value!r}")
     return value
 
 
@@ -106,9 +107,9 @@ def capabilities(backend: str = "metal", *, device: int = 0) -> dict[str, object
         ValueError: The backend name or device index is invalid.
     """
     if backend not in ("metal", "cuda"):
-        raise ValueError("unsupported GPU backend")
+        raise ValueError(f"unsupported GPU backend: {backend!r}")
     if type(device) is not int or device < 0 or (backend == "metal" and device != 0):
-        raise ValueError("unsupported GPU device index")
+        raise ValueError(f"unsupported GPU device index {device!r} for backend {backend!r}")
     compiled = hasattr(_blanket, "MetalImage") if backend == "metal" else hasattr(_blanket, "_gpu_cuda_fatbin")
     probe = getattr(_blanket, "_gpu_available", None)
     available = bool(compiled and probe and probe()) if backend == "metal" else False
@@ -212,9 +213,9 @@ def _library() -> object:
 def _validate(size: tuple[int, int], mode: str) -> None:
     """Validate the mode, positive integer dimensions, and decoded-pixel limit."""
     if mode not in _MODES:
-        raise ValueError("unsupported GPU image mode")
+        raise ValueError(f"unsupported GPU image mode: {mode!r}")
     if len(size) != 2 or any(type(v) is not int or v <= 0 or v > 0xFFFFFFFF for v in size) or size[0] * size[1] > _MAX_PIXELS:
-        raise ValueError("invalid GPU image dimensions")
+        raise ValueError(f"invalid GPU image dimensions: {size!r}")
 
 
 def _dispatch_threads(parameters: list[int], channels: int, floating: bool) -> int:
@@ -248,12 +249,12 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
         RuntimeError: The requested backend or runtime is unavailable.
     """
     if backend not in ("metal", "cuda") or runtime not in ("native", "torch"):
-        raise ValueError("unsupported GPU backend or runtime")
+        raise ValueError(f"unsupported GPU backend or runtime: backend={backend!r}, runtime={runtime!r}")
     _require(backend, device)
     if unified_memory and (backend != "metal" or runtime != "native" or image.bit_depth not in (8, 32)):
         raise ValueError("unified memory requires native Metal uint8 or float32 images")
     if backend == "metal" and device != 0:
-        raise ValueError("Metal supports only the default device")
+        raise ValueError(f"Metal supports only the default device, got {device!r}")
     _validate(image.size, image.mode)
     if image.mode in ("L", "RGB", "RGBA") and image.bit_depth in (10, 12, 16):
         from ._gpu_unsigned import GpuUnsignedImage
@@ -269,7 +270,7 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
             raise RuntimeError("invalid unsigned GPU working storage")
         return GpuUnsignedImage(resident, image.mode, image.bit_depth)
     if image.mode not in ("F", "RGB;F", "RGBA;F") and image.bit_depth != 8:
-        raise ValueError("unsupported GPU sample depth")
+        raise ValueError(f"unsupported GPU sample depth {image.bit_depth!r} for mode {image.mode!r}")
     channels, floating = _MODES[image.mode]
     if backend == "cuda":
         from . import _gpu_cuda
@@ -353,7 +354,7 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         RuntimeError: The matching GPU backend or PyTorch support is unavailable.
     """
     if runtime not in ("torch", "native"):
-        raise ValueError("unsupported GPU runtime")
+        raise ValueError(f"unsupported GPU runtime: {runtime!r}")
     backend = "cuda" if getattr(getattr(tensor, "device", None), "type", None) == "cuda" else "metal"
     device_type = "cuda" if backend == "cuda" else "mps"
     _require(backend, tensor.device.index if backend == "cuda" else 0)
@@ -364,7 +365,7 @@ def from_torch(tensor: Tensor, *, layout: str, mode: str | None = None, copy: bo
         if bit_depth not in (10, 12, 16) or not isinstance(tensor, torch.Tensor) or tensor.dtype != torch.uint16 or tensor.device.type != device_type:
             raise ValueError("unsigned import requires an MPS/CUDA uint16 tensor and depth 10, 12, or 16")
         if mode not in (None, "L", "RGB", "RGBA"):
-            raise ValueError("unsupported unsigned GPU mode")
+            raise ValueError(f"unsupported unsigned GPU mode: {mode!r}")
         working_mode = None if mode is None else {"L": "F", "RGB": "RGB;F", "RGBA": "RGBA;F"}[mode]
         resident = from_torch(tensor.to(torch.float32) / ((1 << bit_depth) - 1), layout=layout, mode=working_mode, runtime=runtime)
         if not isinstance(resident, GpuImage):
@@ -442,7 +443,7 @@ class GpuImage:
         >>> cpu_image = result.to_image()
     """
 
-    def __init__(self, resource: object, size: tuple[int, int], mode: str, runtime: str, info: dict[str, Any], *, unified_memory: bool = False) -> None:
+    def __init__(self, resource: MetalImage | Tensor | CudaImage, size: tuple[int, int], mode: str, runtime: str, info: dict[object, object], *, unified_memory: bool = False) -> None:
         """Wrap an existing backend resource with image metadata.
 
         Args:
@@ -458,12 +459,12 @@ class GpuImage:
         if unified_memory and runtime != "native":
             raise ValueError("unified memory requires native Metal")
         self.unified_memory = unified_memory
-        self._resource: Any = resource
+        self._resource: MetalImage | Tensor | CudaImage | None = resource
         self.size = size
         self.mode = mode
         self.runtime = runtime
         self.info = info
-        self.device = f"cuda:{self._resource.device}" if runtime == "cuda" else "metal" if runtime == "native" else "mps"
+        self.device = f"cuda:{cast('CudaImage', resource).device}" if runtime == "cuda" else "metal" if runtime == "native" else "mps"
         self.dtype = "float32" if _MODES[mode][1] else "uint8"
 
     def _check(self) -> None:
@@ -489,13 +490,13 @@ class GpuImage:
         parameters = [*self.size, _MODES[self.mode][0], *size, op, k, axis]
         values = [0.0] if values is None else values
         if self.runtime == "cuda":
-            resource = self._resource.run(other._resource, parameters, values, channels, floating, _MODES[self.mode][1])
+            resource = cast("CudaImage", self._resource).run(cast("CudaImage", other._resource), parameters, values, channels, floating, _MODES[self.mode][1])
         elif self.runtime == "native":
-            resource = self._resource.run(other._resource, parameters, values)
+            resource = cast("MetalImage", self._resource).run(other._resource, parameters, values)
         else:
             torch = _torch()
-            src = self._resource.resolve_neg().contiguous()
-            rhs = other._resource.resolve_neg().contiguous()
+            src = cast("Tensor", self._resource).resolve_neg().contiguous()
+            rhs = cast("Tensor", other._resource).resolve_neg().contiguous()
             resource = torch.empty((size[1], size[0], channels), dtype=torch.float32 if floating else torch.uint8, device=src.device)
             weights = torch.tensor(values, dtype=torch.float32, device="mps")
             kernel_name = "image_f32" if floating else "image_u8"
@@ -568,15 +569,15 @@ class GpuImage:
         """
         self._check()
         if method not in (Image.Transform.AFFINE, Image.Transform.PERSPECTIVE):
-            raise ValueError("GPU transform supports AFFINE and PERSPECTIVE")
+            raise ValueError(f"GPU transform supports AFFINE and PERSPECTIVE, got {method!r}")
         coefficients = [_scalar(v) for v in data]
         expected = 6 if method == Image.Transform.AFFINE else 8
         if len(coefficients) != expected:
-            raise ValueError("incorrect transform coefficient count")
+            raise ValueError(f"incorrect transform coefficient count: expected {expected}, got {len(coefficients)}")
         if expected == 6:
             coefficients += [0.0, 0.0]
         if resample not in (Image.Resampling.NEAREST, Image.Resampling.BILINEAR, Image.Resampling.BICUBIC):
-            raise ValueError("transform supports NEAREST, BILINEAR, and BICUBIC")
+            raise ValueError(f"transform supports NEAREST, BILINEAR, and BICUBIC, got {resample!r}")
         channels = _MODES[self.mode][0]
         fill = [fillcolor] * channels if isinstance(fillcolor, (int, float)) else list(fillcolor)
         if len(fill) != channels:
@@ -633,7 +634,7 @@ class GpuImage:
         if coordinates.mode != "RGB;F":
             raise ValueError("coordinate maps require RGB;F mode")
         if resample not in (Image.Resampling.NEAREST, Image.Resampling.BILINEAR, Image.Resampling.BICUBIC):
-            raise ValueError("remap supports NEAREST, BILINEAR, and BICUBIC")
+            raise ValueError(f"remap supports NEAREST, BILINEAR, and BICUBIC, got {resample!r}")
         channels = _MODES[self.mode][0]
         fill = [fillcolor] * channels if isinstance(fillcolor, (int, float)) else list(fillcolor)
         if len(fill) != channels:
@@ -673,7 +674,7 @@ class GpuImage:
         if x >= self.size[0] or y >= self.size[1] or x <= -source.size[0] or y <= -source.size[1]:
             return self._run(6)
         if self.runtime == "native":
-            resource = self._resource.paste(source._resource, None if mask is None else mask._resource, (x, y))
+            resource = cast("MetalImage", self._resource).paste(source._resource, None if mask is None else mask._resource, (x, y))
             return GpuImage(resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         working_mode = "F" if self.mode in ("L", "F") else "RGB;F" if self.mode in ("RGB", "RGB;F") else "RGBA;F"
         background, foreground = self.convert(working_mode), source.convert(working_mode)
@@ -718,10 +719,10 @@ class GpuImage:
             try:
                 channel = Image._BANDS[self.mode].index(channel)
             except ValueError as error:
-                raise ValueError("unknown image band") from error
+                raise ValueError(f"unknown image band: {channel!r}") from error
         channel = index(channel)
         if not 0 <= channel < _MODES[self.mode][0]:
-            raise ValueError("band index out of range")
+            raise ValueError(f"band index out of range for mode {self.mode!r}: {channel!r}")
         return self._run(15, mode="F" if _MODES[self.mode][1] else "L", k=channel)
 
     def split(self) -> tuple[GpuImage, ...]:
@@ -764,7 +765,7 @@ class GpuImage:
         if len(radii) != 2:
             raise ValueError("blur radius must contain two values")
         if self.runtime == "native" and hasattr(self._resource, "blur"):
-            resource = self._resource.blur([_scalar(value) for value in radii], gaussian)
+            resource = cast("MetalImage", self._resource).blur([_scalar(value) for value in radii], gaussian)
             return GpuImage(resource, self.size, self.mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         controls = [_blanket._gpu_blur_parameters(_scalar(value), gaussian) for value in radii]
         result = self
@@ -931,7 +932,7 @@ class GpuImage:
             target = (size[0], result.size[1]) if axis == 0 else (result.size[0], size[1])
             if result.size[axis] != target[axis]:
                 if result.runtime == "native":
-                    resource = result._resource.resize_axis(target[axis], resample, axis)
+                    resource = cast("MetalImage", result._resource).resize_axis(target[axis], resample, axis)
                     result = GpuImage(resource, target, result.mode, result.runtime, result.info.copy(), unified_memory=result.unified_memory)
                 else:
                     stride, weights = _blanket._gpu_weights(result.size[axis], target[axis], resample, floating)
@@ -1111,7 +1112,7 @@ class GpuImage:
         if channels < 3 or floating != output_float or output_channels < table_channels or (output_channels > table_channels and output_channels > channels):
             raise ValueError("3D LUT requires compatible RGB/RGBA input and output modes with matching dtype")
         if self.runtime == "native":
-            resource = self._resource.color_lut(lut.size, table_channels, lut.table, _FORMATS.index(mode))
+            resource = cast("MetalImage", self._resource).color_lut(lut.size, table_channels, lut.table, _FORMATS.index(mode))
             return GpuImage(resource, self.size, mode, self.runtime, self.info.copy(), unified_memory=self.unified_memory)
         controls = _blanket._gpu_lut_controls(lut.size, table_channels, list(lut.table), floating)
         return self._run(25, mode=mode, k=table_channels, axis=_FORMATS.index(mode), values=controls)
@@ -1176,7 +1177,7 @@ class GpuImage:
         """
         bits = index(bits)
         if bits not in range(9):
-            raise ValueError("bits must be between 0 and 8")
+            raise ValueError(f"bits must be between 0 and 8, got {bits!r}")
         mask = (255 << (8 - bits)) & 255
         return self.point([v & mask for v in range(256)])
 
@@ -1184,7 +1185,7 @@ class GpuImage:
         """Validate arithmetic controls and dispatch a matching-image channel operation."""
         scale = _scalar(scale)
         if abs(scale) < 1.1754943508222875e-38:
-            raise ValueError("scale must be a nonzero normal float32 value")
+            raise ValueError(f"scale must be a nonzero normal float32 value, got {scale!r}")
         return self._run(13, other=other, k=operation, values=[scale, _scalar(offset)])
 
     def difference(self, other: GpuImage) -> GpuImage:
@@ -1305,7 +1306,7 @@ class GpuImage:
         self._check()
         source._check()
         if transfer not in ("srgb", "linear"):
-            raise ValueError("transfer must be 'srgb' or 'linear'")
+            raise ValueError(f"transfer must be 'srgb' or 'linear', got {transfer!r}")
         if _MODES[self.mode][0] not in (2, 4):
             raise ValueError("source-over requires alpha")
         if (self.size, self.mode, self.runtime) != (source.size, source.mode, source.runtime):
@@ -1328,8 +1329,10 @@ class GpuImage:
             native Metal and CUDA wait for this resource's completion point.
         """
         self._check()
-        if self.runtime in ("native", "cuda"):
-            self._resource.synchronize()
+        if self.runtime == "native":
+            cast("MetalImage", self._resource).synchronize()
+        elif self.runtime == "cuda":
+            cast("CudaImage", self._resource).synchronize()
         else:
             _torch().mps.synchronize()
 
@@ -1344,16 +1347,17 @@ class GpuImage:
         """
         if self.runtime == "native":
             self._check()
-            native = self._resource.shared_image(self.mode) if self.unified_memory else self._resource.download_image(self.mode)
+            resource = cast("MetalImage", self._resource)
+            native = resource.shared_image(self.mode) if self.unified_memory else resource.download_image(self.mode)
             result = Image.Image(native)
             result.info.update(self.info)
             return result
         self._check()
         if self.runtime == "cuda":
-            data = self._resource.download_buffer()
+            data = cast("CudaImage", self._resource).download_buffer()
         else:
             self.synchronize()
-            host = self._resource.resolve_neg().contiguous().view(_torch().uint8).cpu().flatten()
+            host = cast("Tensor", self._resource).resolve_neg().contiguous().view(_torch().uint8).cpu().flatten()
             try:
                 data = memoryview(host.numpy())
             except RuntimeError as error:
@@ -1434,15 +1438,15 @@ class GpuImage:
         """
         self._check()
         if layout not in ("HWC", "CHW", "HW") or (layout == "HW" and _MODES[self.mode][0] != 1):
-            raise ValueError("invalid export layout")
+            raise ValueError(f"invalid export layout {layout!r} for mode {self.mode!r}")
         if self.runtime == "cuda":
-            resource = self._resource.to_torch()
+            resource = cast("CudaImage", self._resource).to_torch()
         elif self.runtime == "native":
             torch = _torch()
             resource = torch.empty((self.size[1], self.size[0], _MODES[self.mode][0]), dtype=torch.float32 if _MODES[self.mode][1] else torch.uint8, device="mps")
-            self._resource.copy_to_torch(resource)
+            cast("MetalImage", self._resource).copy_to_torch(resource)
         else:
-            resource = self._resource
+            resource = cast("Tensor", self._resource)
         if layout == "HWC":
             return resource
         if layout == "CHW":

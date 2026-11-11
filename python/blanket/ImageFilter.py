@@ -17,13 +17,22 @@ __lazy_modules__ = {"collections.abc", "blanket._blanket", "math"}
 
 from abc import ABC, abstractmethod
 from math import isfinite
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
-    from typing import Any
+    from typing import Any, Protocol, Self
 
     from ._blanket import _Image
+
+    class _ArrayTable(Protocol):
+        @property
+        def shape(self) -> tuple[int, ...]: ...
+
+        def copy(self) -> Self: ...
+
+        def reshape(self, size: int, /) -> Self: ...
+
 
 from ._blanket import filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
 
@@ -668,11 +677,13 @@ class Color3DLUT(MultibandFilter):
         wrong_size = False
         # Array adaptation does not import or require NumPy at runtime.
         if hasattr(table, "shape") and hasattr(table, "reshape"):
+            array = cast("_ArrayTable", table)
             if copy_table:
-                table = table.copy()
-            if table.shape in ((items * channels,), (items, channels), (*reversed(self.size), channels)):
-                table = table.reshape(items * channels)
+                array = array.copy()
+            if array.shape in ((items * channels,), (items, channels), (*reversed(self.size), channels)):
+                table = array.reshape(items * channels)
             else:
+                table = array
                 wrong_size = True
         else:
             if copy_table:
