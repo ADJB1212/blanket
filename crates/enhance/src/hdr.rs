@@ -80,7 +80,6 @@ fn srgb(value: f64) -> f64 {
 }
 
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 fn hdr_tone_map(
     py: Python<'_>, image: &Image, operator: &str, transfer: &str, primaries: &str, exposure: f64, reference_white: f64, peak: f64, bit_depth: u8,
 ) -> PyResult<Image> {

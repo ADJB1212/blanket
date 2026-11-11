@@ -155,7 +155,6 @@ impl Rows {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn transform<'a>(
     data: &'a [u8], mode: PixelMode, size: (u32, u32), depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, encode: bool,
 ) -> PyResult<Cow<'a, [u8]>> {
@@ -177,7 +176,6 @@ pub(crate) fn transform<'a>(
     Ok(Cow::Owned(output))
 }
 
-#[expect(clippy::too_many_arguments, reason = "Raw export accepts the image and output layouts")]
 pub(crate) fn encode<'py>(
     py: Python<'py>, data: &[u8], mode: PixelMode, size: (u32, u32), depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
 ) -> PyResult<Bound<'py, PyBytes>> {
@@ -320,7 +318,6 @@ fn raw_kind(mode: PixelMode, rawmode: &str) -> Option<RawKind> {
     })
 }
 
-#[allow(clippy::too_many_arguments)]
 fn extended_transform<'a>(
     data: &'a [u8], mode: PixelMode, size: (u32, u32), depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, encode: bool,
 ) -> Option<PyResult<Cow<'a, [u8]>>> {

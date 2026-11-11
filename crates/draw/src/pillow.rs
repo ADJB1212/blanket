@@ -228,7 +228,6 @@ pub(crate) fn ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), width: i6
 }
 
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 fn draw_curve(
     image: &mut Image, bounds: (i64, i64, i64, i64), start: f32, end: f32, width: i64, style: &str, filled: bool, value: &Bound<'_, PyAny>,
     blend: bool,
@@ -456,7 +455,6 @@ fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool,
 }
 
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 fn draw_polygon(
     image: &mut Image, points: Vec<(i64, i64)>, width: i64, filled: bool, closed: bool, value: &Bound<'_, PyAny>, blend: bool,
 ) -> PyResult<()> {

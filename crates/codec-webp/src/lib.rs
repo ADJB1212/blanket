@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::decode_rust_image;
 use blanket_core::{Image, PixelMode};
 use image::ImageFormat as RustFormat;
@@ -12,12 +12,12 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     blanket_codec_common::ImageHeader::new(info.width, info.height, if info.has_alpha { "RGBA" } else { "RGB" }, 8)
 }
 
-pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
-    let features = webpx::ImageInfo::from_webp(data).map_err(|error| error.to_string())?;
+pub fn decode_webp(data: &[u8]) -> Result<Image, DecodeError> {
+    let features = webpx::ImageInfo::from_webp(data).map_err(DecodeError::with_diagnostic_source)?;
     validate_dimensions(features.width, features.height)?;
     // Preserve the existing first-frame behavior for animated containers.
     if features.has_animation {
-        return decode_rust_image(data, RustFormat::WebP, "WEBP").map_err(String::from);
+        return decode_rust_image(data, RustFormat::WebP, "WEBP");
     }
     let limits = webpx::Limits::default();
     limits.check_input_size(data.len() as u64).map_err(|error| format!("WebP limit exceeded: {error}"))?;
@@ -25,9 +25,9 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     let mode = if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb };
     let stride = (features.width as usize).checked_mul(mode.channels()).ok_or("WebP row size overflow")?;
     let length = stride.checked_mul(features.height as usize).ok_or("WebP buffer size overflow")?;
-    let stride = i32::try_from(stride).map_err(|error| error.to_string())?;
+    let stride = i32::try_from(stride).map_err(DecodeError::with_source)?;
     let mut pixels = Vec::<u8>::new();
-    pixels.try_reserve_exact(length).map_err(|error| error.to_string())?;
+    pixels.try_reserve_exact(length).map_err(DecodeError::with_source)?;
     // SAFETY: dimensions and capacity cover every packed output row. The Into
     // APIs write the entire buffer on success and never retain its pointer.
     let output = unsafe {
@@ -42,7 +42,7 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, String> {
     }
     // SAFETY: successful decoding initialized all length bytes above.
     unsafe { pixels.set_len(length) };
-    Image::from_pixels(features.width, features.height, mode, pixels, Some("WEBP".into())).map_err(|error| error.to_string())
+    Image::from_pixels(features.width, features.height, mode, pixels, Some("WEBP".into())).map_err(DecodeError::with_source)
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -76,7 +76,7 @@ pub fn backend_version() -> String {
     format!("{major}.{minor}.{patch}")
 }
 
-pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, DecodeError> {
     decode_frames(data, None)
 }
 
@@ -110,29 +110,30 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
     Ok(SequenceInfo { count: count as usize, loop_count, default_image: false })
 }
 
-pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
+pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, DecodeError> {
     decode_frames(data, Some(target))
 }
 
-fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, String> {
+fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, DecodeError> {
     use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
-    let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
+    let info = webpx::ImageInfo::from_webp(data).map_err(DecodeError::with_diagnostic_source)?;
     if !info.has_animation {
         return decode_webp(data).map(Sequence::single);
     }
-    let mut decoder = webpx::AnimationDecoder::new(data).map_err(|e| e.to_string())?;
+    let mut decoder = webpx::AnimationDecoder::new(data).map_err(DecodeError::with_diagnostic_source)?;
     let mut sequence = Sequence { loop_count: Some(decoder.info().loop_count), ..Sequence::default() };
     let mut timestamp = 0;
     let mut total = 0;
     let mut frame_index = 0;
     while decoder.has_more_frames() {
         validate_frame_budget(&mut total, decoder.info().width, decoder.info().height)?;
-        let frame = decoder.next_frame().map_err(|e| e.to_string())?.ok_or("missing WebP frame")?;
+        let frame = decoder.next_frame().map_err(DecodeError::with_diagnostic_source)?.ok_or("missing WebP frame")?;
         let duration = frame.timestamp_ms.checked_sub(timestamp).filter(|d| *d >= 0).ok_or("invalid WebP timestamp")?;
         timestamp = frame.timestamp_ms;
         if target.is_none_or(|target| target == frame_index) {
             sequence.frames.push(Frame {
-                image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into())).map_err(|e| e.to_string())?,
+                image: Image::from_pixels(frame.width, frame.height, PixelMode::Rgba, frame.data, Some("WEBP".into()))
+                    .map_err(DecodeError::with_source)?,
                 duration: Some(f64::from(duration)),
                 disposal: 0,
                 blend: 0,

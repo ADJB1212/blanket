@@ -37,6 +37,16 @@ def test_native_decode_preserves_error_cause() -> None:
     assert str(caught.value.__cause__) == str(caught.value)
 
 
+@pytest.mark.parametrize("data,format", [(b"BM", "BMP"), (b"DDS ", "DDS"), (b"qoif", "QOI"), (b"P6\n1 1\n255\n", "PPM"), (b"II*\x00\x08\x00\x00\x00\x00\x00\x00\x00\x00\x00", "TIFF")])
+def test_public_decode_preserves_native_error_cause(data: bytes, format: str) -> None:
+    with pytest.raises(CorruptImageError) as caught:
+        Image.decode(data)
+    assert caught.value.format == format
+    assert caught.value.operation == "decode"
+    assert isinstance(caught.value.__cause__, OSError)
+    assert str(caught.value.__cause__) == str(caught.value)
+
+
 @pytest.mark.parametrize("mode,format,depth", [("RGBA", "JPEG", 8), ("LAB", "PNG", 8), ("HSV", "TIFF", 8), ("RGB", "WEBP", 16)])
 def test_unsupported_encoding(mode: str, format: str, depth: int) -> None:
     image = Image.new(mode, (8, 8))

@@ -147,6 +147,7 @@ unused_macros = "deny"
 [workspace.lints.clippy]
 # Lint groups and overrides
 needless_return = "allow"
+too_many_arguments = "allow"
 perf = { level = "deny", priority = -1 }
 correctness = { level = "deny", priority = -1 }
 suspicious = { level = "deny", priority = -1 }

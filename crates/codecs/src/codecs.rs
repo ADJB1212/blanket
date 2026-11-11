@@ -301,25 +301,24 @@ pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>,
     check_backend(format, "decode")?;
     let sequence = py
         .detach(|| match (format, frame) {
-            (ImageFormat::Gif, Some(frame)) => blanket_codec_gif::decode_frame(data, frame),
+            (ImageFormat::Gif, Some(frame)) => blanket_codec_gif::decode_frame(data, frame).map_err(DecodeError::from),
             (ImageFormat::Webp, Some(frame)) => blanket_codec_webp::decode_frame(data, frame),
             (ImageFormat::Png, Some(frame)) => blanket_codec_png::decode_frame(data, frame),
             (ImageFormat::Tiff, Some(frame)) => blanket_codec_tiff::decode_frame(data, frame),
             _ => match format {
-                ImageFormat::Gif => blanket_codec_gif::decode_sequence(data),
+                ImageFormat::Gif => blanket_codec_gif::decode_sequence(data).map_err(DecodeError::from),
                 ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
                 ImageFormat::Png => blanket_codec_png::decode_sequence(data),
                 ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
-                _ => decode(data, format).map(Sequence::single).map_err(|error| error.to_string()),
+                _ => decode(data, format).map(Sequence::single),
             },
         })
-        .map_err(|message| decode_error(message, Some(format.as_str()), "decode"))?;
+        .map_err(|error| error.into_pyerr(Some(format.as_str())))?;
     let (images, metadata) = sequence.frames.into_iter().map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend))).unzip();
     Ok((images, metadata, sequence.loop_count, sequence.default_image))
 }
 
 #[pyfunction]
-#[expect(clippy::too_many_arguments, reason = "Python sequence API accepts parallel frame arrays and encoding options")]
 #[pyo3(signature = (images, format, durations, disposals, blends, loop_count, default_image, quality, compress_level, lossless, regions=None, pdf_dpi=72.0, output=None, metadata_exif=None, metadata_xmp=None, icc_profile=None, metadata_chunks=Vec::new()))]
 pub fn _encode_sequence(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, format: &str, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>, loop_count: Option<u32>,
@@ -477,13 +476,10 @@ pub fn write_path(py: Python<'_>, output: &Bound<'_, PyAny>, encoded: Vec<u8>) -
 
 pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {
     match format {
-        ImageFormat::Jxl => return decode_jxl(data),
-        ImageFormat::Png => return decode_png(data),
-        ImageFormat::Jpeg => return decode_jpeg(data),
-        ImageFormat::Heif => return decode_heif(data),
-        _ => {}
-    }
-    let result = match format {
+        ImageFormat::Jxl => decode_jxl(data),
+        ImageFormat::Png => decode_png(data),
+        ImageFormat::Jpeg => decode_jpeg(data),
+        ImageFormat::Heif => decode_heif(data),
         ImageFormat::Pcx
         | ImageFormat::Sgi
         | ImageFormat::Xbm
@@ -493,27 +489,22 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {
         | ImageFormat::Pixar
         | ImageFormat::Msp
         | ImageFormat::Palm
-        | ImageFormat::Sun => blanket_codec_extended::legacy::decode(data, format.as_str()),
+        | ImageFormat::Sun => blanket_codec_extended::legacy::decode(data, format.as_str()).map_err(DecodeError::from),
         ImageFormat::Ppm | ImageFormat::Pam => decode_pnm(data),
         ImageFormat::Tga => decode_tga(data),
         ImageFormat::Dds => decode_dds(data),
         ImageFormat::Eps => decode_eps(data),
         ImageFormat::Qoi => decode_qoi(data),
-        ImageFormat::Jpeg2000 => decode_jpeg2000(data),
+        ImageFormat::Jpeg2000 => decode_jpeg2000(data).map_err(DecodeError::from),
         ImageFormat::Bmp => decode_bmp(data),
-        ImageFormat::Gif => decode_gif(data),
+        ImageFormat::Gif => decode_gif(data).map_err(DecodeError::from),
         ImageFormat::Ico => decode_ico(data),
         ImageFormat::Pdf => Err("PDF is a write-only format".into()),
-        ImageFormat::Svg => blanket_codec_svg::decode(data).map_err(|error| error.to_string()),
+        ImageFormat::Svg => blanket_codec_svg::decode(data).map_err(DecodeError::with_source),
         ImageFormat::Avif => decode_avif(data),
         ImageFormat::Tiff => decode_tiff(data),
         ImageFormat::Webp => decode_webp(data),
-        ImageFormat::Heif => unreachable!(),
-        ImageFormat::Png => unreachable!(),
-        ImageFormat::Jpeg => unreachable!(),
-        ImageFormat::Jxl => unreachable!(),
-    };
-    result.map_err(DecodeError::from)
+    }
 }
 
 pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -630,6 +621,25 @@ fn encode_wide(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRe
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoder_adapters_preserve_native_causes() {
+        use std::error::Error;
+
+        for (format, data) in [
+            (ImageFormat::Bmp, b"BM".as_slice()),
+            (ImageFormat::Ppm, b"P6\n1 1\n255\n"),
+            (ImageFormat::Tga, &[0; 18]),
+            (ImageFormat::Dds, b"DDS "),
+            (ImageFormat::Qoi, b"qoif"),
+            (ImageFormat::Tiff, b"II*\0"),
+            (ImageFormat::Avif, b""),
+        ] {
+            let error = decode(data, format).unwrap_err();
+            assert!(error.source().is_some(), "{format:?}: {error}");
+        }
+    }
+
     #[test]
     fn svg_native_dispatch_preserves_pixels_and_format() {
         let format = ImageFormat::parse("svg").unwrap();

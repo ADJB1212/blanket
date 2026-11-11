@@ -1,7 +1,7 @@
 use std::borrow::Borrow;
 use std::io::Cursor;
 
-use blanket_codec_common::{Frame, SaveOptions, Sequence, codec_error, validate_frame_budget};
+use blanket_codec_common::{DecodeError, Frame, SaveOptions, Sequence, codec_error, validate_frame_budget};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -78,11 +78,11 @@ impl CanvasSample for u16 {
     }
 }
 
-pub fn decode_sequence(data: &[u8]) -> Result<Sequence, String> {
+pub fn decode_sequence(data: &[u8]) -> Result<Sequence, DecodeError> {
     decode_frames(data, None)
 }
 
-pub fn decode_frame(data: &[u8], target: usize) -> Result<Sequence, String> {
+pub fn decode_frame(data: &[u8], target: usize) -> Result<Sequence, DecodeError> {
     decode_frames(data, Some(target))
 }
 
@@ -109,20 +109,20 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
     Ok(SequenceInfo { count: count as usize, loop_count: Some(animation.num_plays), default_image })
 }
 
-fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, String> {
+fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, DecodeError> {
     let mut decoder = super::decoder(data);
     decoder.set_transformations(png::Transformations::EXPAND);
-    let reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
     let Some(animation) = reader.info().animation_control else {
         if reader.info().color_type == png::ColorType::Indexed
             || reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One
         {
-            return super::decode_png(data).map(Sequence::single).map_err(String::from);
+            return super::decode_png(data).map(Sequence::single);
         }
-        return super::decode_png_reader(reader, false).map(Sequence::single).map_err(String::from);
+        return super::decode_png_reader(reader, false).map(Sequence::single);
     };
     if reader.info().color_type == png::ColorType::Indexed {
-        let reader = super::decoder(data).read_info().map_err(|error| error.to_string())?;
+        let reader = super::decoder(data).read_info().map_err(DecodeError::with_diagnostic_source)?;
         return decode_animation::<u8>(reader, animation, target);
     }
     if reader.info().bit_depth == png::BitDepth::Sixteen {
@@ -134,7 +134,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, String>
 
 fn decode_animation<T: CanvasSample>(
     mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl, target: Option<usize>,
-) -> Result<Sequence, String> {
+) -> Result<Sequence, DecodeError> {
     let (width, height) = (reader.info().width, reader.info().height);
     let color_type = reader.info().color_type;
     let bit_depth = reader.info().bit_depth;
@@ -149,7 +149,8 @@ fn decode_animation<T: CanvasSample>(
         (width as usize).checked_mul(height as usize).and_then(|v| v.checked_mul(count as usize - 1)).ok_or("APNG pixel count overflow")?;
     validate_frame_budget(&mut total, width, height)?;
     let mut sequence = Sequence { loop_count: Some(animation.num_plays), default_image, ..Sequence::default() };
-    let mut buffer = blanket_core::raster::alloc_pixels(reader.output_buffer_size().ok_or("PNG buffer overflow")?).map_err(|e| e.to_string())?;
+    let mut buffer =
+        blanket_core::raster::alloc_pixels(reader.output_buffer_size().ok_or("PNG buffer overflow")?).map_err(DecodeError::with_source)?;
     let mut canvas = Vec::new();
     let length = width as usize * height as usize;
     canvas.try_reserve_exact(length).map_err(|_| "cannot allocate APNG canvas")?;
@@ -157,7 +158,7 @@ fn decode_animation<T: CanvasSample>(
     canvas.resize(length, [zero; 4]);
     let mut previous = Vec::new();
     for frame_index in 0..count {
-        let output = reader.next_frame(&mut buffer).map_err(|e| e.to_string())?;
+        let output = reader.next_frame(&mut buffer).map_err(DecodeError::with_diagnostic_source)?;
         let control = reader.info().frame_control;
         let (x, y) = control.map_or((0, 0), |c| (c.x_offset, c.y_offset));
         if x.checked_add(output.width).is_none_or(|v| v > width) || y.checked_add(output.height).is_none_or(|v| v > height) {
@@ -232,9 +233,9 @@ fn decode_animation<T: CanvasSample>(
             } else {
                 Image::from_pixels(width, height, mode, pixels, Some("PNG".into()))
             }
-            .map_err(|e| e.to_string())?;
+            .map_err(DecodeError::with_source)?;
             if color_type == png::ColorType::Indexed {
-                image.set_palette_data(Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?))).map_err(|error| error.to_string())?;
+                image.set_palette_data(Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?))).map_err(DecodeError::with_source)?;
             }
             sequence.frames.push(Frame {
                 image,
@@ -245,7 +246,7 @@ fn decode_animation<T: CanvasSample>(
         }
         if target == Some(frame_index as usize) {
             if frame_index + 1 == count {
-                reader.finish().map_err(|e| e.to_string())?;
+                reader.finish().map_err(DecodeError::with_diagnostic_source)?;
             }
             return Ok(sequence);
         }
@@ -270,7 +271,7 @@ fn decode_animation<T: CanvasSample>(
             }
         }
     }
-    reader.finish().map_err(|e| e.to_string())?;
+    reader.finish().map_err(DecodeError::with_diagnostic_source)?;
     Ok(sequence)
 }
 

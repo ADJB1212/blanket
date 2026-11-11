@@ -194,7 +194,6 @@ fn restore_alpha(pixels: &mut [u8], source: &[u8], input: PixelMode, depth: u8, 
 #[pymethods]
 impl CmsTransform {
     #[new]
-    #[allow(clippy::too_many_arguments)]
     fn new(
         py: Python<'_>, input: &[u8], output: &[u8], input_mode: &str, output_mode: &str, rendering_intent: u32, flags: u32, proof: Option<&[u8]>,
         proof_intent: u32,

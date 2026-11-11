@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::io::Cursor;
 
-use blanket_codec_common::{SaveOptions, codec_error, u16_bytes, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, u16_bytes, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
@@ -472,20 +472,19 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     Ok(output)
 }
 
-pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
-    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|error| error.to_string())?;
+pub fn decode_tiff(data: &[u8]) -> Result<Image, DecodeError> {
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(DecodeError::with_diagnostic_source)?;
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let mut image =
-        decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF").map_err(String::from), Ok)?;
+    let mut image = decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
     if image.pixel_mode() == PixelMode::L && image.bit_depth() == 16 {
-        image.reinterpret_mode(PixelMode::I16).map_err(|error| error.to_string())?;
+        image.reinterpret_mode(PixelMode::I16).map_err(DecodeError::with_source)?;
     }
     if !(2..=8).contains(&orientation) {
         return Ok(image);
     }
-    let source = image.raw_data().map_err(|error| error.to_string())?;
+    let source = image.raw_data().map_err(DecodeError::with_source)?;
     let size = if orientation >= 5 { (image.height(), image.width()) } else { (image.width(), image.height()) };
-    let mut pixels = blanket_core::raster::alloc_pixels(source.len()).map_err(|error| error.to_string())?;
+    let mut pixels = blanket_core::raster::alloc_pixels(source.len()).map_err(DecodeError::with_source)?;
     macro_rules! orient {
         ($channels:literal) => {
             blanket_core::geometry::transpose::<$channels>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation as u8)
@@ -502,12 +501,12 @@ pub fn decode_tiff(data: &[u8]) -> Result<Image, String> {
         16 => orient!(16),
         _ => return Err("unsupported TIFF pixel layout".into()),
     }
-    let mut result = blanket_core::buffers::output(&image, size, pixels).map_err(|error| error.to_string())?;
+    let mut result = blanket_core::buffers::output(&image, size, pixels).map_err(DecodeError::with_source)?;
     result.format = Some("TIFF".into());
     Ok(result)
 }
 
-pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
+pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, DecodeError> {
     use blanket_codec_common::{Frame, Sequence};
     let mut sequence = Sequence::default();
     visit_pages(data, |page| {
@@ -526,7 +525,7 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
     Ok(sequence)
 }
 
-pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
+pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, DecodeError> {
     use blanket_codec_common::{Frame, Sequence};
     let mut sequence = Sequence::default();
     let mut index = 0;
@@ -540,7 +539,7 @@ pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::
     Ok(sequence)
 }
 
-fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), String>) -> Result<(), String> {
+fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), DecodeError>) -> Result<(), DecodeError> {
     use blanket_codec_common::validate_frame_budget;
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
@@ -573,8 +572,8 @@ fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), String>) 
         if &page_data[header..header + offset_bytes] != offset_data {
             page_data.to_mut()[header..header + offset_bytes].copy_from_slice(offset_data);
         }
-        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(|e| e.to_string())?;
-        let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
+        let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(DecodeError::with_diagnostic_source)?;
+        let (width, height) = decoder.dimensions().map_err(DecodeError::with_diagnostic_source)?;
         validate_frame_budget(&mut total, width, height)?;
         visit(&page_data)?;
         offset = next_offset;

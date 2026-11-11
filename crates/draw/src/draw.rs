@@ -445,7 +445,6 @@ fn draw_mask(
     draw_mask_impl(image, position, size, mask, value, blend, stroke, false)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn draw_mask_impl(
     image: &mut Image, position: (i64, i64), size: (usize, usize), mask: &[u8], value: &Bound<'_, PyAny>, blend: bool, stroke: usize, bilevel: bool,
 ) -> PyResult<()> {

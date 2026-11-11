@@ -79,7 +79,6 @@ impl NativeFont {
     }
 
     #[pyo3(signature = (text, size, direction, features, language, render, start, advance_only=false))]
-    #[allow(clippy::too_many_arguments)]
     fn layout(
         &self, py: Python<'_>, text: &str, size: f32, direction: Option<&str>, features: Vec<String>, language: Option<&str>, render: bool,
         start: (f32, f32), advance_only: bool,

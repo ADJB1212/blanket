@@ -180,6 +180,9 @@ fn encode_jpeg_coded(image: &Image, pixels: &[u8], quality: u8, coding: JpegCodi
 }
 
 fn encode_jpeg_configured(image: &Image, pixels: &[u8], options: SaveOptions, coding: JpegCoding) -> PyResult<Vec<u8>> {
+    if pixels.len() != image.pixel_data()?.len() {
+        return Err(PyValueError::new_err("invalid JPEG input buffer"));
+    }
     let encoded = if !options.jpeg_qtables.is_empty()
         || options.jpeg_smooth != 0
         || options.jpeg_restart_marker_blocks != 0
@@ -386,6 +389,29 @@ fn ycbcr_planes(pixels: &[u8], width: usize, height: usize) -> (Vec<u8>, Vec<u8>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoders_reject_mismatched_pixel_buffers_before_processing() {
+        Python::initialize();
+        let tables = [[16_u16; 64]];
+        let options = [
+            SaveOptions::default(),
+            SaveOptions { jpeg_smooth: 1, ..Default::default() },
+            SaveOptions { jpeg_qtables: &tables, ..Default::default() },
+            SaveOptions { jpeg_restart_marker_blocks: 1, ..Default::default() },
+            SaveOptions { jpeg_restart_marker_rows: 1, ..Default::default() },
+        ];
+        for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::YCbCr, PixelMode::Cmyk] {
+            let length = 2 * mode.channels();
+            let image = Image::from_pixels(2, 1, mode, vec![0; length], None).unwrap();
+            for length in [0, length - 1, length + 1] {
+                for options in options {
+                    let error = encode_jpeg_options(&image, &vec![0; length], options).unwrap_err();
+                    Python::attach(|py| assert!(error.is_instance_of::<PyValueError>(py)));
+                }
+            }
+        }
+    }
 
     #[test]
     fn horizontal_ycbcr_planes_preserve_samples_rounding_and_edges() {

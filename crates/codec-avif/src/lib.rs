@@ -1,17 +1,18 @@
-use blanket_codec_common::{SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::prelude::*;
 
-pub fn decode_avif(data: &[u8]) -> Result<Image, String> {
-    let context = mp4parse::read_avif(&mut std::io::Cursor::new(data), mp4parse::ParseStrictness::Normal).map_err(|e| e.to_string())?;
+pub fn decode_avif(data: &[u8]) -> Result<Image, DecodeError> {
+    let context =
+        mp4parse::read_avif(&mut std::io::Cursor::new(data), mp4parse::ParseStrictness::Normal).map_err(DecodeError::with_diagnostic_source)?;
     validate_av1(context.primary_item_coded_data().ok_or("missing AVIF primary image")?)?;
     if let Some(alpha) = context.alpha_item_coded_data() {
         validate_av1(alpha)?;
     }
     drop(context);
-    decode_rust_image(data, RustFormat::Avif, "AVIF").map_err(String::from)
+    decode_rust_image(data, RustFormat::Avif, "AVIF")
 }
 
 fn validate_av1(mut data: &[u8]) -> Result<(), String> {
@@ -227,7 +228,7 @@ mod tests {
             assert!(oversized.len() <= stream.len());
             let mut data = encoded.clone();
             data[offset..offset + oversized.len()].copy_from_slice(&oversized);
-            assert!(decode_avif(&data).err().unwrap().contains("exceeds Blanket limit"));
+            assert!(decode_avif(&data).err().unwrap().to_string().contains("exceeds Blanket limit"));
         }
     }
 

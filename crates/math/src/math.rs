@@ -371,7 +371,6 @@ fn float_pixels_impl<const OP: usize>(
 
 #[pyfunction]
 #[pyo3(signature = (operation, left, right=None, integer_output=false, *, scalar=None, reverse=false, integer_scalar=None))]
-#[allow(clippy::too_many_arguments)]
 fn math_apply(
     py: Python<'_>, operation: &str, left: &Image, right: Option<&Image>, integer_output: bool, scalar: Option<f64>, reverse: bool,
     integer_scalar: Option<i32>,

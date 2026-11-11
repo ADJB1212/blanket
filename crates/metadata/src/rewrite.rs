@@ -7,7 +7,6 @@ use super::{PngChunk, encode_metadata, jxl_box};
 
 #[pyfunction]
 #[pyo3(signature = (data, format, exif, xmp, icc, text, dpi, remove_resolution))]
-#[allow(clippy::too_many_arguments)]
 pub fn _rewrite_metadata<'py>(
     py: Python<'py>, data: &[u8], format: &str, exif: Option<Vec<u8>>, xmp: Option<Vec<u8>>, icc: Option<Vec<u8>>, text: Option<Vec<PngChunk>>,
     dpi: Option<(f64, f64)>, remove_resolution: bool,
@@ -24,7 +23,6 @@ fn density(value: f64, scale: f64, maximum: u32) -> PyResult<u32> {
     Ok(value as u32)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn rewrite(
     data: &[u8], format: &str, exif: Option<&[u8]>, xmp: Option<&[u8]>, icc: Option<&[u8]>, text: Option<&[PngChunk]>, dpi: Option<(f64, f64)>,
     remove_resolution: bool,
@@ -54,7 +52,6 @@ fn rewrite(
     encode_metadata(output, format, exif.unwrap_or_default(), xmp.unwrap_or_default(), icc.unwrap_or_default(), &chunks)
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dpi: Option<(f64, f64)>, remove_resolution: bool) -> PyResult<Vec<u8>> {
     if !data.starts_with(b"\xff\xd8") {
         return Err(codec_error("invalid JPEG container"));

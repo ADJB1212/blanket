@@ -1932,7 +1932,6 @@ impl Image {
 }
 
 #[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1, decoder="raw"))]
-#[allow(clippy::too_many_arguments)]
 pub fn frombytes(
     py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, decoder: &str,
 ) -> PyResult<Image> {
@@ -1944,7 +1943,6 @@ pub fn frombytes(
 }
 
 #[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1))]
-#[allow(clippy::too_many_arguments)]
 pub fn frombuffer_copy(
     py: Python<'_>, mode: &str, size: (u32, u32), data: &Bound<'_, PyAny>, bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
 ) -> PyResult<Image> {
@@ -2005,7 +2003,6 @@ fn from_raw_input(
 }
 
 #[pyfunction]
-#[allow(clippy::too_many_arguments)]
 pub fn mapped_getpixel(
     py: Python<'_>, data: &Bound<'_, PyAny>, mode: &str, size: (u32, u32), stride: usize, orientation: i8, xy: (i64, i64),
 ) -> PyResult<Py<PyAny>> {

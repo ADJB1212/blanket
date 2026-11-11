@@ -7,15 +7,15 @@ use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-use blanket_codec_common::{codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, codec_error, validate_dimensions};
 use blanket_codec_image::{LumaMode, color_type, decode_rust_image, decode_with_metadata};
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ImageDecoder, ImageEncoder, ImageFormat};
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 
-pub fn decode_pnm(data: &[u8]) -> Result<Image, String> {
-    let decoder = image::codecs::pnm::PnmDecoder::new(data).map_err(|e| e.to_string())?;
+pub fn decode_pnm(data: &[u8]) -> Result<Image, DecodeError> {
+    let decoder = image::codecs::pnm::PnmDecoder::new(data).map_err(DecodeError::with_diagnostic_source)?;
     let (width, height) = decoder.dimensions();
     validate_dimensions(width, height)?;
     let color = decoder.color_type();
@@ -24,7 +24,7 @@ pub fn decode_pnm(data: &[u8]) -> Result<Image, String> {
         let length = (width as usize).div_ceil(8) * height as usize;
         let source = source.get(..length).ok_or("truncated PBM pixels")?;
         let pixels = blanket_core::raster::unpack_bilevel_inverted(source, width as usize, height as usize);
-        return Image::from_pixels(width, height, PixelMode::One, pixels, Some("PPM".into())).map_err(|e| e.to_string());
+        return Image::from_pixels(width, height, PixelMode::One, pixels, Some("PPM".into())).map_err(DecodeError::with_source);
     }
     if matches!(data.get(1), Some(b'5'..=b'7')) && decoder.header().maximal_sample() == 65535 {
         let mode = match color {
@@ -39,14 +39,14 @@ pub fn decode_pnm(data: &[u8]) -> Result<Image, String> {
             let source = source.get(..length).ok_or("truncated Netpbm pixels")?;
             let mut pixels = vec![0; length];
             blanket_core::simd::samples_to_be16(source, &mut pixels, 16);
-            return Image::from_sample_bytes(width, height, mode, pixels, 16, Some("PPM".into())).map_err(|e| e.to_string());
+            return Image::from_sample_bytes(width, height, mode, pixels, 16, Some("PPM".into())).map_err(DecodeError::with_source);
         }
     }
     let luma = if matches!(data.get(1), Some(b'1' | b'4')) { LumaMode::Bilevel } else { LumaMode::Grayscale };
-    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, luma).map_err(String::from)
+    decode_with_metadata(data, ImageFormat::Pnm, "PPM", None, luma)
 }
 
-pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
+pub fn decode_tga(data: &[u8]) -> Result<Image, DecodeError> {
     if data.len() >= 18 && data[1] == 0 && data[2] == 2 && matches!(data[16], 24 | 32) && data[17] & 0xd0 == 0 {
         let width = u32::from(u16::from_le_bytes([data[12], data[13]]));
         let height = u32::from(u16::from_le_bytes([data[14], data[15]]));
@@ -68,10 +68,10 @@ pub fn decode_tga(data: &[u8]) -> Result<Image, String> {
                 }
             }
             return Image::from_pixels(width, height, if channels == 3 { PixelMode::Rgb } else { PixelMode::Rgba }, pixels, Some("TGA".into()))
-                .map_err(|e| e.to_string());
+                .map_err(DecodeError::with_source);
         }
     }
-    decode_rust_image(data, ImageFormat::Tga, "TGA").map_err(String::from)
+    decode_rust_image(data, ImageFormat::Tga, "TGA")
 }
 
 fn encode_tga(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
@@ -109,12 +109,12 @@ pub fn inspect(data: &[u8], format: &str) -> Result<blanket_codec_common::ImageH
     Ok(header)
 }
 
-pub fn decode_dds(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, ImageFormat::Dds, "DDS").map_err(String::from)
+pub fn decode_dds(data: &[u8]) -> Result<Image, DecodeError> {
+    decode_rust_image(data, ImageFormat::Dds, "DDS")
 }
 
-pub fn decode_qoi(data: &[u8]) -> Result<Image, String> {
-    decode_rust_image(data, ImageFormat::Qoi, "QOI").map_err(String::from)
+pub fn decode_qoi(data: &[u8]) -> Result<Image, DecodeError> {
+    decode_rust_image(data, ImageFormat::Qoi, "QOI")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,13 +234,13 @@ fn inspect_eps(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     blanket_codec_common::ImageHeader::new(width, height, "RGB", 8)
 }
 
-pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
+pub fn decode_eps(data: &[u8]) -> Result<Image, DecodeError> {
     let (data, width, height) = eps_header(data)?;
     validate_dimensions(width, height)?;
-    let directory = tempfile::tempdir().map_err(|e| e.to_string())?;
+    let directory = tempfile::tempdir().map_err(DecodeError::with_diagnostic_source)?;
     let input_path = directory.path().join("input.eps");
     let output_path = directory.path().join("output.ppm");
-    std::fs::File::create(&input_path).and_then(|mut file| file.write_all(data)).map_err(|e| e.to_string())?;
+    std::fs::File::create(&input_path).and_then(|mut file| file.write_all(data)).map_err(DecodeError::with_diagnostic_source)?;
     let mut child = Command::new("gs")
         .args(["-q", "-dSAFER", "-dBATCH", "-dNOPAUSE", "-dFIXEDMEDIA", "-dEPSFitPage", "-sDEVICE=ppmraw", "-r72"])
         .arg(format!("-g{width}x{height}"))
@@ -254,7 +254,7 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
         .map_err(|e| format!("EPS reading requires Ghostscript (gs): {e}"))?;
     let started = Instant::now();
     loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(DecodeError::with_diagnostic_source)? {
             Some(status) if status.success() => break,
             Some(_) => return Err("Ghostscript could not rasterize EPS".into()),
             None if started.elapsed() > Duration::from_secs(30) => {
@@ -265,7 +265,7 @@ pub fn decode_eps(data: &[u8]) -> Result<Image, String> {
             None => std::thread::sleep(Duration::from_millis(10)),
         }
     }
-    let mut image = decode_pnm(&std::fs::read(output_path).map_err(|e| e.to_string())?)?;
+    let mut image = decode_pnm(&std::fs::read(output_path).map_err(DecodeError::with_diagnostic_source)?)?;
     image.format = Some("EPS".into());
     Ok(image)
 }
