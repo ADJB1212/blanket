@@ -166,7 +166,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             palette_values = indexed[0].getpalette()
             if any(frame.getpalette() != palette_values for frame in indexed[1:]):
                 png_mode = "RGBA" if any(frame.palette is not None and frame.palette.mode == "RGBA" for frame in indexed) else "RGB"
-    for frame in frames:
+    for source in frames:
+        frame = source
         if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):
             raise UnsupportedCodecError(f"cannot write mode {frame.mode} as {format}", format=format, operation="encode")
         if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):

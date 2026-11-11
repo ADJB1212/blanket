@@ -15,6 +15,14 @@ from blanket._exif import read_metadata
 MASTERING = (0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290, 1000.0, 0.0005)
 
 
+@pytest.mark.parametrize("cicp", [([9], 16, 0, 1), (9, {}, 0, 1), (True, 16, 0, 1), (9.0, 16, 0, 1), (9, 16, False, True), (256, 16, 0, 1)])
+def test_tone_map_validates_cicp_fields(cicp):
+    image = Image.new("RGB", (1, 1))
+    image.info["cicp"] = cicp
+    with pytest.raises(ValueError, match="cICP"):
+        ImageHdr.tone_map(image, transfer="linear", primaries="srgb")
+
+
 @pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("RGB", 10), ("RGBA", 16), ("I;16B", 16)])
 @pytest.mark.parametrize("transfer", ["srgb", "pq", "hlg"])
 @pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])

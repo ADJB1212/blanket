@@ -25,6 +25,41 @@ _POINTERS = {IFD.Exif, IFD.GPSInfo, IFD.Interop}
 _TYPES = {274: 3, 282: 5, 283: 5, 296: 3, 513: 4, 514: 4, 531: 3, 33434: 5, 33437: 5, 34850: 3, 34855: 3, 36864: 7, 37121: 7, 37377: 10, 37378: 5, 37380: 10, 37386: 5, 37500: 7, 37510: 7, 40960: 7, 40961: 3}
 
 
+def _infer_type(value: object) -> int:
+    """Choose a TIFF field type for a value without a declared tag type."""
+    if isinstance(value, bytes):
+        return 7
+    items = value if isinstance(value, (tuple, list)) else (value,)
+    if any(isinstance(item, float) or (hasattr(item, "denominator") and not isinstance(item, int)) for item in items):
+        return 5 if all(float(cast("FloatInput", item)) >= 0 for item in items) else 10
+    integers = tuple(index(cast("SupportsIndex", item)) for item in items)
+    if all(0 <= item <= 65535 for item in integers):
+        return 3
+    return 9 if any(item < 0 for item in integers) else 4
+
+
+def _pack_value(value: object, kind: int, endian: str) -> tuple[bytes, int]:
+    """Encode one TIFF field and report its element count."""
+    if kind == 2:
+        raw = str(value).encode("ascii", "replace") + b"\0"
+        return raw, len(raw)
+    if kind == 7 or (kind == 1 and isinstance(value, bytes)):
+        raw = bytes(cast("BytesInput", value))
+        return raw, len(raw)
+    items = value if isinstance(value, (tuple, list)) else (value,)
+    if kind not in (5, 10):
+        return struct.pack(f"{endian}{len(items)}{_FORMATS[kind]}", *items), len(items)
+
+    from fractions import Fraction
+
+    numbers = []
+    for item in items:
+        is_rational = hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int)
+        rational = item if is_rational else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
+        numbers.extend((int(cast("int | float | str", rational.numerator)), int(cast("int | float | str", rational.denominator))))
+    return struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers), len(items)
+
+
 class IFDRational(float):
     """A TIFF rational, retaining its numerator and denominator."""
 
@@ -233,7 +268,8 @@ class Exif(MutableMapping[int, object]):
                 count = struct.unpack_from(endian + "H", self._raw, previous_offset)[0]
                 unchanged = count == len(values) and struct.unpack_from(endian + "I", self._raw, previous_offset + 2 + count * 12)[0] == following
             pointers: dict[int, int] = {}
-            for tag, value in values.items():
+            for tag, stored_value in values.items():
+                value = stored_value
                 if tag in _POINTERS:
                     nested = self._ifds.get(tag)
                     if nested is None:
@@ -245,7 +281,8 @@ class Exif(MutableMapping[int, object]):
             if unchanged and previous_offset is not None:
                 active.remove(id(values))
                 return previous_offset
-            for tag, value in sorted(values.items()):
+            for tag, stored_value in sorted(values.items()):
+                value = stored_value
                 if tag in _POINTERS:
                     value = pointers[tag]
                     kind = 4
@@ -256,33 +293,8 @@ class Exif(MutableMapping[int, object]):
                         continue
                     kind = 2 if isinstance(value, str) else types.get(tag) or _TYPES.get(tag)
                 if kind is None:
-                    items = value if isinstance(value, (tuple, list)) else (value,)
-                    if isinstance(value, bytes):
-                        kind = 7
-                    elif any(isinstance(v, float) or (hasattr(v, "denominator") and not isinstance(v, int)) for v in items):
-                        kind = 5 if all(float(cast("FloatInput", v)) >= 0 for v in items) else 10
-                    else:
-                        integers = tuple(index(cast("SupportsIndex", v)) for v in items)
-                        kind = 3 if all(0 <= v <= 65535 for v in integers) else 9 if any(v < 0 for v in integers) else 4
-                if kind == 2:
-                    raw = str(value).encode("ascii", "replace") + b"\0"
-                    count = len(raw)
-                elif kind == 7 or (kind == 1 and isinstance(value, bytes)):
-                    raw = bytes(cast("BytesInput", value))
-                    count = len(raw)
-                else:
-                    items = value if isinstance(value, (tuple, list)) else (value,)
-                    count = len(items)
-                    if kind in (5, 10):
-                        from fractions import Fraction
-
-                        numbers = []
-                        for item in items:
-                            rational = item if hasattr(item, "numerator") and hasattr(item, "denominator") and not isinstance(item, int) else Fraction(cast("int | float | str | Decimal", item)).limit_denominator(1000000)
-                            numbers.extend((int(cast("int | float | str", rational.numerator)), int(cast("int | float | str", rational.denominator))))
-                        raw = struct.pack(f"{endian}{len(numbers)}{'I' if kind == 5 else 'i'}", *numbers)
-                    else:
-                        raw = struct.pack(f"{endian}{count}{_FORMATS[kind]}", *items)
+                    kind = _infer_type(value)
+                raw, count = _pack_value(value, kind, endian)
                 field = raw.ljust(4, b"\0") if len(raw) <= 4 else struct.pack(endian + "I", append(raw))
                 records.append(struct.pack(endian + "HHI", tag, kind, count) + field)
             active.remove(id(values))

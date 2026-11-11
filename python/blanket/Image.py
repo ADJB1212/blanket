@@ -6,7 +6,7 @@ Supported modes are `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGB
 
 from __future__ import annotations
 
-__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette", "math"}
+__lazy_modules__ = {"subprocess", "tempfile", "shlex", "sys", "io", "collections.abc", "contextlib", "pathlib", "warnings", "blanket._lazy_frames", "blanket.ImagePalette", "math"}
 
 import math
 import os
@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import warnings
+from contextlib import ExitStack
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import IntEnum
@@ -869,28 +870,21 @@ class Image:
         """
         self.load()
         display = self if self.mode in ("1", "L", "LA", "P", "PA", "RGB", "RGBA") else self.convert("RGB")
-        with tempfile.NamedTemporaryFile(prefix="blanket-", suffix=".png", delete=False) as stream:
-            path = stream.name
-            try:
+        with ExitStack() as cleanup:
+            with tempfile.NamedTemporaryFile(prefix="blanket-", suffix=".png", delete=False) as stream:
+                path = stream.name
+                cleanup.callback(Path(path).unlink, missing_ok=True)
                 display.save(stream, format="PNG")
-            except Exception:
-                Path(path).unlink(missing_ok=True)
-                raise
-        viewer = os.environ.get("BLANKET_IMAGE_VIEWER")
-        if viewer:
-            command = [*shlex.split(viewer), path]
-        elif sys.platform == "darwin":
-            command = ["open", path]
-        elif sys.platform == "win32":
-            os.startfile(path)  # type: ignore[attr-defined]
-            return
-        else:
-            command = ["xdg-open", path]
-        try:
-            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            Path(path).unlink(missing_ok=True)
-            raise
+            viewer = os.environ.get("BLANKET_IMAGE_VIEWER")
+            if sys.platform == "win32" and not viewer:
+                os.startfile(path)  # type: ignore[attr-defined]
+            else:
+                if viewer:
+                    command = [*shlex.split(viewer), path]
+                else:
+                    command = ["open" if sys.platform == "darwin" else "xdg-open", path]
+                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            cleanup.pop_all()
 
     def close(self) -> None:
         """Release the image's pixel buffer.
@@ -2214,10 +2208,10 @@ class Image:
             if method == Transform.MESH:
                 mesh = []
                 for box, quad in cast("Sequence[tuple[Sequence[int], Sequence[object]]]", data):
-                    box = tuple(index(v) for v in box)
-                    if len(box) != 4:
+                    bounds = tuple(index(v) for v in box)
+                    if len(bounds) != 4:
                         raise ValueError("mesh boxes require four coordinates")
-                    mesh.append((box, coordinates(quad, 8)))
+                    mesh.append((bounds, coordinates(quad, 8)))
             else:
                 mesh = [((0, 0, *size), coordinates(data, 8))]
             native = ops_warp(self._native, size, mesh, (resample, method == Transform.PERSPECTIVE), color if fillcolor is not None else None, isinstance(fillcolor, str))

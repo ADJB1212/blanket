@@ -196,6 +196,27 @@ def test_show_cleans_up_after_failure(failure: str, monkeypatch, tmp_path: Path)
     assert list(tmp_path.iterdir()) == []
 
 
+def test_show_cleans_up_after_invalid_viewer_command(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(Image.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setenv("BLANKET_IMAGE_VIEWER", 'viewer "')
+    with pytest.raises(ValueError, match="No closing quotation"):
+        Image.new("RGB", (1, 1)).show()
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_show_cleans_up_after_windows_launch_failure(monkeypatch, tmp_path: Path) -> None:
+    def fail(path):
+        raise OSError("launch failed")
+
+    monkeypatch.setattr(Image.tempfile, "tempdir", str(tmp_path))
+    monkeypatch.setattr(Image.sys, "platform", "win32")
+    monkeypatch.delenv("BLANKET_IMAGE_VIEWER", raising=False)
+    monkeypatch.setattr(Image.os, "startfile", fail, raising=False)
+    with pytest.raises(OSError, match="launch failed"):
+        Image.new("RGB", (1, 1)).show()
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_to_pillow_without_pillow(monkeypatch) -> None:
     original = builtins.__import__
 

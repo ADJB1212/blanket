@@ -36,7 +36,7 @@ def tone_map(image: Image.Image, operator: str = "reinhard", *, transfer: str | 
         raise ValueError("tone mapping requires L, LA, RGB, RGBA, F, or I;16 pixels")
     cicp = image.info.get("cicp")
     if cicp is not None:
-        if not isinstance(cicp, (tuple, list)) or len(cicp) != 4 or cicp[2:] not in ((0, 1), [0, 1]):
+        if not isinstance(cicp, (tuple, list)) or len(cicp) != 4 or any(isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 255 for value in cicp) or cicp[2:] not in ((0, 1), [0, 1]):
             raise ValueError("tone mapping requires full-range RGB cICP metadata")
         if transfer is None:
             transfer = {8: "linear", 13: "srgb", 16: "pq", 18: "hlg"}.get(cicp[1])

@@ -109,8 +109,7 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
         output = bytearray(_MAGIC)
         for start, end, cid, payload in chunks:
             if cid == b"acTL":
-                putchunk(output_stream := _Buffer(output), b"acTL", o32(fctl_count), bytes(payload[4:8]))
-                del output_stream
+                putchunk(_Buffer(output), b"acTL", o32(fctl_count), bytes(payload[4:8]))
             else:
                 output.extend(view[start:end])
         return bytes(output), None, None
@@ -142,12 +141,8 @@ class _Buffer:
 def _strip_apng(view: memoryview, chunks: list[tuple[int, int, bytes, memoryview]]) -> bytearray:
     """Strip APNG animation chunks to produce a static PNG."""
     output = bytearray(_MAGIC)
-    seen_idat = False
     for start, end, cid, _ in chunks:
-        if cid == b"IDAT":
-            seen_idat = True
-            output.extend(view[start:end])
-        elif (cid not in (b"acTL", b"fcTL", b"fdAT") or (not seen_idat and cid == b"fcTL")) and cid != b"fcTL":
+        if cid not in (b"acTL", b"fcTL", b"fdAT"):
             output.extend(view[start:end])
     return output
 
