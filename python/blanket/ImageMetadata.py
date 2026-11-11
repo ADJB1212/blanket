@@ -58,7 +58,8 @@ def _bytes(value: object, name: str) -> bytes:
     if name == "xmp" and isinstance(value, str):
         return value.encode("utf-8")
     if not isinstance(value, (bytes, bytearray, memoryview)):
-        raise TypeError(f"{name} must be bytes" + (", text, or None" if name == "xmp" else ", an Exif object, or None" if name == "exif" else " or None"))
+        alternatives = {"xmp": ", text, or None", "exif": ", an Exif object, or None"}.get(name, " or None")
+        raise TypeError(f"{name} must be bytes{alternatives}")
     return bytes(value)
 
 

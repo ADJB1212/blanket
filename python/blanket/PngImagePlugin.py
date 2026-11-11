@@ -19,6 +19,7 @@ from ._io import write_all
 from ._plugin import PluginImage
 
 _MAGIC = b"\x89PNG\r\n\x1a\n"
+_MAX_PIXELS = 178_956_970
 _SYNTAX_ERROR = SyntaxError
 
 
@@ -61,13 +62,17 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
     if len(actl_indices) > 1 or num_frames == 0 or num_frames > 0x80000000:
         import warnings
 
+        ihdr = chunks[0][3]
+        if chunks[0][2] != b"IHDR" or len(ihdr) != 13:
+            return data, None, None
+        width, height = int.from_bytes(ihdr[:4], "big"), int.from_bytes(ihdr[4:8], "big")
+        if not width or not height or width * height > _MAX_PIXELS:
+            return data, None, None
         warnings.warn("Invalid APNG, will use default PNG image if possible", UserWarning, stacklevel=3)
         output = bytearray(_MAGIC)
         for start, end, cid, _ in chunks:
             if cid == b"IEND" and not idat_seen:
-                ihdr = chunks[0][3]
-                width, height = int.from_bytes(ihdr[:4], "big"), int.from_bytes(ihdr[4:8], "big")
-                putchunk(_Buffer(output), b"IDAT", zlib.compress(bytes((width * 8 + 1) * height)))
+                putchunk(_Buffer(output), b"IDAT", _empty_idat((width * 8 + 1) * height))
             if cid not in (b"acTL", b"fcTL", b"fdAT"):
                 output.extend(view[start:end])
         return bytes(output), None if idat_seen else OSError("IDAT or fdAT chunk is missing"), None
@@ -99,7 +104,7 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
             need_data = False
     total_frames = num_frames + int(has_idat and not has_fctl_before_idat)
     ihdr = chunks[0][3]
-    if len(ihdr) >= 8 and int.from_bytes(ihdr[:4], "big") * int.from_bytes(ihdr[4:8], "big") * total_frames > 178_956_970:
+    if len(ihdr) >= 8 and int.from_bytes(ihdr[:4], "big") * int.from_bytes(ihdr[4:8], "big") * total_frames > _MAX_PIXELS:
         return data, None, None
     if need_data or fctl_count == 0:
         return bytes(_strip_apng(view, chunks)), _SYNTAX_ERROR("APNG missing frame data"), total_frames
@@ -114,6 +119,17 @@ def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]
                 output.extend(view[start:end])
         return bytes(output), None, None
     return data, None, None
+
+
+def _empty_idat(length: int) -> bytes:
+    """Compress placeholder scanlines without allocating their decoded size."""
+    encoder = zlib.compressobj()
+    block = bytes(64 * 1024)
+    output = bytearray()
+    for offset in range(0, length, len(block)):
+        output.extend(encoder.compress(block[: min(len(block), length - offset)]))
+    output.extend(encoder.flush())
+    return bytes(output)
 
 
 def _chunk_offsets(data: bytes) -> Iterator[int]:

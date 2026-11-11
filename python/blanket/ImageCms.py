@@ -201,9 +201,9 @@ def getProfileName(profile: _Profile) -> str:
     """
     value = _profile(profile)
     if not (value._model or value._manufacturer):
-        return value._description + "\n"
+        return f"{value._description}\n"
     if not value._manufacturer or len(value._model) > 30:
-        return value._model + "\n"
+        return f"{value._model}\n"
     return f"{value._model} - {value._manufacturer}\n"
 
 
@@ -219,7 +219,7 @@ def getProfileDescription(profile: _Profile) -> str:
     Raises:
         PyCMSError: The profile cannot be loaded.
     """
-    return _profile(profile)._description + "\n"
+    return f"{_profile(profile)._description}\n"
 
 
 def getProfileInfo(profile: _Profile) -> str:
@@ -236,7 +236,8 @@ def getProfileInfo(profile: _Profile) -> str:
         PyCMSError: The profile cannot be loaded.
     """
     value = _profile(profile)
-    return "\r\n\r\n".join(element for element in (value._description, value._copyright) if element) + "\r\n\r\n"
+    text = "\r\n\r\n".join(element for element in (value._description, value._copyright) if element)
+    return f"{text}\r\n\r\n"
 
 
 def getProfileCopyright(profile: _Profile) -> str:
@@ -251,7 +252,7 @@ def getProfileCopyright(profile: _Profile) -> str:
     Raises:
         PyCMSError: The profile cannot be loaded.
     """
-    return _profile(profile)._copyright + "\n"
+    return f"{_profile(profile)._copyright}\n"
 
 
 def getProfileManufacturer(profile: _Profile) -> str:
@@ -266,7 +267,7 @@ def getProfileManufacturer(profile: _Profile) -> str:
     Raises:
         PyCMSError: The profile cannot be loaded.
     """
-    return _profile(profile)._manufacturer + "\n"
+    return f"{_profile(profile)._manufacturer}\n"
 
 
 def getProfileModel(profile: _Profile) -> str:
@@ -281,7 +282,7 @@ def getProfileModel(profile: _Profile) -> str:
     Raises:
         PyCMSError: The profile cannot be loaded.
     """
-    return _profile(profile)._model + "\n"
+    return f"{_profile(profile)._model}\n"
 
 
 def _intent(value: int) -> int:

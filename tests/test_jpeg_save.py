@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import struct
 from io import BytesIO
 
 import pytest
@@ -9,6 +10,43 @@ from PIL import Image as PillowImage
 from blanket import Image, ImageFile
 from blanket._jpeg import segments
 from blanket.Compressor import LosslessImageCompressor
+
+
+@pytest.mark.parametrize("count", [-1, 0])
+def test_mpo_rejects_nonpositive_image_count(count: int) -> None:
+    exif = Image.Exif()
+    exif[0xB001] = count
+    exif[0xB002] = bytes(16)
+    image = Image.new("RGB", (1, 1))
+    image.info["mp"] = exif.tobytes()[6:]
+    with pytest.raises(SyntaxError, match="bad MP Entry"):
+        image._getmp()
+
+
+def test_mpo_preserves_memory_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fail(self, data):
+        raise MemoryError("allocation failed")
+
+    image = Image.new("RGB", (1, 1))
+    image.info["mp"] = b"II*\0\x08\0\0\0"
+    monkeypatch.setattr(Image.Exif, "load", fail)
+    with pytest.raises(MemoryError, match="allocation failed"):
+        image._getmp()
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("count", [1, 2])
+def test_mpo_reads_declared_entries(endian: str, count: int) -> None:
+    exif = Image.Exif()
+    exif.endian = endian
+    exif[0xB001] = count
+    exif[0xB002] = b"".join(struct.pack(f"{endian}LLLHH", 0x030000, 100 + i, 200 + i, 0, 0) for i in range(count)) + b"trailing"
+    image = Image.new("RGB", (1, 1))
+    image.info["mp"] = exif.tobytes()[6:]
+    result = image._getmp()
+    assert result is not None
+    assert result[0xB001] == count
+    assert [(entry["Size"], entry["DataOffset"], entry["Attribute"]["MPType"]) for entry in result[0xB002]] == [(100 + i, 200 + i, "Baseline MP Primary Image") for i in range(count)]
 
 
 def source(mode: str = "RGB", size: tuple[int, int] = (17, 9)) -> tuple[Image.Image, PillowImage.Image]:

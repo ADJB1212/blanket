@@ -333,7 +333,7 @@ def _radii(radius: float | Sequence[float]) -> tuple[float, float]:
         values = radius, radius
     else:
         if len(radius) != 2:
-            raise TypeError("argument 1 must be sequence of length 2, not " + str(len(radius)))
+            raise TypeError(f"argument 1 must be sequence of length 2, not {len(radius)}")
         values = radius[0], radius[1]
     if any(abs(value) >= 2**31 or not isfinite(value) for value in values):
         raise ValueError("radius must be finite and less than 2**31")

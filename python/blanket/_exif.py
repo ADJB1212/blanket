@@ -442,7 +442,8 @@ def save_metadata(image: Image, format: str, options: dict[str, object], *, stri
         if value is None:
             value = b""
         if not isinstance(value, (bytes, bytearray, memoryview)):
-            raise TypeError(f"{key} must be bytes" + (" or an Exif object" if key == "exif" else ""))
+            alternative = " or an Exif object" if key == "exif" else ""
+            raise TypeError(f"{key} must be bytes{alternative}")
         values.append(bytes(value))
     pnginfo = options.pop("pnginfo", None)
     if pnginfo is not None and not isinstance(pnginfo, PngInfo):

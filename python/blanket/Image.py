@@ -1144,17 +1144,17 @@ class Image:
             exif = Exif()
             exif.load(raw)
             mp = dict(exif)
-        except Exception as error:
+        except (ValueError, struct.error) as error:
             raise SyntaxError("malformed MP Index (unreadable directory)") from error
         if 0xB001 not in mp:
             raise SyntaxError("malformed MP Index (no number of images)")
         entries = []
         try:
             raw_entries = mp[0xB002]
-            if not isinstance(raw_entries, bytes):
+            count = mp[0xB001]
+            if not isinstance(raw_entries, bytes) or not isinstance(count, int) or count <= 0 or len(raw_entries) < count * 16:
                 raise TypeError("bad MP Entry")
-            for index_num in range(cast("int", mp[0xB001])):
-                attr, size, offset, dep1, dep2 = struct.unpack_from(f"{endian}LLLHH", raw_entries, index_num * 16)
+            for attr, size, offset, dep1, dep2 in struct.iter_unpack(f"{endian}LLLHH", memoryview(raw_entries)[: count * 16]):
                 fmt = (attr & (7 << 24)) >> 24
                 if fmt != 0:
                     raise SyntaxError("unsupported picture format in MPO")

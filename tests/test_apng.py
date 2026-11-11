@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import struct
+import tracemalloc
 from io import BytesIO
 
 import pytest
 from helpers import assert_raises
 from pillow_helpers import PILLOW_IMAGES
 
-from blanket import Image, ImageSequence, PngImagePlugin
+from blanket import CorruptImageError, Image, ImageSequence, PngImagePlugin
 from blanket.PngImagePlugin import Blend, Disposal
 
 TYPE_CHECKING = False
@@ -22,6 +23,43 @@ def assert_frame_pixels(image, first, second=None, *, frame=None):
         image.seek(frame)
     assert image.getpixel((0, 0)) == first
     assert image.getpixel((64, 32)) == (first if second is None else second)
+
+
+def invalid_apng_without_pixels(width: int, height: int) -> bytes:
+    stream = BytesIO(PngImagePlugin._MAGIC)
+    stream.seek(0, 2)
+    PngImagePlugin.putchunk(stream, b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0))
+    PngImagePlugin.putchunk(stream, b"acTL", struct.pack(">II", 0, 0))
+    PngImagePlugin.putchunk(stream, b"IEND")
+    return stream.getvalue()
+
+
+def test_invalid_apng_recovery_bounds_temporary_memory() -> None:
+    data = invalid_apng_without_pixels(512, 512)
+    tracemalloc.start()
+    try:
+        with pytest.warns(UserWarning, match="Invalid APNG"):
+            recovered, error, count = PngImagePlugin.sanitize_apng(data)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert peak < 512 * 1024, f"recovery allocated {peak} bytes"
+    assert isinstance(error, OSError) and count is None
+    with Image.decode(recovered) as image:
+        assert image.size == (512, 512)
+
+
+def test_invalid_apng_recovery_checks_dimensions_before_allocation(monkeypatch) -> None:
+    def checked_bytes(value):
+        if isinstance(value, int) and value > 64 * 1024:
+            raise AssertionError("oversized recovery allocation")
+        return bytes(value)
+
+    data = invalid_apng_without_pixels(20000, 20000)
+    monkeypatch.setattr(PngImagePlugin, "bytes", checked_bytes, raising=False)
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", None)
+    with pytest.raises(CorruptImageError, match="IDAT or fdAT"):
+        Image.decode(data)
 
 
 @pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("L", 16), ("RGB", 16), ("RGBA", 16)])
