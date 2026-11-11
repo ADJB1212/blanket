@@ -498,7 +498,7 @@ class Image:
         if palette_data is not None:
             from .ImagePalette import ImagePalette
 
-            self.palette = ImagePalette(palette_data[0], bytes(palette_data[1]))
+            self.palette = ImagePalette(*palette_data)
 
     @property
     def mode(self) -> str:
@@ -3231,10 +3231,7 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
     from ._buffer import BufferMap, MappedImage
 
     mapping = BufferMap(view[:required], rawmode, size, stride, orientation)
-    initial = frombytes(rawmode, size, view[:required], "raw", rawmode, stride, orientation)
-    result = MappedImage(initial._native, mapping)
-    result.palette = initial.palette
-    return result
+    return MappedImage(mapping)
 
 
 def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
@@ -3263,7 +3260,8 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
                 memoryview(obj)
             except TypeError as error:
                 raise ValueError("strided array interface requires a buffer or tobytes()") from error
-    result = Image(_native_fromarray(obj, "L" if mode == "P" else mode, bit_depth))
+    pixels = interface["data"] if type(obj) is Image and interface is not None else obj
+    result = Image(_native_fromarray(pixels, "L" if mode == "P" else mode, bit_depth, interface))
     if mode == "P":
         result.putpalette(b"")
     return result

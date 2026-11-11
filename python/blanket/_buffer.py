@@ -5,11 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from ._blanket import frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
+from ._blanket import _Image, frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
 from .Image import Image, PixelAccess, _pixel_coordinates
 
 if TYPE_CHECKING:
-    from ._blanket import _Image
     from .ImagePalette import ImagePalette
 
 
@@ -55,18 +54,21 @@ class BufferPixelAccess(PixelAccess):
 class MappedImage(Image):
     """An image backed by a mapped memory buffer."""
 
-    def __init__(self, native: _Image, mapping: BufferMap) -> None:
+    def __init__(self, mapping: BufferMap) -> None:
         """Initialize a mapped image backed by a buffer."""
         self._mapping: BufferMap | None = None
-        super().__init__(native)
+        super().__init__(_Image._mapped_layout(mapping.mode, mapping.size))
         self._mapping = mapping
         self.readonly = 1
 
     @property
     def mode(self) -> str:
         """Return the pixel mode without copying mapped pixels."""
-        if self._mapping is not None and self.palette is not None:
-            return "P"
+        if self._mapping is not None:
+            if self.palette is not None:
+                return "P"
+            if self._mapping.mode == "P":
+                return "L"
         return self._raster.mode
 
     @property
@@ -98,7 +100,7 @@ class MappedImage(Image):
     def _native(self) -> _Image:
         """Return the current native raster snapshot."""
         if self._mapping is not None:
-            self._raster = self._mapping.snapshot(self.palette)
+            return self._mapping.snapshot(self.palette)
         return self._raster
 
     @_native.setter
@@ -111,14 +113,18 @@ class MappedImage(Image):
         """Detach from buffer mapping and ensure raster is mutable."""
         if self._mapping is not None:
             self._native = self._native
+            self.readonly = 0
         super()._ensure_mutable()
 
     def load(self) -> PixelAccess:
         """Load pixel access interface for the mapped buffer."""
         if self._mapping is not None:
-            self._raster.load()
             return BufferPixelAccess(self._mapping, self.palette)
         return super().load()
+
+    def _sync_palette(self) -> None:
+        if self._mapping is None:
+            super()._sync_palette()
 
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
         """Read a pixel directly from a live buffer mapping."""
@@ -141,11 +147,4 @@ class MappedImage(Image):
         from .Image import frombytes
 
         replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
-        encoded = replacement.tobytes("raw", mapping.mode, 0, mapping.orientation)
-        view = memoryview(encoded)
-        row_bytes = len(encoded) // mapping.size[1] if mapping.size[1] else 0
-        if row_bytes == mapping.stride:
-            mapping.data[: len(encoded)] = view
-            return
-        for row in range(mapping.size[1]):
-            mapping.data[row * mapping.stride : row * mapping.stride + row_bytes] = view[row * row_bytes : (row + 1) * row_bytes]
+        replacement._native._write_mapped_rows(mapping.data, mapping.mode, mapping.stride, mapping.orientation)

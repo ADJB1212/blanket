@@ -2,6 +2,7 @@ use std::borrow::Cow;
 
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBytes;
 
 use crate::PixelMode;
 
@@ -93,6 +94,65 @@ impl Layout {
         }
         Ok(Self { image_row, raw_row, stride, bgr_channels })
     }
+
+    fn is_identity(&self, orientation: i8) -> bool {
+        self.bgr_channels.is_none() && self.stride == self.image_row && orientation == 1
+    }
+}
+
+struct Rows {
+    input_row: usize,
+    input_stride: usize,
+    output_row: usize,
+    output_stride: usize,
+    height: usize,
+    length: usize,
+    reverse: bool,
+    swap_channels: Option<(usize, usize)>,
+}
+
+impl Rows {
+    fn new(layout: Layout, mode: PixelMode, height: usize, orientation: i8, encode: bool, input_len: usize) -> PyResult<Self> {
+        let (input_row, input_stride, output_row, output_stride) = if encode {
+            (layout.image_row, layout.image_row, layout.raw_row, layout.stride)
+        } else {
+            (layout.raw_row, layout.stride, layout.image_row, layout.image_row)
+        };
+        let required = if height == 0 { Some(0) } else { (height - 1).checked_mul(input_stride).and_then(|v| v.checked_add(input_row)) }
+            .ok_or_else(|| PyValueError::new_err("raw buffer size overflow"))?;
+        if input_len < required {
+            return Err(PyValueError::new_err("not enough image data"));
+        }
+        let length = output_stride.checked_mul(height).ok_or_else(|| PyValueError::new_err("raw buffer size overflow"))?;
+        let swap_channels = layout.bgr_channels.map(|c| if encode { (mode.channels(), c) } else { (c, mode.channels()) });
+        Ok(Self { input_row, input_stride, output_row, output_stride, height, length, reverse: orientation == -1, swap_channels })
+    }
+
+    fn source_row<'a>(&self, data: &'a [u8], row: usize) -> &'a [u8] {
+        let row = if self.reverse { self.height - row - 1 } else { row };
+        let offset = row * self.input_stride;
+        &data[offset..offset + self.input_row]
+    }
+
+    fn write(&self, data: &[u8], output: &mut [u8]) {
+        if output.is_empty() {
+            return;
+        }
+        crate::parallel::chunks_mut_above(output, self.output_stride.saturating_mul(32), 4 * 1024 * 1024, |band, rows| {
+            for (i, target) in rows.chunks_exact_mut(self.output_stride).enumerate() {
+                let source = self.source_row(data, band * 32 + i);
+                let target = &mut target[..self.output_row];
+                match self.swap_channels {
+                    Some((3, 3)) => crate::pixels::swap_red_blue::<3, 3>(source, target),
+                    Some((3, 4)) => crate::pixels::swap_red_blue::<3, 4>(source, target),
+                    Some((4, 3)) => crate::pixels::swap_red_blue::<4, 3>(source, target),
+                    Some((4, 4)) => crate::pixels::swap_red_blue::<4, 4>(source, target),
+                    Some(_) => unreachable!(),
+                    None => target.copy_from_slice(source),
+                }
+            }
+        });
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,43 +163,39 @@ pub(crate) fn transform<'a>(
         Ok(layout) => layout,
         Err(error) => return extended_transform(data, mode, size, depth, rawmode, stride, orientation, encode).unwrap_or(Err(error)),
     };
-    if layout.bgr_channels.is_none() && layout.stride == layout.image_row && orientation == 1 {
+    if layout.is_identity(orientation) {
         return Ok(Cow::Borrowed(data));
     }
-    let height = size.1 as usize;
-    let (input_row, input_stride, output_stride) =
-        if encode { (layout.image_row, layout.image_row, layout.stride) } else { (layout.raw_row, layout.stride, layout.image_row) };
-    let required = if height == 0 { Some(0) } else { (height - 1).checked_mul(input_stride).and_then(|v| v.checked_add(input_row)) }
-        .ok_or_else(|| PyValueError::new_err("raw buffer size overflow"))?;
-    if data.len() < required {
-        return Err(PyValueError::new_err("not enough image data"));
+    let rows = Rows::new(layout, mode, size.1 as usize, orientation, encode, data.len())?;
+    let mut output = crate::buffers::reserved(rows.length)?;
+    if rows.swap_channels.is_none() && rows.output_stride == rows.output_row {
+        crate::buffers::copy_rows(&mut output, rows.output_stride, rows.height, |row| rows.source_row(data, row));
+    } else {
+        output.resize(rows.length, 0);
+        rows.write(data, &mut output);
     }
-    let length = output_stride.checked_mul(height).ok_or_else(|| PyValueError::new_err("raw buffer size overflow"))?;
-    let mut output = Vec::new();
-    output.try_reserve_exact(length).map_err(|error| PyMemoryError::new_err(error.to_string()))?;
-    output.resize(length, 0);
-    crate::parallel::chunks_mut_above(&mut output, output_stride.saturating_mul(32), 4 * 1024 * 1024, |band, rows| {
-        for (i, target) in rows.chunks_exact_mut(output_stride).enumerate() {
-            let row = band * 32 + i;
-            let source_row = if orientation == -1 { height - row - 1 } else { row };
-            let source = &data[source_row * input_stride..source_row * input_stride + input_row];
-            let target_row = if encode { layout.raw_row } else { layout.image_row };
-            let target = &mut target[..target_row];
-            if let Some(channels) = layout.bgr_channels {
-                let (input_channels, output_channels) = if encode { (mode.channels(), channels) } else { (channels, mode.channels()) };
-                match (input_channels, output_channels) {
-                    (3, 3) => crate::pixels::swap_red_blue::<3, 3>(source, target),
-                    (3, 4) => crate::pixels::swap_red_blue::<3, 4>(source, target),
-                    (4, 3) => crate::pixels::swap_red_blue::<4, 3>(source, target),
-                    (4, 4) => crate::pixels::swap_red_blue::<4, 4>(source, target),
-                    _ => unreachable!(),
-                }
-            } else {
-                target.copy_from_slice(source);
-            }
-        }
-    });
     Ok(Cow::Owned(output))
+}
+
+#[expect(clippy::too_many_arguments, reason = "Raw export accepts the image and output layouts")]
+pub(crate) fn encode<'py>(
+    py: Python<'py>, data: &[u8], mode: PixelMode, size: (u32, u32), depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8,
+) -> PyResult<Bound<'py, PyBytes>> {
+    let layout = match Layout::new(mode, size.0 as usize, depth, rawmode, stride, orientation) {
+        Ok(layout) => layout,
+        Err(error) => {
+            let output = py.detach(|| extended_transform(data, mode, size, depth, rawmode, stride, orientation, true).unwrap_or(Err(error)))?;
+            return Ok(PyBytes::new(py, &output));
+        }
+    };
+    if layout.is_identity(orientation) {
+        return Ok(PyBytes::new(py, data));
+    }
+    let rows = Rows::new(layout, mode, size.1 as usize, orientation, true, data.len())?;
+    PyBytes::new_with(py, rows.length, |output| {
+        py.detach(|| rows.write(data, output));
+        Ok(())
+    })
 }
 
 enum RawKind {

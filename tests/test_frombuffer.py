@@ -214,6 +214,14 @@ def test_frombuffer_immutable_source_detaches_on_replace() -> None:
     assert data == bytes(range(8))
 
 
+def test_frombuffer_write_through_retains_padding_and_reverses_rows() -> None:
+    data = bytearray([0, 0, 90, 0, 0, 91])
+    image = Image.frombuffer("L", (2, 2), data, "raw", "L", 3, -1)
+    image.frombytes(bytes([1, 2, 3, 4]))
+    assert data == bytes([3, 4, 90, 1, 2, 91])
+    assert image.tobytes() == bytes([1, 2, 3, 4])
+
+
 @pytest.mark.parametrize("size", [(0, 0), (0, 3), (3, 0)])
 def test_frombuffer_empty_images(size: tuple[int, int]) -> None:
     actual = Image.frombuffer("RGBA", size, b"")

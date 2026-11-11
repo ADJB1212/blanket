@@ -1217,6 +1217,51 @@ impl Image {
         self.raw_data().map(|_| ())
     }
 
+    #[staticmethod]
+    fn _mapped_layout(mode: &str, size: (u32, u32)) -> PyResult<Self> {
+        // The Python mapping supplies pixels separately.
+        let palette = (mode == "P").then(|| (PixelMode::Rgb, Vec::new()));
+        let mode = if mode == "P" { PixelMode::L } else { PixelMode::parse(mode)? };
+        let bit_depth = (mode.sample_bytes() * 8) as u8;
+        expected_len(size.0, size.1, mode)?
+            .checked_mul(mode.sample_bytes())
+            .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+        Ok(Self { width: size.0, height: size.1, mode, pixels: None, bit_depth, palette, .. })
+    }
+
+    fn _write_mapped_rows(&self, data: &Bound<'_, PyMemoryView>, mode: &str, stride: usize, orientation: i8) -> PyResult<()> {
+        let source = self.raw_data()?;
+        if self.mode.as_str() != mode && !(self.mode == PixelMode::L && mode == "P") {
+            return Err(PyValueError::new_err("mapped buffer mode does not match"));
+        }
+        let row_bytes = self.width as usize * self.raw_bytes_per_pixel();
+        let height = self.height as usize;
+        let required = stride.checked_mul(height).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+        let buffer = PyBuffer::<u8>::get(data.as_any())?;
+        if stride < row_bytes
+            || !matches!(orientation, -1 | 1)
+            || !buffer.is_c_contiguous()
+            || buffer.dimensions() != 1
+            || buffer.len_bytes() != required
+        {
+            return Err(PyValueError::new_err("invalid mapped buffer layout"));
+        }
+        if source.is_empty() {
+            return Ok(());
+        }
+        let py = data.py();
+        if stride == row_bytes && orientation == 1 {
+            return buffer.copy_from_slice(py, source);
+        }
+        for (row, source) in source.chunks_exact(row_bytes).enumerate() {
+            let row = if orientation == 1 { row } else { height - 1 - row };
+            let offset = row * stride;
+            let view = data.get_item(PySlice::new(py, offset as isize, (offset + row_bytes) as isize, 1))?;
+            PyBuffer::<u8>::get(&view)?.copy_from_slice(py, source)?;
+        }
+        Ok(())
+    }
+
     fn _replace_pixels(&mut self, mut replacement: PyRefMut<'_, Self>) -> PyResult<()> {
         if self.size() != replacement.size() || self.mode != replacement.mode || self.bit_depth != replacement.bit_depth {
             return Err(PyValueError::new_err("replacement image layout does not match"));
@@ -1252,6 +1297,9 @@ impl Image {
     }
 
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
+        if std::ptr::eq(first, second) {
+            return Ok(true);
+        }
         let source = self.raw_data()?;
         let pixels = if let Some(pixels) = &self.pixels {
             py.detach(|| Arc::clone(pixels))
@@ -1302,9 +1350,6 @@ impl Image {
             return Ok(integer_value(self.mode, &pixels[start..start + self.mode.sample_bytes()]).into_pyobject(py)?.into_any().unbind());
         }
         if self.bit_depth > 8 {
-        if std::ptr::eq(first, second) {
-            return Ok(true);
-        }
             let sample = |i: usize| u16::from_le_bytes([pixels[2 * i], pixels[2 * i + 1]]);
             return Ok(match self.mode {
                 PixelMode::One | PixelMode::L => sample(offset).into_pyobject(py)?.into_any().unbind(),
@@ -1331,11 +1376,11 @@ impl Image {
         })
     }
 
-    pub fn palette_data(&self) -> Option<(String, Vec<u8>)> {
-        self.palette.as_ref().map(|(mode, data)| (mode.as_str().to_owned(), data.clone()))
+    pub fn palette_data<'py>(&self, py: Python<'py>) -> Option<(&'static str, Bound<'py, PyBytes>)> {
+        self.palette.as_ref().map(|(mode, data)| (mode.as_str(), PyBytes::new(py, data)))
     }
 
-    pub fn set_palette(&mut self, mode: &str, data: Vec<u8>) -> PyResult<()> {
+    pub fn set_palette(&mut self, mode: &str, data: std::borrow::Cow<'_, [u8]>) -> PyResult<()> {
         self.pixel_data()?;
         let mode = PixelMode::parse(mode)?;
         if !matches!(self.mode, PixelMode::L | PixelMode::Pa)
@@ -1345,12 +1390,20 @@ impl Image {
         {
             return Err(PyValueError::new_err("invalid palette"));
         }
-        self.palette = Some((mode, data));
+        if let Some((old_mode, old_data)) = &mut self.palette {
+            *old_mode = mode;
+            if old_data.as_slice() != data.as_ref() {
+                old_data.clear();
+                old_data.extend_from_slice(&data);
+            }
+        } else {
+            self.palette = Some((mode, data.into_owned()));
+        }
         Ok(())
     }
 
     #[pyo3(signature = (alpha=None, index=None))]
-    pub fn set_palette_alpha(&mut self, alpha: Option<Vec<u8>>, index: Option<u8>) -> PyResult<()> {
+    pub fn set_palette_alpha(&mut self, alpha: Option<std::borrow::Cow<'_, [u8]>>, index: Option<u8>) -> PyResult<()> {
         self.pixel_data()?;
         let output = self.alpha_palette(alpha.as_deref(), index)?;
         self.palette = Some((PixelMode::Rgba, output));
@@ -1359,7 +1412,7 @@ impl Image {
 
     #[pyo3(signature = (mode, alpha=None, index=None, bit_depth=None))]
     pub fn convert_palette_alpha(
-        &self, py: Python<'_>, mode: &str, alpha: Option<Vec<u8>>, index: Option<u8>, bit_depth: Option<u8>,
+        &self, py: Python<'_>, mode: &str, alpha: Option<std::borrow::Cow<'_, [u8]>>, index: Option<u8>, bit_depth: Option<u8>,
     ) -> PyResult<Self> {
         if self.mode != PixelMode::L || !matches!(mode, "LA" | "RGBA") {
             return Err(PyValueError::new_err("indexed alpha conversion requires LA or RGBA output"));
@@ -1858,8 +1911,7 @@ impl Image {
         } else {
             pixels
         };
-        let output = py.detach(|| crate::raw::transform(source, self.mode, self.size(), self.bit_depth, rawmode, stride, orientation, true))?;
-        Ok(PyBytes::new(py, &output).unbind())
+        crate::raw::encode(py, source, self.mode, self.size(), self.bit_depth, rawmode, stride, orientation).map(Bound::unbind)
     }
 
     pub fn __enter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -1881,8 +1933,10 @@ pub fn frombytes(
     py: Python<'_>, mode: &str, size: (u32, u32), data: &[u8], bit_depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, decoder: &str,
 ) -> PyResult<Image> {
     let mode = PixelMode::parse(mode)?;
-    let input = py.detach(|| crate::raw::decode(data, decoder))?;
-    py.detach(|| from_raw_input(mode, size, input, bit_depth, rawmode, stride, orientation))
+    py.detach(|| {
+        let input = crate::raw::decode(data, decoder)?;
+        from_raw_input(mode, size, input, bit_depth, rawmode, stride, orientation)
+    })
 }
 
 #[pyfunction(signature = (mode, size, data, bit_depth=8, rawmode=None, stride=0, orientation=1))]
@@ -1993,6 +2047,12 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         if let Ok(raw) = view.call_method1("cast", ("B",)) {
             return PyBuffer::<u8>::get(&raw)?.to_vec(obj.py());
         }
+    if let Ok(bytes) = obj.cast::<PyBytes>() {
+        return crate::buffers::copy(bytes.as_bytes());
+    }
+    if let Ok(buffer) = PyBuffer::<u8>::get(obj) {
+        return buffer.to_vec(obj.py());
+    }
         macro_rules! copy_typed {
             ($($sample:ty),+ $(,)?) => {
                 $(if let Ok(buffer) = PyBuffer::<$sample>::get(obj) {
@@ -2006,7 +2066,7 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
                 })+
             };
         }
-        copy_typed!(u8, u16, i32, f32, f64);
+        copy_typed!(u16, i32, f32, f64);
         let bytes = view.call_method0("tobytes")?;
         return crate::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes());
     }
@@ -2014,9 +2074,11 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
     crate::buffers::copy(bytes.cast::<PyBytes>()?.as_bytes())
 }
 
-#[pyfunction(signature = (obj, mode = None, bit_depth = None))]
-pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit_depth: Option<u8>) -> PyResult<Image> {
-    let interface = obj.getattr("__array_interface__")?;
+#[pyfunction(signature = (obj, mode = None, bit_depth = None, interface = None))]
+pub fn fromarray(
+    py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit_depth: Option<u8>, interface: Option<Bound<'_, PyAny>>,
+) -> PyResult<Image> {
+    let interface = interface.map_or_else(|| obj.getattr("__array_interface__"), Ok)?;
     let shape: Vec<usize> = interface.get_item("shape")?.extract()?;
     let typestr: String = interface.get_item("typestr")?.extract()?;
     let wide = matches!(typestr.as_str(), "<u2" | ">u2" | "=u2");
@@ -2108,8 +2170,7 @@ pub fn fromarray(py: Python<'_>, obj: &Bound<'_, PyAny>, mode: Option<&str>, bit
     if depth != 8 {
         return Err(PyValueError::new_err("high-bit-depth arrays must use uint16 samples"));
     }
-    let pixels = if let Ok(buffer) = PyBuffer::<u8>::get(obj) { buffer.to_vec(py)? } else { array_bytes(obj)? };
-    let mut pixels = pixels;
+    let mut pixels = array_bytes(obj)?;
     if mode == PixelMode::Lab {
         lab_raw_bytes_mut(&mut pixels);
     }
@@ -2695,6 +2756,21 @@ mod tests {
     fn zeroed_pixel_allocations_support_vec_mutation_and_growth() {
         for len in [0, 1, 15, 16, 17, 4095, 4096, 4097, 1024 * 1024] {
             let mut pixels = super::alloc_pixels(len).unwrap();
+
+    #[test]
+    fn owned_raster_copy_shares_storage_until_mutated() {
+        Python::initialize();
+        let mut image = Image::from_pixels(3, 1, PixelMode::L, vec![1, 2, 3], Some("PNG".into())).unwrap();
+        let mut sibling = Python::attach(|py| image.copy(py)).unwrap();
+        assert!(std::ptr::eq(image.raw_data().unwrap(), sibling.raw_data().unwrap()));
+        assert_eq!(sibling.format(), None);
+        image.pixels_mut().unwrap()[0] = 9;
+        assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
+        assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);
+        sibling.close();
+        assert_eq!(image.into_pixels().unwrap(), [9, 2, 3]);
+    }
+
             assert_eq!(pixels.len(), len);
             assert!(pixels.iter().all(|&value| value == 0));
             pixels.fill(173);
@@ -2756,21 +2832,6 @@ mod tests {
     }
 
     #[test]
-
-    #[test]
-    fn owned_raster_copy_shares_storage_until_mutated() {
-        Python::initialize();
-        let mut image = Image::from_pixels(3, 1, PixelMode::L, vec![1, 2, 3], Some("PNG".into())).unwrap();
-        let mut sibling = Python::attach(|py| image.copy(py)).unwrap();
-        assert!(std::ptr::eq(image.raw_data().unwrap(), sibling.raw_data().unwrap()));
-        assert_eq!(sibling.format(), None);
-        image.pixels_mut().unwrap()[0] = 9;
-        assert_eq!(image.raw_data().unwrap(), [9, 2, 3]);
-        assert_eq!(sibling.raw_data().unwrap(), [1, 2, 3]);
-        sibling.close();
-        assert_eq!(image.into_pixels().unwrap(), [9, 2, 3]);
-    }
-
     fn bilevel_rows_preserve_partial_bytes_and_parallel_partitions() {
         for threads in [1, 4] {
             rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| {

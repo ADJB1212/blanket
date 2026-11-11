@@ -152,3 +152,20 @@ def test_fromarray_grayscale_alpha_matches_pillow(mode, strided):
     np.testing.assert_array_equal(np.asarray(image), values)
     values[:] = 0
     assert image.tobytes() == expected.tobytes()
+
+
+def test_fromarray_reads_array_interface_once():
+    class Array:
+        reads = 0
+
+        @property
+        def __array_interface__(self):
+            self.reads += 1
+            return {"version": 3, "shape": (1, 3), "typestr": "|u1"}
+
+        def tobytes(self):
+            return b"abc"
+
+    source = Array()
+    assert Image.fromarray(source).tobytes() == b"abc"
+    assert source.reads == 1
