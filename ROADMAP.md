@@ -430,8 +430,9 @@ with new processing semantics exposed explicitly.
       radius, range, and boundary behavior
 - [ ] **Local contrast adjustment** — adaptive histogram equalization with
       configurable tiles and contrast limits
-- [ ] **Edge detection** — Sobel and Scharr gradients plus Canny edges with
-      explicit threshold and output conventions
+- [x] **Edge detection** — `ImageFilter.sobel` and `scharr` return signed float
+      gradients; `canny` returns binary masks with normalized thresholds,
+      Gaussian smoothing, nonmaximum suppression, and connected hysteresis
 - [x] **Perceptual distortion metrics** — native SSIM, MS-SSIM, and SSIMULACRA2
       scoring for image quality evaluation and compressor tuning
 - [ ] **Content-aware seam carving** — aspect ratio retargeting via seam carving

@@ -10,6 +10,7 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::edges::register(module)?;
     module.add_function(wrap_pyfunction!(filter_kernel, module)?)?;
     module.add_function(wrap_pyfunction!(filter_rank, module)?)?;
     module.add_function(wrap_pyfunction!(filter_mode, module)?)?;

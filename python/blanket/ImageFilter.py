@@ -44,7 +44,103 @@ if TYPE_CHECKING:
         def reshape(self, size: int, /) -> Self: ...
 
 
-from ._blanket import filter_blur, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
+from . import Image
+from ._blanket import filter_blur, filter_canny, filter_gradients, filter_kernel, filter_lut, filter_mode, filter_rank, filter_unsharp
+
+
+def _gradients(image: Image.Image, operator: str) -> tuple[Image.Image, Image.Image]:
+    """Wrap native derivatives and retain source metadata."""
+    if not isinstance(image, Image.Image):
+        raise TypeError("image must be a Blanket Image")
+    image.load()
+    gx, gy = filter_gradients(image._native, operator)
+    results = Image.Image(gx), Image.Image(gy)
+    for result in results:
+        result.info.update(image._metadata_info())
+    return results
+
+
+def sobel(image: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Return signed x/y Sobel derivatives as two mode ``F`` images.
+
+    Args:
+        image: Nonempty L, LA, RGB, RGBA, I;16 variant, F, RGB;F, or RGBA;F image.
+
+    Integer samples are normalized by their depth (8/10/12/16 bits); float
+    color samples must be finite and in [0, 1]. RGB luminance uses
+    0.299 R + 0.587 G + 0.114 B. Alpha, ICC, and EXIF orientation are ignored.
+    Composite first to include transparency in the displayed appearance.
+
+    Use the 3x3 x kernel [-1, 0, 1; -2, 0, 2; -1, 0, 1] divided by 8,
+    and its transpose for y. Positive derivatives point right and down.
+    Borders replicate the nearest pixel, including for one-pixel dimensions.
+    Output size and metadata match the current frame; the source is unchanged.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("L", (32, 32))
+        gx, gy = ImageFilter.sobel(image)
+        ```
+    """
+    return _gradients(image, "sobel")
+
+
+def scharr(image: Image.Image) -> tuple[Image.Image, Image.Image]:
+    """Return signed x/y Scharr derivatives as two mode ``F`` images.
+
+    Args:
+        image: Nonempty image in one of the modes supported by ``sobel``.
+
+    Use the 3x3 x kernel [-3, 0, 3; -10, 0, 10; -3, 0, 3] divided by 32,
+    and its transpose for y. Sample normalization, luminance, alpha handling,
+    replicated borders, and metadata follow ``sobel``.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("L", (32, 32))
+        gx, gy = ImageFilter.scharr(image)
+        ```
+    """
+    return _gradients(image, "scharr")
+
+
+def canny(image: Image.Image, low_threshold: float = 0.1, high_threshold: float = 0.2, *, sigma: float = 1.0) -> Image.Image:
+    """Return Canny edges as a mode ``L`` mask containing only 0 and 255.
+
+    Args:
+        image: Nonempty image in one of the modes supported by ``sobel``.
+        low_threshold: Weak-edge threshold in normalized gradient units.
+        high_threshold: Strong-edge threshold; 0 <= low <= high <= 1, both finite.
+        sigma: Gaussian standard deviation in pixels, finite and in [0, 32].
+            Zero disables smoothing; otherwise support is ceil(3 * sigma).
+
+    Sample normalization, luminance, and alpha handling follow ``sobel``.
+    Apply separable Gaussian smoothing with replicated borders, normalized
+    Sobel gradients, Euclidean magnitude, four-direction nonmaximum suppression,
+    and eight-connected hysteresis. Threshold comparisons are inclusive, but
+    zero magnitude never forms an edge. Equal adjacent maxima keep the first
+    along the selected positive neighbor offset. The outermost border is zero;
+    dimensions below three therefore produce a blank mask. Output retains the
+    current frame's size and metadata without editing the source.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageFilter
+
+        image = Image.new("L", (32, 32))
+        edges = ImageFilter.canny(image, 0.1, 0.2, sigma=1.0)
+        ```
+    """
+    if not isinstance(image, Image.Image):
+        raise TypeError("image must be a Blanket Image")
+    image.load()
+    result = Image.Image(filter_canny(image._native, low_threshold, high_threshold, sigma))
+    result.info.update(image._metadata_info())
+    return result
 
 
 class Filter(ABC):
