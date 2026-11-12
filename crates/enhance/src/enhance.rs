@@ -24,9 +24,10 @@ fn output(image: &Image, pixels: Vec<u8>) -> PyResult<Image> {
     Image::from_pixels(image.width(), image.height(), image.pixel_mode(), pixels, None)
 }
 
-fn copy(image: &Image, source: &[u8]) -> PyResult<Image> {
-    let pixels = blanket_core::buffers::copy(source)?;
-    output(image, pixels)
+fn copy(py: Python<'_>, image: &Image) -> PyResult<Image> {
+    let mut result = image.copy(py)?;
+    result.set_palette_data(None)?;
+    Ok(result)
 }
 
 /// Pillow's core blend uses a single-precision alpha and truncates toward zero.
@@ -45,10 +46,10 @@ pub fn enhance_blend(py: Python<'_>, first: &Image, second: &Image, factor: f32)
     let first_pixels = first.pixel_data()?;
     let second_pixels = second.pixel_data()?;
     if std::ptr::eq(first, second) || factor == 0.0 {
-        return py.detach(|| copy(first, first_pixels));
+        return copy(py, first);
     }
     if factor == 1.0 {
-        return py.detach(|| copy(second, second_pixels));
+        return copy(py, second);
     }
 
     let len = first_pixels.len();
@@ -126,7 +127,7 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     }
     let source = image.pixel_data()?;
     if matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
-        return py.detach(|| copy(image, source));
+        return copy(py, image);
     }
 
     let mut pixels = alloc_pixels(source.len())?;
@@ -142,7 +143,15 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
 fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
     chunks_mut(output, CHUNK_PIXELS * C, |i, dst| {
         let start = i * CHUNK_PIXELS * C;
-        for (source, output) in source[start..].as_chunks::<C>().0.iter().zip(dst.as_chunks_mut::<C>().0) {
+        let source = &source[start..start + dst.len()];
+        let end = dst.len() / (16 * C) * (16 * C);
+        for offset in (0..end).step_by(16 * C) {
+            let mut pixel = load::<C>(&source[offset..]);
+            let gray = luminance(pixel[0], pixel[1], pixel[2]);
+            pixel[..3].fill(gray);
+            blanket_core::pixels::store::<C>(&mut dst[offset..], pixel);
+        }
+        for (source, output) in source[end..].as_chunks::<C>().0.iter().zip(dst[end..].as_chunks_mut::<C>().0) {
             let luma = blanket_convert_kernels::simd::pillow_luma(source[0], source[1], source[2]);
             output[0] = luma;
             output[1] = luma;
@@ -266,10 +275,10 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return crate::high_depth::degenerate(py, image, "sharpness");
     }
     let source = image.pixel_data()?;
-    let mut pixels = py.detach(|| blanket_core::buffers::copy(source))?;
     if image.width() < 3 || image.height() < 3 {
-        return output(image, pixels);
+        return copy(py, image);
     }
+    let mut pixels = py.detach(|| blanket_core::buffers::copy(source))?;
 
     let width = image.width() as usize;
     py.detach(|| match image.pixel_mode() {
@@ -332,6 +341,51 @@ fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], widt
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn color_vectors_preserve_luminance_alpha_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, CHUNK_PIXELS + 17] {
+                for offset in 0..16 {
+                    let source: Vec<u8> = (0..offset + count * C).map(|i| (i * 37 + i / 7) as u8).collect();
+                    let mut output = vec![93; offset + count * C + 16];
+                    color_degenerate::<C>(&source[offset..], &mut output[offset..offset + count * C]);
+                    for (src, dst) in source[offset..].as_chunks::<C>().0.iter().zip(output[offset..offset + count * C].as_chunks::<C>().0) {
+                        let gray = blanket_convert_kernels::simd::pillow_luma(src[0], src[1], src[2]);
+                        assert_eq!(&dst[..3], &[gray; 3]);
+                        if C == 4 {
+                            assert_eq!(dst[3], src[3]);
+                        }
+                    }
+                    assert!(output[..offset].iter().chain(&output[offset + count * C..]).all(|&v| v == 93));
+                }
+            }
+        }
+        check::<3>();
+        check::<4>();
+    }
+
+    #[test]
+    fn no_op_enhancements_share_pixels_until_mutation() {
+        Python::initialize();
+        Python::attach(|py| {
+            for depth in [8, 10, 12, 16] {
+                let image = Image::from_raw_bytes(2, 1, PixelMode::L, vec![0; if depth == 8 { 2 } else { 4 }], depth).unwrap();
+                let other = image.clone();
+                for mut result in [
+                    enhance_blend(py, &image, &other, 0.0).unwrap(),
+                    enhance_blend(py, &other, &image, 1.0).unwrap(),
+                    enhance_color(py, &image).unwrap(),
+                    enhance_sharpness(py, &image).unwrap(),
+                ] {
+                    assert_eq!(image.raw_data().unwrap().as_ptr(), result.raw_data().unwrap().as_ptr());
+                    result.pixels_mut().unwrap()[0] = 1;
+                    assert_eq!(image.raw_data().unwrap()[0], 0);
+                    assert_eq!(result.raw_data().unwrap()[0], 1);
+                }
+            }
+        });
+    }
 
     fn blend_bytes(first: &[u8], second: &[u8], output: &mut [u8], factor: f32) {
         let mut storage: Vec<_> = output.iter().copied().map(std::mem::MaybeUninit::new).collect();

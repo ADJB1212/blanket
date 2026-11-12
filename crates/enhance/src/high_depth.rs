@@ -10,6 +10,9 @@ use blanket_core::{Image, samples};
 use pyo3::prelude::*;
 
 pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyResult<Image> {
+    if operation == "color" && image.pixel_mode().channels() == 1 || operation == "sharpness" && (image.width() < 3 || image.height() < 3) {
+        return image.copy(py);
+    }
     let source = samples::view(image)?;
     let channels = image.pixel_mode().channels();
     let luma = |pixel: &[u16]| -> u16 { if channels == 1 { pixel[0] } else { sample_luminance(pixel[0], pixel[1], pixel[2]) } };
@@ -57,13 +60,13 @@ pub(crate) fn degenerate(py: Python<'_>, image: &Image, operation: &str) -> PyRe
 }
 
 pub(crate) fn blend(py: Python<'_>, first: &Image, second: &Image, factor: f32) -> PyResult<Image> {
-    let a = first.raw_data()?;
-    let b = second.raw_data()?;
+    first.raw_data()?;
+    second.raw_data()?;
     if std::ptr::eq(first, second) || factor == 0.0 {
-        return py.detach(|| samples::output_bytes(first, blanket_core::buffers::copy(a)?));
+        return first.copy(py);
     }
     if factor == 1.0 {
-        return py.detach(|| samples::output_bytes(second, blanket_core::buffers::copy(b)?));
+        return second.copy(py);
     }
     let a = samples::view(first)?;
     let b = samples::view(second)?;

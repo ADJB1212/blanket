@@ -117,7 +117,7 @@ fn hdr_tone_map(
     let colors = if matches!(mode, PixelMode::La | PixelMode::Rgba) { channels - 1 } else { channels };
     let gamma = 1.2 + 0.42 * (peak / 1000.0).log10();
     py.detach(|| {
-        let table_size = if image.bit_depth() == 8 { 256 } else { 65536 };
+        let table_size = 1_usize << image.bit_depth().min(16);
         let table = if image.pixel_mode() != PixelMode::F && transfer != "linear" && source.len() / input_bytes * colors >= table_size * 2 {
             (0..table_size).map(|value| linearize(value as f64 / maximum, transfer, reference_white).min(1e30)).collect::<Vec<_>>()
         } else {
@@ -199,6 +199,26 @@ fn hdr_tone_map(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reduced_depth_tables_match_direct_transfer() {
+        Python::initialize();
+        Python::attach(|py| {
+            for depth in [10, 12] {
+                let count = 1_usize << depth;
+                let samples: Vec<u16> = (0..count).map(|v| v as u16).collect();
+                let direct = Image::from_samples(count as u32, 1, PixelMode::L, samples.clone(), depth, None).unwrap();
+                let repeated = Image::from_samples(count as u32, 2, PixelMode::L, samples.repeat(2), depth, None).unwrap();
+                for transfer in ["pq", "hlg", "srgb"] {
+                    for output_depth in [8, 16] {
+                        let expected = hdr_tone_map(py, &direct, "aces", transfer, "srgb", 0.0, 100.0, 1000.0, output_depth).unwrap();
+                        let actual = hdr_tone_map(py, &repeated, "aces", transfer, "srgb", 0.0, 100.0, 1000.0, output_depth).unwrap();
+                        assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap().repeat(2));
+                    }
+                }
+            }
+        });
+    }
 
     #[test]
     fn color_vectors_match_scalar() {
