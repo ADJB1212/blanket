@@ -115,7 +115,7 @@ fn sequence_dimensions(data: &[u8]) -> Result<(u32, u32), String> {
 pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
     let rgb;
     let (pixels, color) = if image.pixel_mode() == PixelMode::L {
-        rgb = pixels.iter().flat_map(|v| [*v; 3]).collect::<Vec<_>>();
+        rgb = blanket_core::simd::convert(pixels, PixelMode::L, PixelMode::Rgb);
         (rgb.as_slice(), ExtendedColorType::Rgb8)
     } else {
         (pixels, color_type(image.pixel_mode()))

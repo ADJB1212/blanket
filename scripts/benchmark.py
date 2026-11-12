@@ -1070,9 +1070,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
     parser.add_argument("--json", type=Path, dest="json_path")
     parser.add_argument("--save-baseline", type=Path, nargs="?", const=RESULTS_DIRECTORY / "baseline.json", help="replace the baseline (optional path; default: .benchmarks/baseline.json)")
-    parser.add_argument("--compare", nargs="?", choices=("latest", "baseline"), const="latest", help="compare against the latest run (default) or baseline")
+    parser.add_argument("--compare", nargs="?", const="latest", metavar="RUN", help="compare against latest (default), baseline, a filename in .benchmarks, or a JSON path")
     parser.add_argument("--no-baseline", action="store_true", help="disable baseline saving/comparison and run history (explicit --json output still works)")
-    parser.add_argument("--threshold", type=float, default=4.0, help="minimum absolute time change percentage to highlight (default: 4)")
+    parser.add_argument("--threshold", type=float, default=15.0, help="minimum absolute time change percentage to highlight (default: 4)")
     arguments = parser.parse_args()
     if arguments.only_memory:
         if arguments.no_memory or arguments.slower_only or arguments.compare or arguments.save_baseline is not None:
@@ -1081,7 +1081,14 @@ def parse_args() -> argparse.Namespace:
     if arguments.no_baseline and (arguments.compare or arguments.save_baseline is not None):
         parser.error("--no-baseline cannot be combined with --compare or --save-baseline")
     default_baseline = RESULTS_DIRECTORY / "baseline.json"
-    arguments.compare_path = RESULTS_DIRECTORY / f"{arguments.compare}.json" if arguments.compare else None
+    arguments.compare_path = None
+    if arguments.compare:
+        if arguments.compare in ("latest", "baseline"):
+            arguments.compare_path = RESULTS_DIRECTORY / f"{arguments.compare}.json"
+        else:
+            arguments.compare_path = Path(arguments.compare)
+            if arguments.compare_path.name == arguments.compare:
+                arguments.compare_path = RESULTS_DIRECTORY / arguments.compare_path
     if not arguments.no_baseline and not arguments.compare and arguments.save_baseline is None and not default_baseline.exists():
         arguments.save_baseline = default_baseline
     if not math.isfinite(arguments.threshold) or arguments.threshold < 0:

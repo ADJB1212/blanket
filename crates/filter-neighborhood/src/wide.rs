@@ -244,26 +244,36 @@ fn sliding_integer_rank_rows(source: &[i32], output: &mut [i32], dimensions: (us
     }
 }
 
-fn rank_values<T: Copy + PartialOrd>(source: &[T], width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<T>> {
+fn rank_values<T: Copy + PartialOrd + Send + Sync>(source: &[T], width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<T>> {
     let mut output = source.to_vec();
     if output.is_empty() || size == 1 {
         return Ok(output);
     }
-    let mut window = Vec::new();
-    window.try_reserve_exact(size * size).map_err(|_| PyMemoryError::new_err("cannot allocate rank window"))?;
     let radius = size / 2;
-    for y in 0..height {
-        for x in 0..width {
-            window.clear();
-            for ky in 0..size {
-                let yy = (y + ky).saturating_sub(radius).min(height - 1);
-                for kx in 0..size {
-                    let xx = (x + kx).saturating_sub(radius).min(width - 1);
-                    window.push(source[yy * width + xx]);
-                }
-            }
-            output[y * width + x] = select(&mut window, rank);
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    const BAND_ROWS: usize = 4;
+    // Per-pixel selection dominates, so even small images benefit from row bands.
+    blanket_core::parallel::chunks_mut_above(&mut output, width * BAND_ROWS, 16 << 10, |band, rows| {
+        let mut window = Vec::new();
+        if window.try_reserve_exact(size * size).is_err() {
+            failed.store(true, std::sync::atomic::Ordering::Relaxed);
+            return;
         }
+        for (row, out) in rows.chunks_exact_mut(width).enumerate() {
+            let y = band * BAND_ROWS + row;
+            for (x, out) in out.iter_mut().enumerate() {
+                window.clear();
+                for ky in 0..size {
+                    let yy = (y + ky).saturating_sub(radius).min(height - 1);
+                    let line = &source[yy * width..][..width];
+                    window.extend((0..size).map(|kx| line[(x + kx).saturating_sub(radius).min(width - 1)]));
+                }
+                *out = select(&mut window, rank);
+            }
+        }
+    });
+    if failed.into_inner() {
+        return Err(PyMemoryError::new_err("cannot allocate rank window"));
     }
     Ok(output)
 }

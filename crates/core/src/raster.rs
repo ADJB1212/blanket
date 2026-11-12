@@ -1877,6 +1877,9 @@ impl Image {
         }
         let source = self.mode;
         let pixels = self.pixel_data()?;
+        if source == destination {
+            return self.copy(py);
+        }
         let converted = py.detach(|| convert_pixels(pixels, source, destination));
         Self::from_pixels(self.width, self.height, destination, converted, None)
     }
@@ -2352,19 +2355,24 @@ fn lab_raw_bytes_mut(pixels: &mut [u8]) {
 }
 
 fn convert_lab(source: &[u8], to_lab: bool) -> PyResult<Vec<u8>> {
-    use lcms2::{CIExyY, Flags, Intent, PixelFormat, Profile, ThreadContext, Transform};
-    let context = ThreadContext::new();
-    let srgb = Profile::new_srgb_context(&context);
-    let lab = Profile::new_lab4_context(&context, CIExyY::d50()).map_err(|error| PyValueError::new_err(error.to_string()))?;
-    let (input, input_format, output, output_format) =
-        if to_lab { (&srgb, PixelFormat::RGB_8, &lab, PixelFormat::Lab_8) } else { (&lab, PixelFormat::Lab_8, &srgb, PixelFormat::RGB_8) };
+    use lcms2::{CIExyY, DisallowCache, Flags, GlobalContext, Intent, PixelFormat, Profile, Transform};
+    type LabTransform = Transform<u8, u8, GlobalContext, DisallowCache>;
     // NO_CACHE makes the transform Sync; the cache only memoizes repeated pixels.
-    let transform: Transform<u8, u8, ThreadContext, _> =
-        Transform::new_flags_context(&context, input, input_format, output, output_format, Intent::Perceptual, Flags::NO_CACHE)
-            .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    let mut pixels = vec![0_u8; source.len()];
+    fn build(to_lab: bool) -> Result<LabTransform, String> {
+        let context = GlobalContext::new();
+        let srgb = Profile::new_srgb_context(&context);
+        let lab = Profile::new_lab4_context(&context, CIExyY::d50()).map_err(|error| error.to_string())?;
+        let (input, input_format, output, output_format) =
+            if to_lab { (&srgb, PixelFormat::RGB_8, &lab, PixelFormat::Lab_8) } else { (&lab, PixelFormat::Lab_8, &srgb, PixelFormat::RGB_8) };
+        Transform::new_flags_context(context, input, input_format, output, output_format, Intent::Perceptual, Flags::NO_CACHE)
+            .map_err(|error| error.to_string())
+    }
+    static TRANSFORMS: [std::sync::OnceLock<Result<LabTransform, String>>; 2] = [const { std::sync::OnceLock::new() }; 2];
+    let transform = TRANSFORMS[usize::from(to_lab)].get_or_init(|| build(to_lab)).as_ref().map_err(|error| PyValueError::new_err(error.clone()))?;
+    let mut pixels = crate::buffers::reserved(source.len())?;
+    pixels.resize(source.len(), 0_u8);
     let chunk = crate::parallel::CHUNK_PIXELS * 3;
-    crate::parallel::chunks_mut_above(&mut pixels, chunk, 64 * 1024, |i, dst| {
+    crate::parallel::chunks_mut_above(&mut pixels, chunk, 64 << 10, |i, dst| {
         transform.transform_pixels(&source[i * chunk..i * chunk + dst.len()], dst);
     });
     Ok(pixels)
