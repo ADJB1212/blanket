@@ -9,6 +9,8 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+blanket-convert-kernels.workspace = true
+blanket-image-ops.workspace = true
 blanket-core.workspace = true
 blanket-codec-jpeg.workspace = true
 pyo3.workspace = true

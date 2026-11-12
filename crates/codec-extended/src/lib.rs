@@ -38,7 +38,7 @@ pub fn decode_pnm(data: &[u8]) -> Result<Image, DecodeError> {
             let length = width as usize * height as usize * mode.channels() * 2;
             let source = source.get(..length).ok_or("truncated Netpbm pixels")?;
             let mut pixels = vec![0; length];
-            blanket_core::simd::samples_to_be16(source, &mut pixels, 16);
+            blanket_convert_kernels::simd::samples_to_be16(source, &mut pixels, 16);
             return Image::from_sample_bytes(width, height, mode, pixels, 16, Some("PPM".into())).map_err(DecodeError::with_source);
         }
     }
@@ -147,7 +147,7 @@ pub fn encode_wide_pnm(image: &Image, format: PnmFormat) -> PyResult<Vec<u8>> {
     let mut output = header.into_bytes();
     let start = output.len();
     output.resize(start + samples.len(), 0);
-    blanket_core::simd::samples_to_be16(samples, &mut output[start..], image.bit_depth());
+    blanket_convert_kernels::simd::samples_to_be16(samples, &mut output[start..], image.bit_depth());
     Ok(output)
 }
 

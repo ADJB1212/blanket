@@ -120,7 +120,7 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
             "RGBA"
         };
         if target != "LA" {
-            let expanded = image.convert(py, target, None)?;
+            let expanded = blanket_image_ops::convert::convert(py, image, target, None)?;
             return py.detach(|| match compressor {
                 Some(compressor) => compressor.encode(&expanded, format, options),
                 None => codecs::encode(&expanded, format, options),
@@ -141,7 +141,7 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
             return Err(PyOSError::new_err("cannot write mode P as JPEG"));
         }
         let mode = palette_mode.as_str();
-        let expanded = image.convert(py, mode, None)?;
+        let expanded = blanket_image_ops::convert::convert(py, image, mode, None)?;
         return py.detach(|| match compressor {
             Some(compressor) => compressor.encode(&expanded, format, options),
             None => codecs::encode(&expanded, format, options),

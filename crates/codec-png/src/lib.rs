@@ -207,7 +207,7 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> R
             blanket_core::pixels::expand_luma_alpha::<true, true>(&pixels, &mut rgba);
             pixels = rgba;
         } else {
-            blanket_core::simd::samples_from_be16(&mut pixels, depth);
+            blanket_convert_kernels::simd::samples_from_be16(&mut pixels, depth);
         }
         return Image::from_sample_bytes(frame.width, frame.height, mode, pixels, depth, Some("PNG".into()))
             .map_err(DecodeError::with_diagnostic_source);
@@ -239,7 +239,7 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
         let stride = image.width() as usize * image.pixel_mode().channels() * 2;
         let mut samples = vec![0; stride];
         for row in pixels.chunks_exact(stride) {
-            blanket_core::simd::samples_to_be16(row, &mut samples, image.bit_depth());
+            blanket_convert_kernels::simd::samples_to_be16(row, &mut samples, image.bit_depth());
             stream.write_all(&samples).map_err(codec_error)?;
         }
         stream.finish().map_err(codec_error)?;

@@ -2,19 +2,13 @@
 
 pub mod cache;
 pub mod color;
-pub mod float;
 pub mod parallel;
 pub mod pixels;
 pub mod raster;
-mod raw;
 pub mod samples;
-pub mod tensor;
-use blanket_convert_kernels::alpha;
-pub use blanket_convert_kernels::simd;
 
 pyo3::create_exception!(_blanket, UnidentifiedImageError, pyo3::exceptions::PyOSError);
 
 pub use raster::{Image, PixelMode};
 
 pub mod buffers;
-pub mod geometry;

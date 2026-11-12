@@ -487,7 +487,13 @@ pub fn decode_tiff(data: &[u8]) -> Result<Image, DecodeError> {
     let mut pixels = blanket_core::raster::alloc_pixels(source.len()).map_err(DecodeError::with_source)?;
     macro_rules! orient {
         ($channels:literal) => {
-            blanket_core::geometry::transpose::<$channels>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation as u8)
+            blanket_image_ops::geometry::transpose::<$channels>(
+                source,
+                &mut pixels,
+                image.width() as usize,
+                image.height() as usize,
+                orientation as u8,
+            )
         };
     }
     match image.raw_bytes_per_pixel() {
@@ -685,7 +691,7 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
             let values = if image.bit_depth() == 16 {
                 blanket_core::samples::view(image)?
             } else {
-                Cow::Owned(blanket_core::simd::normalize_u16(image.raw_data()?, image.bit_depth()))
+                Cow::Owned(blanket_convert_kernels::simd::normalize_u16(image.raw_data()?, image.bit_depth()))
             };
             match image.pixel_mode() {
                 PixelMode::L => encoder.write_image::<colortype::Gray16>(image.width(), image.height(), &values),
@@ -725,7 +731,7 @@ pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
     let samples = if image.bit_depth() == 16 && cfg!(target_endian = "little") {
         raw
     } else {
-        normalized = blanket_core::simd::normalize_u16(raw, image.bit_depth());
+        normalized = blanket_convert_kernels::simd::normalize_u16(raw, image.bit_depth());
         u16_bytes(&normalized)
     };
     let mut output = Cursor::new(Vec::with_capacity(samples.len().saturating_add(1024)));

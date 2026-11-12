@@ -3,8 +3,8 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
-use blanket_core::geometry::ops_transpose;
 use blanket_core::raster::{Image, PixelMode};
+use blanket_image_ops::geometry::ops_transpose;
 use blanket_kernels::cache::ByteLru;
 use blanket_kernels::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above};
 use blanket_resample_kernels as ops_simd;
@@ -26,10 +26,10 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[pyfunction]
 fn ops_color_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool) -> PyResult<Image> {
-    let prepared = py.detach(|| blanket_core::float::prepare(image, srgb, premultiply))?;
+    let prepared = py.detach(|| blanket_image_ops::float::prepare(image, srgb, premultiply))?;
     let resized = ops_resize(py, &prepared, size, method, bounds, None)?;
     drop(prepared);
-    py.detach(|| blanket_core::float::finish(&resized, image, srgb, premultiply))
+    py.detach(|| blanket_image_ops::float::finish(&resized, image, srgb, premultiply))
 }
 
 fn kernel(x: f64, method: u8) -> f64 {

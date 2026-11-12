@@ -1,9 +1,8 @@
+use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
+use blanket_core::{Image, PixelMode};
 use blanket_kernels::parallel::{MIN_PARALLEL_BYTES, chunks_mut_above};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-
-use crate::buffers::{buffer, copy_rows, output, reserved_buffer};
-use crate::raster::{Image, PixelMode};
 
 #[pyfunction]
 pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult<Image> {
@@ -14,14 +13,14 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
     if orientation == 1 {
         return image.copy(py);
     }
-    let size = if orientation >= 5 { (image.height, image.width) } else { (image.width, image.height) };
+    let size = if orientation >= 5 { (image.height(), image.width()) } else { (image.width(), image.height()) };
     let c = image.raw_bytes_per_pixel();
     if orientation == 4 {
         let mut pixels = reserved_buffer(size, c)?;
         py.detach(|| {
-            let row_bytes = image.width as usize * c;
-            copy_rows(&mut pixels, row_bytes, image.height as usize, |y| {
-                let start = (image.height as usize - 1 - y) * row_bytes;
+            let row_bytes = image.width() as usize * c;
+            copy_rows(&mut pixels, row_bytes, image.height() as usize, |y| {
+                let start = (image.height() as usize - 1 - y) * row_bytes;
                 &source[start..start + row_bytes]
             });
         });
@@ -29,8 +28,8 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
     }
     if c == 1 && matches!(orientation, 2 | 3) {
         let mut pixels = reserved_buffer(size, c)?;
-        let width = image.width as usize;
-        let height = image.height as usize;
+        let width = image.width() as usize;
+        let height = image.height() as usize;
         let len = source.len();
         py.detach(|| {
             chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], width.max(1) * 32, 4 << 20, |band, rows| {
@@ -46,42 +45,42 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
         return output(image, size, pixels);
     }
     let mut pixels = buffer(size, c)?;
-    if image.mode.is_wide_scalar() {
+    if image.pixel_mode().is_wide_scalar() {
         py.detach(|| match c {
-            2 => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            4 => transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            12 => transpose::<12>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
-            16 => transpose::<16>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+            2 => transpose::<2>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
+            4 => transpose::<4>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
+            12 => transpose::<12>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
+            16 => transpose::<16>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
             _ => unreachable!(),
         });
         return output(image, size, pixels);
     }
-    if image.bit_depth > 8 {
-        py.detach(|| match image.mode {
-            PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+    if image.bit_depth() > 8 {
+        py.detach(|| match image.pixel_mode() {
+            PixelMode::One | PixelMode::L => transpose::<2>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
             PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
-                transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+                transpose::<4>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
             }
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                transpose::<6>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+                transpose::<6>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
             }
             PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                transpose::<8>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+                transpose::<8>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
             }
             _ => unreachable!(),
         });
         return output(image, size, pixels);
     }
-    py.detach(|| match image.mode {
-        PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width as usize, image.height as usize, orientation),
+    py.detach(|| match image.pixel_mode() {
+        PixelMode::One | PixelMode::L => transpose::<1>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation),
         PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
-            transpose::<2>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            transpose::<2>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
         }
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-            transpose::<3>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            transpose::<3>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
         }
         PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-            transpose::<4>(source, &mut pixels, image.width as usize, image.height as usize, orientation)
+            transpose::<4>(source, &mut pixels, image.width() as usize, image.height() as usize, orientation)
         }
         _ => unreachable!(),
     });

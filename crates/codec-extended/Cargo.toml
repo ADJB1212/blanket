@@ -7,6 +7,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+blanket-convert-kernels.workspace = true
 blanket-core.workspace = true
 blanket-codec-common.workspace = true
 blanket-codec-image.workspace = true

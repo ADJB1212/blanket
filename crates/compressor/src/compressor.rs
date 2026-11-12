@@ -307,7 +307,7 @@ impl LosslessImageCompressor {
             // Retain every alpha and hidden color sample. Gray+alpha supports
             // arbitrary transparency even when a single tRNS key cannot.
             let (color, reduced) = if opaque {
-                (png::ColorType::Rgb, blanket_core::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
+                (png::ColorType::Rgb, blanket_convert_kernels::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
             } else {
                 (png::ColorType::GrayscaleAlpha, pixels::select(pixels, channels, true, 0))
             };
@@ -351,7 +351,7 @@ impl LosslessImageCompressor {
                 // Eight bits is the last depth, so hand over the samples.
                 std::mem::replace(&mut gray, Cow::Borrowed(&[][..]))
             } else {
-                Cow::Owned(blanket_core::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
+                Cow::Owned(blanket_convert_kernels::simd::convert(pixels, PixelMode::Rgba, PixelMode::Rgb))
             };
             let transparency: Vec<u8> = match key {
                 Some(key) if grayscale => ((usize::from(key[0]) / step) as u16).to_be_bytes().to_vec(),

@@ -9,6 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+blanket-convert-kernels.workspace = true
 blanket-core.workspace = true
 blanket-codecs.workspace = true
 blanket-kernels.workspace = true

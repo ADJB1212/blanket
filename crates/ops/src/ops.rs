@@ -1,11 +1,11 @@
 //! Pixel primitives used by the Python ImageOps API.
 
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
-pub use blanket_core::geometry::{ops_transpose, transpose};
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use blanket_histogram::validate_mask;
 pub use blanket_histogram::{ops_histogram, wide_histogram};
+pub use blanket_image_ops::geometry::{ops_transpose, transpose};
 use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -28,13 +28,12 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_xbm_bits, module)?)?;
     module.add_function(wrap_pyfunction!(ops_xbm, module)?)?;
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
-    module.add_function(wrap_pyfunction!(ops_transpose, module)?)?;
     Ok(())
 }
 
 #[pyfunction]
 fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
-    py.detach(|| blanket_core::float::composite_rgba(background, foreground, srgb))
+    py.detach(|| blanket_image_ops::float::composite_rgba(background, foreground, srgb))
 }
 
 /// Copy complete rows into a reserved, empty image without first zeroing it.
@@ -55,7 +54,7 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         return py.detach(|| {
             (0..image.pixel_mode().channels())
                 .map(|channel| {
-                    let pixels = blanket_core::simd::extract_sample_channel(source, image.pixel_mode().channels(), channel);
+                    let pixels = blanket_convert_kernels::simd::extract_sample_channel(source, image.pixel_mode().channels(), channel);
                     Image::from_sample_bytes(image.width(), image.height(), PixelMode::L, pixels, image.bit_depth(), None)
                 })
                 .collect()
@@ -385,7 +384,7 @@ fn luminance_histogram(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         }
         for (i, pixel) in source[end..].as_chunks::<3>().0.iter().enumerate() {
             if mask.is_none_or(|mask| mask[start + end / 3 + i] != 0) {
-                bins[usize::from(blanket_core::simd::pillow_luma(pixel[0], pixel[1], pixel[2]))] += 1;
+                bins[usize::from(blanket_convert_kernels::simd::pillow_luma(pixel[0], pixel[1], pixel[2]))] += 1;
             }
         }
         bins

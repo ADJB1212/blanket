@@ -14,6 +14,8 @@ crate-type = ["cdylib"]
 doctest = false
 
 [dependencies]
+blanket-core-python.workspace = true
+blanket-image-ops.workspace = true
 blanket-gpu-python = { workspace = true, optional = true }
 blanket-font.workspace = true
 blanket-resample.workspace = true

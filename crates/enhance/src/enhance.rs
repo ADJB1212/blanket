@@ -117,7 +117,12 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return crate::high_depth::degenerate(py, image, "color");
     }
     if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
-        return image.convert(py, "L", None)?.convert(py, image.pixel_mode().as_str(), None);
+        return blanket_image_ops::convert::convert(
+            py,
+            &blanket_image_ops::convert::convert(py, image, "L", None)?,
+            image.pixel_mode().as_str(),
+            None,
+        );
     }
     let source = image.pixel_data()?;
     if matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa) {
@@ -138,7 +143,7 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
     chunks_mut(output, CHUNK_PIXELS * C, |i, dst| {
         let start = i * CHUNK_PIXELS * C;
         for (source, output) in source[start..].as_chunks::<C>().0.iter().zip(dst.as_chunks_mut::<C>().0) {
-            let luma = blanket_core::simd::pillow_luma(source[0], source[1], source[2]);
+            let luma = blanket_convert_kernels::simd::pillow_luma(source[0], source[1], source[2]);
             output[0] = luma;
             output[1] = luma;
             output[2] = luma;
@@ -163,11 +168,11 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return crate::high_depth::degenerate(py, image, "contrast");
     }
     if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
-        let gray = image.convert(py, "L", None)?;
+        let gray = blanket_image_ops::convert::convert(py, image, "L", None)?;
         let source = gray.pixel_data()?;
         let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8 });
         let gray = py.detach(|| Image::from_pixels(image.width(), image.height(), PixelMode::L, vec![mean; source.len()], None))?;
-        return gray.convert(py, image.pixel_mode().as_str(), None);
+        return blanket_image_ops::convert::convert(py, &gray, image.pixel_mode().as_str(), None);
     }
     let source = image.pixel_data()?;
     let sum = py.detach(|| match image.pixel_mode() {
@@ -225,7 +230,7 @@ fn luminance_sum<const C: usize>(source: &[u8]) -> u64 {
             let channels = load::<C>(&source[i..]);
             sum += u64::from(luminance(channels[0], channels[1], channels[2]).cast::<u32>().reduce_sum());
         }
-        sum + source[done..].as_chunks::<C>().0.iter().map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2]))).sum::<u64>()
+        sum + source[done..].as_chunks::<C>().0.iter().map(|p| u64::from(blanket_convert_kernels::simd::pillow_luma(p[0], p[1], p[2]))).sum::<u64>()
     };
     if should_parallel(source.len(), C, MIN_PARALLEL_BYTES) { source.par_chunks(CHUNK_PIXELS * C).map(sum).sum() } else { sum(source) }
 }
@@ -429,7 +434,8 @@ mod tests {
             for fill in [None, Some(0), Some(255)] {
                 let source: Vec<u8> = (0..offset + count * C).map(|i| fill.unwrap_or((i * 37 + i / 11) as u8)).collect();
                 let source = &source[offset..];
-                let sum: u64 = source.as_chunks::<C>().0.iter().map(|p| u64::from(blanket_core::simd::pillow_luma(p[0], p[1], p[2]))).sum();
+                let sum: u64 =
+                    source.as_chunks::<C>().0.iter().map(|p| u64::from(blanket_convert_kernels::simd::pillow_luma(p[0], p[1], p[2]))).sum();
                 assert_eq!(luminance_sum::<C>(source), sum);
             }
         }

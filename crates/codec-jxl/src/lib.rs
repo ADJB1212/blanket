@@ -507,7 +507,7 @@ fn jxl_wide_samples(raw: &[u8], depth: u8) -> Cow<'_, [u16]> {
     {
         return Cow::Borrowed(samples);
     }
-    Cow::Owned(blanket_core::simd::normalize_u16(raw, depth))
+    Cow::Owned(blanket_convert_kernels::simd::normalize_u16(raw, depth))
 }
 
 impl<'a> PreparedJxl<'a> {
@@ -717,14 +717,14 @@ mod tests {
         let storage = Aligned([0, 0, 255, 255, 1, 128, 17, 23, 42, 0]);
         for raw in [&storage.0[..8], &storage.0[1..9]] {
             let prepared = jxl_wide_samples(raw, 16);
-            assert_eq!(prepared.as_ref(), blanket_core::simd::normalize_u16(raw, 16));
+            assert_eq!(prepared.as_ref(), blanket_convert_kernels::simd::normalize_u16(raw, 16));
             assert_eq!(matches!(prepared, Cow::Borrowed(_)), cfg!(target_endian = "little") && raw.as_ptr().addr().is_multiple_of(2));
         }
         for depth in [10, 12] {
             let raw: Vec<_> = [0_u16, 1, 71, (1 << depth) - 1].into_iter().flat_map(u16::to_le_bytes).collect();
             let prepared = jxl_wide_samples(&raw, depth);
             assert!(matches!(prepared, Cow::Owned(_)));
-            assert_eq!(prepared.as_ref(), blanket_core::simd::normalize_u16(&raw, depth));
+            assert_eq!(prepared.as_ref(), blanket_convert_kernels::simd::normalize_u16(&raw, depth));
             assert_eq!(prepared[3], u16::MAX);
         }
     }

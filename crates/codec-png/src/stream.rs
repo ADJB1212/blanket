@@ -142,7 +142,7 @@ impl PngStreamWriter {
         }
         let depth = self.depth;
         let stride = self.stride;
-        if matches!(depth, 10 | 12) && !py.detach(|| blanket_core::simd::samples_in_range(data, depth)) {
+        if matches!(depth, 10 | 12) && !py.detach(|| blanket_convert_kernels::simd::samples_in_range(data, depth)) {
             return Err(PyValueError::new_err("sample exceeds bit depth"));
         }
         let writer = self.writer.as_mut().expect("writer checked above");
@@ -152,7 +152,7 @@ impl PngStreamWriter {
                 let mut result = Ok(());
                 converted.resize(stride, 0);
                 for row in data.chunks_exact(stride) {
-                    blanket_core::simd::samples_to_be16(row, converted, depth);
+                    blanket_convert_kernels::simd::samples_to_be16(row, converted, depth);
                     if let Err(error) = writer.write_all(converted) {
                         result = Err(error);
                         break;

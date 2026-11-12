@@ -58,11 +58,17 @@ from ._blanket import (
     frombytes as _native_frombytes,
     image_alpha_composite,
     image_alpha_composite_inplace,
+    image_convert,
+    image_convert_dithered_bilevel,
+    image_convert_matrix,
+    image_convert_palette_alpha,
+    image_convert_transparent_alpha,
     image_fill,
     image_new,
     image_paste,
     image_putalpha,
     image_putalpha_constant,
+    image_tobytes,
     ops_affine,
     ops_canvas,
     ops_color_composite,
@@ -941,7 +947,7 @@ class Image:
         if mode not in _BANDS:
             raise ValueError("image has wrong mode")
         if matrix is not None:
-            result = Image(self._native.convert_matrix(mode, list(matrix)))
+            result = Image(image_convert_matrix(self._native, mode, list(matrix)))
             result.info.update(self._metadata_info())
             transparency = self.info.get("transparency")
             if isinstance(transparency, tuple) and len(transparency) == 3:
@@ -952,22 +958,22 @@ class Image:
         if mode == "1" and self.mode == "LAB":
             return self.convert("RGB").convert(mode, dither=dither)
         if mode == "1" and self.mode in ("L", "RGB") and self.bit_depth == 8 and dither:
-            result = Image(self._native.convert_dithered_bilevel())
+            result = Image(image_convert_dithered_bilevel(self._native))
             result.info.update(self._metadata_info())
             return result
         transparency = self.info.get("transparency")
         if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None and self.bit_depth == 8:
             key = [transparency] if isinstance(transparency, int) else list(cast("Iterable[int]", transparency))
-            result = Image(self._native.convert_transparent_alpha(mode, key))
+            result = Image(image_convert_transparent_alpha(self._native, mode, key))
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
         if self.mode == "P" and mode in ("LA", "RGBA") and isinstance(transparency, (int, bytes)):
             self._sync_palette()
             if isinstance(transparency, int):
-                result = Image(self._native.convert_palette_alpha(mode, index=transparency, bit_depth=bit_depth))
+                result = Image(image_convert_palette_alpha(self._native, mode, index=transparency, bit_depth=bit_depth))
             else:
-                result = Image(self._native.convert_palette_alpha(mode, alpha=transparency, bit_depth=bit_depth))
+                result = Image(image_convert_palette_alpha(self._native, mode, alpha=transparency, bit_depth=bit_depth))
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
@@ -1003,7 +1009,7 @@ class Image:
             self._conversion_transparency(result)
             return result
         self._sync_palette()
-        result = Image(self._native.convert(mode, bit_depth))
+        result = Image(image_convert(self._native, mode, bit_depth))
         result.info.update(self._metadata_info())
         self._conversion_transparency(result)
         return result
@@ -1600,7 +1606,7 @@ class Image:
             pixels = image.tobytes()
             ```
         """
-        return self._native.tobytes(*_raw_args(self.mode, encoder_name, args))
+        return image_tobytes(self._native, *_raw_args(self.mode, encoder_name, args))
 
     def to_numpy(self, *, layout: str = "HWC", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None) -> np.ndarray:
         """Export an independent, writable, contiguous float32 NumPy array.

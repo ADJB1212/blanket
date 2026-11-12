@@ -1,0 +1,25 @@
+[package]
+name = "blanket-image-ops"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+blanket-convert-kernels.workspace = true
+blanket-kernels.workspace = true
+pyo3.workspace = true
+lcms2 = { version = "6", default-features = false }
+
+[dev-dependencies]
+rayon.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

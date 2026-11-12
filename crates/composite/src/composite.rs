@@ -470,7 +470,7 @@ fn image_putalpha_constant(py: Python<'_>, image: &mut Image, alpha: u16) -> PyR
         return Err(PyValueError::new_err("image has wrong mode"));
     }
     if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
-        let converted = image.convert(py, if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" }, None)?;
+        let converted = blanket_image_ops::convert::convert(py, image, if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" }, None)?;
         image.replace_storage(converted)?;
     }
     if image.bit_depth() > 8 && !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba) {
@@ -563,7 +563,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     }
     if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
         let mode = if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" };
-        let converted = image.convert(py, mode, None)?;
+        let converted = blanket_image_ops::convert::convert(py, image, mode, None)?;
         image.replace_storage(converted)?;
     }
     if blanket_core::samples::supported(image) {

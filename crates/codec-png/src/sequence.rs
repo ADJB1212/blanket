@@ -412,7 +412,7 @@ pub fn encode_sequence_regions(
             if first.bit_depth() > 8 {
                 let raw = image.raw_data()?;
                 pixels.resize(raw.len(), 0);
-                blanket_core::simd::samples_to_be16(raw, &mut pixels, image.bit_depth());
+                blanket_convert_kernels::simd::samples_to_be16(raw, &mut pixels, image.bit_depth());
                 writer.write_image_data(&pixels).map_err(codec_error)?;
             } else if image.pixel_mode() == PixelMode::One {
                 let packed = blanket_core::raster::pack_bilevel(image.pixel_data()?, image.width() as usize, image.height() as usize);

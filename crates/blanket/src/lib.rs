@@ -3,7 +3,6 @@ mod features;
 mod xmp;
 
 use blanket_codecs::open_bytes;
-use blanket_core::raster::{fromarray, frombytes};
 use blanket_core::{Image, UnidentifiedImageError};
 use pyo3::prelude::*;
 
@@ -15,15 +14,11 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("UnidentifiedImageError", module.py().get_type::<UnidentifiedImageError>())?;
     module.add_class::<Image>()?;
+    blanket_image_ops::register(module)?;
+    blanket_core_python::register(module)?;
     module.add_class::<blanket_codecs::stream::StreamingDecoder>()?;
     module.add_class::<blanket_codecs::PngStreamWriter>()?;
     blanket_cms::register(module)?;
-    module.add_function(wrap_pyfunction!(fromarray, module)?)?;
-    module.add_function(wrap_pyfunction!(frombytes, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_core::tensor::tensor_export, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_core::raster::frombuffer_copy, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_core::raster::mapped_getpixel, module)?)?;
-    module.add_function(wrap_pyfunction!(blanket_core::color::color_getcolor, module)?)?;
     module.add_function(wrap_pyfunction!(open_bytes, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_inspect, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_decode_svg, module)?)?;

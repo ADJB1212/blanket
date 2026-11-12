@@ -107,7 +107,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
                 let pixels = if terminal { std::mem::take(&mut canvas) } else { canvas.clone() };
                 Image::from_pixels(width, height, PixelMode::Rgba, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
             } else {
-                let pixels = blanket_core::simd::convert(&canvas, PixelMode::Rgba, PixelMode::Rgb);
+                let pixels = blanket_convert_kernels::simd::convert(&canvas, PixelMode::Rgba, PixelMode::Rgb);
                 Image::from_pixels(width, height, PixelMode::Rgb, pixels, Some("GIF".into())).map_err(|error| error.to_string())?
             };
             sequence.frames.push(Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 });

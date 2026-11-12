@@ -1,10 +1,9 @@
 use std::borrow::Cow;
 
+use blanket_core::PixelMode;
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
-
-use crate::PixelMode;
 
 pub(crate) fn decode<'a>(data: &'a [u8], decoder: &str) -> PyResult<Cow<'a, [u8]>> {
     if decoder == "raw" {
@@ -138,15 +137,15 @@ impl Rows {
         if output.is_empty() {
             return;
         }
-        crate::parallel::chunks_mut_above(output, self.output_stride.saturating_mul(32), 4 * 1024 * 1024, |band, rows| {
+        blanket_kernels::parallel::chunks_mut_above(output, self.output_stride.saturating_mul(32), 4 * 1024 * 1024, |band, rows| {
             for (i, target) in rows.chunks_exact_mut(self.output_stride).enumerate() {
                 let source = self.source_row(data, band * 32 + i);
                 let target = &mut target[..self.output_row];
                 match self.swap_channels {
-                    Some((3, 3)) => crate::pixels::swap_red_blue::<3, 3>(source, target),
-                    Some((3, 4)) => crate::pixels::swap_red_blue::<3, 4>(source, target),
-                    Some((4, 3)) => crate::pixels::swap_red_blue::<4, 3>(source, target),
-                    Some((4, 4)) => crate::pixels::swap_red_blue::<4, 4>(source, target),
+                    Some((3, 3)) => blanket_kernels::pixels::swap_red_blue::<3, 3>(source, target),
+                    Some((3, 4)) => blanket_kernels::pixels::swap_red_blue::<3, 4>(source, target),
+                    Some((4, 3)) => blanket_kernels::pixels::swap_red_blue::<4, 3>(source, target),
+                    Some((4, 4)) => blanket_kernels::pixels::swap_red_blue::<4, 4>(source, target),
                     Some(_) => unreachable!(),
                     None => target.copy_from_slice(source),
                 }
@@ -166,9 +165,9 @@ pub(crate) fn transform<'a>(
         return Ok(Cow::Borrowed(data));
     }
     let rows = Rows::new(layout, mode, size.1 as usize, orientation, encode, data.len())?;
-    let mut output = crate::buffers::reserved(rows.length)?;
+    let mut output = blanket_core::buffers::reserved(rows.length)?;
     if rows.swap_channels.is_none() && rows.output_stride == rows.output_row {
-        crate::buffers::copy_rows(&mut output, rows.output_stride, rows.height, |row| rows.source_row(data, row));
+        blanket_core::buffers::copy_rows(&mut output, rows.output_stride, rows.height, |row| rows.source_row(data, row));
     } else {
         output.resize(rows.length, 0);
         rows.write(data, &mut output);
@@ -370,7 +369,7 @@ fn extended_transform<'a>(
             return Err(PyValueError::new_err("not enough image data"));
         }
         let length = output_stride.checked_mul(height).ok_or_else(|| PyValueError::new_err("raw buffer size overflow"))?;
-        let mut output = crate::raster::alloc_pixels(length)?;
+        let mut output = blanket_core::raster::alloc_pixels(length)?;
         for y in 0..height {
             let source_y = if orientation == -1 { height - y - 1 } else { y };
             let source = &data[source_y * input_stride..source_y * input_stride + input_row];
@@ -492,7 +491,7 @@ fn extended_transform<'a>(
                             let value = if mode == PixelMode::F {
                                 f32::from_le_bytes(pixel.try_into().unwrap()) as f64
                             } else {
-                                crate::raster::integer_value(mode, pixel) as f64
+                                blanket_core::raster::integer_value(mode, pixel) as f64
                             };
                             let value = if *float {
                                 if *bytes == 4 { (value as f32).to_bits() as u64 } else { value.to_bits() }
@@ -524,7 +523,7 @@ fn extended_transform<'a>(
                             if mode == PixelMode::F {
                                 pixel.copy_from_slice(&(value as f32).to_le_bytes());
                             } else {
-                                pixel.copy_from_slice(&crate::raster::integer_bytes(mode, value as i64)[..sample_bytes]);
+                                pixel.copy_from_slice(&blanket_core::raster::integer_bytes(mode, value as i64)[..sample_bytes]);
                             }
                         }
                     }

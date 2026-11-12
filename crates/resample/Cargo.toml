@@ -9,6 +9,7 @@ license.workspace = true
 publish = false
 
 [dependencies]
+blanket-image-ops.workspace = true
 blanket-resample-kernels.workspace = true
 blanket-core.workspace = true
 blanket-kernels.workspace = true

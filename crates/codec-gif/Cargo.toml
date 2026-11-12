@@ -9,6 +9,7 @@ license = { workspace = true }
 publish = false
 
 [dependencies]
+blanket-convert-kernels.workspace = true
 gif = { version = "0.14", default-features = false, features = ["std"] }
 blanket-core.workspace = true
 pyo3.workspace = true

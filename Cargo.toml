@@ -5,6 +5,8 @@ members = [
     "crates/gpu-cuda",
     "crates/gpu-python",
     "crates/core",
+    "crates/image-ops",
+    "crates/core-python",
     "crates/kernels",
     "crates/modes",
     "crates/convert-kernels",
@@ -54,6 +56,8 @@ rust-version = "1.98"
 edition = "2024"
 
 [workspace.dependencies]
+blanket-image-ops = { path = "crates/image-ops" }
+blanket-core-python = { path = "crates/core-python" }
 blanket-gpu = { path = "crates/gpu" }
 blanket-gpu-metal = { path = "crates/gpu-metal" }
 blanket-gpu-cuda = { path = "crates/gpu-cuda" }

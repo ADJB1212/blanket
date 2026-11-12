@@ -62,7 +62,7 @@ def test_float_color_work_releases_gil(mode: str, operation: str) -> None:
     pixel = struct.pack("<" + "f" * channels, *([0.25] * channels))
     image = Image.frombytes(mode, (1024, 1024), pixel * (1024 * 1024)).getim()
     if operation == "convert":
-        result = assert_python_progress(lambda: image.convert("RGBA", 8))
+        result = assert_python_progress(lambda: _blanket.image_convert(image, "RGBA", 8))
         expected = (64, 64, 64, 64 if channels == 4 else 255)
     else:
         result = assert_python_progress(lambda: image.getchannel(channels - 1))
@@ -80,7 +80,7 @@ def test_streaming_decode_releases_gil(format: str) -> None:
     preview = decoder.image
     result = decoder.close()
     assert preview is not None
-    assert preview.tobytes() == result.tobytes() == Image.open(BytesIO(data)).tobytes()
+    assert _blanket.image_tobytes(preview) == _blanket.image_tobytes(result) == Image.open(BytesIO(data)).tobytes()
 
 
 @pytest.mark.parametrize("proof", [False, True])
@@ -92,7 +92,7 @@ def test_cms_creation_releases_gil(proof: bool) -> None:
     transform = assert_python_progress(lambda: _blanket._CmsTransform(source, output, "RGBA", "RGBA", 0, flags, proof_profile, 0))
     image = Image.new("RGBA", (257, 19), (40, 80, 120, 73))
     result = transform.apply(image.getim())
-    assert result.getchannel(3).tobytes() == bytes([73]) * (257 * 19)
+    assert _blanket.image_tobytes(result.getchannel(3)) == bytes([73]) * (257 * 19)
 
 
 @pytest.mark.parametrize("floating", [False, True])
