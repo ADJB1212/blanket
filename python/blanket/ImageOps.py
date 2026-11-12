@@ -22,11 +22,11 @@ if TYPE_CHECKING:
     from ._typing import FloatInput
 
 from . import Image
-from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_transpose, palette_lut
+from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_smart_crop, ops_transpose, palette_lut
 from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
-__all__ = ["SupportsGetMesh", "autocontrast", "colorize", "contain", "cover", "crop", "deform", "equalize", "exif_transpose", "expand", "fit", "flip", "grayscale", "invert", "mirror", "pad", "posterize", "scale", "solarize"]
+__all__ = ["SupportsGetMesh", "autocontrast", "colorize", "contain", "cover", "crop", "deform", "equalize", "exif_transpose", "expand", "fit", "flip", "grayscale", "invert", "mirror", "pad", "posterize", "scale", "smart_crop", "solarize"]
 
 Color = str | int | tuple[int, ...]
 Border = int | tuple[int, ...]
@@ -468,6 +468,58 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
         cw, ch = width, width / ratio
     left, top = bx + (width - cw) * cx, by + (height - ch) * cy
     return _resize(image, size, method, (left, top, left + cw, top + ch))
+
+
+def smart_crop(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:
+    """Crop around visual saliency and resize to exactly ``size``.
+
+    Args:
+        image: Nonempty input image; only the current frame is used.
+        size: Positive integer output ``(width, height)`` in pixels.
+        method: Resampling filter from ``Image.Resampling``.
+
+    The largest rectangle with the requested aspect ratio is positioned using
+    color contrast, edges, and visible alpha on an 8-bit RGBA thumbnail no
+    larger than 128x128. Content near the crop center scores higher. Flat or
+    fully transparent images use a centered crop. This heuristic does not
+    detect faces or guarantee that every subject remains inside the crop.
+
+    Output retains the source mode, depth, palette, and metadata. Analysis
+    ignores ICC profiles and does not apply EXIF orientation; call
+    ``exif_transpose`` first when needed. No optional dependencies are required.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (600, 400), "navy")
+        thumbnail = ImageOps.smart_crop(image, (128, 128))
+        ```
+    """
+    if not isinstance(image, Image.Image):
+        raise TypeError("image must be a Blanket Image")
+    if len(size) != 2:
+        raise ValueError("size must contain two positive integers")
+    width, height = (index(value) for value in size)
+    if width <= 0 or height <= 0:
+        raise ValueError("size must contain two positive integers")
+    if image.width == 0 or image.height == 0:
+        raise ValueError("cannot smart crop an empty image")
+    ratio = width / height
+    crop_width, crop_height = float(image.width), float(image.height)
+    if image.width / image.height > ratio:
+        crop_width = image.height * ratio
+    else:
+        crop_height = image.width / ratio
+    if crop_width == image.width and crop_height == image.height:
+        return image.resize((width, height), method)
+    scale = min(1.0, 128 / max(image.size))
+    analysis_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
+    source = image.convert("LA") if image.mode == "La" else image
+    analysis = source.convert("RGBA", bit_depth=8).resize(analysis_size, Image.Resampling.BOX)
+    cx, cy = ops_smart_crop(analysis._native, (crop_width / image.width, crop_height / image.height))
+    left, top = (image.width - crop_width) * cx, (image.height - crop_height) * cy
+    return image.resize((width, height), method, (left, top, min(image.width, left + crop_width), min(image.height, top + crop_height)))
 
 
 def flip(image: Image.Image) -> Image.Image:

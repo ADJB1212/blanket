@@ -293,8 +293,9 @@ Rust backend for performance and functionality Pillow doesn't offer.
 - [x] **SVG support** — read static SVG as raster images
 - [ ] **Batch processing API** — process multiple images in parallel with
       shared pipeline configuration
-- [ ] **Smart cropping** — content-aware crop using saliency detection or
-      face detection hints
+- [x] **Smart cropping** — `ImageOps.smart_crop` fits a requested size using
+      native color/edge/alpha saliency on a bounded thumbnail, with centered
+      fallback for flat images and no model dependencies
 - [ ] **Advanced quantization** — neural-network-based color quantization,
       perceptual palette optimization
 - [ ] **Raw photo support** — decode camera raw formats (CR2, NEF, ARW, DNG)
