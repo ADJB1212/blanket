@@ -3,6 +3,7 @@
 use std::simd::Simd;
 
 use blanket_core::buffers::{reserved, reserved_buffer};
+use blanket_core::parallel::{MIN_PARALLEL_BYTES, chunks_mut_above};
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -143,22 +144,42 @@ fn smooth(source: Vec<f32>, width: usize, height: usize, sigma: f32) -> PyResult
     }
     let mut temporary = zeros::<f32>(source.len())?;
     let mut output = zeros::<f32>(source.len())?;
-    for y in 0..height {
-        for x in 0..width {
+    // Taps are applied in kernel order for every pixel, so sums match a per-pixel loop.
+    let band = width * 16;
+    let last = width as isize - 1;
+    chunks_mut_above(&mut temporary, band, MIN_PARALLEL_BYTES, |index, rows| {
+        for (row, dst) in rows.chunks_exact_mut(width).enumerate() {
+            let src = &source[(index * 16 + row) * width..][..width];
             for (k, &weight) in kernel.iter().enumerate() {
-                let nx = (x as isize + k as isize - radius).clamp(0, width as isize - 1) as usize;
-                temporary[y * width + x] += source[y * width + nx] * weight;
+                let offset = k as isize - radius;
+                let begin = (-offset).clamp(0, width as isize) as usize;
+                let end = (width as isize - offset).clamp(begin as isize, width as isize) as usize;
+                for (x, value) in dst[..begin].iter_mut().enumerate() {
+                    *value += src[(x as isize + offset).clamp(0, last) as usize] * weight;
+                }
+                if begin < end {
+                    let shifted = (begin as isize + offset) as usize;
+                    for (value, &sample) in dst[begin..end].iter_mut().zip(&src[shifted..shifted + end - begin]) {
+                        *value += sample * weight;
+                    }
+                }
+                for (x, value) in dst[end..].iter_mut().enumerate() {
+                    *value += src[((end + x) as isize + offset).clamp(0, last) as usize] * weight;
+                }
             }
         }
-    }
-    for y in 0..height {
-        for x in 0..width {
+    });
+    chunks_mut_above(&mut output, band, MIN_PARALLEL_BYTES, |index, rows| {
+        for (row, dst) in rows.chunks_exact_mut(width).enumerate() {
+            let y = (index * 16 + row) as isize;
             for (k, &weight) in kernel.iter().enumerate() {
-                let ny = (y as isize + k as isize - radius).clamp(0, height as isize - 1) as usize;
-                output[y * width + x] += temporary[ny * width + x] * weight;
+                let ny = (y + k as isize - radius).clamp(0, height as isize - 1) as usize;
+                for (value, &sample) in dst.iter_mut().zip(&temporary[ny * width..][..width]) {
+                    *value += sample * weight;
+                }
             }
         }
-    }
+    });
     Ok(output)
 }
 

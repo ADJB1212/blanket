@@ -236,19 +236,27 @@ pub fn filter_unsharp(py: Python<'_>, image: &Image, radius: f32, percent: i32, 
     }
     let pixels = py.detach(|| -> PyResult<Vec<u8>> {
         let mut pixels = blur(image, source, (radius, radius), BlurKind::Gaussian)?;
-        chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| {
-            for (&original, blurred) in source[chunk * CHUNK_PIXELS..].iter().zip(dst) {
-                let difference = i32::from(original) - i32::from(*blurred);
-                *blurred = if difference.abs() > threshold {
-                    (i64::from(original) + i64::from(difference) * i64::from(percent) / 100).clamp(0, 255) as u8
-                } else {
-                    original
-                };
-            }
-        });
+        chunks_mut(&mut pixels, CHUNK_PIXELS, |chunk, dst| sharpen(&source[chunk * CHUNK_PIXELS..], dst, percent, threshold));
         Ok(pixels)
     })?;
     output(image, pixels)
+}
+
+fn sharpen(source: &[u8], values: &mut [u8], percent: i32, threshold: i32) {
+    use std::simd::prelude::*;
+    // Beyond this magnitude every nonzero difference saturates, so i32 lanes stay exact.
+    let percent = percent.clamp(-25_600, 25_600);
+    let end = values.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let original = Simd::<u8, 16>::from_slice(&source[i..]).cast::<i32>();
+        let difference = original - Simd::<u8, 16>::from_slice(&values[i..]).cast::<i32>();
+        let value = (original + difference * Simd::splat(percent) / Simd::splat(100)).simd_clamp(Simd::splat(0), Simd::splat(255));
+        difference.abs().simd_gt(Simd::splat(threshold)).select(value, original).cast::<u8>().copy_to_slice(&mut values[i..i + 16]);
+    }
+    for (&original, value) in source[end..].iter().zip(&mut values[end..]) {
+        let difference = i32::from(original) - i32::from(*value);
+        *value = if difference.abs() > threshold { (i32::from(original) + difference * percent / 100).clamp(0, 255) as u8 } else { original };
+    }
 }
 
 #[cfg(test)]
@@ -265,6 +273,34 @@ mod tests {
         let mut rgb = [0; 9];
         box_horizontal::<3>(&[0, 90, 3, 90, 0, 3, 0, 90, 3], &mut rgb, 3, 1.0);
         assert_eq!(rgb, [30, 60, 3, 30, 60, 3, 30, 60, 3]);
+    }
+
+    #[test]
+    fn sharpen_matches_wide_reference_for_tails_and_extreme_percents() {
+        for count in [0, 1, 15, 16, 17, 31, 33, 65] {
+            let source: Vec<u8> = (0..=count).map(|i| (i * 719 + 257) as u8).collect();
+            for percent in [i32::MIN, -25_601, -150, 0, 1, 150, 25_601, i32::MAX] {
+                for threshold in [-1, 0, 17, i32::MAX] {
+                    let mut output = vec![173; count + 2];
+                    for (i, v) in output[1..=count].iter_mut().enumerate() {
+                        *v = source[count - i];
+                    }
+                    let original = output.clone();
+                    sharpen(&source[1..], &mut output[1..=count], percent, threshold);
+                    for i in 0..count {
+                        let a = i64::from(source[1 + i]);
+                        let difference = a - i64::from(original[1 + i]);
+                        let expected = if difference.abs() > i64::from(threshold) {
+                            (a + difference * i64::from(percent) / 100).clamp(0, 255) as u8
+                        } else {
+                            a as u8
+                        };
+                        assert_eq!(output[1 + i], expected);
+                    }
+                    assert_eq!((output[0], output[count + 1]), (173, 173));
+                }
+            }
+        }
     }
 
     #[test]
