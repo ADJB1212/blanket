@@ -34,6 +34,7 @@ venv/
 *.egg
 *.json
 .dylibs
+.github/docker
 
 # Installer logs
 pip-log.txt

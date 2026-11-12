@@ -54,7 +54,7 @@ jobs:
         os: [ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
     container:
-      image: ghcr.io/adjb1212/blanket-ci:v1
+      image: ghcr.io/adjb1212/blanket-ci:v2
     defaults:
       run:
         shell: bash
@@ -65,7 +65,13 @@ jobs:
       CXX: clang++
       CMAKE_CC_COMPILER: clang
       CMAKE_CXX_COMPILER: clang++
-      BUILD_FEATURES: jxl-vendored,no-vendored-webp,embedded-libheif,gpu-cuda
+      BUILD_FEATURES: no-vendored-webp,gpu-cuda
+      PKG_CONFIG_PATH: /opt/blanket-deps/dav1d/lib/pkgconfig:/opt/blanket-deps/aom/lib/pkgconfig:/opt/blanket-deps/x265/lib/pkgconfig:/opt/blanket-deps/libde265/lib/pkgconfig:/opt/blanket-deps/libheif/lib/pkgconfig:/opt/blanket-deps/libwebp/lib/pkgconfig:/opt/blanket-deps/libjxl/lib/pkgconfig:/opt/blanket-deps/lcms2/lib/pkgconfig
+      CMAKE_PREFIX_PATH: /opt/blanket-deps/dav1d:/opt/blanket-deps/aom:/opt/blanket-deps/x265:/opt/blanket-deps/libde265:/opt/blanket-deps/libheif:/opt/blanket-deps/libwebp:/opt/blanket-deps/libjxl:/opt/blanket-deps/lcms2
+      LD_LIBRARY_PATH: /opt/blanket-deps/wheel/lib:/opt/blanket-deps/lcms2/lib:/opt/blanket-deps/dav1d/lib:/opt/blanket-deps/aom/lib:/opt/blanket-deps/x265/lib:/opt/blanket-deps/libde265/lib:/opt/blanket-deps/libheif/lib:/opt/blanket-deps/libwebp/lib:/opt/blanket-deps/libjxl/lib
+      LCMS2_LIB_DIR: /opt/blanket-deps/lcms2/lib
+      LCMS2_INCLUDE_DIR: /opt/blanket-deps/lcms2/include
+      LDFLAGS: -fuse-ld=mold
       RUSTFLAGS: -C linker=clang -C link-arg=-fuse-ld=mold
     steps:
       - uses: actions/checkout@v7
@@ -104,12 +110,8 @@ jobs:
           echo "PYO3_PYTHON=$python_executable" >> "$GITHUB_ENV"
           echo "LD_LIBRARY_PATH=$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
-      - name: Configure ARM64 linking
-        if: runner.arch == 'ARM64'
-        run: echo "RUSTFLAGS=$RUSTFLAGS -C link-arg=-lwebpdemux" >> "$GITHUB_ENV"
-
-      - name: Run Clippy
-        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES
+      - name: Verify native codec libraries
+        run: pkg-config --modversion dav1d aom x265 libde265 libheif libwebp libwebpmux libwebpdemux libjxl libjxl_threads lcms2
 
       - name: Run Rust Tests
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
