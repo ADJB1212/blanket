@@ -211,7 +211,7 @@ jobs:
 
       - name: Install Deps and Setup PATH (macOS)
         run: |
-          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp jpeg-xl little-cms2 pkgconf
+          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp little-cms2 pkgconf
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           echo "LCMS2_LIB_DIR=/opt/homebrew/opt/little-cms2/lib" >> "$GITHUB_ENV"
           echo "LCMS2_INCLUDE_DIR=/opt/homebrew/opt/little-cms2/include" >> "$GITHUB_ENV"
@@ -221,7 +221,7 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
 
       - name: Run Clippy
         run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda

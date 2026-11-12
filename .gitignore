@@ -33,6 +33,7 @@ venv/
 .installed.cfg
 *.egg
 *.json
+.dylibs
 
 # Installer logs
 pip-log.txt
