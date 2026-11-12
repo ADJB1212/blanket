@@ -32,6 +32,9 @@ if TYPE_CHECKING:
     from collections.abc import Buffer, Callable, Iterable, Sequence
     from typing import BinaryIO, Self, SupportsIndex
 
+    import numpy as np
+    from torch import Tensor
+
     from ._blanket import _Image
     from ._lazy_frames import LazyFrames
     from ._typing import BytesInput, FloatInput, Writable
@@ -78,6 +81,7 @@ from ._blanket import (
     ops_xbm,
     palette_to_pa,
     quantize as _native_quantize,
+    tensor_export,
     wide_histogram,
 )
 from ._color import color_pixel
@@ -1597,6 +1601,78 @@ class Image:
             ```
         """
         return self._native.tobytes(*_raw_args(self.mode, encoder_name, args))
+
+    def to_numpy(self, *, layout: str = "HWC", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None) -> np.ndarray:
+        """Export an independent, writable, contiguous float32 NumPy array.
+
+        Fuse layout conversion, normalization, and ``(x - mean) / std`` in
+        Rust. Layout is HWC, CHW, or HW (single-band only); HWC and CHW keep
+        a channel axis even for single-band images. Unsigned samples are
+        divided by their depth's maximum when normalize is true. Mode 1
+        becomes 0/1 when normalized, otherwise 0/255; signed I and float
+        samples keep their original units.
+        Float nonfinite values propagate. Mean and std, when supplied, must
+        each have one finite float32 value per band; std must be positive.
+        Palette images export indices, and other modes retain their bands
+        without color conversion or alpha unpremultiplication.
+
+        NumPy is imported on demand. The array retains its output buffer
+        after image mutation, frame navigation, or close.
+
+        Args:
+            layout: Output axis order, HWC by default.
+            normalize: Scale unsigned samples to 0..1 before standardization.
+            mean: Per-band means, defaulting to zero.
+            std: Per-band positive standard deviations, defaulting to one.
+
+        Examples:
+            ```python
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            array = image.to_numpy(layout="CHW", mean=(0.5, 0.5, 0.5))
+            ```
+        """
+        import numpy as np
+
+        self.load()
+        data = tensor_export(self._native, layout, normalize, mean, std)
+        return np.frombuffer(data, dtype=np.float32).reshape(self._tensor_shape(layout))
+
+    def to_torch(self, *, layout: str = "CHW", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None) -> Tensor:
+        """Export an independent, writable, contiguous CPU float32 tensor.
+
+        Use the normalization, band, and standardization rules of to_numpy.
+        The default layout is CHW. PyTorch is imported on demand; NumPy is
+        not required. The tensor retains its output buffer after the image
+        changes or closes. Move the returned tensor explicitly for GPU use.
+
+        Args:
+            layout: Output axis order, CHW by default.
+            normalize: Scale unsigned samples to 0..1 before standardization.
+            mean: Per-band means, defaulting to zero.
+            std: Per-band positive standard deviations, defaulting to one.
+
+        Examples:
+            ```python
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            tensor = image.to_torch(mean=(0.5, 0.5, 0.5), std=(0.25, 0.25, 0.25))
+            ```
+        """
+        import torch
+
+        self.load()
+        data = tensor_export(self._native, layout, normalize, mean, std)
+        shape = self._tensor_shape(layout)
+        if not data:
+            return torch.empty(shape, dtype=torch.float32, device="cpu")
+        return torch.frombuffer(data, dtype=torch.float32).reshape(shape)
+
+    def _tensor_shape(self, layout: str) -> tuple[int, ...]:
+        channels = len(self._bands)
+        if layout == "HW":
+            return self.height, self.width
+        if layout == "CHW":
+            return channels, self.height, self.width
+        return self.height, self.width, channels
 
     def frombytes(self, data: object, decoder_name: str = "raw", *args: object) -> None:
         """Replace pixels from a raw buffer while retaining image metadata.

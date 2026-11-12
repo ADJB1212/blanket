@@ -370,7 +370,7 @@ with new processing semantics exposed explicitly.
       layouts, with explicit ownership, lifetime, mutability, and stride rules
 - [x] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
       aligned cropping of encoded JPEGs with explicit metadata handling
-- [ ] **Fused tensor export** — direct conversion to PyTorch/NumPy tensors with
+- [x] **Fused tensor export** — `Image.to_torch` / `Image.to_numpy` float32 snapshots with
       fused channel transposition (HWC to CHW), float normalization, and
       standardization (`(x - mean) / std`) in native Rust kernels
 - [ ] **Memory-mapped inputs** — opt-in `mmap` backing for reading uncompressed

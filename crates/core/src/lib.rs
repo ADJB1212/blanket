@@ -8,6 +8,7 @@ pub mod pixels;
 pub mod raster;
 mod raw;
 pub mod samples;
+pub mod tensor;
 use blanket_convert_kernels::alpha;
 pub use blanket_convert_kernels::simd;
 

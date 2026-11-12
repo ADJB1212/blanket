@@ -56,7 +56,7 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   and save-time compression search.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
-- **Interop.** Array imports, binary streams, perceptual hashes, an optional
+- **Interop.** Array imports, fused float32 NumPy/PyTorch exports, binary streams, perceptual hashes, an optional
   Pillow bridge, and explicit Metal/CUDA pipelines.
 
 Blanket is **alpha**. Mode and precision limits are operation-specific, the
