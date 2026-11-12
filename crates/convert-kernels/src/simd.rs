@@ -1,18 +1,12 @@
-use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
+use std::simd::cmp::{SimdOrd, SimdPartialEq};
 use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 use std::simd::{Select, Simd, ToBytes};
 
 use blanket_kernels::color::{luminance, luminance_simd};
 use blanket_kernels::parallel::{CHUNK_PIXELS, chunks_mut};
 use blanket_kernels::pixels::{Bytes, load, load_sample_bytes, load_u16, store, store_sample_bytes};
+pub use blanket_kernels::pixels::{bilevel_to_l_into, extract_channel, extract_sample_channel, extract_two_channel, samples_in_range};
 use blanket_modes::PixelMode;
-
-pub fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
-    let maximum = ((1_u32 << bit_depth) - 1) as u16;
-    let (blocks, tail) = source.as_chunks::<32>();
-    blocks.iter().all(|block| load_u16::<false>(block).simd_le(Simd::splat(maximum)).all())
-        && tail.as_chunks::<2>().0.iter().all(|&bytes| u16::from_le_bytes(bytes) <= maximum)
-}
 
 pub fn samples_to_be16(source: &[u8], output: &mut [u8], depth: u8) {
     fn convert<const DEPTH: u16>(source: &[u8], output: &mut [u8]) {
@@ -614,13 +608,6 @@ pub fn bilevel_to_l(source: &[u8]) -> Vec<u8> {
     output
 }
 
-pub fn bilevel_to_l_into(source: &[u8], output: &mut [u8]) {
-    assert_eq!(source.len(), output.len());
-    chunks_mut(output, CHUNK_PIXELS, |chunk, row| {
-        bilevel_to_l_chunk(&source[chunk * CHUNK_PIXELS..][..row.len()], row);
-    });
-}
-
 pub fn convert_bilevel(source: &[u8], mode: PixelMode) -> Vec<u8> {
     fn convert<const N: usize>(source: &[u8], mode: PixelMode) -> Vec<u8> {
         let (blocks, tail) = source.as_chunks::<16>();
@@ -655,19 +642,6 @@ pub fn convert_bilevel(source: &[u8], mode: PixelMode) -> Vec<u8> {
         PixelMode::Rgb => convert::<48>(source, mode),
         PixelMode::F | PixelMode::Rgba => convert::<64>(source, mode),
         _ => unreachable!(),
-    }
-}
-
-fn bilevel_to_l_chunk(source: &[u8], output: &mut [u8]) {
-    let end = output.len() / 16 * 16;
-    for i in (0..end).step_by(16) {
-        Bytes::from_slice(&source[i..i + 16])
-            .simd_ne(Bytes::splat(0))
-            .select(Bytes::splat(255), Bytes::splat(0))
-            .copy_to_slice(&mut output[i..i + 16]);
-    }
-    for (&value, dst) in source[end..].iter().zip(&mut output[end..]) {
-        *dst = u8::from(value != 0) * 255;
     }
 }
 
@@ -742,41 +716,6 @@ pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
     map_blocks::<S, 4>(source, 4 << 20, |p| [!p[0], !p[1], !p[2], Bytes::splat(0)], |p| [255 - p[0], 255 - p[1], 255 - p[2], 0])
 }
 
-pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
-    fn extract<const S: usize, const BAND: usize>(source: &[u8]) -> Vec<u8> {
-        if S == 2 || S == 3 || source.len() / S < 4 << 20 {
-            let count = source.len() / S / 16;
-            let blocks = &source[..count * S * 16];
-            let tail = &source[count * S * 16..];
-            let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
-            output.extend(blocks.chunks_exact(S * 16).map(|block| load::<S>(block)[BAND].to_array()));
-            let mut output = output.into_flattened();
-            output.extend(tail.as_chunks::<S>().0.iter().map(|p| p[BAND]));
-            return output;
-        }
-        let mut output = vec![0; source.len() / S];
-        const CHUNK: usize = 64 << 10;
-        blanket_kernels::parallel::chunks_mut_above(&mut output, CHUNK, 4 << 20, |i, dst| {
-            let src = &source[i * CHUNK * S..(i * CHUNK + dst.len()) * S];
-            let end = dst.len() / 16 * 16;
-            for offset in (0..end).step_by(16) {
-                load::<S>(&src[offset * S..])[BAND].copy_to_slice(&mut dst[offset..offset + 16]);
-            }
-            for (pixel, value) in dst[end..].iter_mut().zip(src[end * S..].as_chunks::<S>().0) {
-                *pixel = value[BAND];
-            }
-        });
-        output
-    }
-    match channel {
-        0 => extract::<S, 0>(source),
-        1 => extract::<S, 1>(source),
-        2 => extract::<S, 2>(source),
-        3 => extract::<S, 3>(source),
-        _ => unreachable!("validated channel index"),
-    }
-}
-
 pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
     if to == PixelMode::L {
         return extract_channel::<2>(source, 0);
@@ -827,10 +766,6 @@ pub fn convert_la(source: &[u8], to: PixelMode) -> Vec<u8> {
         }
     });
     output
-}
-
-pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
-    extract_channel::<2>(source, channel)
 }
 
 fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
@@ -931,10 +866,6 @@ pub fn pillow_luma(r: u8, g: u8, b: u8) -> u8 {
 
 /// Fixed divisors let LLVM vectorize exact wide-sample normalization. Preserve
 /// the existing rounded full-range mapping, including 16-bit identity input.
-pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) -> Vec<u8> {
-    source.chunks_exact(channels * 2).map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]).collect::<Vec<_>>().into_flattened()
-}
-
 pub fn normalize_u16(source: &[u8], depth: u8) -> Vec<u16> {
     use blanket_kernels::parallel::should_parallel;
     use rayon::prelude::*;
@@ -988,7 +919,7 @@ mod tests {
             for count in [0, 1, 15, 16, 17, 31, 32, 33, 256] {
                 let source: Vec<u8> = (0..offset + count).map(|i| i as u8).collect();
                 let mut output = vec![0xa5; offset + count + 13];
-                super::bilevel_to_l_chunk(&source[offset..], &mut output[offset..offset + count]);
+                super::bilevel_to_l_into(&source[offset..], &mut output[offset..offset + count]);
                 let expected: Vec<u8> = source[offset..].iter().map(|&value| u8::from(value != 0) * 255).collect();
                 assert_eq!(&output[offset..offset + count], expected);
                 assert!(output[..offset].iter().chain(&output[offset + count..]).all(|&value| value == 0xa5));

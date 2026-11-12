@@ -329,6 +329,76 @@ pub fn swap_red_blue<const I: usize, const O: usize>(source: &[u8], output: &mut
     }
 }
 
+pub fn samples_in_range(source: &[u8], bit_depth: u8) -> bool {
+    let maximum = ((1_u32 << bit_depth) - 1) as u16;
+    let (blocks, tail) = source.as_chunks::<32>();
+    blocks.iter().all(|block| load_u16::<false>(block).simd_le(Simd::splat(maximum)).all())
+        && tail.as_chunks::<2>().0.iter().all(|&bytes| u16::from_le_bytes(bytes) <= maximum)
+}
+
+pub fn bilevel_to_l_into(source: &[u8], output: &mut [u8]) {
+    assert_eq!(source.len(), output.len());
+    crate::parallel::chunks_mut(output, crate::parallel::CHUNK_PIXELS, |chunk, row| {
+        bilevel_to_l_chunk(&source[chunk * crate::parallel::CHUNK_PIXELS..][..row.len()], row);
+    });
+}
+
+fn bilevel_to_l_chunk(source: &[u8], output: &mut [u8]) {
+    let end = output.len() / 16 * 16;
+    for i in (0..end).step_by(16) {
+        Bytes::from_slice(&source[i..i + 16])
+            .simd_ne(Bytes::splat(0))
+            .select(Bytes::splat(255), Bytes::splat(0))
+            .copy_to_slice(&mut output[i..i + 16]);
+    }
+    for (&value, dst) in source[end..].iter().zip(&mut output[end..]) {
+        *dst = u8::from(value != 0) * 255;
+    }
+}
+
+pub fn extract_channel<const S: usize>(source: &[u8], channel: usize) -> Vec<u8> {
+    fn extract<const S: usize, const BAND: usize>(source: &[u8]) -> Vec<u8> {
+        if S == 2 || S == 3 || source.len() / S < 4 << 20 {
+            let count = source.len() / S / 16;
+            let blocks = &source[..count * S * 16];
+            let tail = &source[count * S * 16..];
+            let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
+            output.extend(blocks.chunks_exact(S * 16).map(|block| load::<S>(block)[BAND].to_array()));
+            let mut output = output.into_flattened();
+            output.extend(tail.as_chunks::<S>().0.iter().map(|p| p[BAND]));
+            return output;
+        }
+        let mut output = vec![0; source.len() / S];
+        const CHUNK: usize = 64 << 10;
+        crate::parallel::chunks_mut_above(&mut output, CHUNK, 4 << 20, |i, dst| {
+            let src = &source[i * CHUNK * S..(i * CHUNK + dst.len()) * S];
+            let end = dst.len() / 16 * 16;
+            for offset in (0..end).step_by(16) {
+                load::<S>(&src[offset * S..])[BAND].copy_to_slice(&mut dst[offset..offset + 16]);
+            }
+            for (pixel, value) in dst[end..].iter_mut().zip(src[end * S..].as_chunks::<S>().0) {
+                *pixel = value[BAND];
+            }
+        });
+        output
+    }
+    match channel {
+        0 => extract::<S, 0>(source),
+        1 => extract::<S, 1>(source),
+        2 => extract::<S, 2>(source),
+        3 => extract::<S, 3>(source),
+        _ => unreachable!("validated channel index"),
+    }
+}
+
+pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
+    extract_channel::<2>(source, channel)
+}
+
+pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) -> Vec<u8> {
+    source.chunks_exact(channels * 2).map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]).collect::<Vec<_>>().into_flattened()
+}
+
 #[cfg(test)]
 mod channel_swap_tests {
     use super::*;
