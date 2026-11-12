@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"contextlib", "collections.abc", "array", "os", "pathlib", "blanket._palette"}
+__lazy_modules__ = {"collections.abc", "array", "os", "pathlib", "blanket._palette"}
 
 import math
 import os
 from array import array
-from contextlib import nullcontext
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
@@ -15,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import IO
 
-from ._blanket import ops_histogram, palette_colors, palette_decode, palette_gamma, palette_linear, palette_ramp, palette_sepia
+from ._blanket import ops_histogram, palette_colors, palette_decode, palette_format, palette_gamma, palette_linear, palette_ramp, palette_save, palette_sepia
 from ._color import _rgb
 from ._palette import load_palette
 from .Image import Image
@@ -242,18 +241,11 @@ class ImagePalette:
             ```
         """
         self._check_raw()
-        channels = len(self.mode)
-        palette = self.palette
-        # Pad once, rather than repeatedly checking bounds and properties for
-        # each component of every output entry.
-        values = list(palette[: 256 * channels])
-        values.extend([0] * (256 * channels - len(values)))
-        with Path(os.fsdecode(fp)).open("w", encoding="ascii") if isinstance(fp, (str, bytes, os.PathLike)) else nullcontext(fp) as stream:
-            stream.write(f"# Palette\n# Mode: {self.mode}\n")
-            for slot in range(256):
-                offset = slot * channels
-                entry = " ".join(map(str, (slot, *values[offset : offset + channels])))
-                stream.write(f"{entry}\n")
+        data = bytes(self.palette)
+        if isinstance(fp, (str, bytes, os.PathLike)):
+            palette_save(self.mode, data, os.fsdecode(fp))
+        else:
+            fp.write(palette_format(self.mode, data))
 
 
 def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:

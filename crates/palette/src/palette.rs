@@ -1,7 +1,7 @@
 //! Small palette kernels. Python owns mutable palette storage and file parsing.
 
 use blanket_core::{Image, PixelMode};
-use pyo3::exceptions::{PyIndexError, PyOverflowError, PyValueError, PyZeroDivisionError};
+use pyo3::exceptions::{PyIndexError, PyOSError, PyOverflowError, PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
 use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
 use rustc_hash::FxHashSet;
@@ -21,6 +21,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_gamma, module)?)?;
     module.add_function(wrap_pyfunction!(palette_sepia, module)?)?;
     module.add_function(wrap_pyfunction!(palette_gradient, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_save, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_format, module)?)?;
     Ok(())
 }
 
@@ -250,6 +252,47 @@ fn palette_gradient(py: Python<'_>, segments: Vec<(Vec<f64>, usize)>) -> PyResul
     Ok(PyBytes::new(py, &render_gradient(&segments)?))
 }
 
+/// Write a 256-entry text palette to a file path.
+///
+/// The output format matches Pillow's `ImagePalette.save`: a two-line header
+/// followed by 256 lines of `index channel0 channel1 …` values. Entries
+/// beyond the supplied data are zero-padded; entries beyond 256 are truncated.
+#[pyfunction]
+fn palette_save(mode: &str, data: &[u8], path: &str) -> PyResult<()> {
+    let text = format_palette(mode, data)?;
+    std::fs::write(path, text.as_bytes()).map_err(|e| PyOSError::new_err(e.to_string()))
+}
+
+/// Format a 256-entry text palette as a string without writing to disk.
+#[pyfunction]
+fn palette_format(mode: &str, data: &[u8]) -> PyResult<String> {
+    format_palette(mode, data)
+}
+
+fn format_palette(mode: &str, data: &[u8]) -> PyResult<String> {
+    let channels = mode.len();
+    if channels == 0 {
+        return Err(PyValueError::new_err("empty palette mode"));
+    }
+    // Header + 256 entries: each entry is at most "255 255 255 255 255\n" (20 bytes for CMYK).
+    let mut buf = String::with_capacity(64 + 256 * (4 + channels * 4));
+    use std::fmt::Write;
+    writeln!(buf, "# Palette").unwrap();
+    writeln!(buf, "# Mode: {mode}").unwrap();
+    let limit = channels << 8;
+    for slot in 0..256u16 {
+        let offset = usize::from(slot) * channels;
+        write!(buf, "{slot}").unwrap();
+        for c in 0..channels {
+            let index = offset + c;
+            let value = if index < limit && index < data.len() { data[index] } else { 0 };
+            write!(buf, " {value}").unwrap();
+        }
+        buf.push('\n');
+    }
+    Ok(buf)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -291,5 +334,48 @@ mod tests {
             assert_eq!(&result[..4], &[0; 4]);
             assert_eq!(&result[1020..], &[255; 4]);
         }
+    }
+
+    #[test]
+    fn format_palette_rgb_header_and_entry_count() {
+        let data: Vec<u8> = (0..6).collect(); // 2 RGB entries
+        let text = format_palette("RGB", &data).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "# Palette");
+        assert_eq!(lines[1], "# Mode: RGB");
+        assert_eq!(lines.len(), 258); // 2 header + 256 entries
+        assert_eq!(lines[2], "0 0 1 2");
+        assert_eq!(lines[3], "1 3 4 5");
+        // Remaining entries are zero-padded.
+        assert_eq!(lines[4], "2 0 0 0");
+        assert_eq!(lines[257], "255 0 0 0");
+    }
+
+    #[test]
+    fn format_palette_rgba_pads_and_truncates() {
+        // 769 bytes = 192 full RGBA entries + 1 leftover byte; entry 192+ should be 0-padded.
+        let data: Vec<u8> = (0..769).map(|i| (i % 256) as u8).collect();
+        let text = format_palette("RGBA", &data).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 258);
+        assert_eq!(lines[2], "0 0 1 2 3");
+        // Entry 192: offset 768, only 1 byte available then 0-padded.
+        assert_eq!(lines[2 + 192], "192 0 0 0 0");
+    }
+
+    #[test]
+    fn format_palette_cmyk() {
+        let data = vec![10, 20, 30, 40, 50, 60, 70, 80];
+        let text = format_palette("CMYK", &data).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[1], "# Mode: CMYK");
+        assert_eq!(lines[2], "0 10 20 30 40");
+        assert_eq!(lines[3], "1 50 60 70 80");
+        assert_eq!(lines[4], "2 0 0 0 0");
+    }
+
+    #[test]
+    fn format_palette_empty_mode_rejected() {
+        assert!(format_palette("", &[]).is_err());
     }
 }
