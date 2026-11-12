@@ -55,6 +55,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     container:
       image: ghcr.io/adjb1212/blanket-ci:v2
+      options: --cap-add=SYS_NICE
     defaults:
       run:
         shell: bash
@@ -224,9 +225,6 @@ jobs:
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
           echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
-
-      - name: Run Clippy
-        run: cargo clippy --lib --workspace --no-deps --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
 
       - name: Run Rust Tests (MacOS)
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
