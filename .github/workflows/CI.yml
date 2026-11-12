@@ -93,10 +93,6 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
 
-      - name: Clean outdated Rust build artifacts
-        if: steps.cargo-cache-restore.outputs.cache-hit != 'true'
-        run: cargo clean --locked
-
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           version: "latest"
@@ -191,10 +187,6 @@ jobs:
 
       - name: Install pinned Rust toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal --component clippy
-
-      - name: Clean outdated Rust build artifacts
-        if: steps.cargo-cache-restore.outputs.cache-hit != 'true'
-        run: cargo clean --locked
 
       - name: Configure macOS toolchain
         run: |
