@@ -3,7 +3,7 @@ use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd};
 
 use blanket_core::pixels::{Bytes, load, store};
-use blanket_core::raster::{Image, PixelMode};
+use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
@@ -365,11 +365,8 @@ pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image
     }
     let background_pixels = background.pixel_data()?;
     let source = overlay.pixel_data()?;
-    let pixels = py.detach(|| {
-        let mut pixels = background_pixels.to_vec();
-        composite_pixels(&mut pixels, source);
-        pixels
-    });
+    let mut pixels = alloc_pixels(background_pixels.len())?;
+    py.detach(|| composite_pixels(&mut pixels, source, Some(background_pixels)));
     Image::from_pixels(background.width(), background.height(), PixelMode::Rgba, pixels, None)
 }
 
@@ -388,14 +385,18 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
     let pixels = image.pixels_mut().expect("validated open image");
-    py.detach(|| composite_pixels(pixels, source));
+    py.detach(|| composite_pixels(pixels, source, None));
     Ok(())
 }
 
-fn composite_pixels(pixels: &mut [u8], source: &[u8]) {
+/// Composite `source` over `pixels`, first copying `background` into `pixels` when given.
+fn composite_pixels(pixels: &mut [u8], source: &[u8], background: Option<&[u8]>) {
     const CHUNK: usize = 16 * 1024 * 4;
     blanket_core::parallel::chunks_mut(pixels, CHUNK, |i, pixels| {
         let source = &source[i * CHUNK..i * CHUNK + pixels.len()];
+        if let Some(background) = background {
+            pixels.copy_from_slice(&background[i * CHUNK..i * CHUNK + pixels.len()]);
+        }
         let done = pixels.len() / 64 * 64;
         for i in (0..done).step_by(64) {
             let src = load::<4>(&source[i..]);
@@ -693,7 +694,7 @@ mod tests {
             }
             let mut expected = background.clone();
             composite_scalar(&mut expected, &overlay);
-            composite_pixels(&mut background, &overlay);
+            composite_pixels(&mut background, &overlay, None);
             assert_eq!(background, expected);
         }
     }
@@ -713,7 +714,7 @@ mod tests {
                     }
                     let mut expected = background.clone();
                     composite_scalar(&mut expected[offset..end], &overlay[offset..]);
-                    composite_pixels(&mut background[offset..end], &overlay[offset..]);
+                    composite_pixels(&mut background[offset..end], &overlay[offset..], None);
                     assert_eq!(background, expected, "offset={offset}, count={count}, alpha={alpha:?}");
                 }
             }

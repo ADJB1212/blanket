@@ -228,21 +228,39 @@ impl Operation {
     }
 }
 
-fn hard_light_chunk<const OVERLAY: bool>(a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
-    let full = Simd::splat(255);
+const MULTIPLY: u8 = 0;
+const SCREEN: u8 = 1;
+const SOFT_LIGHT: u8 = 2;
+const HARD_LIGHT: u8 = 3;
+const OVERLAY: u8 = 4;
+
+/// 8-bit blend kernels matching `Operation::apply`; every intermediate fits in u32.
+fn blend_chunk<const OP: u8>(a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
+    let full = Simd::<u32, 16>::splat(255);
     let done = output.len() / 16 * 16;
     for i in (0..done).step_by(16) {
-        let x = Bytes::from_slice(&a[i..]).cast::<u16>();
-        let y = Bytes::from_slice(&b[i..]).cast::<u16>();
-        let selector = if OVERLAY { x } else { y };
-        let low = selector.simd_lt(Simd::splat(128));
-        let value = low.select(x, full - x) * low.select(y, full - y) / Simd::splat(127);
-        let values = low.select(value, full - value).cast::<u8>().to_array();
-        for (dst, value) in output[i..i + 16].iter_mut().zip(values) {
-            dst.write(value);
-        }
+        let x = Bytes::from_slice(&a[i..]).cast::<u32>();
+        let y = Bytes::from_slice(&b[i..]).cast::<u32>();
+        let screen = |x, y| full - (full - x) * (full - y) / full;
+        let value = match OP {
+            MULTIPLY => x * y / full,
+            SCREEN => screen(x, y),
+            SOFT_LIGHT => (full - x) * x * y / Simd::splat(65536) + x * screen(x, y) / full,
+            _ => {
+                let low = if OP == OVERLAY { x } else { y }.simd_lt(Simd::splat(128));
+                let value = low.select(x, full - x) * low.select(y, full - y) / Simd::splat(127);
+                low.select(value, full - value)
+            }
+        };
+        output[i..i + 16].write_copy_of_slice(&value.cast::<u8>().to_array());
     }
-    let operation = if OVERLAY { Operation::Overlay } else { Operation::HardLight };
+    let operation = match OP {
+        MULTIPLY => Operation::Multiply,
+        SCREEN => Operation::Screen,
+        SOFT_LIGHT => Operation::SoftLight,
+        HARD_LIGHT => Operation::HardLight,
+        _ => Operation::Overlay,
+    };
     for ((dst, &a), &b) in output[done..].iter_mut().zip(&a[done..]).zip(&b[done..]) {
         dst.write(operation.apply(a, b, 1.0, 0));
     }
@@ -342,15 +360,11 @@ pub fn chops_binary(py: Python<'_>, first: &Image, second: &Image, operation: &s
                     Operation::Subtract if scale == 1.0 && offset == 0 => apply!(u8::saturating_sub),
                     Operation::Add => apply!(|a, b| Operation::Add.apply(a, b, scale, offset)),
                     Operation::Subtract => apply!(|a, b| Operation::Subtract.apply(a, b, scale, offset)),
-                    Operation::Multiply => apply!(|a, b| Operation::Multiply.apply(a, b, scale, offset)),
-                    Operation::Screen => apply!(|a, b| Operation::Screen.apply(a, b, scale, offset)),
-                    Operation::SoftLight => apply!(|a, b| Operation::SoftLight.apply(a, b, scale, offset)),
-                    Operation::HardLight => {
-                        hard_light_chunk::<false>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row);
-                    }
-                    Operation::Overlay => {
-                        hard_light_chunk::<true>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row);
-                    }
+                    Operation::Multiply => blend_chunk::<MULTIPLY>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row),
+                    Operation::Screen => blend_chunk::<SCREEN>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row),
+                    Operation::SoftLight => blend_chunk::<SOFT_LIGHT>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row),
+                    Operation::HardLight => blend_chunk::<HARD_LIGHT>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row),
+                    Operation::Overlay => blend_chunk::<OVERLAY>(&a[a_start..a_start + row], &b[b_start..b_start + row], output_row),
                 }
             }
         });
@@ -605,10 +619,15 @@ mod tests {
         }
     }
 
+    const BLENDS: [Operation; 5] = [Operation::Multiply, Operation::Screen, Operation::SoftLight, Operation::HardLight, Operation::Overlay];
+
     fn blend_chunk(operation: Operation, a: &[u8], b: &[u8], output: &mut [MaybeUninit<u8>]) {
         match operation {
-            Operation::HardLight => hard_light_chunk::<false>(a, b, output),
-            Operation::Overlay => hard_light_chunk::<true>(a, b, output),
+            Operation::Multiply => super::blend_chunk::<MULTIPLY>(a, b, output),
+            Operation::Screen => super::blend_chunk::<SCREEN>(a, b, output),
+            Operation::SoftLight => super::blend_chunk::<SOFT_LIGHT>(a, b, output),
+            Operation::HardLight => super::blend_chunk::<HARD_LIGHT>(a, b, output),
+            Operation::Overlay => super::blend_chunk::<OVERLAY>(a, b, output),
             _ => unreachable!(),
         }
     }
@@ -618,7 +637,7 @@ mod tests {
         let a: Vec<u8> = (0..=255).flat_map(|a| [a; 256]).collect();
         let b: Vec<u8> = (0..=255).cycle().take(a.len()).collect();
         let mut output = vec![MaybeUninit::uninit(); a.len()];
-        for operation in [Operation::HardLight, Operation::Overlay] {
+        for operation in BLENDS {
             blend_chunk(operation, &a, &b, &mut output);
             for ((value, &a), &b) in output.iter().zip(&a).zip(&b) {
                 // SAFETY: blend_chunk initializes every output sample.
@@ -633,7 +652,7 @@ mod tests {
             for len in 0..=65 {
                 let a: Vec<u8> = (0..offset + len).map(|i| (i * 37 + i / 11) as u8).collect();
                 let b: Vec<u8> = (0..offset + len + 1).map(|i| (i * 53 + i / 7) as u8).collect();
-                for operation in [Operation::HardLight, Operation::Overlay] {
+                for operation in BLENDS {
                     let mut expected = vec![0xa5; offset + len + 16];
                     for i in 0..len {
                         expected[offset + i] = operation.apply(a[offset + i], b[offset + i + 1], 1.0, 0);
