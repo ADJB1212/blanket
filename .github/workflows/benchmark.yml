@@ -40,7 +40,7 @@ jobs:
           echo "libheif=v1.23.7" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
           echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
-          echo "lcms2=lcms2.19.1" >> "$GITHUB_OUTPUT"
+          echo "lcms2=lcms2.20" >> "$GITHUB_OUTPUT"
 
   aom:
     needs: prepare
