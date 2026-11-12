@@ -39,6 +39,7 @@ members = [
     "crates/filter-neighborhood",
     "crates/palette",
     "crates/stat",
+    "crates/histogram",
     "crates/draw",
     "crates/blanket",
 ]
@@ -93,6 +94,7 @@ blanket-filter-neighborhood = { path = "crates/filter-neighborhood" }
 blanket-ops = { path = "crates/ops" }
 blanket-palette = { path = "crates/palette" }
 blanket-stat = { path = "crates/stat" }
+blanket-histogram = { path = "crates/histogram" }
 rayon = { version = "1", default-features = false }
 pyo3 = { version = "0.30", features = ["nightly"] }
 png = { version = "0.18", default-features = false, features = ["zlib-rs"] }

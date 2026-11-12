@@ -62,9 +62,9 @@ fn stat_snapshot(py: Python<'_>, image: &blanket_core::Image, mask: Option<&blan
         if mask.is_some() {
             return Err(PyValueError::new_err("image has wrong mode"));
         }
-        blanket_ops::ops::wide_histogram(py, image, None, None)?
+        blanket_histogram::wide_histogram(py, image, None, None)?
     } else {
-        blanket_ops::ops::ops_histogram(py, image, mask)?
+        blanket_histogram::ops_histogram(py, image, mask)?
     };
     Ok(StatHistogram { values })
 }

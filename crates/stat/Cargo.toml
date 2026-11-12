@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 blanket-core.workspace = true
-blanket-ops.workspace = true
+blanket-histogram.workspace = true
 pyo3.workspace = true
 
 [lib]

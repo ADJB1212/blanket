@@ -560,6 +560,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "blanket-histogram"
+version = "0.5.0"
+dependencies = [
+ "blanket-core",
+ "blanket-kernels",
+ "pyo3",
+ "rayon",
+]
+
+[[package]]
 name = "blanket-kernels"
 version = "0.5.0"
 dependencies = [
@@ -603,6 +613,7 @@ name = "blanket-ops"
 version = "0.5.0"
 dependencies = [
  "blanket-core",
+ "blanket-histogram",
  "blanket-kernels",
  "blanket-math",
  "pyo3",
@@ -642,7 +653,7 @@ name = "blanket-stat"
 version = "0.5.0"
 dependencies = [
  "blanket-core",
- "blanket-ops",
+ "blanket-histogram",
  "pyo3",
 ]
 
