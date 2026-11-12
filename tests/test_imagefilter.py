@@ -92,7 +92,7 @@ def test_native_neighborhood_filters_do_not_split_bands(mode: str, name: str, ar
         image.putdata([255 if i % 3 else 0 for i in range(35)] if mode == "1" else [i * 11 % 256 for i in range(35)])
     bands = [image.getchannel(channel) for channel in range(len(image.getbands()))]
     operation = getattr(ImageFilter, name)(*args)
-    expected = [operation.filter(band._native).tobytes() for band in bands]
+    expected = [Image.Image(operation.filter(band._native)).tobytes() for band in bands]
 
     def split_error(_image: Image.Image) -> tuple[Image.Image, ...]:
         raise AssertionError("native neighborhood filters should receive the packed image")

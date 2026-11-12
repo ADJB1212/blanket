@@ -2613,7 +2613,7 @@ class Image:
         self._sync_palette()
         native = self._native
         if self.mode == "RGBX" and output_format == "JPEG":
-            native = native.convert("RGB")
+            native = image_convert(native, "RGB")
         if output_format in ("PNG", "GIF") and self.mode == "P":
             transparency = options.pop("transparency", self.info.get("transparency"))
             if isinstance(transparency, (int, bytes)):
