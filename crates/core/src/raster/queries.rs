@@ -101,6 +101,41 @@ pub(super) fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
     minimum.into_iter().zip(maximum).map(|(a, b)| (u16::from(a), u16::from(b))).collect()
 }
 
+pub(super) fn sample_extrema<const C: usize>(data: &[u8], maximum: u16) -> Vec<(u16, u16)> {
+    use std::simd::cmp::SimdOrd;
+    use std::simd::num::SimdUint;
+
+    use crate::pixels::{Samples, load_sample_bytes};
+
+    let mut minimum = [u16::MAX; C];
+    let mut high = [0; C];
+    for block in data.chunks(256 * C * 2) {
+        let done = block.len() / (32 * C) * (32 * C);
+        let mut low_vectors = minimum.map(Samples::splat);
+        let mut high_vectors = high.map(Samples::splat);
+        for offset in (0..done).step_by(32 * C) {
+            let values = load_sample_bytes::<C>(&block[offset..]);
+            for c in 0..C {
+                low_vectors[c] = low_vectors[c].simd_min(values[c]);
+                high_vectors[c] = high_vectors[c].simd_max(values[c]);
+            }
+        }
+        minimum = low_vectors.map(SimdUint::reduce_min);
+        high = high_vectors.map(SimdUint::reduce_max);
+        for pixel in block[done..].chunks_exact(C * 2) {
+            for c in 0..C {
+                let value = u16::from_le_bytes([pixel[c * 2], pixel[c * 2 + 1]]);
+                minimum[c] = minimum[c].min(value);
+                high[c] = high[c].max(value);
+            }
+        }
+        if minimum == [0; C] && high == [maximum; C] {
+            break;
+        }
+    }
+    minimum.into_iter().zip(high).collect()
+}
+
 pub(super) fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
     const CHUNK: usize = 128 << 10;
     if maxcolors >= 64 && crate::parallel::should_parallel(data.len() / N, CHUNK, CHUNK * 2) {

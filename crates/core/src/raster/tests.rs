@@ -1,7 +1,34 @@
 use pyo3::prelude::*;
 
 use super::packing::lab_raw_bytes_mut;
-use super::queries::extrema;
+use super::queries::{extrema, sample_extrema};
+
+#[test]
+fn sample_extrema_match_scalar_across_unaligned_vectors_and_tails() {
+    fn check<const C: usize>() {
+        for count in [0, 1, 15, 16, 17, 255, 256, 257, 1025] {
+            for offset in 0..4 {
+                let mut data = vec![91; offset];
+                let mut expected = [(u16::MAX, 0); C];
+                for i in 0..count {
+                    for (c, range) in expected.iter_mut().enumerate() {
+                        let value = ((i * 7919 + c * 137) % 65536) as u16;
+                        data.extend_from_slice(&value.to_le_bytes());
+                        range.0 = range.0.min(value);
+                        range.1 = range.1.max(value);
+                    }
+                }
+                data.extend_from_slice(&[93; 4]);
+                assert_eq!(sample_extrema::<C>(&data[offset..offset + count * C * 2], u16::MAX), expected);
+                assert!(data[..offset].iter().all(|&v| v == 91));
+                assert_eq!(&data[offset + count * C * 2..], &[93; 4]);
+            }
+        }
+    }
+    check::<1>();
+    check::<3>();
+    check::<4>();
+}
 
 #[test]
 fn mutable_high_depth_samples_are_revalidated_and_cloned_independently() {

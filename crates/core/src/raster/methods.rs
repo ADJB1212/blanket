@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use super::pixels::{
     float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel, wide_pixel_data,
 };
-use super::queries::{bounding_box_l, count_colors, extrema};
+use super::queries::{bounding_box_l, count_colors, extrema, sample_extrema};
 use super::validation::expected_len;
 use super::{Image, PixelMode};
 
@@ -79,7 +79,6 @@ impl Image {
             return Err(PyValueError::new_err("integer extrema require getdata"));
         }
         let data = self.raw_data()?;
-        let channels = self.mode.channels();
         Ok(py.detach(|| {
             if data.is_empty() {
                 return Vec::new();
@@ -95,14 +94,13 @@ impl Image {
                     _ => unreachable!(),
                 };
             }
-            let mut ranges = vec![(u16::MAX, 0); channels];
-            for (i, bytes) in data.as_chunks::<2>().0.iter().enumerate() {
-                let value = u16::from_le_bytes(*bytes);
-                let range = &mut ranges[i % channels];
-                range.0 = range.0.min(value);
-                range.1 = range.1.max(value);
+            let maximum = ((1_u32 << self.bit_depth) - 1) as u16;
+            match self.mode.channels() {
+                1 => sample_extrema::<1>(data, maximum),
+                3 => sample_extrema::<3>(data, maximum),
+                4 => sample_extrema::<4>(data, maximum),
+                _ => unreachable!("validated sample channels"),
             }
-            ranges
         }))
     }
 
