@@ -1,0 +1,51 @@
+[package]
+edition = "2024"
+name = "libheif-sys"
+version = "5.3.1+1.23.7"
+authors = ["Kirill Kuzminykh <cykooz@gmail.com>"]
+build = "build.rs"
+links = "heif"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "libheif bindings"
+documentation = "https://docs.rs/crate/libheif-sys"
+keywords = ["heic", "heif", "libheif"]
+license = "MIT"
+readme = "README.md"
+repository = "https://github.com/cykooz/libheif-sys"
+
+[package.metadata.docs.rs]
+features = ["latest"]
+
+[features]
+embedded-libheif = ["dep:cmake"]
+latest = ["v1_23"]
+use-bindgen = ["latest", "dep:bindgen", "dep:prettyplease"]
+v1_17 = []
+v1_18 = []
+v1_19 = []
+v1_20 = []
+v1_21 = []
+v1_23 = []
+
+[lib]
+name = "libheif_sys"
+path = "src/lib.rs"
+
+[[test]]
+name = "integration_test"
+path = "tests/integration_test.rs"
+
+[dependencies]
+libc = "0.2"
+cfg-if = "1"
+
+[build-dependencies]
+pkg-config = "0.3"
+prettyplease = { version = "0.3.0", optional = true }
+bindgen = { version = "0.72.1", optional = true }
+cmake = { version = "0.1.58", optional = true }

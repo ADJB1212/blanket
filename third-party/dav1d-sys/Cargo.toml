@@ -1,0 +1,26 @@
+[package]
+edition = "2024"
+rust-version = "1.98"
+name = "dav1d-sys"
+version = "0.8.3"
+authors = ["Luca Barbato <lu_zero@gentoo.org>"]
+build = "build.rs"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "FFI bindings to dav1d"
+license = "MIT"
+repository = "https://github.com/rust-av/dav1d-rs"
+
+[lib]
+name = "dav1d_sys"
+path = "src/lib.rs"
+
+[dependencies.libc]
+version = "0.2"
+
+[build-dependencies.pkg-config]
+version = "0.3"

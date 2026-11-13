@@ -108,6 +108,10 @@ zerocopy = { version = "0.8", default-features = false, features = ["std", "simd
 flate2 = { version = "1", default-features = false, features = ["rust_backend", "zlib-rs"] }
 memchr = {version = "2", default-features = false, features = ["std", "alloc"] }
 
+[patch.crates-io]
+dav1d-sys = {path = "third-party/dav1d-sys" }
+libheif-sys = {path = "third-party/libheif-sys" }
+
 [profile.release]
 opt-level = 3
 debug = false
