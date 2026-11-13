@@ -9,6 +9,19 @@ from blanket import Image, ImageDraw, ImageHash, ImageOps, ImageStat, _blanket
 from blanket._sequence import _png_regions
 
 
+@pytest.mark.parametrize("mode", ["LA", "RGB", "RGBA", "CMYK"])
+@pytest.mark.parametrize("count", [0, 17, 131073])
+@pytest.mark.parametrize("mask,xor", [(255, 0), (255, 255), (240, 0), (0, 137), (15, 128)])
+def test_shared_bitwise_luts_preserve_every_channel(mode, count, mask, xor):
+    raw = (bytes(range(256)) * (count * len(mode) // 256 + 1))[: count * len(mode)]
+    image = Image.frombytes(mode, (count, 1), raw)
+    table = [(value & mask) ^ xor for value in range(256)]
+    result = Image.Image(_blanket.ops_lut(image._native, table))
+    assert result.tobytes() == raw.translate(bytes(table))
+    assert result.mode == mode
+    assert image.tobytes() == raw
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK", "HSV", "LAB"])
 def test_point_callable_transfers_one_shared_table(mode, monkeypatch):
     image = Image.frombytes(mode, (17, 3), bytes((i * 37) % 256 for i in range(51 * len(mode))))

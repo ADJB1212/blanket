@@ -278,11 +278,11 @@ fn ops_lut(py: Python<'_>, image: &Image, lut: Vec<u8>) -> PyResult<Image> {
     if lut.len() != 256 && lut.len() != 256 * channels {
         return Err(PyValueError::new_err("wrong number of lut entries"));
     }
-    if channels == 1 && lut.len() == 256 {
+    if lut.len() == 256 {
         let xor = lut[0];
         let mask = lut[255] ^ xor;
         if lut.iter().enumerate().all(|(value, &mapped)| mapped == (value as u8 & mask) ^ xor) {
-            let mut pixels = reserved_buffer((image.width(), image.height()), 1)?;
+            let mut pixels = reserved_buffer((image.width(), image.height()), channels)?;
             let len = source.len();
             const CHUNK: usize = 256 * 1024;
             py.detach(|| {

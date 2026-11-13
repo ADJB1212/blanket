@@ -62,6 +62,16 @@ pub(crate) fn tensor_export<'py>(
     };
     PyByteArray::new_with(py, len, |output| {
         py.detach(|| {
+            if planar && bytes == 1 && !matches!(image.pixel_mode(), PixelMode::One | PixelMode::Lab) {
+                match channels {
+                    1 => planar_bytes::<1>(source, output, divisor, &mean, &std),
+                    2 => planar_bytes::<2>(source, output, divisor, &mean, &std),
+                    3 => planar_bytes::<3>(source, output, divisor, &mean, &std),
+                    4 => planar_bytes::<4>(source, output, divisor, &mean, &std),
+                    _ => unreachable!("validated image channel count"),
+                }
+                return;
+            }
             const CHUNK: usize = 16384;
             blanket_kernels::parallel::chunks_mut(output, CHUNK * 4, |chunk, output| {
                 let start = chunk * CHUNK;
@@ -98,10 +108,68 @@ pub(crate) fn tensor_export<'py>(
     })
 }
 
+fn planar_bytes<const C: usize>(source: &[u8], output: &mut [u8], divisor: f32, mean: &[f32], std: &[f32]) {
+    let pixels = source.len() / C;
+    if pixels == 0 {
+        return;
+    }
+    const CHUNK: usize = 16384;
+    for (channel, plane) in output.chunks_exact_mut(pixels * 4).enumerate() {
+        let mean = Simd::<f32, 16>::splat(mean[channel]);
+        let std = Simd::<f32, 16>::splat(std[channel]);
+        blanket_kernels::parallel::chunks_mut(plane, CHUNK * 4, |chunk, output| {
+            let start = chunk * CHUNK;
+            let end = output.len() / 64 * 64;
+            for (block, dst) in output[..end].as_chunks_mut::<64>().0.iter_mut().enumerate() {
+                let values = blanket_core::pixels::load::<C>(&source[(start + block * 16) * C..])[channel].cast::<f32>();
+                *dst = ((values / Simd::splat(divisor) - mean) / std).to_ne_bytes().to_array();
+            }
+            for (offset, dst) in output[end..].as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let value = f32::from(source[(start + end / 4 + offset) * C + channel]);
+                *dst = ((value / divisor - mean[0]) / std[0]).to_ne_bytes();
+            }
+        });
+    }
+}
+
 fn parameters(values: Option<Vec<f32>>, channels: usize, default: f32, name: &str) -> PyResult<Vec<f32>> {
     let values = values.unwrap_or_else(|| vec![default; channels]);
     if values.len() != channels || values.iter().any(|value| !value.is_finite()) {
         return Err(PyValueError::new_err(format!("{name} must contain {channels} finite float32 values")));
     }
     Ok(values)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn planar_byte_vectors_preserve_normalization_tails_and_guards() {
+        fn check<const C: usize>() {
+            let mean: [f32; C] = std::array::from_fn(|c| c as f32 / 7.0 - 0.5);
+            let std: [f32; C] = std::array::from_fn(|c| c as f32 / 3.0 + 0.25);
+            for count in [0, 1, 15, 16, 17, 33, 16385] {
+                for offset in 0..4 {
+                    let source: Vec<u8> = (0..offset + count * C).map(|i| (i * 37 + i / 7) as u8).collect();
+                    for divisor in [1.0, 255.0] {
+                        let mut output = vec![93; offset + count * C * 4 + 3];
+                        planar_bytes::<C>(&source[offset..], &mut output[offset..offset + count * C * 4], divisor, &mean, &std);
+                        for c in 0..C {
+                            for pixel in 0..count {
+                                let expected = ((f32::from(source[offset + pixel * C + c]) / divisor - mean[c]) / std[c]).to_ne_bytes();
+                                let start = offset + (c * count + pixel) * 4;
+                                assert_eq!(&output[start..start + 4], &expected);
+                            }
+                        }
+                        assert!(output[..offset].iter().chain(&output[offset + count * C * 4..]).all(|&v| v == 93));
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
 }
