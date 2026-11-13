@@ -435,8 +435,9 @@ with new processing semantics exposed explicitly.
       Gaussian smoothing, nonmaximum suppression, and connected hysteresis
 - [x] **Perceptual distortion metrics** — native SSIM, MS-SSIM, and SSIMULACRA2
       scoring for image quality evaluation and compressor tuning
-- [ ] **Content-aware seam carving** — aspect ratio retargeting via seam carving
-      while preserving high-energy saliency regions
+- [x] **Content-aware seam carving** — `Image.seam_carve(size)` shrinks or enlarges
+      images using low-energy connected seams, preserving sample precision and
+      favoring high-energy color/alpha edges
 - [ ] **Lens correction and remapping** — radial distortion correction and
       reusable coordinate maps with configurable interpolation and borders
 

@@ -11,10 +11,13 @@ use blanket_resample_kernels as ops_simd;
 use ops_simd::{RESAMPLE_BITS, RESAMPLE_ROUND, RESAMPLE_SCALE};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
+
+mod seam;
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
 type Mesh = Vec<(BoxI, [f64; 8])>;
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(seam::ops_seam_carve, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_reduce, module)?)?;

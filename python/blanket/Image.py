@@ -80,6 +80,7 @@ from ._blanket import (
     ops_reduce,
     ops_remap_indices,
     ops_resize,
+    ops_seam_carve,
     ops_split,
     ops_spread,
     ops_transpose,
@@ -2414,6 +2415,41 @@ class Image:
                     box = ((box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy, (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy)
             native = ops_resize(native, size, method, box, reducing_gap if self.mode in ("LA", "RGBA") else None)
         result = Image(native)
+        result.info.update(self._metadata_info())
+        return result
+
+    def seam_carve(self, size: tuple[int, int]) -> Image:
+        """Return a content-aware resized copy by removing or inserting seams.
+
+        Support 8-bit L/LA/RGB/RGBA and 10/12/16-bit L/RGB/RGBA. Retarget
+        width first, then height, using minimum-energy connected seams and
+        recomputing gradients after each removal. Energy includes visible
+        (premultiplied) color and alpha edges. Equal-cost paths prefer straight
+        steps and the leftmost endpoint. Enlargement duplicates distinct seams
+        in batches without interpolating samples. Large changes can distort
+        subjects; this operation does not perform semantic object detection.
+
+        Operate on the current frame, preserving mode, depth, and metadata.
+        The source is unchanged. Both source and target dimensions must be positive.
+
+        Args:
+            size: Output (width, height) in integer pixels.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (12, 8), (40, 100, 180))
+            result = image.seam_carve((9, 8))
+            ```
+        """
+        dimensions = tuple(index(value) for value in size)
+        if len(dimensions) != 2:
+            raise TypeError("size must contain two integers")
+        if min(dimensions) <= 0:
+            raise ValueError("height and width must be > 0")
+        self.load()
+        result = Image(ops_seam_carve(self._native, (dimensions[0], dimensions[1])))
         result.info.update(self._metadata_info())
         return result
 

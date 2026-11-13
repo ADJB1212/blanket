@@ -48,6 +48,8 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   quantize, and image statistics through Pillow-shaped modules.
 - **Real sample depth.** Selected operations keep 10/12/16-bit samples, float
   color, and linear-light resize and compositing.
+- **Content-aware resizing.** `image.seam_carve(size)` shrinks or enlarges images
+  while favoring salient color and alpha edges.
 - **Frames and pages.** Read GIF, WebP, APNG, and TIFF with eager or lazy
   access; write animations and multi-page PDFs.
 - **Color and metadata.** ICC transforms, HDR tone mapping, editable EXIF,
