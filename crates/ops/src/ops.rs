@@ -49,20 +49,11 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
     if image.pixel_mode().channels() == 1 {
         return image.getchannel(py, 0).map(|band| vec![band]);
     }
-    if image.bit_depth() > 8 {
-        let source = image.raw_data()?;
-        return py.detach(|| {
-            (0..image.pixel_mode().channels())
-                .map(|channel| {
-                    let pixels = blanket_convert_kernels::simd::extract_sample_channel(source, image.pixel_mode().channels(), channel);
-                    Image::from_sample_bytes(image.width(), image.height(), PixelMode::L, pixels, image.bit_depth(), None)
-                })
-                .collect()
-        });
-    }
-    let source = image.pixel_data()?;
+    let source = image.raw_data()?;
     let channels = image.pixel_mode().channels();
-    let mut bands = (0..channels).map(|_| buffer((image.width(), image.height()), 1)).collect::<PyResult<Vec<_>>>()?;
+    let sample_bytes = usize::from(image.bit_depth().div_ceil(8));
+    let chunk = CHUNK_PIXELS * sample_bytes;
+    let mut bands = (0..channels).map(|_| buffer((image.width(), image.height()), sample_bytes)).collect::<PyResult<Vec<_>>>()?;
     py.detach(|| {
         if let [luma, alpha] = bands.as_mut_slice() {
             let split = |offset: usize, luma: &mut [u8], alpha: &mut [u8]| {
@@ -80,7 +71,13 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         }
         let split = |offset: usize, red: &mut [u8], green: &mut [u8], blue: &mut [u8], alpha: Option<&mut [u8]>| {
             let src = &source[offset * channels..(offset + red.len()) * channels];
-            if let Some(alpha) = alpha {
+            if sample_bytes == 2 {
+                if let Some(alpha) = alpha {
+                    split_sample_bands(src, [red, green, blue, alpha]);
+                } else {
+                    split_sample_bands(src, [red, green, blue]);
+                }
+            } else if let Some(alpha) = alpha {
                 split_bands(src, [red, green, blue, alpha]);
             } else {
                 split_bands(src, [red, green, blue]);
@@ -88,24 +85,33 @@ fn ops_split(py: Python<'_>, image: &Image) -> PyResult<Vec<Image>> {
         };
         // Deinterleave all bands in one source pass and one Rayon dispatch.
         let [red, green, blue, rest @ ..] = bands.as_mut_slice() else { unreachable!() };
-        if !should_parallel(source.len(), CHUNK_PIXELS * channels, 2 * 1024 * 1024) {
+        if !should_parallel(source.len(), chunk * channels, 2 * 1024 * 1024) {
             split(0, red, green, blue, rest.first_mut().map(Vec::as_mut_slice));
         } else if let Some(alpha) = rest.first_mut() {
-            red.par_chunks_mut(CHUNK_PIXELS)
-                .zip(green.par_chunks_mut(CHUNK_PIXELS))
-                .zip(blue.par_chunks_mut(CHUNK_PIXELS))
-                .zip(alpha.par_chunks_mut(CHUNK_PIXELS))
+            red.par_chunks_mut(chunk)
+                .zip(green.par_chunks_mut(chunk))
+                .zip(blue.par_chunks_mut(chunk))
+                .zip(alpha.par_chunks_mut(chunk))
                 .enumerate()
-                .for_each(|(i, (((r, g), b), a))| split(i * CHUNK_PIXELS, r, g, b, Some(a)));
+                .for_each(|(i, (((r, g), b), a))| split(i * chunk, r, g, b, Some(a)));
         } else {
-            red.par_chunks_mut(CHUNK_PIXELS)
-                .zip(green.par_chunks_mut(CHUNK_PIXELS))
-                .zip(blue.par_chunks_mut(CHUNK_PIXELS))
+            red.par_chunks_mut(chunk)
+                .zip(green.par_chunks_mut(chunk))
+                .zip(blue.par_chunks_mut(chunk))
                 .enumerate()
-                .for_each(|(i, ((r, g), b))| split(i * CHUNK_PIXELS, r, g, b, None));
+                .for_each(|(i, ((r, g), b))| split(i * chunk, r, g, b, None));
         }
     });
-    bands.into_iter().map(|pixels| Image::from_pixels(image.width(), image.height(), PixelMode::L, pixels, None)).collect()
+    bands
+        .into_iter()
+        .map(|pixels| {
+            if sample_bytes == 2 {
+                Image::from_sample_bytes(image.width(), image.height(), PixelMode::L, pixels, image.bit_depth(), None)
+            } else {
+                Image::from_pixels(image.width(), image.height(), PixelMode::L, pixels, None)
+            }
+        })
+        .collect()
 }
 
 fn split_bands<const C: usize>(source: &[u8], mut bands: [&mut [u8]; C]) {
@@ -119,6 +125,21 @@ fn split_bands<const C: usize>(source: &[u8], mut bands: [&mut [u8]; C]) {
     for (i, pixel) in source[end * C..].as_chunks::<C>().0.iter().enumerate() {
         for (band, &value) in bands.iter_mut().zip(pixel) {
             band[end + i] = value;
+        }
+    }
+}
+
+fn split_sample_bands<const C: usize>(source: &[u8], mut bands: [&mut [u8]; C]) {
+    let end = bands[0].len() / 32 * 32;
+    for offset in (0..end).step_by(32) {
+        let values = blanket_core::pixels::load_sample_bytes::<C>(&source[offset * C..]);
+        for (band, value) in bands.iter_mut().zip(values) {
+            blanket_core::pixels::store_sample_bytes::<1>(&mut band[offset..offset + 32], [value]);
+        }
+    }
+    for (i, pixel) in source[end * C..].chunks_exact(C * 2).enumerate() {
+        for (channel, band) in bands.iter_mut().enumerate() {
+            band[end + i * 2..end + i * 2 + 2].copy_from_slice(&pixel[channel * 2..channel * 2 + 2]);
         }
     }
 }
@@ -545,6 +566,27 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sample_split_preserves_unaligned_tails_and_guards() {
+        fn check<const C: usize>() {
+            for width in 0..=65 {
+                let source: Vec<u8> = (0..width * C * 2 + 2).map(|i| (i * 53 + i / 7) as u8).collect();
+                let mut bands = std::array::from_fn::<_, C, _>(|_| vec![0xa5; width * 2 + 2]);
+                let output = bands.each_mut().map(|band| &mut band[1..width * 2 + 1]);
+                split_sample_bands(&source[1..width * C * 2 + 1], output);
+                for (channel, band) in bands.iter().enumerate() {
+                    assert_eq!(band[0], 0xa5);
+                    assert_eq!(band[width * 2 + 1], 0xa5);
+                    for i in 0..width {
+                        assert_eq!(&band[i * 2 + 1..i * 2 + 3], &source[1 + (i * C + channel) * 2..3 + (i * C + channel) * 2]);
+                    }
+                }
+            }
+        }
+        check::<3>();
+        check::<4>();
+    }
 
     #[test]
     fn split_preserves_unaligned_tails_and_guards() {

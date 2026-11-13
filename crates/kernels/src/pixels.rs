@@ -396,7 +396,21 @@ pub fn extract_two_channel(source: &[u8], channel: usize) -> Vec<u8> {
 }
 
 pub fn extract_sample_channel(source: &[u8], channels: usize, channel: usize) -> Vec<u8> {
-    source.chunks_exact(channels * 2).map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]).collect::<Vec<_>>().into_flattened()
+    fn extract<const C: usize>(source: &[u8], channel: usize) -> Vec<u8> {
+        let count = source.len() / (32 * C);
+        let (blocks, tail) = source.split_at(count * 32 * C);
+        let mut output = Vec::with_capacity(count + usize::from(!tail.is_empty()));
+        output.extend(blocks.chunks_exact(32 * C).map(|block| load_sample_bytes::<C>(block)[channel].to_le_bytes().to_array()));
+        let mut output = output.into_flattened();
+        output.extend(tail.chunks_exact(C * 2).flat_map(|pixel| [pixel[channel * 2], pixel[channel * 2 + 1]]));
+        output
+    }
+    match channels {
+        1 => extract::<1>(source, channel),
+        3 => extract::<3>(source, channel),
+        4 => extract::<4>(source, channel),
+        _ => unreachable!("sample channels must be 1, 3, or 4"),
+    }
 }
 
 #[cfg(test)]
@@ -909,6 +923,24 @@ pub fn store_sample_bytes<const C: usize>(output: &mut [u8], values: [Samples; C
 #[cfg(test)]
 mod sample_tests {
     use super::*;
+
+    #[test]
+    fn channel_extraction_preserves_unaligned_samples_tails_and_source() {
+        for channels in [1, 3, 4] {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 65537] {
+                for offset in 0..4 {
+                    let source: Vec<u8> = (0..offset + count * channels * 2 + 3).map(|i| (i * 37 + i / 7) as u8).collect();
+                    let input = &source[offset..offset + count * channels * 2];
+                    let before = source.clone();
+                    for channel in 0..channels {
+                        let expected: Vec<u8> = input.chunks_exact(channels * 2).flat_map(|p| [p[channel * 2], p[channel * 2 + 1]]).collect();
+                        assert_eq!(extract_sample_channel(input, channels, channel), expected);
+                    }
+                    assert_eq!(source, before);
+                }
+            }
+        }
+    }
 
     #[test]
     fn merging_samples_preserves_channel_order_unaligned_blocks_tails_and_guards() {
