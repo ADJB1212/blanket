@@ -62,6 +62,9 @@ impl Raster {
 
     fn distance(&self, a: usize, b: usize) -> u64 {
         let has_alpha = matches!(self.channels, 2 | 4);
+        if !has_alpha {
+            return (0..self.channels).map(|channel| u64::from(self.sample(a, channel).abs_diff(self.sample(b, channel)))).sum();
+        }
         let colors = self.channels - usize::from(has_alpha);
         let alpha_a = if has_alpha { self.sample(a, colors) } else { self.maximum };
         let alpha_b = if has_alpha { self.sample(b, colors) } else { self.maximum };
