@@ -8,6 +8,40 @@ from helpers import image_buffer
 from blanket import Image
 
 
+def reference_shrink(rows: list[list[tuple[int, ...]]], target: int, maximum: int) -> bytes:
+    rows = [row[:] for row in rows]
+    while len(rows[0]) > target:
+        width = len(rows[0])
+        costs = [0] * width
+        parents = []
+
+        def distance(a: tuple[int, ...], b: tuple[int, ...]) -> int:
+            if len(a) in (2, 4):
+                return abs(a[-1] - b[-1]) + sum(abs(x * a[-1] // maximum - y * b[-1] // maximum) for x, y in zip(a[:-1], b[:-1], strict=True))
+            return sum(abs(x - y) for x, y in zip(a, b, strict=True))
+
+        for y, row in enumerate(rows):
+            previous = [min([x, *([x - 1] if x else []), *([x + 1] if x + 1 < width else [])], key=costs.__getitem__) for x in range(width)]
+            parents.append(previous)
+            costs = [costs[previous[x]] + sum(distance(row[x], rows[ny][nx]) for ny, nx in [(y, max(0, x - 1)), (y, min(width - 1, x + 1)), (max(0, y - 1), x), (min(len(rows) - 1, y + 1), x)]) for x in range(width)]
+        x = min(range(width), key=costs.__getitem__)
+        for y in range(len(rows) - 1, -1, -1):
+            del rows[y][x]
+            x = parents[y][x]
+    sample_bytes = 1 if maximum == 255 else 2
+    return b"".join(value.to_bytes(sample_bytes, "little") for row in rows for pixel in row for value in pixel)
+
+
+@pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("L", 10), ("RGB", 12), ("RGBA", 16)])
+@pytest.mark.parametrize("width,height", [(2, 1), (7, 9), (17, 5), (33, 17)])
+def test_shrinking_matches_reference_with_identical_tie_breaks(mode: str, depth: int, width: int, height: int) -> None:
+    maximum = (1 << depth) - 1
+    rows = [[tuple((x * 7919 + y * 137 + c * 53) & maximum for c in range(len(mode))) for x in range(width)] for y in range(height)]
+    raw = b"".join(value.to_bytes(1 if depth == 8 else 2, "little") for row in rows for pixel in row for value in pixel)
+    image = Image.frombytes(mode, (width, height), raw, bit_depth=depth)
+    assert image.seam_carve((max(1, width - 5), height)).tobytes() == reference_shrink(rows, max(1, width - 5), maximum)
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("size", [(1, 1), (5, 4), (2, 3), (8, 7), (2, 9), (11, 2)])
 def test_uniform_retargeting(mode: str, size: tuple[int, int]) -> None:

@@ -11,6 +11,9 @@ pub(crate) fn ops_seam_carve(py: Python<'_>, image: &Image, size: (u32, u32)) ->
     if size.0 == 0 || size.1 == 0 || image.width() == 0 || image.height() == 0 {
         return Err(PyValueError::new_err("seam carving requires positive image dimensions"));
     }
+    if size == image.size() {
+        return image.copy(py);
+    }
     // Validate the final allocation before starting the iterative work.
     let channels = image.pixel_mode().channels();
     let stride = image.raw_bytes_per_pixel();
@@ -175,4 +178,24 @@ fn remove_seam<T: Copy>(pixels: &mut Vec<T>, width: usize, stride: usize, seam: 
         pixels.copy_within(source + (x + 1) * stride..source + width * stride, dest + x * stride);
     }
     pixels.truncate((width - 1) * seam.len() * stride);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unchanged_size_shares_storage_until_mutation() {
+        Python::initialize();
+        Python::attach(|py| {
+            for (mode, depth) in [(PixelMode::L, 8), (PixelMode::La, 8), (PixelMode::Rgb, 10), (PixelMode::Rgba, 16)] {
+                let bytes = 6 * mode.channels() * if depth == 8 { 1 } else { 2 };
+                let image = Image::from_raw_bytes(3, 2, mode, vec![0; bytes], depth).unwrap();
+                let mut result = ops_seam_carve(py, &image, image.size()).unwrap();
+                assert_eq!(image.raw_data().unwrap().as_ptr(), result.raw_data().unwrap().as_ptr());
+                result.pixels_mut().unwrap()[0] = 1;
+                assert_eq!(image.raw_data().unwrap()[0], 0);
+            }
+        });
+    }
 }
