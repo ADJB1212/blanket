@@ -776,12 +776,7 @@ fn convert_layout<const S: usize, const C: usize>(source: &[u8]) -> Vec<u8> {
         if S == 3 {
             let (blocks, tail) = source.as_chunks::<48>();
             let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
-            output.extend(blocks.iter().map(|block| {
-                let mut pixels = [0; 64];
-                let [r, g, b] = load::<3>(block);
-                store(&mut pixels, [r, g, b, Bytes::splat(255)]);
-                pixels
-            }));
+            output.extend(blocks.iter().map(rgb_to_rgba_block));
             let mut output = output.into_flattened();
             output.extend(tail.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]));
             return output;
@@ -834,6 +829,22 @@ fn luma_block(r: Bytes, g: Bytes, b: Bytes) -> Bytes {
     let high = r * Simd::splat(76) + g * Simd::splat(150) + b * Simd::splat(29);
     let low = r * Simd::splat(139) + g * Simd::splat(70) + b * Simd::splat(47);
     ((high + (low >> 8) + Simd::splat(128)) >> 8).cast()
+}
+
+#[inline]
+fn rgb_to_rgba_block(source: &[u8; 48]) -> [u8; 64] {
+    use std::simd::simd_swizzle;
+    let a = Bytes::from_slice(&source[..16]);
+    let b = Bytes::from_slice(&source[16..32]);
+    let c = Bytes::from_slice(&source[32..]);
+    let alpha = Bytes::from_array([0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    let pixels = [
+        simd_swizzle!(a, [0, 1, 2, 0, 3, 4, 5, 0, 6, 7, 8, 0, 9, 10, 11, 0]) | alpha,
+        simd_swizzle!(a, b, [12, 13, 14, 0, 15, 16, 17, 0, 18, 19, 20, 0, 21, 22, 23, 0]) | alpha,
+        simd_swizzle!(b, c, [8, 9, 10, 0, 11, 12, 13, 0, 14, 15, 16, 0, 17, 18, 19, 0]) | alpha,
+        simd_swizzle!(c, [4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0, 13, 14, 15, 0]) | alpha,
+    ];
+    pixels.map(Bytes::to_array).as_flattened().try_into().unwrap()
 }
 
 #[inline]
@@ -1498,6 +1509,18 @@ mod tests {
             assert_eq!(result[i * 4 + 1], rgb[i * 3 + 1], "G mismatch at pixel {i}");
             assert_eq!(result[i * 4 + 2], rgb[i * 3 + 2], "B mismatch at pixel {i}");
             assert_eq!(result[i * 4 + 3], 255, "A mismatch at pixel {i}");
+        }
+    }
+
+    #[test]
+    fn rgb_to_rgba_handles_unaligned_blocks_and_tails() {
+        for count in [0, 1, 3, 4, 5, 7, 8, 9, 15, 16, 17, 31, 32, 33, 255, 256, 257] {
+            for offset in 0..16 {
+                let source: Vec<u8> = (0..offset + count * 3).map(|i| (i * 137 + i / 7) as u8).collect();
+                let source = &source[offset..];
+                let expected: Vec<u8> = source.as_chunks::<3>().0.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
+                assert_eq!(convert(source, PixelMode::Rgb, PixelMode::Rgba), expected, "count={count}, offset={offset}");
+            }
         }
     }
 

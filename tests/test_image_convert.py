@@ -16,7 +16,8 @@ if TYPE_CHECKING:
 
 @pytest.mark.parametrize("width", [1, 16, 257])
 @pytest.mark.parametrize(
-    "source,target", [("RGB", "RGBX"), ("RGBX", "RGB"), ("RGBX", "L"), ("RGBX", "RGBA"), ("RGBA", "RGBX"), ("RGBA", "RGBa"), ("RGBa", "RGBA"), ("LA", "La"), ("La", "LA"), ("RGB", "F"), ("RGBA", "F"), ("CMYK", "RGB"), ("YCbCr", "RGB")]
+    "source,target",
+    [("RGB", "RGBA"), ("RGB", "RGBX"), ("RGBX", "RGB"), ("RGBX", "L"), ("RGBX", "RGBA"), ("RGBA", "RGBX"), ("RGBA", "RGBa"), ("RGBa", "RGBA"), ("LA", "La"), ("La", "LA"), ("RGB", "F"), ("RGBA", "F"), ("CMYK", "RGB"), ("YCbCr", "RGB")],
 )
 def test_conversion_buffers_preserve_pixels_and_source(width, source, target):
     size = (width, 3)
