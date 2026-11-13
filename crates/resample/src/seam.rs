@@ -65,9 +65,9 @@ impl Raster {
         if !has_alpha {
             return (0..self.channels).map(|channel| u64::from(self.sample(a, channel).abs_diff(self.sample(b, channel)))).sum();
         }
-        let colors = self.channels - usize::from(has_alpha);
-        let alpha_a = if has_alpha { self.sample(a, colors) } else { self.maximum };
-        let alpha_b = if has_alpha { self.sample(b, colors) } else { self.maximum };
+        let colors = self.channels - 1;
+        let alpha_a = self.sample(a, colors);
+        let alpha_b = self.sample(b, colors);
         let mut distance = u64::from(alpha_a.abs_diff(alpha_b));
         for channel in 0..colors {
             let a = self.sample(a, channel) * alpha_a / self.maximum;
@@ -81,15 +81,18 @@ impl Raster {
         let mut costs = reserved::<u64>(self.width)?;
         costs.resize(self.width, 0);
         let mut next = copy(&costs)?;
+        let mut vertical = copy(&costs)?;
         let mut parents = reserved::<usize>(self.width * self.height)?;
         parents.resize(self.width * self.height, 0);
         for y in 0..self.height {
+            let mut left = 0;
             for (x, cost) in next.iter_mut().enumerate() {
                 let pixel = y * self.width + x;
-                let energy = self.distance(pixel, y * self.width + x.saturating_sub(1))
-                    + self.distance(pixel, y * self.width + (x + 1).min(self.width - 1))
-                    + self.distance(pixel, y.saturating_sub(1) * self.width + x)
-                    + self.distance(pixel, (y + 1).min(self.height - 1) * self.width + x);
+                let right = if x + 1 < self.width { self.distance(pixel, pixel + 1) } else { 0 };
+                let down = if y + 1 < self.height { self.distance(pixel, pixel + self.width) } else { 0 };
+                let energy = left + right + vertical[x] + down;
+                left = right;
+                vertical[x] = down;
                 let mut parent = x;
                 if x > 0 && costs[x - 1] < costs[parent] {
                     parent = x - 1;
