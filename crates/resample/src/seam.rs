@@ -82,8 +82,7 @@ impl Raster {
         costs.resize(self.width, 0);
         let mut next = copy(&costs)?;
         let mut vertical = copy(&costs)?;
-        let mut parents = reserved::<usize>(self.width * self.height)?;
-        parents.resize(self.width * self.height, 0);
+        let mut parents = reserved::<u8>(self.width * self.height)?;
         for y in 0..self.height {
             let mut left = 0;
             for (x, cost) in next.iter_mut().enumerate() {
@@ -100,7 +99,7 @@ impl Raster {
                 if x + 1 < self.width && costs[x + 1] < costs[parent] {
                     parent = x + 1;
                 }
-                parents[pixel] = parent;
+                parents.push((parent + 1 - x) as u8);
                 *cost = energy + costs[parent];
             }
             std::mem::swap(&mut costs, &mut next);
@@ -110,7 +109,7 @@ impl Raster {
         let mut x = costs.iter().enumerate().min_by_key(|&(_, cost)| cost).unwrap().0;
         for y in (0..self.height).rev() {
             seam[y] = x;
-            x = parents[y * self.width + x];
+            x = x + usize::from(parents[y * self.width + x]) - 1;
         }
         Ok(seam)
     }
