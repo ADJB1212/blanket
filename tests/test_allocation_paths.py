@@ -9,6 +9,27 @@ from blanket import Image, ImageDraw, ImageHash, ImageOps, ImageStat, _blanket
 from blanket._sequence import _png_regions
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "CMYK", "HSV", "LAB"])
+def test_point_callable_transfers_one_shared_table(mode, monkeypatch):
+    image = Image.frombytes(mode, (17, 3), bytes((i * 37) % 256 for i in range(51 * len(mode))))
+    values = [value * 1.5 - 20.5 for value in range(256)]
+    expected = image.point(values * len(mode))
+    native_lut = Image.ops_lut
+    calls = []
+
+    def lookup(value):
+        calls.append(value)
+        return values[value]
+
+    def shared_table(native, table):
+        assert len(table) == 256
+        return native_lut(native, table)
+
+    monkeypatch.setattr(Image, "ops_lut", shared_table)
+    assert image.point(lookup).tobytes() == expected.tobytes()
+    assert calls == list(range(256))
+
+
 def test_apng_full_frame_deltas_reuse_prepared_images(monkeypatch):
     first = Image.new("RGBA", (17, 3), (17, 31, 89, 255))
     second = Image.new("RGBA", first.size, (71, 113, 173, 149))

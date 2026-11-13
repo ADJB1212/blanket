@@ -2090,8 +2090,13 @@ class Image:
             return result
         if mode is not None and mode != self.mode:
             raise ValueError("point mode conversion is not supported")
-        values = [cast("Callable[[int], float]", lut)(i) for i in range(256)] * len(self.getbands()) if callable(lut) else list(cast("Sequence[float]", lut))
-        if len(values) != 256 * len(self.getbands()):
+        if callable(lut):
+            values = [cast("Callable[[int], float]", lut)(i) for i in range(256)]
+            expected = 256
+        else:
+            values = list(cast("Sequence[float]", lut))
+            expected = 256 * len(self.getbands())
+        if len(values) != expected:
             raise ValueError("wrong number of lut entries")
         result = Image(ops_lut(self._native, [max(0, min(255, round(v))) for v in values]))
         result.info.update(self._metadata_info())
