@@ -135,11 +135,15 @@ def test_current_frame_and_navigation(lazy: bool) -> None:
 
 
 @pytest.mark.parametrize("width", [1, 3, 9])
-def test_horizontal_seams_match_transposed_vertical_seams(width: int) -> None:
-    image = Image.frombytes("L", (7, 5), bytes((i * 43) % 256 for i in range(35)))
+@pytest.mark.parametrize("mode,depth", [("L", 8), ("LA", 8), ("RGB", 8), ("RGBA", 8), ("L", 10), ("RGB", 12), ("RGBA", 16)])
+@pytest.mark.parametrize("size", [(7, 5), (33, 35)])
+def test_horizontal_seams_match_transposed_vertical_seams(width: int, mode: str, depth: int, size: tuple[int, int]) -> None:
+    maximum = (1 << depth) - 1
+    raw = b"".join(((i * 43) & maximum).to_bytes(1 if depth == 8 else 2, "little") for i in range(size[0] * size[1] * len(mode)))
+    image = Image.frombytes(mode, size, raw, bit_depth=depth)
     transposed = image.transpose(Image.Transpose.TRANSPOSE)
-    expected = transposed.seam_carve((width, 7)).transpose(Image.Transpose.TRANSPOSE)
-    assert image.seam_carve((7, width)).tobytes() == expected.tobytes()
+    expected = transposed.seam_carve((width, size[0])).transpose(Image.Transpose.TRANSPOSE)
+    assert image.seam_carve((size[0], width)).tobytes() == expected.tobytes()
 
 
 @pytest.mark.parametrize("source_size", [(1, 1), (1, 4), (4, 1)])

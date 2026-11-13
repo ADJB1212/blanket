@@ -162,12 +162,15 @@ impl Raster {
     fn transpose(&mut self) -> PyResult<()> {
         let stride = self.stride();
         let mut pixels = buffer((self.height as u32, self.width as u32), stride)?;
-        for y in 0..self.height {
-            for x in 0..self.width {
-                let source = (y * self.width + x) * stride;
-                let dest = (x * self.height + y) * stride;
-                pixels[dest..dest + stride].copy_from_slice(&self.pixels[source..source + stride]);
-            }
+        use blanket_image_ops::geometry::transpose;
+        match stride {
+            1 => transpose::<1>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            2 => transpose::<2>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            3 => transpose::<3>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            4 => transpose::<4>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            6 => transpose::<6>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            8 => transpose::<8>(&self.pixels, &mut pixels, self.width, self.height, 5),
+            _ => unreachable!("validated seam-carving pixel layout"),
         }
         self.pixels = pixels;
         std::mem::swap(&mut self.width, &mut self.height);
