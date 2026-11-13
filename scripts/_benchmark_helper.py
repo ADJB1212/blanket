@@ -16,7 +16,7 @@ from io import BytesIO
 from pathlib import Path
 from statistics import geometric_mean, median
 from tempfile import TemporaryDirectory
-from time import perf_counter
+from time import perf_counter_ns
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -163,9 +163,9 @@ def measure(operation: Callable[[], object], warmups: int, iterations: int) -> d
     gc.disable()
     try:
         for _ in range(iterations):
-            started = perf_counter()
+            started = perf_counter_ns()
             operation()
-            samples.append(perf_counter() - started)
+            samples.append((perf_counter_ns() - started) / 1_000_000_000)
     finally:
         gc.enable()
     samples.sort()
@@ -402,7 +402,7 @@ def print_comparison(console: Console, results: list[dict[str, Any]], baseline: 
         return
 
     def change_cell(change: float) -> Text:
-        return Text(f"{change:+.1f}%", style="green" if change < -threshold else "red" if change > threshold else "dim")
+        return Text(f"{change:+.1f}%", style="green" if change < (-threshold / 2) else "red" if change > (threshold / 2) else "dim")
 
     table = Table("Section / size", "Time change", "Improved", "Regressed", "Within threshold")
     groups = dict.fromkeys((row["section"], row["size"]) for row in matched)

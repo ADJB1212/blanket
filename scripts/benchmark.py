@@ -1058,6 +1058,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--sizes", nargs="+", choices=list(SIZES.keys()), default=list(SIZES.keys()), help="image size presets to benchmark (default: all)")
     parser.add_argument("--all", action="store_true", help="run all benchmark sections, including cases without a Pillow equivalent (size and skip options still apply)")
+    parser.add_argument("--fast", action="store_true", help="run all benchmark sections except Codec I/O (size and skip options still apply)")
     parser.add_argument("-s", "--sections", nargs="+", choices=SECTION_NAMES, help=f"sections to benchmark (default: {', '.join(DEFAULT_SECTIONS)}; quote names containing spaces)")
     parser.add_argument("-i", "--iterations", type=int, default=5)
     parser.add_argument("-w", "--warmups", type=int, default=2)
@@ -1107,10 +1108,13 @@ def parse_args() -> argparse.Namespace:
         parser.error("--iterations must be positive")
     if arguments.warmups < 0:
         parser.error("--warmups cannot be negative")
+    arguments.all = arguments.all or arguments.fast
     if arguments.all and arguments.sections is not None:
-        parser.error("--all cannot be combined with --sections")
+        parser.error("--all and --fast cannot be combined with --sections")
     if arguments.sections is None:
         arguments.sections = list(SECTION_NAMES if arguments.all else DEFAULT_SECTIONS)
+    if arguments.fast:
+        arguments.sections = [section for section in arguments.sections if section != "Codec I/O"]
     if arguments.no_palette:
         arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
     if arguments.formats:
@@ -1131,8 +1135,12 @@ def run_section(comparisons: list[Comparison], warmups: int, iterations: int, *,
             results.append({"operation": name, "blanket_ms": None, "blanket_p25_ms": None, "blanket_p75_ms": None, "pillow_ms": None, "blanket_speedup": None})
         else:
             b = measure(blanket_op, warmups, iterations)
+            if f"{b['median'] * 1000:.3f}" == "0.000":
+                continue
         if not only_memory and pillow_op is not None:
             p = measure(pillow_op, warmups, iterations)
+            if f"{p['median'] * 1000:.3f}" == "0.000":
+                continue
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": p["median"] * 1000, "blanket_speedup": p["median"] / b["median"]})
         elif not only_memory:
             results.append({"operation": name, "blanket_ms": b["median"] * 1000, "blanket_p25_ms": b["p25"] * 1000, "blanket_p75_ms": b["p75"] * 1000, "pillow_ms": None, "blanket_speedup": None})
