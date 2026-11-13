@@ -15,6 +15,7 @@ pyo3.workspace = true
 blanket-codec-common.workspace = true
 turbojpeg.workspace = true
 rayon.workspace = true
+memchr.workspace = true
 libjpeg-turbo-rs = { version = "0.9", default-features = false, features = ["std", "simd"] }
 
 [lib]

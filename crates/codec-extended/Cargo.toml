@@ -13,6 +13,7 @@ blanket-codec-common.workspace = true
 blanket-codec-image.workspace = true
 pyo3.workspace = true
 rustc-hash.workspace = true
+memchr.workspace = true
 image = { version = "0.25", default-features = false, features = ["pnm", "tga", "dds", "qoi"] }
 tempfile = { version = "3", default-features = false }
 

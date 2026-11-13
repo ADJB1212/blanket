@@ -106,6 +106,7 @@ turbojpeg = { version = "1", default-features = false, features = ["cmake", "req
 rustc-hash = { version = "2", default-features = false, features = ["std", "nightly"] }
 zerocopy = { version = "0.8", default-features = false, features = ["std", "simd-nightly", "float-nightly"]}
 flate2 = { version = "1", default-features = false, features = ["rust_backend", "zlib-rs"] }
+memchr = {version = "2", default-features = false, features = ["std", "alloc"] }
 
 [profile.release]
 opt-level = 3

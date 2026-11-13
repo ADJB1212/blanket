@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use blanket_core::{Image, PixelMode};
+use memchr::{memchr2, memmem};
 use rustc_hash::FxHashMap;
 
 use super::{dimensions, image};
@@ -95,7 +96,7 @@ fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Cow<'_, [u8]>>, String
     let mut pos = 0;
     while pos < data.len() {
         if data[pos..].starts_with(b"/*") {
-            let n = data[pos + 2..].windows(2).position(|v| v == b"*/").ok_or("unterminated XPM comment")?;
+            let n = memmem::find(&data[pos + 2..], b"*/").ok_or("unterminated XPM comment")?;
             pos += n + 4;
             continue;
         }
@@ -105,22 +106,21 @@ fn strings_until(data: &[u8], limit: usize) -> Result<Vec<Cow<'_, [u8]>>, String
         }
         pos += 1;
         let start = pos;
-        let mut value = None;
-        while pos < data.len() && data[pos] != b'"' {
-            if data[pos] == b'\\' {
-                value.get_or_insert_with(|| data[start..pos].to_vec());
-                pos += 1;
-                if pos == data.len() {
-                    return Err("truncated XPM escape".into());
-                }
-            }
+        let mut value: Option<Vec<u8>> = None;
+        loop {
+            let offset = memchr2(b'"', b'\\', &data[pos..]).ok_or("unterminated XPM string")?;
+            let end = pos + offset;
             if let Some(value) = &mut value {
-                value.push(data[pos]);
+                value.extend_from_slice(&data[pos..end]);
             }
+            pos = end;
+            if data[pos] == b'"' {
+                break;
+            }
+            let value = value.get_or_insert_with(|| data[start..pos].to_vec());
             pos += 1;
-        }
-        if pos == data.len() {
-            return Err("unterminated XPM string".into());
+            value.push(*data.get(pos).ok_or("truncated XPM escape")?);
+            pos += 1;
         }
         result.push(value.map_or_else(|| Cow::Borrowed(&data[start..pos]), Cow::Owned));
         pos += 1;
@@ -259,4 +259,36 @@ pub(super) fn encode_xpm(im: &Image, pixels: &[u8]) -> Result<Vec<u8>, String> {
     }
     out.push_str("};\n");
     Ok(out.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn string_spans_preserve_escapes_and_borrow_unescaped_values() {
+        for length in [0, 1, 15, 16, 17, 31, 32, 33, 4096] {
+            let span = vec![b'a'; length];
+            let input = [b"/* ignored \" ".as_slice(), &span, b" */ \"", &span, b"\", \"", &span, b"\\\"", &span, b"\\\\\""].concat();
+            let values = strings(&input).unwrap();
+            assert_eq!(values.len(), 2);
+            assert!(matches!(values[0], Cow::Borrowed(_)));
+            assert_eq!(values[0].as_ref(), span);
+            assert!(matches!(values[1], Cow::Owned(_)));
+            assert_eq!(values[1].as_ref(), [&span[..], b"\"", &span, b"\\"].concat());
+        }
+    }
+
+    #[test]
+    fn string_scanning_preserves_truncation_errors_and_header_limit() {
+        for (input, expected) in [
+            (b"/* unfinished".as_slice(), "unterminated XPM comment"),
+            (b"\"unfinished", "unterminated XPM string"),
+            (b"\"unfinished\\", "truncated XPM escape"),
+            (b"\"escaped\\\"", "unterminated XPM string"),
+        ] {
+            assert_eq!(strings(input).unwrap_err(), expected);
+        }
+        assert_eq!(strings_until(b"\"header\" /* unfinished", 1).unwrap(), vec![Cow::Borrowed(b"header".as_slice())]);
+    }
 }

@@ -1,4 +1,5 @@
 use blanket_codec_common::codec_error;
+use memchr::memchr;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -66,22 +67,16 @@ pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dp
         if in_scan {
             let start = pos;
             loop {
-                if pos >= data.len() {
-                    return Err(codec_error("truncated JPEG scan"));
+                pos += memchr(255, &data[pos..]).ok_or_else(|| codec_error("truncated JPEG scan"))?;
+                let mut next = pos + 1;
+                while data.get(next) == Some(&255) {
+                    next += 1;
                 }
-                if data[pos] == 255 {
-                    let mut next = pos + 1;
-                    while data.get(next) == Some(&255) {
-                        next += 1;
-                    }
-                    let marker = *data.get(next).ok_or_else(|| codec_error("truncated JPEG marker"))?;
-                    if marker != 0 && !(0xd0..=0xd7).contains(&marker) {
-                        break;
-                    }
-                    pos = next + 1;
-                } else {
-                    pos += 1;
+                let marker = *data.get(next).ok_or_else(|| codec_error("truncated JPEG marker"))?;
+                if marker != 0 && !(0xd0..=0xd7).contains(&marker) {
+                    break;
                 }
+                pos = next + 1;
             }
             output.extend_from_slice(&data[start..pos]);
             in_scan = false;
@@ -177,7 +172,7 @@ fn png(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, resolution: bo
             return Err(codec_error("invalid PNG chunk CRC"));
         }
         let is_text = matches!(kind, b"tEXt" | b"zTXt" | b"iTXt");
-        let keyword = if is_text { payload.split(|&b| b == 0).next().unwrap_or_default() } else { &[] };
+        let keyword = if is_text { &payload[..memchr(0, payload).unwrap_or(payload.len())] } else { &[] };
         let is_xmp = keyword == b"XML:com.adobe.xmp";
         let is_exif_text = keyword == b"Raw profile type exif";
         let remove = (exif && (kind == b"eXIf" || is_exif_text))
@@ -335,6 +330,21 @@ mod tests {
         let output = rewrite(&input, "JPEG", Some(&[]), None, None, None, None, false).unwrap();
         assert_eq!(output, [b"\xff\xd8".as_slice(), first, second].concat());
         assert!(rewrite(&input[..input.len() - 1], "JPEG", None, None, None, None, None, false).is_err());
+    }
+
+    #[test]
+    fn jpeg_scan_search_preserves_long_spans_and_rejects_truncation() {
+        for length in [0, 1, 15, 16, 17, 31, 32, 33, 4096] {
+            let mut input = b"\xff\xd8\xff\xda\0\x02".to_vec();
+            input.extend(std::iter::repeat_n(42, length));
+            input.extend_from_slice(b"\xff\xff\0\x12\xff\xff\xd7");
+            let scan_end = input.len();
+            input.extend_from_slice(b"\xff\xff\xd9");
+            assert_eq!(jpeg(&input, false, false, false, false, None, false).unwrap(), input);
+            for end in [scan_end, scan_end + 1, scan_end + 2] {
+                assert!(jpeg(&input[..end], false, false, false, false, None, false).is_err());
+            }
+        }
     }
 
     #[test]

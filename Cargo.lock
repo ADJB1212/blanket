@@ -276,6 +276,7 @@ dependencies = [
  "blanket-convert-kernels",
  "blanket-core",
  "image",
+ "memchr",
  "pyo3",
  "rustc-hash",
  "tempfile",
@@ -321,6 +322,7 @@ dependencies = [
  "blanket-convert-kernels",
  "blanket-core",
  "libjpeg-turbo-rs",
+ "memchr",
  "pyo3",
  "rayon",
  "turbojpeg",
@@ -632,6 +634,7 @@ dependencies = [
  "blanket-core",
  "crc32fast",
  "flate2",
+ "memchr",
  "pyo3",
 ]
 

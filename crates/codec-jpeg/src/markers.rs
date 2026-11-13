@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use memchr::memchr;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 
@@ -33,10 +34,15 @@ pub(super) fn separate(data: Vec<u8>, streamtype: i32, coding: super::JpegCoding
         position += length;
         if marker == 0xda {
             while position + 1 < data.len() {
-                if data[position] == 0xff && data[position + 1] != 0 && !(0xd0..=0xd7).contains(&data[position + 1]) {
+                let Some(offset) = memchr(0xff, &data[position..data.len() - 1]) else {
+                    position = data.len() - 1;
+                    break;
+                };
+                position += offset;
+                if data[position + 1] != 0 && !(0xd0..=0xd7).contains(&data[position + 1]) {
                     break;
                 }
-                position += if data[position] == 0xff { 2 } else { 1 };
+                position += 2;
             }
         }
         let table = matches!(marker, 0xc4 | 0xcc | 0xdb);
