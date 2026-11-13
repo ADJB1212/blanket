@@ -1,3 +1,6 @@
+use std::simd::Simd;
+use std::simd::num::{SimdFloat, SimdUint};
+
 use blanket_convert_kernels::{alpha, simd};
 use blanket_core::raster::alloc_pixels;
 use blanket_core::{Image, PixelMode};
@@ -48,20 +51,41 @@ pub fn convert_matrix(py: Python<'_>, source_image: &Image, mode: &str, matrix: 
     py.detach(|| {
         blanket_kernels::parallel::chunks_mut_above(&mut pixels.spare_capacity_mut()[..length], 16 * 1024 * channels, 256 * 1024, |chunk, dst| {
             let start = chunk * 16 * 1024 * 3;
-            for (pixel, output) in source[start..].as_chunks::<3>().0.iter().zip(dst.chunks_exact_mut(channels)) {
-                for (channel, value) in output.iter_mut().enumerate() {
-                    let m = &matrix[channel * 4..channel * 4 + 4];
-                    value.write(
-                        (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5)
-                            .clamp(0.0, 255.0) as u8,
-                    );
-                }
+            if channels == 1 {
+                matrix_pixels::<1>(&source[start..start + dst.len() * 3], dst, &matrix);
+            } else {
+                matrix_pixels::<3>(&source[start..start + dst.len()], dst, &matrix);
             }
         });
         // SAFETY: Every reserved byte is initialized by its pixel's matrix row.
         unsafe { pixels.set_len(length) };
     });
     Image::from_pixels(source_image.width(), source_image.height(), destination, pixels, None)
+}
+
+fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], matrix: &[f32]) {
+    let count = output.len() / C;
+    let end = count / 16 * 16;
+    for i in (0..end).step_by(16) {
+        let rgb = blanket_core::pixels::load::<3>(&source[i * 3..]).map(|v| v.cast::<f32>());
+        let values = std::array::from_fn::<_, C, _>(|c| {
+            let m = &matrix[c * 4..c * 4 + 4];
+            let value = Simd::splat(m[0]) * rgb[0] + Simd::splat(m[1]) * rgb[1] + Simd::splat(m[2]) * rgb[2] + Simd::splat(m[3]);
+            (value.cast::<f64>() + Simd::splat(0.5)).cast::<u8>()
+        });
+        let mut bytes = [0; 48];
+        blanket_core::pixels::store::<C>(&mut bytes[..16 * C], values);
+        output[i * C..(i + 16) * C].write_copy_of_slice(&bytes[..16 * C]);
+    }
+    for (pixel, output) in source[end * 3..].as_chunks::<3>().0.iter().zip(output[end * C..].as_chunks_mut::<C>().0) {
+        for (channel, value) in output.iter_mut().enumerate() {
+            let m = &matrix[channel * 4..channel * 4 + 4];
+            value.write(
+                (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5).clamp(0.0, 255.0)
+                    as u8,
+            );
+        }
+    }
 }
 
 #[pyfunction(name = "image_convert_transparent_alpha")]
@@ -839,6 +863,39 @@ mod tests {
     use blanket_core::raster::lab_raw_bytes;
 
     use super::*;
+
+    #[test]
+    fn matrix_simd_matches_scalar_rounding_and_saturation() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, 33, 16385] {
+                let source: Vec<u8> = (0..count * 3 + 1).map(|i| (i * 37 + i / 7) as u8).collect();
+                let source = &source[1..];
+                for weights in [
+                    [0.299, 0.587, 0.114, 0.0],
+                    [-1.5, 0.25, 2.0, -31.5],
+                    [1.0e8, -1.0e8, 0.5, 0.49999],
+                    [f32::NAN, 0.0, 1.0, 0.0],
+                    [f32::INFINITY, 1.0, 0.0, 0.0],
+                ] {
+                    let matrix: Vec<_> = weights.into_iter().cycle().take(C * 4).collect();
+                    let mut output = vec![std::mem::MaybeUninit::new(93); count * C + 2];
+                    matrix_pixels::<C>(source, &mut output[1..count * C + 1], &matrix);
+                    // SAFETY: Guards start initialized and matrix_pixels writes every output byte.
+                    let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                    assert_eq!(output[0], 93);
+                    assert_eq!(output[count * C + 1], 93);
+                    for (pixel, output) in source.as_chunks::<3>().0.iter().zip(output[1..count * C + 1].as_chunks::<C>().0) {
+                        let value =
+                            weights[0] * f32::from(pixel[0]) + weights[1] * f32::from(pixel[1]) + weights[2] * f32::from(pixel[2]) + weights[3];
+                        let expected = (f64::from(value) + 0.5).clamp(0.0, 255.0) as u8;
+                        assert_eq!(*output, [expected; C]);
+                    }
+                }
+            }
+        }
+        check::<1>();
+        check::<3>();
+    }
     #[test]
     fn palette_table_conversion_matches_expanded_pixels() {
         let indices: Vec<u8> = (0..259).map(|i| (i * 71) as u8).collect();

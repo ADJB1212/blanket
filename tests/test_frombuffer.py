@@ -13,6 +13,25 @@ from blanket import Image, ImageDraw
 MAPPED_MODES = ["L", "P", "RGBX", "RGBA", "CMYK", "I;16", "I;16L", "I;16B"]
 
 
+@pytest.mark.parametrize("orientation", [1, -1])
+@pytest.mark.parametrize("offset", [0, 1, 7])
+@pytest.mark.parametrize("storage", [bytes, bytearray])
+def test_mapped_snapshots_preserve_sliced_buffer_layout(storage, offset, orientation) -> None:
+    size = (17, 3)
+    stride = size[0] * 4 + 3
+    raw = bytes((i * 37 + i // 7) % 256 for i in range(stride * size[1]))
+    data = storage(bytes(offset) + raw + bytes(5))
+    view = memoryview(data)[offset : offset + len(raw)]
+    image = Image.frombuffer("RGBA", size, view, "raw", "RGBA", stride, orientation)
+    expected = PillowImage.frombuffer("RGBA", size, view, "raw", "RGBA", stride, orientation)
+    snapshot = image.copy()
+    assert snapshot.tobytes() == expected.tobytes()
+    image.close()
+    if isinstance(data, bytearray):
+        data[:] = bytes(len(data))
+    assert snapshot.tobytes() == PillowImage.frombytes("RGBA", size, raw, "raw", "RGBA", stride, orientation).tobytes()
+
+
 @pytest.mark.parametrize("mapped", [False, True])
 @pytest.mark.parametrize("xy", [(1.9, 0.2), [-1.2, -1.0], [True, False]])
 def test_getpixel_coordinate_conversion_matches_owned_images(mapped, xy) -> None:

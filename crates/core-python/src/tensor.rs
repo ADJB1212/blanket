@@ -1,5 +1,6 @@
 //! Fused float32 tensor snapshots in contiguous HWC or CHW order.
 
+use std::simd::num::SimdUint;
 use std::simd::{Simd, ToBytes};
 
 use blanket_core::{Image, PixelMode};
@@ -32,6 +33,10 @@ pub(crate) fn tensor_export<'py>(
         1.0
     };
     let bytes = image.raw_bytes_per_pixel() / channels;
+    let interleaved_means: [Simd<f32, 16>; 4] =
+        std::array::from_fn(|offset| Simd::from_array(std::array::from_fn(|lane| mean[(offset + lane) % channels])));
+    let interleaved_stds: [Simd<f32, 16>; 4] =
+        std::array::from_fn(|offset| Simd::from_array(std::array::from_fn(|lane| std[(offset + lane) % channels])));
     let read = |index: usize| -> f32 {
         let start = index * bytes;
         match bytes {
@@ -65,10 +70,22 @@ pub(crate) fn tensor_export<'py>(
                 };
                 let end = output.len() / 64 * 64;
                 for (block, dst) in output[..end].as_chunks_mut::<64>().0.iter_mut().enumerate() {
-                    let locations: [_; 16] = std::array::from_fn(|lane| location(start + block * 16 + lane));
-                    let values = Simd::from_array(locations.map(|(index, _)| read(index)));
-                    let means = Simd::from_array(locations.map(|(_, channel)| mean[channel]));
-                    let stds = Simd::from_array(locations.map(|(_, channel)| std[channel]));
+                    let index = start + block * 16;
+                    let (values, means, stds) = if !planar {
+                        let values = if bytes == 1 && !matches!(image.pixel_mode(), PixelMode::One | PixelMode::Lab) {
+                            Simd::<u8, 16>::from_slice(&source[index..]).cast::<f32>()
+                        } else {
+                            Simd::from_array(std::array::from_fn(|lane| read(index + lane)))
+                        };
+                        (values, interleaved_means[index % channels], interleaved_stds[index % channels])
+                    } else {
+                        let locations: [_; 16] = std::array::from_fn(|lane| location(index + lane));
+                        (
+                            Simd::from_array(locations.map(|(index, _)| read(index))),
+                            Simd::from_array(locations.map(|(_, channel)| mean[channel])),
+                            Simd::from_array(locations.map(|(_, channel)| std[channel])),
+                        )
+                    };
                     *dst = ((values / Simd::splat(divisor) - means) / stds).to_ne_bytes().to_array();
                 }
                 for (offset, dst) in output[end..].as_chunks_mut::<4>().0.iter_mut().enumerate() {

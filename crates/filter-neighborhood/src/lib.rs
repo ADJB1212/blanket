@@ -244,7 +244,7 @@ fn extrema_filter(py: Python<'_>, image: &Image, radius: usize, maximum: bool) -
     output(image, pixels)
 }
 
-pub(crate) fn extrema_line<T: Copy + Ord>(
+pub(crate) fn extrema_line<T: Copy + PartialOrd>(
     source: &[T], output: &mut [T], step: usize, first: usize, radius: usize, maximum: bool, queue: &mut VecDeque<(usize, T)>,
 ) {
     queue.clear();

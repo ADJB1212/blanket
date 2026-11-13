@@ -114,8 +114,7 @@ pub(crate) fn rank(image: &Image, size: usize, rank: usize) -> PyResult<Image> {
             .into_flattened()
     } else {
         let source = float_view(bytes);
-        let values = rank_values(&source, image.width() as usize, image.height() as usize, size, rank)?;
-        drop(source);
+        let values = float_rank(source, image.width() as usize, image.height() as usize, size, rank)?;
         values.into_iter().map(f32::to_le_bytes).collect::<Vec<_>>().into_flattened()
     };
     blanket_core::buffers::output(image, (image.width(), image.height()), pixels)
@@ -134,10 +133,23 @@ fn integer_rank(source: Cow<'_, [i32]>, width: usize, height: usize, size: usize
         }
         return rank_values(&source, width, height, size, rank);
     }
-    let mut source = source.into_owned();
+    Ok(extrema_values(source.into_owned(), width, height, size, rank != 0))
+}
+
+fn float_rank(source: Cow<'_, [f32]>, width: usize, height: usize, size: usize, rank: usize) -> PyResult<Vec<f32>> {
+    if source.is_empty() || size == 1 {
+        return Ok(source.into_owned());
+    }
+    // Selection can choose different NaN and signed-zero bits among equal values.
+    if (rank == 0 || rank == size * size - 1) && source.iter().all(|v| !v.is_nan() && v.to_bits() != (-0.0_f32).to_bits()) {
+        return Ok(extrema_values(source.into_owned(), width, height, size, rank != 0));
+    }
+    rank_values(&source, width, height, size, rank)
+}
+
+fn extrema_values<T: Copy + PartialOrd + Send + Sync>(mut source: Vec<T>, width: usize, height: usize, size: usize, maximum: bool) -> Vec<T> {
     let radius = size / 2;
-    let maximum = rank != 0;
-    let mut horizontal = vec![0; source.len()];
+    let mut horizontal = vec![source[0]; source.len()];
     blanket_core::parallel::chunks_mut_above(&mut horizontal, width * 16, 256 * 1024, |band, rows| {
         let mut queue = VecDeque::new();
         for (i, row) in rows.chunks_exact_mut(width).enumerate() {
@@ -152,7 +164,7 @@ fn integer_rank(source: Cow<'_, [i32]>, width: usize, height: usize, size: usize
             super::extrema_line(&horizontal[column..], &mut rows[column..], width, band * band_rows, radius, maximum, &mut queue);
         }
     });
-    Ok(source)
+    source
 }
 
 fn monotonic_integer_rank(source: &[i32], width: usize, height: usize, size: usize, rank: usize) -> Vec<i32> {
@@ -312,6 +324,31 @@ fn select<T: Copy + PartialOrd>(values: &mut [T], rank: usize) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn float_extrema_match_square_selection_including_special_bits() {
+        for (width, height) in [(1, 1), (1, 7), (7, 1), (19, 5), (65, 17), (19, 137)] {
+            for special in [false, true] {
+                let source: Vec<f32> = (0..width * height)
+                    .map(|i| {
+                        if special {
+                            [0.0, -0.0, f32::INFINITY, f32::NEG_INFINITY, f32::from_bits(0x7fc01234), 0.25][i % 6]
+                        } else {
+                            [0.0, f32::INFINITY, f32::NEG_INFINITY, (i * 7919 % 4093) as f32 - 2046.0][i % 4]
+                        }
+                    })
+                    .collect();
+                for size in [3, 5, 11, 31] {
+                    for rank in [0, size * size - 1] {
+                        let expected = rank_values(&source, width, height, size, rank).unwrap();
+                        let actual = float_rank(Cow::Borrowed(&source), width, height, size, rank).unwrap();
+                        assert_eq!(actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(), expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>());
+                    }
+                }
+            }
+        }
+        assert!(float_rank(Cow::Borrowed(&[]), 0, 7, 3, 0).unwrap().is_empty());
+    }
 
     #[test]
     fn wide_views_preserve_unaligned_bits_and_borrow_native_storage() {

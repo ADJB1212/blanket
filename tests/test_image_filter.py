@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import math
+import struct
 
 import pytest
-from helpers import assert_image_properties, assert_raises
+from helpers import assert_image_properties, assert_raises, image_pair
+from PIL import ImageFilter as PillowFilter
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
 from blanket import Image, ImageFilter
 
 MODES = ("L", "LA", "La", "I", "I;16", "I;16B", "I;16L", "I;16N", "RGB", "RGBA", "RGBa", "RGBX", "CMYK")
+
+
+@pytest.mark.parametrize("name", ["MinFilter", "MaxFilter"])
+@pytest.mark.parametrize("size", [3, 11, 31])
+@pytest.mark.parametrize("dimensions", [(1, 7), (7, 1), (65, 17)])
+def test_float_extrema_match_pillow(name, size, dimensions) -> None:
+    values = [((i * 7919) % 4093 - 2046) / 7 for i in range(dimensions[0] * dimensions[1])]
+    raw = struct.pack(f"<{len(values)}f", *values)
+    actual, expected = image_pair("F", dimensions, raw)
+    assert actual.filter(getattr(ImageFilter, name)(size)).tobytes() == expected.filter(getattr(PillowFilter, name)(size)).tobytes()
 
 
 @pytest.mark.parametrize(
