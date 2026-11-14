@@ -31,6 +31,47 @@ pub fn reverse_gray(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
     }
 }
 
+pub fn reverse_packed<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
+    assert!(C == 2 || C == 4);
+    assert_eq!(source.len(), output.len());
+    assert!(source.len().is_multiple_of(C));
+    let count = source.len() / C;
+    let done = count / 16 * 16;
+    for i in (0..done).step_by(16) {
+        let start = (count - i - 16) * C;
+        let input = &source[start..start + 16 * C];
+        let dst = &mut output[i * C..(i + 16) * C];
+        if C == 2 {
+            let values = Simd::<u16, 16>::from_array(std::array::from_fn(|j| u16::from_ne_bytes(input[j * 2..j * 2 + 2].try_into().unwrap())));
+            dst.write_copy_of_slice(values.reverse().to_array().map(u16::to_ne_bytes).as_flattened());
+        } else {
+            let values = Simd::<u32, 16>::from_array(std::array::from_fn(|j| u32::from_ne_bytes(input[j * 4..j * 4 + 4].try_into().unwrap())));
+            dst.write_copy_of_slice(values.reverse().to_array().map(u32::to_ne_bytes).as_flattened());
+        }
+    }
+    for (dst, src) in output[done * C..].as_chunks_mut::<C>().0.iter_mut().zip(source[..(count - done) * C].as_chunks::<C>().0.iter().rev()) {
+        dst.write_copy_of_slice(src);
+    }
+}
+
+#[inline]
+pub fn transpose_rgba_four(rows: [&[u8]; 4]) -> [[u8; 16]; 4] {
+    use std::simd::simd_swizzle;
+
+    let [a, b, c, d] = rows.map(Bytes::from_slice);
+    let ab0 = simd_swizzle!(a, b, [0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23]);
+    let ab1 = simd_swizzle!(a, b, [8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31]);
+    let cd0 = simd_swizzle!(c, d, [0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23]);
+    let cd1 = simd_swizzle!(c, d, [8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31]);
+    [
+        simd_swizzle!(ab0, cd0, [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23]),
+        simd_swizzle!(ab0, cd0, [8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31]),
+        simd_swizzle!(ab1, cd1, [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23]),
+        simd_swizzle!(ab1, cd1, [8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31]),
+    ]
+    .map(Simd::to_array)
+}
+
 #[inline]
 pub fn transpose_rgb_four(rows: [&[u8]; 4]) -> [[u8; 12]; 4] {
     use std::simd::simd_swizzle;
@@ -104,6 +145,29 @@ fn dispatch_colorize(source: &[u8], output: &mut [u8], tables: &[u8]) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn packed_reversals_preserve_bytes_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, 127] {
+                for offset in 0..16 {
+                    let source: Vec<u8> = (0..offset + count * C).map(|i| (i * 37) as u8).collect();
+                    let mut output = vec![std::mem::MaybeUninit::new(93); offset + count * C + 16];
+                    reverse_packed::<C>(&source[offset..], &mut output[offset..offset + count * C]);
+                    // SAFETY: guards start initialized and the kernel writes every pixel byte.
+                    let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                    for (dst, src) in
+                        output[offset..offset + count * C].as_chunks::<C>().0.iter().zip(source[offset..].as_chunks::<C>().0.iter().rev())
+                    {
+                        assert_eq!(dst, src);
+                    }
+                    assert!(output[..offset].iter().chain(&output[offset + count * C..]).all(|&value| value == 93));
+                }
+            }
+        }
+        check::<2>();
+        check::<4>();
+    }
 
     #[test]
     fn constant_pixels_check_every_channel_lane_unaligned_tail_and_guard() {

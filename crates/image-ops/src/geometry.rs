@@ -26,17 +26,23 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
         });
         return output(image, size, pixels);
     }
-    if c == 1 && matches!(orientation, 2 | 3) {
+    if matches!(c, 1 | 2 | 4) && matches!(orientation, 2 | 3) {
         let mut pixels = reserved_buffer(size, c)?;
         let width = image.width() as usize;
         let height = image.height() as usize;
         let len = source.len();
         py.detach(|| {
-            chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], width.max(1) * 32, 4 << 20, |band, rows| {
-                for (i, row) in rows.chunks_exact_mut(width.max(1)).enumerate() {
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..len], width.max(1) * c * 32, 4 << 20, |band, rows| {
+                for (i, row) in rows.chunks_exact_mut(width.max(1) * c).enumerate() {
                     let y = band * 32 + i;
                     let sy = if orientation == 3 { height - 1 - y } else { y };
-                    blanket_kernels::ops::reverse_gray(&source[sy * width..(sy + 1) * width], row);
+                    let src = &source[sy * width * c..(sy + 1) * width * c];
+                    match c {
+                        1 => blanket_kernels::ops::reverse_gray(src, row),
+                        2 => blanket_kernels::ops::reverse_packed::<2>(src, row),
+                        4 => blanket_kernels::ops::reverse_packed::<4>(src, row),
+                        _ => unreachable!(),
+                    }
                 }
             });
             // SAFETY: every row was initialized by the reversal kernel.
@@ -89,7 +95,11 @@ pub fn ops_transpose(py: Python<'_>, image: &Image, orientation: u8) -> PyResult
 
 pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
     if C == 3 && orientation >= 5 {
-        transpose_rgb(source, output, w, h, orientation);
+        transpose_four::<3, 12>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgb_four);
+        return;
+    }
+    if C == 4 && orientation >= 5 {
+        transpose_four::<4, 16>(source, output, w, h, orientation, blanket_kernels::ops::transpose_rgba_four);
         return;
     }
     let source = source.as_chunks::<C>().0;
@@ -145,50 +155,102 @@ pub fn transpose<const C: usize>(source: &[u8], output: &mut [u8], w: usize, h: 
     });
 }
 
-fn transpose_rgb(source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8) {
+fn transpose_four<const C: usize, const N: usize>(
+    source: &[u8], output: &mut [u8], w: usize, h: usize, orientation: u8, kernel: impl Fn([&[u8]; 4]) -> [[u8; N]; 4] + Sync + Send,
+) {
     let reverse_rows = orientation == 7 || orientation == 8;
     let reverse_columns = orientation == 6 || orientation == 7;
-    chunks_mut_above(output, h * 3 * 32, MIN_PARALLEL_BYTES, |band, rows| {
-        for (group, rows) in rows.chunks_mut(h * 3 * 4).enumerate() {
-            let count = rows.len() / (h * 3);
-            let y = band * 32 + group * 4;
-            if count == 4 {
-                let sx = if reverse_rows { w - y - 4 } else { y };
-                let end = h / 4 * 4;
-                for x in (0..end).step_by(4) {
-                    let input = std::array::from_fn(|i| {
-                        let sy = if reverse_columns { h - 1 - x - i } else { x + i };
-                        &source[(sy * w + sx) * 3..][..12]
-                    });
-                    let columns = blanket_kernels::ops::transpose_rgb_four(input);
-                    if reverse_rows {
-                        for (row, column) in rows.chunks_exact_mut(h * 3).zip(columns.iter().rev()) {
-                            row[x * 3..x * 3 + 12].copy_from_slice(column);
-                        }
-                    } else {
-                        for (row, column) in rows.chunks_exact_mut(h * 3).zip(&columns) {
-                            row[x * 3..x * 3 + 12].copy_from_slice(column);
+    chunks_mut_above(output, h * C * 32, 1024 << 10, |band, rows| {
+        for x0 in (0..h).step_by(32) {
+            let limit = (x0 + 32).min(h);
+            for (group, rows) in rows.chunks_mut(h * C * 4).enumerate() {
+                let count = rows.len() / (h * C);
+                let y = band * 32 + group * 4;
+                if count == 4 {
+                    let sx = if reverse_rows { w - y - 4 } else { y };
+                    let end = limit / 4 * 4;
+                    for x in (x0..end).step_by(4) {
+                        let input = std::array::from_fn(|i| {
+                            let sy = if reverse_columns { h - 1 - x - i } else { x + i };
+                            &source[(sy * w + sx) * C..][..N]
+                        });
+                        let columns = kernel(input);
+                        if reverse_rows {
+                            for (row, column) in rows.chunks_exact_mut(h * C).zip(columns.iter().rev()) {
+                                row[x * C..x * C + N].copy_from_slice(column);
+                            }
+                        } else {
+                            for (row, column) in rows.chunks_exact_mut(h * C).zip(&columns) {
+                                row[x * C..x * C + N].copy_from_slice(column);
+                            }
                         }
                     }
-                }
-                for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
-                    for x in end..h {
-                        let sx = if reverse_rows { w - 1 - y - i } else { y + i };
-                        let sy = if reverse_columns { h - 1 - x } else { x };
-                        let src = (sy * w + sx) * 3;
-                        row[x * 3..x * 3 + 3].copy_from_slice(&source[src..src + 3]);
+                    for (i, row) in rows.chunks_exact_mut(h * C).enumerate() {
+                        for x in end..limit {
+                            let sx = if reverse_rows { w - 1 - y - i } else { y + i };
+                            let sy = if reverse_columns { h - 1 - x } else { x };
+                            let src = (sy * w + sx) * C;
+                            row[x * C..x * C + C].copy_from_slice(&source[src..src + C]);
+                        }
                     }
-                }
-            } else {
-                for (i, row) in rows.chunks_exact_mut(h * 3).enumerate() {
-                    for (x, dst) in row.as_chunks_mut::<3>().0.iter_mut().enumerate() {
-                        let sx = if reverse_rows { w - 1 - y - i } else { y + i };
-                        let sy = if reverse_columns { h - 1 - x } else { x };
-                        let src = (sy * w + sx) * 3;
-                        dst.copy_from_slice(&source[src..src + 3]);
+                } else {
+                    for (i, row) in rows.chunks_exact_mut(h * C).enumerate() {
+                        for (x, dst) in row.as_chunks_mut::<C>().0.iter_mut().enumerate().take(limit).skip(x0) {
+                            let sx = if reverse_rows { w - 1 - y - i } else { y + i };
+                            let sy = if reverse_columns { h - 1 - x } else { x };
+                            let src = (sy * w + sx) * C;
+                            dst.copy_from_slice(&source[src..src + C]);
+                        }
                     }
                 }
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tiled_transposes_match_scalar_coordinates_with_tails_and_guards() {
+        fn check<const C: usize>(w: usize, h: usize, offset: usize) {
+            let source: Vec<u8> = (0..offset + w * h * C).map(|i| (i * 37 + i / 7) as u8).collect();
+            for orientation in 1..=8 {
+                let (width, height) = if orientation >= 5 { (h, w) } else { (w, h) };
+                let mut expected = vec![93; offset + w * h * C + 16];
+                for y in 0..height {
+                    for x in 0..width {
+                        let (sx, sy) = match orientation {
+                            1 => (x, y),
+                            2 => (w - 1 - x, y),
+                            3 => (w - 1 - x, h - 1 - y),
+                            4 => (x, h - 1 - y),
+                            5 => (y, x),
+                            6 => (y, h - 1 - x),
+                            7 => (w - 1 - y, h - 1 - x),
+                            8 => (w - 1 - y, x),
+                            _ => unreachable!(),
+                        };
+                        let start = offset + (y * width + x) * C;
+                        let src = offset + (sy * w + sx) * C;
+                        expected[start..start + C].copy_from_slice(&source[src..src + C]);
+                    }
+                }
+                let mut output = vec![93; expected.len()];
+                transpose::<C>(&source[offset..], &mut output[offset..offset + w * h * C], w, h, orientation);
+                assert_eq!(output, expected, "C={C}, w={w}, h={h}, offset={offset}, orientation={orientation}");
+            }
+        }
+        for offset in [0, 1, 7] {
+            for w in [0, 1, 3, 4, 5, 15, 16, 17, 31, 32, 33] {
+                for h in [0, 1, 3, 4, 5, 31, 32, 33] {
+                    check::<3>(w, h, offset);
+                    check::<4>(w, h, offset);
+                }
+            }
+        }
+        check::<3>(521, 509, 1);
+        check::<4>(521, 509, 1);
+    }
 }

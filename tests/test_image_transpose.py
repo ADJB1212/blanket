@@ -13,7 +13,7 @@ TYPE_CHECKING = False
 if TYPE_CHECKING:
     from blanket import Image
 
-HOPPER = {mode: helper.hopper(mode).crop((0, 0, 121, 127)).copy() for mode in ["L", "RGB", "I;16", "I;16L", "I;16B"]}
+HOPPER = {mode: helper.hopper(mode).crop((0, 0, 121, 127)).copy() for mode in ["L", "LA", "RGB", "RGBA", "CMYK", "I", "F", "I;16", "I;16L", "I;16B"]}
 
 
 @pytest.mark.parametrize("mode", HOPPER)
