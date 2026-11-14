@@ -24,9 +24,35 @@ pub fn reserved<T>(len: usize) -> PyResult<Vec<T>> {
     Ok(result)
 }
 
-pub fn copy<T: Copy>(source: &[T]) -> PyResult<Vec<T>> {
+// Large copies are bandwidth-bound; one core cannot saturate memory.
+const COPY_CHUNK_BYTES: usize = 256 << 10;
+const COPY_PARALLEL_BYTES: usize = 4 << 20;
+
+pub fn copy<T: Copy + Send + Sync>(source: &[T]) -> PyResult<Vec<T>> {
     let mut result = reserved(source.len())?;
-    result.extend_from_slice(source);
+    let chunk = (COPY_CHUNK_BYTES / size_of::<T>().max(1)).max(1);
+    chunks_mut_above(&mut result.spare_capacity_mut()[..source.len()], chunk, COPY_PARALLEL_BYTES, |i, dst| {
+        dst.write_copy_of_slice(&source[i * chunk..i * chunk + dst.len()]);
+    });
+    // SAFETY: Every element was initialized above, including a partial final chunk.
+    unsafe { result.set_len(source.len()) };
+    Ok(result)
+}
+
+/// Copy foreign memory, such as a Python buffer, with `memcpy` semantics.
+///
+/// # Safety
+/// `source` must be valid for reads of `len` bytes for the duration of the call.
+pub unsafe fn copy_from_ptr(source: *const u8, len: usize) -> PyResult<Vec<u8>> {
+    let mut result = reserved::<u8>(len)?;
+    let address = source as usize;
+    chunks_mut_above(&mut result.spare_capacity_mut()[..len], COPY_CHUNK_BYTES, COPY_PARALLEL_BYTES, |i, dst| {
+        // SAFETY: The caller guarantees the source range; chunks are disjoint
+        // and in bounds of both buffers. No shared slice of foreign memory is formed.
+        unsafe { std::ptr::copy_nonoverlapping((address + i * COPY_CHUNK_BYTES) as *const u8, dst.as_mut_ptr().cast::<u8>(), dst.len()) };
+    });
+    // SAFETY: Every byte was initialized above.
+    unsafe { result.set_len(len) };
     Ok(result)
 }
 

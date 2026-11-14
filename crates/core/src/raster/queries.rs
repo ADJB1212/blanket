@@ -169,6 +169,43 @@ pub(super) fn count_colors<const N: usize>(data: &[u8], maxcolors: usize) -> Opt
     count_colors_serial::<N>(data, maxcolors)
 }
 
+/// Unbounded counts keyed by packed pixel bytes, as (count, first index).
+pub(super) fn count_colors_map<const N: usize>(data: &[u8], maxcolors: usize) -> Option<Vec<(usize, usize)>> {
+    const CHUNK: usize = 128 << 10;
+    if crate::parallel::should_parallel(data.len() / N, CHUNK, CHUNK * 2) {
+        use rayon::prelude::*;
+        let maps: Option<Vec<_>> = data.par_chunks(CHUNK * N).map(|chunk| count_colors_map_serial::<N>(chunk, maxcolors)).collect();
+        let mut maps = maps?.into_iter();
+        let mut merged = maps.next()?;
+        for (chunk, map) in maps.enumerate() {
+            for (key, (count, index)) in map {
+                let entry = merged.entry(key).or_insert((0, (chunk + 1) * CHUNK + index));
+                entry.0 += count;
+            }
+            if merged.len() > maxcolors {
+                return None;
+            }
+        }
+        return Some(merged.into_values().collect());
+    }
+    Some(count_colors_map_serial::<N>(data, maxcolors)?.into_values().collect())
+}
+
+fn count_colors_map_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<rustc_hash::FxHashMap<u64, (usize, usize)>> {
+    let mut counts = rustc_hash::FxHashMap::<u64, (usize, usize)>::default();
+    counts.reserve(maxcolors.min(data.len() / N).min(1 << 16));
+    for (i, pixel) in data.as_chunks::<N>().0.iter().enumerate() {
+        let mut bytes = [0; 8];
+        bytes[..N].copy_from_slice(pixel);
+        let entry = counts.entry(u64::from_le_bytes(bytes)).or_insert((0, i));
+        entry.0 += 1;
+        if entry.0 == 1 && counts.len() > maxcolors {
+            return None;
+        }
+    }
+    Some(counts)
+}
+
 pub(super) fn count_colors_serial<const N: usize>(data: &[u8], maxcolors: usize) -> Option<ColorCounts> {
     let mut table = [(0_u64, 0_usize, 0_usize); COLOR_TABLE_SIZE];
     let mut used = 0;

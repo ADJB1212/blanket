@@ -2,6 +2,7 @@ use std::simd::cmp::{SimdOrd, SimdPartialEq, SimdPartialOrd};
 use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd};
 
+use blanket_core::parallel::{MIN_PARALLEL_BYTES, chunks_mut_above};
 use blanket_core::pixels::{Bytes, load, store};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
@@ -201,24 +202,29 @@ fn image_paste(
             pixels[d..d + len].copy_from_slice(&source_pixels[s..s + len]);
             return Ok(());
         }
-        for y in top..bottom {
-            let s = (y - position.1) as usize * size.0 as usize + (left - position.0) as usize;
-            let d = (y as usize * width + left as usize) * c;
-            let dst = &mut pixels[d..d + count * c];
-            if let Some((mask, mc)) = mask_pixels {
-                let mask = &mask[s * mc..(s + count) * mc];
-                let fill = fill && source.pixel_mode() == PixelMode::Rgba;
-                if let Some(tile) = &fill_tile {
-                    for (dst, mask) in dst.chunks_mut(tile.len()).zip(mask.chunks(tile.len() / c * mc)) {
-                        paste_masked_row(dst, &tile[..dst.len()], mask, c, mc, fill);
+        let row_bytes = width * c;
+        let fill = fill && source.pixel_mode() == PixelMode::Rgba;
+        let band = &mut pixels[top as usize * row_bytes..bottom as usize * row_bytes];
+        let threshold = if mask_pixels.is_some() { MIN_PARALLEL_BYTES } else { 4 << 20 };
+        chunks_mut_above(band, row_bytes * 16, threshold, |chunk, rows| {
+            for (index, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+                let y = top + (chunk * 16 + index) as i64;
+                let s = (y - position.1) as usize * size.0 as usize + (left - position.0) as usize;
+                let dst = &mut row[left as usize * c..right as usize * c];
+                if let Some((mask, mc)) = mask_pixels {
+                    let mask = &mask[s * mc..(s + count) * mc];
+                    if let Some(tile) = &fill_tile {
+                        for (dst, mask) in dst.chunks_mut(tile.len()).zip(mask.chunks(tile.len() / c * mc)) {
+                            paste_masked_row(dst, &tile[..dst.len()], mask, c, mc, fill);
+                        }
+                    } else {
+                        paste_masked_row(dst, &source_pixels[s * c..(s + count) * c], mask, c, mc, fill);
                     }
                 } else {
-                    paste_masked_row(dst, &source_pixels[s * c..(s + count) * c], mask, c, mc, fill);
+                    dst.copy_from_slice(&source_pixels[s * c..(s + count) * c]);
                 }
-            } else {
-                dst.copy_from_slice(&source_pixels[s * c..(s + count) * c]);
             }
-        }
+        });
         Ok(())
     })
 }

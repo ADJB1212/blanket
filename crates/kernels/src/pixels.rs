@@ -124,21 +124,27 @@ pub fn alpha_scale<const C: usize, const DIVIDE: bool>(pixels: &mut [u8]) {
     assert!(C == 2 || C == 4);
     assert_eq!(pixels.len() % C, 0);
     let end = pixels.len() / (C * 16) * (C * 16);
-    let max = Simd::<u32, 16>::splat(255);
     for offset in (0..end).step_by(C * 16) {
         let mut p = load::<C>(&pixels[offset..]);
-        let alpha = p[C - 1].cast::<u32>();
-        let zero = alpha.simd_eq(Simd::splat(0));
-        let divisor = zero.select(Simd::splat(1), alpha);
-        for channel in &mut p[..C - 1] {
-            let value = channel.cast::<u32>();
-            *channel = if DIVIDE {
-                // Byte-sample quotient gaps exceed f32 rounding error.
-                zero.select(value, ((value * max).cast::<f32>() / divisor.cast::<f32>()).cast::<u32>().simd_min(max)).cast::<u8>()
-            } else {
-                let value = value * alpha + Simd::splat(128);
-                (((value >> 8) + value) >> 8).cast::<u8>()
-            };
+        if DIVIDE {
+            let alpha = p[C - 1];
+            let zero = alpha.simd_eq(Bytes::splat(0));
+            // floor(255 * v / a) for a > 0: a non-integer quotient is at least
+            // 1/255 below the next integer, while the reciprocal product errs by
+            // under 2^-14 for quotients up to 256. The 2^-9 bias absorbs that
+            // error without crossing a boundary; larger quotients clamp to 255.
+            let reciprocal = Simd::<f32, 16>::splat(255.0) / alpha.cast::<f32>();
+            for channel in &mut p[..C - 1] {
+                let restored = (channel.cast::<f32>() * reciprocal + Simd::splat(1.0 / 512.0)).simd_min(Simd::splat(255.0)).cast::<u8>();
+                *channel = zero.select(*channel, restored);
+            }
+        } else {
+            let alpha = p[C - 1].cast::<u16>();
+            for channel in &mut p[..C - 1] {
+                // 255 * 255 + 128 + 254 fits in u16.
+                let value = channel.cast::<u16>() * alpha + Simd::splat(128);
+                *channel = (((value >> 8) + value) >> 8).cast::<u8>();
+            }
         }
         store::<C>(&mut pixels[offset..], p);
     }

@@ -14,6 +14,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("UnidentifiedImageError", module.py().get_type::<UnidentifiedImageError>())?;
     module.add_class::<Image>()?;
+    module.add_class::<blanket_core::raster::PixelAccess>()?;
     blanket_image_ops::register(module)?;
     blanket_core_python::register(module)?;
     module.add_class::<blanket_codecs::stream::StreamingDecoder>()?;

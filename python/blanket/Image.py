@@ -51,6 +51,7 @@ from ._blanket import (
     _index_sequence,
     _inspect,
     _open_sequence,
+    _PixelAccess,
     enhance_blend,
     filter_merge,
     fromarray as _native_fromarray,
@@ -401,8 +402,23 @@ def _pixel_coordinates(xy: tuple[int, int] | list[int]) -> tuple[int, int]:
     return x, y
 
 
-class PixelAccess:
-    """Read and write pixels in the raster selected by Image.load()."""
+class PixelAccess(_PixelAccess):
+    """Read and write pixels in the raster selected by Image.load().
+
+    ``pixels[x, y]`` returns a pixel and ``pixels[x, y] = value`` sets one.
+    Coordinates are an ``(x, y)`` tuple; floats truncate toward zero and
+    negative values count from the right or bottom. Indexing runs natively.
+
+    Examples:
+        ```python
+        from blanket import Image
+
+        image = Image.new("RGB", (4, 4), "black")
+        pixels = image.load()
+        pixels[1, 1] = (255, 255, 255)
+        color = pixels[1, 1]
+        ```
+    """
 
     def __init__(self, native: _Image) -> None:
         """Initialize pixel access for a native image.
@@ -419,56 +435,6 @@ class PixelAccess:
             ```
         """
         self._native = native
-
-    @staticmethod
-    def _coordinates(xy: tuple[int, int]) -> tuple[int, int]:
-        """Validate and convert coordinates into integer pair."""
-        if not isinstance(xy, tuple) or len(xy) != 2:
-            raise TypeError("argument must be sequence of length 2")
-        x, y = (int(v) if isinstance(v, float) else index(v) for v in xy)
-        return x, y
-
-    def __getitem__(self, xy: tuple[int, int]) -> int | float | tuple[int | float, ...]:
-        """Return the pixel value at the given coordinates.
-
-        Args:
-            xy: The (x, y) coordinate tuple.
-
-        Examples:
-            ```python
-            from blanket import Image
-
-            image = Image.new("RGB", (4, 4), (255, 0, 0))
-            pixels = image.load()
-            color = pixels[0, 0]
-            ```
-        """
-        return self._native.getpixel(self._coordinates(xy))
-
-    def __setitem__(self, xy: tuple[int, int], value: float | tuple[int | float, ...]) -> None:
-        """Set the pixel value at the given coordinates.
-
-        Args:
-            xy: The (x, y) coordinate tuple.
-            value: Pixel value matching the image mode.
-
-        Examples:
-            ```python
-            from blanket import Image
-
-            image = Image.new("RGB", (4, 4), "black")
-            pixels = image.load()
-            pixels[1, 1] = (255, 255, 255)
-            ```
-        """
-        coordinates = self._coordinates(xy)
-        if isinstance(value, tuple) and len(value) == 1:
-            mode = self._native.mode
-            if mode in ("1", "L", "I", "I;16", "I;16L", "I;16B", "I;16N"):
-                value = value[0]
-            elif mode in ("LA", "La", "PA"):
-                value = (value[0], 0)
-        self._native.putpixel(coordinates, value)
 
 
 class Image:

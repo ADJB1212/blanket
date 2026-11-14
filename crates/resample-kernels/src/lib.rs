@@ -158,6 +158,11 @@ impl NearestL {
         self.columns.len() >= 16
     }
 
+    /// Every full block uses the two-vector shuffle rather than a gather.
+    pub fn is_shuffled(&self) -> bool {
+        self.blocks.iter().all(Option::is_some)
+    }
+
     pub fn sample(&self, source: &[u8], output: &mut [u8]) {
         assert_eq!(source.len(), self.width);
         assert_eq!(output.len(), self.columns.len());

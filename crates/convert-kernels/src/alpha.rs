@@ -1,39 +1,17 @@
-use std::simd::cmp::{SimdOrd, SimdPartialEq};
-use std::simd::num::SimdUint;
-use std::simd::{Select, Simd};
+use blanket_kernels::parallel::{CHUNK_PIXELS, chunks_mut};
+use blanket_kernels::pixels::alpha_scale;
 
-use blanket_kernels::pixels::{load, store};
-
+/// Copy cache-sized chunks, then scale them in place while they are hot.
 pub fn convert<const C: usize>(source: &[u8], output: &mut [u8], premultiply: bool) {
-    let end = source.len() / (16 * C) * (16 * C);
-    for offset in (0..end).step_by(16 * C) {
-        let mut values = load::<C>(&source[offset..]);
-        let alpha = values[C - 1].cast::<u16>();
-        for value in &mut values[..C - 1] {
-            let sample = value.cast::<u16>();
-            *value = if premultiply {
-                let product = sample * alpha + Simd::splat(128);
-                ((product + (product >> 8)) >> 8).cast()
-            } else {
-                let restored = (sample * Simd::splat(255) / alpha.simd_max(Simd::splat(1))).simd_min(Simd::splat(255));
-                alpha.simd_eq(Simd::splat(0)).select(sample, restored).cast()
-            };
+    assert_eq!(source.len(), output.len());
+    chunks_mut(output, CHUNK_PIXELS * C, |chunk, dst| {
+        dst.copy_from_slice(&source[chunk * CHUNK_PIXELS * C..][..dst.len()]);
+        if premultiply {
+            alpha_scale::<C, false>(dst);
+        } else {
+            alpha_scale::<C, true>(dst);
         }
-        store::<C>(&mut output[offset..], values);
-    }
-    for (source, output) in source[end..].as_chunks::<C>().0.iter().zip(output[end..].as_chunks_mut::<C>().0) {
-        let alpha = u16::from(source[C - 1]);
-        for c in 0..C - 1 {
-            let sample = u16::from(source[c]);
-            output[c] = if premultiply {
-                let product = sample * alpha + 128;
-                ((product + (product >> 8)) >> 8) as u8
-            } else {
-                (sample * 255).checked_div(alpha).unwrap_or(sample).min(255) as u8
-            };
-        }
-        output[C - 1] = alpha as u8;
-    }
+    });
 }
 
 #[cfg(test)]

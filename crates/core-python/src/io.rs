@@ -85,7 +85,10 @@ fn from_raw_input(
             drop(input);
             data
         }
-        std::borrow::Cow::Borrowed(_) => input.into_owned(),
+        std::borrow::Cow::Borrowed(_) => match input {
+            std::borrow::Cow::Borrowed(input) => blanket_core::buffers::copy(input)?,
+            std::borrow::Cow::Owned(input) => input,
+        },
     };
     if mode.is_float() {
         if bit_depth != 8 && bit_depth != 32 {
@@ -162,6 +165,11 @@ fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
         return blanket_core::buffers::copy(bytes.as_bytes());
     }
     if let Ok(buffer) = PyBuffer::<u8>::get(obj) {
+        if buffer.is_c_contiguous() {
+            let (address, len) = (buffer.buf_ptr() as usize, buffer.len_bytes());
+            // SAFETY: The held buffer export keeps `len` contiguous bytes alive.
+            return obj.py().detach(|| unsafe { blanket_core::buffers::copy_from_ptr(address as *const u8, len) });
+        }
         return buffer.to_vec(obj.py());
     }
     if let Ok(view) = PyMemoryView::from(obj) {

@@ -655,6 +655,13 @@ pub fn convert(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
         (PixelMode::L, PixelMode::Rgba) => convert_layout::<1, 4>(source),
         (PixelMode::Rgb, PixelMode::L) => color_to_gray::<3>(source),
         (PixelMode::Rgba, PixelMode::L) => color_to_gray::<4>(source),
+        (PixelMode::L, PixelMode::La) => map_blocks::<1, 2>(source, 2 << 20, |p| [p[0], Bytes::splat(255)], |p| [p[0], 255]),
+        (PixelMode::Rgb, PixelMode::La) => {
+            map_blocks::<3, 2>(source, 2 << 20, |p| [luma_block(p[0], p[1], p[2]), Bytes::splat(255)], |p| [pillow_luma(p[0], p[1], p[2]), 255])
+        }
+        (PixelMode::Rgba, PixelMode::La) => {
+            map_blocks::<4, 2>(source, 2 << 20, |p| [luma_block(p[0], p[1], p[2]), p[3]], |p| [pillow_luma(p[0], p[1], p[2]), p[3]])
+        }
         _ => unreachable!("all mode pairs are covered"),
     }
 }

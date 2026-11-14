@@ -268,8 +268,7 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
             }
             PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => reduce_pixels::<4>(source, &mut pixels, image.width(), size, factor, bounds),
             PixelMode::La | PixelMode::Rgba => {
-                let mut source = reduction_crop(source, image.width(), bounds, c)?;
-                premultiply_image(image.pixel_mode(), &mut source);
+                let source = premultiplied_crop(source, image.width(), bounds, c)?;
                 if c == 2 {
                     reduce_pixels::<2>(&source, &mut pixels, right - left, size, factor, (0, 0, right - left, bottom - top));
                 } else {
@@ -291,6 +290,27 @@ fn reduction_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), chann
     copy_rows(&mut pixels, row_bytes, (bottom - top) as usize, |y| {
         let start = ((top as usize + y) * width as usize + left as usize) * channels;
         &source[start..start + row_bytes]
+    });
+    Ok(pixels)
+}
+
+fn premultiplied_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), channels: usize) -> PyResult<Vec<u8>> {
+    let (left, top, right, bottom) = bounds;
+    let mut pixels = buffer((right - left, bottom - top), channels)?;
+    let row_bytes = (right - left) as usize * channels;
+    if row_bytes == 0 {
+        return Ok(pixels);
+    }
+    chunks_mut(&mut pixels, row_bytes * 16, |band, rows| {
+        for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
+            let start = ((top as usize + band * 16 + i) * width as usize + left as usize) * channels;
+            row.copy_from_slice(&source[start..start + row_bytes]);
+        }
+        if channels == 2 {
+            blanket_core::pixels::alpha_scale::<2, false>(rows);
+        } else {
+            blanket_core::pixels::alpha_scale::<4, false>(rows);
+        }
     });
     Ok(pixels)
 }
@@ -536,7 +556,9 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             let fx = (((bounds.2 - bounds.0) / f64::from(size.0) / gap) as u32).max(1);
             let fy = (((bounds.3 - bounds.1) / f64::from(size.1) / gap) as u32).max(1);
             if fx > 1 || fy > 1 {
-                premultiply_image(image.pixel_mode(), source.to_mut());
+                if !matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba) {
+                    return Err(PyValueError::new_err("resize reduction requires an alpha image"));
+                }
                 let support = match method {
                     6 => 2.5,
                     7 => 4.5,
@@ -555,10 +577,12 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
                 );
                 let reduced_size = ((safe.2 - safe.0).div_ceil(fx), (safe.3 - safe.1).div_ceil(fy));
                 let mut pixels = buffer(reduced_size, c)?;
-                match image.pixel_mode() {
-                    PixelMode::La => reduce_pixels::<2>(&source, &mut pixels, image.width(), reduced_size, (fx, fy), safe),
-                    PixelMode::Rgba => reduce_pixels::<4>(&source, &mut pixels, image.width(), reduced_size, (fx, fy), safe),
-                    _ => return Err(PyValueError::new_err("resize reduction requires an alpha image")),
+                let cropped = premultiplied_crop(&source, image.width(), safe, c)?;
+                let local = (0, 0, safe.2 - safe.0, safe.3 - safe.1);
+                if c == 2 {
+                    reduce_pixels::<2>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
+                } else {
+                    reduce_pixels::<4>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
                 }
                 b = [
                     (bounds.0 - f64::from(safe.0)) / f64::from(fx),
@@ -792,12 +816,15 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
     let row_bytes = xs.len() * C;
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
     let double_rgb = C == 3 && xs.len() == width as usize * 2 && xs.iter().enumerate().all(|(x, &sx)| sx == x / 2);
-    let map = (C == 3 && !half_width && !double_rgb && row_bytes >= 16 && ys.len() >= 4).then(|| {
-        let columns: Vec<_> = xs.iter().flat_map(|&x| (0..C).map(move |c| Some(x * C + c))).collect();
-        crate::ops_simd::NearestL::new(&columns, width as usize * C).expect("validated resize coordinates")
-    });
+    let map = (C == 3 && !half_width && !double_rgb && row_bytes >= 16 && ys.len() >= 4)
+        .then(|| {
+            let columns: Vec<_> = xs.iter().flat_map(|&x| (0..C).map(move |c| Some(x * C + c))).collect();
+            crate::ops_simd::NearestL::new(&columns, width as usize * C).expect("validated resize coordinates")
+        })
+        .filter(crate::ops_simd::NearestL::is_shuffled);
     let source = source.as_chunks::<C>().0;
-    chunks_mut_above(output, row_bytes << 4, 1024 << 10, |band, rows| {
+    // Per-pixel gathers cost more than copies; split them like arithmetic.
+    chunks_mut_above(output, row_bytes << 4, MIN_PARALLEL_BYTES, |band, rows| {
         for i in 0..rows.len() / row_bytes {
             let sy = ys[band * 16 + i];
             if i > 0 && sy == ys[band * 16 + i - 1] {
@@ -1256,17 +1283,6 @@ pub fn ops_affine(
             // Interior extents need neither per-pixel fill checks nor
             // optional byte offsets; reuse the typed resize gather.
             if columns.iter().all(Option::is_some) && row_origins.iter().all(|&(_, y)| y >= 0.0 && y < image.height() as f64) {
-                if channels == 3 {
-                    let columns: Vec<_> = columns.iter().flat_map(|x| (0..3).map(move |c| x.map(|x| x + c))).collect();
-                    let map = crate::ops_simd::NearestL::new(&columns, image.width() as usize * 3).expect("validated byte coordinates");
-                    chunks_mut_above(&mut pixels, row_bytes * 16, 1024 << 10, |band, rows| {
-                        for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
-                            let start = row_origins[band * 16 + i].1 as usize * image.width() as usize * 3;
-                            map.sample(&source[start..start + image.width() as usize * 3], row);
-                        }
-                    });
-                    return;
-                }
                 let xs: Vec<_> = columns.iter().map(|x| x.unwrap() / channels).collect();
                 let ys: Vec<_> = row_origins.iter().map(|&(_, y)| y as usize).collect();
                 match image.pixel_mode() {
@@ -1526,7 +1542,9 @@ mod tests {
     use super::*;
     #[test]
     fn nearest_rgb_mapping_preserves_pixels_repeated_rows_tails_and_guards() {
-        for (width, height, target, rows) in [(5, 7, 17, 19), (33, 7, 65, 19), (97, 7, 33, 19), (769, 7, 1153, 513)] {
+        for (width, height, target, rows) in
+            [(5, 7, 17, 19), (33, 7, 65, 19), (97, 7, 33, 19), (769, 7, 1153, 513), (301, 7, 37, 19), (1000, 5, 333, 7)]
+        {
             let mut source = vec![93];
             source.extend((0..width * height * 3).map(|i| (i * 137 + i / 3) as u8));
             source.push(97);

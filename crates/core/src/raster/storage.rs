@@ -101,7 +101,13 @@ impl Image {
         if matches!(self.bit_depth, 10 | 12) {
             self.sample_validation.0.store(false, Ordering::Relaxed);
         }
-        self.pixels.as_mut().map(|pixels| Arc::make_mut(pixels).as_mut_slice())
+        let pixels = self.pixels.as_mut()?;
+        if Arc::strong_count(pixels) > 1
+            && let Ok(copy) = crate::buffers::copy(pixels.as_slice())
+        {
+            *pixels = Arc::new(copy);
+        }
+        Some(Arc::make_mut(pixels).as_mut_slice())
     }
 
     pub fn shared_pixels(&self) -> Option<&dyn SharedPixels> {
@@ -261,13 +267,13 @@ impl Image {
         Ok(Self { width, height, mode, pixels: Some(Arc::new(pixels)), bit_depth, format, .. })
     }
 
-    pub(super) fn color_count_list<'py>(&self, py: Python<'py>, entries: impl IntoIterator<Item = (usize, usize)>) -> PyResult<Bound<'py, PyList>> {
-        let result = PyList::empty(py);
-        for (count, i) in entries {
-            let pixel = self.getpixel(py, ((i % self.width as usize) as i64, (i / self.width as usize) as i64))?;
-            result.append((count, pixel))?;
-        }
-        Ok(result)
+    pub(super) fn color_count_list<'py>(&self, py: Python<'py>, entries: Vec<(usize, usize)>) -> PyResult<Bound<'py, PyList>> {
+        let width = self.width as usize;
+        let items = entries.into_iter().map(|(count, i)| {
+            let pixel = self.getpixel(py, ((i % width) as i64, (i / width) as i64))?;
+            Ok((count, pixel).into_pyobject(py)?.into_any())
+        });
+        Ok(super::pixels::pixel_sequence(py, items, false)?.cast_into::<PyList>()?)
     }
 
     pub fn alpha_palette(&self, alpha: Option<&[u8]>, index: Option<u8>) -> PyResult<Vec<u8>> {

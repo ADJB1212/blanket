@@ -49,8 +49,10 @@ class BufferPixelAccess(PixelAccess):
 
     def __getitem__(self, xy: tuple[int, int]) -> int | float | tuple[int | float, ...]:
         """Read one mapped pixel without taking a raster snapshot."""
+        if not isinstance(xy, tuple):
+            raise TypeError("argument must be sequence of length 2")
         mapping = self._mapping
-        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, self._coordinates(xy))
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy))
 
 
 class MappedImage(Image):

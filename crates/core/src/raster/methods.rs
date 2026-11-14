@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use super::pixels::{
     float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel, wide_pixel_data,
 };
-use super::queries::{bounding_box_l, count_colors, extrema, sample_extrema};
+use super::queries::{bounding_box_l, count_colors, count_colors_map, extrema, sample_extrema};
 use super::validation::expected_len;
 use super::{Image, PixelMode};
 
@@ -251,22 +251,29 @@ impl Image {
                 _ => return None,
             });
             let Some(counts) = counts else { return Ok(None) };
-            let entries = counts.into_iter().filter(|entry| entry.1 != 0).map(|(_, count, i)| (count, i));
+            let entries: Vec<_> = counts.into_iter().filter(|entry| entry.1 != 0).map(|(_, count, i)| (count, i)).collect();
             return Ok(Some(self.color_count_list(py, entries)?.unbind()));
         }
-        let counts = py.detach(|| {
-            let mut counts = FxHashMap::<&[u8], (usize, usize)>::default();
-            for (i, pixel) in data.chunks_exact(stride).enumerate() {
-                let entry = counts.entry(pixel).or_insert((0, i));
-                entry.0 += 1;
-                if counts.len() > maxcolors {
-                    return None;
+        let counts = py.detach(|| match stride {
+            2 => count_colors_map::<2>(data, maxcolors),
+            3 => count_colors_map::<3>(data, maxcolors),
+            4 => count_colors_map::<4>(data, maxcolors),
+            6 => count_colors_map::<6>(data, maxcolors),
+            8 => count_colors_map::<8>(data, maxcolors),
+            _ => {
+                let mut counts = FxHashMap::<&[u8], (usize, usize)>::default();
+                for (i, pixel) in data.chunks_exact(stride).enumerate() {
+                    let entry = counts.entry(pixel).or_insert((0, i));
+                    entry.0 += 1;
+                    if counts.len() > maxcolors {
+                        return None;
+                    }
                 }
+                Some(counts.into_values().collect())
             }
-            Some(counts)
         });
         let Some(counts) = counts else { return Ok(None) };
-        Ok(Some(self.color_count_list(py, counts.into_values())?.unbind()))
+        Ok(Some(self.color_count_list(py, counts)?.unbind()))
     }
 
     pub fn putpixel(&mut self, xy: (i64, i64), value: &Bound<'_, PyAny>) -> PyResult<()> {

@@ -577,7 +577,9 @@ fn convert_pixels(source: &[u8], from: PixelMode, to: PixelMode) -> Vec<u8> {
             }
         };
     }
-    if matches!(from, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(to, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) {
+    if matches!(from, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba)
+        && matches!(to, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+    {
         return simd::convert(source, from, to);
     }
     convert_pixels_generic(source, from, to)
