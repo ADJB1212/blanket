@@ -6,7 +6,38 @@ use pyo3::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_smart_crop, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_smart_crop_size, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_smart_crop_box, module)?)?;
     Ok(())
+}
+
+fn crop_size(source: (u32, u32), size: (u32, u32)) -> PyResult<(f64, f64)> {
+    if source.0 == 0 || source.1 == 0 || size.0 == 0 || size.1 == 0 {
+        return Err(PyValueError::new_err("smart crop dimensions must be positive"));
+    }
+    let (width, height) = (f64::from(source.0), f64::from(source.1));
+    let ratio = f64::from(size.0) / f64::from(size.1);
+    Ok(if width / height > ratio { (height * ratio, height) } else { (width, width / ratio) })
+}
+
+#[pyfunction]
+fn ops_smart_crop_size(source: (u32, u32), size: (u32, u32)) -> PyResult<Option<(u32, u32)>> {
+    let crop = crop_size(source, size)?;
+    if crop == (f64::from(source.0), f64::from(source.1)) {
+        return Ok(None);
+    }
+    let scale = (128.0 / f64::from(source.0.max(source.1))).min(1.0);
+    Ok(Some(((f64::from(source.0) * scale).round_ties_even().max(1.0) as u32, (f64::from(source.1) * scale).round_ties_even().max(1.0) as u32)))
+}
+
+#[pyfunction]
+fn ops_smart_crop_box(py: Python<'_>, image: &Image, source: (u32, u32), size: (u32, u32)) -> PyResult<(f64, f64, f64, f64)> {
+    let (crop_width, crop_height) = crop_size(source, size)?;
+    let (width, height) = (f64::from(source.0), f64::from(source.1));
+    let (cx, cy) = ops_smart_crop(py, image, (crop_width / width, crop_height / height))?;
+    let left = (width - crop_width) * cx;
+    let top = (height - crop_height) * cy;
+    Ok((left, top, width.min(left + crop_width), height.min(top + crop_height)))
 }
 
 #[pyfunction]

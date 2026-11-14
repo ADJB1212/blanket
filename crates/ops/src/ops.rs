@@ -12,6 +12,9 @@ use pyo3::types::PyBytes;
 use rayon::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::geometry::register(module)?;
+    module.add_function(wrap_pyfunction!(ops_tone_lut, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_autocontrast_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_composite, module)?)?;
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_linear_gradient, module)?)?;
@@ -29,6 +32,74 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_xbm, module)?)?;
     module.add_function(wrap_pyfunction!(ops_canvas, module)?)?;
     Ok(())
+}
+
+#[pyfunction(signature = (operation, value=0.0))]
+fn ops_tone_lut<'py>(py: Python<'py>, operation: &str, value: f64) -> PyResult<Bound<'py, PyBytes>> {
+    let table: [u8; 256] = match operation {
+        "invert" => std::array::from_fn(|v| 255 - v as u8),
+        "posterize" => {
+            if !(1.0..=8.0).contains(&value) {
+                return Err(PyValueError::new_err("bits must be between or equal to 1 and 8"));
+            }
+            let mask = u8::MAX << (8 - value as u32);
+            std::array::from_fn(|v| v as u8 & mask)
+        }
+        "solarize" => std::array::from_fn(|v| if (v as f64) < value { v as u8 } else { 255 - v as u8 }),
+        _ => return Err(PyValueError::new_err("unknown tone operation")),
+    };
+    Ok(PyBytes::new(py, &table))
+}
+
+#[pyfunction]
+fn ops_autocontrast_lut<'py>(py: Python<'py>, histogram: Vec<u64>, cutoff: Vec<f64>, ignore: Vec<i64>) -> PyResult<Bound<'py, PyBytes>> {
+    let histogram = histogram.as_slice().try_into().map_err(|_| PyValueError::new_err("expected 256 histogram bins"))?;
+    Ok(PyBytes::new(py, &autocontrast_lut(histogram, &cutoff, &ignore)?))
+}
+
+fn autocontrast_lut(histogram: &[u64; 256], cutoff: &[f64], ignore: &[i64]) -> PyResult<[u8; 256]> {
+    let mut counts = histogram.map(i128::from);
+    for &value in ignore {
+        if !(-256..256).contains(&value) {
+            return Err(PyIndexError::new_err("list assignment index out of range"));
+        }
+        counts[value.rem_euclid(256) as usize] = 0;
+    }
+    let total: i128 = counts.iter().sum();
+    for (tail, &percent) in cutoff.iter().take(2).enumerate() {
+        let product = total as f64 * percent;
+        // Python's remainder has the divisor's sign.
+        let quotient = (product - product.rem_euclid(100.0)) / 100.0;
+        let floor = quotient.floor();
+        let remaining = floor + f64::from(quotient - floor > 0.5);
+        if remaining.is_nan() {
+            return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+        }
+        if !remaining.is_finite() {
+            return Err(pyo3::exceptions::PyOverflowError::new_err("cannot convert float infinity to integer"));
+        }
+        let mut remaining = remaining as i128;
+        for offset in 0..256 {
+            let index = if tail == 0 { offset } else { 255 - offset };
+            let removed = remaining.min(counts[index]);
+            counts[index] = counts[index].saturating_sub(removed);
+            remaining -= removed;
+            if remaining <= 0 {
+                break;
+            }
+        }
+    }
+    let low = counts.iter().position(|&count| count != 0);
+    let high = counts.iter().rposition(|&count| count != 0);
+    let table: [u8; 256] = match (low, high) {
+        (Some(low), Some(high)) if low < high => {
+            let gain = 255.0 / (high - low) as f64;
+            let offset = -(low as f64) * gain;
+            std::array::from_fn(|value| ((value as f64 * gain + offset) as i64).clamp(0, 255) as u8)
+        }
+        _ => std::array::from_fn(|value| value as u8),
+    };
+    Ok(table)
 }
 
 #[pyfunction]
@@ -348,7 +419,7 @@ fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult
 fn ops_autocontrast(
     py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>, preserve_tone: bool,
 ) -> PyResult<Image> {
-    let mut bins = if preserve_tone && histogram_image.pixel_mode() == PixelMode::Rgb {
+    let bins = if preserve_tone && histogram_image.pixel_mode() == PixelMode::Rgb {
         let source = histogram_image.pixel_data()?;
         let mask = validate_mask(mask, histogram_image)?;
         py.detach(|| luminance_histogram(source, mask))
@@ -359,41 +430,9 @@ fn ops_autocontrast(
     if cutoff.iter().any(|&value| !(0.0..=100.0).contains(&value)) {
         return Err(PyValueError::new_err("cutoff must be between 0 and 100"));
     }
-    if ignore.iter().any(|&value| !(-256..256).contains(&value)) {
-        return Err(PyIndexError::new_err("list assignment index out of range"));
-    }
     let mut table = Vec::with_capacity(bins.len());
-    for counts in bins.as_chunks_mut::<256>().0 {
-        for &value in &ignore {
-            counts[value.rem_euclid(256) as usize] = 0;
-        }
-        let total = counts.iter().sum::<u64>();
-        for (tail, percent) in cutoff.into_iter().enumerate() {
-            let product = total as f64 * percent;
-            // Match Python's float floor division, including its quotient correction.
-            let quotient = (product - product % 100.0) / 100.0;
-            let floor = quotient.floor();
-            let mut remaining = (floor + f64::from(quotient - floor > 0.5)) as u64;
-            for offset in 0..256 {
-                let index = if tail == 0 { offset } else { 255 - offset };
-                let removed = remaining.min(counts[index]);
-                counts[index] -= removed;
-                remaining -= removed;
-                if remaining == 0 {
-                    break;
-                }
-            }
-        }
-        let low = counts.iter().position(|&count| count != 0);
-        let high = counts.iter().rposition(|&count| count != 0);
-        match (low, high) {
-            (Some(low), Some(high)) if low < high => {
-                let gain = 255.0 / (high - low) as f64;
-                let offset = -(low as f64) * gain;
-                table.extend((0..256).map(|value| ((value as f64 * gain + offset) as i64).clamp(0, 255) as u8));
-            }
-            _ => table.extend(0..=255),
-        }
+    for counts in bins.as_chunks::<256>().0 {
+        table.extend(autocontrast_lut(counts, &cutoff, &ignore)?);
     }
     ops_lut(py, image, table)
 }

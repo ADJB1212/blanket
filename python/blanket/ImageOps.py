@@ -22,7 +22,27 @@ if TYPE_CHECKING:
     from ._typing import FloatInput
 
 from . import Image
-from ._blanket import chops_invert, ops_autocontrast, ops_canvas, ops_colorize_stops, ops_equalize, ops_histogram, ops_lut, ops_mesh, ops_smart_crop, ops_transpose, palette_lut
+from ._blanket import (
+    chops_invert,
+    ops_autocontrast,
+    ops_autocontrast_lut,
+    ops_canvas,
+    ops_colorize_stops,
+    ops_contain_size,
+    ops_cover_size,
+    ops_equalize,
+    ops_fit_box,
+    ops_histogram,
+    ops_lut,
+    ops_mesh,
+    ops_pad_offset,
+    ops_scale_size,
+    ops_smart_crop_box,
+    ops_smart_crop_size,
+    ops_tone_lut,
+    ops_transpose,
+    palette_lut,
+)
 from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
@@ -66,7 +86,7 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
     return color_pixel(color, image.mode)
 
 
-def _lut(image: Image.Image, table: list[int], *, palette: bool = False) -> Image.Image:
+def _lut(image: Image.Image, table: bytes, *, palette: bool = False) -> Image.Image:
     """Apply a clamped 8-bit lookup table to an L or RGB image."""
     if image.mode == "P":
         if not palette:
@@ -80,7 +100,7 @@ def _lut(image: Image.Image, table: list[int], *, palette: bool = False) -> Imag
         return result
     if image.mode not in ("L", "RGB"):
         raise OSError(f"not supported for mode {image.mode}")
-    return _result(image, ops_lut(image._native, [max(0, min(255, v)) for v in table]))
+    return _result(image, ops_lut(image._native, table))
 
 
 def _border(border: Border) -> tuple[int, int, int, int]:
@@ -131,29 +151,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     # Retain Python's permissive cutoff and index semantics outside the native fast path.
     source = image.convert("L") if preserve_tone and image.mode != "L" else image
     histogram = ops_histogram(source._native, None if mask is None else mask._native)
-    table = []
-    for offset in range(0, len(histogram), 256):
-        counts = histogram[offset : offset + 256]
-        for value in ignored:
-            counts[value] = 0
-        total = sum(counts)
-        if cutoff:
-            for percent, indices in zip(tails, (range(256), range(255, -1, -1)), strict=False):
-                remaining = int(total * percent // 100)
-                for value in indices:
-                    removed = min(remaining, counts[value])
-                    counts[value] -= removed
-                    remaining -= removed
-                    if remaining <= 0:
-                        break
-        occupied = [i for i, n in enumerate(counts) if n]
-        if len(occupied) < 2:
-            table.extend(range(256))
-        else:
-            low, high = occupied[0], occupied[-1]
-            gain = 255.0 / (high - low)
-            offset_value = -low * gain
-            table.extend(int(i * gain + offset_value) for i in range(256))
+    table = b"".join(ops_autocontrast_lut(histogram[offset : offset + 256], tails[:2] if cutoff else (), [index(value) for value in ignored]) for offset in range(0, len(histogram), 256))
     return _lut(image, table)
 
 
@@ -206,16 +204,7 @@ def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resam
         result = ImageOps.contain(image, (4, 6))
         ```
     """
-    if image.height == 0:
-        return Image.new(image.mode, (size[0], 0))
-    if size[1] == 0:
-        return Image.new(image.mode, (0, 0))
-    ratio = image.width / image.height
-    target = size[0] / size[1]
-    if ratio > target:
-        size = (size[0], round(image.height / image.width * size[0]))
-    elif ratio < target:
-        size = (round(image.width / image.height * size[1]), size[1])
+    size = ops_contain_size(image.size, size)
     if min(size) == 0:
         return Image.new(image.mode, size)
     return _resize(image, size, method)
@@ -237,16 +226,10 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
         result = ImageOps.cover(image, (4, 6))
         ```
     """
-    if image.height == 0:
-        return Image.new(image.mode, (size[0], 0))
-    if size[1] == 0:
-        return Image.new(image.mode, (0, 0))
-    ratio = image.width / image.height
-    target = size[0] / size[1]
-    if ratio < target:
-        size = (size[0], round(image.height / image.width * size[0]))
-    elif ratio > target:
-        size = (round(image.width / image.height * size[1]), size[1])
+    empty = image.height == 0 or size[1] == 0
+    size = ops_cover_size(image.size, size)
+    if empty:
+        return Image.new(image.mode, size)
     return _resize(image, size, method)
 
 
@@ -271,7 +254,7 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     resized = contain(image, size, method)
     if resized.size == tuple(size):
         return resized
-    offset = tuple(round((target - actual) * max(0, min(position, 1))) for target, actual, position in zip(size, resized.size, centering, strict=False))
+    offset = ops_pad_offset(resized.size, size, centering)
     fill = _canvas_color(resized, color)
     return _result(resized, ops_canvas(resized._native, size, offset, fill))
 
@@ -316,9 +299,7 @@ def scale(image: Image.Image, factor: float, resample: int = Image.Resampling.BI
     """
     if factor == 1:
         return _copy(image)
-    if factor <= 0:
-        raise ValueError("the factor must be greater than 0")
-    return _resize(image, (round(image.width * factor), round(image.height * factor)), resample)
+    return _resize(image, ops_scale_size(image.size, factor), resample)
 
 
 class SupportsGetMesh(Protocol):
@@ -450,24 +431,10 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
         result = ImageOps.fit(image, (4, 6))
         ```
     """
-    if min(size) == 0:
+    box = ops_fit_box(image.size, size, bleed, centering)
+    if box is None:
         return Image.new(image.mode, size)
-    cx, cy = (v if 0 <= v <= 1 else 0.5 for v in centering)
-    if not 0 <= bleed < 0.5:
-        bleed = 0.0
-    bx, by = image.width * bleed, image.height * bleed
-    width, height = image.width - 2 * bx, image.height - 2 * by
-    if height == 0:
-        return Image.new(image.mode, size)
-    ratio = size[0] / size[1]
-    if width / height == ratio:
-        cw, ch = width, height
-    elif width / height > ratio:
-        cw, ch = ratio * height, height
-    else:
-        cw, ch = width, width / ratio
-    left, top = bx + (width - cw) * cx, by + (height - ch) * cy
-    return _resize(image, size, method, (left, top, left + cw, top + ch))
+    return _resize(image, size, method, box)
 
 
 def smart_crop(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:
@@ -505,21 +472,13 @@ def smart_crop(image: Image.Image, size: tuple[int, int], method: int = Image.Re
         raise ValueError("size must contain two positive integers")
     if image.width == 0 or image.height == 0:
         raise ValueError("cannot smart crop an empty image")
-    ratio = width / height
-    crop_width, crop_height = float(image.width), float(image.height)
-    if image.width / image.height > ratio:
-        crop_width = image.height * ratio
-    else:
-        crop_height = image.width / ratio
-    if crop_width == image.width and crop_height == image.height:
+    analysis_size = ops_smart_crop_size(image.size, (width, height))
+    if analysis_size is None:
         return image.resize((width, height), method)
-    scale = min(1.0, 128 / max(image.size))
-    analysis_size = (max(1, round(image.width * scale)), max(1, round(image.height * scale)))
     source = image.convert("LA") if image.mode == "La" else image
     analysis = source.convert("RGBA", bit_depth=8).resize(analysis_size, Image.Resampling.BOX)
-    cx, cy = ops_smart_crop(analysis._native, (crop_width / image.width, crop_height / image.height))
-    left, top = (image.width - crop_width) * cx, (image.height - crop_height) * cy
-    return image.resize((width, height), method, (left, top, min(image.width, left + crop_width), min(image.height, top + crop_height)))
+    box = ops_smart_crop_box(analysis._native, image.size, (width, height))
+    return image.resize((width, height), method, box)
 
 
 def flip(image: Image.Image) -> Image.Image:
@@ -574,8 +533,8 @@ def invert(image: Image.Image) -> Image.Image:
         image.load()
         return _result(image, chops_invert(image._native))
     if image.mode == "1":
-        return image.point(list(range(255, -1, -1)))
-    return _lut(image, list(range(255, -1, -1)), palette=True)
+        return _result(image, ops_lut(image._native, ops_tone_lut("invert")))
+    return _lut(image, ops_tone_lut("invert"), palette=True)
 
 
 def mirror(image: Image.Image) -> Image.Image:
@@ -612,8 +571,7 @@ def posterize(image: Image.Image, bits: int) -> Image.Image:
     """
     if not 1 <= bits <= 8:
         raise ValueError("bits must be between or equal to 1 and 8")
-    mask = ~(2 ** (8 - bits) - 1)
-    return _lut(image, [v & mask for v in range(256)], palette=True)
+    return _lut(image, ops_tone_lut("posterize", index(bits)), palette=True)
 
 
 def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
@@ -631,7 +589,7 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
         result = ImageOps.solarize(image, threshold=128)
         ```
     """
-    return _lut(image, [v if v < threshold else 255 - v for v in range(256)], palette=True)
+    return _lut(image, ops_tone_lut("solarize", threshold), palette=True)
 
 
 @overload

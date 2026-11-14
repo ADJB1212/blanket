@@ -542,6 +542,63 @@ def test_autocontrast_fractional_and_unusual_cutoffs(cutoff: object) -> None:
     assert_pillow_equal(ImageOps.autocontrast(image, cutoff=cutoff), PILOps.autocontrast(reference, cutoff=cutoff))
 
 
+@pytest.mark.parametrize("name", ["contain", "cover", "pad", "fit"])
+@pytest.mark.parametrize("source,target", [((3, 2), (2, 1)), ((5, 2), (3, 1)), ((2, 5), (1, 3)), ((17, 11), (7, 13))])
+def test_native_geometry_matches_pillow_rounding(name, source, target):
+    image, reference = random_pair("RGB", source)
+    image.info["description"] = "geometry"
+    options = {"centering": (0.25, 0.75)} if name in ("pad", "fit") else {}
+    result = getattr(ImageOps, name)(image, target, **options)
+    assert_pillow_equal(result, getattr(PILOps, name)(reference, target, **options))
+    assert result.info == image.info and result.info is not image.info
+
+
+@pytest.mark.parametrize("bleed", [0.125, 0.49, -1, 0.5, float("nan")])
+@pytest.mark.parametrize("centering", [(0, 1), (-1, 2), (float("nan"), 0.75)])
+def test_native_fit_bleed_and_centering(bleed, centering):
+    image, reference = random_pair("RGB", (17, 11))
+    options = {"bleed": bleed, "centering": centering}
+    assert_pillow_equal(ImageOps.fit(image, (7, 13), **options), PILOps.fit(reference, (7, 13), **options))
+
+
+@pytest.mark.parametrize("factor", [0.5, 1.5, 2.5, 0.7])
+def test_native_scale_rounds_ties_to_even(factor):
+    image, reference = random_pair("RGB", (5, 7))
+    assert_pillow_equal(ImageOps.scale(image, factor), PILOps.scale(reference, factor))
+
+
+@pytest.mark.parametrize("factor,error", [(float("nan"), ValueError), (float("inf"), OverflowError), (-float("inf"), ValueError)])
+def test_native_scale_rejects_nonfinite_dimensions(factor, error):
+    with pytest.raises(error):
+        ImageOps.scale(Image.new("L", (5, 7)), factor)
+
+
+@pytest.mark.parametrize("operation,options", [("invert", {}), ("posterize", {"bits": 3}), ("solarize", {"threshold": 127.5}), ("solarize", {"threshold": float("nan")})])
+@pytest.mark.parametrize("mode", ["L", "RGB", "P"])
+def test_native_tone_tables_cover_all_values(operation, options, mode):
+    image, reference = image_pair("L", (256, 1), bytes(range(256)))
+    if mode != "L":
+        image, reference = image.convert(mode), reference.convert(mode)
+    result = getattr(ImageOps, operation)(image, **options)
+    if mode == "P":
+        expected = getattr(PILOps, operation)(reference.convert("RGB"), **options)
+        assert_pillow_equal(result.convert("RGB"), expected)
+        assert result.tobytes() == image.tobytes()
+    else:
+        assert_pillow_equal(result, getattr(PILOps, operation)(reference, **options))
+
+
+@pytest.mark.parametrize("cutoff", [(), (-3, 110), (-1e300, 1e300)])
+def test_native_autocontrast_permissive_cutoffs(cutoff):
+    image, reference = random_pair("RGB", (17, 11))
+    assert_pillow_equal(ImageOps.autocontrast(image, cutoff=cutoff, ignore=range(2)), PILOps.autocontrast(reference, cutoff=cutoff, ignore=range(2)))
+
+
+def test_native_autocontrast_keeps_single_tail_cutoff():
+    image, reference = random_pair("RGB", (17, 11))
+    assert_pillow_equal(ImageOps.autocontrast(image, cutoff=(5,)), PILOps.autocontrast(reference, cutoff=(5, 0)))
+
+
 @pytest.mark.parametrize("points", [(0, 0, 255), (0, 255, 255), (70, 70, 200), (70, 200, 200), (255, 255, 255), (0, 0, 0)])
 def test_colorize_coincident_stops_preserve_floor_rounding(points: tuple[int, int, int]) -> None:
     image, reference = image_pair("L", (256, 1), bytes(range(256)))
