@@ -42,9 +42,8 @@ pub fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32
     if i64::from(size.0) * i64::from(size.1) != kernel.len() as i64 {
         return Err(PyValueError::new_err("bad kernel size"));
     }
-    let mut pixels = py.detach(|| source.to_vec());
     if i64::from(image.width()) < i64::from(size.0) || i64::from(image.height()) < i64::from(size.1) {
-        return output(image, pixels);
+        return image.copy(py);
     }
     if size.0 != size.1 || !matches!(size.0, 3 | 5) {
         return Err(PyValueError::new_err("bad kernel size"));
@@ -54,27 +53,27 @@ pub fn filter_kernel(py: Python<'_>, image: &Image, size: (i32, i32), scale: f32
     }
     let weights = kernel;
     let width = image.width() as usize;
+    let mut pixels = blanket_core::buffers::reserved(source.len())?;
+    let spare = &mut pixels.spare_capacity_mut()[..source.len()];
     py.detach(|| match (image.pixel_mode(), size.0) {
-        (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, 3) => convolve::<2, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, _) => convolve::<2, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, 3) => convolve::<3, 3>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, _) => convolve::<3, 5>(source, &mut pixels, width, &weights, offset),
-        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, 3) => {
-            convolve::<4, 3>(source, &mut pixels, width, &weights, offset)
-        }
-        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, _) => {
-            convolve::<4, 5>(source, &mut pixels, width, &weights, offset)
-        }
+        (PixelMode::One | PixelMode::L, 3) => convolve::<1, 3>(source, spare, width, &weights, offset),
+        (PixelMode::One | PixelMode::L, _) => convolve::<1, 5>(source, spare, width, &weights, offset),
+        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, 3) => convolve::<2, 3>(source, spare, width, &weights, offset),
+        (PixelMode::La | PixelMode::PremulLa | PixelMode::Pa, _) => convolve::<2, 5>(source, spare, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, 3) => convolve::<3, 3>(source, spare, width, &weights, offset),
+        (PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab, _) => convolve::<3, 5>(source, spare, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, 3) => convolve::<4, 3>(source, spare, width, &weights, offset),
+        (PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk, _) => convolve::<4, 5>(source, spare, width, &weights, offset),
         _ => unreachable!(),
     });
+    // SAFETY: convolve writes every interior byte and copies all border bytes.
+    unsafe { pixels.set_len(source.len()) };
     output(image, pixels)
 }
 
 // Fixed channel and kernel sizes let every tap and band unroll; the runtime
 // version spent its time on strided index arithmetic and bounds checks.
-fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], width: usize, weights: &[f32], offset: f32) {
+fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [std::mem::MaybeUninit<u8>], width: usize, weights: &[f32], offset: f32) {
     if pixels.is_empty() {
         return;
     }
@@ -82,14 +81,18 @@ fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], wi
     let radius = K / 2;
     let stride = width * C;
     let height = source.len() / stride;
-    chunks_mut(pixels, stride * 16, |band, rows| {
+    blanket_core::parallel::chunks_mut_above(pixels, stride * 16, blanket_core::parallel::MIN_PARALLEL_BYTES, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(stride).enumerate() {
             let y = band * 16 + i;
+            let original = &source[y * stride..(y + 1) * stride];
             if y < radius || y + radius >= height {
+                row.write_copy_of_slice(original);
                 continue;
             }
             let first = radius * C;
             let last = (width - radius) * C;
+            row[..first].write_copy_of_slice(&original[..first]);
+            row[last..].write_copy_of_slice(&original[last..]);
             let end = first + (last - first) / 16 * 16;
             for x in (first..end).step_by(16) {
                 let mut sums = Simd::splat(offset + 0.5);
@@ -102,7 +105,7 @@ fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], wi
                     }
                     sums += subtotal;
                 }
-                sums.cast::<u8>().copy_to_slice(&mut row[x..x + 16]);
+                row[x..x + 16].write_copy_of_slice(&sums.cast::<u8>().to_array());
             }
             for (i, pixel) in row[end..last].iter_mut().enumerate() {
                 let x = end + i;
@@ -116,7 +119,7 @@ fn convolve<const C: usize, const K: usize>(source: &[u8], pixels: &mut [u8], wi
                     }
                     sum += subtotal;
                 }
-                *pixel = sum as u8;
+                pixel.write(sum as u8);
             }
         }
     });
@@ -470,6 +473,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn convolution_initializes_borders_vectors_tails_and_guards() {
+        fn check<const C: usize, const K: usize>(width: usize, height: usize, offset: usize) {
+            let length = width * height * C;
+            let source: Vec<u8> = (0..offset + length).map(|i| (i * 37 + i / 7) as u8).collect();
+            let input = &source[offset..];
+            let weights: Vec<f32> = (0..K * K).map(|i| (i as f32 % 5.0 - 2.0) / 13.0).collect();
+            let mut expected = vec![93; offset + length + 16];
+            expected[offset..offset + length].copy_from_slice(input);
+            let radius = K / 2;
+            for y in radius..height - radius {
+                for x in radius..width - radius {
+                    for c in 0..C {
+                        let mut sum = 17.5;
+                        for ky in 0..K {
+                            let start = ((y + radius - ky) * width + x - radius) * C + c;
+                            let taps = &weights[ky * K..(ky + 1) * K];
+                            let mut subtotal = kernel_add(f32::from(input[start]), taps[0], f32::from(input[start + C]) * taps[1]);
+                            for kx in 2..K {
+                                subtotal = kernel_add(f32::from(input[start + kx * C]), taps[kx], subtotal);
+                            }
+                            sum += subtotal;
+                        }
+                        expected[offset + (y * width + x) * C + c] = sum as u8;
+                    }
+                }
+            }
+            let mut output = vec![std::mem::MaybeUninit::new(93); expected.len()];
+            output[offset..offset + length].fill(std::mem::MaybeUninit::uninit());
+            convolve::<C, K>(input, &mut output[offset..offset + length], width, &weights, 17.0);
+            // SAFETY: guards start initialized and convolve writes every image byte.
+            let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+            assert_eq!(output, expected, "C={C}, K={K}, width={width}, height={height}, offset={offset}");
+        }
+        for width in 5..39 {
+            for offset in [0, 1, 7] {
+                check::<1, 3>(width, 7, offset);
+                check::<2, 3>(width, 7, offset);
+                check::<3, 3>(width, 7, offset);
+                check::<4, 3>(width, 7, offset);
+                check::<1, 5>(width, 7, offset);
+                check::<2, 5>(width, 7, offset);
+                check::<3, 5>(width, 7, offset);
+                check::<4, 5>(width, 7, offset);
+            }
+        }
+        check::<3, 3>(521, 509, 1);
+        check::<4, 5>(521, 509, 1);
+    }
+
+    #[test]
     fn column_ranks_preserve_edges_channels_bands_and_guards() {
         for width in [1, 7, 33] {
             for channels in 1..=4 {
@@ -580,9 +633,11 @@ mod tests {
                                 expected[y * width * C + x] = sum as u8;
                             }
                         }
-                        let mut output = vec![93; offset + source.len() + 16];
-                        output[offset..offset + source.len()].copy_from_slice(source);
+                        let mut output = vec![std::mem::MaybeUninit::new(93); offset + source.len() + 16];
+                        output[offset..offset + source.len()].fill(std::mem::MaybeUninit::uninit());
                         convolve::<C, K>(source, &mut output[offset..offset + source.len()], width, &weights, -13.25);
+                        // SAFETY: guards start initialized and convolve writes every image byte.
+                        let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
                         assert_eq!(&output[offset..offset + source.len()], expected);
                         assert!(output[..offset].iter().all(|&v| v == 93));
                         assert!(output[offset + source.len()..].iter().all(|&v| v == 93));
@@ -603,16 +658,20 @@ mod tests {
     #[test]
     fn convolution_orientation_and_borders() {
         let input: Vec<u8> = (0..25).collect();
-        let mut result = input.clone();
+        let mut result = vec![std::mem::MaybeUninit::uninit(); input.len()];
         let mut kernel = [0.0; 9];
         kernel[0] = 1.0;
         convolve::<1, 3>(&input, &mut result, 5, &kernel, 0.0);
+        // SAFETY: convolve writes every image byte, including borders.
+        let result: Vec<_> = result.into_iter().map(|value| unsafe { value.assume_init() }).collect();
         assert_eq!(result[12], input[16]);
         assert_eq!(&result[..5], &input[..5]);
         // Interleaved channels stay independent, including alpha.
         let rgba: Vec<u8> = (0..100).collect();
-        let mut result = rgba.clone();
+        let mut result = vec![std::mem::MaybeUninit::uninit(); rgba.len()];
         convolve::<4, 3>(&rgba, &mut result, 5, &kernel, 0.0);
+        // SAFETY: convolve writes every image byte, including borders.
+        let result: Vec<_> = result.into_iter().map(|value| unsafe { value.assume_init() }).collect();
         assert_eq!(&result[48..52], &rgba[64..68]);
         assert_eq!(&result[..20], &rgba[..20]);
     }
