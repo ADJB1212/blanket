@@ -4,7 +4,7 @@ use std::simd::Simd;
 use std::simd::num::SimdUint;
 
 use blanket_core::color::luminance_simd;
-use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, chunks_mut_above, should_parallel};
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut_above, should_parallel};
 use blanket_core::pixels::{Bytes, load};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::PyValueError;
@@ -130,18 +130,20 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
         return copy(py, image);
     }
 
-    let mut pixels = alloc_pixels(source.len())?;
+    let mut pixels = blanket_core::buffers::reserved(source.len())?;
     py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
-        PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels),
-        PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels),
+        PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels.spare_capacity_mut()[..source.len()]),
+        PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels.spare_capacity_mut()[..source.len()]),
         _ => unreachable!(),
     });
+    // SAFETY: the color kernel initializes every channel, including alpha.
+    unsafe { pixels.set_len(source.len()) };
     output(image, pixels)
 }
 
-fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
-    chunks_mut(output, CHUNK_PIXELS * C, |i, dst| {
+fn color_degenerate<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
+    chunks_mut_above(output, CHUNK_PIXELS * C, MIN_PARALLEL_BYTES, |i, dst| {
         let start = i * CHUNK_PIXELS * C;
         let source = &source[start..start + dst.len()];
         let end = dst.len() / (16 * C) * (16 * C);
@@ -149,15 +151,17 @@ fn color_degenerate<const C: usize>(source: &[u8], output: &mut [u8]) {
             let mut pixel = load::<C>(&source[offset..]);
             let gray = luminance(pixel[0], pixel[1], pixel[2]);
             pixel[..3].fill(gray);
-            blanket_core::pixels::store::<C>(&mut dst[offset..], pixel);
+            let mut bytes = [0; 64];
+            blanket_core::pixels::store::<C>(&mut bytes[..16 * C], pixel);
+            dst[offset..offset + 16 * C].write_copy_of_slice(&bytes[..16 * C]);
         }
         for (source, output) in source[end..].as_chunks::<C>().0.iter().zip(dst[end..].as_chunks_mut::<C>().0) {
             let luma = blanket_convert_kernels::simd::pillow_luma(source[0], source[1], source[2]);
-            output[0] = luma;
-            output[1] = luma;
-            output[2] = luma;
+            output[0].write(luma);
+            output[1].write(luma);
+            output[2].write(luma);
             if C == 4 {
-                output[3] = source[3];
+                output[3].write(source[3]);
             }
         }
     });
@@ -179,14 +183,14 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
         let gray = blanket_image_ops::convert::convert(py, image, "L", None)?;
         let source = gray.pixel_data()?;
-        let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum(source) as f64 / source.len() as f64 + 0.5) as u8 });
+        let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum::<1>(source) as f64 / source.len() as f64 + 0.5) as u8 });
         let gray = py.detach(|| Image::from_pixels(image.width(), image.height(), PixelMode::L, vec![mean; source.len()], None))?;
         return blanket_image_ops::convert::convert(py, &gray, image.pixel_mode().as_str(), None);
     }
     let source = image.pixel_data()?;
     let sum = py.detach(|| match image.pixel_mode() {
-        PixelMode::One | PixelMode::L => byte_sum(source),
-        PixelMode::La | PixelMode::Pa => source.as_chunks::<2>().0.iter().map(|pixel| u64::from(pixel[0])).sum(),
+        PixelMode::One | PixelMode::L => byte_sum::<1>(source),
+        PixelMode::La | PixelMode::Pa => byte_sum::<2>(source),
         PixelMode::Rgb | PixelMode::Hsv => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
         _ => unreachable!(),
@@ -194,39 +198,50 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let pixel_count = source.len() / image.pixel_mode().channels();
     let mean = if pixel_count == 0 { 0 } else { (sum as f64 / pixel_count as f64 + 0.5) as u8 };
 
-    let mut pixels = alloc_pixels(source.len())?;
-    py.detach(|| match image.pixel_mode() {
-        PixelMode::One | PixelMode::L => pixels.fill(mean),
-        PixelMode::La | PixelMode::Pa => {
-            for (src, dst) in source.as_chunks::<2>().0.iter().zip(pixels.as_chunks_mut::<2>().0) {
-                dst.copy_from_slice(&[mean, src[1]]);
+    let mut pixels = blanket_core::buffers::reserved(source.len())?;
+    py.detach(|| {
+        chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS * image.pixel_mode().channels(), 4 << 20, |i, dst| {
+            let start = i * CHUNK_PIXELS * image.pixel_mode().channels();
+            match image.pixel_mode() {
+                PixelMode::One | PixelMode::L | PixelMode::Rgb | PixelMode::Hsv => dst.fill(std::mem::MaybeUninit::new(mean)),
+                PixelMode::La | PixelMode::Pa => contrast_alpha::<2>(&source[start..start + dst.len()], dst, mean),
+                PixelMode::Rgba => contrast_alpha::<4>(&source[start..start + dst.len()], dst, mean),
+                _ => unreachable!(),
             }
-        }
-        PixelMode::Rgb | PixelMode::Hsv => chunks_mut(&mut pixels, CHUNK_PIXELS * 3, |_, dst| {
-            for pixel in dst.as_chunks_mut::<3>().0 {
-                pixel.fill(mean);
-            }
-        }),
-        PixelMode::Rgba => chunks_mut(&mut pixels, CHUNK_PIXELS * 4, |i, dst| {
-            let start = i * CHUNK_PIXELS * 4;
-            for (source, output) in source[start..].as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
-                *output = [mean, mean, mean, source[3]];
-            }
-        }),
-        _ => unreachable!(),
+        });
+        // SAFETY: each output byte is initialized to the mean or the source alpha.
+        unsafe { pixels.set_len(source.len()) };
     });
     output(image, pixels)
 }
 
-fn byte_sum(source: &[u8]) -> u64 {
+fn contrast_alpha<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], mean: u8) {
+    let mask = Simd::<u8, 64>::from_array(std::array::from_fn(|i| if i % C == C - 1 { 255 } else { 0 }));
+    let gray = Simd::splat(mean) & !mask;
+    let done = output.len() / 64 * 64;
+    for i in (0..done).step_by(64) {
+        let values = (Simd::<u8, 64>::from_slice(&source[i..i + 64]) & mask) | gray;
+        output[i..i + 64].write_copy_of_slice(&values.to_array());
+    }
+    for (source, output) in source[done..].as_chunks::<C>().0.iter().zip(output[done..].as_chunks_mut::<C>().0) {
+        output.fill(std::mem::MaybeUninit::new(mean));
+        output[C - 1].write(source[C - 1]);
+    }
+}
+
+fn byte_sum<const C: usize>(source: &[u8]) -> u64 {
     const CHUNK: usize = 16 * 1024;
     let sum = |source: &[u8]| {
         let (blocks, tail) = source.as_chunks::<64>();
         let mut sum = Simd::<u16, 64>::splat(0);
         for block in blocks {
-            sum += Simd::<u8, 64>::from_array(*block).cast::<u16>();
+            let mut values = Simd::<u8, 64>::from_array(*block);
+            if C == 2 {
+                values &= Simd::from_array(std::array::from_fn(|i| if i % 2 == 0 { 255 } else { 0 }));
+            }
+            sum += values.cast::<u16>();
         }
-        u64::from(sum.cast::<u32>().reduce_sum()) + tail.iter().map(|&value| u64::from(value)).sum::<u64>()
+        u64::from(sum.cast::<u32>().reduce_sum()) + tail.iter().step_by(C).map(|&value| u64::from(value)).sum::<u64>()
     };
     if should_parallel(source.len(), CHUNK, 4 * 1024 * 1024) { source.par_chunks(CHUNK).map(sum).sum() } else { source.chunks(CHUNK).map(sum).sum() }
 }
@@ -249,24 +264,38 @@ pub fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "brightness");
     }
-    let mut pixels = alloc_pixels(
+    if image.pixel_mode() == PixelMode::Rgba {
+        let source = image.pixel_data()?;
+        let mut pixels = blanket_core::buffers::reserved(source.len())?;
+        py.detach(|| {
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS << 2, 4 << 20, |i, dst| {
+                let start = (i * CHUNK_PIXELS) << 2;
+                brightness_rgba(&source[start..start + dst.len()], dst);
+            });
+            // SAFETY: the kernel writes zero RGB and source alpha for every pixel.
+            unsafe { pixels.set_len(source.len()) };
+        });
+        return output(image, pixels);
+    }
+    let pixels = alloc_pixels(
         (image.width() as usize)
             .checked_mul(image.height() as usize)
             .and_then(|count| count.checked_mul(image.pixel_mode().channels()))
             .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?,
     )?;
-    if image.pixel_mode() == PixelMode::Rgba {
-        let source = image.pixel_data()?;
-        py.detach(|| {
-            chunks_mut(&mut pixels, CHUNK_PIXELS * 4, |i, dst| {
-                let start = i * CHUNK_PIXELS * 4;
-                for (source, output) in source[start..].as_chunks::<4>().0.iter().zip(dst.as_chunks_mut::<4>().0) {
-                    output[3] = source[3];
-                }
-            });
-        });
-    }
     output(image, pixels)
+}
+
+fn brightness_rgba(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>]) {
+    let mask = Simd::<u8, 64>::from_array(std::array::from_fn(|i| if i % 4 == 3 { 255 } else { 0 }));
+    let done = output.len() / 64 * 64;
+    for i in (0..done).step_by(64) {
+        let values = Simd::<u8, 64>::from_slice(&source[i..i + 64]) & mask;
+        output[i..i + 64].write_copy_of_slice(&values.to_array());
+    }
+    for (source, output) in source[done..].as_chunks::<4>().0.iter().zip(output[done..].as_chunks_mut::<4>().0) {
+        output.write_copy_of_slice(&[0, 0, 0, source[3]]);
+    }
 }
 
 #[pyfunction]
@@ -278,29 +307,36 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if image.width() < 3 || image.height() < 3 {
         return copy(py, image);
     }
-    let mut pixels = py.detach(|| blanket_core::buffers::copy(source))?;
+    let mut pixels = blanket_core::buffers::reserved(source.len())?;
 
     let width = image.width() as usize;
+    let spare = &mut pixels.spare_capacity_mut()[..source.len()];
     py.detach(|| match image.pixel_mode() {
-        PixelMode::One | PixelMode::L => smooth::<1, 1>(source, &mut pixels, width),
-        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, &mut pixels, width),
-        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, &mut pixels, width),
-        PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => smooth::<4, 4>(source, &mut pixels, width),
-        PixelMode::Rgba => smooth::<4, 3>(source, &mut pixels, width),
+        PixelMode::One | PixelMode::L => smooth::<1, 1>(source, spare, width),
+        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, spare, width),
+        PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, spare, width),
+        PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => smooth::<4, 4>(source, spare, width),
+        PixelMode::Rgba => smooth::<4, 3>(source, spare, width),
         _ => unreachable!(),
     });
+    // SAFETY: smooth writes each interior channel and copies borders and alpha.
+    unsafe { pixels.set_len(source.len()) };
     output(image, pixels)
 }
 
-fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], width: usize) {
+fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], width: usize) {
     let row_bytes = width * C;
     let height = source.len() / row_bytes;
     chunks_mut_above(output, row_bytes * 32, MIN_PARALLEL_BYTES, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y = band * 32 + i;
+            let original_row = &source[y * row_bytes..(y + 1) * row_bytes];
             if y == 0 || y + 1 >= height {
+                row.write_copy_of_slice(original_row);
                 continue;
             }
+            row[..C].write_copy_of_slice(&original_row[..C]);
+            row[row_bytes - C..].write_copy_of_slice(&original_row[row_bytes - C..]);
             let done = C + (row_bytes - C * 2) / 16 * 16;
             for x in (C..done).step_by(16) {
                 let center = y * row_bytes + x;
@@ -319,7 +355,7 @@ fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], widt
                     let mask = Bytes::from_array(std::array::from_fn(|i| if (x + i) % C < B { 255 } else { 0 }));
                     (filtered & mask) | (original & !mask)
                 };
-                filtered.copy_to_slice(&mut row[x..x + 16]);
+                row[x..x + 16].write_copy_of_slice(&filtered.to_array());
             }
             for (x, dst) in row.iter_mut().enumerate().take(row_bytes - C).skip(done) {
                 if x % C < B {
@@ -331,7 +367,9 @@ fn smooth<const C: usize, const B: usize>(source: &[u8], output: &mut [u8], widt
                             sum += u32::from(source[left + dx]);
                         }
                     }
-                    *dst = ((sum + 6) / 13) as u8;
+                    dst.write(((sum + 6) / 13) as u8);
+                } else {
+                    dst.write(original_row[x]);
                 }
             }
         }
@@ -343,13 +381,69 @@ mod tests {
     use super::*;
 
     #[test]
+    fn contrast_alpha_initializes_unaligned_vectors_tails_and_guards() {
+        fn check<const C: usize>() {
+            for count in [0, 1, 15, 16, 17, 31, 32, 33, CHUNK_PIXELS + 1] {
+                for offset in 0..16 {
+                    let source: Vec<u8> = (0..offset + count * C).map(|i| (i * 37) as u8).collect();
+                    let mut output = vec![std::mem::MaybeUninit::new(93); offset + count * C + 16];
+                    contrast_alpha::<C>(&source[offset..], &mut output[offset..offset + count * C], 129);
+                    // SAFETY: guards start initialized and the kernel writes all image bytes.
+                    let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                    for (src, dst) in source[offset..].as_chunks::<C>().0.iter().zip(output[offset..offset + count * C].as_chunks::<C>().0) {
+                        assert!(dst[..C - 1].iter().all(|&value| value == 129));
+                        assert_eq!(dst[C - 1], src[C - 1]);
+                    }
+                    assert!(output[..offset].iter().chain(&output[offset + count * C..]).all(|&value| value == 93));
+                }
+            }
+        }
+        check::<2>();
+        check::<4>();
+    }
+
+    #[test]
+    fn byte_sums_preserve_stride_tails_and_maximum_accumulation() {
+        for length in [0, 1, 31, 32, 33, 63, 64, 65, 16383, 16384, 16385, 4 * 1024 * 1024 + 2] {
+            for offset in [0, 1, 7] {
+                let source: Vec<u8> = (0..length + offset).map(|i| if i % 3 == 0 { 255 } else { (i * 37) as u8 }).collect();
+                let source = &source[offset..];
+                assert_eq!(byte_sum::<1>(source), source.iter().map(|&value| u64::from(value)).sum::<u64>());
+                assert_eq!(byte_sum::<2>(source), source.iter().step_by(2).map(|&value| u64::from(value)).sum::<u64>());
+            }
+        }
+        let source = vec![255; 16384 * 3];
+        assert_eq!(byte_sum::<1>(&source), source.len() as u64 * 255);
+        assert_eq!(byte_sum::<2>(&source), source.len() as u64 / 2 * 255);
+    }
+
+    #[test]
+    fn brightness_preserves_alpha_with_unaligned_tails_and_guards() {
+        for count in [0, 1, 15, 16, 17, 31, 32, 33, CHUNK_PIXELS + 1] {
+            for offset in 0..16 {
+                let source: Vec<u8> = (0..offset + count * 4).map(|i| (i * 37) as u8).collect();
+                let mut output = vec![std::mem::MaybeUninit::new(93); offset + count * 4 + 16];
+                brightness_rgba(&source[offset..], &mut output[offset..offset + count * 4]);
+                // SAFETY: the guards start initialized and the kernel writes all image bytes.
+                let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
+                for (src, dst) in source[offset..].as_chunks::<4>().0.iter().zip(output[offset..offset + count * 4].as_chunks::<4>().0) {
+                    assert_eq!(dst, &[0, 0, 0, src[3]]);
+                }
+                assert!(output[..offset].iter().chain(&output[offset + count * 4..]).all(|&value| value == 93));
+            }
+        }
+    }
+
+    #[test]
     fn color_vectors_preserve_luminance_alpha_tails_and_guards() {
         fn check<const C: usize>() {
             for count in [0, 1, 15, 16, 17, CHUNK_PIXELS + 17] {
                 for offset in 0..16 {
                     let source: Vec<u8> = (0..offset + count * C).map(|i| (i * 37 + i / 7) as u8).collect();
-                    let mut output = vec![93; offset + count * C + 16];
+                    let mut output = vec![std::mem::MaybeUninit::new(93); offset + count * C + 16];
                     color_degenerate::<C>(&source[offset..], &mut output[offset..offset + count * C]);
+                    // SAFETY: guards start initialized and the kernel writes every image byte.
+                    let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
                     for (src, dst) in source[offset..].as_chunks::<C>().0.iter().zip(output[offset..offset + count * C].as_chunks::<C>().0) {
                         let gray = blanket_convert_kernels::simd::pillow_luma(src[0], src[1], src[2]);
                         assert_eq!(&dst[..3], &[gray; 3]);
@@ -475,7 +569,7 @@ mod tests {
                     for fill in [None, Some(0), Some(255)] {
                         let source: Vec<_> = (0..count + 1).map(|i| fill.unwrap_or((i * 137 + i / 7) as u8)).collect();
                         let expected: u64 = source[1..].iter().map(|&value| u64::from(value)).sum();
-                        assert_eq!(byte_sum(&source[1..]), expected);
+                        assert_eq!(byte_sum::<1>(&source[1..]), expected);
                     }
                 }
             });
@@ -525,9 +619,12 @@ mod tests {
                         }
                     }
                 }
-                let mut output = source.clone();
+                let mut output: Vec<_> = source.iter().copied().map(std::mem::MaybeUninit::new).collect();
                 let end = offset + width * height * C;
+                output[offset..end].fill(std::mem::MaybeUninit::uninit());
                 smooth::<C, B>(&source[offset..end], &mut output[offset..end], width);
+                // SAFETY: guards start initialized and smooth writes every image byte.
+                let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
                 assert_eq!(output, expected, "C={C}, B={B}, width={width}, height={height}, offset={offset}");
             }
         }
@@ -550,8 +647,10 @@ mod tests {
     #[test]
     fn smooth_copies_borders_and_preserves_alpha() {
         let source: Vec<u8> = (0..100).collect();
-        let mut output = source.clone();
+        let mut output = vec![std::mem::MaybeUninit::uninit(); source.len()];
         smooth::<4, 3>(&source, &mut output, 5);
+        // SAFETY: smooth writes every image byte, including borders and alpha.
+        let output: Vec<_> = output.into_iter().map(|value| unsafe { value.assume_init() }).collect();
         assert_eq!(&output[..20], &source[..20]);
         assert_eq!(&output[80..], &source[80..]);
         for (actual, expected) in output.as_chunks::<4>().0.iter().zip(source.as_chunks::<4>().0) {
