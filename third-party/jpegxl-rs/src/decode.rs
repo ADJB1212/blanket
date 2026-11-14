@@ -27,13 +27,11 @@ use jpegxl_sys::{
     metadata::codestream_header::{JxlBasicInfo, JxlOrientation},
 };
 
-use crate::{
-    common::{Endianness, PixelType},
-    errors::{check_dec_status, DecodeError},
-    memory::MemoryManager,
-    parallel::ParallelRunner,
-    utils::check_valid_signature,
-};
+use crate::common::{Endianness, PixelType};
+use crate::errors::{DecodeError, check_dec_status};
+use crate::memory::MemoryManager;
+use crate::parallel::ParallelRunner;
+use crate::utils::check_valid_signature;
 
 mod event;
 pub use event::*;
@@ -77,11 +75,7 @@ pub struct PixelFormat {
 
 impl Default for PixelFormat {
     fn default() -> Self {
-        Self {
-            num_channels: 0,
-            endianness: Endianness::Native,
-            align: 0,
-        }
+        Self { num_channels: 0, endianness: Endianness::Native, align: 0 }
     }
 }
 
@@ -165,26 +159,13 @@ impl<'pr, 'mm> JxlDecoder<'pr, 'mm> {
     /// Return [`DecodeError::CannotCreateDecoder`] if it fails to create the decoder.
     #[builder(derive(Clone))]
     pub fn new(
-        pixel_format: Option<PixelFormat>,
-        skip_reorientation: Option<bool>,
-        unpremul_alpha: Option<bool>,
-        render_spotcolors: Option<bool>,
-        coalescing: Option<bool>,
-        desired_intensity_target: Option<f32>,
-        decompress: Option<bool>,
-        progressive_detail: Option<JxlProgressiveDetail>,
-        #[builder(default)] icc_profile: bool,
-        #[builder(default = 512 * 1024)] init_jpeg_buffer: usize,
-        parallel_runner: Option<&'pr dyn ParallelRunner>,
-        memory_manager: Option<&'mm dyn MemoryManager>,
+        pixel_format: Option<PixelFormat>, skip_reorientation: Option<bool>, unpremul_alpha: Option<bool>, render_spotcolors: Option<bool>,
+        coalescing: Option<bool>, desired_intensity_target: Option<f32>, decompress: Option<bool>, progressive_detail: Option<JxlProgressiveDetail>,
+        #[builder(default)] icc_profile: bool, #[builder(default = 512 * 1024)] init_jpeg_buffer: usize,
+        parallel_runner: Option<&'pr dyn ParallelRunner>, memory_manager: Option<&'mm dyn MemoryManager>,
     ) -> Result<Self, DecodeError> {
         // SAFETY: libjxl copies the memory manager, so the temporary only has to outlive the call
-        let dec = unsafe {
-            memory_manager.map_or_else(
-                || JxlDecoderCreate(null()),
-                |mm| JxlDecoderCreate(&mm.manager()),
-            )
-        };
+        let dec = unsafe { memory_manager.map_or_else(|| JxlDecoderCreate(null()), |mm| JxlDecoderCreate(&mm.manager())) };
 
         if dec.is_null() {
             return Err(DecodeError::CannotCreateDecoder);
@@ -227,11 +208,7 @@ impl JxlDecoder<'_, '_> {
     /// Run a [`Session`] over `data`. Returns the metadata, the image of the last frame
     /// and the reconstructed JPEG, if requested and possible.
     pub(crate) fn decode_internal(
-        &self,
-        data: &[u8],
-        data_type: Option<JxlDataType>,
-        with_icc_profile: bool,
-        reconstruct_jpeg: bool,
+        &self, data: &[u8], data_type: Option<JxlDataType>, with_icc_profile: bool, reconstruct_jpeg: bool,
     ) -> Result<Decoded, DecodeError> {
         if !check_valid_signature(data).unwrap_or(false) {
             return Err(DecodeError::InvalidInput);
@@ -264,9 +241,7 @@ impl JxlDecoder<'_, '_> {
             }
         }
 
-        let info = session
-            .basic_info()
-            .ok_or(DecodeError::InternalError("No basic info"))?;
+        let info = session.basic_info().ok_or(DecodeError::InternalError("No basic info"))?;
         let metadata = Metadata {
             width: info.xsize,
             height: info.ysize,
@@ -286,9 +261,7 @@ impl JxlDecoder<'_, '_> {
     pub(crate) fn setup_decoder(&self, events: Events) -> Result<(), DecodeError> {
         if let Some(runner) = self.parallel_runner {
             // SAFETY: `self.dec` is valid until drop and the runner outlives it
-            check_dec_status(unsafe {
-                JxlDecoderSetParallelRunner(self.dec, runner.runner(), runner.as_opaque_ptr())
-            })?;
+            check_dec_status(unsafe { JxlDecoderSetParallelRunner(self.dec, runner.runner(), runner.as_opaque_ptr()) })?;
         }
 
         // SAFETY: `self.dec` is valid until drop
@@ -340,12 +313,8 @@ impl JxlDecoder<'_, '_> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] when internal decoder fails
-    pub fn decode_with<T: PixelType>(
-        &self,
-        data: &[u8],
-    ) -> Result<(Metadata, Vec<T>), DecodeError> {
-        let (metadata, image, _) =
-            self.decode_internal(data, Some(T::pixel_type()), self.icc_profile, false)?;
+    pub fn decode_with<T: PixelType>(&self, data: &[u8]) -> Result<(Metadata, Vec<T>), DecodeError> {
+        let (metadata, image, _) = self.decode_internal(data, Some(T::pixel_type()), self.icc_profile, false)?;
         let image = image.ok_or(DecodeError::InternalError("No image decoded"))?;
 
         debug_assert_eq!(T::pixel_type(), image.format.data_type);

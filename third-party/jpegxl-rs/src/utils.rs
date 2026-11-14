@@ -35,10 +35,10 @@ pub fn check_valid_signature(buf: &[u8]) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+    use pretty_assertions::assert_eq;
+
     use super::*;
     use crate::tests::SAMPLE_JXL;
-
-    use pretty_assertions::assert_eq;
 
     #[test]
     fn test_signature() {

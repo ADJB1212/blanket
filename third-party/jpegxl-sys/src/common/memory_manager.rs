@@ -31,8 +31,7 @@ use std::ffi::c_void;
 /// # Returns
 /// - `NULL` if the memory cannot be allocated.
 /// - Pointer to the memory otherwise.
-pub type JpegxlAllocFunc =
-    unsafe extern "C-unwind" fn(opaque: *mut c_void, size: usize) -> *mut c_void;
+pub type JpegxlAllocFunc = unsafe extern "C-unwind" fn(opaque: *mut c_void, size: usize) -> *mut c_void;
 
 /// Deallocating function pointer type.
 ///

@@ -17,7 +17,8 @@ along with jpegxl-sys.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Utility functions to manipulate jhgm (gain map) boxes.
 
-use crate::{color::color_encoding::JxlColorEncoding, common::types::JxlBool};
+use crate::color::color_encoding::JxlColorEncoding;
+use crate::common::types::JxlBool;
 
 /// Gain map bundle
 ///
@@ -60,7 +61,7 @@ pub struct JxlGainMapBundle {
     pub gain_map: *const u8,
 }
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Calculates the total size required to serialize the gain map bundle into a
     /// binary buffer. This function accounts for all the necessary space to
     /// serialize fields such as gain map metadata, color encoding, compressed ICC
@@ -74,10 +75,7 @@ extern "C-unwind" {
     ///
     /// # Returns
     /// - A boolean indicating whether setting the size was successful.
-    pub fn JxlGainMapGetBundleSize(
-        map_bundle: *const JxlGainMapBundle,
-        bundle_size: *mut usize,
-    ) -> JxlBool;
+    pub fn JxlGainMapGetBundleSize(map_bundle: *const JxlGainMapBundle, bundle_size: *mut usize) -> JxlBool;
 
     /// Serializes the gain map bundle into a preallocated buffer. The function
     /// ensures that all parts of the bundle such as metadata, color encoding,
@@ -97,10 +95,7 @@ extern "C-unwind" {
     /// # Returns
     /// - A boolean indicating whether writing the bundle was successful.
     pub fn JxlGainMapWriteBundle(
-        map_bundle: *const JxlGainMapBundle,
-        output_buffer: *mut u8,
-        output_buffer_size: usize,
-        bytes_written: *mut usize,
+        map_bundle: *const JxlGainMapBundle, output_buffer: *mut u8, output_buffer_size: usize, bytes_written: *mut usize,
     ) -> JxlBool;
 
     /// Deserializes a gain map bundle from a provided buffer and populates a
@@ -126,9 +121,6 @@ extern "C-unwind" {
     /// # Returns
     /// - A boolean indicating whether reading the bundle was successful.
     pub fn JxlGainMapReadBundle(
-        map_bundle: *mut JxlGainMapBundle,
-        input_buffer: *const u8,
-        input_buffer_size: usize,
-        bytes_read: *mut usize,
+        map_bundle: *mut JxlGainMapBundle, input_buffer: *const u8, input_buffer_size: usize, bytes_read: *mut usize,
     ) -> JxlBool;
 }

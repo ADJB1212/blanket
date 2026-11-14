@@ -23,9 +23,10 @@ use bon::bon;
 #[allow(clippy::wildcard_imports)]
 use jpegxl_sys::encoder::encode::*;
 
-use crate::{
-    common::PixelType, errors::EncodeError, memory::MemoryManager, parallel::ParallelRunner,
-};
+use crate::common::PixelType;
+use crate::errors::EncodeError;
+use crate::memory::MemoryManager;
+use crate::parallel::ParallelRunner;
 
 mod options;
 pub use options::*;
@@ -131,27 +132,14 @@ impl<'prl, 'mm> JxlEncoder<'prl, 'mm> {
     /// Return [`EncodeError::CannotCreateEncoder`] if it fails to create the encoder
     #[builder(derive(Clone))]
     pub fn new(
-        memory_manager: Option<&'mm dyn MemoryManager>,
-        #[builder(default)] has_alpha: bool,
-        lossless: Option<bool>,
-        #[builder(default)] speed: EncoderSpeed,
-        #[builder(default = 1.0)] quality: f32,
-        #[builder(default)] use_container: bool,
-        #[builder(default)] uses_original_profile: bool,
-        #[builder(default)] decoding_speed: i64,
-        init_buffer_size: Option<usize>,
-        color_encoding: Option<ColorEncoding>,
-        target_intensity: Option<f32>,
-        parallel_runner: Option<&'prl dyn ParallelRunner>,
+        memory_manager: Option<&'mm dyn MemoryManager>, #[builder(default)] has_alpha: bool, lossless: Option<bool>,
+        #[builder(default)] speed: EncoderSpeed, #[builder(default = 1.0)] quality: f32, #[builder(default)] use_container: bool,
+        #[builder(default)] uses_original_profile: bool, #[builder(default)] decoding_speed: i64, init_buffer_size: Option<usize>,
+        color_encoding: Option<ColorEncoding>, target_intensity: Option<f32>, parallel_runner: Option<&'prl dyn ParallelRunner>,
         #[builder(default)] use_box: bool,
     ) -> Result<Self, EncodeError> {
         // SAFETY: libjxl copies the memory manager, so the temporary only has to outlive the call
-        let enc = unsafe {
-            memory_manager.map_or_else(
-                || JxlEncoderCreate(null()),
-                |mm| JxlEncoderCreate(&mm.manager()),
-            )
-        };
+        let enc = unsafe { memory_manager.map_or_else(|| JxlEncoderCreate(null()), |mm| JxlEncoderCreate(&mm.manager())) };
 
         if enc.is_null() {
             return Err(EncodeError::CannotCreateEncoder);
@@ -185,9 +173,7 @@ impl<'prl, 'mm, S: State> JxlEncoderBuilder<'prl, 'mm, S> {
     /// quality).
     #[allow(dead_code)]
     pub fn jpeg_quality(self, quality: f32) -> JxlEncoderBuilder<'prl, 'mm, SetQuality<S>>
-    where
-        S::Quality: IsUnset,
-    {
+    where S::Quality: IsUnset {
         // SAFETY: this is a pure function of its argument
         self.quality(unsafe { JxlEncoderDistanceFromQuality(quality) })
     }
@@ -295,12 +281,7 @@ impl<'prl, 'mm> JxlEncoder<'prl, 'mm> {
     ///
     /// # Errors
     /// Return [`EncodeError`] if the internal encoder fails to encode
-    pub fn encode<T: PixelType>(
-        &mut self,
-        data: &[T],
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<u8>, EncodeError> {
+    pub fn encode<T: PixelType>(&mut self, data: &[T], width: u32, height: u32) -> Result<Vec<u8>, EncodeError> {
         self.encode_frame(&EncoderFrame::new(data), width, height)
     }
 
@@ -309,12 +290,7 @@ impl<'prl, 'mm> JxlEncoder<'prl, 'mm> {
     ///
     /// # Errors
     /// Return [`EncodeError`] if the internal encoder fails to encode
-    pub fn encode_frame<T: PixelType>(
-        &mut self,
-        frame: &EncoderFrame<T>,
-        width: u32,
-        height: u32,
-    ) -> Result<Vec<u8>, EncodeError> {
+    pub fn encode_frame<T: PixelType>(&mut self, frame: &EncoderFrame<T>, width: u32, height: u32) -> Result<Vec<u8>, EncodeError> {
         let info = self.image_info::<T>(width, height);
         let mut session = self.session(&info)?;
         session.add_frame(frame)?;
@@ -348,8 +324,9 @@ pub fn encoder_builder<'prl, 'mm>() -> JxlEncoderBuilder<'prl, 'mm> {
 // MARK: Tests
 #[cfg(test)]
 mod tests {
-    use super::*;
     use testresult::TestResult;
+
+    use super::*;
 
     #[test]
     #[allow(clippy::float_cmp)]

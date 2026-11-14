@@ -35,10 +35,7 @@ pub mod resizable_runner;
 pub mod threads_runner;
 
 use jpegxl_sys::threads::parallel_runner::JxlParallelRunner;
-
-pub use jpegxl_sys::threads::parallel_runner::{
-    JxlParallelRetCode, JxlParallelRunFunction, JxlParallelRunInit,
-};
+pub use jpegxl_sys::threads::parallel_runner::{JxlParallelRetCode, JxlParallelRunFunction, JxlParallelRunInit};
 
 use crate::decode::BasicInfo;
 

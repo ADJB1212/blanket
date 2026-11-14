@@ -31,11 +31,7 @@ pub enum JxlBool {
 
 impl From<bool> for JxlBool {
     fn from(b: bool) -> Self {
-        if b {
-            JxlBool::True
-        } else {
-            JxlBool::False
-        }
+        if b { JxlBool::True } else { JxlBool::False }
     }
 }
 

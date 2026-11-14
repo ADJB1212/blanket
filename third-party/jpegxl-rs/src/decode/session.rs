@@ -15,19 +15,15 @@
  * along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use jpegxl_sys::{
-    color::color_encoding::JxlColorEncoding,
-    common::types::{JxlBoxType, JxlDataType, JxlPixelFormat},
-    decode as d,
-    metadata::codestream_header::{JxlExtraChannelInfo, JxlFrameHeader},
-};
 use std::mem::MaybeUninit;
 
-use super::{
-    BasicInfo, BoxHeader, ColorProfileTarget, Event, Events, FrameInfo, Image, JxlDecoder,
-    PixelFormat,
-};
-use crate::errors::{check_dec_status, DecodeError};
+use jpegxl_sys::color::color_encoding::JxlColorEncoding;
+use jpegxl_sys::common::types::{JxlBoxType, JxlDataType, JxlPixelFormat};
+use jpegxl_sys::decode as d;
+use jpegxl_sys::metadata::codestream_header::{JxlExtraChannelInfo, JxlFrameHeader};
+
+use super::{BasicInfo, BoxHeader, ColorProfileTarget, Event, Events, FrameInfo, Image, JxlDecoder, PixelFormat};
+use crate::errors::{DecodeError, check_dec_status};
 
 /// Minimum number of bytes of a new chunk glued to the bytes libjxl left unprocessed.
 /// The glued part grows with the carry, so a large section is not copied over and over.
@@ -51,10 +47,7 @@ struct Slot {
 
 impl Slot {
     fn into_image(self) -> Image {
-        Image {
-            format: self.format,
-            data: self.data,
-        }
+        Image { format: self.format, data: self.data }
     }
 }
 
@@ -66,16 +59,10 @@ struct Sink {
 
 impl Sink {
     fn new(size: usize) -> Self {
-        Self {
-            buf: vec![0; size.max(1)],
-            written: 0,
-        }
+        Self { buf: vec![0; size.max(1)], written: 0 }
     }
 
-    fn attach(
-        &mut self,
-        set: impl FnOnce(*mut u8, usize) -> d::JxlDecoderStatus,
-    ) -> Result<(), DecodeError> {
+    fn attach(&mut self, set: impl FnOnce(*mut u8, usize) -> d::JxlDecoderStatus) -> Result<(), DecodeError> {
         let rest = &mut self.buf[self.written..];
         check_dec_status(set(rest.as_mut_ptr(), rest.len()))
     }
@@ -139,10 +126,7 @@ pub struct Session<'dec, 'pr, 'mm> {
 }
 
 impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
-    pub(crate) fn new(
-        dec: &'dec JxlDecoder<'pr, 'mm>,
-        events: Events,
-    ) -> Result<Self, DecodeError> {
+    pub(crate) fn new(dec: &'dec JxlDecoder<'pr, 'mm>, events: Events) -> Result<Self, DecodeError> {
         let mut events = events | Events::BASIC_INFO;
         if events.contains(Events::BOX) {
             // The collected box is only handed back by `BoxComplete`
@@ -224,11 +208,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
 
         loop {
             let carried = self.carry.len();
-            let prefix = if carried == 0 {
-                input.len()
-            } else {
-                input.len().min(carried.max(CARRY_PREFIX))
-            };
+            let prefix = if carried == 0 { input.len() } else { input.len().min(carried.max(CARRY_PREFIX)) };
             if carried > 0 {
                 self.carry.extend_from_slice(&input[..prefix]);
             }
@@ -317,9 +297,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
                 Event::JpegReconstruction
             }
             s::JPEGNeedMoreOutput => {
-                let sink = self.jpeg.as_mut().ok_or(DecodeError::InternalError(
-                    "JPEG output requested without a JPEG buffer",
-                ))?;
+                let sink = self.jpeg.as_mut().ok_or(DecodeError::InternalError("JPEG output requested without a JPEG buffer"))?;
                 // SAFETY: the decoder is valid while the session borrows it
                 sink.grow(unsafe { d::JxlDecoderReleaseJPEGBuffer(dec) });
                 // SAFETY: `self.jpeg` keeps the buffer until it is released
@@ -331,9 +309,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
                 Event::Box(self.box_header()?)
             }
             s::BoxNeedMoreOutput => {
-                let sink = self.boxed.as_mut().ok_or(DecodeError::InternalError(
-                    "Box output requested without a box buffer",
-                ))?;
+                let sink = self.boxed.as_mut().ok_or(DecodeError::InternalError("Box output requested without a box buffer"))?;
                 // SAFETY: the decoder is valid while the session borrows it
                 sink.grow(unsafe { d::JxlDecoderReleaseBoxBuffer(dec) });
                 // SAFETY: `self.boxed` keeps the buffer until it is released
@@ -369,41 +345,25 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
 
         let mut name = vec![0u8; header.name_length as usize + 1];
         // SAFETY: the decoder is valid while the session borrows it, and `name` has room for the NUL
-        check_dec_status(unsafe {
-            d::JxlDecoderGetFrameName(dec, name.as_mut_ptr().cast(), name.len())
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderGetFrameName(dec, name.as_mut_ptr().cast(), name.len()) })?;
         name.truncate(header.name_length as usize);
 
-        Ok(FrameInfo {
-            header,
-            name: String::from_utf8_lossy(&name).into_owned(),
-        })
+        Ok(FrameInfo { header, name: String::from_utf8_lossy(&name).into_owned() })
     }
 
     fn box_header(&self) -> Result<BoxHeader, DecodeError> {
         let dec = self.dec.dec;
         let mut box_type = JxlBoxType([0; 4]);
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderGetBoxType(
-                dec,
-                &mut box_type,
-                self.dec.decompress.unwrap_or(false).into(),
-            )
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderGetBoxType(dec, &mut box_type, self.dec.decompress.unwrap_or(false).into()) })?;
 
         let (mut raw, mut contents) = (0, 0);
         // SAFETY: the decoder is valid while the session borrows it
         check_dec_status(unsafe { d::JxlDecoderGetBoxSizeRaw(dec, &raw mut raw) })?;
         // SAFETY: the decoder is valid while the session borrows it
-        let has_contents = unsafe { d::JxlDecoderGetBoxSizeContents(dec, &raw mut contents) }
-            == d::JxlDecoderStatus::Success;
+        let has_contents = unsafe { d::JxlDecoderGetBoxSizeContents(dec, &raw mut contents) } == d::JxlDecoderStatus::Success;
 
-        Ok(BoxHeader {
-            box_type: box_type.0.map(|c| c.to_ne_bytes()[0]),
-            size_raw: raw,
-            size_contents: has_contents.then_some(contents),
-        })
+        Ok(BoxHeader { box_type: box_type.0.map(|c| c.to_ne_bytes()[0]), size_raw: raw, size_contents: has_contents.then_some(contents) })
     }
 
     /// ICC profile of the image, after [`Event::ColorEncoding`]
@@ -418,9 +378,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
 
         let mut icc = vec![0; size];
         // SAFETY: the decoder is valid while the session borrows it, and `icc` holds `size` bytes
-        check_dec_status(unsafe {
-            d::JxlDecoderGetColorAsICCProfile(dec, target, icc.as_mut_ptr(), size)
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderGetColorAsICCProfile(dec, target, icc.as_mut_ptr(), size) })?;
         Ok(icc)
     }
 
@@ -428,28 +386,16 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] if the image has no structured encoding, e.g. it uses an ICC profile
-    pub fn color_encoding(
-        &self,
-        target: ColorProfileTarget,
-    ) -> Result<JxlColorEncoding, DecodeError> {
+    pub fn color_encoding(&self, target: ColorProfileTarget) -> Result<JxlColorEncoding, DecodeError> {
         let mut encoding = MaybeUninit::uninit();
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderGetColorAsEncodedProfile(self.dec.dec, target, encoding.as_mut_ptr())
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderGetColorAsEncodedProfile(self.dec.dec, target, encoding.as_mut_ptr()) })?;
         // SAFETY: `GetColorAsEncodedProfile` succeeded
         Ok(unsafe { encoding.assume_init() })
     }
 
-    fn resolve_format(
-        &self,
-        format: PixelFormat,
-        data_type: Option<JxlDataType>,
-    ) -> Result<JxlPixelFormat, DecodeError> {
-        let info = self
-            .basic_info
-            .as_ref()
-            .ok_or(DecodeError::InvalidState("basic info is not available yet"))?;
+    fn resolve_format(&self, format: PixelFormat, data_type: Option<JxlDataType>) -> Result<JxlPixelFormat, DecodeError> {
+        let info = self.basic_info.as_ref().ok_or(DecodeError::InvalidState("basic info is not available yet"))?;
 
         let data_type = match data_type {
             Some(v) => v,
@@ -457,11 +403,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
         };
 
         Ok(JxlPixelFormat {
-            num_channels: if format.num_channels == 0 {
-                info.num_color_channels + u32::from(info.alpha_bits > 0)
-            } else {
-                format.num_channels
-            },
+            num_channels: if format.num_channels == 0 { info.num_color_channels + u32::from(info.alpha_bits > 0) } else { format.num_channels },
             data_type,
             endianness: format.endianness,
             align: format.align,
@@ -473,17 +415,11 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] if the format is not supported
-    pub fn alloc_image_buffer(
-        &mut self,
-        format: PixelFormat,
-        data_type: Option<JxlDataType>,
-    ) -> Result<(), DecodeError> {
+    pub fn alloc_image_buffer(&mut self, format: PixelFormat, data_type: Option<JxlDataType>) -> Result<(), DecodeError> {
         let format = self.resolve_format(format, data_type)?;
         let mut size = 0;
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderImageOutBufferSize(self.dec.dec, &raw const format, &raw mut size)
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderImageOutBufferSize(self.dec.dec, &raw const format, &raw mut size) })?;
         self.set_image_buffer(format, vec![0; size])
     }
 
@@ -492,20 +428,9 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] if the buffer is too small for the image
-    pub fn set_image_buffer(
-        &mut self,
-        format: JxlPixelFormat,
-        mut data: Vec<u8>,
-    ) -> Result<(), DecodeError> {
+    pub fn set_image_buffer(&mut self, format: JxlPixelFormat, mut data: Vec<u8>) -> Result<(), DecodeError> {
         // SAFETY: `self.image` keeps `data` until libjxl is done with it
-        check_dec_status(unsafe {
-            d::JxlDecoderSetImageOutBuffer(
-                self.dec.dec,
-                &raw const format,
-                data.as_mut_ptr().cast(),
-                data.len(),
-            )
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderSetImageOutBuffer(self.dec.dec, &raw const format, data.as_mut_ptr().cast(), data.len()) })?;
         // The previous buffer is only dropped once libjxl points at the new one
         self.image = Some(Slot { format, data });
         Ok(())
@@ -534,28 +459,15 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] if the format is not supported
-    pub fn alloc_preview_buffer(
-        &mut self,
-        format: PixelFormat,
-        data_type: Option<JxlDataType>,
-    ) -> Result<(), DecodeError> {
+    pub fn alloc_preview_buffer(&mut self, format: PixelFormat, data_type: Option<JxlDataType>) -> Result<(), DecodeError> {
         let format = self.resolve_format(format, data_type)?;
         let mut size = 0;
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderPreviewOutBufferSize(self.dec.dec, &raw const format, &raw mut size)
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderPreviewOutBufferSize(self.dec.dec, &raw const format, &raw mut size) })?;
 
         let mut data = vec![0; size];
         // SAFETY: `self.preview` keeps `data` until libjxl is done with it
-        check_dec_status(unsafe {
-            d::JxlDecoderSetPreviewOutBuffer(
-                self.dec.dec,
-                &raw const format,
-                data.as_mut_ptr().cast(),
-                data.len(),
-            )
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderSetPreviewOutBuffer(self.dec.dec, &raw const format, data.as_mut_ptr().cast(), data.len()) })?;
         self.preview = Some(Slot { format, data });
         Ok(())
     }
@@ -585,9 +497,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     pub fn extra_channel_info(&self, index: usize) -> Result<JxlExtraChannelInfo, DecodeError> {
         let mut info = MaybeUninit::uninit();
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderGetExtraChannelInfo(self.dec.dec, index, info.as_mut_ptr())
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderGetExtraChannelInfo(self.dec.dec, index, info.as_mut_ptr()) })?;
         // SAFETY: `GetExtraChannelInfo` succeeded
         Ok(unsafe { info.assume_init() })
     }
@@ -600,35 +510,18 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
     ///
     /// # Errors
     /// Return a [`DecodeError`] if `index` is out of range or the format is not supported
-    pub fn alloc_extra_channel_buffer(
-        &mut self,
-        index: u32,
-        format: PixelFormat,
-        data_type: Option<JxlDataType>,
-    ) -> Result<(), DecodeError> {
+    pub fn alloc_extra_channel_buffer(&mut self, index: u32, format: PixelFormat, data_type: Option<JxlDataType>) -> Result<(), DecodeError> {
         let data_type = if let Some(v) = data_type {
             v
         } else {
             let info = self.extra_channel_info(index as usize)?;
             data_type_of(info.bits_per_sample, info.exponent_bits_per_sample)?
         };
-        let format = JxlPixelFormat {
-            num_channels: 1,
-            data_type,
-            endianness: format.endianness,
-            align: format.align,
-        };
+        let format = JxlPixelFormat { num_channels: 1, data_type, endianness: format.endianness, align: format.align };
 
         let mut size = 0;
         // SAFETY: the decoder is valid while the session borrows it
-        check_dec_status(unsafe {
-            d::JxlDecoderExtraChannelBufferSize(
-                self.dec.dec,
-                &raw const format,
-                &raw mut size,
-                index,
-            )
-        })?;
+        check_dec_status(unsafe { d::JxlDecoderExtraChannelBufferSize(self.dec.dec, &raw const format, &raw mut size, index) })?;
 
         if self.extra_ready {
             self.extra.clear();
@@ -637,13 +530,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
         let mut data = vec![0; size];
         // SAFETY: `self.extra` keeps `data` until libjxl is done with it
         check_dec_status(unsafe {
-            d::JxlDecoderSetExtraChannelBuffer(
-                self.dec.dec,
-                &raw const format,
-                data.as_mut_ptr().cast(),
-                data.len(),
-                index,
-            )
+            d::JxlDecoderSetExtraChannelBuffer(self.dec.dec, &raw const format, data.as_mut_ptr().cast(), data.len(), index)
         })?;
         self.extra.retain(|(i, _)| *i != index);
         self.extra.push((index, Slot { format, data }));
@@ -658,11 +545,7 @@ impl<'dec, 'pr, 'mm> Session<'dec, 'pr, 'mm> {
         if !self.extra_ready {
             return Err(DecodeError::InvalidState("the frame is not fully decoded"));
         }
-        Ok(self
-            .extra
-            .iter()
-            .position(|(i, _)| *i == index)
-            .map(|pos| self.extra.swap_remove(pos).1.into_image()))
+        Ok(self.extra.iter().position(|(i, _)| *i == index).map(|pos| self.extra.swap_remove(pos).1.into_image()))
     }
 
     /// Skip the next `amount` frames. Their events are not emitted.
@@ -696,18 +579,14 @@ mod tests {
     use jpegxl_sys::metadata::codestream_header::JxlExtraChannelType as ExtraChannelType;
     use testresult::TestResult;
 
-    use crate::{decoder_builder, tests::SAMPLE_JXL};
-
     use super::*;
+    use crate::decoder_builder;
+    use crate::tests::SAMPLE_JXL;
 
     /// Kind of every event except `NeedMoreInput`, with the pixels of each frame
-    fn decode_pieces<'a>(
-        pieces: impl IntoIterator<Item = &'a [u8]>,
-    ) -> TestResult<Vec<(std::mem::Discriminant<Event>, Vec<u8>)>> {
+    fn decode_pieces<'a>(pieces: impl IntoIterator<Item = &'a [u8]>) -> TestResult<Vec<(std::mem::Discriminant<Event>, Vec<u8>)>> {
         let mut decoder = decoder_builder().build()?;
-        let mut session = decoder.session(
-            Events::COLOR_ENCODING | Events::FRAME | Events::FRAME_PROGRESSION | Events::FULL_IMAGE,
-        )?;
+        let mut session = decoder.session(Events::COLOR_ENCODING | Events::FRAME | Events::FRAME_PROGRESSION | Events::FULL_IMAGE)?;
         let mut pieces = pieces.into_iter();
         let mut input: &[u8] = &[];
         let mut seen = vec![];
@@ -738,11 +617,7 @@ mod tests {
         for data in [SAMPLE_JXL, SAMPLE_BOXES, SAMPLE_JXL_JPEG] {
             let whole = decode_pieces([data])?;
             for chunk in [1, 7, 20, 100, 1000] {
-                assert_eq!(
-                    decode_pieces(data.chunks(chunk))?,
-                    whole,
-                    "chunk size {chunk}"
-                );
+                assert_eq!(decode_pieces(data.chunks(chunk))?, whole, "chunk size {chunk}");
             }
             // Some of these split a section that is larger than the bytes glued to the carry
             for at in [1, 38, 51, 200] {
@@ -759,28 +634,20 @@ mod tests {
         assert_eq!(data_type_of(12, 0).ok(), Some(JxlDataType::Uint16));
         assert_eq!(data_type_of(16, 5).ok(), Some(JxlDataType::Float16));
         assert_eq!(data_type_of(32, 8).ok(), Some(JxlDataType::Float));
-        assert!(matches!(
-            data_type_of(24, 0),
-            Err(DecodeError::UnsupportedBitWidth(24))
-        ));
+        assert!(matches!(data_type_of(24, 0), Err(DecodeError::UnsupportedBitWidth(24))));
     }
 
     #[test]
     fn color_encoding_and_missing_preview() -> TestResult {
         let mut decoder = decoder_builder().build()?;
         let mut session = decoder.session(Events::COLOR_ENCODING)?;
-        assert!(matches!(
-            session.alloc_preview_buffer(PixelFormat::default(), None),
-            Err(DecodeError::InvalidState(_))
-        ));
+        assert!(matches!(session.alloc_preview_buffer(PixelFormat::default(), None), Err(DecodeError::InvalidState(_))));
         let mut input = SAMPLE_JXL;
         loop {
             match session.process(&mut input)? {
                 Event::BasicInfo(info) => {
                     assert_eq!(info.have_preview, jpegxl_sys::common::types::JxlBool::False);
-                    assert!(session
-                        .alloc_preview_buffer(PixelFormat::default(), None)
-                        .is_err());
+                    assert!(session.alloc_preview_buffer(PixelFormat::default(), None).is_err());
                 }
                 Event::ColorEncoding => {
                     let encoding = session.color_encoding(ColorProfileTarget::Data)?;
@@ -807,10 +674,7 @@ mod tests {
                     session.alloc_image_buffer(PixelFormat::default(), None)?;
                 }
                 Event::NeedMoreInput => {
-                    return Ok(session.flush_image().is_ok()
-                        && session
-                            .image_buffer()
-                            .is_some_and(|b| b.iter().any(|&x| x != 0)));
+                    return Ok(session.flush_image().is_ok() && session.image_buffer().is_some_and(|b| b.iter().any(|&x| x != 0)));
                 }
                 Event::Success => panic!("truncated input decoded completely"),
                 _ => {}
@@ -820,10 +684,7 @@ mod tests {
 
     #[test]
     fn truncated_input_flushes_partial_image() -> TestResult {
-        let flushed = [10, 15]
-            .into_iter()
-            .map(|i| flush_truncated(BENCH_JXL.len() * i / 20))
-            .collect::<Result<Vec<_>, _>>()?;
+        let flushed = [10, 15].into_iter().map(|i| flush_truncated(BENCH_JXL.len() * i / 20)).collect::<Result<Vec<_>, _>>()?;
         assert!(flushed.contains(&true), "{flushed:?}");
         Ok(())
     }
@@ -854,10 +715,7 @@ mod tests {
         assert_eq!(boxes.len(), 2);
         let find = |t: &[u8; 4]| boxes.iter().find(|(ty, _)| ty.as_ref() == Some(t));
         assert!(find(b"Exif").is_some_and(|(_, c)| c.ends_with(crate::tests::SAMPLE_EXIF)));
-        assert_eq!(
-            find(b"xml ").map(|(_, c)| c.as_slice()),
-            Some(crate::tests::SAMPLE_XMP)
-        );
+        assert_eq!(find(b"xml ").map(|(_, c)| c.as_slice()), Some(crate::tests::SAMPLE_XMP));
         Ok(())
     }
 
@@ -925,10 +783,7 @@ mod tests {
 
     /// (duration, name, `is_last`, pixels) of every frame, after running `on_event`
     #[allow(clippy::type_complexity)]
-    fn frames_of(
-        data: &[u8],
-        mut on_event: impl FnMut(&mut Session, &Event) -> TestResult<bool>,
-    ) -> TestResult<Vec<(u32, String, bool, Vec<u8>)>> {
+    fn frames_of(data: &[u8], mut on_event: impl FnMut(&mut Session, &Event) -> TestResult<bool>) -> TestResult<Vec<(u32, String, bool, Vec<u8>)>> {
         let mut decoder = decoder_builder().build()?;
         let mut session = decoder.session(Events::FRAME | Events::FULL_IMAGE)?;
         let mut input = data;
@@ -940,11 +795,7 @@ mod tests {
             }
             match event {
                 Event::Frame(f) => {
-                    current = Some((
-                        f.header.duration,
-                        f.name,
-                        f.header.is_last == jpegxl_sys::common::types::JxlBool::True,
-                    ));
+                    current = Some((f.header.duration, f.name, f.header.is_last == jpegxl_sys::common::types::JxlBool::True));
                 }
                 Event::NeedImageOutBuffer => {
                     session.alloc_image_buffer(PixelFormat::default(), None)?;
@@ -965,22 +816,12 @@ mod tests {
         let frames = frames_of(data, |_, _| Ok(false))?;
 
         let summary: Vec<_> = frames.iter().map(|f| (f.0, f.1.as_str(), f.2)).collect();
-        assert_eq!(
-            summary,
-            [
-                (10, "frame0", false),
-                (20, "frame1", false),
-                (30, "frame2", true)
-            ]
-        );
+        assert_eq!(summary, [(10, "frame0", false), (20, "frame1", false), (30, "frame2", true)]);
         assert_ne!(frames[0].3, frames[1].3);
         assert_ne!(frames[1].3, frames[2].3);
 
         let (_, one_shot) = decoder_builder().build()?.decode_with::<u8>(data)?;
-        assert_eq!(
-            one_shot, frames[2].3,
-            "one-shot decode returns the last frame"
-        );
+        assert_eq!(one_shot, frames[2].3, "one-shot decode returns the last frame");
         Ok(())
     }
 
@@ -1017,11 +858,7 @@ mod tests {
     fn extra_channel_of_every_layer() -> TestResult {
         let pixels = vec![200u8; 8 * 8 * 4];
         let frame = crate::encode::EncoderFrame::new(&pixels).num_channels(4);
-        let info = crate::encode::ImageInfo::builder()
-            .width(8)
-            .height(8)
-            .has_alpha(true)
-            .build();
+        let info = crate::encode::ImageInfo::builder().width(8).height(8).has_alpha(true).build();
         let mut encoder = crate::encoder_builder().build()?;
         let mut enc = encoder.session(&info)?;
         enc.add_frame(&frame)?;
@@ -1073,9 +910,7 @@ mod tests {
     #[test]
     fn progressive_steps_flush() -> TestResult {
         let data = crate::tests::SAMPLE_PROGRESSIVE;
-        let mut decoder = decoder_builder()
-            .progressive_detail(super::super::ProgressiveDetail::Passes)
-            .build()?;
+        let mut decoder = decoder_builder().progressive_detail(super::super::ProgressiveDetail::Passes).build()?;
         let mut session = decoder.session(Events::FRAME_PROGRESSION | Events::FULL_IMAGE)?;
         let mut input = data;
         let mut steps = 0;
@@ -1086,9 +921,7 @@ mod tests {
                 }
                 Event::FrameProgression => {
                     session.flush_image()?;
-                    assert!(session
-                        .image_buffer()
-                        .is_some_and(|b| b.iter().any(|&x| x != 0)));
+                    assert!(session.image_buffer().is_some_and(|b| b.iter().any(|&x| x != 0)));
                     steps += 1;
                 }
                 Event::Success => break,
@@ -1113,15 +946,11 @@ mod tests {
                     assert_eq!(info.r#type, ExtraChannelType::Depth);
                     session.alloc_image_buffer(PixelFormat::default(), None)?;
                     session.alloc_extra_channel_buffer(0, PixelFormat::default(), None)?;
-                    assert!(matches!(
-                        session.take_extra_channel(0),
-                        Err(DecodeError::InvalidState(_))
-                    ));
+                    assert!(matches!(session.take_extra_channel(0), Err(DecodeError::InvalidState(_))));
                 }
                 Event::FullImage(_) => {
                     let depth = session.take_extra_channel(0)?.expect("no depth channel");
-                    let expected: Vec<u8> =
-                        (0..128u32 * 128).map(|i| (i % 128 * 2) as u8).collect();
+                    let expected: Vec<u8> = (0..128u32 * 128).map(|i| (i % 128 * 2) as u8).collect();
                     assert_eq!(depth.data, expected);
                     assert!(session.take_extra_channel(0)?.is_none());
                 }
@@ -1143,18 +972,9 @@ mod tests {
     fn misuse_is_an_error() -> TestResult {
         let mut decoder = decoder_builder().build()?;
         let mut session = decoder.session(Events::empty())?;
-        assert!(matches!(
-            session.alloc_image_buffer(PixelFormat::default(), None),
-            Err(DecodeError::InvalidState(_))
-        ));
-        assert!(matches!(
-            session.flush_image(),
-            Err(DecodeError::InvalidState(_))
-        ));
-        assert!(matches!(
-            session.set_box_buffer(8),
-            Err(DecodeError::InvalidState(_))
-        ));
+        assert!(matches!(session.alloc_image_buffer(PixelFormat::default(), None), Err(DecodeError::InvalidState(_))));
+        assert!(matches!(session.flush_image(), Err(DecodeError::InvalidState(_))));
+        assert!(matches!(session.set_box_buffer(8), Err(DecodeError::InvalidState(_))));
         Ok(())
     }
 }

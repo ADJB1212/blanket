@@ -62,8 +62,7 @@ pub const heif_suberror_code_heif_suberror_No_iref_box: heif_suberror_code = 113
 #[doc = " Mandatory 'ftyp' box is missing"]
 pub const heif_suberror_code_heif_suberror_No_pict_handler: heif_suberror_code = 114;
 #[doc = " An item property referenced in the 'ipma' box is not existing in the 'ipco' container."]
-pub const heif_suberror_code_heif_suberror_Ipma_box_references_nonexisting_property:
-    heif_suberror_code = 115;
+pub const heif_suberror_code_heif_suberror_Ipma_box_references_nonexisting_property: heif_suberror_code = 115;
 #[doc = " No properties have been assigned to an item."]
 pub const heif_suberror_code_heif_suberror_No_properties_assigned_to_item: heif_suberror_code = 116;
 #[doc = " Image has no (compressed) data"]
@@ -77,11 +76,9 @@ pub const heif_suberror_code_heif_suberror_Invalid_clean_aperture: heif_suberror
 #[doc = " Invalid specification of overlay image"]
 pub const heif_suberror_code_heif_suberror_Invalid_overlay_data: heif_suberror_code = 121;
 #[doc = " Overlay image completely outside of visible canvas area"]
-pub const heif_suberror_code_heif_suberror_Overlay_image_outside_of_canvas: heif_suberror_code =
-    122;
+pub const heif_suberror_code_heif_suberror_Overlay_image_outside_of_canvas: heif_suberror_code = 122;
 #[doc = " Overlay image completely outside of visible canvas area"]
-pub const heif_suberror_code_heif_suberror_Auxiliary_image_type_unspecified: heif_suberror_code =
-    123;
+pub const heif_suberror_code_heif_suberror_Auxiliary_image_type_unspecified: heif_suberror_code = 123;
 #[doc = " Overlay image completely outside of visible canvas area"]
 pub const heif_suberror_code_heif_suberror_No_or_invalid_primary_item: heif_suberror_code = 124;
 #[doc = " Overlay image completely outside of visible canvas area"]
@@ -103,21 +100,17 @@ pub const heif_suberror_code_heif_suberror_Wrong_tile_image_pixel_depth: heif_su
 #[doc = " Overlay image completely outside of visible canvas area"]
 pub const heif_suberror_code_heif_suberror_Unknown_NCLX_color_primaries: heif_suberror_code = 133;
 #[doc = " Overlay image completely outside of visible canvas area"]
-pub const heif_suberror_code_heif_suberror_Unknown_NCLX_transfer_characteristics:
-    heif_suberror_code = 134;
+pub const heif_suberror_code_heif_suberror_Unknown_NCLX_transfer_characteristics: heif_suberror_code = 134;
 #[doc = " Overlay image completely outside of visible canvas area"]
-pub const heif_suberror_code_heif_suberror_Unknown_NCLX_matrix_coefficients: heif_suberror_code =
-    135;
+pub const heif_suberror_code_heif_suberror_Unknown_NCLX_matrix_coefficients: heif_suberror_code = 135;
 #[doc = " Invalid specification of region item"]
 pub const heif_suberror_code_heif_suberror_Invalid_region_data: heif_suberror_code = 136;
 #[doc = " Image has no ispe property"]
 pub const heif_suberror_code_heif_suberror_No_ispe_property: heif_suberror_code = 137;
 #[doc = " Image has no ispe property"]
-pub const heif_suberror_code_heif_suberror_Camera_intrinsic_matrix_undefined: heif_suberror_code =
-    138;
+pub const heif_suberror_code_heif_suberror_Camera_intrinsic_matrix_undefined: heif_suberror_code = 138;
 #[doc = " Image has no ispe property"]
-pub const heif_suberror_code_heif_suberror_Camera_extrinsic_matrix_undefined: heif_suberror_code =
-    139;
+pub const heif_suberror_code_heif_suberror_Camera_extrinsic_matrix_undefined: heif_suberror_code = 139;
 #[doc = " Invalid JPEG 2000 codestream - usually a missing marker"]
 pub const heif_suberror_code_heif_suberror_Invalid_J2K_codestream: heif_suberror_code = 140;
 #[doc = " Invalid JPEG 2000 codestream - usually a missing marker"]
@@ -137,15 +130,13 @@ pub const heif_suberror_code_heif_suberror_NCLX_colr_VUI_mismatch: heif_suberror
 #[doc = " A security limit preventing unreasonable memory allocations was exceeded by the input file.\n Please check whether the file is valid. If it is, contact us so that we could increase the\n security limits further."]
 pub const heif_suberror_code_heif_suberror_Security_limit_exceeded: heif_suberror_code = 1000;
 #[doc = " There was an error from the underlying compression / decompression library.\n One possibility is lack of resources (e.g. memory)."]
-pub const heif_suberror_code_heif_suberror_Compression_initialisation_error: heif_suberror_code =
-    1001;
+pub const heif_suberror_code_heif_suberror_Compression_initialisation_error: heif_suberror_code = 1001;
 #[doc = " also used for Invalid_input"]
 pub const heif_suberror_code_heif_suberror_Nonexisting_item_referenced: heif_suberror_code = 2000;
 #[doc = " An API argument was given a NULL pointer, which is not allowed for that function."]
 pub const heif_suberror_code_heif_suberror_Null_pointer_argument: heif_suberror_code = 2001;
 #[doc = " Image channel referenced that does not exist in the image"]
-pub const heif_suberror_code_heif_suberror_Nonexisting_image_channel_referenced:
-    heif_suberror_code = 2002;
+pub const heif_suberror_code_heif_suberror_Nonexisting_image_channel_referenced: heif_suberror_code = 2002;
 #[doc = " The version of the passed plugin is not supported."]
 pub const heif_suberror_code_heif_suberror_Unsupported_plugin_version: heif_suberror_code = 2003;
 #[doc = " The version of the passed writer is not supported."]
@@ -167,17 +158,13 @@ pub const heif_suberror_code_heif_suberror_Unsupported_data_version: heif_suberr
 #[doc = " The conversion of the source image to the requested chroma / colorspace is not supported."]
 pub const heif_suberror_code_heif_suberror_Unsupported_color_conversion: heif_suberror_code = 3003;
 #[doc = " The conversion of the source image to the requested chroma / colorspace is not supported."]
-pub const heif_suberror_code_heif_suberror_Unsupported_item_construction_method:
-    heif_suberror_code = 3004;
+pub const heif_suberror_code_heif_suberror_Unsupported_item_construction_method: heif_suberror_code = 3004;
 #[doc = " The conversion of the source image to the requested chroma / colorspace is not supported."]
-pub const heif_suberror_code_heif_suberror_Unsupported_header_compression_method:
-    heif_suberror_code = 3005;
+pub const heif_suberror_code_heif_suberror_Unsupported_header_compression_method: heif_suberror_code = 3005;
 #[doc = " Generically compressed data used an unsupported compression method"]
-pub const heif_suberror_code_heif_suberror_Unsupported_generic_compression_method:
-    heif_suberror_code = 3006;
+pub const heif_suberror_code_heif_suberror_Unsupported_generic_compression_method: heif_suberror_code = 3006;
 #[doc = " Generically compressed data used an unsupported compression method"]
-pub const heif_suberror_code_heif_suberror_Unsupported_essential_property: heif_suberror_code =
-    3007;
+pub const heif_suberror_code_heif_suberror_Unsupported_essential_property: heif_suberror_code = 3007;
 #[doc = " Generically compressed data used an unsupported compression method"]
 pub const heif_suberror_code_heif_suberror_Unsupported_track_type: heif_suberror_code = 3008;
 #[doc = " --- Encoder_plugin_error ---"]
@@ -276,16 +263,11 @@ pub struct heif_plugin_info {
     pub internal_handle: *mut libc::c_void,
 }
 unsafe extern "C" {
-    pub fn heif_load_plugin(
-        filename: *const libc::c_char,
-        out_plugin: *mut *const heif_plugin_info,
-    ) -> heif_error;
+    pub fn heif_load_plugin(filename: *const libc::c_char, out_plugin: *mut *const heif_plugin_info) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_load_plugins(
-        directory: *const libc::c_char,
-        out_plugins: *mut *const heif_plugin_info,
-        out_nPluginsLoaded: *mut libc::c_int,
+        directory: *const libc::c_char, out_plugins: *mut *const heif_plugin_info, out_nPluginsLoaded: *mut libc::c_int,
         output_array_size: libc::c_int,
     ) -> heif_error;
 }
@@ -317,16 +299,10 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED. Use heif_register_decoder_plugin(const struct heif_decoder_plugin*) instead."]
-    pub fn heif_register_decoder(
-        heif: *mut heif_context,
-        arg1: *const heif_decoder_plugin,
-    ) -> heif_error;
+    pub fn heif_register_decoder(heif: *mut heif_context, arg1: *const heif_decoder_plugin) -> heif_error;
 }
 pub const heif_chroma_heif_chroma_undefined: heif_chroma = 99;
-#[deprecated(
-    since = "5.3.0",
-    note = "use `heif_chroma_heif_chroma_planar` instead."
-)]
+#[deprecated(since = "5.3.0", note = "use `heif_chroma_heif_chroma_planar` instead.")]
 pub const heif_chroma_heif_chroma_monochrome: heif_chroma = 0;
 pub const heif_chroma_heif_chroma_planar: heif_chroma = 0;
 pub const heif_chroma_heif_chroma_420: heif_chroma = 1;
@@ -351,10 +327,7 @@ pub const heif_colorspace_heif_colorspace_YCbCr: heif_colorspace = 0;
 pub const heif_colorspace_heif_colorspace_RGB: heif_colorspace = 1;
 #[doc = " heif_colorspace_monochrome should only be used with heif_chroma = heif_chroma_planar."]
 pub const heif_colorspace_heif_colorspace_monochrome: heif_colorspace = 2;
-#[deprecated(
-    since = "5.3.0",
-    note = "use `heif_colorspace_heif_colorspace_custom` instead."
-)]
+#[deprecated(since = "5.3.0", note = "use `heif_colorspace_heif_colorspace_custom` instead.")]
 pub const heif_colorspace_heif_colorspace_nonvisual: heif_colorspace = 3;
 #[doc = " Indicates that this image has a special, custom arrangement of components.\n For example, it can have several monochrome channels or just a depth component with no color image.\n Images of this type are always planar and use heif_chroma_planar."]
 pub const heif_colorspace_heif_colorspace_custom: heif_colorspace = 3;
@@ -405,72 +378,38 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Crop the image in place by removing margins from each edge.\n\n The four parameters specify the number of pixels to remove from each side,\n not absolute pixel coordinates. For example, to crop a 100x100 image down\n to its central 80x80 region, pass `left=10, right=10, top=10, bottom=10`.\n Passing all zeros leaves the image unchanged.\n\n The resulting image has dimensions `(w - left - right) x (h - top - bottom)`,\n which must be at least 1x1. All four values must be non-negative and the\n sums `left + right` and `top + bottom` must each be strictly less than the\n corresponding image dimension; otherwise `heif_error_Usage_error` /\n `heif_suberror_Invalid_parameter_value` is returned and the image is left\n unchanged.\n\n @param img    the image to crop (modified in place on success)\n @param left   number of pixels to remove from the left edge\n @param right  number of pixels to remove from the right edge\n @param top    number of pixels to remove from the top edge\n @param bottom number of pixels to remove from the bottom edge"]
-    pub fn heif_image_crop(
-        img: *mut heif_image,
-        left: libc::c_int,
-        right: libc::c_int,
-        top: libc::c_int,
-        bottom: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_image_crop(img: *mut heif_image, left: libc::c_int, right: libc::c_int, top: libc::c_int, bottom: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_image_extract_area(
-        arg1: *const heif_image,
-        x0: u32,
-        y0: u32,
-        w: u32,
-        h: u32,
-        limits: *const heif_security_limits,
-        out_image: *mut *mut heif_image,
+        arg1: *const heif_image, x0: u32, y0: u32, w: u32, h: u32, limits: *const heif_security_limits, out_image: *mut *mut heif_image,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the number of bits per pixel in the given image channel. Returns -1 if\n a non-existing channel was given.\n Note that the number of bits per pixel may be different for each color channel.\n This function returns the number of bits used for storage of each pixel.\n Especially for HDR images, this is probably not what you want. Have a look at\n heif_image_get_bits_per_pixel_range() instead."]
-    pub fn heif_image_get_bits_per_pixel(
-        arg1: *const heif_image,
-        channel: heif_channel,
-    ) -> libc::c_int;
+    pub fn heif_image_get_bits_per_pixel(arg1: *const heif_image, channel: heif_channel) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the number of bits per pixel in the given image channel. This function returns\n the number of bits used for representing the pixel value, which might be smaller\n than the number of bits used in memory.\n For example, in 12bit HDR images, this function returns '12', while still 16 bits\n are reserved for storage. For interleaved RGBA with 12 bit, this function also returns\n '12', not '48' or '64' (heif_image_get_bits_per_pixel returns 64 in this case)."]
-    pub fn heif_image_get_bits_per_pixel_range(
-        arg1: *const heif_image,
-        channel: heif_channel,
-    ) -> libc::c_int;
+    pub fn heif_image_get_bits_per_pixel_range(arg1: *const heif_image, channel: heif_channel) -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_has_channel(arg1: *const heif_image, channel: heif_channel) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get a pointer to the actual pixel data.\n The 'out_stride' is returned as \"bytes per line\".\n When out_stride is NULL, no value will be written.\n Returns NULL if a non-existing channel was given.\n Deprecated, use the safer version heif_image_get_plane_readonly2() instead."]
-    pub fn heif_image_get_plane_readonly(
-        arg1: *const heif_image,
-        channel: heif_channel,
-        out_stride: *mut libc::c_int,
-    ) -> *const u8;
+    pub fn heif_image_get_plane_readonly(arg1: *const heif_image, channel: heif_channel, out_stride: *mut libc::c_int) -> *const u8;
 }
 unsafe extern "C" {
     #[doc = " Deprecated, use the safer version heif_image_get_plane2() instead."]
-    pub fn heif_image_get_plane(
-        arg1: *mut heif_image,
-        channel: heif_channel,
-        out_stride: *mut libc::c_int,
-    ) -> *mut u8;
+    pub fn heif_image_get_plane(arg1: *mut heif_image, channel: heif_channel, out_stride: *mut libc::c_int) -> *mut u8;
 }
 unsafe extern "C" {
     #[doc = " These are safer variants of the two functions above.\n The 'stride' parameter is often multiplied by the image height in the client application.\n For very large images, this can lead to integer overflows and, consequently, illegal memory accesses.\n The changed 'stride' parameter type eliminates this common error."]
-    pub fn heif_image_get_plane_readonly2(
-        arg1: *const heif_image,
-        channel: heif_channel,
-        out_stride: *mut usize,
-    ) -> *const u8;
+    pub fn heif_image_get_plane_readonly2(arg1: *const heif_image, channel: heif_channel, out_stride: *mut usize) -> *const u8;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_plane2(
-        arg1: *mut heif_image,
-        channel: heif_channel,
-        out_stride: *mut usize,
-    ) -> *mut u8;
+    pub fn heif_image_get_plane2(arg1: *mut heif_image, channel: heif_channel, out_stride: *mut usize) -> *mut u8;
 }
 #[repr(C)]
 #[derive(Debug)]
@@ -480,28 +419,17 @@ pub struct heif_scaling_options {
 unsafe extern "C" {
     #[doc = " Currently, heif_scaling_options is not defined yet. Pass a NULL pointer."]
     pub fn heif_image_scale_image(
-        input: *const heif_image,
-        output: *mut *mut heif_image,
-        width: libc::c_int,
-        height: libc::c_int,
-        options: *const heif_scaling_options,
+        input: *const heif_image, output: *mut *mut heif_image, width: libc::c_int, height: libc::c_int, options: *const heif_scaling_options,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Extends the image size to match the given size by extending the right and bottom borders.\n The border areas are filled with zero."]
-    pub fn heif_image_extend_to_size_fill_with_zero(
-        image: *mut heif_image,
-        width: u32,
-        height: u32,
-    ) -> heif_error;
+    pub fn heif_image_extend_to_size_fill_with_zero(image: *mut heif_image, width: u32, height: u32) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Fills the image decoding warnings into the provided 'out_warnings' array.\n The size of the array has to be provided in max_output_buffer_entries.\n If max_output_buffer_entries==0, the number of decoder warnings is returned.\n The function fills the warnings into the provided buffer, starting with 'first_warning_idx'.\n It returns the number of warnings filled into the buffer.\n Note: you can iterate through all warnings by using 'max_output_buffer_entries=1' and iterate 'first_warning_idx'."]
     pub fn heif_image_get_decoding_warnings(
-        image: *mut heif_image,
-        first_warning_idx: libc::c_int,
-        out_warnings: *mut heif_error,
-        max_output_buffer_entries: libc::c_int,
+        image: *mut heif_image, first_warning_idx: libc::c_int, out_warnings: *mut heif_error, max_output_buffer_entries: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
@@ -513,83 +441,52 @@ unsafe extern "C" {
     pub fn heif_image_release(arg1: *const heif_image);
 }
 unsafe extern "C" {
-    pub fn heif_image_get_pixel_aspect_ratio(
-        arg1: *const heif_image,
-        aspect_h: *mut u32,
-        aspect_v: *mut u32,
-    );
+    pub fn heif_image_get_pixel_aspect_ratio(arg1: *const heif_image, aspect_h: *mut u32, aspect_v: *mut u32);
 }
 unsafe extern "C" {
     pub fn heif_image_set_pixel_aspect_ratio(arg1: *mut heif_image, aspect_h: u32, aspect_v: u32);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_pixel_aspect_ratio(
-        arg1: *mut heif_image_handle,
-        aspect_h: u32,
-        aspect_v: u32,
-    );
+    pub fn heif_image_handle_set_pixel_aspect_ratio(arg1: *mut heif_image_handle, aspect_h: u32, aspect_v: u32);
 }
 unsafe extern "C" {
     #[doc = " Create a new image of the specified resolution and colorspace.\n\n <p>This does not allocate memory for the image data. Use {@link heif_image_add_plane} to\n add the corresponding planes to match the specified {@code colorspace} and {@code chroma}.\n\n @param width the width of the image in pixels\n @param height the height of the image in pixels\n @param colorspace the colorspace of the image\n @param chroma the chroma of the image\n @param out_image pointer to pointer of the resulting image\n @return whether the creation succeeded or there was an error"]
     pub fn heif_image_create(
-        width: libc::c_int,
-        height: libc::c_int,
-        colorspace: heif_colorspace,
-        chroma: heif_chroma,
-        out_image: *mut *mut heif_image,
+        width: libc::c_int, height: libc::c_int, colorspace: heif_colorspace, chroma: heif_chroma, out_image: *mut *mut heif_image,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add an image plane to the image.\n\n <p>The image plane needs to match the colorspace and chroma of the image. Note\n that this does not need to be a single \"planar\" format - interleaved pixel channels\n can also be used if the chroma is interleaved.\n\n <p>The indicated bit_depth corresponds to the bit depth per channel. For example,\n with an interleaved format like RRGGBB where each color is represented by 10 bits,\n the {@code bit_depth} would be {@code 10} rather than {@code 30}.\n\n <p>For backward compatibility, one can also specify 24bits for RGB and 32bits for RGBA,\n instead of the preferred 8 bits. However, this use is deprecated.\n\n @param image the parent image to add the channel plane to\n @param channel the channel of the plane to add\n @param width the width of the plane\n @param height the height of the plane\n @param bit_depth the bit depth per color channel\n @return whether the addition succeeded or there was an error\n\n @note The width and height are usually the same as the parent image, but can be\n less for subsampling.\n\n @note The specified width can differ from the row stride of the resulting image plane.\n Always use the result of {@link heif_image_get_plane} or {@link heif_image_get_plane_readonly}\n to determine row stride."]
     pub fn heif_image_add_plane(
-        image: *mut heif_image,
-        channel: heif_channel,
-        width: libc::c_int,
-        height: libc::c_int,
-        bit_depth: libc::c_int,
+        image: *mut heif_image, channel: heif_channel, width: libc::c_int, height: libc::c_int, bit_depth: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " The security limits should preferably be the limits from a heif_context.\n The memory allocated will then be registered in the memory budget of that context."]
     pub fn heif_image_add_plane_safe(
-        image: *mut heif_image,
-        channel: heif_channel,
-        width: libc::c_int,
-        height: libc::c_int,
-        bit_depth: libc::c_int,
+        image: *mut heif_image, channel: heif_channel, width: libc::c_int, height: libc::c_int, bit_depth: libc::c_int,
         limits: *const heif_security_limits,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Signal that the image is premultiplied by the alpha pixel values."]
-    pub fn heif_image_set_premultiplied_alpha(
-        image: *mut heif_image,
-        is_premultiplied_alpha: libc::c_int,
-    );
+    pub fn heif_image_set_premultiplied_alpha(image: *mut heif_image, is_premultiplied_alpha: libc::c_int);
 }
 unsafe extern "C" {
     pub fn heif_image_is_premultiplied_alpha(image: *mut heif_image) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " This function extends the padding of the image so that it has at least the given physical size.\n The padding border is filled with the pixels along the right/bottom border.\n This function may be useful if you want to process the image, but have some external padding requirements.\n The image size will not be modified if it is already larger/equal than the given physical size.\n I.e. you cannot assume that after calling this function, the stride will be equal to min_physical_width."]
-    pub fn heif_image_extend_padding_to_size(
-        image: *mut heif_image,
-        min_physical_width: libc::c_int,
-        min_physical_height: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_image_extend_padding_to_size(image: *mut heif_image, min_physical_width: libc::c_int, min_physical_height: libc::c_int)
+    -> heif_error;
 }
-pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_nearest_neighbor:
-    heif_chroma_downsampling_algorithm = 1;
-pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_average:
-    heif_chroma_downsampling_algorithm = 2;
+pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_nearest_neighbor: heif_chroma_downsampling_algorithm = 1;
+pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_average: heif_chroma_downsampling_algorithm = 2;
 #[doc = " Combine with 'heif_chroma_upsampling_bilinear' for best quality.\n Makes edges look sharper when using YUV 420 with bilinear chroma upsampling."]
-pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_sharp_yuv:
-    heif_chroma_downsampling_algorithm = 3;
+pub const heif_chroma_downsampling_algorithm_heif_chroma_downsampling_sharp_yuv: heif_chroma_downsampling_algorithm = 3;
 pub type heif_chroma_downsampling_algorithm = libc::c_uint;
-pub const heif_chroma_upsampling_algorithm_heif_chroma_upsampling_nearest_neighbor:
-    heif_chroma_upsampling_algorithm = 1;
-pub const heif_chroma_upsampling_algorithm_heif_chroma_upsampling_bilinear:
-    heif_chroma_upsampling_algorithm = 2;
+pub const heif_chroma_upsampling_algorithm_heif_chroma_upsampling_nearest_neighbor: heif_chroma_upsampling_algorithm = 1;
+pub const heif_chroma_upsampling_algorithm_heif_chroma_upsampling_bilinear: heif_chroma_upsampling_algorithm = 2;
 pub type heif_chroma_upsampling_algorithm = libc::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -602,12 +499,9 @@ pub struct heif_color_conversion_options {
     #[doc = " When set to 'false' libheif may also use a different algorithm if the preferred one is not available\n or using a different algorithm is computationally less complex. Note that currently (v1.17.0) this\n means that for RGB input it will usually choose nearest-neighbor sampling because this is computationally\n the simplest.\n Set this field to 'true' if you want to make sure that the specified algorithm is used even\n at the cost of slightly higher computation times."]
     pub only_use_preferred_chroma_algorithm: u8,
 }
-pub const heif_alpha_composition_mode_heif_alpha_composition_mode_none:
-    heif_alpha_composition_mode = 0;
-pub const heif_alpha_composition_mode_heif_alpha_composition_mode_solid_color:
-    heif_alpha_composition_mode = 1;
-pub const heif_alpha_composition_mode_heif_alpha_composition_mode_checkerboard:
-    heif_alpha_composition_mode = 2;
+pub const heif_alpha_composition_mode_heif_alpha_composition_mode_none: heif_alpha_composition_mode = 0;
+pub const heif_alpha_composition_mode_heif_alpha_composition_mode_solid_color: heif_alpha_composition_mode = 1;
+pub const heif_alpha_composition_mode_heif_alpha_composition_mode_checkerboard: heif_alpha_composition_mode = 2;
 pub type heif_alpha_composition_mode = libc::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -634,114 +528,75 @@ unsafe extern "C" {
     pub fn heif_color_conversion_options_ext_alloc() -> *mut heif_color_conversion_options_ext;
 }
 unsafe extern "C" {
-    pub fn heif_color_conversion_options_ext_copy(
-        dst: *mut heif_color_conversion_options_ext,
-        src: *const heif_color_conversion_options_ext,
-    );
+    pub fn heif_color_conversion_options_ext_copy(dst: *mut heif_color_conversion_options_ext, src: *const heif_color_conversion_options_ext);
 }
 unsafe extern "C" {
     pub fn heif_color_conversion_options_ext_free(arg1: *mut heif_color_conversion_options_ext);
 }
 pub const heif_color_profile_type_heif_color_profile_type_not_present: heif_color_profile_type = 0;
-pub const heif_color_profile_type_heif_color_profile_type_nclx: heif_color_profile_type =
-    1852009592;
-pub const heif_color_profile_type_heif_color_profile_type_rICC: heif_color_profile_type =
-    1917403971;
-pub const heif_color_profile_type_heif_color_profile_type_prof: heif_color_profile_type =
-    1886547814;
+pub const heif_color_profile_type_heif_color_profile_type_nclx: heif_color_profile_type = 1852009592;
+pub const heif_color_profile_type_heif_color_profile_type_rICC: heif_color_profile_type = 1917403971;
+pub const heif_color_profile_type_heif_color_profile_type_prof: heif_color_profile_type = 1886547814;
 #[doc = " ------------------------- color profiles -------------------------"]
 pub type heif_color_profile_type = libc::c_uint;
 unsafe extern "C" {
     #[doc = " Returns 'heif_color_profile_type_not_present' if there is no color profile.\n If there is an ICC profile and an NCLX profile, the ICC profile is returned.\n TODO: we need a new API for this function as images can contain both NCLX and ICC at the same time.\n       However, you can still use heif_image_handle_get_raw_color_profile() and\n       heif_image_handle_get_nclx_color_profile() to access both profiles."]
-    pub fn heif_image_handle_get_color_profile_type(
-        handle: *const heif_image_handle,
-    ) -> heif_color_profile_type;
+    pub fn heif_image_handle_get_color_profile_type(handle: *const heif_image_handle) -> heif_color_profile_type;
 }
 unsafe extern "C" {
     pub fn heif_image_handle_get_raw_color_profile_size(handle: *const heif_image_handle) -> usize;
 }
 unsafe extern "C" {
     #[doc = " Returns 'heif_error_Color_profile_does_not_exist' when there is no ICC profile."]
-    pub fn heif_image_handle_get_raw_color_profile(
-        handle: *const heif_image_handle,
-        out_data: *mut libc::c_void,
-    ) -> heif_error;
+    pub fn heif_image_handle_get_raw_color_profile(handle: *const heif_image_handle, out_data: *mut libc::c_void) -> heif_error;
 }
 #[doc = " g=0.3;0.6, b=0.15;0.06, r=0.64;0.33, w=0.3127,0.3290"]
 pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_709_5: heif_color_primaries = 1;
 pub const heif_color_primaries_heif_color_primaries_unspecified: heif_color_primaries = 2;
-pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_470_6_System_M: heif_color_primaries =
-    4;
-pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_470_6_System_B_G:
-    heif_color_primaries = 5;
+pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_470_6_System_M: heif_color_primaries = 4;
+pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_470_6_System_B_G: heif_color_primaries = 5;
 pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_601_6: heif_color_primaries = 6;
 pub const heif_color_primaries_heif_color_primaries_SMPTE_240M: heif_color_primaries = 7;
 pub const heif_color_primaries_heif_color_primaries_generic_film: heif_color_primaries = 8;
-pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_2020_2_and_2100_0:
-    heif_color_primaries = 9;
+pub const heif_color_primaries_heif_color_primaries_ITU_R_BT_2020_2_and_2100_0: heif_color_primaries = 9;
 pub const heif_color_primaries_heif_color_primaries_SMPTE_ST_428_1: heif_color_primaries = 10;
 pub const heif_color_primaries_heif_color_primaries_SMPTE_RP_431_2: heif_color_primaries = 11;
 pub const heif_color_primaries_heif_color_primaries_SMPTE_EG_432_1: heif_color_primaries = 12;
 pub const heif_color_primaries_heif_color_primaries_EBU_Tech_3213_E: heif_color_primaries = 22;
 pub type heif_color_primaries = libc::c_uint;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_709_5:
-    heif_transfer_characteristics = 1;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_unspecified:
-    heif_transfer_characteristics = 2;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_470_6_System_M:
-    heif_transfer_characteristics = 4;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_470_6_System_B_G:
-    heif_transfer_characteristics = 5;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_601_6:
-    heif_transfer_characteristics = 6;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_SMPTE_240M:
-    heif_transfer_characteristics = 7;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_linear:
-    heif_transfer_characteristics = 8;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_logarithmic_100:
-    heif_transfer_characteristics = 9;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_logarithmic_100_sqrt10:
-    heif_transfer_characteristics = 10;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_IEC_61966_2_4:
-    heif_transfer_characteristics = 11;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_1361:
-    heif_transfer_characteristics = 12;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_IEC_61966_2_1:
-    heif_transfer_characteristics = 13;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2020_2_10bit:
-    heif_transfer_characteristics = 14;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2020_2_12bit:
-    heif_transfer_characteristics = 15;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2100_0_PQ:
-    heif_transfer_characteristics = 16;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_SMPTE_ST_428_1:
-    heif_transfer_characteristics = 17;
-pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2100_0_HLG:
-    heif_transfer_characteristics = 18;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_709_5: heif_transfer_characteristics = 1;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_unspecified: heif_transfer_characteristics = 2;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_470_6_System_M: heif_transfer_characteristics = 4;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_470_6_System_B_G: heif_transfer_characteristics = 5;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_601_6: heif_transfer_characteristics = 6;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_SMPTE_240M: heif_transfer_characteristics = 7;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_linear: heif_transfer_characteristics = 8;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_logarithmic_100: heif_transfer_characteristics = 9;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_logarithmic_100_sqrt10: heif_transfer_characteristics = 10;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_IEC_61966_2_4: heif_transfer_characteristics = 11;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_1361: heif_transfer_characteristics = 12;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_IEC_61966_2_1: heif_transfer_characteristics = 13;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2020_2_10bit: heif_transfer_characteristics = 14;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2020_2_12bit: heif_transfer_characteristics = 15;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2100_0_PQ: heif_transfer_characteristics = 16;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_SMPTE_ST_428_1: heif_transfer_characteristics = 17;
+pub const heif_transfer_characteristics_heif_transfer_characteristic_ITU_R_BT_2100_0_HLG: heif_transfer_characteristics = 18;
 pub type heif_transfer_characteristics = libc::c_uint;
 pub const heif_matrix_coefficients_heif_matrix_coefficients_RGB_GBR: heif_matrix_coefficients = 0;
 #[doc = " TODO: or 709-6 according to h.273"]
-pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_709_5:
-    heif_matrix_coefficients = 1;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_unspecified: heif_matrix_coefficients =
-    2;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_US_FCC_T47: heif_matrix_coefficients =
-    4;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_470_6_System_B_G:
-    heif_matrix_coefficients = 5;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_709_5: heif_matrix_coefficients = 1;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_unspecified: heif_matrix_coefficients = 2;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_US_FCC_T47: heif_matrix_coefficients = 4;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_470_6_System_B_G: heif_matrix_coefficients = 5;
 #[doc = " TODO: or 601-7 according to h.273"]
-pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_601_6:
-    heif_matrix_coefficients = 6;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_SMPTE_240M: heif_matrix_coefficients =
-    7;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_601_6: heif_matrix_coefficients = 6;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_SMPTE_240M: heif_matrix_coefficients = 7;
 pub const heif_matrix_coefficients_heif_matrix_coefficients_YCgCo: heif_matrix_coefficients = 8;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_2020_2_non_constant_luminance : heif_matrix_coefficients = 9 ;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_2020_2_constant_luminance:
-    heif_matrix_coefficients = 10;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_SMPTE_ST_2085:
-    heif_matrix_coefficients = 11;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_chromaticity_derived_non_constant_luminance : heif_matrix_coefficients = 12 ;
-pub const heif_matrix_coefficients_heif_matrix_coefficients_chromaticity_derived_constant_luminance : heif_matrix_coefficients = 13 ;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_2020_2_non_constant_luminance: heif_matrix_coefficients = 9;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_ITU_R_BT_2020_2_constant_luminance: heif_matrix_coefficients = 10;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_SMPTE_ST_2085: heif_matrix_coefficients = 11;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_chromaticity_derived_non_constant_luminance: heif_matrix_coefficients = 12;
+pub const heif_matrix_coefficients_heif_matrix_coefficients_chromaticity_derived_constant_luminance: heif_matrix_coefficients = 13;
 pub const heif_matrix_coefficients_heif_matrix_coefficients_ICtCp: heif_matrix_coefficients = 14;
 pub type heif_matrix_coefficients = libc::c_uint;
 #[repr(C)]
@@ -765,29 +620,17 @@ pub struct heif_color_profile_nclx {
     pub color_primary_white_y: f32,
 }
 unsafe extern "C" {
-    pub fn heif_nclx_color_profile_set_color_primaries(
-        nclx: *mut heif_color_profile_nclx,
-        cp: u16,
-    ) -> heif_error;
+    pub fn heif_nclx_color_profile_set_color_primaries(nclx: *mut heif_color_profile_nclx, cp: u16) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_nclx_color_profile_set_transfer_characteristics(
-        nclx: *mut heif_color_profile_nclx,
-        transfer_characteristics: u16,
-    ) -> heif_error;
+    pub fn heif_nclx_color_profile_set_transfer_characteristics(nclx: *mut heif_color_profile_nclx, transfer_characteristics: u16) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_nclx_color_profile_set_matrix_coefficients(
-        nclx: *mut heif_color_profile_nclx,
-        matrix_coefficients: u16,
-    ) -> heif_error;
+    pub fn heif_nclx_color_profile_set_matrix_coefficients(nclx: *mut heif_color_profile_nclx, matrix_coefficients: u16) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Returns 'heif_error_Color_profile_does_not_exist' when there is no NCLX profile.\n TODO: This function does currently not return an NCLX profile if it is stored in the image bitstream.\n       Only NCLX profiles stored as colr boxes are returned. This may change in the future."]
-    pub fn heif_image_handle_get_nclx_color_profile(
-        handle: *const heif_image_handle,
-        out_data: *mut *mut heif_color_profile_nclx,
-    ) -> heif_error;
+    pub fn heif_image_handle_get_nclx_color_profile(handle: *const heif_image_handle, out_data: *mut *mut heif_color_profile_nclx) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Returned color profile has 'version' field set to the maximum allowed.\n Do not fill values for higher versions as these might be outside the allocated structure size.\n May return NULL."]
@@ -806,31 +649,19 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns the ICC profile if one is assigned to the image. Otherwise, it returns an error."]
-    pub fn heif_image_get_raw_color_profile(
-        image: *const heif_image,
-        out_data: *mut libc::c_void,
-    ) -> heif_error;
+    pub fn heif_image_get_raw_color_profile(image: *const heif_image, out_data: *mut libc::c_void) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_nclx_color_profile(
-        image: *const heif_image,
-        out_data: *mut *mut heif_color_profile_nclx,
-    ) -> heif_error;
+    pub fn heif_image_get_nclx_color_profile(image: *const heif_image, out_data: *mut *mut heif_color_profile_nclx) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " The color profile is not attached to the image handle because we might need it\n for color space transform and encoding."]
     pub fn heif_image_set_raw_color_profile(
-        image: *mut heif_image,
-        profile_type_fourcc_string: *const libc::c_char,
-        profile_data: *const libc::c_void,
-        profile_size: usize,
+        image: *mut heif_image, profile_type_fourcc_string: *const libc::c_char, profile_data: *const libc::c_void, profile_size: usize,
     ) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_image_set_nclx_color_profile(
-        image: *mut heif_image,
-        color_profile: *const heif_color_profile_nclx,
-    ) -> heif_error;
+    pub fn heif_image_set_nclx_color_profile(image: *mut heif_image, color_profile: *const heif_color_profile_nclx) -> heif_error;
 }
 #[doc = " Semantics follow the H.265 'Content light level information' SEI message\n (ITU-T H.265 Annex D.3.35). Identifies upper bounds for the nominal\n target brightness light level of the pictures. The bounds are defined\n against samples in a 4:4:4 RGB representation in the linear light domain,\n in units of candelas per square metre (cd/m^2 = nits). A field value\n of 0 means \"no upper bound indicated\" (i.e. undefined)."]
 #[repr(C)]
@@ -845,34 +676,21 @@ unsafe extern "C" {
     pub fn heif_image_has_content_light_level(arg1: *const heif_image) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_content_light_level(arg1: *const heif_image_handle)
-        -> libc::c_int;
+    pub fn heif_image_handle_has_content_light_level(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " TODO: this function should also return 'int' to be consistent to heif_image_handle_get_content_light_level."]
-    pub fn heif_image_get_content_light_level(
-        arg1: *const heif_image,
-        out: *mut heif_content_light_level,
-    );
+    pub fn heif_image_get_content_light_level(arg1: *const heif_image, out: *mut heif_content_light_level);
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has 'content light level' information. If 0 is returned, the output is not filled."]
-    pub fn heif_image_handle_get_content_light_level(
-        arg1: *const heif_image_handle,
-        out: *mut heif_content_light_level,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_content_light_level(arg1: *const heif_image_handle, out: *mut heif_content_light_level) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_set_content_light_level(
-        arg1: *const heif_image,
-        in_: *const heif_content_light_level,
-    );
+    pub fn heif_image_set_content_light_level(arg1: *const heif_image, in_: *const heif_content_light_level);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_content_light_level(
-        arg1: *const heif_image_handle,
-        in_: *const heif_content_light_level,
-    );
+    pub fn heif_image_handle_set_content_light_level(arg1: *const heif_image_handle, in_: *const heif_content_light_level);
 }
 #[doc = " Semantics follow the H.265 'Mastering display colour volume' SEI message\n (ITU-T H.265 Annex D.3.28) and SMPTE ST 2086. Identifies the colour\n volume (primaries, white point, luminance range) of the mastering display\n for the associated content. CIE 1931 chromaticity coordinates are defined\n by ISO 11664-1 (see also ISO 11664-3 and CIE 15).\n\n For RGB mastering displays, H.265 suggests the index order\n   [0]=green, [1]=blue, [2]=red\n (see H.265 Annex E, Table E.3)."]
 #[repr(C)]
@@ -913,69 +731,45 @@ unsafe extern "C" {
     pub fn heif_image_has_mastering_display_colour_volume(arg1: *const heif_image) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_mastering_display_colour_volume(
-        arg1: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_mastering_display_colour_volume(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_mastering_display_colour_volume(
-        arg1: *const heif_image,
-        out: *mut heif_mastering_display_colour_volume,
-    );
+    pub fn heif_image_get_mastering_display_colour_volume(arg1: *const heif_image, out: *mut heif_mastering_display_colour_volume);
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has 'mastering display colour volume' information. If 0 is returned, the output is not filled."]
     pub fn heif_image_handle_get_mastering_display_colour_volume(
-        arg1: *const heif_image_handle,
-        out: *mut heif_mastering_display_colour_volume,
+        arg1: *const heif_image_handle, out: *mut heif_mastering_display_colour_volume,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_set_mastering_display_colour_volume(
-        arg1: *const heif_image,
-        in_: *const heif_mastering_display_colour_volume,
-    );
+    pub fn heif_image_set_mastering_display_colour_volume(arg1: *const heif_image, in_: *const heif_mastering_display_colour_volume);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_mastering_display_colour_volume(
-        arg1: *const heif_image_handle,
-        in_: *const heif_mastering_display_colour_volume,
-    );
+    pub fn heif_image_handle_set_mastering_display_colour_volume(arg1: *const heif_image_handle, in_: *const heif_mastering_display_colour_volume);
 }
 unsafe extern "C" {
     #[doc = " --- ambient viewing environment ---"]
     pub fn heif_image_has_ambient_viewing_environment(arg1: *const heif_image) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_ambient_viewing_environment(
-        arg1: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_ambient_viewing_environment(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has 'ambient viewing environment' information. If 0 is returned, the output is not filled."]
-    pub fn heif_image_get_ambient_viewing_environment(
-        arg1: *const heif_image,
-        out: *mut heif_ambient_viewing_environment,
-    ) -> libc::c_int;
+    pub fn heif_image_get_ambient_viewing_environment(arg1: *const heif_image, out: *mut heif_ambient_viewing_environment) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has 'ambient viewing environment' information. If 0 is returned, the output is not filled."]
     pub fn heif_image_handle_get_ambient_viewing_environment(
-        arg1: *const heif_image_handle,
-        out: *mut heif_ambient_viewing_environment,
+        arg1: *const heif_image_handle, out: *mut heif_ambient_viewing_environment,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_set_ambient_viewing_environment(
-        arg1: *const heif_image,
-        in_: *const heif_ambient_viewing_environment,
-    );
+    pub fn heif_image_set_ambient_viewing_environment(arg1: *const heif_image, in_: *const heif_ambient_viewing_environment);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_ambient_viewing_environment(
-        arg1: *const heif_image_handle,
-        in_: *const heif_ambient_viewing_environment,
-    );
+    pub fn heif_image_handle_set_ambient_viewing_environment(arg1: *const heif_image_handle, in_: *const heif_ambient_viewing_environment);
 }
 unsafe extern "C" {
     #[doc = " If the image has no 'nominal diffuse white' information, the getter returns 0,\n which is indistinguishable from a stored luminance of 0. Use the has_ function\n to disambiguate."]
@@ -988,26 +782,18 @@ unsafe extern "C" {
     pub fn heif_image_set_nominal_diffuse_white_luminance(arg1: *const heif_image, luminance: u32);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_nominal_diffuse_white_luminance(
-        arg1: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_nominal_diffuse_white_luminance(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_nominal_diffuse_white_luminance(
-        arg1: *const heif_image_handle,
-    ) -> u32;
+    pub fn heif_image_handle_get_nominal_diffuse_white_luminance(arg1: *const heif_image_handle) -> u32;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_nominal_diffuse_white_luminance(
-        arg1: *const heif_image_handle,
-        luminance: u32,
-    );
+    pub fn heif_image_handle_set_nominal_diffuse_white_luminance(arg1: *const heif_image_handle, luminance: u32);
 }
 unsafe extern "C" {
     #[doc = " Converts the internal numeric representation of heif_mastering_display_colour_volume to the\n normalized values, collected in heif_decoded_mastering_display_colour_volume.\n Values that are out-of-range are decoded to 0, indicating an undefined value (as specified in ISO/IEC 23008-2)."]
     pub fn heif_mastering_display_colour_volume_decode(
-        in_: *const heif_mastering_display_colour_volume,
-        out: *mut heif_decoded_mastering_display_colour_volume,
+        in_: *const heif_mastering_display_colour_volume, out: *mut heif_decoded_mastering_display_colour_volume,
     ) -> heif_error;
 }
 pub type heif_brand2 = u32;
@@ -1029,19 +815,12 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " 'brand_fourcc' must be 4 character long, but need not be 0-terminated\n returns 1 if file includes the brand, and 0 if it does not\n returns -1 if the provided data is not sufficient\n            (you should input at least as many bytes as indicated in the first 4 bytes of the file, usually ~50 bytes will do)\n returns -2 on other errors"]
-    pub fn heif_has_compatible_brand(
-        data: *const u8,
-        len: libc::c_int,
-        brand_fourcc: *const libc::c_char,
-    ) -> libc::c_int;
+    pub fn heif_has_compatible_brand(data: *const u8, len: libc::c_int, brand_fourcc: *const libc::c_char) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns an array of compatible brands. The array is allocated by this function and has to be freed with 'heif_free_list_of_compatible_brands()'.\n The number of entries is returned in out_size."]
     pub fn heif_list_compatible_brands(
-        data: *const u8,
-        len: libc::c_int,
-        out_brands: *mut *mut heif_brand2,
-        out_size: *mut libc::c_int,
+        data: *const u8, len: libc::c_int, out_brands: *mut *mut heif_brand2, out_size: *mut libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -1116,119 +895,76 @@ unsafe extern "C" {
 pub const heif_metadata_compression_heif_metadata_compression_off: heif_metadata_compression = 0;
 pub const heif_metadata_compression_heif_metadata_compression_auto: heif_metadata_compression = 1;
 #[doc = " only used when reading unknown method from input file"]
-pub const heif_metadata_compression_heif_metadata_compression_unknown: heif_metadata_compression =
-    2;
-pub const heif_metadata_compression_heif_metadata_compression_deflate: heif_metadata_compression =
-    3;
+pub const heif_metadata_compression_heif_metadata_compression_unknown: heif_metadata_compression = 2;
+pub const heif_metadata_compression_heif_metadata_compression_deflate: heif_metadata_compression = 3;
 #[doc = " do not use for header data"]
 pub const heif_metadata_compression_heif_metadata_compression_zlib: heif_metadata_compression = 4;
 pub const heif_metadata_compression_heif_metadata_compression_brotli: heif_metadata_compression = 5;
 pub type heif_metadata_compression = libc::c_uint;
 unsafe extern "C" {
-    pub fn heif_metadata_compression_method_supported(
-        method: heif_metadata_compression,
-    ) -> libc::c_int;
+    pub fn heif_metadata_compression_method_supported(method: heif_metadata_compression) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " How many metadata blocks are attached to an image. If you only want to get EXIF data,\n set the type_filter to \"Exif\". Otherwise, set the type_filter to NULL."]
-    pub fn heif_image_handle_get_number_of_metadata_blocks(
-        handle: *const heif_image_handle,
-        type_filter: *const libc::c_char,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_metadata_blocks(handle: *const heif_image_handle, type_filter: *const libc::c_char) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " 'type_filter' can be used to get only metadata of specific types, like \"Exif\".\n If 'type_filter' is NULL, it will return all types of metadata IDs."]
     pub fn heif_image_handle_get_list_of_metadata_block_IDs(
-        handle: *const heif_image_handle,
-        type_filter: *const libc::c_char,
-        ids: *mut heif_item_id,
-        count: libc::c_int,
+        handle: *const heif_image_handle, type_filter: *const libc::c_char, ids: *mut heif_item_id, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Return a string indicating the type of the metadata, as specified in the HEIF file.\n Exif data will have the type string \"Exif\".\n This string will be valid until the next call to a libheif function.\n You do not have to free this string."]
-    pub fn heif_image_handle_get_metadata_type(
-        handle: *const heif_image_handle,
-        metadata_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_metadata_type(handle: *const heif_image_handle, metadata_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " For EXIF, the content type is empty.\n For XMP, the content type is \"application/rdf+xml\"."]
-    pub fn heif_image_handle_get_metadata_content_type(
-        handle: *const heif_image_handle,
-        metadata_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_metadata_content_type(handle: *const heif_image_handle, metadata_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Get the size of the raw metadata, as stored in the HEIF file."]
-    pub fn heif_image_handle_get_metadata_size(
-        handle: *const heif_image_handle,
-        metadata_id: heif_item_id,
-    ) -> usize;
+    pub fn heif_image_handle_get_metadata_size(handle: *const heif_image_handle, metadata_id: heif_item_id) -> usize;
 }
 unsafe extern "C" {
     #[doc = " 'out_data' must point to a memory area of the size reported by heif_image_handle_get_metadata_size().\n The data is returned exactly as stored in the HEIF file.\n For Exif data, you probably have to skip the first four bytes of the data, since they\n indicate the offset to the start of the TIFF header of the Exif data."]
-    pub fn heif_image_handle_get_metadata(
-        handle: *const heif_image_handle,
-        metadata_id: heif_item_id,
-        out_data: *mut libc::c_void,
-    ) -> heif_error;
+    pub fn heif_image_handle_get_metadata(handle: *const heif_image_handle, metadata_id: heif_item_id, out_data: *mut libc::c_void) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Only valid for item type == \"uri \", an absolute URI"]
-    pub fn heif_image_handle_get_metadata_item_uri_type(
-        handle: *const heif_image_handle,
-        metadata_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_metadata_item_uri_type(handle: *const heif_image_handle, metadata_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Add EXIF metadata to an image."]
     pub fn heif_context_add_exif_metadata(
-        arg1: *mut heif_context,
-        image_handle: *const heif_image_handle,
-        data: *const libc::c_void,
-        size: libc::c_int,
+        arg1: *mut heif_context, image_handle: *const heif_image_handle, data: *const libc::c_void, size: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add XMP metadata to an image."]
     pub fn heif_context_add_XMP_metadata(
-        arg1: *mut heif_context,
-        image_handle: *const heif_image_handle,
-        data: *const libc::c_void,
-        size: libc::c_int,
+        arg1: *mut heif_context, image_handle: *const heif_image_handle, data: *const libc::c_void, size: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " New version of heif_context_add_XMP_metadata() with data compression (experimental)."]
     pub fn heif_context_add_XMP_metadata2(
-        arg1: *mut heif_context,
-        image_handle: *const heif_image_handle,
-        data: *const libc::c_void,
-        size: libc::c_int,
+        arg1: *mut heif_context, image_handle: *const heif_image_handle, data: *const libc::c_void, size: libc::c_int,
         compression: heif_metadata_compression,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add generic, proprietary metadata to an image. You have to specify an 'item_type' that will\n identify your metadata. 'content_type' can be an additional type, or it can be NULL.\n For example, this function can be used to add IPTC metadata (IIM stream, not XMP) to an image.\n Although not standard, we propose to store IPTC data with item type=\"iptc\", content_type=NULL."]
     pub fn heif_context_add_generic_metadata(
-        ctx: *mut heif_context,
-        image_handle: *const heif_image_handle,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        item_type: *const libc::c_char,
+        ctx: *mut heif_context, image_handle: *const heif_image_handle, data: *const libc::c_void, size: libc::c_int, item_type: *const libc::c_char,
         content_type: *const libc::c_char,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add generic metadata with item_type \"uri \". Items with this type do not have a content_type, but\n an item_uri_type and they have no content_encoding (they are always stored uncompressed)."]
     pub fn heif_context_add_generic_uri_metadata(
-        ctx: *mut heif_context,
-        image_handle: *const heif_image_handle,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        item_uri_type: *const libc::c_char,
-        out_item_id: *mut heif_item_id,
+        ctx: *mut heif_context, image_handle: *const heif_image_handle, data: *const libc::c_void, size: libc::c_int,
+        item_uri_type: *const libc::c_char, out_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 #[repr(C)]
@@ -1241,32 +977,21 @@ unsafe extern "C" {
     pub fn heif_image_handle_has_depth_image(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_number_of_depth_images(
-        handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_depth_images(handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_list_of_depth_image_IDs(
-        handle: *const heif_image_handle,
-        ids: *mut heif_item_id,
-        count: libc::c_int,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_list_of_depth_image_IDs(handle: *const heif_image_handle, ids: *mut heif_item_id, count: libc::c_int)
+    -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_handle_get_depth_image_handle(
-        handle: *const heif_image_handle,
-        depth_image_id: heif_item_id,
-        out_depth_handle: *mut *mut heif_image_handle,
+        handle: *const heif_image_handle, depth_image_id: heif_item_id, out_depth_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
-pub const heif_depth_representation_type_heif_depth_representation_type_uniform_inverse_Z:
-    heif_depth_representation_type = 0;
-pub const heif_depth_representation_type_heif_depth_representation_type_uniform_disparity:
-    heif_depth_representation_type = 1;
-pub const heif_depth_representation_type_heif_depth_representation_type_uniform_Z:
-    heif_depth_representation_type = 2;
-pub const heif_depth_representation_type_heif_depth_representation_type_nonuniform_disparity:
-    heif_depth_representation_type = 3;
+pub const heif_depth_representation_type_heif_depth_representation_type_uniform_inverse_Z: heif_depth_representation_type = 0;
+pub const heif_depth_representation_type_heif_depth_representation_type_uniform_disparity: heif_depth_representation_type = 1;
+pub const heif_depth_representation_type_heif_depth_representation_type_uniform_Z: heif_depth_representation_type = 2;
+pub const heif_depth_representation_type_heif_depth_representation_type_nonuniform_disparity: heif_depth_representation_type = 3;
 pub type heif_depth_representation_type = libc::c_uint;
 #[repr(C)]
 #[derive(Debug)]
@@ -1292,94 +1017,60 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Returns true when there is depth_representation_info available\n Note 1: depth_image_id is currently unused because we support only one depth channel per image, but\n you should still provide the correct ID for future compatibility.\n Note 2: Because of an API bug before v1.11.0, the function also works when 'handle' is the handle of the depth image.\n However, you should pass the handle of the main image. Please adapt your code if needed."]
     pub fn heif_image_handle_get_depth_image_representation_info(
-        handle: *const heif_image_handle,
-        depth_image_id: heif_item_id,
-        out: *mut *const heif_depth_representation_info,
+        handle: *const heif_image_handle, depth_image_id: heif_item_id, out: *mut *const heif_depth_representation_info,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " List the number of thumbnails assigned to this image handle. Usually 0 or 1."]
-    pub fn heif_image_handle_get_number_of_thumbnails(
-        handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_thumbnails(handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_list_of_thumbnail_IDs(
-        handle: *const heif_image_handle,
-        ids: *mut heif_item_id,
-        count: libc::c_int,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_list_of_thumbnail_IDs(handle: *const heif_image_handle, ids: *mut heif_item_id, count: libc::c_int) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the image handle of a thumbnail image."]
     pub fn heif_image_handle_get_thumbnail(
-        main_image_handle: *const heif_image_handle,
-        thumbnail_id: heif_item_id,
-        out_thumbnail_handle: *mut *mut heif_image_handle,
+        main_image_handle: *const heif_image_handle, thumbnail_id: heif_item_id, out_thumbnail_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Encode the 'image' as a scaled down thumbnail image.\n The image is scaled down to fit into a square area of width 'bbox_size'.\n If the input image is already so small that it fits into this bounding box, no thumbnail\n image is encoded and NULL is returned in 'out_thumb_image_handle'.\n No error is returned in this case.\n The encoded thumbnail is automatically assigned to the 'master_image_handle'. Hence, you\n do not have to call heif_context_assign_thumbnail()."]
     pub fn heif_context_encode_thumbnail(
-        arg1: *mut heif_context,
-        image: *const heif_image,
-        master_image_handle: *const heif_image_handle,
-        encoder: *mut heif_encoder,
-        options: *const heif_encoding_options,
-        bbox_size: libc::c_int,
-        out_thumb_image_handle: *mut *mut heif_image_handle,
+        arg1: *mut heif_context, image: *const heif_image, master_image_handle: *const heif_image_handle, encoder: *mut heif_encoder,
+        options: *const heif_encoding_options, bbox_size: libc::c_int, out_thumb_image_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Assign 'thumbnail_image' as the thumbnail image of 'master_image'."]
     pub fn heif_context_assign_thumbnail(
-        arg1: *mut heif_context,
-        master_image: *const heif_image_handle,
-        thumbnail_image: *const heif_image_handle,
+        arg1: *mut heif_context, master_image: *const heif_image_handle, thumbnail_image: *const heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " List the number of auxiliary images assigned to this image handle."]
-    pub fn heif_image_handle_get_number_of_auxiliary_images(
-        handle: *const heif_image_handle,
-        aux_filter: libc::c_int,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_auxiliary_images(handle: *const heif_image_handle, aux_filter: libc::c_int) -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_handle_get_list_of_auxiliary_image_IDs(
-        handle: *const heif_image_handle,
-        aux_filter: libc::c_int,
-        ids: *mut heif_item_id,
-        count: libc::c_int,
+        handle: *const heif_image_handle, aux_filter: libc::c_int, ids: *mut heif_item_id, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " You are responsible to deallocate the returned buffer with heif_image_handle_release_auxiliary_type()."]
-    pub fn heif_image_handle_get_auxiliary_type(
-        handle: *const heif_image_handle,
-        out_type: *mut *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_image_handle_get_auxiliary_type(handle: *const heif_image_handle, out_type: *mut *const libc::c_char) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_release_auxiliary_type(
-        handle: *const heif_image_handle,
-        out_type: *mut *const libc::c_char,
-    );
+    pub fn heif_image_handle_release_auxiliary_type(handle: *const heif_image_handle, out_type: *mut *const libc::c_char);
 }
 unsafe extern "C" {
     #[doc = " Get the image handle of an auxiliary image."]
     pub fn heif_image_handle_get_auxiliary_image_handle(
-        main_image_handle: *const heif_image_handle,
-        auxiliary_id: heif_item_id,
-        out_auxiliary_handle: *mut *mut heif_image_handle,
+        main_image_handle: *const heif_image_handle, auxiliary_id: heif_item_id, out_auxiliary_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED (because typo in function name). Use heif_image_handle_release_auxiliary_type() instead."]
-    pub fn heif_image_handle_free_auxiliary_types(
-        handle: *const heif_image_handle,
-        out_type: *mut *const libc::c_char,
-    );
+    pub fn heif_image_handle_free_auxiliary_types(handle: *const heif_image_handle, out_type: *mut *const libc::c_char);
 }
 #[doc = " ------------------------- entity groups ------------------------"]
 pub type heif_entity_group_id = u32;
@@ -1395,10 +1086,7 @@ pub struct heif_entity_group {
 unsafe extern "C" {
     #[doc = " Use 0 for `type_filter` or `item_filter` to disable the filter.\n Returns an array of heif_entity_group structs with *out_num_groups entries."]
     pub fn heif_context_get_entity_groups(
-        arg1: *const heif_context,
-        type_filter: u32,
-        item_filter: heif_item_id,
-        out_num_groups: *mut libc::c_int,
+        arg1: *const heif_context, type_filter: u32, item_filter: heif_item_id, out_num_groups: *mut libc::c_int,
     ) -> *mut heif_entity_group;
 }
 unsafe extern "C" {
@@ -1447,22 +1135,15 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns the security limits for a heif_context.\n By default, the limits are set to the global limits, but you can change them in the returned object."]
-    pub fn heif_context_get_security_limits(arg1: *const heif_context)
-        -> *mut heif_security_limits;
+    pub fn heif_context_get_security_limits(arg1: *const heif_context) -> *mut heif_security_limits;
 }
 unsafe extern "C" {
     #[doc = " Overwrites the security limits of a heif_context.\n This is a convenience function to easily copy limits."]
-    pub fn heif_context_set_security_limits(
-        arg1: *mut heif_context,
-        arg2: *const heif_security_limits,
-    ) -> heif_error;
+    pub fn heif_context_set_security_limits(arg1: *mut heif_context, arg2: *const heif_security_limits) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Set the maximum image size security limit. This function will set the maximum image area (number of pixels)\n to maximum_width ^ 2. Alternatively to using this function, you can also set the maximum image area\n in the security limits structure returned by heif_context_get_security_limits()."]
-    pub fn heif_context_set_maximum_image_size_limit(
-        ctx: *mut heif_context,
-        maximum_width: libc::c_int,
-    );
+    pub fn heif_context_set_maximum_image_size_limit(ctx: *mut heif_context, maximum_width: libc::c_int);
 }
 #[doc = " Unspecified / undefined compression format.\n\n This is used to mean \"no match\" or \"any decoder\" for some parts of the\n API. It does not indicate a specific compression format."]
 pub const heif_compression_format_heif_compression_undefined: heif_compression_format = 0;
@@ -1506,8 +1187,7 @@ pub const heif_reader_grow_status_heif_reader_grow_status_size_reached: heif_rea
 #[doc = " size has not been reached yet, but it may still grow further (deprecated)"]
 pub const heif_reader_grow_status_heif_reader_grow_status_timeout: heif_reader_grow_status = 1;
 #[doc = " size has not been reached and never will. The file has grown to its full size"]
-pub const heif_reader_grow_status_heif_reader_grow_status_size_beyond_eof: heif_reader_grow_status =
-    2;
+pub const heif_reader_grow_status_heif_reader_grow_status_size_beyond_eof: heif_reader_grow_status = 2;
 #[doc = " an error has occurred"]
 pub const heif_reader_grow_status_heif_reader_grow_status_error: heif_reader_grow_status = 3;
 pub type heif_reader_grow_status = libc::c_uint;
@@ -1529,77 +1209,41 @@ pub struct heif_reader {
     #[doc = " API version supported by this reader"]
     pub reader_api_version: libc::c_int,
     #[doc = " --- version 1 functions ---"]
-    pub get_position:
-        ::std::option::Option<unsafe extern "C" fn(userdata: *mut libc::c_void) -> i64>,
+    pub get_position: ::std::option::Option<unsafe extern "C" fn(userdata: *mut libc::c_void) -> i64>,
     #[doc = " The functions read(), and seek() return 0 on success.\n Generally, libheif will make sure that we do not read past the file size."]
-    pub read: ::std::option::Option<
-        unsafe extern "C" fn(
-            data: *mut libc::c_void,
-            size: usize,
-            userdata: *mut libc::c_void,
-        ) -> libc::c_int,
-    >,
-    pub seek: ::std::option::Option<
-        unsafe extern "C" fn(position: i64, userdata: *mut libc::c_void) -> libc::c_int,
-    >,
+    pub read: ::std::option::Option<unsafe extern "C" fn(data: *mut libc::c_void, size: usize, userdata: *mut libc::c_void) -> libc::c_int>,
+    pub seek: ::std::option::Option<unsafe extern "C" fn(position: i64, userdata: *mut libc::c_void) -> libc::c_int>,
     #[doc = " When calling this function, libheif wants to make sure that it can read the file\n up to 'target_size'. This is useful when the file is currently downloaded and may\n grow with time. You may, for example, extract the image sizes even before the actual\n compressed image data has been completely downloaded.\n\n Even if your input files will not grow, you will have to implement at least\n detection whether the target_size is above the (fixed) file length\n (in this case, return 'size_beyond_eof')."]
-    pub wait_for_file_size: ::std::option::Option<
-        unsafe extern "C" fn(
-            target_size: i64,
-            userdata: *mut libc::c_void,
-        ) -> heif_reader_grow_status,
-    >,
+    pub wait_for_file_size: ::std::option::Option<unsafe extern "C" fn(target_size: i64, userdata: *mut libc::c_void) -> heif_reader_grow_status>,
     #[doc = " If this function is defined, libheif will often request a file range before accessing it.\n The purpose of this function is that libheif will usually read very small chunks of data with the\n read() callback above. However, it is inefficient to request such a small chunk of data over a network\n and the network delay will significantly increase the decoding time.\n Thus, libheif will call request_range() with a larger block of data that should be preloaded and the\n subsequent read() calls will work within the requested ranges.\n\n Note: `end_pos` is one byte after the last position to be read.\n You should return\n - 'heif_reader_grow_status_size_reached' if the requested range is available, or\n - 'heif_reader_grow_status_size_beyond_eof' if the requested range exceeds the file size\n   (the valid part of the range has been read)."]
-    pub request_range: ::std::option::Option<
-        unsafe extern "C" fn(
-            start_pos: u64,
-            end_pos: u64,
-            userdata: *mut libc::c_void,
-        ) -> heif_reader_range_request_result,
-    >,
+    pub request_range:
+        ::std::option::Option<unsafe extern "C" fn(start_pos: u64, end_pos: u64, userdata: *mut libc::c_void) -> heif_reader_range_request_result>,
     #[doc = " libheif might issue hints when it assumes that a file range might be needed in the future.\n This may happen, for example, when your are doing selective tile accesses and libheif proposes\n to preload offset pointer tables.\n Another difference to request_file_range() is that this call should be non-blocking.\n If you preload any data, do this in a background thread."]
-    pub preload_range_hint: ::std::option::Option<
-        unsafe extern "C" fn(start_pos: u64, end_pos: u64, userdata: *mut libc::c_void),
-    >,
+    pub preload_range_hint: ::std::option::Option<unsafe extern "C" fn(start_pos: u64, end_pos: u64, userdata: *mut libc::c_void)>,
     #[doc = " If libheif does not need access to a file range anymore, it may call this function to\n give a hint to the reader that it may release the range from a cache.\n If you do not maintain a file cache that wants to reduce its size dynamically, you do not\n need to implement this function."]
-    pub release_file_range: ::std::option::Option<
-        unsafe extern "C" fn(start_pos: u64, end_pos: u64, userdata: *mut libc::c_void),
-    >,
+    pub release_file_range: ::std::option::Option<unsafe extern "C" fn(start_pos: u64, end_pos: u64, userdata: *mut libc::c_void)>,
     #[doc = " Release an error message that was returned by heif_reader in an earlier call.\n If this function is NULL, the error message string will not be released.\n This is a viable option if you are only returning static strings."]
     pub release_error_msg: ::std::option::Option<unsafe extern "C" fn(msg: *const libc::c_char)>,
 }
 unsafe extern "C" {
     #[doc = " Read a HEIF file from a named disk file.\n The heif_reading_options should currently be set to NULL."]
-    pub fn heif_context_read_from_file(
-        arg1: *mut heif_context,
-        filename: *const libc::c_char,
-        arg2: *const heif_reading_options,
-    ) -> heif_error;
+    pub fn heif_context_read_from_file(arg1: *mut heif_context, filename: *const libc::c_char, arg2: *const heif_reading_options) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Read a HEIF file stored completely in memory.\n The heif_reading_options should currently be set to NULL.\n DEPRECATED: use heif_context_read_from_memory_without_copy() instead."]
     pub fn heif_context_read_from_memory(
-        arg1: *mut heif_context,
-        mem: *const libc::c_void,
-        size: usize,
-        arg2: *const heif_reading_options,
+        arg1: *mut heif_context, mem: *const libc::c_void, size: usize, arg2: *const heif_reading_options,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Same as heif_context_read_from_memory() except that the provided memory is not copied.\n That means, you will have to keep the memory area alive as long as you use the heif_context."]
     pub fn heif_context_read_from_memory_without_copy(
-        arg1: *mut heif_context,
-        mem: *const libc::c_void,
-        size: usize,
-        arg2: *const heif_reading_options,
+        arg1: *mut heif_context, mem: *const libc::c_void, size: usize, arg2: *const heif_reading_options,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_read_from_reader(
-        arg1: *mut heif_context,
-        reader: *const heif_reader,
-        userdata: *mut libc::c_void,
-        arg2: *const heif_reading_options,
+        arg1: *mut heif_context, reader: *const heif_reader, userdata: *mut libc::c_void, arg2: *const heif_reading_options,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -1607,39 +1251,22 @@ unsafe extern "C" {
     pub fn heif_context_get_number_of_top_level_images(ctx: *mut heif_context) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_context_is_top_level_image_ID(
-        ctx: *mut heif_context,
-        id: heif_item_id,
-    ) -> libc::c_int;
+    pub fn heif_context_is_top_level_image_ID(ctx: *mut heif_context, id: heif_item_id) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Fills in image IDs into the user-supplied int-array 'ID_array', preallocated with 'count' entries.\n Function returns the total number of IDs filled into the array."]
-    pub fn heif_context_get_list_of_top_level_image_IDs(
-        ctx: *mut heif_context,
-        ID_array: *mut heif_item_id,
-        count: libc::c_int,
-    ) -> libc::c_int;
+    pub fn heif_context_get_list_of_top_level_image_IDs(ctx: *mut heif_context, ID_array: *mut heif_item_id, count: libc::c_int) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_context_get_primary_image_ID(
-        ctx: *mut heif_context,
-        id: *mut heif_item_id,
-    ) -> heif_error;
+    pub fn heif_context_get_primary_image_ID(ctx: *mut heif_context, id: *mut heif_item_id) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get a handle to the primary image of the HEIF file.\n This is the image that should be displayed primarily when there are several images in the file."]
-    pub fn heif_context_get_primary_image_handle(
-        ctx: *mut heif_context,
-        arg1: *mut *mut heif_image_handle,
-    ) -> heif_error;
+    pub fn heif_context_get_primary_image_handle(ctx: *mut heif_context, arg1: *mut *mut heif_image_handle) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the image handle for a known image ID."]
-    pub fn heif_context_get_image_handle(
-        ctx: *mut heif_context,
-        id: heif_item_id,
-        arg1: *mut *mut heif_image_handle,
-    ) -> heif_error;
+    pub fn heif_context_get_image_handle(ctx: *mut heif_context, id: heif_item_id, arg1: *mut *mut heif_image_handle) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Print information about the boxes of a HEIF file to file descriptor.\n This is for debugging and informational purposes only. You should not rely on\n the output having a specific format. At best, you should not use this at all."]
@@ -1651,10 +1278,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " ====================================================================================================\n   Write the heif_context to a HEIF file"]
-    pub fn heif_context_write_to_file(
-        arg1: *mut heif_context,
-        filename: *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_context_write_to_file(arg1: *mut heif_context, filename: *const libc::c_char) -> heif_error;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1663,20 +1287,11 @@ pub struct heif_writer {
     pub writer_api_version: libc::c_int,
     #[doc = " TODO: why do we need this parameter?"]
     pub write: ::std::option::Option<
-        unsafe extern "C" fn(
-            ctx: *mut heif_context,
-            data: *const libc::c_void,
-            size: usize,
-            userdata: *mut libc::c_void,
-        ) -> heif_error,
+        unsafe extern "C" fn(ctx: *mut heif_context, data: *const libc::c_void, size: usize, userdata: *mut libc::c_void) -> heif_error,
     >,
 }
 unsafe extern "C" {
-    pub fn heif_context_write(
-        arg1: *mut heif_context,
-        writer: *mut heif_writer,
-        userdata: *mut libc::c_void,
-    ) -> heif_error;
+    pub fn heif_context_write(arg1: *mut heif_context, writer: *mut heif_writer, userdata: *mut libc::c_void) -> heif_error;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -1700,53 +1315,37 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get a list of available encoders. You can filter the encoders by compression format and name.\n Use format_filter==heif_compression_undefined and name_filter==NULL as wildcards.\n The returned list of encoders is sorted by their priority (which is a plugin property).\n The number of encoders is returned, which are not more than 'count' if (out_encoders != nullptr).\n By setting out_encoders==nullptr, you can query the number of encoders, 'count' is ignored.\n Note: to get the actual encoder from the descriptors returned here, use heif_context_get_encoder()."]
     pub fn heif_get_encoder_descriptors(
-        format_filter: heif_compression_format,
-        name_filter: *const libc::c_char,
-        out_encoders: *mut *const heif_encoder_descriptor,
+        format_filter: heif_compression_format, name_filter: *const libc::c_char, out_encoders: *mut *const heif_encoder_descriptor,
         count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Return a long, descriptive name of the encoder (including version information)."]
-    pub fn heif_encoder_descriptor_get_name(
-        arg1: *const heif_encoder_descriptor,
-    ) -> *const libc::c_char;
+    pub fn heif_encoder_descriptor_get_name(arg1: *const heif_encoder_descriptor) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Return a short, symbolic name for identifying the encoder.\n This name should stay constant over different encoder versions."]
-    pub fn heif_encoder_descriptor_get_id_name(
-        arg1: *const heif_encoder_descriptor,
-    ) -> *const libc::c_char;
+    pub fn heif_encoder_descriptor_get_id_name(arg1: *const heif_encoder_descriptor) -> *const libc::c_char;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_descriptor_get_compression_format(
-        arg1: *const heif_encoder_descriptor,
-    ) -> heif_compression_format;
+    pub fn heif_encoder_descriptor_get_compression_format(arg1: *const heif_encoder_descriptor) -> heif_compression_format;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_descriptor_supports_lossy_compression(
-        arg1: *const heif_encoder_descriptor,
-    ) -> libc::c_int;
+    pub fn heif_encoder_descriptor_supports_lossy_compression(arg1: *const heif_encoder_descriptor) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_descriptor_supports_lossless_compression(
-        arg1: *const heif_encoder_descriptor,
-    ) -> libc::c_int;
+    pub fn heif_encoder_descriptor_supports_lossless_compression(arg1: *const heif_encoder_descriptor) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get an encoder instance that can be used to actually encode images from a descriptor."]
     pub fn heif_context_get_encoder(
-        context: *mut heif_context,
-        arg1: *const heif_encoder_descriptor,
-        out_encoder: *mut *mut heif_encoder,
+        context: *mut heif_context, arg1: *const heif_encoder_descriptor, out_encoder: *mut *mut heif_encoder,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get an encoder for the given compression format. If there are several encoder plugins\n for this format, the encoder with the highest plugin priority will be returned."]
     pub fn heif_context_get_encoder_for_format(
-        context: *mut heif_context,
-        format: heif_compression_format,
-        arg1: *mut *mut heif_encoder,
+        context: *mut heif_context, format: heif_compression_format, arg1: *mut *mut heif_encoder,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -1759,185 +1358,113 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Set a 'quality' factor (0-100). How this is mapped to actual encoding parameters is\n encoder dependent."]
-    pub fn heif_encoder_set_lossy_quality(
-        arg1: *mut heif_encoder,
-        quality: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_set_lossy_quality(arg1: *mut heif_encoder, quality: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_encoder_set_lossless(arg1: *mut heif_encoder, enable: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " level should be between 0 (= none) to 4 (= full)"]
-    pub fn heif_encoder_set_logging_level(
-        arg1: *mut heif_encoder,
-        level: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_set_logging_level(arg1: *mut heif_encoder, level: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get a generic list of encoder parameters.\n Each encoder may define its own, additional set of parameters.\n You do not have to free the returned list."]
-    pub fn heif_encoder_list_parameters(
-        arg1: *mut heif_encoder,
-    ) -> *const *const heif_encoder_parameter;
+    pub fn heif_encoder_list_parameters(arg1: *mut heif_encoder) -> *const *const heif_encoder_parameter;
 }
 unsafe extern "C" {
     #[doc = " Return the parameter name."]
-    pub fn heif_encoder_parameter_get_name(
-        arg1: *const heif_encoder_parameter,
-    ) -> *const libc::c_char;
+    pub fn heif_encoder_parameter_get_name(arg1: *const heif_encoder_parameter) -> *const libc::c_char;
 }
-pub const heif_encoder_parameter_type_heif_encoder_parameter_type_integer:
-    heif_encoder_parameter_type = 1;
-pub const heif_encoder_parameter_type_heif_encoder_parameter_type_boolean:
-    heif_encoder_parameter_type = 2;
-pub const heif_encoder_parameter_type_heif_encoder_parameter_type_string:
-    heif_encoder_parameter_type = 3;
+pub const heif_encoder_parameter_type_heif_encoder_parameter_type_integer: heif_encoder_parameter_type = 1;
+pub const heif_encoder_parameter_type_heif_encoder_parameter_type_boolean: heif_encoder_parameter_type = 2;
+pub const heif_encoder_parameter_type_heif_encoder_parameter_type_string: heif_encoder_parameter_type = 3;
 pub type heif_encoder_parameter_type = libc::c_uint;
 unsafe extern "C" {
     #[doc = " Return the parameter type."]
-    pub fn heif_encoder_parameter_get_type(
-        arg1: *const heif_encoder_parameter,
-    ) -> heif_encoder_parameter_type;
+    pub fn heif_encoder_parameter_get_type(arg1: *const heif_encoder_parameter) -> heif_encoder_parameter_type;
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED. Use heif_encoder_parameter_get_valid_integer_values() instead."]
     pub fn heif_encoder_parameter_get_valid_integer_range(
-        arg1: *const heif_encoder_parameter,
-        have_minimum_maximum: *mut libc::c_int,
-        minimum: *mut libc::c_int,
-        maximum: *mut libc::c_int,
+        arg1: *const heif_encoder_parameter, have_minimum_maximum: *mut libc::c_int, minimum: *mut libc::c_int, maximum: *mut libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " If integer is limited by a range, have_minimum and/or have_maximum will be != 0 and *minimum, *maximum is set.\n If integer is limited by a fixed set of values, *num_valid_values will be >0 and *out_integer_array is set."]
     pub fn heif_encoder_parameter_get_valid_integer_values(
-        arg1: *const heif_encoder_parameter,
-        have_minimum: *mut libc::c_int,
-        have_maximum: *mut libc::c_int,
-        minimum: *mut libc::c_int,
-        maximum: *mut libc::c_int,
-        num_valid_values: *mut libc::c_int,
-        out_integer_array: *mut *const libc::c_int,
+        arg1: *const heif_encoder_parameter, have_minimum: *mut libc::c_int, have_maximum: *mut libc::c_int, minimum: *mut libc::c_int,
+        maximum: *mut libc::c_int, num_valid_values: *mut libc::c_int, out_integer_array: *mut *const libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_encoder_parameter_get_valid_string_values(
-        arg1: *const heif_encoder_parameter,
-        out_stringarray: *mut *const *const libc::c_char,
+        arg1: *const heif_encoder_parameter, out_stringarray: *mut *const *const libc::c_char,
     ) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_set_parameter_integer(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_set_parameter_integer(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_get_parameter_integer(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: *mut libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_get_parameter_integer(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: *mut libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_encoder_parameter_integer_valid_range(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        have_minimum_maximum: *mut libc::c_int,
-        minimum: *mut libc::c_int,
+        arg1: *mut heif_encoder, parameter_name: *const libc::c_char, have_minimum_maximum: *mut libc::c_int, minimum: *mut libc::c_int,
         maximum: *mut libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_set_parameter_boolean(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_set_parameter_boolean(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_get_parameter_boolean(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: *mut libc::c_int,
-    ) -> heif_error;
+    pub fn heif_encoder_get_parameter_boolean(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: *mut libc::c_int) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_encoder_set_parameter_string(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_encoder_set_parameter_string(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: *const libc::c_char) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_encoder_get_parameter_string(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: *mut libc::c_char,
-        value_size: libc::c_int,
+        arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: *mut libc::c_char, value_size: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " returns a NULL-terminated list of valid strings or NULL if all values are allowed"]
     pub fn heif_encoder_parameter_string_valid_values(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        out_stringarray: *mut *const *const libc::c_char,
+        arg1: *mut heif_encoder, parameter_name: *const libc::c_char, out_stringarray: *mut *const *const libc::c_char,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_encoder_parameter_integer_valid_values(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        have_minimum: *mut libc::c_int,
-        have_maximum: *mut libc::c_int,
-        minimum: *mut libc::c_int,
-        maximum: *mut libc::c_int,
-        num_valid_values: *mut libc::c_int,
-        out_integer_array: *mut *const libc::c_int,
+        arg1: *mut heif_encoder, parameter_name: *const libc::c_char, have_minimum: *mut libc::c_int, have_maximum: *mut libc::c_int,
+        minimum: *mut libc::c_int, maximum: *mut libc::c_int, num_valid_values: *mut libc::c_int, out_integer_array: *mut *const libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Set a parameter of any type to the string value.\n Integer values are parsed from the string.\n Boolean values can be \"true\"/\"false\"/\"1\"/\"0\"\n\n x265 encoder specific note:\n When using the x265 encoder, you may pass any of its parameters by\n prefixing the parameter name with 'x265:'. Hence, to set the 'ctu' parameter,\n you will have to set 'x265:ctu' in libheif.\n Note that there is no checking for valid parameters when using the prefix."]
-    pub fn heif_encoder_set_parameter(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value: *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_encoder_set_parameter(arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value: *const libc::c_char) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the current value of a parameter of any type as a human readable string.\n The returned string is compatible with heif_encoder_set_parameter()."]
     pub fn heif_encoder_get_parameter(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-        value_ptr: *mut libc::c_char,
-        value_size: libc::c_int,
+        arg1: *mut heif_encoder, parameter_name: *const libc::c_char, value_ptr: *mut libc::c_char, value_size: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Query whether a specific parameter has a default value."]
-    pub fn heif_encoder_has_default(
-        arg1: *mut heif_encoder,
-        parameter_name: *const libc::c_char,
-    ) -> libc::c_int;
+    pub fn heif_encoder_has_default(arg1: *mut heif_encoder, parameter_name: *const libc::c_char) -> libc::c_int;
 }
 pub const heif_orientation_heif_orientation_normal: heif_orientation = 1;
 pub const heif_orientation_heif_orientation_flip_horizontally: heif_orientation = 2;
 pub const heif_orientation_heif_orientation_rotate_180: heif_orientation = 3;
 pub const heif_orientation_heif_orientation_flip_vertically: heif_orientation = 4;
-pub const heif_orientation_heif_orientation_rotate_90_cw_then_flip_horizontally: heif_orientation =
-    5;
+pub const heif_orientation_heif_orientation_rotate_90_cw_then_flip_horizontally: heif_orientation = 5;
 pub const heif_orientation_heif_orientation_rotate_90_cw: heif_orientation = 6;
 pub const heif_orientation_heif_orientation_rotate_90_cw_then_flip_vertically: heif_orientation = 7;
 pub const heif_orientation_heif_orientation_rotate_270_cw: heif_orientation = 8;
 #[doc = " The orientation values are defined equal to the EXIF Orientation tag."]
 pub type heif_orientation = libc::c_uint;
 unsafe extern "C" {
-    pub fn heif_orientation_concat(
-        first: heif_orientation,
-        second: heif_orientation,
-    ) -> heif_orientation;
+    pub fn heif_orientation_concat(first: heif_orientation, second: heif_orientation) -> heif_orientation;
 }
 #[repr(C)]
 #[derive(Debug)]
@@ -1965,10 +1492,7 @@ unsafe extern "C" {
     pub fn heif_encoding_options_alloc() -> *mut heif_encoding_options;
 }
 unsafe extern "C" {
-    pub fn heif_encoding_options_copy(
-        dst: *mut heif_encoding_options,
-        src: *const heif_encoding_options,
-    );
+    pub fn heif_encoding_options_copy(dst: *mut heif_encoding_options, src: *const heif_encoding_options);
 }
 unsafe extern "C" {
     pub fn heif_encoding_options_free(arg1: *mut heif_encoding_options);
@@ -1976,31 +1500,19 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Compress the input image.\n Returns a handle to the coded image in 'out_image_handle' unless out_image_handle = NULL.\n 'options' should be NULL for now.\n The first image added to the context is also automatically set the primary image, but\n you can change the primary image later with heif_context_set_primary_image()."]
     pub fn heif_context_encode_image(
-        arg1: *mut heif_context,
-        image: *const heif_image,
-        encoder: *mut heif_encoder,
-        options: *const heif_encoding_options,
+        arg1: *mut heif_context, image: *const heif_image, encoder: *mut heif_encoder, options: *const heif_encoding_options,
         out_image_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " offsets[] should either be NULL (all offsets==0) or an array of size 2*nImages with x;y offset pairs.\n If background_rgba is NULL, the background is transparent."]
     pub fn heif_context_add_overlay_image(
-        ctx: *mut heif_context,
-        image_width: u32,
-        image_height: u32,
-        nImages: u16,
-        image_ids: *const heif_item_id,
-        offsets: *mut i32,
-        background_rgba: *const [u16; 4usize],
-        out_iovl_image_handle: *mut *mut heif_image_handle,
+        ctx: *mut heif_context, image_width: u32, image_height: u32, nImages: u16, image_ids: *const heif_item_id, offsets: *mut i32,
+        background_rgba: *const [u16; 4usize], out_iovl_image_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_context_set_primary_image(
-        arg1: *mut heif_context,
-        image_handle: *mut heif_image_handle,
-    ) -> heif_error;
+    pub fn heif_context_set_primary_image(arg1: *mut heif_context, image_handle: *mut heif_image_handle) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Set the major brand of the file.\n If this function is not called, the major brand is determined automatically from\n the image or sequence content."]
@@ -2016,24 +1528,17 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED, typo in function name"]
-    pub fn heif_encoder_descriptor_supportes_lossy_compression(
-        arg1: *const heif_encoder_descriptor,
-    ) -> libc::c_int;
+    pub fn heif_encoder_descriptor_supportes_lossy_compression(arg1: *const heif_encoder_descriptor) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED, typo in function name"]
-    pub fn heif_encoder_descriptor_supportes_lossless_compression(
-        arg1: *const heif_encoder_descriptor,
-    ) -> libc::c_int;
+    pub fn heif_encoder_descriptor_supportes_lossless_compression(arg1: *const heif_encoder_descriptor) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " DEPRECATED: use heif_get_encoder_descriptors() instead.\n Get a list of available encoders. You can filter the encoders by compression format and name.\n Use format_filter==heif_compression_undefined and name_filter==NULL as wildcards.\n The returned list of encoders is sorted by their priority (which is a plugin property).\n The number of encoders is returned, which are not more than 'count' if (out_encoders != nullptr).\n By setting out_encoders==nullptr, you can query the number of encoders, 'count' is ignored.\n Note: to get the actual encoder from the descriptors returned here, use heif_context_get_encoder()."]
     pub fn heif_context_get_encoder_descriptors(
-        arg1: *mut heif_context,
-        format_filter: heif_compression_format,
-        name_filter: *const libc::c_char,
-        out_encoders: *mut *const heif_encoder_descriptor,
-        count: libc::c_int,
+        arg1: *mut heif_context, format_filter: heif_compression_format, name_filter: *const libc::c_char,
+        out_encoders: *mut *const heif_encoder_descriptor, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
@@ -2058,23 +1563,11 @@ pub struct heif_decoding_options {
     #[doc = " Ignore geometric transformations like cropping, rotation, mirroring.\n Default: false (do not ignore)."]
     pub ignore_transformations: u8,
     #[doc = " Any of the progress functions may be called from background threads."]
-    pub start_progress: ::std::option::Option<
-        unsafe extern "C" fn(
-            step: heif_progress_step,
-            max_progress: libc::c_int,
-            progress_user_data: *mut libc::c_void,
-        ),
-    >,
-    pub on_progress: ::std::option::Option<
-        unsafe extern "C" fn(
-            step: heif_progress_step,
-            progress: libc::c_int,
-            progress_user_data: *mut libc::c_void,
-        ),
-    >,
-    pub end_progress: ::std::option::Option<
-        unsafe extern "C" fn(step: heif_progress_step, progress_user_data: *mut libc::c_void),
-    >,
+    pub start_progress:
+        ::std::option::Option<unsafe extern "C" fn(step: heif_progress_step, max_progress: libc::c_int, progress_user_data: *mut libc::c_void)>,
+    pub on_progress:
+        ::std::option::Option<unsafe extern "C" fn(step: heif_progress_step, progress: libc::c_int, progress_user_data: *mut libc::c_void)>,
+    pub end_progress: ::std::option::Option<unsafe extern "C" fn(step: heif_progress_step, progress_user_data: *mut libc::c_void)>,
     pub progress_user_data: *mut libc::c_void,
     #[doc = " version 2 options"]
     pub convert_hdr_to_8bit: u8,
@@ -2085,9 +1578,7 @@ pub struct heif_decoding_options {
     #[doc = " version 5 options"]
     pub color_conversion_options: heif_color_conversion_options,
     #[doc = " version 6 options"]
-    pub cancel_decoding: ::std::option::Option<
-        unsafe extern "C" fn(progress_user_data: *mut libc::c_void) -> libc::c_int,
-    >,
+    pub cancel_decoding: ::std::option::Option<unsafe extern "C" fn(progress_user_data: *mut libc::c_void) -> libc::c_int>,
     #[doc = " When set to NULL, default options will be used"]
     pub color_conversion_options_ext: *mut heif_color_conversion_options_ext,
     #[doc = " bool"]
@@ -2108,10 +1599,7 @@ unsafe extern "C" {
     pub fn heif_decoding_options_alloc() -> *mut heif_decoding_options;
 }
 unsafe extern "C" {
-    pub fn heif_decoding_options_copy(
-        dst: *mut heif_decoding_options,
-        src: *const heif_decoding_options,
-    );
+    pub fn heif_decoding_options_copy(dst: *mut heif_decoding_options, src: *const heif_decoding_options);
 }
 unsafe extern "C" {
     pub fn heif_decoding_options_free(arg1: *mut heif_decoding_options);
@@ -2124,30 +1612,21 @@ pub struct heif_decoder_descriptor {
 unsafe extern "C" {
     #[doc = " Get a list of available decoders. You can filter the encoders by compression format.\n Use format_filter==heif_compression_undefined to get all available decoders.\n The returned list of decoders is sorted by their priority (which is a plugin property).\n The number of decoders is returned, which are not more than 'count' if (out_decoders != nullptr).\n By setting out_decoders==nullptr, you can query the number of decoders, 'count' is ignored."]
     pub fn heif_get_decoder_descriptors(
-        format_filter: heif_compression_format,
-        out_decoders: *mut *const heif_decoder_descriptor,
-        count: libc::c_int,
+        format_filter: heif_compression_format, out_decoders: *mut *const heif_decoder_descriptor, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Return a long, descriptive name of the decoder (including version information)."]
-    pub fn heif_decoder_descriptor_get_name(
-        arg1: *const heif_decoder_descriptor,
-    ) -> *const libc::c_char;
+    pub fn heif_decoder_descriptor_get_name(arg1: *const heif_decoder_descriptor) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Return a short, symbolic name for identifying the decoder.\n This name should stay constant over different decoder versions.\n Note: the returned ID may be NULL for old plugins that don't support this yet."]
-    pub fn heif_decoder_descriptor_get_id_name(
-        arg1: *const heif_decoder_descriptor,
-    ) -> *const libc::c_char;
+    pub fn heif_decoder_descriptor_get_id_name(arg1: *const heif_decoder_descriptor) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Decode an heif_image_handle into the actual pixel image and also carry out\n all geometric transformations specified in the HEIF file (rotation, cropping, mirroring).\n\n If colorspace or chroma is set to heif_colorspace_undefined or heif_chroma_undefined,\n respectively, the original colorspace is taken.\n Note: for images with matrix_coefficients=0 the \"original colorspace\" is YCbCr\n (tagged with matrix_coefficients=0); this is not specified and may change in a future\n version. See heif_image_handle_get_preferred_decoding_colorspace().\n Decoding options may be NULL. If you want to supply options, always use\n heif_decoding_options_alloc() to get the structure."]
     pub fn heif_decode_image(
-        in_handle: *const heif_image_handle,
-        out_img: *mut *mut heif_image,
-        colorspace: heif_colorspace,
-        chroma: heif_chroma,
+        in_handle: *const heif_image_handle, out_img: *mut *mut heif_image, colorspace: heif_colorspace, chroma: heif_chroma,
         options: *const heif_decoding_options,
     ) -> heif_error;
 }
@@ -2178,21 +1657,16 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns -1 on error, e.g. if this information is not present in the image.\n Only defined for images coded in the YCbCr or monochrome colorspace."]
-    pub fn heif_image_handle_get_luma_bits_per_pixel(arg1: *const heif_image_handle)
-        -> libc::c_int;
+    pub fn heif_image_handle_get_luma_bits_per_pixel(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns -1 on error, e.g. if this information is not present in the image.\n Only defined for images coded in the YCbCr colorspace."]
-    pub fn heif_image_handle_get_chroma_bits_per_pixel(
-        arg1: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_chroma_bits_per_pixel(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Return the colorspace that libheif proposes to use for decoding.\n Usually, these will be either YCbCr or Monochrome, but it may also propose RGB for images\n encoded with matrix_coefficients=0 or for images coded natively in RGB.\n It may also return *_undefined if the file misses relevant information to determine this without decoding.\n These are only proposed values that avoid colorspace conversions as much as possible.\n You can still request the output in your preferred colorspace, but this may involve an internal conversion.\n\n Note on matrix_coefficients=0 (H.273 identity, i.e. RGB carried in YCbCr planes):\n for such images this function proposes RGB. However, heif_decode_image() called with\n heif_colorspace_undefined currently returns the image still tagged as YCbCr (with\n matrix_coefficients=0). That tagging is self-consistent. Converting it to RGB applies\n the identity mapping and yields correct colors, so request heif_colorspace_RGB\n explicitly if you need RGB output. This exact behavior is not specified and may change.\n A later version may return RGB directly when decoding with an undefined colorspace.\n See heif_decode_image()."]
     pub fn heif_image_handle_get_preferred_decoding_colorspace(
-        image_handle: *const heif_image_handle,
-        out_colorspace: *mut heif_colorspace,
-        out_chroma: *mut heif_chroma,
+        image_handle: *const heif_image_handle, out_colorspace: *mut heif_colorspace, out_chroma: *mut heif_chroma,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -2204,26 +1678,17 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has 'pixel aspect ratio information' information. If 0 is returned, the output is filled with the 1:1 default."]
-    pub fn heif_image_handle_get_pixel_aspect_ratio(
-        arg1: *const heif_image_handle,
-        aspect_h: *mut u32,
-        aspect_v: *mut u32,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_pixel_aspect_ratio(arg1: *const heif_image_handle, aspect_h: *mut u32, aspect_v: *mut u32) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " This gets the context associated with the image handle.\n Note that you have to release the returned context with heif_context_free() in any case.\n\n This means: when you have several image-handles that originate from the same file and you get the\n context of each of them, the returned pointer may be different even though it refers to the same\n logical context. You have to call heif_context_free() on all those context pointers.\n After you freed a context pointer, you can still use the context through a different pointer that you\n might have acquired from elsewhere."]
     pub fn heif_image_handle_get_context(handle: *const heif_image_handle) -> *mut heif_context;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_gimi_content_id(
-        handle: *const heif_image_handle,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_gimi_content_id(handle: *const heif_image_handle) -> *const libc::c_char;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_gimi_content_id(
-        handle: *mut heif_image_handle,
-        content_id: *const libc::c_char,
-    );
+    pub fn heif_image_handle_set_gimi_content_id(handle: *mut heif_image_handle, content_id: *const libc::c_char);
 }
 unsafe extern "C" {
     #[doc = " Returns the number of components in the cmpd box, or 0 if no cmpd property exists."]
@@ -2231,38 +1696,23 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns the component_type for the given cmpd component index.\n Returns 0 if out of range or no cmpd property."]
-    pub fn heif_image_handle_get_cmpd_component_type(
-        arg1: *const heif_image_handle,
-        component_idx: u32,
-    ) -> u16;
+    pub fn heif_image_handle_get_cmpd_component_type(arg1: *const heif_image_handle, component_idx: u32) -> u16;
 }
 unsafe extern "C" {
     #[doc = " Returns the component_type_uri for the given cmpd component index (component_type >= 0x8000).\n Returns NULL if the component does not have a URI.\n The returned string must be freed with heif_string_release()."]
-    pub fn heif_image_handle_get_cmpd_component_type_uri(
-        arg1: *const heif_image_handle,
-        component_idx: u32,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_cmpd_component_type_uri(arg1: *const heif_image_handle, component_idx: u32) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Returns non-zero (count of content IDs) if an ItemComponentContentIDProperty is set, 0 otherwise."]
-    pub fn heif_image_handle_has_gimi_component_content_ids(
-        arg1: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_gimi_component_content_ids(arg1: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns the GIMI component content ID for the given component index.\n Returns NULL if no ItemComponentContentIDProperty is set or index is out of range.\n The returned string must be freed with heif_string_release()."]
-    pub fn heif_image_handle_get_gimi_component_content_id(
-        arg1: *const heif_image_handle,
-        component_idx: u32,
-    ) -> *const libc::c_char;
+    pub fn heif_image_handle_get_gimi_component_content_id(arg1: *const heif_image_handle, component_idx: u32) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Set a GIMI component content ID for a single component.\n If an ItemComponentContentIDProperty does not yet exist, one will be created.\n The content IDs array is resized as needed (new entries default to empty)."]
-    pub fn heif_image_handle_set_gimi_component_content_id(
-        arg1: *mut heif_image_handle,
-        component_idx: u32,
-        content_id: *const libc::c_char,
-    );
+    pub fn heif_image_handle_set_gimi_component_content_id(arg1: *mut heif_image_handle, component_idx: u32, content_id: *const libc::c_char);
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -2286,74 +1736,44 @@ pub struct heif_image_tiling {
 unsafe extern "C" {
     #[doc = " If 'process_image_transformations' is true, this returns modified sizes.\n If it is false, the top_offset and left_offset will always be (0;0)."]
     pub fn heif_image_handle_get_image_tiling(
-        handle: *const heif_image_handle,
-        process_image_transformations: libc::c_int,
-        out_tiling: *mut heif_image_tiling,
+        handle: *const heif_image_handle, process_image_transformations: libc::c_int, out_tiling: *mut heif_image_tiling,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " For grid images, return the image item ID of a specific grid tile.\n If 'process_image_transformations' is true, the tile positions are given in the transformed image coordinate system and\n are internally mapped to the original image tile positions."]
     pub fn heif_image_handle_get_grid_image_tile_id(
-        handle: *const heif_image_handle,
-        process_image_transformations: libc::c_int,
-        tile_x: u32,
-        tile_y: u32,
-        out_tile_item_id: *mut heif_item_id,
+        handle: *const heif_image_handle, process_image_transformations: libc::c_int, tile_x: u32, tile_y: u32, out_tile_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " The tile position is given in tile indices, not in pixel coordinates.\n If the image transformations are processed (option->ignore_image_transformations==false), the tile position\n is given in the transformed coordinates."]
     pub fn heif_image_handle_decode_image_tile(
-        in_handle: *const heif_image_handle,
-        out_img: *mut *mut heif_image,
-        colorspace: heif_colorspace,
-        chroma: heif_chroma,
-        options: *const heif_decoding_options,
-        tile_x: u32,
-        tile_y: u32,
+        in_handle: *const heif_image_handle, out_img: *mut *mut heif_image, colorspace: heif_colorspace, chroma: heif_chroma,
+        options: *const heif_decoding_options, tile_x: u32, tile_y: u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " @brief Encodes an array of images into a grid.\n\n @param ctx The file context\n @param tiles User allocated array of images that will form the grid.\n @param rows The number of rows in the grid.\n @param columns The number of columns in the grid.\n @param encoder Defines the encoder to use. See heif_context_get_encoder_for_format()\n @param input_options Optional, may be nullptr.\n @param out_image_handle Returns a handle to the grid. The caller is responsible for freeing it.\n @return Returns an error if ctx, tiles, or encoder is nullptr. If rows or columns is 0."]
     pub fn heif_context_encode_grid(
-        ctx: *mut heif_context,
-        tiles: *mut *mut heif_image,
-        rows: u16,
-        columns: u16,
-        encoder: *mut heif_encoder,
-        input_options: *const heif_encoding_options,
-        out_image_handle: *mut *mut heif_image_handle,
+        ctx: *mut heif_context, tiles: *mut *mut heif_image, rows: u16, columns: u16, encoder: *mut heif_encoder,
+        input_options: *const heif_encoding_options, out_image_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_grid_image(
-        ctx: *mut heif_context,
-        image_width: u32,
-        image_height: u32,
-        tile_columns: u32,
-        tile_rows: u32,
-        encoding_options: *const heif_encoding_options,
-        out_grid_image_handle: *mut *mut heif_image_handle,
+        ctx: *mut heif_context, image_width: u32, image_height: u32, tile_columns: u32, tile_rows: u32,
+        encoding_options: *const heif_encoding_options, out_grid_image_handle: *mut *mut heif_image_handle,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_image_tile(
-        ctx: *mut heif_context,
-        tiled_image: *mut heif_image_handle,
-        tile_x: u32,
-        tile_y: u32,
-        image: *const heif_image,
-        encoder: *mut heif_encoder,
+        ctx: *mut heif_context, tiled_image: *mut heif_image_handle, tile_x: u32, tile_y: u32, image: *const heif_image, encoder: *mut heif_encoder,
     ) -> heif_error;
 }
-pub const heif_component_datatype_heif_component_datatype_unsigned_integer:
-    heif_component_datatype = 0;
-pub const heif_component_datatype_heif_component_datatype_floating_point: heif_component_datatype =
-    1;
-pub const heif_component_datatype_heif_component_datatype_complex_number: heif_component_datatype =
-    2;
-pub const heif_component_datatype_heif_component_datatype_signed_integer: heif_component_datatype =
-    3;
+pub const heif_component_datatype_heif_component_datatype_unsigned_integer: heif_component_datatype = 0;
+pub const heif_component_datatype_heif_component_datatype_floating_point: heif_component_datatype = 1;
+pub const heif_component_datatype_heif_component_datatype_complex_number: heif_component_datatype = 2;
+pub const heif_component_datatype_heif_component_datatype_signed_integer: heif_component_datatype = 3;
 pub const heif_component_datatype_heif_component_datatype_undefined: heif_component_datatype = 255;
 #[doc = " --- pixel datatype support\n\n The numeric values are aligned with the ISO/IEC 23001-17 Table 2\n component_format byte (used by the uncC box of the uncompressed codec).\n This is an internal convenience and should not be relied upon."]
 pub type heif_component_datatype = libc::c_uint;
@@ -2369,8 +1789,7 @@ pub struct heif_complex64 {
     pub real: f64,
     pub imaginary: f64,
 }
-pub const heif_cmpd_component_type_heif_cmpd_component_type_monochrome: heif_cmpd_component_type =
-    0;
+pub const heif_cmpd_component_type_heif_cmpd_component_type_monochrome: heif_cmpd_component_type = 0;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_Y: heif_cmpd_component_type = 1;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_Cb: heif_cmpd_component_type = 2;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_Cr: heif_cmpd_component_type = 3;
@@ -2381,14 +1800,12 @@ pub const heif_cmpd_component_type_heif_cmpd_component_type_alpha: heif_cmpd_com
 pub const heif_cmpd_component_type_heif_cmpd_component_type_depth: heif_cmpd_component_type = 8;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_disparity: heif_cmpd_component_type = 9;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_palette: heif_cmpd_component_type = 10;
-pub const heif_cmpd_component_type_heif_cmpd_component_type_filter_array: heif_cmpd_component_type =
-    11;
+pub const heif_cmpd_component_type_heif_cmpd_component_type_filter_array: heif_cmpd_component_type = 11;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_padded: heif_cmpd_component_type = 12;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_cyan: heif_cmpd_component_type = 13;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_magenta: heif_cmpd_component_type = 14;
 pub const heif_cmpd_component_type_heif_cmpd_component_type_yellow: heif_cmpd_component_type = 15;
-pub const heif_cmpd_component_type_heif_cmpd_component_type_key_black: heif_cmpd_component_type =
-    16;
+pub const heif_cmpd_component_type_heif_cmpd_component_type_key_black: heif_cmpd_component_type = 16;
 #[doc = " --- component types (ISO/IEC 23001-17 Table 1, used in the cmpd box)"]
 pub type heif_cmpd_component_type = libc::c_uint;
 unsafe extern "C" {
@@ -2400,10 +1817,7 @@ unsafe extern "C" {
     pub fn heif_image_get_used_component_ids(arg1: *const heif_image, out_component_ids: *mut u32);
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_channel(
-        arg1: *const heif_image,
-        component_id: u32,
-    ) -> heif_channel;
+    pub fn heif_image_get_component_channel(arg1: *const heif_image, component_id: u32) -> heif_channel;
 }
 unsafe extern "C" {
     pub fn heif_image_get_component_width(arg1: *const heif_image, component_id: u32) -> u32;
@@ -2412,20 +1826,14 @@ unsafe extern "C" {
     pub fn heif_image_get_component_height(arg1: *const heif_image, component_id: u32) -> u32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_bits_per_pixel(
-        arg1: *const heif_image,
-        component_id: u32,
-    ) -> libc::c_int;
+    pub fn heif_image_get_component_bits_per_pixel(arg1: *const heif_image, component_id: u32) -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_get_component_type(arg1: *const heif_image, component_id: u32) -> u16;
 }
 unsafe extern "C" {
     #[doc = " Returns the datatype (unsigned/signed integer, floating point, or complex\n number) of the given component."]
-    pub fn heif_image_get_component_datatype(
-        arg1: *const heif_image,
-        component_id: u32,
-    ) -> heif_component_datatype;
+    pub fn heif_image_get_component_datatype(arg1: *const heif_image, component_id: u32) -> heif_component_datatype;
 }
 unsafe extern "C" {
     #[doc = " --- ID-based component access via heif_image_handle (before decoding)\n\n These let the caller introspect a multi-component image's components without\n decoding any tile. They return 0 / -1 / heif_component_datatype_undefined for\n images that do not expose a component model or for unknown component IDs.\n\n The component IDs returned here match the IDs that\n heif_image_get_used_component_ids() will report after the same image is\n decoded, so the same numerical id can be used to address a component on\n either side of the API."]
@@ -2433,310 +1841,164 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Fills `out_component_ids` with the valid component IDs.\n The caller must allocate an array of at least\n heif_image_handle_get_number_of_components() elements."]
-    pub fn heif_image_handle_get_used_component_ids(
-        arg1: *const heif_image_handle,
-        out_component_ids: *mut u32,
-    );
+    pub fn heif_image_handle_get_used_component_ids(arg1: *const heif_image_handle, out_component_ids: *mut u32);
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_component_type(
-        arg1: *const heif_image_handle,
-        component_id: u32,
-    ) -> u16;
+    pub fn heif_image_handle_get_component_type(arg1: *const heif_image_handle, component_id: u32) -> u16;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_component_bits_per_pixel(
-        arg1: *const heif_image_handle,
-        component_id: u32,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_component_bits_per_pixel(arg1: *const heif_image_handle, component_id: u32) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_get_component_datatype(
-        arg1: *const heif_image_handle,
-        component_id: u32,
-    ) -> heif_component_datatype;
+    pub fn heif_image_handle_get_component_datatype(arg1: *const heif_image_handle, component_id: u32) -> heif_component_datatype;
 }
 unsafe extern "C" {
     #[doc = " --- adding components to a heif_image (encoder path)"]
     pub fn heif_image_add_component(
-        image: *mut heif_image,
-        width: libc::c_int,
-        height: libc::c_int,
-        component_type: u16,
-        datatype: heif_component_datatype,
-        bit_depth: libc::c_int,
-        out_component_id: *mut u32,
+        image: *mut heif_image, width: libc::c_int, height: libc::c_int, component_type: u16, datatype: heif_component_datatype,
+        bit_depth: libc::c_int, out_component_id: *mut u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " --- untyped uint8 component data getters: stride is in BYTES per row."]
-    pub fn heif_image_get_component_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_stride: *mut usize,
-    ) -> *const u8;
+    pub fn heif_image_get_component_readonly(arg1: *const heif_image, component_id: u32, out_stride: *mut usize) -> *const u8;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_stride: *mut usize,
-    ) -> *mut u8;
+    pub fn heif_image_get_component(arg1: *mut heif_image, component_id: u32, out_stride: *mut usize) -> *mut u8;
 }
 unsafe extern "C" {
     #[doc = " --- typed component data getters: `out_row_elements` is the number of T\n elements per row, not bytes. Index with `data[y * row_elements + x]` (no\n casts, no sizeof). libheif allocates rows with element-aligned padding, so\n this count is always exact for the named type T."]
-    pub fn heif_image_get_component_uint16_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const u16;
+    pub fn heif_image_get_component_uint16_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const u16;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_uint16(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut u16;
+    pub fn heif_image_get_component_uint16(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut u16;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_uint32_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const u32;
+    pub fn heif_image_get_component_uint32_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const u32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_uint32(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut u32;
+    pub fn heif_image_get_component_uint32(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut u32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_uint64_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const u64;
+    pub fn heif_image_get_component_uint64_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const u64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_uint64(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut u64;
+    pub fn heif_image_get_component_uint64(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut u64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int8_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const i8;
+    pub fn heif_image_get_component_int8_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const i8;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int8(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut i8;
+    pub fn heif_image_get_component_int8(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut i8;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int16_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const i16;
+    pub fn heif_image_get_component_int16_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const i16;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int16(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut i16;
+    pub fn heif_image_get_component_int16(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut i16;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int32_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const i32;
+    pub fn heif_image_get_component_int32_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const i32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int32(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut i32;
+    pub fn heif_image_get_component_int32(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut i32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int64_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const i64;
+    pub fn heif_image_get_component_int64_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const i64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_int64(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut i64;
+    pub fn heif_image_get_component_int64(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut i64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_float32_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const f32;
+    pub fn heif_image_get_component_float32_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const f32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_float32(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut f32;
+    pub fn heif_image_get_component_float32(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut f32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_float64_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *const f64;
+    pub fn heif_image_get_component_float64_readonly(arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize) -> *const f64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_float64(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut f64;
+    pub fn heif_image_get_component_float64(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut f64;
 }
 unsafe extern "C" {
     pub fn heif_image_get_component_complex32_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
+        arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize,
     ) -> *const heif_complex32;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_complex32(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut heif_complex32;
+    pub fn heif_image_get_component_complex32(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut heif_complex32;
 }
 unsafe extern "C" {
     pub fn heif_image_get_component_complex64_readonly(
-        arg1: *const heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
+        arg1: *const heif_image, component_id: u32, out_row_elements: *mut usize,
     ) -> *const heif_complex64;
 }
 unsafe extern "C" {
-    pub fn heif_image_get_component_complex64(
-        arg1: *mut heif_image,
-        component_id: u32,
-        out_row_elements: *mut usize,
-    ) -> *mut heif_complex64;
+    pub fn heif_image_get_component_complex64(arg1: *mut heif_image, component_id: u32, out_row_elements: *mut usize) -> *mut heif_complex64;
 }
 unsafe extern "C" {
     #[doc = " Set a GIMI component content ID for the component with the given\n component_id (as minted by heif_image_add_component / returned via the\n component access API). Pass an empty string to clear a previously set id.\n Returns an error if no component with this id exists on the image.\n The collected ids are written into an ItemComponentContentIDProperty box\n during encoding."]
-    pub fn heif_image_set_gimi_component_content_id(
-        arg1: *mut heif_image,
-        component_id: u32,
-        content_id: *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_image_set_gimi_component_content_id(arg1: *mut heif_image, component_id: u32, content_id: *const libc::c_char) -> heif_error;
 }
 #[doc = " Equirectangular projection."]
-pub const heif_omaf_image_projection_heif_omaf_image_projection_equirectangular:
-    heif_omaf_image_projection = 0;
+pub const heif_omaf_image_projection_heif_omaf_image_projection_equirectangular: heif_omaf_image_projection = 0;
 #[doc = " Cube map."]
-pub const heif_omaf_image_projection_heif_omaf_image_projection_cube_map:
-    heif_omaf_image_projection = 1;
+pub const heif_omaf_image_projection_heif_omaf_image_projection_cube_map: heif_omaf_image_projection = 1;
 #[doc = " Flat projection. Also returned by the get-projection accessors when no\n projection information is present on the image, so callers can use\n `result == heif_omaf_image_projection_flat` to test for \"no prfr box\".\n 0xFF lies outside the prfr value range reserved by ISO 23090-2:2023\n Table 10, so it cannot collide with a value read from a file."]
-pub const heif_omaf_image_projection_heif_omaf_image_projection_flat: heif_omaf_image_projection =
-    255;
+pub const heif_omaf_image_projection_heif_omaf_image_projection_flat: heif_omaf_image_projection = 255;
 #[doc = " OMAF Image projection.\n\n The image projection for most images is flat - it is projected as intended to be shown on\n a flat screen or print. For immersive or omnidirectional media (e.g. VR headsets, or\n equivalent), there are alternatives such as an equirectangular projection or cubemap projection.\n\n See ISO/IEC 23090-2 \"Omnidirectional media format\" for more information."]
 pub type heif_omaf_image_projection = libc::c_uint;
 unsafe extern "C" {
     #[doc = " To test whether projection information is present, compare the getter's\n result against heif_omaf_image_projection_flat."]
-    pub fn heif_image_handle_get_omaf_image_projection(
-        handle: *const heif_image_handle,
-    ) -> heif_omaf_image_projection;
+    pub fn heif_image_handle_get_omaf_image_projection(handle: *const heif_image_handle) -> heif_omaf_image_projection;
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_set_omaf_image_projection(
-        handle: *mut heif_image_handle,
-        image_projection: heif_omaf_image_projection,
-    );
+    pub fn heif_image_handle_set_omaf_image_projection(handle: *mut heif_image_handle, image_projection: heif_omaf_image_projection);
 }
 unsafe extern "C" {
     #[doc = " Variants operating on a heif_image (a decoded or about-to-be-encoded pixel\n image). Setting the projection on a heif_image before encoding causes the\n resulting image item to carry the corresponding prfr property."]
-    pub fn heif_image_get_omaf_image_projection(
-        image: *const heif_image,
-    ) -> heif_omaf_image_projection;
+    pub fn heif_image_get_omaf_image_projection(image: *const heif_image) -> heif_omaf_image_projection;
 }
 unsafe extern "C" {
-    pub fn heif_image_set_omaf_image_projection(
-        image: *mut heif_image,
-        image_projection: heif_omaf_image_projection,
-    );
+    pub fn heif_image_set_omaf_image_projection(image: *mut heif_image, image_projection: heif_omaf_image_projection);
 }
 #[doc = "  heif_item_property_unknown = -1,"]
 pub const heif_item_property_type_heif_item_property_type_invalid: heif_item_property_type = 0;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_user_description:
-    heif_item_property_type = 1969513843;
+pub const heif_item_property_type_heif_item_property_type_user_description: heif_item_property_type = 1969513843;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_transform_mirror:
-    heif_item_property_type = 1768778098;
+pub const heif_item_property_type_heif_item_property_type_transform_mirror: heif_item_property_type = 1768778098;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_transform_rotation:
-    heif_item_property_type = 1769107316;
+pub const heif_item_property_type_heif_item_property_type_transform_rotation: heif_item_property_type = 1769107316;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_transform_crop: heif_item_property_type =
-    1668047216;
+pub const heif_item_property_type_heif_item_property_type_transform_crop: heif_item_property_type = 1668047216;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_image_size: heif_item_property_type =
-    1769173093;
+pub const heif_item_property_type_heif_item_property_type_image_size: heif_item_property_type = 1769173093;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_uuid: heif_item_property_type =
-    1970628964;
+pub const heif_item_property_type_heif_item_property_type_uuid: heif_item_property_type = 1970628964;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_tai_clock_info: heif_item_property_type =
-    1952541027;
+pub const heif_item_property_type_heif_item_property_type_tai_clock_info: heif_item_property_type = 1952541027;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_tai_timestamp: heif_item_property_type =
-    1769234793;
+pub const heif_item_property_type_heif_item_property_type_tai_timestamp: heif_item_property_type = 1769234793;
 #[doc = "  heif_item_property_unknown = -1,"]
-pub const heif_item_property_type_heif_item_property_type_extended_language:
-    heif_item_property_type = 1701604967;
+pub const heif_item_property_type_heif_item_property_type_extended_language: heif_item_property_type = 1701604967;
 #[doc = " ------------------------- item properties -------------------------"]
 pub type heif_item_property_type = libc::c_uint;
 unsafe extern "C" {
     #[doc = " Get the heif_property_id for a heif_item_id.\n You may specify which property 'type' you want to receive.\n If you specify 'heif_item_property_type_invalid', all properties associated to that item are returned.\n The number of properties is returned, which are not more than 'count' if (out_list != nullptr).\n By setting out_list==nullptr, you can query the number of properties, 'count' is ignored."]
     pub fn heif_item_get_properties_of_type(
-        context: *const heif_context,
-        id: heif_item_id,
-        type_: heif_item_property_type,
-        out_list: *mut heif_property_id,
-        count: libc::c_int,
+        context: *const heif_context, id: heif_item_id, type_: heif_item_property_type, out_list: *mut heif_property_id, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns all transformative properties in the correct order.\n This includes \"irot\", \"imir\", \"clap\".\n The number of properties is returned, which are not more than 'count' if (out_list != nullptr).\n By setting out_list==nullptr, you can query the number of properties, 'count' is ignored."]
     pub fn heif_item_get_transformation_properties(
-        context: *const heif_context,
-        id: heif_item_id,
-        out_list: *mut heif_property_id,
-        count: libc::c_int,
+        context: *const heif_context, id: heif_item_id, out_list: *mut heif_property_id, count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
-    pub fn heif_item_get_property_type(
-        context: *const heif_context,
-        id: heif_item_id,
-        property_id: heif_property_id,
-    ) -> heif_item_property_type;
+    pub fn heif_item_get_property_type(context: *const heif_context, id: heif_item_id, property_id: heif_property_id) -> heif_item_property_type;
 }
 #[doc = " The strings are managed by libheif. They will be deleted in heif_property_user_description_release()."]
 #[repr(C)]
@@ -2752,101 +2014,66 @@ pub struct heif_property_user_description {
 unsafe extern "C" {
     #[doc = " Get the \"udes\" user description property content.\n Undefined strings are returned as empty strings."]
     pub fn heif_item_get_property_user_description(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
-        out: *mut *mut heif_property_user_description,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id, out: *mut *mut heif_property_user_description,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a \"udes\" user description property to the item.\n If any string pointers are NULL, an empty string will be used instead."]
     pub fn heif_item_add_property_user_description(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        description: *const heif_property_user_description,
-        out_propertyId: *mut heif_property_id,
+        context: *const heif_context, itemId: heif_item_id, description: *const heif_property_user_description, out_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Release all strings and the object itself.\n Only call for objects that you received from heif_item_get_property_user_description()."]
     pub fn heif_property_user_description_release(arg1: *mut heif_property_user_description);
 }
-pub const heif_transform_mirror_direction_heif_transform_mirror_direction_invalid:
-    heif_transform_mirror_direction = -1;
+pub const heif_transform_mirror_direction_heif_transform_mirror_direction_invalid: heif_transform_mirror_direction = -1;
 #[doc = " flip image vertically"]
-pub const heif_transform_mirror_direction_heif_transform_mirror_direction_vertical:
-    heif_transform_mirror_direction = 0;
+pub const heif_transform_mirror_direction_heif_transform_mirror_direction_vertical: heif_transform_mirror_direction = 0;
 #[doc = " flip image horizontally"]
-pub const heif_transform_mirror_direction_heif_transform_mirror_direction_horizontal:
-    heif_transform_mirror_direction = 1;
+pub const heif_transform_mirror_direction_heif_transform_mirror_direction_horizontal: heif_transform_mirror_direction = 1;
 pub type heif_transform_mirror_direction = libc::c_int;
 unsafe extern "C" {
     #[doc = " Will return 'heif_transform_mirror_direction_invalid' in case of error.\n If 'propertyId==0', it returns the first imir property found."]
     pub fn heif_item_get_property_transform_mirror(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id,
     ) -> heif_transform_mirror_direction;
 }
 unsafe extern "C" {
     #[doc = " Returns only 0, 90, 180, or 270 angle values.\n Returns -1 in case of error (but it will only return an error in case of wrong usage).\n If 'propertyId==0', it returns the first irot property found."]
     pub fn heif_item_get_property_transform_rotation_ccw(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Returns the number of pixels that should be removed from the four edges.\n Because of the way this data is stored, you have to pass the image size at the moment of the crop operation\n to compute the cropped border sizes.\n If 'propertyId==0', it returns the first clap property found."]
     pub fn heif_item_get_property_transform_crop_borders(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
-        image_width: libc::c_int,
-        image_height: libc::c_int,
-        left: *mut libc::c_int,
-        top: *mut libc::c_int,
-        right: *mut libc::c_int,
-        bottom: *mut libc::c_int,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id, image_width: libc::c_int, image_height: libc::c_int,
+        left: *mut libc::c_int, top: *mut libc::c_int, right: *mut libc::c_int, bottom: *mut libc::c_int,
     );
 }
 unsafe extern "C" {
     #[doc = " @param context     The heif_context for the file\n @param itemId      The image item id to which this property belongs.\n @param fourcc_type The short four-cc type of the property to add.\n @param uuid_type   If fourcc_type=='uuid', this should point to a 16-byte UUID type. It is ignored otherwise and can be NULL.\n @param data        Data to insert for this property (including a full-box header, if required for this box).\n @param size        Length of data in bytes.\n @param is_essential   Whether this property is essential (boolean).\n @param out_propertyId Outputs the id of the inserted property. Can be NULL."]
     pub fn heif_item_add_raw_property(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        fourcc_type: u32,
-        uuid_type: *const u8,
-        data: *const u8,
-        size: usize,
-        is_essential: libc::c_int,
-        out_propertyId: *mut heif_property_id,
+        context: *const heif_context, itemId: heif_item_id, fourcc_type: u32, uuid_type: *const u8, data: *const u8, size: usize,
+        is_essential: libc::c_int, out_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_item_get_property_raw_size(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
-        out_size: *mut usize,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id, out_size: *mut usize,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " @param out_data User-supplied array to write the property data to. The required size of the output array is given by heif_item_get_property_raw_size()."]
     pub fn heif_item_get_property_raw_data(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
-        out_data: *mut u8,
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id, out_data: *mut u8,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the extended type for an extended \"uuid\" box.\n\n This provides the UUID for the extended box.\n\n This method should only be called on properties of type `heif_item_property_type_uuid`.\n\n @param context the heif_context containing the HEIF file\n @param itemId the image item id to which this property belongs.\n @param propertyId the property index (1-based) to get the extended type for\n @param out_extended_type output of the call, must be a pointer to at least 16-bytes.\n @return heif_error_success or an error indicating the failure"]
     pub fn heif_item_get_property_uuid_type(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        propertyId: heif_property_id,
-        out_extended_type: *mut [u8; 16usize],
+        context: *const heif_context, itemId: heif_item_id, propertyId: heif_property_id, out_extended_type: *mut [u8; 16usize],
     ) -> heif_error;
 }
 #[doc = " --- Bayer / filter array pattern (cpat box)"]
@@ -2859,36 +2086,23 @@ pub struct heif_bayer_pattern_pixel {
 unsafe extern "C" {
     #[doc = " Set a Bayer / filter array pattern on an image.\n The pattern is a 2D array of component indices with dimensions pattern_width x pattern_height.\n The number of entries in patternPixels must be pattern_width * pattern_height.\n The component_index values are indices into the cmpd component definition table.\n On the encoder path, these indices are generated by heif_image_add_component() and the\n encoder adds reference components to cmpd for pattern entries that don't have image planes.\n On the decoder path, they come directly from the cpat box."]
     pub fn heif_image_set_bayer_pattern(
-        arg1: *mut heif_image,
-        bayer_component_id: u32,
-        pattern_width: u16,
-        pattern_height: u16,
-        patternPixels: *const heif_bayer_pattern_pixel,
+        arg1: *mut heif_image, bayer_component_id: u32, pattern_width: u16, pattern_height: u16, patternPixels: *const heif_bayer_pattern_pixel,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a reference-only component to the image's component description table for use as\n a Bayer pattern entry. The component is registered (its component_type appears in the\n cmpd box) but carries no pixel plane of its own — the actual pixel data lives in the\n single combined Bayer component (added with heif_image_add_component()).\n\n Use this for the per-cell colors that the Bayer pattern references (e.g. red, green,\n blue) when those colors have no standalone plane. Pass the returned component_id in\n heif_bayer_pattern_pixel::component_id of the patternPixels array given to\n heif_image_set_bayer_pattern().\n\n component_type: one of heif_cmpd_component_type_* (e.g. _red, _green, _blue).\n out_component_id: receives the minted component id. Must not be NULL."]
-    pub fn heif_image_add_bayer_component(
-        arg1: *mut heif_image,
-        component_type: u16,
-        out_component_id: *mut u32,
-    ) -> heif_error;
+    pub fn heif_image_add_bayer_component(arg1: *mut heif_image, component_type: u16, out_component_id: *mut u32) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Returns whether the image has a Bayer / filter array pattern.\n If the image has a pattern, out_pattern_width and out_pattern_height are set.\n Either output pointer may be NULL if the caller does not need that value."]
     pub fn heif_image_get_bayer_pattern_size(
-        arg1: *const heif_image,
-        bayer_component_id: u32,
-        out_pattern_width: *mut u16,
-        out_pattern_height: *mut u16,
+        arg1: *const heif_image, bayer_component_id: u32, out_pattern_width: *mut u16, out_pattern_height: *mut u16,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the Bayer / filter array pattern pixels.\n The caller must provide an array large enough for pattern_width * pattern_height entries\n (use heif_image_get_bayer_pattern_size() to query the dimensions first).\n Returns heif_error_Ok on success, or an error if no pattern is set."]
     pub fn heif_image_get_bayer_pattern(
-        arg1: *const heif_image,
-        bayer_component_id: u32,
-        out_patternPixels: *mut heif_bayer_pattern_pixel,
+        arg1: *const heif_image, bayer_component_id: u32, out_patternPixels: *mut heif_bayer_pattern_pixel,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -2902,11 +2116,7 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Add a polarization pattern to an image.\n component_indices: array of component indices this pattern applies to (may be NULL if num_component_indices == 0,\n                    meaning the pattern applies to all components).\n polarization_angles: array of pattern_width * pattern_height float values.\n                      Each is an angle in degrees [0.0, 360.0), or heif_polarization_angle_no_filter() for \"no filter\".\n Multiple patterns can be added (one per distinct component group)."]
     pub fn heif_image_add_polarization_pattern(
-        arg1: *mut heif_image,
-        num_component_indices: u32,
-        component_indices: *const u32,
-        pattern_width: u16,
-        pattern_height: u16,
+        arg1: *mut heif_image, num_component_indices: u32, component_indices: *const u32, pattern_width: u16, pattern_height: u16,
         polarization_angles: *const f32,
     ) -> heif_error;
 }
@@ -2917,28 +2127,19 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get the sizes/dimensions of a polarization pattern (to allocate arrays for the data query)."]
     pub fn heif_image_get_polarization_pattern_info(
-        arg1: *const heif_image,
-        pattern_index: libc::c_int,
-        out_num_component_indices: *mut u32,
-        out_pattern_width: *mut u16,
+        arg1: *const heif_image, pattern_index: libc::c_int, out_num_component_indices: *mut u32, out_pattern_width: *mut u16,
         out_pattern_height: *mut u16,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the actual data of a polarization pattern.\n Caller must provide pre-allocated arrays:\n   out_component_indices: num_component_indices entries (may be NULL if num_component_indices == 0)\n   out_polarization_angles: pattern_width * pattern_height entries"]
     pub fn heif_image_get_polarization_pattern_data(
-        arg1: *const heif_image,
-        pattern_index: libc::c_int,
-        out_component_indices: *mut u32,
-        out_polarization_angles: *mut f32,
+        arg1: *const heif_image, pattern_index: libc::c_int, out_component_indices: *mut u32, out_polarization_angles: *mut f32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Find the polarization pattern index that applies to a given component index.\n Returns the pattern index (>= 0), or -1 if no pattern matches.\n A pattern with an empty component list (component_count == 0) matches all components."]
-    pub fn heif_image_get_polarization_pattern_index_for_component(
-        arg1: *const heif_image,
-        component_index: u32,
-    ) -> libc::c_int;
+    pub fn heif_image_get_polarization_pattern_index_for_component(arg1: *const heif_image, component_index: u32) -> libc::c_int;
 }
 #[doc = " --- Sensor bad pixels map (ISO 23001-17, Section 6.1.7)"]
 #[repr(C)]
@@ -2950,16 +2151,8 @@ pub struct heif_bad_pixel {
 unsafe extern "C" {
     #[doc = " Add a sensor bad pixels map to an image.\n component_indices: array of component indices this map applies to (may be NULL if num_component_indices == 0,\n                    meaning the map applies to all components).\n Multiple maps can be added (one per distinct component group with different defects)."]
     pub fn heif_image_add_sensor_bad_pixels_map(
-        arg1: *mut heif_image,
-        num_component_indices: u32,
-        component_indices: *const u32,
-        correction_applied: libc::c_int,
-        num_bad_rows: u32,
-        bad_rows: *const u32,
-        num_bad_columns: u32,
-        bad_columns: *const u32,
-        num_bad_pixels: u32,
-        bad_pixels: *const heif_bad_pixel,
+        arg1: *mut heif_image, num_component_indices: u32, component_indices: *const u32, correction_applied: libc::c_int, num_bad_rows: u32,
+        bad_rows: *const u32, num_bad_columns: u32, bad_columns: *const u32, num_bad_pixels: u32, bad_pixels: *const heif_bad_pixel,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -2969,37 +2162,22 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get the sizes of a sensor bad pixels map (to allocate arrays for the data query)."]
     pub fn heif_image_get_sensor_bad_pixels_map_info(
-        arg1: *const heif_image,
-        map_index: libc::c_int,
-        out_num_component_indices: *mut u32,
-        out_correction_applied: *mut libc::c_int,
-        out_num_bad_rows: *mut u32,
-        out_num_bad_columns: *mut u32,
-        out_num_bad_pixels: *mut u32,
+        arg1: *const heif_image, map_index: libc::c_int, out_num_component_indices: *mut u32, out_correction_applied: *mut libc::c_int,
+        out_num_bad_rows: *mut u32, out_num_bad_columns: *mut u32, out_num_bad_pixels: *mut u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the actual data of a sensor bad pixels map.\n Caller must provide pre-allocated arrays:\n   out_component_indices: num_component_indices entries (may be NULL if num_component_indices == 0)\n   out_bad_rows: num_bad_rows entries (may be NULL if num_bad_rows == 0)\n   out_bad_columns: num_bad_columns entries (may be NULL if num_bad_columns == 0)\n   out_bad_pixels: num_bad_pixels entries (may be NULL if num_bad_pixels == 0)"]
     pub fn heif_image_get_sensor_bad_pixels_map_data(
-        arg1: *const heif_image,
-        map_index: libc::c_int,
-        out_component_indices: *mut u32,
-        out_bad_rows: *mut u32,
-        out_bad_columns: *mut u32,
+        arg1: *const heif_image, map_index: libc::c_int, out_component_indices: *mut u32, out_bad_rows: *mut u32, out_bad_columns: *mut u32,
         out_bad_pixels: *mut heif_bad_pixel,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a sensor non-uniformity correction table to an image.\n component_indices: array of component indices this NUC applies to (may be NULL if num_component_indices == 0,\n                    meaning it applies to all components).\n nuc_gains and nuc_offsets: arrays of image_width * image_height float values.\n Correction equation: y = nuc_gain * x + nuc_offset.\n Multiple NUC tables can be added (one per distinct component group)."]
     pub fn heif_image_add_sensor_nuc(
-        arg1: *mut heif_image,
-        num_component_indices: u32,
-        component_indices: *const u32,
-        nuc_is_applied: libc::c_int,
-        image_width: u32,
-        image_height: u32,
-        nuc_gains: *const f32,
-        nuc_offsets: *const f32,
+        arg1: *mut heif_image, num_component_indices: u32, component_indices: *const u32, nuc_is_applied: libc::c_int, image_width: u32,
+        image_height: u32, nuc_gains: *const f32, nuc_offsets: *const f32,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3009,51 +2187,35 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get the sizes of a sensor NUC table (to allocate arrays for the data query)."]
     pub fn heif_image_get_sensor_nuc_info(
-        arg1: *const heif_image,
-        nuc_index: libc::c_int,
-        out_num_component_indices: *mut u32,
-        out_nuc_is_applied: *mut libc::c_int,
-        out_image_width: *mut u32,
-        out_image_height: *mut u32,
+        arg1: *const heif_image, nuc_index: libc::c_int, out_num_component_indices: *mut u32, out_nuc_is_applied: *mut libc::c_int,
+        out_image_width: *mut u32, out_image_height: *mut u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the actual data of a sensor NUC table.\n Caller must provide pre-allocated arrays:\n   out_component_indices: num_component_indices entries (may be NULL if num_component_indices == 0)\n   out_nuc_gains: image_width * image_height entries\n   out_nuc_offsets: image_width * image_height entries"]
     pub fn heif_image_get_sensor_nuc_data(
-        arg1: *const heif_image,
-        nuc_index: libc::c_int,
-        out_component_indices: *mut u32,
-        out_nuc_gains: *mut f32,
-        out_nuc_offsets: *mut f32,
+        arg1: *const heif_image, nuc_index: libc::c_int, out_component_indices: *mut u32, out_nuc_gains: *mut f32, out_nuc_offsets: *mut f32,
     ) -> heif_error;
 }
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_05:
-    heif_chroma420_sample_location = 0;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_05: heif_chroma420_sample_location = 0;
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_05:
-    heif_chroma420_sample_location = 1;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_05: heif_chroma420_sample_location = 1;
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_00:
-    heif_chroma420_sample_location = 2;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_00: heif_chroma420_sample_location = 2;
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_00:
-    heif_chroma420_sample_location = 3;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_00: heif_chroma420_sample_location = 3;
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_10:
-    heif_chroma420_sample_location = 4;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_10: heif_chroma420_sample_location = 4;
 #[doc = " values 0-5 according to ISO 23091-2 / ITU-T H.273"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_10:
-    heif_chroma420_sample_location = 5;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_05_10: heif_chroma420_sample_location = 5;
 #[doc = " value 6 according to ISO 23001-17"]
-pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_00_01_00:
-    heif_chroma420_sample_location = 6;
+pub const heif_chroma420_sample_location_heif_chroma420_sample_location_00_00_01_00: heif_chroma420_sample_location = 6;
 #[doc = " --- Chroma sample location (ISO 23091-2 / ITU-T H.273 + ISO 23001-17, Section 6.1.4) [cloc box]"]
 pub type heif_chroma420_sample_location = libc::c_uint;
 unsafe extern "C" {
     #[doc = " Set the chroma sample location on an image.\n chroma_location must be in the range 0-6 (see heif_chroma420_sample_location)."]
-    pub fn heif_image_set_chroma_location(arg1: *mut heif_image, chroma_location: u8)
-        -> heif_error;
+    pub fn heif_image_set_chroma_location(arg1: *mut heif_image, chroma_location: u8) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Returns non-zero if the image has a chroma sample location set."]
@@ -3074,14 +2236,11 @@ pub struct heif_camera_intrinsic_matrix {
     pub skew: f64,
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_camera_intrinsic_matrix(
-        handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_camera_intrinsic_matrix(handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_handle_get_camera_intrinsic_matrix(
-        handle: *const heif_image_handle,
-        out_matrix: *mut heif_camera_intrinsic_matrix,
+        handle: *const heif_image_handle, out_matrix: *mut heif_camera_intrinsic_matrix,
     ) -> heif_error;
 }
 #[repr(C)]
@@ -3090,24 +2249,18 @@ pub struct heif_camera_extrinsic_matrix {
     _unused: [u8; 0],
 }
 unsafe extern "C" {
-    pub fn heif_image_handle_has_camera_extrinsic_matrix(
-        handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_has_camera_extrinsic_matrix(handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     pub fn heif_image_handle_get_camera_extrinsic_matrix(
-        handle: *const heif_image_handle,
-        out_matrix: *mut *mut heif_camera_extrinsic_matrix,
+        handle: *const heif_image_handle, out_matrix: *mut *mut heif_camera_extrinsic_matrix,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_camera_extrinsic_matrix_release(arg1: *mut heif_camera_extrinsic_matrix);
 }
 unsafe extern "C" {
-    pub fn heif_camera_extrinsic_matrix_get_rotation_matrix(
-        arg1: *const heif_camera_extrinsic_matrix,
-        out_matrix_row_major: *mut f64,
-    ) -> heif_error;
+    pub fn heif_camera_extrinsic_matrix_get_rotation_matrix(arg1: *const heif_camera_extrinsic_matrix, out_matrix_row_major: *mut f64) -> heif_error;
 }
 #[repr(C)]
 #[derive(Debug)]
@@ -3137,25 +2290,17 @@ pub struct heif_region {
 }
 unsafe extern "C" {
     #[doc = " Get the number of region items that are attached to an image.\n\n @param image_handle the image handle for the image to query.\n @return the number of region items, which can be zero."]
-    pub fn heif_image_handle_get_number_of_region_items(
-        image_handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_region_items(image_handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the region item identifiers for the region items attached to an image.\n\n Possible usage (in C++):\n @code\n  int numRegionItems = heif_image_handle_get_number_of_region_items(handle);\n  if (numRegionItems > 0) {\n      std::vector<heif_item_id> region_item_ids(numRegionItems);\n      heif_image_handle_get_list_of_region_item_ids(handle, region_item_ids.data(), numRegionItems);\n      // use region item ids\n  }\n @endcode\n\n @param image_handle the image handle for the parent image to query\n @param region_item_ids_array array to put the item identifiers into\n @param max_count the maximum number of region identifiers\n @return the number of region item identifiers that were returned."]
     pub fn heif_image_handle_get_list_of_region_item_ids(
-        image_handle: *const heif_image_handle,
-        region_item_ids_array: *mut heif_item_id,
-        max_count: libc::c_int,
+        image_handle: *const heif_image_handle, region_item_ids_array: *mut heif_item_id, max_count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the region item.\n\n Caller is responsible for release of the output heif_region_item with heif_region_item_release().\n\n @param context the context to get the region item from, usually from a file operation\n @param region_item_id the identifier for the region item\n @param out pointer to pointer to the resulting region item\n @return heif_error_ok on success, or an error value indicating the problem"]
-    pub fn heif_context_get_region_item(
-        context: *const heif_context,
-        region_item_id: heif_item_id,
-        out: *mut *mut heif_region_item,
-    ) -> heif_error;
+    pub fn heif_context_get_region_item(context: *const heif_context, region_item_id: heif_item_id, out: *mut *mut heif_region_item) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the item identifier for a region item.\n\n @param region_item the region item to query\n @return the region item identifier (or 0 if the region_item is null)"]
@@ -3167,24 +2312,16 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the reference size for a region item.\n\n The reference size specifies the coordinate space used for the region items.\n When the reference size does not match the image size, the regions need to be\n scaled to correspond.\n\n @param out_width the return value for the reference width (before any transformation)\n @param out_height the return value for the reference height (before any transformation)"]
-    pub fn heif_region_item_get_reference_size(
-        arg1: *mut heif_region_item,
-        out_width: *mut u32,
-        out_height: *mut u32,
-    );
+    pub fn heif_region_item_get_reference_size(arg1: *mut heif_region_item, out_width: *mut u32, out_height: *mut u32);
 }
 unsafe extern "C" {
     #[doc = " Get the number of regions within a region item.\n\n @param region_item the region item to query.\n @return the number of regions"]
-    pub fn heif_region_item_get_number_of_regions(
-        region_item: *const heif_region_item,
-    ) -> libc::c_int;
+    pub fn heif_region_item_get_number_of_regions(region_item: *const heif_region_item) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the regions that are part of a region item.\n\n Caller is responsible for releasing the returned `heif_region` objects, using heif_region_release()\n on each region, or heif_region_release_many() on the returned array.\n\n Possible usage (in C++):\n @code\n  int num_regions = heif_image_handle_get_number_of_regions(region_item);\n  if (num_regions > 0) {\n      std::vector<heif_region*> regions(num_regions);\n      int n = heif_region_item_get_list_of_regions(region_item, regions.data(), (int)regions.size());\n      // use regions\n      heif_region_release_many(regions.data(), n);\n  }\n @endcode\n\n @param region_item the region_item to query\n @param out_regions_array array to put the region pointers into\n @param max_count the maximum number of regions, which needs to correspond to the size of the out_regions_array\n @return the number of regions that were returned."]
     pub fn heif_region_item_get_list_of_regions(
-        region_item: *const heif_region_item,
-        out_regions_array: *mut *mut heif_region,
-        max_count: libc::c_int,
+        region_item: *const heif_region_item, out_regions_array: *mut *mut heif_region, max_count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
@@ -3193,10 +2330,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Release a list of regions.\n\n This should be called on the list of regions from heif_region_item_get_list_of_regions().\n\n @param regions_array the regions to release.\n @param num_items the number of items in the array\n\n \\sa heif_region_release() to release a single region"]
-    pub fn heif_region_release_many(
-        regions_array: *const *const heif_region,
-        num_items: libc::c_int,
-    );
+    pub fn heif_region_release_many(regions_array: *const *const heif_region, num_items: libc::c_int);
 }
 unsafe extern "C" {
     #[doc = " Get the region type for a specified region.\n\n @param region the region to query\n @return the corresponding region type as an enumeration value"]
@@ -3204,61 +2338,34 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the values for a point region.\n\n This returns the coordinates in the reference coordinate space (from the parent region item).\n\n @param region the region to query, which must be of type #heif_region_type_point.\n @param out_x the X coordinate, where 0 is the left-most column.\n @param out_y the Y coordinate, where 0 is the top-most row.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_point_transformed() for a version in pixels after all transformative properties have been applied."]
-    pub fn heif_region_get_point(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-    ) -> heif_error;
+    pub fn heif_region_get_point(region: *const heif_region, out_x: *mut i32, out_y: *mut i32) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the transformed values for a point region.\n\n This returns the coordinates in pixels after all transformative properties have been applied.\n\n @param region the region to query, which must be of type #heif_region_type_point.\n @param image_id the identifier for the image to transform / scale the region to\n @param out_x the X coordinate, where 0 is the left-most column.\n @param out_y the Y coordinate, where 0 is the top-most row.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_point() for a version that returns the values in the reference coordinate space."]
-    pub fn heif_region_get_point_transformed(
-        region: *const heif_region,
-        image_id: heif_item_id,
-        out_x: *mut f64,
-        out_y: *mut f64,
-    ) -> heif_error;
+    pub fn heif_region_get_point_transformed(region: *const heif_region, image_id: heif_item_id, out_x: *mut f64, out_y: *mut f64) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the values for a rectangle region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n The rectangle is represented by a top left corner position, and a size defined\n by a width and height. All of the interior points and the edge are\n part of the region.\n\n @param region the region to query, which must be of type #heif_region_type_rectangle.\n @param out_x the X coordinate for the top left corner, where 0 is the left-most column.\n @param out_y the Y coordinate for the top left corner, where 0 is the top-most row.\n @param out_width the width of the rectangle\n @param out_height the height of the rectangle\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_rectangle_transformed() for a version in pixels after all transformative properties have been applied."]
     pub fn heif_region_get_rectangle(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-        out_width: *mut u32,
-        out_height: *mut u32,
+        region: *const heif_region, out_x: *mut i32, out_y: *mut i32, out_width: *mut u32, out_height: *mut u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the transformed values for a rectangle region.\n\n This returns the coordinates in pixels after all transformative properties have been applied.\n The rectangle is represented by a top left corner position, and a size defined\n by a width and height. All of the interior points and the edge are\n part of the region.\n\n @param region the region to query, which must be of type #heif_region_type_rectangle.\n @param image_id the identifier for the image to transform / scale the region to\n @param out_x the X coordinate for the top left corner, where 0 is the left-most column.\n @param out_y the Y coordinate for the top left corner, where 0 is the top-most row.\n @param out_width the width of the rectangle\n @param out_height the height of the rectangle\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_rectangle() for a version that returns the values in the reference coordinate space."]
     pub fn heif_region_get_rectangle_transformed(
-        region: *const heif_region,
-        image_id: heif_item_id,
-        out_x: *mut f64,
-        out_y: *mut f64,
-        out_width: *mut f64,
-        out_height: *mut f64,
+        region: *const heif_region, image_id: heif_item_id, out_x: *mut f64, out_y: *mut f64, out_width: *mut f64, out_height: *mut f64,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the values for an ellipse region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n The ellipse is represented by a centre position, and a size defined\n by radii in the X and Y directions. All of the interior points and the edge are\n part of the region.\n\n @param region the region to query, which must be of type #heif_region_type_ellipse.\n @param out_x the X coordinate for the centre point, where 0 is the left-most column.\n @param out_y the Y coordinate for the centre point, where 0 is the top-most row.\n @param out_radius_x the radius value in the X direction.\n @param out_radius_y the radius value in the Y direction\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_ellipse_transformed() for a version in pixels after all transformative properties have been applied."]
     pub fn heif_region_get_ellipse(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-        out_radius_x: *mut u32,
-        out_radius_y: *mut u32,
+        region: *const heif_region, out_x: *mut i32, out_y: *mut i32, out_radius_x: *mut u32, out_radius_y: *mut u32,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the transformed values for an ellipse region.\n\n This returns the coordinates in pixels after all transformative properties have been applied.\n The ellipse is represented by a centre position, and a size defined\n by radii in the X and Y directions. All of the interior points and the edge are\n part of the region.\n\n @param region the region to query, which must be of type #heif_region_type_ellipse.\n @param image_id the identifier for the image to transform / scale the region to\n @param out_x the X coordinate for the centre point, where 0 is the left-most column.\n @param out_y the Y coordinate for the centre point, where 0 is the top-most row.\n @param out_radius_x the radius value in the X direction.\n @param out_radius_y the radius value in the Y direction\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_ellipse() for a version that returns the values in the reference coordinate space."]
     pub fn heif_region_get_ellipse_transformed(
-        region: *const heif_region,
-        image_id: heif_item_id,
-        out_x: *mut f64,
-        out_y: *mut f64,
-        out_radius_x: *mut f64,
-        out_radius_y: *mut f64,
+        region: *const heif_region, image_id: heif_item_id, out_x: *mut f64, out_y: *mut f64, out_radius_x: *mut f64, out_radius_y: *mut f64,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3267,18 +2374,11 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the points in a polygon region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n\n A polygon is a sequence of points that form a closed shape. The first point does\n not need to be repeated as the last point. All of the interior points and the edge are\n part of the region.\n The points are returned as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n @param region the region to query, which must be of type #heif_region_type_polygon\n @param out_pts_array the array to return the points in, which must have twice as many entries as there are points\n in the polygon.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_polygon_points_transformed() for a version in pixels after all transformative properties have been applied."]
-    pub fn heif_region_get_polygon_points(
-        region: *const heif_region,
-        out_pts_array: *mut i32,
-    ) -> heif_error;
+    pub fn heif_region_get_polygon_points(region: *const heif_region, out_pts_array: *mut i32) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the transformed points in a polygon region.\n\n This returns the coordinates in pixels after all transformative properties have been applied.\n\n A polygon is a sequence of points that form a closed shape. The first point does\n not need to be repeated as the last point. All of the interior points and the edge are\n part of the region.\n The points are returned as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n @param region the region to query, which must be of type #heif_region_type_polygon\n @param image_id the identifier for the image to transform / scale the region to\n @param out_pts_array the array to return the points in, which must have twice as many entries as there are points\n in the polygon.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_polygon_points() for a version that returns the values in the reference coordinate space."]
-    pub fn heif_region_get_polygon_points_transformed(
-        region: *const heif_region,
-        image_id: heif_item_id,
-        out_pts_array: *mut f64,
-    ) -> heif_error;
+    pub fn heif_region_get_polygon_points_transformed(region: *const heif_region, image_id: heif_item_id, out_pts_array: *mut f64) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the number of points in a polyline.\n\n @param region the region to query, which must be of type #heif_region_type_polyline\n @return the number of points, or -1 on error."]
@@ -3286,28 +2386,16 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the points in a polyline region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n\n A polyline is a sequence of points that does not form a closed shape. Even if the\n polyline is closed, the only points that are part of the region are those that\n intersect (even minimally) a one-pixel line drawn along the polyline.\n The points are provided as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n Possible usage (in C++):\n @code\n int num_polyline_points = heif_region_get_polyline_num_points(region);\n if (num_polyline_points > 0) {\n     std::vector<int32_t> polyline(num_polyline_points * 2);\n     heif_region_get_polyline_points(region, polyline.data());\n     // do something with points ...\n }\n @endcode\n\n @param region the region to query, which must be of type #heif_region_type_polyline\n @param out_pts_array the array to return the points in, which must have twice as many entries as there are points\n in the polyline.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_polyline_points_transformed() for a version in pixels after all transformative properties have been applied."]
-    pub fn heif_region_get_polyline_points(
-        region: *const heif_region,
-        out_pts_array: *mut i32,
-    ) -> heif_error;
+    pub fn heif_region_get_polyline_points(region: *const heif_region, out_pts_array: *mut i32) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the transformed points in a polyline region.\n\n This returns the coordinates in pixels after all transformative properties have been applied.\n\n A polyline is a sequence of points that does not form a closed shape. Even if the\n polyline is closed, the only points that are part of the region are those that\n intersect (even minimally) a one-pixel line drawn along the polyline.\n The points are provided as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n @param region the region to query, which must be of type #heif_region_type_polyline\n @param image_id the identifier for the image to transform / scale the region to\n @param out_pts_array the array to return the points in, which must have twice as many entries as there are points\n in the polyline.\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\sa heif_region_get_polyline_points() for a version that returns the values in the reference coordinate space."]
-    pub fn heif_region_get_polyline_points_transformed(
-        region: *const heif_region,
-        image_id: heif_item_id,
-        out_pts_array: *mut f64,
-    ) -> heif_error;
+    pub fn heif_region_get_polyline_points_transformed(region: *const heif_region, image_id: heif_item_id, out_pts_array: *mut f64) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get a referenced item mask region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n The mask location is represented by a top left corner position, and a size defined\n by a width and height. The value of each sample in that mask identifies whether the\n corresponding pixel is part of the region.\n\n The mask is provided as an image in another item. The image item containing the mask\n is one of:\n\n - a mask item (see ISO/IEC 23008-12:2022 Section 6.10.2), or a derived\n image from a mask item\n\n - an image item in monochrome format (4:0:0 chroma)\n\n - an image item in colour format with luma and chroma planes (e.g. 4:2:0)\n\n If the pixel value is equal to the minimum sample value (e.g. 0 for unsigned\n integer), the pixel is not part of the region. If the pixel value is equal\n to the maximum sample value (e.g. 255 for 8 bit unsigned integer), the pixel\n is part of the region. If the pixel value is between the minimum sample value\n and maximum sample value, the pixel value represents an (application defined)\n probability that the pixel is part of the region, where higher pixel values\n correspond to higher probability values.\n\n @param region the region to query, which must be of type #heif_region_type_referenced_mask.\n @param out_x the X coordinate for the top left corner, where 0 is the left-most column.\n @param out_y the Y coordinate for the top left corner, where 0 is the top-most row.\n @param out_width the width of the mask region\n @param out_height the height of the mask region\n @param out_mask_item_id the item identifier for the image that provides the mask.\n @return heif_error_ok on success, or an error value indicating the problem on failure"]
     pub fn heif_region_get_referenced_mask_ID(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-        out_width: *mut u32,
-        out_height: *mut u32,
-        out_mask_item_id: *mut heif_item_id,
+        region: *const heif_region, out_x: *mut i32, out_y: *mut i32, out_width: *mut u32, out_height: *mut u32, out_mask_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3317,118 +2405,66 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get data for an inline mask region.\n\n This returns the values in the reference coordinate space (from the parent region item).\n The mask location is represented by a top left corner position, and a size defined\n by a width and height.\n\n The mask is held as inline data on the region, one bit per pixel, most significant\n bit first pixel, no padding. If the bit value is `1`, the corresponding pixel is\n part of the region. If the bit value is `0`, the corresponding pixel is not part of the\n region.\n\n Possible usage (in C++):\n @code\n long unsigned int data_len = heif_region_get_inline_mask_data_len(region);\n int32_t x, y;\n uint32_t width, height;\n std::vector<uint8_t> mask_data(data_len);\n err = heif_region_get_inline_mask(region, &x, &y, &width, &height, mask_data.data());\n @endcode\n\n @param region the region to query, which must be of type #heif_region_type_inline_mask.\n @param out_x the X coordinate for the top left corner, where 0 is the left-most column.\n @param out_y the Y coordinate for the top left corner, where 0 is the top-most row.\n @param out_width the width of the mask region\n @param out_height the height of the mask region\n @param out_mask_data the location to return the mask data\n @return heif_error_ok on success, or an error value indicating the problem on failure"]
     pub fn heif_region_get_inline_mask_data(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-        out_width: *mut u32,
-        out_height: *mut u32,
-        out_mask_data: *mut u8,
+        region: *const heif_region, out_x: *mut i32, out_y: *mut i32, out_width: *mut u32, out_height: *mut u32, out_mask_data: *mut u8,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get a mask region image.\n\n This returns the values in the reference coordinate space (from the parent region item).\n The mask location is represented by a top left corner position, and a size defined\n by a width and height.\n\n This function works when the passed region is either a heif_region_type_referenced_mask or\n a heif_region_type_inline_mask.\n The returned image is a monochrome image where each pixel represents the (scaled) probability\n of the pixel being part of the mask.\n\n If the region type is an inline mask, which always holds a binary mask, this function\n converts the binary inline mask to an 8-bit monochrome image with the values '0' and '255'.\n The pixel value is set to `255` where the pixel is part of the region, and `0` where the\n pixel is not part of the region.\n\n @param region the region to query, which must be of type #heif_region_type_inline_mask.\n @param out_x the X coordinate for the top left corner, where 0 is the left-most column.\n @param out_y the Y coordinate for the top left corner, where 0 is the top-most row.\n @param out_width the width of the mask region\n @param out_height the height of the mask region\n @param out_mask_image the returned mask image\n @return heif_error_ok on success, or an error value indicating the problem on failure\n\n \\note the caller is responsible for releasing the mask image"]
     pub fn heif_region_get_mask_image(
-        region: *const heif_region,
-        out_x: *mut i32,
-        out_y: *mut i32,
-        out_width: *mut u32,
-        out_height: *mut u32,
-        out_mask_image: *mut *mut heif_image,
+        region: *const heif_region, out_x: *mut i32, out_y: *mut i32, out_width: *mut u32, out_height: *mut u32, out_mask_image: *mut *mut heif_image,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a region item to an image.\n\n The region item is a collection of regions (point, polyline, polygon, rectangle, ellipse or mask)\n along with a reference size (width and height) that forms the coordinate basis for the regions.\n\n The concept is to add the region item, then add one or more regions to the region item.\n\n @param image_handle the image to attach the region item to.\n @param reference_width the width of the reference size.\n @param reference_height the height of the reference size.\n @param out_region_item the resulting region item\n @return heif_error_ok on success, or an error indicating the problem on failure"]
     pub fn heif_image_handle_add_region_item(
-        image_handle: *mut heif_image_handle,
-        reference_width: u32,
-        reference_height: u32,
-        out_region_item: *mut *mut heif_region_item,
+        image_handle: *mut heif_image_handle, reference_width: u32, reference_height: u32, out_region_item: *mut *mut heif_region_item,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a point region to the region item.\n\n @param region_item the region item that holds this point region\n @param x the x value for the point location\n @param y the y value for the point location\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
-    pub fn heif_region_item_add_region_point(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        out_region: *mut *mut heif_region,
-    ) -> heif_error;
+    pub fn heif_region_item_add_region_point(region_item: *mut heif_region_item, x: i32, y: i32, out_region: *mut *mut heif_region) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a rectangle region to the region item.\n\n @param region_item the region item that holds this rectangle region\n @param x the x value for the top-left corner of this rectangle region\n @param y the y value for the top-left corner of this rectangle region\n @param width the width of this rectangle region\n @param height the height of this rectangle region\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
     pub fn heif_region_item_add_region_rectangle(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, x: i32, y: i32, width: u32, height: u32, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a ellipse region to the region item.\n\n @param region_item the region item that holds this ellipse region\n @param x the x value for the centre of this ellipse region\n @param y the y value for the centre of this ellipse region\n @param radius_x the radius of the ellipse in the X (horizontal) direction\n @param radius_y the radius of the ellipse in the Y (vertical) direction\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
     pub fn heif_region_item_add_region_ellipse(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        radius_x: u32,
-        radius_y: u32,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, x: i32, y: i32, radius_x: u32, radius_y: u32, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a polygon region to the region item.\n\n A polygon is a sequence of points that form a closed shape. The first point does\n not need to be repeated as the last point.\n The points are provided as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n @param region_item the region item that holds this polygon region\n @param pts_array the array of points in X,Y order (see above)\n @param nPoints the number of points\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note `nPoints` is the number of points, not the number of elements in the array\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
     pub fn heif_region_item_add_region_polygon(
-        region_item: *mut heif_region_item,
-        pts_array: *const i32,
-        nPoints: libc::c_int,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, pts_array: *const i32, nPoints: libc::c_int, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a polyline region to the region item.\n\n A polyline is a sequence of points that does not form a closed shape. Even if the\n polyline is closed, the only points that are part of the region are those that\n intersect (even minimally) a one-pixel line drawn along the polyline.\n The points are provided as pairs of X,Y coordinates, in the order X<sub>1</sub>,\n Y<sub>1</sub>, X<sub>2</sub>, Y<sub>2</sub>, ..., X<sub>n</sub>, Y<sub>n</sub>.\n\n @param region_item the region item that holds this polyline region\n @param pts_array the array of points in X,Y order (see above)\n @param nPoints the number of points\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note `nPoints` is the number of points, not the number of elements in the array\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
     pub fn heif_region_item_add_region_polyline(
-        region_item: *mut heif_region_item,
-        pts_array: *const i32,
-        nPoints: libc::c_int,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, pts_array: *const i32, nPoints: libc::c_int, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a referenced mask region to the region item.\n\n The region geometry is described by the pixels in another image item,\n which has a item reference of type `mask` from the region item to the\n image item containing the mask.\n\n The image item containing the mask is one of:\n\n - a mask item (see ISO/IEC 23008-12:2022 Section 6.10.2), or a derived\n image from a mask item\n\n - an image item in monochrome format (4:0:0 chroma)\n\n - an image item in colour format with luma and chroma planes (e.g. 4:2:0)\n\n If the pixel value is equal to the minimum sample value (e.g. 0 for unsigned\n integer), the pixel is not part of the region. If the pixel value is equal\n to the maximum sample value (e.g. 255 for 8 bit unsigned integer), the pixel\n is part of the region. If the pixel value is between the minimum sample value\n and maximum sample value, the pixel value represents an (application defined)\n probability that the pixel is part of the region, where higher pixel values\n correspond to higher probability values.\n\n @param region_item the region item that holds this mask region\n @param x the x value for the top-left corner of this mask region\n @param y the y value for the top-left corner of this mask region\n @param width the width of this mask region\n @param height the height of this mask region\n @param mask_item_id the item identifier for the mask that is referenced\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error indicating the problem on failure\n\n @note The `out_region` parameter is optional, and can be set to `NULL` if not needed."]
     pub fn heif_region_item_add_region_referenced_mask(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        mask_item_id: heif_item_id,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, x: i32, y: i32, width: u32, height: u32, mask_item_id: heif_item_id, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add an inline mask region to the region item.\n\n The region geometry is described by a top left corner position, and a size defined\n by a width and height.\n\n The mask is held as inline data on the region, one bit per pixel, most significant\n bit first pixel, no padding. If the bit value is `1`, the corresponding pixel is\n part of the region. If the bit value is `0`, the corresponding pixel is not part of the\n region.\n\n @param region_item the region item that holds this mask region\n @param x the x value for the top-left corner of this mask region\n @param y the y value for the top-left corner of this mask region\n @param width the width of this mask region\n @param height the height of this mask region\n @param mask_data the location to return the mask data\n @param mask_data_len the length of the mask data, in bytes\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error value indicating the problem on failure"]
     pub fn heif_region_item_add_region_inline_mask_data(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        mask_data: *const u8,
-        mask_data_len: usize,
+        region_item: *mut heif_region_item, x: i32, y: i32, width: u32, height: u32, mask_data: *const u8, mask_data_len: usize,
         out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add an inline mask region image to the region item.\n\n The region geometry is described by a top left corner position, and a size defined\n by a width and height.\n\n The mask data is held as inline data on the region, one bit per pixel. The provided\n image is converted to inline data, where any pixel with a value >= 0x80 becomes part of the\n mask region. If the image width is less that the specified width, it is expanded\n to match the width of the region (zero fill on the right). If the image height is\n less than the specified height, it is expanded to match the height of the region\n (zero fill on the bottom). If the image width or height is greater than the\n width or height (correspondingly) of the region, the image is cropped.\n\n @param region_item the region item that holds this mask region\n @param x the x value for the top-left corner of this mask region\n @param y the y value for the top-left corner of this mask region\n @param width the width of this mask region\n @param height the height of this mask region\n @param image the image to convert to an inline mask\n @param out_region pointer to pointer to the returned region (optional, see below)\n @return heif_error_ok on success, or an error value indicating the problem on failure"]
     pub fn heif_region_item_add_region_inline_mask(
-        region_item: *mut heif_region_item,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        image: *mut heif_image,
-        out_region: *mut *mut heif_region,
+        region_item: *mut heif_region_item, x: i32, y: i32, width: u32, height: u32, image: *mut heif_image, out_region: *mut *mut heif_region,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3437,61 +2473,37 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the item identifiers.\n\n Fills in the item IDs into the user-supplied array {@code ID_array}, preallocated with {@code count} entries.\n\n @param ctx the file context\n @param ID_array the output array.\n @param count the number of items allocated within {@code ID_array}.\n @return the total number of IDs filled into the array, which may be less than {@code count}."]
-    pub fn heif_context_get_list_of_item_IDs(
-        ctx: *const heif_context,
-        ID_array: *mut heif_item_id,
-        count: libc::c_int,
-    ) -> libc::c_int;
+    pub fn heif_context_get_list_of_item_IDs(ctx: *const heif_context, ID_array: *mut heif_item_id, count: libc::c_int) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Gets the item type.\n\n Usually, this is a four character code (e.g. `mime` or `uri `), but it can theoretically be\n any 4-byte number. Thus, the type is returned as an integer. You can use #heif_fourcc to map\n between the two representations.\n\n @param ctx the file context\n @param item_id the item identifier for the item\n @return the item type"]
     pub fn heif_item_get_item_type(ctx: *const heif_context, item_id: heif_item_id) -> u32;
 }
 unsafe extern "C" {
-    pub fn heif_item_is_item_hidden(ctx: *const heif_context, item_id: heif_item_id)
-        -> libc::c_int;
+    pub fn heif_item_is_item_hidden(ctx: *const heif_context, item_id: heif_item_id) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Gets the MIME content_type for an item.\n\n Only valid if the item type is `mime`.\n If the item does not exist, or if it is not a `mime` item, NULL is returned.\n\n @param ctx the file context\n @param item_id the item identifier for the item\n @return the item content_type"]
-    pub fn heif_item_get_mime_item_content_type(
-        ctx: *const heif_context,
-        item_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_item_get_mime_item_content_type(ctx: *const heif_context, item_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Gets the content_encoding for a MIME item.\n\n Only valid if the item type is `mime`.\n If the item does not exist, or if it is not a `mime` item, NULL is returned.\n\n If the item is not encoded, the returned value will be an empty string (not null).\n\n @param ctx the file context\n @param item_id the item identifier for the item\n @return the item content_type"]
-    pub fn heif_item_get_mime_item_content_encoding(
-        ctx: *const heif_context,
-        item_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_item_get_mime_item_content_encoding(ctx: *const heif_context, item_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Gets the item_uri_type for an item.\n\n Only valid if the item type is `uri `.\n If the item does not exist, or if it is not a `uri ` item, NULL is returned.\n\n @param ctx the file context\n @param item_id the item identifier for the item\n @return the item item_uri_type"]
-    pub fn heif_item_get_uri_item_uri_type(
-        ctx: *const heif_context,
-        item_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_item_get_uri_item_uri_type(ctx: *const heif_context, item_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
-    pub fn heif_item_get_item_name(
-        ctx: *const heif_context,
-        item_id: heif_item_id,
-    ) -> *const libc::c_char;
+    pub fn heif_item_get_item_name(ctx: *const heif_context, item_id: heif_item_id) -> *const libc::c_char;
 }
 unsafe extern "C" {
-    pub fn heif_item_set_item_name(
-        ctx: *mut heif_context,
-        item: heif_item_id,
-        item_name: *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_item_set_item_name(ctx: *mut heif_context, item: heif_item_id, item_name: *const libc::c_char) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Gets the raw metadata, as stored in the HEIF file.\n\n Data in a \"mime\" item with \"content_encoding\" can be compressed.\n When `out_compression_format` is NULL, the decompressed data will be returned.\n Otherwise, the compressed data is returned and `out_compression_format` will be filled with the\n compression format.\n If the compression method is not supported, an error will be returned.\n\n It is valid to set `out_data` to NULL. In that case, only the `out_data_size` is filled.\n Note that it is inefficient to use `out_data=NULL` just to get the size of compressed data.\n In general, this should be avoided.\n\n If there is no data assigned to the item or there is an error, `out_data_size` is set to zero.\n\n @param ctx the file context\n @param item_id the item identifier for the item\n @param out_compression_format how the data is compressed. If the pointer is NULL, the decompressed data will be returned.\n @param out_data the corresponding raw metadata\n @param out_data_size the size of the metadata in bytes\n @return whether the call succeeded, or there was an error"]
     pub fn heif_item_get_item_data(
-        ctx: *const heif_context,
-        item_id: heif_item_id,
-        out_compression_format: *mut heif_metadata_compression,
-        out_data: *mut *mut u8,
+        ctx: *const heif_context, item_id: heif_item_id, out_compression_format: *mut heif_metadata_compression, out_data: *mut *mut u8,
         out_data_size: *mut usize,
     ) -> heif_error;
 }
@@ -3502,89 +2514,54 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Get the extended language associated with the item.\n The item is usually a text item.\n\n @param context the heif file context containg the item.\n @param itemId the identifier for the item\n @param out_language output parameter with the item's language. Free with heif_string_release().\n @return heif_error_ok on success, or an error value indicating the problem"]
     pub fn heif_item_get_property_extended_language(
-        context: *const heif_context,
-        itemId: heif_item_id,
-        out_language: *mut *mut libc::c_char,
+        context: *const heif_context, itemId: heif_item_id, out_language: *mut *mut libc::c_char,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_item_set_property_extended_language(
-        context: *mut heif_context,
-        item_id: heif_item_id,
-        language: *const libc::c_char,
-        out_optional_propertyId: *mut heif_property_id,
+        context: *mut heif_context, item_id: heif_item_id, language: *const libc::c_char, out_optional_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the item ids that reference the given item.\n\n @param ctx the file context.\n @param from_item_id the item identifier for the item.\n @param index the index of the reference to get.\n @param out_reference_type_4cc The 4cc of the reference. (e.g dimg, thmb, cdsc, or auxl)\n @param out_references_to the item references. Use {@link heif_release_item_references} to free the memory.\n @return the number of items that reference the given item. Returns 0 if the index exceeds the number of references."]
     pub fn heif_context_get_item_references(
-        ctx: *const heif_context,
-        from_item_id: heif_item_id,
-        index: libc::c_int,
-        out_reference_type_4cc: *mut u32,
+        ctx: *const heif_context, from_item_id: heif_item_id, index: libc::c_int, out_reference_type_4cc: *mut u32,
         out_references_to: *mut *mut heif_item_id,
     ) -> usize;
 }
 unsafe extern "C" {
-    pub fn heif_release_item_references(
-        ctx: *const heif_context,
-        references: *mut *mut heif_item_id,
-    );
+    pub fn heif_release_item_references(ctx: *const heif_context, references: *mut *mut heif_item_id);
 }
 unsafe extern "C" {
-    pub fn heif_context_add_item_reference(
-        ctx: *mut heif_context,
-        reference_type: u32,
-        from_item: heif_item_id,
-        to_item: heif_item_id,
-    ) -> heif_error;
+    pub fn heif_context_add_item_reference(ctx: *mut heif_context, reference_type: u32, from_item: heif_item_id, to_item: heif_item_id)
+    -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_item_references(
-        ctx: *mut heif_context,
-        reference_type: u32,
-        from_item: heif_item_id,
-        to_item: *const heif_item_id,
-        num_to_items: libc::c_int,
+        ctx: *mut heif_context, reference_type: u32, from_item: heif_item_id, to_item: *const heif_item_id, num_to_items: libc::c_int,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " ------------------------- adding new items -------------------------"]
     pub fn heif_context_add_item(
-        ctx: *mut heif_context,
-        item_type: *const libc::c_char,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        out_item_id: *mut heif_item_id,
+        ctx: *mut heif_context, item_type: *const libc::c_char, data: *const libc::c_void, size: libc::c_int, out_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_mime_item(
-        ctx: *mut heif_context,
-        content_type: *const libc::c_char,
-        content_encoding: heif_metadata_compression,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        out_item_id: *mut heif_item_id,
+        ctx: *mut heif_context, content_type: *const libc::c_char, content_encoding: heif_metadata_compression, data: *const libc::c_void,
+        size: libc::c_int, out_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_precompressed_mime_item(
-        ctx: *mut heif_context,
-        content_type: *const libc::c_char,
-        content_encoding: *const libc::c_char,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        out_item_id: *mut heif_item_id,
+        ctx: *mut heif_context, content_type: *const libc::c_char, content_encoding: *const libc::c_char, data: *const libc::c_void,
+        size: libc::c_int, out_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     pub fn heif_context_add_uri_item(
-        ctx: *mut heif_context,
-        item_uri_type: *const libc::c_char,
-        data: *const libc::c_void,
-        size: libc::c_int,
-        out_item_id: *mut heif_item_id,
+        ctx: *mut heif_context, item_uri_type: *const libc::c_char, data: *const libc::c_void, size: libc::c_int, out_item_id: *mut heif_item_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3614,10 +2591,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Returns the IDs for each of the tracks stored in the HEIF file.\n\n The caller MUST allocate `out_track_id_array` with exactly\n heif_context_number_of_sequence_tracks() entries. The function writes\n that many IDs unconditionally. Passing a smaller array results in a\n buffer overflow (undefined behavior); there is no capacity parameter\n and no truncation."]
-    pub fn heif_context_get_track_ids(
-        ctx: *const heif_context,
-        out_track_id_array: *mut [u32; 0usize],
-    );
+    pub fn heif_context_get_track_ids(ctx: *const heif_context, out_track_id_array: *mut [u32; 0usize]);
 }
 unsafe extern "C" {
     #[doc = " Get the ID of the passed track.\n The track ID will never be 0."]
@@ -3637,15 +2611,11 @@ unsafe extern "C" {
     #[doc = " Get the four-cc track handler type.\n Typical codes are \"vide\" for video sequences, \"pict\" for image sequences, \"meta\" for metadata tracks.\n These are defined in heif_track_type_4cc, but files may also contain other types.\n\n @return four-cc handler type"]
     pub fn heif_track_get_track_handler_type(arg1: *const heif_track) -> heif_track_type;
 }
-pub const heif_auxiliary_track_info_type_heif_auxiliary_track_info_type_unknown:
-    heif_auxiliary_track_info_type = 0;
-pub const heif_auxiliary_track_info_type_heif_auxiliary_track_info_type_alpha:
-    heif_auxiliary_track_info_type = 1;
+pub const heif_auxiliary_track_info_type_heif_auxiliary_track_info_type_unknown: heif_auxiliary_track_info_type = 0;
+pub const heif_auxiliary_track_info_type_heif_auxiliary_track_info_type_alpha: heif_auxiliary_track_info_type = 1;
 pub type heif_auxiliary_track_info_type = libc::c_uint;
 unsafe extern "C" {
-    pub fn heif_track_get_auxiliary_info_type(
-        arg1: *const heif_track,
-    ) -> heif_auxiliary_track_info_type;
+    pub fn heif_track_get_auxiliary_info_type(arg1: *const heif_track) -> heif_auxiliary_track_info_type;
 }
 unsafe extern "C" {
     pub fn heif_track_get_auxiliary_info_type_urn(arg1: *const heif_track) -> *const libc::c_char;
@@ -3663,19 +2633,12 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the image resolution of the track.\n If the passed track is no visual track, an error is returned."]
-    pub fn heif_track_get_image_resolution(
-        arg1: *const heif_track,
-        out_width: *mut u16,
-        out_height: *mut u16,
-    ) -> heif_error;
+    pub fn heif_track_get_image_resolution(arg1: *const heif_track, out_width: *mut u16, out_height: *mut u16) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Decode the next image in the passed sequence track.\n If there is no more image in the sequence, `heif_error_End_of_sequence` is returned.\n The parameters `colorspace`, `chroma` and `options` are similar to heif_decode_image().\n If you want to let libheif decide the output colorspace and chroma, set these parameters\n to heif_colorspace_undefined / heif_chroma_undefined. Usually, libheif will return the\n image in the input colorspace, but it may also modify it for example when it has to rotate the image.\n If you want to get the image in a specific colorspace/chroma format, you can specify this\n and libheif will convert the image to match this format."]
     pub fn heif_track_decode_next_image(
-        track: *mut heif_track,
-        out_img: *mut *mut heif_image,
-        colorspace: heif_colorspace,
-        chroma: heif_chroma,
+        track: *mut heif_track, out_img: *mut *mut heif_image, colorspace: heif_colorspace, chroma: heif_chroma,
         options: *const heif_decoding_options,
     ) -> heif_error;
 }
@@ -3689,10 +2652,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the URI of the first sample cluster in an 'urim' track.\n Only call this for tracks with 'urim' sample entry types. It will return an error otherwise.\n\n @param out_uri A string with the URI will be returned. Free this string with `heif_string_release()`."]
-    pub fn heif_track_get_urim_sample_entry_uri_of_first_cluster(
-        arg1: *const heif_track,
-        out_uri: *mut *const libc::c_char,
-    ) -> heif_error;
+    pub fn heif_track_get_urim_sample_entry_uri_of_first_cluster(arg1: *const heif_track, out_uri: *mut *const libc::c_char) -> heif_error;
 }
 #[repr(C)]
 #[derive(Debug)]
@@ -3701,10 +2661,7 @@ pub struct heif_raw_sequence_sample {
 }
 unsafe extern "C" {
     #[doc = " Get the next raw sample from the (metadata) sequence track.\n You have to free the returned sample with heif_raw_sequence_sample_release()."]
-    pub fn heif_track_get_next_raw_sequence_sample(
-        arg1: *mut heif_track,
-        out_sample: *mut *mut heif_raw_sequence_sample,
-    ) -> heif_error;
+    pub fn heif_track_get_next_raw_sequence_sample(arg1: *mut heif_track, out_sample: *mut *mut heif_raw_sequence_sample) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Release a heif_raw_sequence_sample object.\n You may pass NULL."]
@@ -3712,10 +2669,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get a pointer to the data of the (metadata) sample.\n The data pointer stays valid until the heif_raw_sequence_sample object is released.\n\n @param out_array_size Size of the returned array (may be NULL)."]
-    pub fn heif_raw_sequence_sample_get_data(
-        arg1: *const heif_raw_sequence_sample,
-        out_array_size: *mut usize,
-    ) -> *const u8;
+    pub fn heif_raw_sequence_sample_get_data(arg1: *const heif_raw_sequence_sample, out_array_size: *mut usize) -> *const u8;
 }
 unsafe extern "C" {
     #[doc = " Return the size of the raw data contained in the sample.\n This is the same as returned through the 'out_array_size' parameter of 'heif_raw_sequence_sample_get_data()'."]
@@ -3731,17 +2685,11 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Number of times the sequence should be played in total (default = 1).\n Can be set to heif_sequence_maximum_number_of_repetitions."]
-    pub fn heif_context_set_number_of_sequence_repetitions(
-        arg1: *mut heif_context,
-        number_of_repetitions: u32,
-    );
+    pub fn heif_context_set_number_of_sequence_repetitions(arg1: *mut heif_context, number_of_repetitions: u32);
 }
-pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_none:
-    heif_sample_aux_info_presence = 0;
-pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_optional:
-    heif_sample_aux_info_presence = 1;
-pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_mandatory:
-    heif_sample_aux_info_presence = 2;
+pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_none: heif_sample_aux_info_presence = 0;
+pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_optional: heif_sample_aux_info_presence = 1;
+pub const heif_sample_aux_info_presence_heif_sample_aux_info_presence_mandatory: heif_sample_aux_info_presence = 2;
 #[doc = " Specifies whether a 'sample auxiliary info' is stored with the samples.\n The difference between `heif_sample_aux_info_presence_optional` and `heif_sample_aux_info_presence_mandatory`\n is that `heif_sample_aux_info_presence_mandatory` will throw an error if the data is missing when writing a sample."]
 pub type heif_sample_aux_info_presence = libc::c_uint;
 #[repr(C)]
@@ -3762,48 +2710,31 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Set whether the aux-info data should be stored interleaved with the sequence samples.\n Default is: false.\n\n If 'true', the aux_info data blocks will be interleaved with the compressed image.\n This has the advantage that the aux_info is localized near the image data.\n\n If 'false', all aux_info will be written as one block after the compressed image data.\n This has the advantage that no aux_info offsets have to be written.\n\n Note: currently ignored. Interleaved writing is disabled."]
-    pub fn heif_track_options_set_interleaved_sample_aux_infos(
-        arg1: *mut heif_track_options,
-        interleaved_flag: libc::c_int,
-    );
+    pub fn heif_track_options_set_interleaved_sample_aux_infos(arg1: *mut heif_track_options, interleaved_flag: libc::c_int);
 }
 unsafe extern "C" {
     pub fn heif_track_options_enable_sample_tai_timestamps(
-        arg1: *mut heif_track_options,
-        arg2: *const heif_tai_clock_info,
-        arg3: heif_sample_aux_info_presence,
+        arg1: *mut heif_track_options, arg2: *const heif_tai_clock_info, arg3: heif_sample_aux_info_presence,
     ) -> heif_error;
 }
 unsafe extern "C" {
-    pub fn heif_track_options_enable_sample_gimi_content_ids(
-        arg1: *mut heif_track_options,
-        arg2: heif_sample_aux_info_presence,
-    );
+    pub fn heif_track_options_enable_sample_gimi_content_ids(arg1: *mut heif_track_options, arg2: heif_sample_aux_info_presence);
 }
 unsafe extern "C" {
     #[doc = " Set the GIMI format track ID string. If NULL is passed, no track ID is saved.\n @param track_id"]
-    pub fn heif_track_options_set_gimi_track_id(
-        arg1: *mut heif_track_options,
-        track_id: *const libc::c_char,
-    );
+    pub fn heif_track_options_set_gimi_track_id(arg1: *mut heif_track_options, track_id: *const libc::c_char);
 }
 #[doc = " Only independently decodable keyframes."]
-pub const heif_sequence_gop_structure_heif_sequence_gop_structure_intra_only:
-    heif_sequence_gop_structure = 0;
+pub const heif_sequence_gop_structure_heif_sequence_gop_structure_intra_only: heif_sequence_gop_structure = 0;
 #[doc = " No frame reordering, usually an IPPPP structure."]
-pub const heif_sequence_gop_structure_heif_sequence_gop_structure_lowdelay:
-    heif_sequence_gop_structure = 1;
+pub const heif_sequence_gop_structure_heif_sequence_gop_structure_lowdelay: heif_sequence_gop_structure = 1;
 #[doc = " All frame types are allowed, including frame reordering, to achieve\n the best compression ratio."]
-pub const heif_sequence_gop_structure_heif_sequence_gop_structure_unrestricted:
-    heif_sequence_gop_structure = 2;
+pub const heif_sequence_gop_structure_heif_sequence_gop_structure_unrestricted: heif_sequence_gop_structure = 2;
 #[doc = " --- writing visual tracks"]
 pub type heif_sequence_gop_structure = libc::c_uint;
-pub const heif_sequence_content_kind_heif_sequence_content_kind_auto: heif_sequence_content_kind =
-    0;
-pub const heif_sequence_content_kind_heif_sequence_content_kind_image_sequence:
-    heif_sequence_content_kind = 1;
-pub const heif_sequence_content_kind_heif_sequence_content_kind_video: heif_sequence_content_kind =
-    2;
+pub const heif_sequence_content_kind_heif_sequence_content_kind_auto: heif_sequence_content_kind = 0;
+pub const heif_sequence_content_kind_heif_sequence_content_kind_image_sequence: heif_sequence_content_kind = 1;
+pub const heif_sequence_content_kind_heif_sequence_content_kind_video: heif_sequence_content_kind = 2;
 #[doc = " Describes the intent of the encoded sequence content. Encoder plugins may\n use this to choose different default tunings (e.g. perceptual quality vs.\n rate-distortion) for slide-show-style image sequences vs. video.\n\n Pass `_auto` to let libheif pick a value. Today libheif derives the kind\n from the track's handler type (`pict` -> image_sequence, `vide` -> video);\n in the future it may use additional input signals (e.g. frame rate or\n frame-to-frame similarity). Plugins never see `_auto`: libheif resolves it\n to a concrete kind before passing the options to the encoder plugin."]
 pub type heif_sequence_content_kind = libc::c_uint;
 #[repr(C)]
@@ -3828,10 +2759,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Copy fields from `src` into `dst`, respecting both structs' version numbers.\n Only fields present in `min(dst->version, src->version)` are copied, so this\n is safe when libheif and the caller were built against different header\n versions of `heif_sequence_encoding_options`. Pass NULL `src` to leave `dst`\n unchanged."]
-    pub fn heif_sequence_encoding_options_copy(
-        dst: *mut heif_sequence_encoding_options,
-        src: *const heif_sequence_encoding_options,
-    );
+    pub fn heif_sequence_encoding_options_copy(dst: *mut heif_sequence_encoding_options, src: *const heif_sequence_encoding_options);
 }
 unsafe extern "C" {
     pub fn heif_sequence_encoding_options_release(arg1: *mut heif_sequence_encoding_options);
@@ -3839,13 +2767,8 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Add a visual track to the sequence.\n The track ID is assigned automatically.\n\n @param width Image resolution width\n @param height Image resolution height\n @param track_type Has to be heif_track_type_video or heif_track_type_image_sequence\n @param track_options Optional track creation options. If NULL, default options will be used.\n @param encoding_options Options for sequence encoding. If NULL, default options will be used.\n @param out_track Output parameter to receive the track object for the just created track.\n @return"]
     pub fn heif_context_add_visual_sequence_track(
-        arg1: *mut heif_context,
-        width: u16,
-        height: u16,
-        track_type: heif_track_type,
-        track_options: *const heif_track_options,
-        encoding_options: *const heif_sequence_encoding_options,
-        out_track: *mut *mut heif_track,
+        arg1: *mut heif_context, width: u16, height: u16, track_type: heif_track_type, track_options: *const heif_track_options,
+        encoding_options: *const heif_sequence_encoding_options, out_track: *mut *mut heif_track,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3855,26 +2778,17 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Encode the image into a visual track.\n If the passed track is no visual track, an error will be returned.\n\n @param image                     The input image to append to the sequence.\n @param encoder                   The encoder used for encoding the image.\n @param sequence_encoding_options Options for sequence encoding. If NULL, default options will be used."]
     pub fn heif_track_encode_sequence_image(
-        arg1: *mut heif_track,
-        image: *const heif_image,
-        encoder: *mut heif_encoder,
-        sequence_encoding_options: *const heif_sequence_encoding_options,
+        arg1: *mut heif_track, image: *const heif_image, encoder: *mut heif_encoder, sequence_encoding_options: *const heif_sequence_encoding_options,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " When all sequence frames have been sent, you can to call this function to let the\n library know that no more frames will follow. This is strongly recommended, but optional\n for backwards compatibility.\n If you do not end the sequence explicitly with this function, it will be closed\n automatically when the HEIF file is written. Using this function has the advantage\n that you can free the {@link heif_encoder} afterwards (with {@link heif_encoder_release}).\n If you do not use call function, you have to keep the {@link heif_encoder} alive\n until the HEIF file is written."]
-    pub fn heif_track_encode_end_of_sequence(
-        arg1: *mut heif_track,
-        encoder: *mut heif_encoder,
-    ) -> heif_error;
+    pub fn heif_track_encode_end_of_sequence(arg1: *mut heif_track, encoder: *mut heif_encoder) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a metadata track.\n The track is created as a 'urim' \"URI Meta Sample Entry\".\n The track content type is specified by the 'uri' parameter.\n\n @param uri       Track content type.\n @param options   Optional track creation options. If NULL, default options will be used.\n @param out_track Returns the created track object. If this is not NULL, you have to\n                  free the returned track with {@link heif_track_release}."]
     pub fn heif_context_add_uri_metadata_sequence_track(
-        arg1: *mut heif_context,
-        uri: *const libc::c_char,
-        options: *const heif_track_options,
-        out_track: *mut *mut heif_track,
+        arg1: *mut heif_context, uri: *const libc::c_char, options: *const heif_track_options, out_track: *mut *mut heif_track,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -3883,25 +2797,15 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Set the raw sequence sample data."]
-    pub fn heif_raw_sequence_sample_set_data(
-        arg1: *mut heif_raw_sequence_sample,
-        data: *const u8,
-        size: usize,
-    ) -> heif_error;
+    pub fn heif_raw_sequence_sample_set_data(arg1: *mut heif_raw_sequence_sample, data: *const u8, size: usize) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Set the sample duration in track timescale units."]
-    pub fn heif_raw_sequence_sample_set_duration(
-        arg1: *mut heif_raw_sequence_sample,
-        duration: u32,
-    );
+    pub fn heif_raw_sequence_sample_set_duration(arg1: *mut heif_raw_sequence_sample, duration: u32);
 }
 unsafe extern "C" {
     #[doc = " Add a raw sequence sample (usually a metadata sample) to the (metadata) track."]
-    pub fn heif_track_add_raw_sequence_sample(
-        arg1: *mut heif_track,
-        arg2: *const heif_raw_sequence_sample,
-    ) -> heif_error;
+    pub fn heif_track_add_raw_sequence_sample(arg1: *mut heif_track, arg2: *const heif_raw_sequence_sample) -> heif_error;
 }
 #[doc = " Contains the type of sample auxiliary data assigned to the track samples."]
 #[repr(C)]
@@ -3916,10 +2820,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get get the list of sample auxiliary data types used in the track.\n The passed array has to have heif_track_get_number_of_sample_aux_infos() entries."]
-    pub fn heif_track_get_sample_aux_info_types(
-        arg1: *const heif_track,
-        out_types: *mut [heif_sample_aux_info_type; 0usize],
-    );
+    pub fn heif_track_get_sample_aux_info_types(arg1: *const heif_track, out_types: *mut [heif_sample_aux_info_type; 0usize]);
 }
 unsafe extern "C" {
     #[doc = " Get the GIMI content ID for the track (as a whole).\n If there is no content ID, nullptr is returned.\n\n @return The returned string has to be released with `heif_string_release()`."]
@@ -3931,67 +2832,43 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Get the GIMI content ID stored in the metadata sample.\n If there is no content ID, NULL is returned.\n @return"]
-    pub fn heif_raw_sequence_sample_get_gimi_sample_content_id(
-        arg1: *const heif_raw_sequence_sample,
-    ) -> *const libc::c_char;
+    pub fn heif_raw_sequence_sample_get_gimi_sample_content_id(arg1: *const heif_raw_sequence_sample) -> *const libc::c_char;
 }
 unsafe extern "C" {
     #[doc = " Set the GIMI content ID for an image sample. It will be stored as SAI.\n When passing NULL, a previously set ID will be removed."]
-    pub fn heif_image_set_gimi_sample_content_id(
-        arg1: *mut heif_image,
-        contentID: *const libc::c_char,
-    );
+    pub fn heif_image_set_gimi_sample_content_id(arg1: *mut heif_image, contentID: *const libc::c_char);
 }
 unsafe extern "C" {
     #[doc = " Set the GIMI content ID for a (metadata) sample. It will be stored as SAI.\n When passing NULL, a previously set ID will be removed."]
-    pub fn heif_raw_sequence_sample_set_gimi_sample_content_id(
-        arg1: *mut heif_raw_sequence_sample,
-        contentID: *const libc::c_char,
-    );
+    pub fn heif_raw_sequence_sample_set_gimi_sample_content_id(arg1: *mut heif_raw_sequence_sample, contentID: *const libc::c_char);
 }
 unsafe extern "C" {
     #[doc = " Returns whether the raw (metadata) sample has a TAI timestamp attached to it (stored as SAI).\n\n @return boolean flag whether a TAI exists for this sample."]
-    pub fn heif_raw_sequence_sample_has_tai_timestamp(
-        arg1: *const heif_raw_sequence_sample,
-    ) -> libc::c_int;
+    pub fn heif_raw_sequence_sample_has_tai_timestamp(arg1: *const heif_raw_sequence_sample) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the TAI timestamp of the (metadata) sample.\n If there is no timestamp assigned to it, NULL will be returned.\n\n @note You should NOT free the returned timestamp with 'heif_tai_timestamp_packet_release()'.\n       The returned struct stays valid until the heif_raw_sequence_sample is released."]
-    pub fn heif_raw_sequence_sample_get_tai_timestamp(
-        arg1: *const heif_raw_sequence_sample,
-    ) -> *const heif_tai_timestamp_packet;
+    pub fn heif_raw_sequence_sample_get_tai_timestamp(arg1: *const heif_raw_sequence_sample) -> *const heif_tai_timestamp_packet;
 }
 unsafe extern "C" {
     #[doc = " Set the TAI timestamp for a raw sequence sample.\n The timestamp will be copied, you can release it after calling this function."]
-    pub fn heif_raw_sequence_sample_set_tai_timestamp(
-        sample: *mut heif_raw_sequence_sample,
-        timestamp: *const heif_tai_timestamp_packet,
-    );
+    pub fn heif_raw_sequence_sample_set_tai_timestamp(sample: *mut heif_raw_sequence_sample, timestamp: *const heif_tai_timestamp_packet);
 }
 unsafe extern "C" {
     #[doc = " Returns the TAI clock info of the track.\n If there is no TAI clock info, NULL is returned.\n You should NOT free the returned heif_tai_clock_info.\n The structure stays valid until the heif_track object is released."]
-    pub fn heif_track_get_tai_clock_info_of_first_cluster(
-        arg1: *mut heif_track,
-    ) -> *const heif_tai_clock_info;
+    pub fn heif_track_get_tai_clock_info_of_first_cluster(arg1: *mut heif_track) -> *const heif_tai_clock_info;
 }
 #[doc = " track_description"]
-pub const heif_track_reference_type_heif_track_reference_type_description:
-    heif_track_reference_type = 1667527523;
+pub const heif_track_reference_type_heif_track_reference_type_description: heif_track_reference_type = 1667527523;
 #[doc = " thumbnails"]
-pub const heif_track_reference_type_heif_track_reference_type_thumbnails:
-    heif_track_reference_type = 1953000802;
+pub const heif_track_reference_type_heif_track_reference_type_thumbnails: heif_track_reference_type = 1953000802;
 #[doc = " auxiliary data (e.g. depth maps or alpha channel)"]
-pub const heif_track_reference_type_heif_track_reference_type_auxiliary: heif_track_reference_type =
-    1635088492;
+pub const heif_track_reference_type_heif_track_reference_type_auxiliary: heif_track_reference_type = 1635088492;
 #[doc = " --- track references"]
 pub type heif_track_reference_type = libc::c_uint;
 unsafe extern "C" {
     #[doc = " Add a reference between tracks.\n 'reference_type' can be one of the four-cc codes listed in heif_track_reference_type or any other type."]
-    pub fn heif_track_add_reference_to_track(
-        arg1: *mut heif_track,
-        reference_type: u32,
-        to_track: *const heif_track,
-    );
+    pub fn heif_track_add_reference_to_track(arg1: *mut heif_track, reference_type: u32, to_track: *const heif_track);
 }
 unsafe extern "C" {
     #[doc = " Return the number of different reference types used in this track's tref box."]
@@ -3999,33 +2876,20 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " List the reference types used in this track.\n\n The caller MUST allocate `out_reference_types` with exactly\n heif_track_get_number_of_track_reference_types() entries. The function\n writes that many values unconditionally. Passing a smaller array\n results in a buffer overflow (undefined behavior); there is no\n capacity parameter and no truncation."]
-    pub fn heif_track_get_track_reference_types(
-        arg1: *const heif_track,
-        out_reference_types: *mut [u32; 0usize],
-    );
+    pub fn heif_track_get_track_reference_types(arg1: *const heif_track, out_reference_types: *mut [u32; 0usize]);
 }
 unsafe extern "C" {
     #[doc = " Get the number of references of the passed type."]
-    pub fn heif_track_get_number_of_track_reference_of_type(
-        arg1: *const heif_track,
-        reference_type: u32,
-    ) -> usize;
+    pub fn heif_track_get_number_of_track_reference_of_type(arg1: *const heif_track, reference_type: u32) -> usize;
 }
 unsafe extern "C" {
     #[doc = " List the track ids this track points to with the passed reference type.\n The passed array must have heif_track_get_number_of_track_reference_of_type() entries."]
-    pub fn heif_track_get_references_from_track(
-        arg1: *const heif_track,
-        reference_type: u32,
-        out_to_track_id: *mut [u32; 0usize],
-    ) -> usize;
+    pub fn heif_track_get_references_from_track(arg1: *const heif_track, reference_type: u32, out_to_track_id: *mut [u32; 0usize]) -> usize;
 }
 unsafe extern "C" {
     #[doc = " Find tracks that are referring to the current track through the passed reference_type.\n The found track IDs will be filled into the passed array, but no more than `array_size` entries will be filled.\n\n @return number of tracks found. If this is equal to 'array_size', you should ask again with a larger array size to be sure you got all tracks."]
     pub fn heif_track_find_referring_tracks(
-        arg1: *const heif_track,
-        reference_type: u32,
-        out_track_id: *mut [u32; 0usize],
-        array_size: usize,
+        arg1: *const heif_track, reference_type: u32, out_track_id: *mut [u32; 0usize], array_size: usize,
     ) -> usize;
 }
 #[repr(C)]
@@ -4071,10 +2935,7 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " Copies the source object into the destination object.\n Only the fields that are present in both objects are copied.\n The version property has to be set in both structs."]
-    pub fn heif_tai_timestamp_packet_copy(
-        dst: *mut heif_tai_timestamp_packet,
-        src: *const heif_tai_timestamp_packet,
-    );
+    pub fn heif_tai_timestamp_packet_copy(dst: *mut heif_tai_timestamp_packet, src: *const heif_tai_timestamp_packet);
 }
 unsafe extern "C" {
     pub fn heif_tai_timestamp_packet_release(arg1: *mut heif_tai_timestamp_packet);
@@ -4082,50 +2943,34 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Creates a new clock info property if it doesn't exist yet.\n You can only add one tai_clock_info to an image.\n\n @param clock_info The TAI clock info to set for the item. This object will be copied.\n @param out_optional_propertyId Output parameter for the property ID of the tai_clock_info.\n                                This parameter may be NULL if the info is not required."]
     pub fn heif_item_set_property_tai_clock_info(
-        ctx: *mut heif_context,
-        itemId: heif_item_id,
-        clock_info: *const heif_tai_clock_info,
-        out_optional_propertyId: *mut heif_property_id,
+        ctx: *mut heif_context, itemId: heif_item_id, clock_info: *const heif_tai_clock_info, out_optional_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the heif_tai_clock_info attached to the item.\n This function allocates a new heif_tai_clock_info and returns it through out_clock.\n\n @param out_clock This parameter must not be nullptr. The object returned through this parameter must\n                  be released with heif_tai_clock_info_release().\n                  If no tai_clock_info property exists for the item, out_clock is set to NULL and\n                  no error is returned."]
     pub fn heif_item_get_property_tai_clock_info(
-        ctx: *const heif_context,
-        itemId: heif_item_id,
-        out_clock: *mut *mut heif_tai_clock_info,
+        ctx: *const heif_context, itemId: heif_item_id, out_clock: *mut *mut heif_tai_clock_info,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Creates a new TAI timestamp property if it doesn't exist yet.\n You can only add one tai_timestamp to an image.\n\n @param timestamp The TAI timestamp to set for the item. This object will be copied.\n @param out_optional_propertyId Output parameter for the property ID of the TAI timestamp.\n                                This parameter may be NULL if the info is not required."]
     pub fn heif_item_set_property_tai_timestamp(
-        ctx: *mut heif_context,
-        itemId: heif_item_id,
-        timestamp: *const heif_tai_timestamp_packet,
-        out_optional_propertyId: *mut heif_property_id,
+        ctx: *mut heif_context, itemId: heif_item_id, timestamp: *const heif_tai_timestamp_packet, out_optional_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the heif_tai_timestamp_packet attached to the item.\n This function allocates a new heif_tai_timestamp_packet and returns it through out_timestamp.\n\n @param out_timestamp This parameter must not be NULL. The object returned through this parameter must\n                  be released with heif_tai_timestamp_packet_release().\n                  If no tai_timestamp_packet property exists for the item, *out_timestamp is set to NULL and\n                  no error is returned."]
     pub fn heif_item_get_property_tai_timestamp(
-        ctx: *const heif_context,
-        itemId: heif_item_id,
-        out_timestamp: *mut *mut heif_tai_timestamp_packet,
+        ctx: *const heif_context, itemId: heif_item_id, out_timestamp: *mut *mut heif_tai_timestamp_packet,
     ) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Attach a TAI timestamp to the image.\n The main use of this function is for image sequences, but it can also be used for still images.\n If used for still images, note that you also have to set the heif_tai_clock_info to the image item\n through heif_item_set_property_tai_clock_info().\n\n @param timestamp The TAI timestamp to set to the image. This object will be copied."]
-    pub fn heif_image_set_tai_timestamp(
-        img: *mut heif_image,
-        timestamp: *const heif_tai_timestamp_packet,
-    ) -> heif_error;
+    pub fn heif_image_set_tai_timestamp(img: *mut heif_image, timestamp: *const heif_tai_timestamp_packet) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the heif_tai_timestamp_packet attached to the image.\n The main use of this function is for image sequences, but it can also be used for still images.\n This function allocates a new heif_tai_timestamp_packet and returns it through out_timestamp.\n\n @param out_timestamp This parameter must not be NULL. The object returned through this parameter must\n                  be released with heif_tai_timestamp_packet_release().\n                  If no tai_timestamp_packet property exists for the image, *out_timestamp is set to NULL and\n                  no error is returned."]
-    pub fn heif_image_get_tai_timestamp(
-        img: *const heif_image,
-        out_timestamp: *mut *mut heif_tai_timestamp_packet,
-    ) -> heif_error;
+    pub fn heif_image_get_tai_timestamp(img: *const heif_image, out_timestamp: *mut *mut heif_tai_timestamp_packet) -> heif_error;
 }
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
@@ -4134,25 +2979,17 @@ pub struct heif_text_item {
 }
 unsafe extern "C" {
     #[doc = " Get the number of text items that are attached to an image.\n\n @param image_handle the image handle for the image to query.\n @return the number of text items, which can be zero."]
-    pub fn heif_image_handle_get_number_of_text_items(
-        image_handle: *const heif_image_handle,
-    ) -> libc::c_int;
+    pub fn heif_image_handle_get_number_of_text_items(image_handle: *const heif_image_handle) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the text item identifiers for the text items attached to an image.\n\n Possible usage (in C++):\n @code\n  int numTextItems = heif_image_handle_get_number_of_text_items(handle);\n  if (numTextItems > 0) {\n      std::vector<heif_item_id> text_item_ids(numTextItems);\n      heif_image_handle_get_list_of_text_item_ids(handle, text_item_ids.data(), numTextItems);\n      // use text item ids\n  }\n @endcode\n\n @param image_handle the image handle for the parent image to query\n @param text_item_ids_array array to put the item identifiers into\n @param max_count the maximum number of text identifiers\n @return the number of text item identifiers that were returned."]
     pub fn heif_image_handle_get_list_of_text_item_ids(
-        image_handle: *const heif_image_handle,
-        text_item_ids_array: *mut heif_item_id,
-        max_count: libc::c_int,
+        image_handle: *const heif_image_handle, text_item_ids_array: *mut heif_item_id, max_count: libc::c_int,
     ) -> libc::c_int;
 }
 unsafe extern "C" {
     #[doc = " Get the text item.\n\n Caller is responsible for release of the output heif_text_item with heif_text_item_release().\n\n @param context the context to get the text item from, usually from a file operation\n @param text_item_id the identifier for the text item\n @param out pointer to pointer to the resulting text item\n @return heif_error_ok on success, or an error value indicating the problem"]
-    pub fn heif_context_get_text_item(
-        context: *const heif_context,
-        text_item_id: heif_item_id,
-        out: *mut *mut heif_text_item,
-    ) -> heif_error;
+    pub fn heif_context_get_text_item(context: *const heif_context, text_item_id: heif_item_id, out: *mut *mut heif_text_item) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Get the item identifier for a text item.\n\n @param text_item the text item to query\n @return the text item identifier (or 0 if the text_item is null)"]
@@ -4164,18 +3001,12 @@ unsafe extern "C" {
 }
 unsafe extern "C" {
     #[doc = " This function is similar to heif_item_get_property_extended_language(), but\n takes a `heif_text_item` as parameter.\n\n @param text_item The text item for which we are requesting the language.\n @param out_language Output parameter for the text language. Free with heif_string_release().\n @return"]
-    pub fn heif_text_item_get_property_extended_language(
-        text_item: *const heif_text_item,
-        out_language: *mut *mut libc::c_char,
-    ) -> heif_error;
+    pub fn heif_text_item_get_property_extended_language(text_item: *const heif_text_item, out_language: *mut *mut libc::c_char) -> heif_error;
 }
 unsafe extern "C" {
     #[doc = " Add a text item to an image."]
     pub fn heif_image_handle_add_text_item(
-        image_handle: *mut heif_image_handle,
-        content_type: *const libc::c_char,
-        text: *const libc::c_char,
-        out_text_item: *mut *mut heif_text_item,
+        image_handle: *mut heif_image_handle, content_type: *const libc::c_char, text: *const libc::c_char, out_text_item: *mut *mut heif_text_item,
     ) -> heif_error;
 }
 unsafe extern "C" {
@@ -4185,8 +3016,6 @@ unsafe extern "C" {
 unsafe extern "C" {
     #[doc = " Set the extended language property to the text item.\n\n This adds an RFC 5346 (IETF BCP 47) extended language tag, such as \"en-AU\".\n\n @param text_item the text item to query\n @param language the language to set\n @param out_optional_propertyId Output parameter for the property ID of the language property.\n                                This parameter may be NULL if the info is not required.\n @return heif_error_ok on success, or an error value indicating the problem"]
     pub fn heif_text_item_set_extended_language(
-        text_item: *mut heif_text_item,
-        language: *const libc::c_char,
-        out_optional_propertyId: *mut heif_property_id,
+        text_item: *mut heif_text_item, language: *const libc::c_char, out_optional_propertyId: *mut heif_property_id,
     ) -> heif_error;
 }

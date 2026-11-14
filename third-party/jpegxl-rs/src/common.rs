@@ -17,9 +17,8 @@ along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Common types used across the crate
 
-use byteorder::{ByteOrder, NativeEndian, BE, LE};
+use byteorder::{BE, ByteOrder, LE, NativeEndian};
 use half::f16;
-
 use jpegxl_sys::common::types::{JxlDataType, JxlPixelFormat};
 
 /// Endianness of the pixels

@@ -17,9 +17,10 @@ along with jpegxl-sys.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Utility functions to compress and decompress ICC streams.
 
-use crate::common::{memory_manager, types::JxlBool};
+use crate::common::memory_manager;
+use crate::common::types::JxlBool;
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Allocates a buffer using the memory manager, fills it with a compressed
     /// representation of an ICC profile, returns the result through `output_buffer`
     /// and indicates its size through `output_size`.
@@ -39,10 +40,7 @@ extern "C-unwind" {
     ///
     /// Whether compressing the profile was successful.
     pub fn JxlICCProfileEncode(
-        memory_manager: *const memory_manager::JxlMemoryManager,
-        icc: *const u8,
-        icc_size: usize,
-        compressed_icc: *mut *mut u8,
+        memory_manager: *const memory_manager::JxlMemoryManager, icc: *const u8, icc_size: usize, compressed_icc: *mut *mut u8,
         compressed_icc_size: *mut usize,
     ) -> JxlBool;
 
@@ -64,10 +62,7 @@ extern "C-unwind" {
     ///
     /// Whether decompressing the profile was successful.
     pub fn JxlICCProfileDecode(
-        memory_manager: *const memory_manager::JxlMemoryManager,
-        compressed_icc: *const u8,
-        compressed_icc_size: usize,
-        icc: *mut *mut u8,
+        memory_manager: *const memory_manager::JxlMemoryManager, compressed_icc: *const u8, compressed_icc_size: usize, icc: *mut *mut u8,
         icc_size: *mut usize,
     ) -> JxlBool;
 }

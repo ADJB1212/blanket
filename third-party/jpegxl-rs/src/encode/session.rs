@@ -15,7 +15,9 @@
  * along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::{ffi::CString, mem::MaybeUninit, ptr::null};
+use std::ffi::CString;
+use std::mem::MaybeUninit;
+use std::ptr::null;
 
 #[allow(clippy::wildcard_imports)]
 use jpegxl_sys::{
@@ -24,7 +26,8 @@ use jpegxl_sys::{
 };
 
 use super::{ColorEncoding, EncoderFrame, FrameSettings, ImageInfo, JxlEncoder, Metadata};
-use crate::{common::PixelType, errors::EncodeError};
+use crate::common::PixelType;
+use crate::errors::EncodeError;
 
 /// An encoding session that is driven by the caller.
 ///
@@ -57,15 +60,8 @@ enum LastFrame {
 }
 
 impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
-    pub(crate) fn new(
-        enc: &'enc mut JxlEncoder<'prl, 'mm>,
-        info: Option<&ImageInfo>,
-    ) -> Result<Self, EncodeError> {
-        let session = Self {
-            enc,
-            output: Vec::new(),
-            last_frame: LastFrame::None,
-        };
+    pub(crate) fn new(enc: &'enc mut JxlEncoder<'prl, 'mm>, info: Option<&ImageInfo>) -> Result<Self, EncodeError> {
+        let session = Self { enc, output: Vec::new(), last_frame: LastFrame::None };
         session.setup(info)?;
         for (t, data, compress) in &session.enc.boxes {
             session.add_box(*t, data, *compress)?;
@@ -77,9 +73,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
         let enc = &*self.enc;
         if let Some(runner) = enc.parallel_runner {
             // SAFETY: `enc.enc` is valid until drop and the runner outlives it
-            enc.check_enc_status(unsafe {
-                JxlEncoderSetParallelRunner(enc.enc, runner.runner(), runner.as_opaque_ptr())
-            })?;
+            enc.check_enc_status(unsafe { JxlEncoderSetParallelRunner(enc.enc, runner.runner(), runner.as_opaque_ptr()) })?;
         }
         // SAFETY: `enc.enc` is valid until drop
         enc.check_enc_status(unsafe { JxlEncoderUseContainer(enc.enc, enc.use_container.into()) })?;
@@ -129,9 +123,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
         enc.check_enc_status(unsafe { JxlEncoderSetBasicInfo(enc.enc, &raw const basic_info) })?;
         if let Some(color_encoding) = &enc.color_encoding {
             // SAFETY: `enc.enc` is valid until drop
-            enc.check_enc_status(unsafe {
-                JxlEncoderSetColorEncoding(enc.enc, &color_encoding.into())
-            })?;
+            enc.check_enc_status(unsafe { JxlEncoderSetColorEncoding(enc.enc, &color_encoding.into()) })?;
         }
         Ok(())
     }
@@ -150,15 +142,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
         // SAFETY: `enc.enc` is valid until drop
         enc.check_enc_status(unsafe { JxlEncoderUseBoxes(enc.enc) })?;
         // SAFETY: `enc.enc` is valid until drop
-        enc.check_enc_status(unsafe {
-            JxlEncoderAddBox(
-                enc.enc,
-                &Metadata::box_type(t),
-                data.as_ptr().cast(),
-                data.len(),
-                compress.into(),
-            )
-        })
+        enc.check_enc_status(unsafe { JxlEncoderAddBox(enc.enc, &Metadata::box_type(t), data.as_ptr().cast(), data.len(), compress.into()) })
     }
 
     /// The settings a frame uses unless it has its own,
@@ -169,10 +153,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
     }
 
     /// Create frame settings, owned by the encoder until it is reset
-    fn create_frame_settings(
-        &self,
-        settings: &FrameSettings,
-    ) -> Result<*mut JxlEncoderFrameSettings, EncodeError> {
+    fn create_frame_settings(&self, settings: &FrameSettings) -> Result<*mut JxlEncoderFrameSettings, EncodeError> {
         let enc = &*self.enc;
         // SAFETY: `enc.enc` is valid until drop
         let ptr = unsafe { JxlEncoderFrameSettingsCreate(enc.enc, null()) };
@@ -191,10 +172,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
         set(JxlEncoderFrameSettingId::Effort, settings.speed as _)?;
         // SAFETY: `ptr` is valid until the encoder is reset
         enc.check_enc_status(unsafe { JxlEncoderSetFrameDistance(ptr, settings.quality) })?;
-        set(
-            JxlEncoderFrameSettingId::DecodingSpeed,
-            settings.decoding_speed,
-        )?;
+        set(JxlEncoderFrameSettingId::DecodingSpeed, settings.decoding_speed)?;
         for &(id, value) in &settings.options {
             set(id, value)?;
         }
@@ -225,29 +203,16 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
         if let Some(name) = frame.name {
             let name = CString::new(name).map_err(|_| EncodeError::BadInput)?;
             // SAFETY: `settings` is valid until the encoder is reset
-            enc.check_enc_status(unsafe {
-                JxlEncoderSetFrameName(settings, name.as_ptr().cast())
-            })?;
+            enc.check_enc_status(unsafe { JxlEncoderSetFrameName(settings, name.as_ptr().cast()) })?;
         }
         if frame.bit_depth_from_image {
-            let bit_depth = JxlBitDepth {
-                r#type: JxlBitDepthType::FromCodestream,
-                bits_per_sample: 0,
-                exponent_bits_per_sample: 0,
-            };
+            let bit_depth = JxlBitDepth { r#type: JxlBitDepthType::FromCodestream, bits_per_sample: 0, exponent_bits_per_sample: 0 };
             // SAFETY: `settings` is valid until the encoder is reset
-            enc.check_enc_status(unsafe {
-                JxlEncoderSetFrameBitDepth(settings, &raw const bit_depth)
-            })?;
+            enc.check_enc_status(unsafe { JxlEncoderSetFrameBitDepth(settings, &raw const bit_depth) })?;
         }
         // SAFETY: `settings` is valid and the size matches `frame.data`
         enc.check_enc_status(unsafe {
-            JxlEncoderAddImageFrame(
-                settings,
-                &frame.pixel_format(),
-                frame.data.as_ptr().cast(),
-                std::mem::size_of_val(frame.data),
-            )
+            JxlEncoderAddImageFrame(settings, &frame.pixel_format(), frame.data.as_ptr().cast(), std::mem::size_of_val(frame.data))
         })?;
         self.last_frame = LastFrame::Queued;
         Ok(())
@@ -260,8 +225,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
     /// Return [`EncodeError`] if output was already taken
     pub fn store_jpeg_metadata(&mut self) -> Result<(), EncodeError> {
         // SAFETY: `self.enc.enc` is valid until drop
-        self.enc
-            .check_enc_status(unsafe { JxlEncoderStoreJPEGMetadata(self.enc.enc, true.into()) })
+        self.enc.check_enc_status(unsafe { JxlEncoderStoreJPEGMetadata(self.enc.enc, true.into()) })
     }
 
     /// Add a frame from JPEG data, which is recompressed losslessly
@@ -271,9 +235,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
     pub fn add_jpeg_frame(&mut self, data: &[u8]) -> Result<(), EncodeError> {
         let settings = self.create_frame_settings(&self.frame_settings())?;
         // SAFETY: `settings` is valid and the size matches `data`
-        self.enc.check_enc_status(unsafe {
-            JxlEncoderAddJPEGFrame(settings, data.as_ptr().cast(), data.len())
-        })?;
+        self.enc.check_enc_status(unsafe { JxlEncoderAddJPEGFrame(settings, data.as_ptr().cast(), data.len()) })?;
         self.last_frame = LastFrame::Queued;
         Ok(())
     }
@@ -300,9 +262,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
     /// if the last frame was already taken by `take_output`
     pub fn finish(mut self) -> Result<Vec<u8>, EncodeError> {
         if self.last_frame == LastFrame::Taken {
-            return Err(EncodeError::InvalidState(
-                "the last frame was written as a non-final frame",
-            ));
+            return Err(EncodeError::InvalidState("the last frame was written as a non-final frame"));
         }
         // SAFETY: `self.enc.enc` is valid until drop
         unsafe { JxlEncoderCloseInput(self.enc.enc) };
@@ -320,8 +280,7 @@ impl<'enc, 'prl, 'mm> Session<'enc, 'prl, 'mm> {
             let mut next_out = output[start..].as_mut_ptr();
             let mut avail_out = output.len() - start;
             // SAFETY: `next_out` and `avail_out` describe the unused tail of `output`
-            let status =
-                unsafe { JxlEncoderProcessOutput(enc.enc, &raw mut next_out, &raw mut avail_out) };
+            let status = unsafe { JxlEncoderProcessOutput(enc.enc, &raw mut next_out, &raw mut avail_out) };
             output.truncate(output.len() - avail_out);
             if status != JxlEncoderStatus::NeedMoreOutput {
                 return enc.check_enc_status(status);

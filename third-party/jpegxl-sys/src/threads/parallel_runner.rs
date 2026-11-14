@@ -69,10 +69,7 @@ pub const JXL_PARALLEL_RET_RUNNER_ERROR: JxlParallelRetCode = -1;
 /// - `0` if the initialization process was successful.
 /// - An error code if there was an error, which should be returned by
 ///   [`JxlParallelRunner`].
-pub type JxlParallelRunInit = unsafe extern "C-unwind" fn(
-    jpegxl_opaque: *mut c_void,
-    num_threads: usize,
-) -> JxlParallelRetCode;
+pub type JxlParallelRunInit = unsafe extern "C-unwind" fn(jpegxl_opaque: *mut c_void, num_threads: usize) -> JxlParallelRetCode;
 
 /// Parallel run data processing callback. See [`JxlParallelRunner`] for
 /// details.
@@ -89,8 +86,7 @@ pub type JxlParallelRunInit = unsafe extern "C-unwind" fn(
 /// - `thread_id`: the thread number where this function is being called from.
 ///   This must be lower than the `num_threads` value passed to
 ///   [`JxlParallelRunInit`].
-pub type JxlParallelRunFunction =
-    unsafe extern "C-unwind" fn(jpegxl_opaque: *mut c_void, value: u32, thread_id: usize);
+pub type JxlParallelRunFunction = unsafe extern "C-unwind" fn(jpegxl_opaque: *mut c_void, value: u32, thread_id: usize);
 
 /// [`JxlParallelRunner`] function type. A parallel runner implementation can be
 /// provided by a JPEG XL caller to allow running computations in multiple

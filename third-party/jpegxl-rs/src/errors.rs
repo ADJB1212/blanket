@@ -17,9 +17,9 @@ along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Decoder and encoder errors
 
+use jpegxl_sys::decode::JxlDecoderStatus;
+use jpegxl_sys::encoder::encode::JxlEncoderError;
 use thiserror::Error;
-
-use jpegxl_sys::{decode::JxlDecoderStatus, encoder::encode::JxlEncoderError};
 
 /// Errors derived from [`JxlDecoderStatus`]
 #[derive(Error, Debug)]
@@ -110,36 +110,20 @@ pub(crate) fn check_dec_status(status: JxlDecoderStatus) -> Result<(), DecodeErr
 mod tests {
     use testresult::TestResult;
 
-    use crate::encode::JxlEncoder;
-
     use super::*;
+    use crate::encode::JxlEncoder;
 
     #[test]
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn decode_invalid_data() -> TestResult {
         let decoder = crate::decoder_builder().build()?;
-        assert!(matches!(
-            decoder.decode_with::<u8>(&[]),
-            Err(DecodeError::InvalidInput)
-        ));
-        assert!(matches!(
-            decoder.decode_with::<u8>(&[0; 64]),
-            Err(DecodeError::InvalidInput)
-        ));
-        assert!(matches!(
-            decoder.decode(&crate::tests::SAMPLE_JXL[..100]),
-            Err(DecodeError::GenericError)
-        ));
+        assert!(matches!(decoder.decode_with::<u8>(&[]), Err(DecodeError::InvalidInput)));
+        assert!(matches!(decoder.decode_with::<u8>(&[0; 64]), Err(DecodeError::InvalidInput)));
+        assert!(matches!(decoder.decode(&crate::tests::SAMPLE_JXL[..100]), Err(DecodeError::GenericError)));
 
-        assert!(matches!(
-            check_dec_status(JxlDecoderStatus::Error),
-            Err(DecodeError::GenericError)
-        ));
+        assert!(matches!(check_dec_status(JxlDecoderStatus::Error), Err(DecodeError::GenericError)));
 
-        println!(
-            "{x}, {x:?}",
-            x = check_dec_status(JxlDecoderStatus::BasicInfo).unwrap_err()
-        );
+        println!("{x}, {x:?}", x = check_dec_status(JxlDecoderStatus::BasicInfo).unwrap_err());
 
         Ok(())
     }
@@ -151,19 +135,10 @@ mod tests {
 
         println!("{}", encoder.encode::<u8>(&[], 0, 0).err().unwrap());
 
-        assert!(matches!(
-            encoder.encode::<u8>(&[], 0, 0),
-            Err(EncodeError::ApiUsage)
-        ));
-        assert!(matches!(
-            encoder.encode::<f32>(&[1.0, 1.0, 1.0, 0.5], 1, 1),
-            Err(EncodeError::ApiUsage)
-        ));
+        assert!(matches!(encoder.encode::<u8>(&[], 0, 0), Err(EncodeError::ApiUsage)));
+        assert!(matches!(encoder.encode::<f32>(&[1.0, 1.0, 1.0, 0.5], 1, 1), Err(EncodeError::ApiUsage)));
 
-        println!(
-            "{x}, {x:?}",
-            x = EncodeError::UnknownStatus(JxlEncoderError::OK)
-        );
+        println!("{x}, {x:?}", x = EncodeError::UnknownStatus(JxlEncoderError::OK));
 
         Ok(())
     }

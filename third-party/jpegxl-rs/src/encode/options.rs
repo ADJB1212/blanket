@@ -17,10 +17,8 @@
 
 use std::mem::MaybeUninit;
 
-use jpegxl_sys::{
-    color::color_encoding::JxlColorEncoding,
-    encoder::encode::{self as api, JxlEncoderFrameSettingId},
-};
+use jpegxl_sys::color::color_encoding::JxlColorEncoding;
+use jpegxl_sys::encoder::encode::{self as api, JxlEncoderFrameSettingId};
 
 /// Encoding speed
 #[derive(Debug, Clone, Copy, Default)]

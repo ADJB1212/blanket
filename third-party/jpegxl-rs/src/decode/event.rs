@@ -15,10 +15,8 @@
  * along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
  */
 
-use std::{
-    ffi::c_int,
-    ops::{BitOr, BitOrAssign},
-};
+use std::ffi::c_int;
+use std::ops::{BitOr, BitOrAssign};
 
 /// Target of the color profile.
 pub use jpegxl_sys::decode::JxlColorProfileTarget as ColorProfileTarget;

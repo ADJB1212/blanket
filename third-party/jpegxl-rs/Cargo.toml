@@ -1,5 +1,5 @@
 [package]
-edition = "2021"
+edition = "2024"
 rust-version = "1.92.0"
 name = "jpegxl-rs"
 version = "0.16.0+libjxl-0.13.0"

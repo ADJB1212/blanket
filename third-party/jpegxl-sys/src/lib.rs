@@ -27,19 +27,17 @@ pub mod threads;
 
 #[cfg(test)]
 mod test {
-    use crate::{
-        common::types::*,
-        decode::*,
-        encoder::encode::*,
-        threads::thread_parallel_runner::{
-            JxlThreadParallelRunner, JxlThreadParallelRunnerCreate,
-            JxlThreadParallelRunnerDefaultNumWorkerThreads, JxlThreadParallelRunnerDestroy,
-        },
-    };
-
-    use std::{mem::MaybeUninit, ptr};
+    use std::mem::MaybeUninit;
+    use std::ptr;
 
     use pretty_assertions::assert_eq;
+
+    use crate::common::types::*;
+    use crate::decode::*;
+    use crate::encoder::encode::*;
+    use crate::threads::thread_parallel_runner::{
+        JxlThreadParallelRunner, JxlThreadParallelRunnerCreate, JxlThreadParallelRunnerDefaultNumWorkerThreads, JxlThreadParallelRunnerDestroy,
+    };
 
     const SAMPLE_PNG: &[u8] = include_bytes!("../../samples/sample.png");
     const SAMPLE_JXL: &[u8] = include_bytes!("../../samples/sample.jxl");
@@ -83,15 +81,10 @@ mod test {
 
     #[cfg_attr(coverage_nightly, coverage(off))]
     unsafe fn decode(decoder: *mut JxlDecoder, sample: &[u8]) {
-        use JxlDecoderStatus::{
-            BasicInfo, Error, FullImage, NeedImageOutBuffer, NeedMoreInput, Success,
-        };
+        use JxlDecoderStatus::{BasicInfo, Error, FullImage, NeedImageOutBuffer, NeedMoreInput, Success};
 
         // Stop after getting the basic info and decoding the image
-        let mut status = JxlDecoderSubscribeEvents(
-            decoder,
-            jxl_dec_events!(JxlDecoderStatus::BasicInfo, JxlDecoderStatus::FullImage),
-        );
+        let mut status = JxlDecoderSubscribeEvents(decoder, jxl_dec_events!(JxlDecoderStatus::BasicInfo, JxlDecoderStatus::FullImage));
         jxl_dec_assert!(status, "Subscribe Events");
 
         // Read everything in memory
@@ -101,12 +94,7 @@ mod test {
         let next_in = sample.as_ptr();
         let avail_in = sample.len();
 
-        let pixel_format = JxlPixelFormat {
-            num_channels: 3,
-            data_type: JxlDataType::Uint8,
-            endianness: JxlEndianness::Native,
-            align: 0,
-        };
+        let pixel_format = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Native, align: 0 };
 
         let mut basic_info;
         let mut buffer: Vec<f32> = Vec::new();
@@ -143,20 +131,11 @@ mod test {
                 // Get the output buffer
                 NeedImageOutBuffer => {
                     let mut size = 0;
-                    status = JxlDecoderImageOutBufferSize(
-                        decoder,
-                        &raw const pixel_format,
-                        &raw mut size,
-                    );
+                    status = JxlDecoderImageOutBufferSize(decoder, &raw const pixel_format, &raw mut size);
                     jxl_dec_assert!(status, "BufferSize");
 
                     buffer.resize(size, 0f32);
-                    status = JxlDecoderSetImageOutBuffer(
-                        decoder,
-                        &raw const pixel_format,
-                        buffer.as_mut_ptr().cast(),
-                        size,
-                    );
+                    status = JxlDecoderSetImageOutBuffer(decoder, &raw const pixel_format, buffer.as_mut_ptr().cast(), size);
                     jxl_dec_assert!(status, "SetBuffer");
                 }
 
@@ -188,10 +167,7 @@ mod test {
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn test_bindings_thread_pool() {
         unsafe {
-            let runner = JxlThreadParallelRunnerCreate(
-                std::ptr::null(),
-                JxlThreadParallelRunnerDefaultNumWorkerThreads(),
-            );
+            let runner = JxlThreadParallelRunnerCreate(std::ptr::null(), JxlThreadParallelRunnerDefaultNumWorkerThreads());
 
             let dec = JxlDecoderCreate(ptr::null()); // Default memory manager
             assert!(!dec.is_null());
@@ -210,13 +186,10 @@ mod test {
     #[test]
     #[cfg_attr(coverage_nightly, coverage(off))]
     fn test_bindings_resizable() {
-        use JxlDecoderStatus::{
-            BasicInfo, Error, FullImage, NeedImageOutBuffer, NeedMoreInput, Success,
-        };
+        use JxlDecoderStatus::{BasicInfo, Error, FullImage, NeedImageOutBuffer, NeedMoreInput, Success};
 
         use crate::threads::resizable_parallel_runner::{
-            JxlResizableParallelRunner, JxlResizableParallelRunnerCreate,
-            JxlResizableParallelRunnerDestroy, JxlResizableParallelRunnerSetThreads,
+            JxlResizableParallelRunner, JxlResizableParallelRunnerCreate, JxlResizableParallelRunnerDestroy, JxlResizableParallelRunnerSetThreads,
             JxlResizableParallelRunnerSuggestThreads,
         };
 
@@ -231,10 +204,7 @@ mod test {
             jxl_dec_assert!(status, "Set Parallel Runner");
 
             // Stop after getting the basic info and decoding the image
-            let mut status = JxlDecoderSubscribeEvents(
-                dec,
-                jxl_dec_events!(JxlDecoderStatus::BasicInfo, JxlDecoderStatus::FullImage),
-            );
+            let mut status = JxlDecoderSubscribeEvents(dec, jxl_dec_events!(JxlDecoderStatus::BasicInfo, JxlDecoderStatus::FullImage));
             jxl_dec_assert!(status, "Subscribe Events");
 
             // Read everything in memory
@@ -244,12 +214,7 @@ mod test {
             let next_in = SAMPLE_JXL.as_ptr();
             let avail_in = SAMPLE_JXL.len();
 
-            let pixel_format = JxlPixelFormat {
-                num_channels: 3,
-                data_type: JxlDataType::Uint8,
-                endianness: JxlEndianness::Native,
-                align: 0,
-            };
+            let pixel_format = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Native, align: 0 };
 
             let mut basic_info;
             let mut buffer: Vec<f32> = Vec::new();
@@ -279,10 +244,7 @@ mod test {
                         x_size = basic_info.xsize;
                         y_size = basic_info.ysize;
 
-                        let num_threads = JxlResizableParallelRunnerSuggestThreads(
-                            u64::from(x_size),
-                            u64::from(y_size),
-                        );
+                        let num_threads = JxlResizableParallelRunnerSuggestThreads(u64::from(x_size), u64::from(y_size));
                         JxlResizableParallelRunnerSetThreads(runner, num_threads as usize);
 
                         assert_eq!(basic_info.xsize, 40);
@@ -292,20 +254,11 @@ mod test {
                     // Get the output buffer
                     NeedImageOutBuffer => {
                         let mut size = 0;
-                        status = JxlDecoderImageOutBufferSize(
-                            dec,
-                            &raw const pixel_format,
-                            &raw mut size,
-                        );
+                        status = JxlDecoderImageOutBufferSize(dec, &raw const pixel_format, &raw mut size);
                         jxl_dec_assert!(status, "BufferSize");
 
                         buffer.resize(size, 0f32);
-                        status = JxlDecoderSetImageOutBuffer(
-                            dec,
-                            &raw const pixel_format,
-                            buffer.as_mut_ptr().cast(),
-                            size,
-                        );
+                        status = JxlDecoderSetImageOutBuffer(dec, &raw const pixel_format, buffer.as_mut_ptr().cast(), size);
                         jxl_dec_assert!(status, "SetBuffer");
                     }
 
@@ -328,10 +281,7 @@ mod test {
         unsafe {
             let enc = JxlEncoderCreate(std::ptr::null());
 
-            let runner = JxlThreadParallelRunnerCreate(
-                std::ptr::null(),
-                JxlThreadParallelRunnerDefaultNumWorkerThreads(),
-            );
+            let runner = JxlThreadParallelRunnerCreate(std::ptr::null(), JxlThreadParallelRunnerDefaultNumWorkerThreads());
 
             let mut status = JxlEncoderSetParallelRunner(enc, JxlThreadParallelRunner, runner);
             jxl_enc_assert!(status, "Set Parallel Runner");
@@ -347,12 +297,7 @@ mod test {
             status = JxlEncoderSetBasicInfo(enc, &raw const basic_info);
             jxl_enc_assert!(status, "Set Basic Info");
 
-            let pixel_format = JxlPixelFormat {
-                num_channels: 3,
-                data_type: JxlDataType::Uint8,
-                endianness: JxlEndianness::Native,
-                align: 0,
-            };
+            let pixel_format = JxlPixelFormat { num_channels: 3, data_type: JxlDataType::Uint8, endianness: JxlEndianness::Native, align: 0 };
             let mut color_encoding = MaybeUninit::uninit();
             JxlColorEncodingSetToSRGB(color_encoding.as_mut_ptr(), false.into());
             status = JxlEncoderSetColorEncoding(enc, color_encoding.as_ptr());
@@ -374,11 +319,7 @@ mod test {
             let mut avail_out = chunk_size;
 
             loop {
-                status = JxlEncoderProcessOutput(
-                    enc,
-                    std::ptr::addr_of_mut!(next_out),
-                    &raw mut avail_out,
-                );
+                status = JxlEncoderProcessOutput(enc, std::ptr::addr_of_mut!(next_out), &raw mut avail_out);
 
                 if status != JxlEncoderStatus::NeedMoreOutput {
                     break;
@@ -405,17 +346,10 @@ mod test {
         let img = image::load_from_memory_with_format(SAMPLE_PNG, image::ImageFormat::Png).unwrap();
         let image_buffer = img.into_rgb8();
 
-        let output = encode(
-            image_buffer.as_raw(),
-            image_buffer.width(),
-            image_buffer.height(),
-        );
+        let output = encode(image_buffer.as_raw(), image_buffer.width(), image_buffer.height());
 
         unsafe {
-            let runner = JxlThreadParallelRunnerCreate(
-                std::ptr::null(),
-                JxlThreadParallelRunnerDefaultNumWorkerThreads(),
-            );
+            let runner = JxlThreadParallelRunnerCreate(std::ptr::null(), JxlThreadParallelRunnerDefaultNumWorkerThreads());
 
             let dec = JxlDecoderCreate(ptr::null()); // Default memory manager
             assert!(!dec.is_null());

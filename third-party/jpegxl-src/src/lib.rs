@@ -61,7 +61,6 @@ pub fn build() {
 
     let mut config = cmake::Config::new(source);
     config
-        .define("DJPEGXL_ENABLE_LTO", "ON")
         .define("BUILD_TESTING", "OFF")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("JPEGXL_ENABLE_TOOLS", "OFF")

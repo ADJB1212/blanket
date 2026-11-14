@@ -40,22 +40,17 @@ use super::parallel_runner::JxlParallelRunner;
 use super::parallel_runner::{JxlParallelRetCode, JxlParallelRunFunction, JxlParallelRunInit};
 use crate::common::memory_manager::JxlMemoryManager;
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Parallel runner internally using `std::thread`. Use as [`JxlParallelRunner`].
     pub fn JxlResizableParallelRunner(
-        runner_opaque: *mut c_void,
-        jpegxl_opaque: *mut c_void,
-        init: JxlParallelRunInit,
-        func: JxlParallelRunFunction,
-        start_range: u32,
+        runner_opaque: *mut c_void, jpegxl_opaque: *mut c_void, init: JxlParallelRunInit, func: JxlParallelRunFunction, start_range: u32,
         end_range: u32,
     ) -> JxlParallelRetCode;
 
     /// Creates the runner for [`JxlResizableParallelRunner`]. Use as the opaque
     /// runner. The runner will execute tasks on the calling thread until
     /// [`JxlResizableParallelRunnerSetThreads`] is called.
-    pub fn JxlResizableParallelRunnerCreate(memory_manager: *const JxlMemoryManager)
-        -> *mut c_void;
+    pub fn JxlResizableParallelRunnerCreate(memory_manager: *const JxlMemoryManager) -> *mut c_void;
 
     /// Changes the number of threads for [`JxlResizableParallelRunner`].
     pub fn JxlResizableParallelRunnerSetThreads(runner_opaque: *mut c_void, num_threads: usize);

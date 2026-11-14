@@ -20,13 +20,10 @@ along with jpegxl-sys.  If not, see <https://www.gnu.org/licenses/>.
 //! color encoding which is in [`crate::color::color_encoding`].
 
 use crate::common::types::JxlBool;
-
 #[cfg(doc)]
 use crate::{
     color::color_encoding::{JxlColorEncoding, JxlColorSpace},
-    decode::{
-        JxlColorProfileTarget, JxlDecoderGetExtraChannelBlendInfo, JxlDecoderGetExtraChannelInfo,
-    },
+    decode::{JxlColorProfileTarget, JxlDecoderGetExtraChannelBlendInfo, JxlDecoderGetExtraChannelInfo},
     encoder::encode::{JxlEncoderCloseFrames, JxlEncoderSetFrameName},
 };
 

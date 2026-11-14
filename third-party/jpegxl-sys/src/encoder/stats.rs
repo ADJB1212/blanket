@@ -29,7 +29,7 @@ pub struct JxlEncoderStats {
     _unused: [u8; 0],
 }
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Creates an instance of [`JxlEncoderStats`] and initializes it.
     ///
     /// # Returns

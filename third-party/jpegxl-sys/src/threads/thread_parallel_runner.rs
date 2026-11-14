@@ -41,22 +41,15 @@ use super::parallel_runner::JxlParallelRunner;
 use super::parallel_runner::{JxlParallelRetCode, JxlParallelRunFunction, JxlParallelRunInit};
 use crate::common::memory_manager::JxlMemoryManager;
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Parallel runner internally using `std::thread`. Use as [`JxlParallelRunner`].
     pub fn JxlThreadParallelRunner(
-        runner_opaque: *mut c_void,
-        jpegxl_opaque: *mut c_void,
-        init: JxlParallelRunInit,
-        func: JxlParallelRunFunction,
-        start_range: u32,
+        runner_opaque: *mut c_void, jpegxl_opaque: *mut c_void, init: JxlParallelRunInit, func: JxlParallelRunFunction, start_range: u32,
         end_range: u32,
     ) -> JxlParallelRetCode;
 
     /// Creates the runner for [`JxlThreadParallelRunner`]. Use as the opaque runner.
-    pub fn JxlThreadParallelRunnerCreate(
-        memory_manager: *const JxlMemoryManager,
-        num_worker_threads: usize,
-    ) -> *mut c_void;
+    pub fn JxlThreadParallelRunnerCreate(memory_manager: *const JxlMemoryManager, num_worker_threads: usize) -> *mut c_void;
 
     /// Destroys the runner created by [`JxlThreadParallelRunnerCreate`].
     pub fn JxlThreadParallelRunnerDestroy(runner_opaque: *mut c_void);

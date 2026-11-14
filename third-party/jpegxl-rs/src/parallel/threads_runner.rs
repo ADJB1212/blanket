@@ -17,13 +17,13 @@ along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Wrapper for default thread pool implementation with C++ standard library
 
-use std::{ffi::c_void, ptr::null_mut};
+use std::ffi::c_void;
+use std::ptr::null_mut;
 
 #[allow(clippy::wildcard_imports)]
 use jpegxl_sys::threads::thread_parallel_runner::*;
 
 use super::{JxlParallelRunner, ParallelRunner};
-
 use crate::memory::MemoryManager;
 
 /// Wrapper for default thread pool implementation with C++ standard library
@@ -35,10 +35,7 @@ pub struct ThreadsRunner<'mm> {
 impl<'mm> ThreadsRunner<'mm> {
     /// Construct with number of threads
     #[must_use]
-    pub fn new(
-        memory_manager: Option<&'mm dyn MemoryManager>,
-        num_workers: Option<usize>,
-    ) -> Option<Self> {
+    pub fn new(memory_manager: Option<&'mm dyn MemoryManager>, num_workers: Option<usize>) -> Option<Self> {
         let mm = memory_manager.map(MemoryManager::manager);
         // SAFETY: libjxl copies the memory manager, so `mm` only has to outlive the call
         let runner_ptr = unsafe {
@@ -48,14 +45,7 @@ impl<'mm> ThreadsRunner<'mm> {
             )
         };
 
-        if runner_ptr.is_null() {
-            None
-        } else {
-            Some(Self {
-                runner_ptr,
-                _memory_manager: memory_manager,
-            })
-        }
+        if runner_ptr.is_null() { None } else { Some(Self { runner_ptr, _memory_manager: memory_manager }) }
     }
 }
 
@@ -86,9 +76,8 @@ impl Drop for ThreadsRunner<'_> {
 
 #[cfg(test)]
 mod tests {
-    use crate::memory::tests::BumpManager;
-
     use super::*;
+    use crate::memory::tests::BumpManager;
 
     #[test]
     fn test_construction() {

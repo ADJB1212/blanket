@@ -20,16 +20,12 @@ along with jpegxl-sys.  If not, see <https://www.gnu.org/licenses/>.
 use std::ffi::{c_char, c_void};
 
 use super::stats::JxlEncoderStats;
-use crate::{
-    color::{cms_interface::JxlCmsInterface, color_encoding::JxlColorEncoding},
-    common::memory_manager::JxlMemoryManager,
-    common::types::{JxlBitDepth, JxlBool, JxlBoxType, JxlPixelFormat},
-    metadata::codestream_header::{
-        JxlBasicInfo, JxlBlendInfo, JxlExtraChannelInfo, JxlExtraChannelType, JxlFrameHeader,
-    },
-    threads::parallel_runner::JxlParallelRunner,
-};
-
+use crate::color::cms_interface::JxlCmsInterface;
+use crate::color::color_encoding::JxlColorEncoding;
+use crate::common::memory_manager::JxlMemoryManager;
+use crate::common::types::{JxlBitDepth, JxlBool, JxlBoxType, JxlPixelFormat};
+use crate::metadata::codestream_header::{JxlBasicInfo, JxlBlendInfo, JxlExtraChannelInfo, JxlExtraChannelType, JxlFrameHeader};
+use crate::threads::parallel_runner::JxlParallelRunner;
 #[cfg(doc)]
 use crate::{
     common::types::{JxlBitDepthType, JxlDataType},
@@ -416,7 +412,7 @@ pub struct JxlEncoderOutputProcessor {
     /// # Returns
     /// A pointer to the acquired buffer or NULL to indicate a stop
     /// condition.
-    get_buffer: extern "C-unwind" fn(opaque: *mut c_void, size: *mut usize) -> *mut c_void,
+    get_buffer: unsafe extern "C-unwind" fn(opaque: *mut c_void, size: *mut usize) -> *mut c_void,
     /// Notifies the user of library that the current buffer's data has been
     /// written and can be released. This function should advance the current
     /// osition of the buffer by `written_bytes` number of bytes.
@@ -424,7 +420,7 @@ pub struct JxlEncoderOutputProcessor {
     /// # Parameters
     /// - `opaque`: user supplied parameters to the callback
     /// - `written_bytes`: the number of bytes written to the buffer.
-    release_buffer: extern "C-unwind" fn(opaque: *mut c_void, written_bytes: usize),
+    release_buffer: unsafe extern "C-unwind" fn(opaque: *mut c_void, written_bytes: usize),
     /// Seeks to a specific position in the output. This function is optional and
     /// can be set to `None` if the output doesn't support seeking. Can only be done
     /// when there is no buffer. Cannot be used to seek before the finalized
@@ -433,7 +429,7 @@ pub struct JxlEncoderOutputProcessor {
     /// # Parameters
     /// - `opaque`: User supplied parameters to the callback.
     /// - `position`: The position to seek to, in bytes.
-    seek: Option<extern "C-unwind" fn(opaque: *mut c_void, position: u64)>,
+    seek: Option<unsafe extern "C-unwind" fn(opaque: *mut c_void, position: u64)>,
     /// Sets a finalized position on the output data, at a specific position.
     /// Seeking will never request a position before the finalized position.
     ///
@@ -443,7 +439,7 @@ pub struct JxlEncoderOutputProcessor {
     /// - `opaque`: User supplied parameters to the callback.
     /// - `finalized_position`: The position, in bytes, where the finalized
     ///   position should be set.
-    set_finalized_position: extern "C-unwind" fn(opaque: *mut c_void, finalized_position: u64),
+    set_finalized_position: unsafe extern "C-unwind" fn(opaque: *mut c_void, finalized_position: u64),
 }
 
 /// This struct provides callback functions to pass pixel data in a streaming
@@ -466,8 +462,7 @@ pub struct JxlChunkedFrameInputSource {
     /// # Parameters
     /// - `opaque`: User supplied parameters to the callback.
     /// - `pixel_format`: Format for pixels.
-    get_color_channels_pixel_format:
-        extern "C-unwind" fn(opaque: *mut c_void, pixel_format: *mut JxlPixelFormat),
+    get_color_channels_pixel_format: unsafe extern "C-unwind" fn(opaque: *mut c_void, pixel_format: *mut JxlPixelFormat),
 
     /// Callback to retrieve a rectangle of color channel data at a specific
     /// location. It is guaranteed that `xpos` and `ypos` are multiples of 8. `xsize`,
@@ -493,7 +488,7 @@ pub struct JxlChunkedFrameInputSource {
     ///
     /// # Returns
     /// Pointer to the retrieved pixel data.
-    get_color_channels_data_at: extern "C-unwind" fn(
+    get_color_channels_data_at: unsafe extern "C-unwind" fn(
         opaque: *mut c_void,
         xpos: usize,
         ypos: usize,
@@ -514,11 +509,7 @@ pub struct JxlChunkedFrameInputSource {
     /// - `opaque`: User supplied parameters to the callback.
     /// - `ec_index`: Zero-indexed index of the extra channel.
     /// - `pixel_format`: Format for extra channel data.
-    get_extra_channel_pixel_format: extern "C-unwind" fn(
-        opaque: *mut c_void,
-        ec_index: usize,
-        pixel_format: *mut JxlPixelFormat,
-    ),
+    get_extra_channel_pixel_format: unsafe extern "C-unwind" fn(opaque: *mut c_void, ec_index: usize, pixel_format: *mut JxlPixelFormat),
 
     /// Callback to retrieve a rectangle of extra channel `ec_index` data at a
     /// specific location. It is guaranteed that `xpos` and `ypos` are multiples of
@@ -545,7 +536,7 @@ pub struct JxlChunkedFrameInputSource {
     ///
     /// # Returns
     /// Pointer to the retrieved pixel data.
-    get_extra_channel_data_at: extern "C-unwind" fn(
+    get_extra_channel_data_at: unsafe extern "C-unwind" fn(
         opaque: *mut c_void,
         ec_index: usize,
         xpos: usize,
@@ -564,7 +555,7 @@ pub struct JxlChunkedFrameInputSource {
     /// - `opaque`: User supplied parameters to the callback.
     /// - `buf`: Pointer returned by [`Self::get_color_channels_data_at`] or
     ///   [`Self::get_extra_channel_data_at`].
-    release_buffer: extern "C-unwind" fn(opaque: *mut c_void, buf: *const c_void),
+    release_buffer: unsafe extern "C-unwind" fn(opaque: *mut c_void, buf: *const c_void),
 }
 
 /// Function type for [`JxlEncoderSetDebugImageCallback`].
@@ -581,7 +572,7 @@ pub struct JxlChunkedFrameInputSource {
 /// - `pixels`: Pixel data of debug image as big-endian 16-bit unsigned samples.
 ///   The memory is not owned by the user, and is only valid during the time the
 ///   callback is running.
-pub type JxlDebugImageCallback = extern "C-unwind" fn(
+pub type JxlDebugImageCallback = unsafe extern "C-unwind" fn(
     opaque: *mut c_void,
     label: *const c_char,
     xsize: usize,
@@ -590,7 +581,7 @@ pub type JxlDebugImageCallback = extern "C-unwind" fn(
     pixels: *const u16,
 );
 
-extern "C-unwind" {
+unsafe extern "C-unwind" {
     /// Encoder library version.
     ///
     /// # Returns
@@ -648,9 +639,7 @@ extern "C-unwind" {
     /// - `JxlEncoderStatus::Success` if the runner was set.
     /// - `JxlEncoderStatus::Error` otherwise (the previous runner remains set).
     pub fn JxlEncoderSetParallelRunner(
-        enc: *mut JxlEncoder,
-        parallel_runner: JxlParallelRunner,
-        parallel_runner_opaque: *mut c_void,
+        enc: *mut JxlEncoder, parallel_runner: JxlParallelRunner, parallel_runner_opaque: *mut c_void,
     ) -> JxlEncoderStatus;
 
     /// Get the (last) error code in case [`JxlEncoderStatus::Error`] was returned.
@@ -693,11 +682,7 @@ extern "C-unwind" {
     /// - [`JxlEncoderStatus::Success`] when encoding finished and all events handled.
     /// - [`JxlEncoderStatus::Error`] when encoding failed, e.g. invalid input.
     /// - [`JxlEncoderStatus::NeedMoreOutput`] more output buffer is necessary.
-    pub fn JxlEncoderProcessOutput(
-        enc: *mut JxlEncoder,
-        next_out: *mut *mut u8,
-        avail_out: *mut usize,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderProcessOutput(enc: *mut JxlEncoder, next_out: *mut *mut u8, avail_out: *mut usize) -> JxlEncoderStatus;
 
     /// Sets the frame information for this frame to the encoder. This includes
     /// animation information such as frame duration to store in the frame header.
@@ -733,10 +718,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success
     /// - [`JxlEncoderStatus::Error`] on error
-    pub fn JxlEncoderSetFrameHeader(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        frame_header: *const JxlFrameHeader,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetFrameHeader(frame_settings: *mut JxlEncoderFrameSettings, frame_header: *const JxlFrameHeader) -> JxlEncoderStatus;
 
     /// Sets blend info of an extra channel. The blend info of extra channels is set
     /// separately from that of the color channels, the color channels are set with
@@ -752,9 +734,7 @@ extern "C-unwind" {
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
     pub fn JxlEncoderSetExtraChannelBlendInfo(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        index: usize,
-        blend_info: *const JxlBlendInfo,
+        frame_settings: *mut JxlEncoderFrameSettings, index: usize, blend_info: *const JxlBlendInfo,
     ) -> JxlEncoderStatus;
 
     /// Sets the name of the animation frame. This function is optional, frames are
@@ -779,10 +759,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success
     /// - [`JxlEncoderStatus::Error`] on error
-    pub fn JxlEncoderSetFrameName(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        frame_name: *const u8,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetFrameName(frame_settings: *mut JxlEncoderFrameSettings, frame_name: *const u8) -> JxlEncoderStatus;
 
     /// Sets the bit depth of the input buffer.
     ///
@@ -799,10 +776,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
-    pub fn JxlEncoderSetFrameBitDepth(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        bit_depth: *const JxlBitDepth,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetFrameBitDepth(frame_settings: *mut JxlEncoderFrameSettings, bit_depth: *const JxlBitDepth) -> JxlEncoderStatus;
 
     /// Sets the buffer to read JPEG encoded bytes from for the next frame to encode.
     ///
@@ -838,11 +812,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success
     /// - [`JxlEncoderStatus::Error`] on error
-    pub fn JxlEncoderAddJPEGFrame(
-        options: *const JxlEncoderFrameSettings,
-        buffer: *const u8,
-        size: usize,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderAddJPEGFrame(options: *const JxlEncoderFrameSettings, buffer: *const u8, size: usize) -> JxlEncoderStatus;
 
     /// Sets the buffer to read pixels from for the next image to encode. Must call
     /// [`JxlEncoderSetBasicInfo`] before [`JxlEncoderAddImageFrame`].
@@ -909,10 +879,7 @@ extern "C-unwind" {
     /// - [`JxlEncoderStatus::Success`] on success
     /// - [`JxlEncoderStatus::Error`] on error
     pub fn JxlEncoderAddImageFrame(
-        options: *const JxlEncoderFrameSettings,
-        pixel_format: *const JxlPixelFormat,
-        buffer: *const c_void,
-        size: usize,
+        options: *const JxlEncoderFrameSettings, pixel_format: *const JxlPixelFormat, buffer: *const c_void, size: usize,
     ) -> JxlEncoderStatus;
 
     /// Sets the output processor for the encoder. This processor determines how the
@@ -929,10 +896,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
-    pub fn JxlEncoderSetOutputProcessor(
-        enc: *mut JxlEncoder,
-        output_processor: JxlEncoderOutputProcessor,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetOutputProcessor(enc: *mut JxlEncoder, output_processor: JxlEncoderOutputProcessor) -> JxlEncoderStatus;
 
     /// Flushes any buffered input in the encoder, ensuring that all available input
     /// data has been processed and written to the output.
@@ -972,9 +936,7 @@ extern "C-unwind" {
     /// Returns a status indicating the success or failure of adding the
     /// frame.
     pub fn JxlEncoderAddChunkedFrame(
-        frame_settings: *const JxlEncoderFrameSettings,
-        is_last_frame: JxlBool,
-        chunked_frame_input: JxlChunkedFrameInputSource,
+        frame_settings: *const JxlEncoderFrameSettings, is_last_frame: JxlBool, chunked_frame_input: JxlChunkedFrameInputSource,
     ) -> JxlEncoderStatus;
 
     /// Sets the buffer to read pixels from for an extra channel at a given index.
@@ -1003,11 +965,7 @@ extern "C-unwind" {
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
     pub fn JxlEncoderSetExtraChannelBuffer(
-        frame_settings: *const JxlEncoderFrameSettings,
-        pixel_format: *const JxlPixelFormat,
-        buffer: *const c_void,
-        size: usize,
-        index: u32,
+        frame_settings: *const JxlEncoderFrameSettings, pixel_format: *const JxlPixelFormat, buffer: *const c_void, size: usize, index: u32,
     ) -> JxlEncoderStatus;
 
     /// Adds a metadata box to the file format. [`JxlEncoderProcessOutput`] must be
@@ -1083,11 +1041,7 @@ extern "C-unwind" {
     ///   when using this function without [`JxlEncoderUseContainer`], or adding a box
     ///   type that would result in an invalid file format.
     pub fn JxlEncoderAddBox(
-        enc: *mut JxlEncoder,
-        box_type: *const JxlBoxType,
-        contents: *const u8,
-        size: usize,
-        compress_box: JxlBool,
+        enc: *mut JxlEncoder, box_type: *const JxlBoxType, contents: *const u8, size: usize, compress_box: JxlBool,
     ) -> JxlEncoderStatus;
 
     /// Indicates the intention to add metadata boxes. This allows [`JxlEncoderAddBox`] to be used.
@@ -1158,10 +1112,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful.
     /// - [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetColorEncoding(
-        enc: *mut JxlEncoder,
-        color: *const JxlColorEncoding,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetColorEncoding(enc: *mut JxlEncoder, color: *const JxlColorEncoding) -> JxlEncoderStatus;
 
     /// Sets the original color encoding of the image encoded by this encoder as an
     /// ICC color profile. This is an alternative to [`JxlEncoderSetColorEncoding`]
@@ -1177,11 +1128,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful.
     /// - [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetICCProfile(
-        enc: *mut JxlEncoder,
-        icc_profile: *const u8,
-        size: usize,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetICCProfile(enc: *mut JxlEncoder, icc_profile: *const u8, size: usize) -> JxlEncoderStatus;
 
     /// Initializes a [`JxlBasicInfo`] struct to default values.
     /// For forwards-compatibility, this function has to be called before values
@@ -1228,10 +1175,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful.
     /// - [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetBasicInfo(
-        enc: *mut JxlEncoder,
-        info: *const JxlBasicInfo,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetBasicInfo(enc: *mut JxlEncoder, info: *const JxlBasicInfo) -> JxlEncoderStatus;
 
     /// Sets the upsampling method the decoder will use in case there are frames
     /// with [`JxlEncoderFrameSettingsSetOption`] set. This is useful in combination
@@ -1250,11 +1194,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful,
     /// - [`JxlEncoderStatus::Error`] otherwise
-    pub fn JxlEncoderSetUpsamplingMode(
-        enc: *mut JxlEncoder,
-        factor: i64,
-        mode: i64,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetUpsamplingMode(enc: *mut JxlEncoder, factor: i64, mode: i64) -> JxlEncoderStatus;
 
     /// Initializes a [`JxlExtraChannelInfo`] struct to default values.
     /// For forwards-compatibility, this function has to be called before values
@@ -1265,10 +1205,7 @@ extern "C-unwind" {
     /// - `channel_type`: type of the extra channel.
     /// - `info`: global extra channel metadata. Object owned by the caller and its
     ///   contents are copied internally.
-    pub fn JxlEncoderInitExtraChannelInfo(
-        channel_type: JxlExtraChannelType,
-        info: *mut JxlExtraChannelInfo,
-    );
+    pub fn JxlEncoderInitExtraChannelInfo(channel_type: JxlExtraChannelType, info: *mut JxlExtraChannelInfo);
 
     /// Sets information for the extra channel at the given index. The index
     /// must be smaller than `num_extra_channels` in the associated [`JxlBasicInfo`].
@@ -1282,11 +1219,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
-    pub fn JxlEncoderSetExtraChannelInfo(
-        enc: *mut JxlEncoder,
-        index: usize,
-        info: *const JxlExtraChannelInfo,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetExtraChannelInfo(enc: *mut JxlEncoder, index: usize, info: *const JxlExtraChannelInfo) -> JxlEncoderStatus;
 
     /// Sets the name for the extra channel at the given index in UTF-8. The index
     /// must be smaller than the `num_extra_channels` in the associated [`JxlBasicInfo`].
@@ -1303,12 +1236,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] on success.
     /// - [`JxlEncoderStatus::Error`] on error.
-    pub fn JxlEncoderSetExtraChannelName(
-        enc: *mut JxlEncoder,
-        index: usize,
-        name: *const u8,
-        size: usize,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetExtraChannelName(enc: *mut JxlEncoder, index: usize, name: *const u8, size: usize) -> JxlEncoderStatus;
 
     /// Sets a frame-specific option of integer type to the encoder options.
     /// The [`JxlEncoderFrameSettingId`] argument determines which option is set.
@@ -1326,9 +1254,7 @@ extern "C-unwind" {
     ///   state of the [`JxlEncoderFrameSettings`] object is still valid and is the same as before
     ///   this function was called.
     pub fn JxlEncoderFrameSettingsSetOption(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        option: JxlEncoderFrameSettingId,
-        value: i64,
+        frame_settings: *mut JxlEncoderFrameSettings, option: JxlEncoderFrameSettingId, value: i64,
     ) -> JxlEncoderStatus;
 
     /// Sets a frame-specific option of float type to the encoder options.
@@ -1347,9 +1273,7 @@ extern "C-unwind" {
     ///   state of the [`JxlEncoderFrameSettings`] object is still valid and is the same as before
     ///   this function was called.
     pub fn JxlEncoderFrameSettingsSetFloatOption(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        option: JxlEncoderFrameSettingId,
-        value: f32,
+        frame_settings: *mut JxlEncoderFrameSettings, option: JxlEncoderFrameSettingId, value: f32,
     ) -> JxlEncoderStatus;
 
     /// Forces the encoder to use the box-based container format (BMFF) even
@@ -1372,8 +1296,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful.
     /// - [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderUseContainer(enc: *mut JxlEncoder, use_container: JxlBool)
-        -> JxlEncoderStatus;
+    pub fn JxlEncoderUseContainer(enc: *mut JxlEncoder, use_container: JxlBool) -> JxlEncoderStatus;
 
     /// Configure the encoder to store JPEG reconstruction metadata in the JPEG XL
     /// container.
@@ -1390,10 +1313,7 @@ extern "C-unwind" {
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful.
     /// - [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderStoreJPEGMetadata(
-        enc: *mut JxlEncoder,
-        store_jpeg_metadata: JxlBool,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderStoreJPEGMetadata(enc: *mut JxlEncoder, store_jpeg_metadata: JxlBool) -> JxlEncoderStatus;
 
     /// Sets the feature level of the JPEG XL codestream. Valid values are 5 and
     /// 10, or -1 (to choose automatically). Using the minimum required level, or
@@ -1473,10 +1393,7 @@ extern "C-unwind" {
     ///
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful, [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetFrameLossless(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        lossless: JxlBool,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetFrameLossless(frame_settings: *mut JxlEncoderFrameSettings, lossless: JxlBool) -> JxlEncoderStatus;
 
     /// Sets the distance level for lossy compression: target max butteraugli
     /// distance, lower = higher quality. Range: 0 .. 25.
@@ -1492,10 +1409,7 @@ extern "C-unwind" {
     ///
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful, [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetFrameDistance(
-        options: *mut JxlEncoderFrameSettings,
-        distance: f32,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetFrameDistance(options: *mut JxlEncoderFrameSettings, distance: f32) -> JxlEncoderStatus;
 
     /// Sets the distance level for lossy compression of extra channels.
     /// The distance is as in [`JxlEncoderSetFrameDistance`] (lower = higher
@@ -1510,11 +1424,7 @@ extern "C-unwind" {
     ///
     /// # Returns
     /// - [`JxlEncoderStatus::Success`] if the operation was successful, [`JxlEncoderStatus::Error`] otherwise.
-    pub fn JxlEncoderSetExtraChannelDistance(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        index: usize,
-        distance: f32,
-    ) -> JxlEncoderStatus;
+    pub fn JxlEncoderSetExtraChannelDistance(frame_settings: *mut JxlEncoderFrameSettings, index: usize, distance: f32) -> JxlEncoderStatus;
 
     /// Maps JPEG-style quality factor to distance.
     ///
@@ -1569,10 +1479,7 @@ extern "C-unwind" {
     ///
     /// # Returns
     /// The opaque struct pointer identifying a new set of encoder options.
-    pub fn JxlEncoderFrameSettingsCreate(
-        enc: *mut JxlEncoder,
-        source: *const JxlEncoderFrameSettings,
-    ) -> *mut JxlEncoderFrameSettings;
+    pub fn JxlEncoderFrameSettingsCreate(enc: *mut JxlEncoder, source: *const JxlEncoderFrameSettings) -> *mut JxlEncoderFrameSettings;
 
     /// Sets a color encoding to be sRGB.
     ///
@@ -1608,11 +1515,7 @@ extern "C-unwind" {
     ///   includes reference to the encoder object.
     /// - `callback`: used to return the debug image.
     /// - `opaque`: user supplied parameter to the image callback.
-    pub fn JxlEncoderSetDebugImageCallback(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        callback: JxlDebugImageCallback,
-        opaque: *mut c_void,
-    );
+    pub fn JxlEncoderSetDebugImageCallback(frame_settings: *mut JxlEncoderFrameSettings, callback: JxlDebugImageCallback, opaque: *mut c_void);
 
     /// Sets the given stats object for gathering various statistics during encoding.
     ///
@@ -1624,8 +1527,5 @@ extern "C-unwind" {
     ///   includes reference to the encoder object.
     /// - `stats`: object that can be used to query the gathered stats (created
     ///   by [`JxlEncoderStatsCreate`])
-    pub fn JxlEncoderCollectStats(
-        frame_settings: *mut JxlEncoderFrameSettings,
-        stats: *mut JxlEncoderStats,
-    );
+    pub fn JxlEncoderCollectStats(frame_settings: *mut JxlEncoderFrameSettings, stats: *mut JxlEncoderStats);
 }

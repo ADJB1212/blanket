@@ -17,9 +17,8 @@
 
 use jpegxl_sys::common::types::{JxlEndianness, JxlPixelFormat};
 
-use crate::common::PixelType;
-
 use super::FrameSettings;
+use crate::common::PixelType;
 
 /// A frame for the encoder, consisting of the pixels and its options
 #[allow(clippy::module_name_repetitions)]
@@ -39,16 +38,7 @@ impl<'data, T: PixelType> EncoderFrame<'data, T> {
     ///
     /// Use RGB(3) channels, native endianness and no alignment.
     pub fn new(data: &'data [T]) -> Self {
-        Self {
-            data,
-            num_channels: None,
-            endianness: None,
-            align: None,
-            settings: None,
-            duration: None,
-            name: None,
-            bit_depth_from_image: false,
-        }
+        Self { data, num_channels: None, endianness: None, align: None, settings: None, duration: None, name: None, bit_depth_from_image: false }
     }
 
     /// Set the number of channels of the source.

@@ -30,27 +30,20 @@ pub trait MemoryManager {
     /// Helper conversion function for C API
     #[must_use]
     fn manager(&self) -> JxlMemoryManager {
-        JxlMemoryManager {
-            opaque: std::ptr::from_ref(self).cast_mut().cast(),
-            alloc: Some(self.alloc()),
-            free: Some(self.free()),
-        }
+        JxlMemoryManager { opaque: std::ptr::from_ref(self).cast_mut().cast(), alloc: Some(self.alloc()), free: Some(self.free()) }
     }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use std::{
-        ffi::c_void,
-        ptr::null_mut,
-        sync::atomic::{AtomicUsize, Ordering},
-    };
+    use std::ffi::c_void;
+    use std::ptr::null_mut;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use testresult::TestResult;
 
-    use crate::{decoder_builder, encoder_builder};
-
     use super::*;
+    use crate::{decoder_builder, encoder_builder};
     /// Example implementation of [`MemoryManager`] of a fixed size allocator
     pub struct BumpManager {
         arena: Vec<u8>,
@@ -59,10 +52,7 @@ pub(crate) mod tests {
 
     impl BumpManager {
         pub(crate) fn new(n: usize) -> Self {
-            Self {
-                arena: vec![0; n],
-                footer: AtomicUsize::new(0),
-            }
+            Self { arena: vec![0; n], footer: AtomicUsize::new(0) }
         }
     }
 
@@ -79,12 +69,7 @@ pub(crate) mod tests {
                     if new > mm.arena.len() {
                         println!("Out of memory");
                         break null_mut();
-                    } else if let Err(s) = mm.footer.compare_exchange_weak(
-                        footer,
-                        new,
-                        Ordering::AcqRel,
-                        Ordering::Relaxed,
-                    ) {
+                    } else if let Err(s) = mm.footer.compare_exchange_weak(footer, new, Ordering::AcqRel, Ordering::Relaxed) {
                         new = s + size;
                     } else {
                         let addr = mm.arena.get_unchecked_mut(footer);
@@ -142,14 +127,8 @@ pub(crate) mod tests {
         use crate::{DecodeError, EncodeError, ThreadsRunner};
 
         let mm = BumpManager::new(0);
-        assert!(matches!(
-            decoder_builder().memory_manager(&mm).build(),
-            Err(DecodeError::CannotCreateDecoder)
-        ));
-        assert!(matches!(
-            encoder_builder().memory_manager(&mm).build(),
-            Err(EncodeError::CannotCreateEncoder)
-        ));
+        assert!(matches!(decoder_builder().memory_manager(&mm).build(), Err(DecodeError::CannotCreateDecoder)));
+        assert!(matches!(encoder_builder().memory_manager(&mm).build(), Err(EncodeError::CannotCreateEncoder)));
         assert!(ThreadsRunner::new(Some(&mm), None).is_none());
     }
 

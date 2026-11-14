@@ -17,13 +17,14 @@ along with jpegxl-rs.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Wrapper for resizable thread pool implementation with C++ standard library
 
-use std::{ffi::c_void, ptr::null_mut};
+use std::ffi::c_void;
+use std::ptr::null_mut;
 
 use jpegxl_sys::threads::resizable_parallel_runner as api;
 
 use super::{JxlParallelRunner, ParallelRunner};
-
-use crate::{decode::BasicInfo, memory::MemoryManager};
+use crate::decode::BasicInfo;
+use crate::memory::MemoryManager;
 
 /// Wrapper for resizable thread pool implementation with C++ standard library
 pub struct ResizableRunner<'mm> {
@@ -37,18 +38,9 @@ impl<'mm> ResizableRunner<'mm> {
     pub fn new(memory_manager: Option<&'mm dyn MemoryManager>) -> Option<Self> {
         let mm = memory_manager.map(MemoryManager::manager);
         // SAFETY: libjxl copies the memory manager, so `mm` only has to outlive the call
-        let runner_ptr = unsafe {
-            api::JxlResizableParallelRunnerCreate(mm.as_ref().map_or(null_mut(), |mm| mm))
-        };
+        let runner_ptr = unsafe { api::JxlResizableParallelRunnerCreate(mm.as_ref().map_or(null_mut(), |mm| mm)) };
 
-        if runner_ptr.is_null() {
-            None
-        } else {
-            Some(Self {
-                runner_ptr,
-                _memory_manager: memory_manager,
-            })
-        }
+        if runner_ptr.is_null() { None } else { Some(Self { runner_ptr, _memory_manager: memory_manager }) }
     }
 
     /// Set number of threads depending on the size of the image
@@ -92,9 +84,8 @@ impl Drop for ResizableRunner<'_> {
 #[cfg(test)]
 mod tests {
 
-    use crate::memory::tests::BumpManager;
-
     use super::*;
+    use crate::memory::tests::BumpManager;
 
     #[test]
     #[cfg_attr(coverage_nightly, coverage(off))]
