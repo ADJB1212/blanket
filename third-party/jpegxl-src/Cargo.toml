@@ -1,0 +1,30 @@
+[package]
+edition = "2024"
+rust-version = "1.92.0"
+name = "jpegxl-src"
+version = "0.12.0"
+build = false
+exclude = ["libjxl"]
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "Source of libjxl and logic to build it."
+readme = "README.md"
+license = "BSD-3-Clause"
+repository = "https://github.com/inflation/jpegxl-rs"
+
+[features]
+threads = []
+
+[lib]
+name = "jpegxl_src"
+path = "src/lib.rs"
+
+[dependencies]
+cmake = "0.1.58"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(asan)', 'cfg(tsan)'] }

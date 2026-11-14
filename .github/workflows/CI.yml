@@ -39,7 +39,7 @@ env:
   HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
   UV_NO_SYNC: "1"
   RUSTUP_AUTO_INSTALL: "0"
-  RUSTUP_TOOLCHAIN: nightly-2026-11-12
+  RUSTUP_TOOLCHAIN: nightly-2026-11-14
 
 permissions:
   contents: read

@@ -111,6 +111,9 @@ memchr = {version = "2", default-features = false, features = ["std", "alloc"] }
 [patch.crates-io]
 dav1d-sys = {path = "third-party/dav1d-sys" }
 libheif-sys = {path = "third-party/libheif-sys" }
+jpegxl-sys = {path = "third-party/jpegxl-sys" }
+jpegxl-rs = {path = "third-party/jpegxl-rs" }
+jpegxl-src = {path = "third-party/jpegxl-src" }
 
 [profile.release]
 opt-level = 3
@@ -143,7 +146,7 @@ opt-level = 1
 debug = false
 split-debuginfo = "unpacked"
 lto = "off"
-codegen-units = 16
+codegen-units = 32
 
 [workspace.lints.rust]
 missing_debug_implementations = "deny"
@@ -192,7 +195,7 @@ manual_memcpy = "deny"
 trivially_copy_pass_by_ref = "deny"
 large_types_passed_by_value = "deny"
 large_enum_variant = "deny"
-large_stack_frames = "deny"
+large_unopt_stack_frames = "deny"
 needless_pass_by_ref_mut = "deny"
 boxed_local = "deny"
 
