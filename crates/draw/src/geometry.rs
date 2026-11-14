@@ -1,0 +1,230 @@
+//! Geometry preparation shared by the Python drawing adapters.
+
+use std::f64::consts::PI;
+
+use pyo3::exceptions::{PyOverflowError, PyValueError};
+use pyo3::prelude::*;
+
+type Point = (f64, f64);
+type IntPoint = (i64, i64);
+type Edge = (IntPoint, IntPoint);
+type Bounds = (f64, f64, f64, f64);
+type IntBounds = (i64, i64, i64, i64);
+type OutlineTransform = (Vec<Edge>, IntPoint, IntPoint);
+
+pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(draw_bezier_edges, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_outline_transform, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_regular_vertices, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_arc_points, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_rounded_points, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_line_joints, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_text_positions, module)?)?;
+    Ok(())
+}
+
+pub(crate) fn integer(value: f64) -> PyResult<i64> {
+    if value.is_nan() {
+        return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+    }
+    if !value.is_finite() || !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&value.trunc()) {
+        return Err(PyOverflowError::new_err("drawing coordinate is too large"));
+    }
+    Ok(value as i64)
+}
+
+fn int_point(point: Point) -> PyResult<IntPoint> {
+    Ok((integer(point.0)?, integer(point.1)?))
+}
+
+#[pyfunction]
+fn draw_bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>, Point)> {
+    let [(x1, y1), (x2, y2), (x3, y3)] = controls;
+    let mut previous = start;
+    let mut edges = Vec::with_capacity(32);
+    for step in 1..=32 {
+        let t = f64::from(step) / 32.0;
+        let t2 = t * t;
+        let t3 = t2 * t;
+        let u = 1.0 - t;
+        let u2 = u * u;
+        let u3 = u2 * u;
+        let point =
+            (start.0 * u3 + 3.0 * (x1 * t * u2 + x2 * t2 * u) + x3 * t3 + 0.5, start.1 * u3 + 3.0 * (y1 * t * u2 + y2 * t2 * u) + y3 * t3 + 0.5);
+        edges.push((int_point(previous)?, int_point(point)?));
+        previous = point;
+    }
+    Ok((edges, previous))
+}
+
+#[pyfunction]
+fn draw_outline_transform(edges: Vec<Edge>, position: Point, origin: Point, matrix: [f64; 6]) -> PyResult<OutlineTransform> {
+    if !matrix.iter().all(|value| value.is_finite()) {
+        return Err(PyValueError::new_err("transform matrix must be finite"));
+    }
+    let [a, b, c, d, e, f] = matrix;
+    let point = |(x, y): Point| int_point((a * x + b * y + c, d * x + e * y + f));
+    let edges = edges
+        .into_iter()
+        .map(|(start, end)| Ok((point((start.0 as f64, start.1 as f64))?, point((end.0 as f64, end.1 as f64))?)))
+        .collect::<PyResult<Vec<_>>>()?;
+    Ok((edges, point(position)?, point(origin)?))
+}
+
+fn round_hundredths(value: f64) -> f64 {
+    // Decimal formatting rounds the binary value directly, as Python round(x, 2) does.
+    format!("{value:.2}").parse().expect("formatted float")
+}
+
+#[pyfunction]
+fn draw_regular_vertices(center: Point, radius: f64, sides: usize, rotation: f64) -> PyResult<Vec<Point>> {
+    if sides < 3 {
+        return Err(PyValueError::new_err("n_sides must be greater than two"));
+    }
+    if rotation.is_infinite() {
+        return Err(PyValueError::new_err("math domain error"));
+    }
+    let degrees = 360.0 / sides as f64;
+    let mut angle = (270.0 - 0.5 * degrees) + rotation;
+    let mut points = Vec::new();
+    points.try_reserve_exact(sides).map_err(|_| pyo3::exceptions::PyMemoryError::new_err("polygon is too large"))?;
+    for _ in 0..sides {
+        let radians = (360.0 - angle) * (PI / 180.0);
+        points.push((
+            round_hundredths(radius * radians.cos() - 0.0 * radians.sin() + center.0),
+            round_hundredths(0.0 * radians.cos() + radius * radians.sin() + center.1),
+        ));
+        angle += degrees;
+        if angle > 360.0 {
+            angle -= 360.0;
+        }
+    }
+    Ok(points)
+}
+
+#[pyfunction(signature = (bounds, start, end, style="arc"))]
+fn draw_arc_points(bounds: IntBounds, start: f64, end: f64, style: &str) -> PyResult<Vec<Point>> {
+    if !start.is_finite() || !end.is_finite() {
+        return Err(PyValueError::new_err("angles must be finite"));
+    }
+    let difference = end - start;
+    let sweep = if difference >= 360.0 { 360.0 } else { difference.rem_euclid(360.0) };
+    if sweep.is_nan() {
+        return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+    }
+    if sweep == 0.0 {
+        return Ok(Vec::new());
+    }
+    let (left, top, right, bottom) = bounds;
+    let (rx, ry) = ((i128::from(right) - i128::from(left)) as f64 / 2.0, (i128::from(bottom) - i128::from(top)) as f64 / 2.0);
+    let (x0, y0) = (left as f64, top as f64);
+    let count = (rx.max(ry) * sweep * PI / 180.0 * 2.0).ceil().clamp(1.0, 65536.0) as u32;
+    let mut points: Vec<_> = (0..=count)
+        .map(|i| {
+            let radians = (start + sweep * f64::from(i) / f64::from(count)) * PI / 180.0;
+            (x0 + rx + rx * radians.cos(), y0 + ry + ry * radians.sin())
+        })
+        .collect();
+    if style == "pie" && difference.abs() < 360.0 {
+        points.push(((i128::from(left) + i128::from(right)) as f64 / 2.0, (i128::from(top) + i128::from(bottom)) as f64 / 2.0));
+    }
+    Ok(points)
+}
+
+#[pyfunction]
+fn draw_rounded_points(bounds: Bounds, radius: f64, corners: [bool; 4]) -> Vec<Point> {
+    let (x0, y0, x1, y1) = bounds;
+    let radius = radius.min((x1 - x0) / 2.0).min((y1 - y0) / 2.0);
+    let mut points = Vec::new();
+    let centers = [
+        (x0 + radius, y0 + radius, 180.0, (x0, y0)),
+        (x1 - radius, y0 + radius, 270.0, (x1, y0)),
+        (x1 - radius, y1 - radius, 0.0, (x1, y1)),
+        (x0 + radius, y1 - radius, 90.0, (x0, y1)),
+    ];
+    for (enabled, (cx, cy, start, corner)) in corners.into_iter().zip(centers) {
+        if enabled && radius != 0.0 {
+            let count = (radius * PI).ceil().clamp(1.0, 16384.0) as u32;
+            points.extend((0..=count).map(|i| {
+                let radians = (start + 90.0 * f64::from(i) / f64::from(count)) * PI / 180.0;
+                (cx + radius * radians.cos(), cy + radius * radians.sin())
+            }));
+        } else {
+            points.push(corner);
+        }
+    }
+    points
+}
+
+type Joint = (Bounds, f64, f64, Vec<IntPoint>);
+
+#[pyfunction]
+fn draw_line_joints(points: Vec<IntPoint>, width: i64) -> PyResult<Vec<Joint>> {
+    let mut joints = Vec::new();
+    for triple in points.windows(3) {
+        let [previous, center, following] = [triple[0], triple[1], triple[2]];
+        let point = (center.0 as f64, center.1 as f64);
+        let angle = |start: IntPoint, end: IntPoint| {
+            let dx = (i128::from(end.0) - i128::from(start.0)) as f64;
+            let dy = (i128::from(start.1) - i128::from(end.1)) as f64;
+            dx.atan2(dy).to_degrees().rem_euclid(360.0)
+        };
+        let angles = [angle(previous, center), angle(center, following)];
+        if angles[0] == angles[1] {
+            continue;
+        }
+        let flipped = (angles[1] > angles[0] && angles[1] - 180.0 > angles[0]) || (angles[1] < angles[0] && angles[1] + 180.0 > angles[0]);
+        let (start, end) = if flipped { (angles[1] + 90.0, angles[0] + 90.0) } else { (angles[0] - 90.0, angles[1] - 90.0) };
+        let half = width as f64 / 2.0;
+        let bounds = (point.0 - half + 1.0, point.1 - half + 1.0, point.0 + half - 1.0, point.1 + half - 1.0);
+        let mut gap = Vec::new();
+        if width > 8 {
+            for angle in angles {
+                let radians = (angle + if flipped { 90.0 } else { -90.0 } - 90.0) * PI / 180.0;
+                let (dx, dy) = ((half - 1.0) * radians.cos(), (half - 1.0) * radians.sin());
+                let x = center.0.checked_add(integer(dx)?);
+                let y = center.1.checked_add(integer(dy)?);
+                gap.push(x.zip(y).ok_or_else(|| PyOverflowError::new_err("drawing coordinate is too large"))?);
+            }
+            gap.insert(1, center);
+        }
+        joints.push((bounds, start - 90.0, end - 90.0, gap));
+    }
+    Ok(joints)
+}
+
+#[pyfunction]
+fn draw_text_positions(xy: Point, widths: Vec<f64>, height: f64, stroke: f64, spacing: f64, anchor: &str, align: &str) -> PyResult<Vec<Point>> {
+    if widths.is_empty() {
+        return Ok(Vec::new());
+    }
+    let max_width = widths.iter().copied().reduce(|a, b| if b > a { b } else { a }).unwrap();
+    let line_height = height + stroke + spacing;
+    let mut y = xy.1;
+    match anchor.as_bytes().get(1) {
+        Some(b'a' | b's') => (),
+        Some(b'm') => y -= (widths.len() - 1) as f64 * line_height / 2.0,
+        Some(b'd') => y -= (widths.len() - 1) as f64 * line_height,
+        _ => return Err(PyValueError::new_err("invalid multiline text anchor")),
+    }
+    widths
+        .into_iter()
+        .enumerate()
+        .map(|(i, width)| {
+            let difference = max_width - width;
+            let mut shift = match align {
+                "left" => 0.0,
+                "center" => difference / 2.0,
+                "right" => difference,
+                _ => return Err(PyValueError::new_err("align must be left, center, or right")),
+            };
+            shift -= match anchor.as_bytes().first() {
+                Some(b'l') => 0.0,
+                Some(b'm') => difference / 2.0,
+                Some(b'r') => difference,
+                _ => return Err(PyValueError::new_err("invalid multiline text anchor")),
+            };
+            Ok((xy.0 + shift, y + i as f64 * line_height))
+        })
+        .collect()
+}

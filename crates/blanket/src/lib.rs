@@ -32,6 +32,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_write_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_rewrite_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_container_previews, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_resolve_resolution, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_native_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
     module.add_function(wrap_pyfunction!(xmp::_getxmp, module)?)?;

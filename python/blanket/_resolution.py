@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"struct", "math"}
+__lazy_modules__ = {"struct"}
 
-import math
 import struct
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from ._blanket import _resolve_resolution
 from ._ifd import Exif
 
 if TYPE_CHECKING:
@@ -33,23 +33,11 @@ class Resolution:
     conflicts: tuple[str, ...] = ()
 
 
-def _value(x: float, y: float, unit: int, source: str, units: dict[int, tuple[str, float | None]]) -> Resolution | None:
-    """Convert raw physical resolution values into a normalized Resolution object."""
-    if not math.isfinite(x) or not math.isfinite(y) or x <= 0 or y <= 0 or unit not in units:
-        return None
-    name, factor = units[unit]
-    dpi = None if factor is None else (x * factor, y * factor)
-    aspect = y / x
-    if not math.isfinite(aspect) or aspect <= 0 or (dpi is not None and any(not math.isfinite(v) or v <= 0 for v in dpi)):
-        return None
-    return Resolution(dpi, aspect, source, name)
-
-
 def parse_resolution(data: bytes, format: str, info: dict[object, object], conflict: Literal["container", "exif", "error"]) -> Resolution:
     """Parse and reconcile container chunks and EXIF tags to determine resolution."""
     if conflict not in ("container", "exif", "error"):
         raise ValueError("conflict must be 'container', 'exif', or 'error'")
-    container = None
+    candidates: list[tuple[float, float, int, str]] = []
     if format == "PNG":
         pos = 8
         while pos + 12 <= len(data):
@@ -59,7 +47,7 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
                 break
             if data[pos + 4 : pos + 8] == b"pHYs" and length == 9:
                 x, y, unit = struct.unpack_from(">IIB", data, pos + 8)
-                container = _value(x, y, unit, "png", {0: ("relative", None), 1: ("meter", 0.0254)})
+                candidates.append((x, y, unit, "png"))
                 break
             pos = end
     elif format == "JPEG":
@@ -79,13 +67,12 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
                 break
             if marker == 0xE0 and data[pos + 2 : pos + 7] == b"JFIF\0" and length >= 16:
                 unit, x, y = struct.unpack_from(">BHH", data, pos + 9)
-                container = _value(x, y, unit, "jfif", {0: ("relative", None), 1: ("inch", 1.0), 2: ("cm", 2.54)})
+                candidates.append((x, y, unit, "jfif"))
                 break
             pos = end
     elif format == "BMP" and len(data) >= 46 and int.from_bytes(data[14:18], "little") >= 40:
         x, y = struct.unpack_from("<ii", data, 38)
-        container = _value(x, y, 1, "bmp", {1: ("meter", 0.0254)})
-    exif_resolution = None
+        candidates.append((x, y, 1, "bmp"))
     raw = info.get("exif")
     if isinstance(raw, bytes):
         try:
@@ -93,23 +80,9 @@ def parse_resolution(data: bytes, format: str, info: dict[object, object], confl
             exif.load(raw)
             x, y = float(cast("FloatInput", exif[282])), float(cast("FloatInput", exif[283]))
             unit = exif.get(296, 2)
-            if isinstance(unit, int):
-                exif_resolution = _value(x, y, unit, "tiff" if format == "TIFF" else "exif", {1: ("relative", None), 2: ("inch", 1.0), 3: ("cm", 2.54)})
+            if isinstance(unit, int) and unit in (1, 2, 3):
+                candidates.append((x, y, unit, "tiff" if format == "TIFF" else "exif"))
         except (KeyError, TypeError, ValueError, OverflowError, struct.error):
             pass
-    candidates = [v for v in (container, exif_resolution) if v is not None]
-    if not candidates:
-        return Resolution(None, 1.0, None, None)
-    preferred = list(reversed(candidates)) if conflict == "exif" else candidates
-    selected = next((v for v in preferred if v.dpi is not None), preferred[0])
-    conflicts: list[str] = []
-    for candidate in candidates:
-        if candidate is selected or candidate.source is None:
-            continue
-        aspect_differs = not math.isclose(candidate.pixel_aspect, selected.pixel_aspect, rel_tol=1e-3)
-        dpi_differs = candidate.dpi is not None and selected.dpi is not None and any(not math.isclose(a, b, rel_tol=1e-3) for a, b in zip(candidate.dpi, selected.dpi, strict=True))
-        if aspect_differs or dpi_differs:
-            conflicts.append(candidate.source)
-    if conflicts and conflict == "error":
-        raise ValueError("conflicting resolution metadata")
-    return Resolution(selected.dpi, selected.pixel_aspect, selected.source, selected.unit, tuple(conflicts))
+    dpi, aspect, source, unit_name, conflicts = _resolve_resolution(candidates, conflict)
+    return Resolution(dpi, aspect, source, unit_name, tuple(conflicts))

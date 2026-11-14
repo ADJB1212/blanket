@@ -12,6 +12,8 @@ const STROKE_EPSILON: f64 = 1e-12;
 const MAX_MASK_PIXELS: usize = 100_000_000;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::geometry::register(module)?;
+    crate::rounded::register(module)?;
     crate::pillow::register(module)?;
     crate::path::register(module)?;
     module.add_function(wrap_pyfunction!(draw_points, module)?)?;
@@ -69,7 +71,7 @@ fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyA
 }
 
 #[pyfunction]
-fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'_, PyAny>, width: i64, blend: bool) -> PyResult<()> {
+pub(crate) fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'_, PyAny>, width: i64, blend: bool) -> PyResult<()> {
     let ink = ink(image, value, blend)?;
     image.ensure_owned()?;
     let (left, top, right, bottom) = bounds;
@@ -265,7 +267,9 @@ pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[
 }
 
 #[pyfunction]
-fn draw_ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'_, PyAny>, width: i64, blend: bool, antialias: bool) -> PyResult<()> {
+pub(crate) fn draw_ellipse(
+    image: &mut Image, bounds: (i64, i64, i64, i64), value: &Bound<'_, PyAny>, width: i64, blend: bool, antialias: bool,
+) -> PyResult<()> {
     let ink = ink(image, value, blend)?;
     image.ensure_owned()?;
     if antialias {

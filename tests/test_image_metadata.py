@@ -320,6 +320,35 @@ def test_resolution_conflicts_and_unitless_density():
     assert result.dpi is None and result.pixel_aspect == 0.5 and result.unit == "relative"
 
 
+@pytest.mark.parametrize("difference,conflicts", [(0.05, ()), (0.1, ("exif",))])
+def test_native_resolution_conflict_tolerance(difference, conflicts):
+    exif = Image.Exif()
+    exif[282], exif[283], exif[296] = 72 + difference, 72 + difference, 2
+    stream = image_buffer(PillowImage.new("RGB", (3, 2)), "JPEG", dpi=(72, 72), exif=exif.tobytes())
+    result = ImageMetadata.get_resolution(stream)
+    assert result.dpi == (72, 72)
+    assert result.conflicts == conflicts
+    if conflicts:
+        with pytest.raises(ValueError, match="conflicting resolution metadata"):
+            ImageMetadata.get_resolution(stream, conflict="error")
+    else:
+        assert ImageMetadata.get_resolution(stream, conflict="error").conflicts == ()
+
+
+@pytest.mark.parametrize("conflict", ["container", "exif", "error"])
+def test_native_resolution_prefers_physical_density_over_relative(conflict):
+    exif = Image.Exif()
+    exif[282], exif[283], exif[296] = 300, 150, 2
+    data = bytearray(encode("JPEG", exif=exif.tobytes()))
+    pos = data.index(b"JFIF\0")
+    data[pos + 7 : pos + 12] = struct.pack(">BHH", 0, 2, 1)
+    result = ImageMetadata.get_resolution(BytesIO(data), conflict=conflict)
+    assert result.dpi == (300, 150)
+    assert result.pixel_aspect == 0.5
+    assert result.source == "exif" and result.unit == "inch"
+    assert result.conflicts == ()
+
+
 @pytest.mark.parametrize("format", ["JPEG", "PNG", "WEBP", "JXL", "TIFF", "HEIF"])
 def test_save_policy_filters_explicit_metadata_and_cached_exif(format):
     image = Image.new("RGB", (17, 9))

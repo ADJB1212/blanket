@@ -11,6 +11,30 @@ from blanket import Image, ImageDraw
 from blanket._blanket import draw_path
 
 
+@pytest.mark.parametrize("sides", [3, 4, 7, 32])
+@pytest.mark.parametrize("rotation", [-721.5, -45, 0, 22.5, 450])
+@pytest.mark.parametrize("circle", [(2.675, -0.125, 0.135), (-7.25, 11.125, 23.675)])
+def test_native_polygon_vertices_preserve_decimal_rounding(circle, sides, rotation):
+    assert ImageDraw._compute_regular_polygon_vertices(circle, sides, rotation) == PILDraw._compute_regular_polygon_vertices(circle, sides, rotation)
+
+
+def test_native_outline_curves_preserve_position_and_transform():
+    outline = ImageDraw.Outline()
+    outline.move(-3.25, 2.75)
+    outline.curve(-5.5, 10.25, 8.5, -4.75, 12.25, 6.5)
+    assert len(outline.edges) == 32
+    assert outline.edges[0][0] == (-3, 2)
+    assert outline.edges[-1][1] == (12, 7)
+    assert (outline.x, outline.y) == (12.75, 7.0)
+    outline.curve(17.5, -3.25, 20.5, 17.5, 21.25, 9.75)
+    assert len(outline.edges) == 64
+    assert outline.edges[32][0] == (12, 7)
+    outline.transform((0.5, -0.25, 2.5, 0.25, 1.5, -1))
+    assert (outline.x, outline.y, outline.x0, outline.y0) == (10, 19, 0, 2)
+    outline.close()
+    assert outline.edges[-1] == ((10, 19), (0, 2))
+
+
 @pytest.mark.parametrize("blend", [False, True])
 @pytest.mark.parametrize("offset", [-31, 0, 37])
 def test_polygon_horizontal_edges_and_reused_scanlines_match_pillow(blend: bool, offset: int) -> None:

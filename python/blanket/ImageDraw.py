@@ -9,12 +9,30 @@ from __future__ import annotations
 
 __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font", "math", "operator"}
 
-from math import atan2, ceil, cos, degrees, floor, isfinite, pi, radians, sin
+from math import ceil, isfinite
 from operator import index
 from typing import TYPE_CHECKING, cast
 
 from . import Image
-from ._blanket import draw_curve, draw_ellipse, draw_floodfill, draw_image_mask, draw_mask, draw_path, draw_points, draw_polygon, draw_rectangle
+from ._blanket import (
+    draw_arc_points,
+    draw_bezier_edges,
+    draw_curve,
+    draw_ellipse,
+    draw_floodfill,
+    draw_image_mask,
+    draw_line_joints,
+    draw_mask,
+    draw_outline_transform,
+    draw_path,
+    draw_points,
+    draw_polygon,
+    draw_rectangle,
+    draw_regular_vertices,
+    draw_rounded_points,
+    draw_rounded_rectangle,
+    draw_text_positions,
+)
 from ._color import color_pixel
 from ._draw_font import BitmapFont, PublicDomainFont
 from .ImageFont import load_default
@@ -143,19 +161,9 @@ class Outline:
             ```
         """
         x1, y1, x2, y2, x3, y3 = float(x1), float(y1), float(x2), float(y2), float(x3), float(y3)
-        xo, yo = self.x, self.y
-        for step in range(1, 33):
-            t = step / 32.0
-            t2 = t * t
-            t3 = t2 * t
-            u = 1.0 - t
-            u2 = u * u
-            u3 = u2 * u
-            x = self.x * u3 + 3.0 * (x1 * t * u2 + x2 * t2 * u) + x3 * t3 + 0.5
-            y = self.y * u3 + 3.0 * (y1 * t * u2 + y2 * t2 * u) + y3 * t3 + 0.5
-            self.edges.append(((int(xo), int(yo)), (int(x), int(y))))
-            xo, yo = x, y
-        self.x, self.y = xo, yo
+        edges, position = draw_bezier_edges((self.x, self.y), [(x1, y1), (x2, y2), (x3, y3)])
+        self.edges.extend(edges)
+        self.x, self.y = position
 
     def close(self) -> None:
         """Close the outline by connecting the current position back to the origin.
@@ -196,14 +204,9 @@ class Outline:
         if not all(isfinite(value) for value in (a, b, c, d, e, f)):
             raise ValueError(f"transform matrix must be finite, got {matrix!r}")
 
-        def point(x: float, y: float) -> tuple[int, int]:
-            """Apply the affine matrix to coordinates (x, y)."""
-            return int(a * x + b * y + c), int(d * x + e * y + f)
-
-        edges = [(point(*start), point(*end)) for start, end in self.edges]
-        self.x, self.y = point(self.x, self.y)
-        self.x0, self.y0 = point(self.x0, self.y0)
-        self.edges = edges
+        self.edges, position, origin = draw_outline_transform(self.edges, (self.x, self.y), (self.x0, self.y0), (a, b, c, d, e, f))
+        self.x, self.y = position
+        self.x0, self.y0 = origin
 
 
 _BINARY_TABLE = bytes([0] + [255] * 255)
@@ -236,21 +239,7 @@ def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] 
     if not isinstance(rotation, (int, float)) or isinstance(rotation, bool):
         raise ValueError(f"rotation should be an int or float, got {rotation!r}")
 
-    def _apply_rotation(point: tuple[float, float], deg: float) -> tuple[float, float]:
-        """Rotate a 2D point around the centroid by given degrees."""
-        rad = radians(360 - deg)
-        return (round(point[0] * cos(rad) - point[1] * sin(rad) + centroid_x, 2), round(point[1] * cos(rad) + point[0] * sin(rad) + centroid_y, 2))
-
-    degrees = 360 / n_sides
-    current_angle = (270 - 0.5 * degrees) + rotation
-    angles = []
-    for _ in range(n_sides):
-        angles.append(current_angle)
-        current_angle += degrees
-        if current_angle > 360:
-            current_angle -= 360
-
-    return [_apply_rotation((polygon_radius, 0.0), angle) for angle in angles]
+    return draw_regular_vertices((centroid_x, centroid_y), polygon_radius, n_sides, rotation)
 
 
 class ImageDraw:
@@ -518,20 +507,10 @@ class ImageDraw:
                 return
             draw_polygon(self.im._native, points, max(1, width), False, False, ink, bool(self.blend))
             if joint == "curve" and width > 4:
-                for previous, point, following in zip(points, points[1:], points[2:], strict=False):
-                    angles = [degrees(atan2(end[0] - start[0], start[1] - end[1])) % 360 for start, end in ((previous, point), (point, following))]
-                    if angles[0] == angles[1]:
-                        continue
-                    flipped = (angles[1] > angles[0] and angles[1] - 180 > angles[0]) or (angles[1] < angles[0] and angles[1] + 180 > angles[0])
-                    start, end = (angles[1] + 90, angles[0] + 90) if flipped else (angles[0] - 90, angles[1] - 90)
-                    self.pieslice((point[0] - width / 2 + 1, point[1] - width / 2 + 1, point[0] + width / 2 - 1, point[1] + width / 2 - 1), start - 90, end - 90, fill=fill)
-                    if width > 8:
-                        gap = []
-                        for angle in angles:
-                            radians = (angle + (90 if flipped else -90) - 90) * pi / 180
-                            dx, dy = (width / 2 - 1) * cos(radians), (width / 2 - 1) * sin(radians)
-                            gap.append((point[0] + (floor(dx) if dx > 0 else ceil(dx)), point[1] + (floor(dy) if dy > 0 else ceil(dy))))
-                        self.line([gap[0], point, gap[1]], fill, 3)
+                for bounds, start, end, gap in draw_line_joints(points, width):
+                    self.pieslice(bounds, start, end, fill=fill)
+                    if gap:
+                        self.line(gap, fill, 3)
             return
         points = self._coords(xy)
         if len(points) < 2:
@@ -565,12 +544,9 @@ class ImageDraw:
         if not self.antialias:
             self._native_curve(xy, start, end, "pie", fill, outline, width)
             return
-        bounds = self._bounds(xy)
-        points = self._curve(xy, start, end)
+        points = draw_arc_points(self._bounds(xy), start, end, "pie")
         if not points:
             return
-        if abs(end - start) < 360:
-            points.append(((bounds[0] + bounds[2]) / 2, (bounds[1] + bounds[3]) / 2))
         self._shape(points, fill, outline, width)
 
     def _native_curve(self, xy: Coords, start: float, end: float, style: str, fill: Color, outline: Color, width: int) -> None:
@@ -595,16 +571,7 @@ class ImageDraw:
 
     def _curve(self, xy: Coords, start: float, end: float) -> list[tuple[float, float]]:
         """Sample a clockwise elliptical arc, returning no points for zero sweep."""
-        x0, y0, x1, y1 = self._bounds(xy)
-        if not isfinite(start) or not isfinite(end):
-            raise ValueError(f"angles must be finite, got start={start!r}, end={end!r}")
-        sweep = end - start
-        sweep = 360 if sweep >= 360 else sweep % 360
-        if sweep == 0:
-            return []
-        rx, ry = (x1 - x0) / 2, (y1 - y0) / 2
-        count = max(1, min(65536, ceil(max(rx, ry) * sweep * pi / 180 * 2)))
-        return [(x0 + rx + rx * cos((start + sweep * i / count) * pi / 180), y0 + ry + ry * sin((start + sweep * i / count) * pi / 180)) for i in range(count + 1)]
+        return draw_arc_points(self._bounds(xy), start, end)
 
     def _path(self, points: Sequence[tuple[float, float]], fill: Color, *, width: int = 1, closed: bool = False, filled: bool = False) -> None:
         """Rasterize a path using the context's ink, blend, and coverage settings."""
@@ -805,14 +772,7 @@ class ImageDraw:
         if not self.antialias:
             self._rounded_rectangle(xy, radius, fill, outline, index(width), corners)
             return
-        radius = min(radius, (x1 - x0) / 2, (y1 - y0) / 2)
-        points = []
-        for enabled, (cx, cy, start, corner) in zip(corners, [(x0 + radius, y0 + radius, 180, (x0, y0)), (x1 - radius, y0 + radius, 270, (x1, y0)), (x1 - radius, y1 - radius, 0, (x1, y1)), (x0 + radius, y1 - radius, 90, (x0, y1))], strict=True):
-            if enabled and radius:
-                count = max(1, min(16384, ceil(radius * pi)))
-                points.extend((cx + radius * cos((start + 90 * i / count) * pi / 180), cy + radius * sin((start + 90 * i / count) * pi / 180)) for i in range(count + 1))
-            else:
-                points.append(corner)
+        points = draw_rounded_points((x0, y0, x1, y1), radius, corners)
         self._shape(points, fill, outline, width)
 
     def _rounded_rectangle(self, xy: Coords, radius: float, fill: Color, outline: Color, width: int, corners: tuple[bool, bool, bool, bool]) -> None:
@@ -822,62 +782,12 @@ class ImageDraw:
             (x0, y0), (x1, y1) = cast("Sequence[tuple[float, float]]", coordinates)
         else:
             x0, y0, x1, y1 = cast("Sequence[float]", coordinates)
-        diameter = min(x1 - x0, y1 - y0, radius * 2)
-        x0, y0, x1, y1 = round(x0), round(y0), round(x1), round(y1)
-        full_x = full_y = False
-        if all(corners):
-            full_x = diameter >= x1 - x0 - 1
-            if full_x:
-                diameter = x1 - x0
-            full_y = diameter >= y1 - y0 - 1
-            if full_y:
-                diameter = y1 - y0
-            if full_x and full_y:
-                self.ellipse(xy, fill, outline, width)
-                return
-        if diameter == 0 or not any(corners):
-            self.rectangle(xy, fill, outline, width)
-            return
-        r = int(diameter // 2)
-        if full_x:
-            parts = [((x0, y0, x0 + diameter, y0 + diameter), 180, 360), ((x0, y1 - diameter, x0 + diameter, y1), 0, 180)]
-        elif full_y:
-            parts = [((x0, y0, x0 + diameter, y0 + diameter), 90, 270), ((x1 - diameter, y0, x1, y0 + diameter), 270, 90)]
-        else:
-            parts = [
-                part
-                for enabled, part in zip(
-                    corners, [((x0, y0, x0 + diameter, y0 + diameter), 180, 270), ((x1 - diameter, y0, x1, y0 + diameter), 270, 360), ((x1 - diameter, y1 - diameter, x1, y1), 0, 90), ((x0, y1 - diameter, x0 + diameter, y1), 90, 180)], strict=True
-                )
-                if enabled
-            ]
-
-        def rectangle(bounds: tuple[int, int, int, int], ink: Color) -> None:
-            """Draw a filled rectangle within the given bounds."""
-            draw_rectangle(self.im._native, bounds, self._ink(ink), 0, bool(self.blend))
-
         fill_ink = None if fill is None else self._ink(fill)
         outline_ink = None if outline is None else self._ink(outline)
         for ink, filled in ((fill_ink, True), (outline_ink, False)):
             if ink is None or (not filled and (ink == fill_ink or width <= 0)):
                 continue
-            for bounds, start, end in parts:
-                draw_curve(self.im._native, tuple(int(v) for v in bounds), start, end, 0 if filled else width, "pie" if filled else "arc", filled, ink, bool(self.blend))
-            if filled:
-                if full_x:
-                    rectangle((x0, y0 + r + 1, x1, y1 - r - 1), ink)
-                elif x1 - r - 1 >= x0 + r + 1:
-                    rectangle((x0 + r + 1, y0, x1 - r - 1, y1), ink)
-                if not full_x and not full_y:
-                    rectangle((x0, y0 + (r + 1 if corners[0] else 0), x0 + r, y1 - (r + 1 if corners[3] else 0)), ink)
-                    rectangle((x1 - r, y0 + (r + 1 if corners[1] else 0), x1, y1 - (r + 1 if corners[2] else 0)), ink)
-            else:
-                if not full_x:
-                    rectangle((x0 + (r + 1 if corners[0] else 0), y0, x1 - (r + 1 if corners[1] else 0), y0 + width - 1), ink)
-                    rectangle((x0 + (r + 1 if corners[3] else 0), y1 - width + 1, x1 - (r + 1 if corners[2] else 0), y1), ink)
-                if not full_y:
-                    rectangle((x0, y0 + (r + 1 if corners[0] else 0), x0 + width - 1, y1 - (r + 1 if corners[3] else 0)), ink)
-                    rectangle((x1 - width + 1, y0 + (r + 1 if corners[1] else 0), x1, y1 - (r + 1 if corners[2] else 0)), ink)
+            draw_rounded_rectangle(self.im._native, (x0, y0, x1, y1), radius, width, corners, filled, ink, bool(self.blend))
 
     def text(
         self,
@@ -1074,16 +984,9 @@ class ImageDraw:
         options = self._font_options(direction, features, language)
         lines = text.split("\n")
         widths = [float(font.getlength(line, **options)) for line in lines]
-        max_width = max(widths)
-        line_height = font.getbbox("A", stroke_width=stroke_width, **options)[3] + stroke_width + spacing
-        x, y = xy
-        y -= {"a": 0, "s": 0, "m": (len(lines) - 1) * line_height / 2, "d": (len(lines) - 1) * line_height}[anchor[1]]
-        positions = []
-        for i, (line, width) in enumerate(zip(lines, widths, strict=True)):
-            shift = {"left": 0, "center": (max_width - width) / 2, "right": max_width - width}[align]
-            shift -= {"l": 0, "m": (max_width - width) / 2, "r": max_width - width}[anchor[0]]
-            positions.append(((x + shift, y + i * line_height), line))
-        return positions
+        height = font.getbbox("A", stroke_width=stroke_width, **options)[3]
+        positions = draw_text_positions(xy, widths, height, stroke_width, spacing, anchor, align)
+        return list(zip(positions, lines, strict=True))
 
     def textlength(self, text: str, font: _Font | None = None, direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, embedded_color: bool = False, font_size: float | None = None) -> float:
         """Return the single-line advance length in pixels.

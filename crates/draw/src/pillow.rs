@@ -228,7 +228,7 @@ pub(crate) fn ellipse(image: &mut Image, bounds: (i64, i64, i64, i64), width: i6
 }
 
 #[pyfunction]
-fn draw_curve(
+pub(crate) fn draw_curve(
     image: &mut Image, bounds: (i64, i64, i64, i64), start: f32, end: f32, width: i64, style: &str, filled: bool, value: &Bound<'_, PyAny>,
     blend: bool,
 ) -> PyResult<()> {

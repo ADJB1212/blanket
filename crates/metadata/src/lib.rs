@@ -9,7 +9,9 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
+mod resolution;
 mod rewrite;
+pub use resolution::_resolve_resolution;
 pub use rewrite::_rewrite_metadata;
 
 #[pyfunction]
