@@ -31,11 +31,11 @@ fn source_dir() -> PathBuf {
     let source = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR must be set")).join("libjxl");
     if !source.exists() {
         let status = Command::new("git")
-            .args(["clone", "--depth", "1", "--branch", "v0.12.0", "https://github.com/libjxl/libjxl.git"])
+            .args(["clone", "--depth", "1", "--branch", "v0.13.0", "https://github.com/libjxl/libjxl.git"])
             .arg(&source)
             .status()
             .expect("failed to run git to clone libjxl");
-        assert!(status.success(), "failed to clone libjxl v0.12.0");
+        assert!(status.success(), "failed to clone libjxl v0.13.0");
     }
 
     let status = Command::new("git")
@@ -61,6 +61,7 @@ pub fn build() {
 
     let mut config = cmake::Config::new(source);
     config
+        .define("DJPEGXL_ENABLE_LTO", "ON")
         .define("BUILD_TESTING", "OFF")
         .define("BUILD_SHARED_LIBS", "OFF")
         .define("JPEGXL_ENABLE_TOOLS", "OFF")
@@ -71,6 +72,12 @@ pub fn build() {
         .define("JPEGXL_ENABLE_JNI", "OFF")
         .define("JPEGXL_ENABLE_SJPEG", "OFF")
         .define("JPEGXL_ENABLE_OPENEXR", "OFF")
+        .define("DJPEGXL_ENABLE_VIEWERS", "OFF")
+        .define("DJPEGXL_ENABLE_FUZZERS", "OFF")
+        .define("DJPEGXL_ENABLE_COVERAGE", "OFF")
+        .define("DJPEGXL_TEST_TOOLS", "OFF")
+        .define("DJPEGXL_ENABLE_DEVTOOLS", "OFF")
+        .define("DJPEGXL_ENABLE_WASM_THREADS", "OFF")
         .define("JPEGXL_BUNDLE_LIBPNG", "OFF");
 
     if let Ok(p) = std::thread::available_parallelism() {

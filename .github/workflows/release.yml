@@ -48,7 +48,7 @@ jobs:
           echo "dav1d=1.5.4" >> "$GITHUB_OUTPUT"
           echo "libheif=v1.23.7" >> "$GITHUB_OUTPUT"
           echo "libwebp=v1.6.0" >> "$GITHUB_OUTPUT"
-          echo "libjxl=v0.12.0" >> "$GITHUB_OUTPUT"
+          echo "libjxl=v0.13.0" >> "$GITHUB_OUTPUT"
           echo "lcms2=lcms2.20" >> "$GITHUB_OUTPUT"
       - name: Ensure release exists
         env:

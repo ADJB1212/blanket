@@ -51,12 +51,22 @@ def test_filename_from_path(tmp_path: Path, path_type: type) -> None:
 def test_opened_image_attributes(mode: str, format: str) -> None:
     if mode == "RGBA" and format == "JPEG":
         pytest.skip("JPEG does not support alpha")
-    stream = image_buffer(Image.frombytes(mode, (1, 1), bytes([255] * len(mode))), format)
+    raw = bytes([255, 255, 255, 128]) if mode == "RGBA" else bytes([255] * len(mode))
+    stream = image_buffer(Image.frombytes(mode, (1, 1), raw), format)
     image = Image.open(stream)
     assert image.filename == ""
     assert image.palette is None
     assert image.is_animated is False
     assert image.has_transparency_data is (mode == "RGBA")
+
+
+def test_opened_lossless_jxl_preserves_opaque_alpha() -> None:
+    stream = image_buffer(Image.new("RGBA", (1, 1), (255, 255, 255, 255)), "JXL", lossless=True)
+    with Image.open(stream) as image:
+        assert image.has_transparency_data is True
+        image.load()
+        assert image.mode == "RGBA"
+        assert image.tobytes() == bytes([255] * 4)
 
 
 def test_filename_from_named_stream(tmp_path: Path) -> None:

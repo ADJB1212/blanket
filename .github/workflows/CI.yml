@@ -54,7 +54,7 @@ jobs:
         os: [ubuntu-26.04, ubuntu-26.04-arm]
     runs-on: ${{ matrix.os }}
     container:
-      image: ghcr.io/adjb1212/blanket-ci:v2
+      image: ghcr.io/adjb1212/blanket-ci:v5
       options: --cap-add=SYS_NICE
     defaults:
       run:
@@ -66,10 +66,10 @@ jobs:
       CXX: clang++
       CMAKE_CC_COMPILER: clang
       CMAKE_CXX_COMPILER: clang++
-      BUILD_FEATURES: no-vendored-webp,gpu-cuda
-      PKG_CONFIG_PATH: /opt/blanket-deps/dav1d/lib/pkgconfig:/opt/blanket-deps/aom/lib/pkgconfig:/opt/blanket-deps/x265/lib/pkgconfig:/opt/blanket-deps/libde265/lib/pkgconfig:/opt/blanket-deps/libheif/lib/pkgconfig:/opt/blanket-deps/libwebp/lib/pkgconfig:/opt/blanket-deps/libjxl/lib/pkgconfig:/opt/blanket-deps/lcms2/lib/pkgconfig
-      CMAKE_PREFIX_PATH: /opt/blanket-deps/dav1d:/opt/blanket-deps/aom:/opt/blanket-deps/x265:/opt/blanket-deps/libde265:/opt/blanket-deps/libheif:/opt/blanket-deps/libwebp:/opt/blanket-deps/libjxl:/opt/blanket-deps/lcms2
-      LD_LIBRARY_PATH: /opt/blanket-deps/wheel/lib:/opt/blanket-deps/lcms2/lib:/opt/blanket-deps/dav1d/lib:/opt/blanket-deps/aom/lib:/opt/blanket-deps/x265/lib:/opt/blanket-deps/libde265/lib:/opt/blanket-deps/libheif/lib:/opt/blanket-deps/libwebp/lib:/opt/blanket-deps/libjxl/lib
+      BUILD_FEATURES: jxl-vendored,no-vendored-webp,gpu-cuda
+      PKG_CONFIG_PATH: /opt/blanket-deps/dav1d/lib/pkgconfig:/opt/blanket-deps/aom/lib/pkgconfig:/opt/blanket-deps/x265/lib/pkgconfig:/opt/blanket-deps/libde265/lib/pkgconfig:/opt/blanket-deps/libheif/lib/pkgconfig:/opt/blanket-deps/libwebp/lib/pkgconfig:/opt/blanket-deps/lcms2/lib/pkgconfig
+      CMAKE_PREFIX_PATH: /opt/blanket-deps/dav1d:/opt/blanket-deps/aom:/opt/blanket-deps/x265:/opt/blanket-deps/libde265:/opt/blanket-deps/libheif:/opt/blanket-deps/libwebp:/opt/blanket-deps/lcms2
+      LD_LIBRARY_PATH: /opt/blanket-deps/wheel/lib:/opt/blanket-deps/lcms2/lib:/opt/blanket-deps/dav1d/lib:/opt/blanket-deps/aom/lib:/opt/blanket-deps/x265/lib:/opt/blanket-deps/libde265/lib:/opt/blanket-deps/libheif/lib:/opt/blanket-deps/libwebp/lib
       LCMS2_LIB_DIR: /opt/blanket-deps/lcms2/lib
       LCMS2_INCLUDE_DIR: /opt/blanket-deps/lcms2/include
       LDFLAGS: -fuse-ld=mold
@@ -107,7 +107,7 @@ jobs:
           echo "LD_LIBRARY_PATH=$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Verify native codec libraries
-        run: pkg-config --modversion dav1d aom x265 libde265 libheif libwebp libwebpmux libwebpdemux libjxl libjxl_threads lcms2
+        run: pkg-config --modversion dav1d aom x265 libde265 libheif libwebp libwebpmux libwebpdemux lcms2
 
       - name: Run Rust Tests
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
@@ -185,6 +185,9 @@ jobs:
       - name: Install pinned Rust toolchain
         run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
 
+      - name: Set up Homebrew
+        uses: Homebrew/actions/setup-homebrew@a3493777b0b3a3c94d72caf072fbc211ce2c4ee8
+
       - name: Configure macOS toolchain
         run: |
           sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
@@ -203,7 +206,7 @@ jobs:
 
       - name: Install Deps and Setup PATH (macOS)
         run: |
-          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp little-cms2 pkgconf
+          brew install dav1d libheif aom x265 libde265 cmake ninja nasm webp little-cms2 pkgconf jpeg-xl
           echo "PKG_CONFIG_PATH=/opt/homebrew/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}" >> "$GITHUB_ENV"
           echo "LCMS2_LIB_DIR=/opt/homebrew/opt/little-cms2/lib" >> "$GITHUB_ENV"
           echo "LCMS2_INCLUDE_DIR=/opt/homebrew/opt/little-cms2/include" >> "$GITHUB_ENV"
@@ -213,7 +216,7 @@ jobs:
           echo "CXX=clang++" >> "$GITHUB_ENV"
           echo "CMAKE_CC_COMPILER=clang" >> "$GITHUB_ENV"
           echo "CMAKE_CXX_COMPILER=clang++" >> "$GITHUB_ENV"
-          echo "BUILD_FEATURES=jxl-vendored,no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
+          echo "BUILD_FEATURES=no-vendored-webp,gpu-metal" >> "$GITHUB_ENV"
 
       - name: Run Rust Tests (MacOS)
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES --exclude blanket-gpu-cuda
