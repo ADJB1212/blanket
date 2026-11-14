@@ -47,7 +47,7 @@ jobs:
           xcrun --sdk macosx --show-sdk-path
       - name: Set up Homebrew
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
-        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+        uses: Homebrew/actions/setup-homebrew@a3493777b0b3a3c94d72caf072fbc211ce2c4ee8
       - name: Configure Linux toolchain
         if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
         run: bash scripts/setup_manylinux.sh

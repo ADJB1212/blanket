@@ -143,7 +143,7 @@ jobs:
       version: ${{ needs.prepare.outputs.libwebp-version }}
 
   libjxl:
-    needs: [prepare, lcms2]
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
@@ -367,7 +367,7 @@ jobs:
           enable-cache: "false"
           save-cache: "false"
       - name: Set up Homebrew
-        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+        uses: Homebrew/actions/setup-homebrew@a3493777b0b3a3c94d72caf072fbc211ce2c4ee8
       - name: Install Rust
         run: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
       - name: Install Python from uv

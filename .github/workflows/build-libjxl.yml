@@ -50,7 +50,7 @@ jobs:
           xcrun --sdk macosx --show-sdk-path
       - name: Set up Homebrew
         if: runner.os == 'macOS' && steps.cache.outputs.cache-hit != 'true'
-        uses: Homebrew/actions/setup-homebrew@1f8e202ffddf94def7f42f6fa3a482e821489f9c
+        uses: Homebrew/actions/setup-homebrew@a3493777b0b3a3c94d72caf072fbc211ce2c4ee8
       - name: Configure Linux toolchain
         if: runner.os == 'Linux' && steps.cache.outputs.cache-hit != 'true'
         run: bash scripts/setup_manylinux.sh
@@ -63,13 +63,6 @@ jobs:
           echo "$(brew --prefix lld)/bin" >> "$GITHUB_PATH"
           echo "CC=$(brew --prefix llvm)/bin/clang" >> "$GITHUB_ENV"
           echo "CXX=$(brew --prefix llvm)/bin/clang++" >> "$GITHUB_ENV"
-      - name: Restore LCMS2
-        if: steps.cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@v6
-        with:
-          path: ~/deps/lcms2
-          key: sources-v1-lcms2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.lcms2-version }}
-          fail-on-cache-miss: true
       - name: Build libjxl
         if: steps.cache.outputs.cache-hit != 'true'
         shell: bash
