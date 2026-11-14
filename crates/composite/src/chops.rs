@@ -22,7 +22,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 
 #[pyfunction]
 #[pyo3(signature = (first, second, clear=None))]
-fn _difference_bbox(
+pub fn _difference_bbox(
     py: Python<'_>, first: &Image, second: &Image, clear: Option<(u32, u32, u32, u32)>,
 ) -> PyResult<Option<(usize, usize, usize, usize)>> {
     let a = first.pixel_data()?;

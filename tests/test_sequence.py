@@ -239,6 +239,41 @@ def test_apng_fractional_duration_matches_pillow(duration: float) -> None:
         assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("duration,count", [(0.5, 1), (32767500, 1), (32768000, 2), (65535000, 2)])
+def test_apng_repeated_frames_respect_duration_capacity(duration: float, count: int) -> None:
+    frame = Image.new("RGBA", (3, 2), "red")
+    data = frame.encode("PNG", save_all=True, append_images=[frame.copy(), Image.new("RGBA", frame.size, "blue")], duration=duration)
+    actual = Image.open(BytesIO(data))
+    assert actual.n_frames == count + 1
+    assert actual.info["duration"] == duration * (3 - count)
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "LA", "P"])
+def test_apng_native_deltas_with_transparency_and_disposal(mode: str) -> None:
+    first = Image.new(mode, (5, 4))
+    if mode == "P":
+        first.putpalette([20, 30, 40, 200, 100, 50] + [0] * 762)
+    if mode in ("L", "P"):
+        first.info["transparency"] = 1
+    elif mode == "RGB":
+        first.info["transparency"] = (1, 1, 1)
+    second = first.copy()
+    second.putpixel((4, 3), (1,) * len(second.getbands()) if mode in ("RGB", "LA") else 1)
+    frames = [first, second, first.copy(), first.copy()]
+    originals = [frame.tobytes() for frame in frames]
+    options = {"duration": [10, 20, 30, 40], "disposal": [1, 2, 0, 0], "blend": 0}
+    actual_data = image_buffer(first, "PNG", save_all=True, append_images=frames[1:], **options)
+    actual, reference = Image.open(actual_data), PillowImage.open(actual_data)
+    assert actual.n_frames == reference.n_frames == 3
+    for position, duration in enumerate([10, 20, 70]):
+        actual.seek(position)
+        reference.seek(position)
+        assert actual.convert("RGBA").tobytes() == reference.convert("RGBA").tobytes()
+        assert actual.tobytes() == originals[position]
+        assert actual.info["duration"] == duration
+    assert [frame.tobytes() for frame in frames] == originals
+
+
 def test_tiff_lzw_large_pages_preserve_strip_order() -> None:
     frames = []
     for i, mode in enumerate(("L", "RGBA", "RGB")):

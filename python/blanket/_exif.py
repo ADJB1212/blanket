@@ -17,6 +17,7 @@ if TYPE_CHECKING:
     from ._typing import BytesInput, FloatInput
     from .Image import Image
 
+from ._blanket import _exif_orientation as _orientation
 from ._hdr import HDR_KEYS, decode_chunk, encode_chunk
 from ._ifd import Exif
 from ._jpeg import read_metadata as read_jpeg_metadata
@@ -25,45 +26,7 @@ from .ExifTags import Base
 # Limit expansion of compressed PNG text while reading metadata.
 _MAX_TEXT_BYTES = 1024 << 10
 _MAX_PNG_METADATA_BYTES = _MAX_TEXT_BYTES << 6
-# Classic TIFF identifies its header and IFD0 orientation with these values.
 _TIFF_MAGIC = 42
-_ORIENTATION_TAG = Base.Orientation
-_IFD_ENTRY_BYTES = 12
-
-
-def _orientation(raw: bytes) -> tuple[int | None, bytes]:
-    """Remove an IFD0 orientation entry without relocating referenced data."""
-    prefix = b"Exif\0\0" if raw.startswith(b"Exif\0\0") else b""
-    data = raw[len(prefix) :]
-    if len(data) < 8 or data[:2] not in (b"II", b"MM"):
-        return None, raw
-    endian = "<" if data[:2] == b"II" else ">"
-    try:
-        magic, offset = struct.unpack_from(endian + "HI", data, 2)
-        if magic != _TIFF_MAGIC:
-            return None, raw
-        count = struct.unpack_from(endian + "H", data, offset)[0]
-        end = offset + 2 + _IFD_ENTRY_BYTES * count
-        if end + 4 > len(data):
-            return None, raw
-        for i in range(count):
-            pos = offset + 2 + i * _IFD_ENTRY_BYTES
-            tag, kind, length = struct.unpack_from(endian + "HHI", data, pos)
-            if tag != _ORIENTATION_TAG or kind not in (3, 4) or length != 1:
-                continue
-            orientation = struct.unpack_from(endian + ("H" if kind == 3 else "I"), data, pos + 8)[0]
-            if orientation not in range(2, 9):
-                return orientation, raw
-            clean = bytearray(data)
-            struct.pack_into(endian + "H", clean, offset, count - 1)
-            # Shift the remaining entries and next-IFD pointer within IFD0.
-            # The trailing gap keeps every external value/thumbnail offset valid.
-            clean[pos : end - 8] = data[pos + _IFD_ENTRY_BYTES : end + 4]
-            clean[end - 8 : end + 4] = bytes(_IFD_ENTRY_BYTES)
-            return orientation, prefix + bytes(clean)
-    except (struct.error, OverflowError):
-        pass
-    return None, raw
 
 
 ORIENTATION_RE = re.compile(r'tiff:Orientation="([0-9])"|<tiff:Orientation>([0-9])</tiff:Orientation>')

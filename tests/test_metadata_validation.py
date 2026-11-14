@@ -8,7 +8,8 @@ import pytest
 from helpers import assert_raises, image_buffer, png_chunk
 
 from blanket import Image, ImageOps
-from blanket._exif import _png_metadata, read_metadata, read_tiff_metadata, transpose_metadata
+from blanket._exif import _orientation, _png_metadata, read_metadata, read_tiff_metadata, transpose_metadata
+from blanket._resolution import parse_resolution
 
 
 @pytest.mark.parametrize("kind", [b"tEXt", b"zTXt", b"iTXt", b"iCCP", b"eXIf"])
@@ -100,6 +101,39 @@ def test_raw_exif_profile_and_xmp_orientation() -> None:
 @pytest.mark.parametrize("raw", [b"II\0\0\x08\0\0\0\0\0\0\0\0\0", b"II*\0\x08\0\0\0\x01\0\0\0\0\0"])
 def test_orientation_ignores_invalid_tiff_headers(raw: bytes) -> None:
     assert transpose_metadata({"exif": raw}) == (1, {"exif": raw})
+
+
+@pytest.mark.parametrize("endian", ["<", ">"])
+@pytest.mark.parametrize("prefix", [b"", b"Exif\0\0"])
+@pytest.mark.parametrize("kind", [3, 4])
+def test_orientation_removal_preserves_external_offsets(endian: str, prefix: bytes, kind: int) -> None:
+    header = (b"II" if endian == "<" else b"MM") + struct.pack(endian + "HIH", 42, 8, 2)
+    value = struct.pack(endian + ("H2x" if kind == 3 else "I"), 6)
+    entry = struct.pack(endian + "HHI", 274, kind, 1) + value
+    software = struct.pack(endian + "HHII", 305, 2, 9, 38)
+    raw = prefix + header + entry + software + bytes(4) + b"software\0"
+    orientation, cleaned = _orientation(raw)
+    assert orientation == 6 and len(cleaned) == len(raw)
+    assert cleaned[len(prefix) + 38 :] == b"software\0"
+    exif = Image.Exif()
+    exif.load(cleaned)
+    assert dict(exif) == {305: "software"}
+    for length in range(len(prefix) + 38):
+        truncated = raw[:length]
+        assert _orientation(truncated) == (None, truncated)
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "BMP"])
+def test_resolution_ignores_truncated_density_records(format: str) -> None:
+    if format == "PNG":
+        data = b"\x89PNG\r\n\x1a\n" + png_chunk(b"pHYs", struct.pack(">IIB", 10000, 5000, 1))
+    elif format == "JPEG":
+        data = b"\xff\xd8\xff\xe0\0\x10JFIF\0\x01\x01\x01" + struct.pack(">HH", 254, 127) + bytes(2)
+    else:
+        data = bytes(14) + struct.pack("<I", 40) + bytes(20) + struct.pack("<ii", 10000, 5000)
+    assert parse_resolution(data, format, {}, "error").dpi == pytest.approx((254, 127))
+    for length in range(len(data)):
+        assert parse_resolution(data[:length], format, {}, "error").dpi is None
 
 
 @pytest.mark.parametrize(("format", "options"), [("GIF", {"exif": b""}), ("JPEG", {"pnginfo": None})])

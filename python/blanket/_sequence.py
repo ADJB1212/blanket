@@ -2,73 +2,40 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os", "collections.abc", "math", "fractions", "itertools"}
+__lazy_modules__ = {"os", "collections.abc", "math", "itertools"}
 
 import math
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
-from fractions import Fraction
 from itertools import islice, repeat
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from ._typing import Writable
 
-from ._blanket import _difference_bbox, _encode_sequence
+from ._blanket import _encode_sequence, _png_frame_plan
 from ._exif import save_metadata
 from ._io import write_bytes
 from .errors import UnsupportedCodecError
 from .Image import Image, _bounded_int, _save_options
 
 
-@dataclass
-class _PngFrame:
-    image: Image
-    bbox: tuple[int, int, int, int] | None
-    duration: float
-    disposal: int
-    blend: int
-
-
 def _png_regions(
     frames: list[Image], durations: list[float | int], disposals: list[float | int], blends: list[float | int], default_image: bool, duration_known: bool
 ) -> tuple[list[Image], list[float], list[int], list[int], tuple[tuple[int, int], list[tuple[int, int]]]]:
     """Adapt APNG deltas and repeated frames using native raster operations."""
-    canvas = (max(frame.width for frame in frames), max(frame.height for frame in frames))
-    records: list[_PngFrame] = []
-    for position, frame in enumerate(islice(frames, int(default_image), None), start=int(default_image)):
-        bbox = None
-        duration = float(durations[position])
-        disposal, blend = int(disposals[position]), int(blends[position])
-        if records:
-            previous = records[-1]
-            previous_disposal = 1 if previous.disposal == 2 and len(records) < 2 else previous.disposal
-            base = records[-2].image if previous_disposal == 2 else previous.image
-            clear = (previous.bbox or (0, 0, *frames[0].size)) if previous_disposal == 1 else None
-            if frame.mode == base.mode and frame.mode in ("1", "L", "LA", "RGB", "RGBA") and frame.info.get("transparency") is None and base.info.get("transparency") is None:
-                bbox = _difference_bbox(frame._native, base._native, clear)
-            else:
-                if clear is not None and base.mode != "RGBA":
-                    base = base.copy()
-                    base.paste(0, clear)
-                    clear = None
-                current = frame if frame.mode == "RGBA" else frame.convert("RGBA")
-                comparison = base if base.mode == "RGBA" else base.convert("RGBA")
-                bbox = _difference_bbox(current._native, comparison._native, clear)
-            combined = previous.duration + duration
-            if bbox is None and previous_disposal == disposal and previous.blend == blend and duration_known and math.isfinite(combined) and Fraction(combined / 1000).limit_denominator(65535).numerator <= 65535:
-                previous.duration = combined
-                continue
-        records.append(_PngFrame(frame, bbox, duration, disposal, blend))
+    for frame in frames:
+        frame._sync_palette()
+    canvas, records = _png_frame_plan([frame._native for frame in frames], durations, disposals, blends, [frame.info.get("transparency") for frame in frames], default_image, duration_known)
     prepared = frames[: int(default_image)]
     offsets = [(0, 0)] * int(default_image)
-    for record in records:
-        prepared.append(record.image if record.bbox is None or record.bbox == (0, 0, *record.image.size) else record.image.crop(record.bbox))
-        offsets.append((0, 0) if record.bbox is None else record.bbox[:2])
+    for position, bbox, _, _, _ in records:
+        frame = frames[position]
+        prepared.append(frame if bbox is None or bbox == (0, 0, *frame.size) else frame.crop(bbox))
+        offsets.append((0, 0) if bbox is None else bbox[:2])
     if prepared[0].size != canvas:
         prepared[0] = prepared[0].crop((0, 0, *canvas))
-    return (prepared, [0.0] * int(default_image) + [record.duration for record in records], [0] * int(default_image) + [record.disposal for record in records], [0] * int(default_image) + [record.blend for record in records], (canvas, offsets))
+    return (prepared, [0.0] * int(default_image) + [record[2] for record in records], [0] * int(default_image) + [record[3] for record in records], [0] * int(default_image) + [record[4] for record in records], (canvas, offsets))
 
 
 def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Writable | None, format: str, options: dict[str, object], compressor: object) -> bytes | None:

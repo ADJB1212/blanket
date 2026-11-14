@@ -1,5 +1,6 @@
 mod encode;
 mod features;
+mod sequence;
 mod xmp;
 
 use blanket_codecs::open_bytes;
@@ -29,11 +30,13 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_open_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_index_sequence, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::codecs::_encode_sequence, module)?)?;
+    module.add_function(wrap_pyfunction!(sequence::_png_frame_plan, module)?)?;
     module.add_function(wrap_pyfunction!(encode::_encode, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_write_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_rewrite_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_container_previews, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_resolve_resolution, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_exif_orientation, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_native_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
     module.add_function(wrap_pyfunction!(xmp::_getxmp, module)?)?;

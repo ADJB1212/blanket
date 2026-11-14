@@ -248,4 +248,4 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
     Ok(output)
 }
 mod sequence;
-pub use sequence::{decode_frame, decode_sequence, encode_sequence, encode_sequence_regions, index_sequence};
+pub use sequence::{decode_frame, decode_sequence, encode_sequence, encode_sequence_regions, frame_delay, index_sequence};

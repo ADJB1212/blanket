@@ -275,7 +275,7 @@ fn decode_animation<T: CanvasSample>(
     Ok(sequence)
 }
 
-fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
+pub fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
     if !duration.is_finite() || !(0.0..=65_535_000.0).contains(&duration) {
         return Err(PyValueError::new_err("cannot write duration"));
     }
