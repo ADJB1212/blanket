@@ -80,6 +80,15 @@ pub(crate) fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), va
             for y in top.max(0)..=bottom.min(i64::from(image.height()) - 1) {
                 hline(image, left, right, y, &ink, blend);
             }
+        } else if !blend && width > 0 && width <= right.saturating_sub(left) / 2 && width <= bottom.saturating_sub(top) / 2 {
+            for y in top.max(0)..=bottom.min(i64::from(image.height()) - 1) {
+                if y.saturating_sub(top) < width || bottom.saturating_sub(y) < width {
+                    hline(image, left, right, y, &ink, false);
+                } else {
+                    hline(image, left, left + width - 1, y, &ink, false);
+                    hline(image, right - width + 1, right, y, &ink, false);
+                }
+            }
         } else {
             let ranges = outline_ranges(bounds, width, (image.width(), image.height()));
             for i in ranges.into_iter().flatten() {

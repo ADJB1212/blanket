@@ -250,6 +250,20 @@ def test_polygon_fill_includes_edges() -> None:
     assert_drawing_equal(actual, expected, "polygon", coords, fill=255, outline=100, width=1)
 
 
+@pytest.mark.parametrize(("mode", "ink", "draw_mode"), [("L", 117, None), ("RGB", (23, 81, 157), None), ("RGBA", (23, 81, 157, 91), None), ("RGB", (23, 81, 157, 91), "RGBA"), ("I", -123456, None), ("I;16B", 12000, None)])
+@pytest.mark.parametrize("width", [2, 3, 7, 20])
+def test_outline_spans_match_pillow(mode, ink, draw_mode, width, subtests):
+    polygons = [[(2, 2), (26, 2), (26, 22), (2, 22)], [(-9, 3), (14, -8), (40, 17), (5, 30)], [(1, 1), (27, 1), (27, 22), (18, 22), (18, 8), (9, 8), (9, 22), (1, 22)], [(1, 1), (27, 22), (1, 22), (27, 1)], [(2, 2), (2, 2), (26, 2), (14, 22)]]
+    for coords in polygons:
+        with subtests.test(coords=coords):
+            actual, expected = new_pair(mode, (29, 25))
+            assert_drawing_equal(actual, expected, "polygon", coords, outline=ink, width=width, draw_mode=draw_mode)
+    for bounds in [(2, 2, 26, 22), (-10, -10, 20, 20), (10, 10, 40, 40), (-20, -20, -2, -2)]:
+        with subtests.test(bounds=bounds):
+            actual, expected = new_pair(mode, (29, 25))
+            assert_drawing_equal(actual, expected, "rectangle", bounds, outline=ink, width=width, draw_mode=draw_mode)
+
+
 @pytest.mark.parametrize("operation", ["arc", "chord", "pieslice"])
 def test_zero_sweep_draws_nothing(operation: str) -> None:
     image = Image.new("L", (10, 10))

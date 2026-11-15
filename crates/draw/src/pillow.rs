@@ -464,7 +464,7 @@ fn draw_polygon(
         return Ok(());
     }
     let (w, h) = (image.width() as usize, image.height());
-    let mut mask = if closed && !filled && width > 1 { Some(blanket_core::raster::alloc_pixels(w * h as usize)?) } else { None };
+    let mut interior = if closed && !filled && width > 1 { Some(vec![Vec::new(); h as usize]) } else { None };
     value.py().detach(|| {
         if !filled && width == 1 {
             let line = |image: &mut Image, a: (i64, i64), b: (i64, i64)| {
@@ -481,24 +481,41 @@ fn draw_polygon(
             }
             return;
         }
-        if let Some(mask) = &mut mask {
+        if let Some(interior) = &mut interior {
             polygon_spans(&points, h, false, |l, y, r| {
                 if y >= 0 && y < i64::from(h) {
-                    let (l, r) = (l.max(0) as usize, r.min(w as i64 - 1));
-                    if r >= l as i64 {
-                        mask[y as usize * w + l..=y as usize * w + r as usize].fill(1);
+                    let (l, r) = (l.max(0), r.min(w as i64 - 1));
+                    if l <= r {
+                        interior[y as usize].push((l, r));
                     }
                 }
             });
+            for spans in interior {
+                spans.sort_unstable();
+                let mut kept = 0;
+                for i in 0..spans.len() {
+                    let (left, right) = spans[i];
+                    if kept != 0 && spans[kept - 1].1.saturating_add(1) >= left {
+                        spans[kept - 1].1 = spans[kept - 1].1.max(right);
+                    } else {
+                        spans[kept] = (left, right);
+                        kept += 1;
+                    }
+                }
+                spans.truncate(kept);
+            }
         }
         let mut emit = |l: i64, y: i64, r: i64| {
-            if let Some(mask) = &mask {
+            if let Some(interior) = &interior {
                 if y < 0 || y >= i64::from(h) {
                     return;
                 }
-                for x in l.max(0)..=r.min(w as i64 - 1) {
-                    if mask[y as usize * w + x as usize] != 0 {
-                        super::draw::paint(image, x, y, &ink, blend);
+                for &(left, right) in &interior[y as usize] {
+                    if left > r {
+                        break;
+                    }
+                    if right >= l {
+                        super::draw::hline(image, left.max(l), right.min(r), y, &ink, blend);
                     }
                 }
             } else {
@@ -508,7 +525,7 @@ fn draw_polygon(
         if filled {
             polygon_spans(&points, h, blend, emit);
         } else {
-            let width = if mask.is_some() { width.saturating_mul(2) - 1 } else { width };
+            let width = if interior.is_some() { width.saturating_mul(2) - 1 } else { width };
             for pair in points.windows(2) {
                 wide_line(pair[0], pair[1], width, h, blend, &mut emit);
             }
