@@ -3063,19 +3063,23 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
             return None
         if count != 1 or loop_count is not None:
             return None
-    info = read_metadata(data, header.format)
+    parsed = None
+    if header.format == "JPEG":
+        from ._jpeg import read_attributes, sanitize_jpeg, segments
+
+        parsed = segments(data)
+    info = read_metadata(data, header.format, jpeg_segments=parsed)
     if header.format == "PNG" and "transparency" in info:
         return None
     image = Image(header)
     image._info.update(info)
     if header.format == "JPEG":
-        from ._jpeg import read_attributes, sanitize_jpeg
-
-        data, truncated = sanitize_jpeg(data)
+        cleaned, truncated = sanitize_jpeg(data)
         if truncated:
             # Preserve the existing truncated-stream recovery and load checks.
             return None
-        image.__dict__.update(read_attributes(data))
+        image.__dict__.update(read_attributes(cleaned, parsed if cleaned is data else None))
+        data = cleaned
         image._draft_source = data
         if "mp" in info:
             try:

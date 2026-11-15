@@ -349,6 +349,8 @@ pub fn _encode_sequence(
             matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
         } else if format == ImageFormat::Pdf {
             matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb | PixelMode::Rgba | PixelMode::Cmyk)
+        } else if format == ImageFormat::Webp {
+            matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba)
         } else {
             image.pixel_mode() == PixelMode::Rgba
         };

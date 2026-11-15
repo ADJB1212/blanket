@@ -21,6 +21,21 @@ struct Scan {
     bits: Bits,
 }
 
+impl Scan {
+    /// Restore a block's coefficients to their state before this scan.
+    fn undo(&self, block: &mut [i16; 64]) {
+        for (k, value) in block.iter_mut().enumerate().take(usize::from(self.end) + 1).skip(usize::from(self.start)) {
+            *value = if self.ah == 0 {
+                0
+            } else if k == 0 {
+                *value & !((1i16 << self.ah) - 1)
+            } else {
+                *value / (1i16 << self.ah) * (1i16 << self.ah)
+            };
+        }
+    }
+}
+
 pub struct JpegStreamDecoder {
     input: Vec<u8> = Vec::new(),
     coefficients: Option<JpegCoefficients> = None,
@@ -30,7 +45,7 @@ pub struct JpegStreamDecoder {
     quant_slots: [usize; 4] = [0; 4],
     progression: [[i8; 64]; 4] = [[-1; 64]; 4],
     scan: Option<Scan> = None,
-    staged: [(usize, usize, [i16; 64]); 10] = [(0, 0, [0; 64]); 10],
+    staged: [(usize, usize); 10] = [(0, 0); 10],
     progressive: bool = false,
     started: bool = false,
     seen_scan: bool = false,
@@ -356,83 +371,91 @@ impl JpegStreamDecoder {
         Ok(())
     }
 
+    /// Decode complete MCUs until the scan ends or input runs out mid-MCU.
     fn consume_scan(&mut self, input: &[u8]) -> Result<Option<usize>, String> {
         let scan = self.scan.as_mut().unwrap();
         let coefficients = self.coefficients.as_mut().unwrap();
         let mut reader = Reader { data: input, pos: 0, bits: scan.bits };
-        let mut predictors = scan.predictors;
-        let mut eob = scan.eob;
-        let mut restart = scan.restart;
-        let blocks = &mut self.staged;
-        let mut block_count = 0;
-        let result = (|| -> entropy::Result<()> {
-            if self.restart_interval > 0 && scan.index > 0 && scan.index.is_multiple_of(self.restart_interval) {
-                if eob != 0 {
-                    return Err(Error::Invalid);
+        let mut consumed = None;
+        loop {
+            let checkpoint = reader.pos;
+            let mut predictors = scan.predictors;
+            let mut eob = scan.eob;
+            let mut restart = scan.restart;
+            let blocks = &mut self.staged;
+            let mut block_count = 0;
+            let result = (|| -> entropy::Result<()> {
+                if self.restart_interval > 0 && scan.index > 0 && scan.index.is_multiple_of(self.restart_interval) {
+                    if eob != 0 {
+                        return Err(Error::Invalid);
+                    }
+                    reader.restart(restart)?;
+                    restart = (restart + 1) & 7;
+                    predictors = [0; 4];
                 }
-                reader.restart(restart)?;
-                restart = (restart + 1) & 7;
-                predictors = [0; 4];
-            }
-            for &(index, dc, ac) in &scan.components {
-                let component = &coefficients.components[index];
-                let (h, v) = if scan.components.len() == 1 { (1, 1) } else { (usize::from(component.h_sampling), usize::from(component.v_sampling)) };
-                for y in 0..v {
-                    for x in 0..h {
-                        let block_index = (scan.index / scan.width * v + y) * component.blocks_x + scan.index % scan.width * h + x;
-                        let mut block = component.blocks[block_index];
-                        if scan.start == 0 {
-                            if scan.ah == 0 {
-                                entropy::dc(&mut reader, self.dc[dc].as_ref().unwrap(), &mut predictors[index], &mut block, scan.al)?;
-                            } else if reader.read(1)? != 0 {
-                                block[0] |= 1i16 << scan.al;
+                for &(index, dc, ac) in &scan.components {
+                    let component = &mut coefficients.components[index];
+                    let (h, v) =
+                        if scan.components.len() == 1 { (1, 1) } else { (usize::from(component.h_sampling), usize::from(component.v_sampling)) };
+                    for y in 0..v {
+                        for x in 0..h {
+                            let block_index = (scan.index / scan.width * v + y) * component.blocks_x + scan.index % scan.width * h + x;
+                            blocks[block_count] = (index, block_index);
+                            block_count += 1;
+                            let block = &mut component.blocks[block_index];
+                            if scan.start == 0 {
+                                if scan.ah == 0 {
+                                    entropy::dc(&mut reader, self.dc[dc].as_ref().unwrap(), &mut predictors[index], block, scan.al)?;
+                                } else if reader.read(1)? != 0 {
+                                    block[0] |= 1i16 << scan.al;
+                                }
+                            }
+                            if scan.end > 0 {
+                                entropy::ac(
+                                    &mut reader,
+                                    self.ac[ac].as_ref().unwrap(),
+                                    block,
+                                    (scan.start, scan.end),
+                                    scan.al,
+                                    scan.ah != 0,
+                                    &mut eob,
+                                )?;
+                            }
+                            if scan.start == 0 && !(-1024..=1023).contains(&block[0]) {
+                                return Err(Error::Invalid);
                             }
                         }
-                        if scan.end > 0 {
-                            entropy::ac(
-                                &mut reader,
-                                self.ac[ac].as_ref().unwrap(),
-                                &mut block,
-                                (scan.start, scan.end),
-                                scan.al,
-                                scan.ah != 0,
-                                &mut eob,
-                            )?;
-                        }
-                        if scan.start == 0 && !(-1024..=1023).contains(&block[0]) {
-                            return Err(Error::Invalid);
-                        }
-                        blocks[block_count] = (index, block_index, block);
-                        block_count += 1;
                     }
                 }
+                Ok(())
+            })();
+            match result {
+                Err(Error::NeedInput) => {
+                    for &(index, block_index) in &blocks[..block_count] {
+                        scan.undo(&mut coefficients.components[index].blocks[block_index]);
+                    }
+                    return Ok(consumed.map(|_| checkpoint));
+                }
+                Err(Error::Invalid) => return Err("invalid JPEG entropy data".into()),
+                Ok(()) => (),
             }
-            Ok(())
-        })();
-        match result {
-            Err(Error::NeedInput) => return Ok(None),
-            Err(Error::Invalid) => return Err("invalid JPEG entropy data".into()),
-            Ok(()) => (),
-        }
-        for &(index, block_index, block) in &blocks[..block_count] {
-            coefficients.components[index].blocks[block_index] = block;
-        }
-        scan.bits = reader.bits;
-        scan.predictors = predictors;
-        scan.eob = eob;
-        scan.restart = restart;
-        scan.index += 1;
-        let consumed = reader.pos;
-        if scan.index == scan.count {
-            if eob != 0 {
-                return Err("JPEG end-of-block run exceeds scan".into());
+            scan.bits = reader.bits;
+            scan.predictors = predictors;
+            scan.eob = eob;
+            scan.restart = restart;
+            scan.index += 1;
+            consumed = Some(reader.pos);
+            if scan.index == scan.count {
+                if eob != 0 {
+                    return Err("JPEG end-of-block run exceeds scan".into());
+                }
+                self.scan = None;
+                self.seen_scan = true;
+                self.completed_color = (self.jfif, self.adobe);
+                self.pixels = None;
+                return Ok(consumed);
             }
-            self.scan = None;
-            self.seen_scan = true;
-            self.completed_color = (self.jfif, self.adobe);
-            self.pixels = None;
         }
-        Ok(Some(consumed))
     }
 
     fn render(&mut self) -> Result<(), String> {
@@ -444,17 +467,7 @@ impl JpegStreamDecoder {
             // Undo only the active scan in a snapshot. Earlier scans remain
             // available without rendering or copying them during feed().
             for &(index, _, _) in &scan.components {
-                for block in &mut coefficients.components[index].blocks {
-                    for (k, value) in block.iter_mut().enumerate().take(usize::from(scan.end) + 1).skip(usize::from(scan.start)) {
-                        *value = if scan.ah == 0 {
-                            0
-                        } else if k == 0 {
-                            *value & !((1i16 << scan.ah) - 1)
-                        } else {
-                            *value / (1i16 << scan.ah) * (1i16 << scan.ah)
-                        };
-                    }
-                }
+                coefficients.components[index].blocks.iter_mut().for_each(|block| scan.undo(block));
             }
             previous = Some(coefficients);
         }

@@ -85,32 +85,33 @@ def exif_source(info: Mapping[object, object]) -> object:
     return raw
 
 
-def read_metadata(data: bytes, format: str | None, frame: int = 0) -> dict[object, object]:
+def read_metadata(data: bytes, format: str | None, frame: int = 0, jpeg_segments: list[tuple[int, memoryview]] | None = None) -> dict[object, object]:
     """Read metadata independently of pixel decoding."""
     info: dict[object, object] = {}
     if format == "JPEG":
-        info.update(read_jpeg_metadata(data))
+        info.update(read_jpeg_metadata(data, jpeg_segments))
         profiles: dict[int, bytes] = {}
         exif_parts: list[bytes] = []
         profile_count = 0
         valid_profile = True
+        size = len(data)
         pos = 2
-        while pos + 4 <= len(data) and data[pos] == 255:
+        while pos + 4 <= size and data[pos] == 255:
             pos += 1
-            while pos < len(data) and data[pos] == 255:
+            while pos < size and data[pos] == 255:
                 pos += 1
-            if pos >= len(data):
+            if pos >= size:
                 break
             marker = data[pos]
             pos += 1
-            if marker in (0xDA, 0xD9):
+            if marker == 0xDA or marker == 0xD9:
                 break
             if marker == 1 or 0xD0 <= marker <= 0xD8:
                 continue
-            if pos + 2 > len(data):
+            if pos + 2 > size:
                 break
-            length = int.from_bytes(data[pos : pos + 2], "big")
-            if length < 2 or pos + length > len(data):
+            length = data[pos] << 8 | data[pos + 1]
+            if length < 2 or pos + length > size:
                 break
             if marker == 0xE1:
                 payload = data[pos + 2 : pos + length]

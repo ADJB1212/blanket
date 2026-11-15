@@ -704,6 +704,13 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
             let mut frame = encoder.new_image::<colortype::RGB8>(image.width(), image.height()).map_err(codec_error)?;
             frame.encoder().write_tag(Tag::PhotometricInterpretation, 8_u16).map_err(codec_error)?;
             frame.write_data(&blanket_core::raster::lab_raw_bytes(image.pixel_data()?)).map_err(codec_error)?;
+        } else if let Some(photometric) = match image.pixel_mode() {
+            PixelMode::L | PixelMode::One => Some(1_u16),
+            PixelMode::Rgb | PixelMode::Rgba => Some(2),
+            PixelMode::Cmyk => Some(5),
+            _ => None,
+        } {
+            write_compressed_strips(&mut encoder, image, photometric, options.tiff_compression)?;
         } else {
             let pixels = image.pixel_data()?;
             match image.pixel_mode() {
@@ -717,6 +724,55 @@ pub fn encode_compressed_tiff(image: &Image, options: SaveOptions) -> PyResult<V
         }
     }
     Ok(output.into_inner())
+}
+
+/// Compress 8-bit strips in parallel, matching the tags and strip layout of `tiff::ImageEncoder`.
+fn write_compressed_strips<W: std::io::Write + std::io::Seek>(
+    encoder: &mut tiff::encoder::TiffEncoder<W>, image: &Image, photometric: u16, compression: u8,
+) -> PyResult<()> {
+    use tiff::encoder::Rational;
+    use tiff::tags::Tag;
+
+    let pixels = image.pixel_data()?;
+    let channels = image.pixel_mode().channels();
+    let row_bytes = image.width() as usize * channels;
+    let rows_per_strip = 1_000_000_usize.div_ceil(row_bytes);
+    let compress = |strip: &[u8]| -> PyResult<Vec<u8>> {
+        if compression == 1 {
+            return weezl::encode::Encoder::with_tiff_size_switch(weezl::BitOrder::Msb, 8).encode(strip).map_err(codec_error);
+        }
+        let mut output = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::new(6));
+        std::io::Write::write_all(&mut output, strip).map_err(codec_error)?;
+        output.finish().map_err(codec_error)
+    };
+    let strips = &pixels[..row_bytes * image.height() as usize];
+    let strips: Vec<Vec<u8>> = if strips.len() > rows_per_strip * row_bytes {
+        strips.par_chunks(rows_per_strip * row_bytes).map(compress).collect::<PyResult<_>>()?
+    } else {
+        vec![compress(strips)?]
+    };
+    // Out-of-line tag values are written immediately, so keep the serial encoder's order.
+    let mut directory = encoder.image_directory().map_err(codec_error)?;
+    directory.write_tag(Tag::ImageWidth, image.width()).map_err(codec_error)?;
+    directory.write_tag(Tag::ImageLength, image.height()).map_err(codec_error)?;
+    directory.write_tag(Tag::Compression, if compression == 1 { 5_u16 } else { 8 }).map_err(codec_error)?;
+    directory.write_tag(Tag::Predictor, 1_u16).map_err(codec_error)?;
+    directory.write_tag(Tag::PhotometricInterpretation, photometric).map_err(codec_error)?;
+    directory.write_tag(Tag::RowsPerStrip, u32::try_from(rows_per_strip).map_err(codec_error)?).map_err(codec_error)?;
+    directory.write_tag(Tag::SamplesPerPixel, channels as u16).map_err(codec_error)?;
+    directory.write_tag(Tag::XResolution, Rational { n: 1, d: 1 }).map_err(codec_error)?;
+    directory.write_tag(Tag::YResolution, Rational { n: 1, d: 1 }).map_err(codec_error)?;
+    directory.write_tag(Tag::ResolutionUnit, 1_u16).map_err(codec_error)?;
+    let mut offsets = Vec::with_capacity(strips.len());
+    for strip in &strips {
+        offsets.push(u32::try_from(directory.write_data(strip.as_slice()).map_err(codec_error)?).map_err(codec_error)?);
+    }
+    let counts = strips.iter().map(|strip| u32::try_from(strip.len())).collect::<Result<Vec<_>, _>>().map_err(codec_error)?;
+    directory.write_tag(Tag::BitsPerSample, vec![8_u16; channels].as_slice()).map_err(codec_error)?;
+    directory.write_tag(Tag::SampleFormat, vec![1_u16; channels].as_slice()).map_err(codec_error)?;
+    directory.write_tag(Tag::StripOffsets, offsets.as_slice()).map_err(codec_error)?;
+    directory.write_tag(Tag::StripByteCounts, counts.as_slice()).map_err(codec_error)?;
+    directory.finish().map_err(codec_error)
 }
 
 pub fn encode_wide_tiff(image: &Image) -> PyResult<Vec<u8>> {
@@ -756,6 +812,32 @@ mod tests {
             assert_eq!(samples.iter().map(|value| value.to_bits()).collect::<Vec<_>>(), bits);
             assert_eq!(matches!(samples, Cow::Borrowed(_)), cfg!(target_endian = "little") && bytes.as_ptr().align_offset(4) == 0);
             assert_eq!(storage[offset + bits.len() * 4], 173);
+        }
+    }
+
+    #[test]
+    fn parallel_strips_match_serial_encoder_bytes() {
+        use tiff::encoder::{Compression, TiffEncoder, colortype};
+        for (width, height) in [(1, 1), (17, 3), (601, 1700)] {
+            for mode in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba, PixelMode::Cmyk] {
+                let pixels: Vec<u8> = (0..width * height * mode.channels()).map(|i| ((i * 31) ^ (i >> 9)) as u8).collect();
+                let image = Image::from_pixels(width as u32, height as u32, mode, pixels.clone(), None).unwrap();
+                for tiff_compression in [1, 2] {
+                    let mut expected = Cursor::new(Vec::new());
+                    let compression = if tiff_compression == 1 { Compression::Lzw } else { Compression::Deflate(Default::default()) };
+                    let mut encoder = TiffEncoder::new(&mut expected).unwrap().with_compression(compression);
+                    let (w, h) = (width as u32, height as u32);
+                    match mode {
+                        PixelMode::L => encoder.write_image::<colortype::Gray8>(w, h, &pixels),
+                        PixelMode::Rgb => encoder.write_image::<colortype::RGB8>(w, h, &pixels),
+                        PixelMode::Rgba => encoder.write_image::<colortype::RGBA8>(w, h, &pixels),
+                        _ => encoder.write_image::<colortype::CMYK8>(w, h, &pixels),
+                    }
+                    .unwrap();
+                    let actual = encode_compressed_tiff(&image, SaveOptions { tiff_compression, ..Default::default() }).unwrap();
+                    assert!(actual == expected.into_inner(), "{mode:?} {width}x{height} compression={tiff_compression}");
+                }
+            }
         }
     }
 

@@ -15,7 +15,7 @@ trait CanvasSample: Copy + Into<u64> {
         Self::pack(&canvas, mode)
     }
     fn over(src: [Self; 4], dst: &mut [Self; 4]);
-    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]);
+    fn copy_row(source: &[u8], color: png::ColorType, canvas: &mut [[Self; 4]]) -> bool;
 }
 
 impl CanvasSample for u8 {
@@ -30,13 +30,32 @@ impl CanvasSample for u8 {
         match mode {
             PixelMode::One | PixelMode::L => canvas.iter().map(|pixel| pixel[0]).collect(),
             PixelMode::La => canvas.iter().map(|pixel| [pixel[0], pixel[3]]).collect::<Vec<_>>().into_flattened(),
-            PixelMode::Rgb => canvas.iter().map(|pixel| [pixel[0], pixel[1], pixel[2]]).collect::<Vec<_>>().into_flattened(),
+            PixelMode::Rgb => blanket_convert_kernels::simd::convert(canvas.as_flattened(), PixelMode::Rgba, PixelMode::Rgb),
             PixelMode::Rgba => canvas.as_flattened().to_vec(),
             _ => unreachable!("validated APNG output mode"),
         }
     }
-    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
-        canvas.as_flattened_mut().copy_from_slice(source);
+    fn copy_row(source: &[u8], color: png::ColorType, canvas: &mut [[Self; 4]]) -> bool {
+        match color {
+            png::ColorType::Rgba => canvas.as_flattened_mut().copy_from_slice(source),
+            png::ColorType::Rgb => {
+                for (dst, src) in canvas.iter_mut().zip(source.as_chunks::<3>().0) {
+                    *dst = [src[0], src[1], src[2], 255];
+                }
+            }
+            png::ColorType::Grayscale => {
+                for (dst, &value) in canvas.iter_mut().zip(source) {
+                    *dst = [value, value, value, 255];
+                }
+            }
+            png::ColorType::GrayscaleAlpha => {
+                for (dst, src) in canvas.iter_mut().zip(source.as_chunks::<2>().0) {
+                    *dst = [src[0], src[0], src[0], src[1]];
+                }
+            }
+            png::ColorType::Indexed => return false,
+        }
+        true
     }
     fn pack_owned(canvas: Vec<[Self; 4]>, mode: PixelMode) -> Vec<u8> {
         if mode == PixelMode::Rgba { canvas.into_flattened() } else { Self::pack(&canvas, mode) }
@@ -60,10 +79,14 @@ impl CanvasSample for u16 {
     fn pack(canvas: &[[Self; 4]], _mode: PixelMode) -> Vec<u8> {
         canvas.iter().map(|pixel| pixel.map(u16::to_le_bytes)).collect::<Vec<_>>().into_flattened().into_flattened()
     }
-    fn copy_rgba(source: &[u8], canvas: &mut [[Self; 4]]) {
+    fn copy_row(source: &[u8], color: png::ColorType, canvas: &mut [[Self; 4]]) -> bool {
+        if color != png::ColorType::Rgba {
+            return false;
+        }
         for (src, dst) in source.as_chunks::<8>().0.iter().zip(canvas) {
             *dst = std::array::from_fn(|c| u16::from_be_bytes([src[c * 2], src[c * 2 + 1]]));
         }
+        true
     }
     fn over(src: [Self; 4], dst: &mut [Self; 4]) {
         let sa = u64::from(src[3]);
@@ -180,12 +203,14 @@ fn decode_animation<T: CanvasSample>(
         let max = T::MAX_SAMPLE;
         let bytes = size_of::<T>();
         let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over) && frame_index != u32::from(default_image);
+        let opaque = matches!(output.color_type, png::ColorType::Rgb | png::ColorType::Grayscale);
         for row in 0..output.height as usize {
-            if !over && output.color_type == png::ColorType::Rgba {
-                let start = row * output.width as usize * 4 * bytes;
+            if !over || opaque {
+                let row_bytes = output.width as usize * channels * bytes;
                 let dst = (y as usize + row) * width as usize + x as usize;
-                T::copy_rgba(&buffer[start..start + output.width as usize * 4 * bytes], &mut canvas[dst..dst + output.width as usize]);
-                continue;
+                if T::copy_row(&buffer[row * row_bytes..][..row_bytes], output.color_type, &mut canvas[dst..dst + output.width as usize]) {
+                    continue;
+                }
             }
             for col in 0..output.width as usize {
                 let start = (row * output.width as usize + col) * channels * bytes;

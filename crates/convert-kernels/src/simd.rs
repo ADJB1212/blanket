@@ -689,7 +689,31 @@ fn map_blocks<const S: usize, const D: usize>(
 }
 
 pub fn gray_to_hsv<const C: usize>(source: &[u8]) -> Vec<u8> {
+    if C == 1 {
+        return gray_with_fill(source, 2, 0);
+    }
     map_blocks::<C, 3>(source, 5 << 20, |p| [Bytes::splat(0), Bytes::splat(0), p[0]], |p| [0, 0, p[0]])
+}
+
+/// Three-channel output with gray at `channel` and `fill` elsewhere.
+fn gray_with_fill(source: &[u8], channel: usize, fill: u8) -> Vec<u8> {
+    let masks: [std::simd::Mask<i8, 16>; 3] =
+        std::array::from_fn(|v| std::simd::Mask::from_array(std::array::from_fn(|i| (v * 16 + i) % 3 == channel)));
+    let fills = Bytes::splat(fill);
+    let (blocks, tail) = source.as_chunks::<16>();
+    let mut output = Vec::with_capacity(blocks.len() + usize::from(!tail.is_empty()));
+    output.extend(blocks.iter().map(|block| {
+        let mut gray = [0; 48];
+        blanket_kernels::pixels::store_gray_rgb(&mut gray, Bytes::from_array(*block));
+        let mut pixels = [0; 48];
+        for ((dst, src), mask) in pixels.as_chunks_mut::<16>().0.iter_mut().zip(gray.as_chunks::<16>().0).zip(masks) {
+            *dst = mask.select(Bytes::from_array(*src), fills).to_array();
+        }
+        pixels
+    }));
+    let mut output = output.into_flattened();
+    output.extend(tail.iter().flat_map(|&v| std::array::from_fn::<u8, 3, _>(|c| if c == channel { v } else { fill })));
+    output
 }
 
 /// Pillow's L to CMYK stores inverted gray as K.
@@ -703,7 +727,7 @@ pub fn gray_to_cmyk(source: &[u8]) -> Vec<u8> {
 }
 
 pub fn gray_to_ycbcr(source: &[u8]) -> Vec<u8> {
-    map_blocks::<1, 3>(source, 4 << 20, |p| [p[0], Bytes::splat(128), Bytes::splat(128)], |p| [p[0], 128, 128])
+    gray_with_fill(source, 0, 128)
 }
 
 pub fn color_to_cmyk<const S: usize>(source: &[u8]) -> Vec<u8> {
@@ -1467,6 +1491,18 @@ mod tests {
             let source: Vec<_> = std::iter::once(93).chain((0..count).flat_map(|i| values[i % values.len()].to_le_bytes())).collect();
             let expected: Vec<_> = (0..count).flat_map(|i| (values[i % values.len()] as i32).to_le_bytes()).collect();
             assert_eq!(float_to_integer(&source[1..]), expected);
+        }
+    }
+
+    #[test]
+    fn gray_fill_matches_scalar() {
+        for count in [0, 1, 15, 16, 17, 33, 1000] {
+            let gray: Vec<u8> = (0..count).map(|i| (i * 7 + 3) as u8).collect();
+            let ycbcr: Vec<u8> = gray.iter().flat_map(|&v| [v, 128, 128]).collect();
+            let hsv: Vec<u8> = gray.iter().flat_map(|&v| [0, 0, v]).collect();
+            assert_eq!(gray_to_ycbcr(&gray[..]), ycbcr, "{count}");
+            assert_eq!(gray_to_hsv::<1>(&gray[..]), hsv, "{count}");
+            assert_eq!(gray_to_ycbcr(&gray[1.min(count)..]), ycbcr[3.min(ycbcr.len())..], "unaligned {count}");
         }
     }
 

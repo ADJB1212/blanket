@@ -43,6 +43,16 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
     if target == Some(0) {
         return Ok(Sequence { frames: vec![decode_first_frame(data)?], ..Sequence::default() });
     }
+    // A still GIF needs no RGBA compositing canvas.
+    if target.is_none()
+        && let Ok(info) = index_sequence(data)
+        && info.count == 1
+    {
+        let (frame, has_palette) = first_frame(data)?;
+        if has_palette {
+            return Ok(Sequence { frames: vec![frame], loop_count: info.loop_count, ..Sequence::default() });
+        }
+    }
     let mut options = gif::DecodeOptions::new();
     options.check_frame_consistency(true);
     options.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap()));
@@ -172,6 +182,11 @@ pub fn decode_gif(data: &[u8]) -> Result<Image, String> {
 }
 
 fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String> {
+    first_frame(data).map(|(frame, _)| frame)
+}
+
+/// Decode frame zero as an indexed image, reporting whether any palette was present.
+fn first_frame(data: &[u8]) -> Result<(blanket_codec_common::Frame, bool), String> {
     let mut options = gif::DecodeOptions::new();
     options.check_frame_consistency(true);
     options.set_memory_limit(gif::MemoryLimit::Bytes(std::num::NonZeroU64::new(blanket_codec_common::MAX_IMAGE_PIXELS as u64 * 4).unwrap()));
@@ -186,7 +201,10 @@ fn decode_first_frame(data: &[u8]) -> Result<blanket_codec_common::Frame, String
     }
     let palette = frame.palette.as_deref().or(global_palette.as_deref());
     let image = indexed_image(width, height, frame, palette, background)?;
-    Ok(blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 })
+    Ok((
+        blanket_codec_common::Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 },
+        palette.is_some(),
+    ))
 }
 
 fn indexed_image(width: u32, height: u32, frame: &gif::Frame<'_>, palette: Option<&[u8]>, background: u8) -> Result<Image, String> {

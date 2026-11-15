@@ -37,9 +37,16 @@ fn pass(s: [I32x8; 8]) -> [I32x8; 8] {
     [t0 + o3, t1 + o2, t2 + o1, t3 + o0, t3 - o0, t2 - o1, t1 - o2, t0 - o3]
 }
 
-fn transpose(rows: [I32x8; 8]) -> [I32x8; 8] {
-    let rows = rows.map(Simd::to_array);
-    std::array::from_fn(|column| I32x8::from_array(std::array::from_fn(|row| rows[row][column])))
+/// Three perfect shuffles of the 64 lanes swap row and column bits.
+fn transpose(mut rows: [I32x8; 8]) -> [I32x8; 8] {
+    for _ in 0..3 {
+        let (a0, b0) = rows[0].interleave(rows[4]);
+        let (a1, b1) = rows[1].interleave(rows[5]);
+        let (a2, b2) = rows[2].interleave(rows[6]);
+        let (a3, b3) = rows[3].interleave(rows[7]);
+        rows = [a0, b0, a1, b1, a2, b2, a3, b3];
+    }
+    rows
 }
 
 fn idct(block: &[i16; 64], quant: &[u16; 64]) -> Option<[u8; 64]> {
@@ -80,6 +87,23 @@ fn rgb_row(y: &[u8], cb: &[u8], cr: &[u8], output: &mut [u8], width: usize) {
     ycbcr_to_rgb_row(&y[end..], &cb[end..], &cr[end..], &mut output[end * 3..], width - end);
 }
 
+/// Return one fancy-upsampled chroma row, matching libjpeg's h2v1 and h2v2 filters.
+fn chroma_row<'a>(
+    (plane, stride): &'a (Vec<u8>, usize), (h, v): (usize, usize), height: usize, columns: usize, row: usize, buffer: &'a mut [u8],
+) -> &'a [u8] {
+    if h == 1 {
+        return &plane[row * stride..];
+    }
+    if v == 1 {
+        upsample::fancy_h2v1(&plane[row * stride..], columns, buffer, columns * 2);
+        return buffer;
+    }
+    let (y, rows) = (row / 2, height.div_ceil(2));
+    let neighbor = if row % 2 == 0 { y.saturating_sub(1) } else { (y + 1).min(rows - 1) };
+    upsample::fancy_h2v2_row(&plane[y * stride..][..columns], &plane[neighbor * stride..][..columns], buffer, columns);
+    buffer
+}
+
 pub(super) fn render(coefficients: &JpegCoefficients, adobe: Option<u8>) -> Result<Option<Image>, String> {
     let components = &coefficients.components;
     let count = components.len();
@@ -106,24 +130,27 @@ pub(super) fn render(coefficients: &JpegCoefficients, adobe: Option<u8>) -> Resu
     {
         return Ok(None);
     }
+    let parallel = blanket_core::parallel::should_parallel(width * height, 256 * 1024, 1024 * 1024);
     let plane = |component: &libjpeg_turbo_rs::ComponentCoefficients| {
         let stride = component.blocks_x * 8;
         let mut plane = vec![0; stride * component.blocks_y * 8];
         let quant = &coefficients.quant_tables[component.quant_table_index as usize];
-        for (index, block) in component.blocks.iter().enumerate() {
-            let pixels = idct(block, quant)?;
-            let start = (index / component.blocks_x * stride + index % component.blocks_x) * 8;
-            for row in 0..8 {
-                for column in 0..8 {
-                    plane[start + row * stride + column] = pixels[row * 8 + column];
+        let band = |(output, blocks): (&mut [u8], &[[i16; 64]])| {
+            for (x, block) in blocks.iter().enumerate() {
+                for (row, values) in idct(block, quant)?.as_chunks::<8>().0.iter().enumerate() {
+                    output[row * stride + x * 8..][..8].copy_from_slice(values);
                 }
             }
+            Some(())
+        };
+        if parallel {
+            plane.par_chunks_mut(stride * 8).zip(component.blocks.par_chunks(component.blocks_x)).try_for_each(band)?;
+        } else {
+            plane.chunks_mut(stride * 8).zip(component.blocks.chunks(component.blocks_x)).try_for_each(band)?;
         }
         Some((plane, stride))
     };
-    let parallel = blanket_core::parallel::should_parallel(width * height, 256 * 1024, 1024 * 1024);
-    let planes: Option<Vec<_>> = if parallel { components.par_iter().map(plane).collect() } else { components.iter().map(plane).collect() };
-    let Some(planes) = planes else {
+    let Some(planes) = components.iter().map(plane).collect::<Option<Vec<_>>>() else {
         return Ok(None);
     };
     if count == 1 {
@@ -135,37 +162,21 @@ pub(super) fn render(coefficients: &JpegCoefficients, adobe: Option<u8>) -> Resu
             .map(Some)
             .map_err(|error| error.to_string());
     }
-    let planes: Vec<_> = planes
-        .into_iter()
-        .zip(components)
-        .map(|((plane, stride), component)| {
-            let h = max_h / component.h_sampling as usize;
-            let v = max_v / component.v_sampling as usize;
-            if h == 1 {
-                return (plane, stride);
-            }
-            let columns = width.div_ceil(2);
-            let rows = height.div_ceil(v);
-            let out_stride = columns * 2;
-            let mut output = vec![0; out_stride * rows * v];
-            if v == 2 {
-                upsample::fancy_h2v2_strided(&plane, columns, stride, rows, &mut output, out_stride);
-            } else {
-                for row in 0..rows {
-                    upsample::fancy_h2v1(&plane[row * stride..], columns, &mut output[row * out_stride..], out_stride);
-                }
-            }
-            (output, out_stride)
-        })
-        .collect();
+    let factors: Vec<_> = components.iter().map(|c| (max_h / c.h_sampling as usize, max_v / c.v_sampling as usize)).collect();
+    let columns = width.div_ceil(2);
     let mut output = vec![0; width * height * 3];
-    let convert = |(row, pixels): (usize, &mut [u8])| {
-        rgb_row(&planes[0].0[row * planes[0].1..], &planes[1].0[row * planes[1].1..], &planes[2].0[row * planes[2].1..], pixels, width);
+    let convert = |scratch: &mut [Vec<u8>; 2], (row, pixels): (usize, &mut [u8])| {
+        let [cb, cr] = scratch;
+        let cb = chroma_row(&planes[1], factors[1], height, columns, row, cb);
+        let cr = chroma_row(&planes[2], factors[2], height, columns, row, cr);
+        rgb_row(&planes[0].0[row * planes[0].1..], cb, cr, pixels, width);
     };
+    let scratch = || [vec![0; columns * 2], vec![0; columns * 2]];
     if parallel {
-        output.par_chunks_exact_mut(width * 3).enumerate().for_each(convert);
+        output.par_chunks_exact_mut(width * 3).enumerate().for_each_init(scratch, convert);
     } else {
-        output.chunks_exact_mut(width * 3).enumerate().for_each(convert);
+        let mut buffers = scratch();
+        output.chunks_exact_mut(width * 3).enumerate().for_each(|item| convert(&mut buffers, item));
     }
     Image::from_pixels(width as u32, height as u32, PixelMode::Rgb, output, Some("JPEG".into())).map(Some).map_err(|error| error.to_string())
 }

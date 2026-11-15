@@ -8,7 +8,7 @@ pub(super) type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct Bits {
-    buffer: u32,
+    buffer: u64,
     remaining: u8,
 }
 
@@ -19,26 +19,52 @@ pub(super) struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// Buffer entropy bytes up to the next marker or the end of the input.
+    fn refill(&mut self) {
+        while self.bits.remaining <= 56 {
+            if let Some(word) = self.data.get(self.pos..self.pos + 8) {
+                let word = u64::from_be_bytes(word.try_into().unwrap());
+                let inverted = !word;
+                if (inverted.wrapping_sub(0x0101_0101_0101_0101) & !inverted & 0x8080_8080_8080_8080) == 0 {
+                    let count = ((64 - self.bits.remaining) / 8).min(7);
+                    let shift = u32::from(count) * 8;
+                    self.bits.buffer = (self.bits.buffer << shift) | (word >> (64 - shift));
+                    self.bits.remaining += count * 8;
+                    self.pos += usize::from(count);
+                    continue;
+                }
+            }
+            let Some(&byte) = self.data.get(self.pos) else {
+                return;
+            };
+            let mut next = self.pos + 1;
+            if byte == 255 {
+                while self.data.get(next) == Some(&255) {
+                    next += 1;
+                }
+                if self.data.get(next) != Some(&0) {
+                    return;
+                }
+                next += 1;
+            }
+            self.pos = next;
+            self.bits.buffer = (self.bits.buffer << 8) | u64::from(byte);
+            self.bits.remaining += 8;
+        }
+    }
+
     #[inline]
     fn fill(&mut self, count: u8) -> Result<()> {
-        while self.bits.remaining < count {
-            let mut byte = *self.data.get(self.pos).ok_or(Error::NeedInput)?;
-            self.pos += 1;
-            if byte == 255 {
-                loop {
-                    byte = *self.data.get(self.pos).ok_or(Error::NeedInput)?;
-                    self.pos += 1;
-                    if byte != 255 {
-                        break;
-                    }
+        if self.bits.remaining < count {
+            self.refill();
+            if self.bits.remaining < count {
+                // Short at a marker is corrupt; short at the end of input waits for more.
+                let mut next = self.pos;
+                while self.data.get(next) == Some(&255) {
+                    next += 1;
                 }
-                if byte != 0 {
-                    return Err(Error::Invalid);
-                }
-                byte = 255;
+                return Err(if next > self.pos && next < self.data.len() { Error::Invalid } else { Error::NeedInput });
             }
-            self.bits.buffer = (self.bits.buffer << 8) | u32::from(byte);
-            self.bits.remaining += 8;
         }
         Ok(())
     }
@@ -53,9 +79,8 @@ impl Reader<'_> {
     #[inline]
     fn peek(&mut self, count: u8) -> Option<usize> {
         if self.bits.remaining < count {
-            let checkpoint = (self.pos, self.bits);
-            if self.fill(count).is_err() {
-                (self.pos, self.bits) = checkpoint;
+            self.refill();
+            if self.bits.remaining < count {
                 return None;
             }
         }
@@ -213,7 +238,33 @@ pub(super) fn ac(
     let (start, end) = (usize::from(range.0.max(1)), usize::from(range.1));
     let bit = 1i16 << al;
     let mut k = start;
-    if *eob == 0 {
+    if !refine && *eob == 0 {
+        while k <= end {
+            let (symbol, amplitude) = table.coefficient(reader)?;
+            let (run, size) = (usize::from(symbol >> 4), symbol & 15);
+            if size == 0 {
+                if run != 15 {
+                    if range.0 == 0 && run != 0 {
+                        return Err(Error::Invalid);
+                    }
+                    *eob = (1u16 << run) + reader.read(run as u8)?;
+                    break;
+                }
+                k += 16;
+                if k > end + 1 {
+                    return Err(Error::Invalid);
+                }
+                continue;
+            }
+            let value = amplitude.checked_mul(bit).ok_or(Error::Invalid)?;
+            k += run;
+            if size > 10 || !(-1023..=1023).contains(&value) || k > end {
+                return Err(Error::Invalid);
+            }
+            block[k] = value;
+            k += 1;
+        }
+    } else if *eob == 0 {
         while k <= end {
             let (symbol, amplitude) = if refine { (table.symbol(reader)?, 0) } else { table.coefficient(reader)? };
             let mut run = usize::from(symbol >> 4);

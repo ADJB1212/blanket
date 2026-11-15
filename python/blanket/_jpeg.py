@@ -7,10 +7,7 @@ __lazy_modules__ = {"array", "operator", "struct"}
 import array
 import struct
 from operator import index
-from typing import TYPE_CHECKING, cast
-
-if TYPE_CHECKING:
-    from collections.abc import Iterator
+from typing import cast
 
 _ZIGZAG = (
     0,
@@ -109,28 +106,30 @@ def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
     if not data.startswith(b"\xff\xd8"):
         return data, False
     view = memoryview(data)
+    size = len(data)
     output: bytearray | None = None
     seen_sof = False
     position = 2
-    while position < len(data):
+    while position < size:
         start = position
         if data[position] != 255:
-            while position < len(data) and data[position] != 255:
-                position += 1
+            position = data.find(b"\xff", position)
+            if position < 0:
+                position = size
             if output is None:
                 output = bytearray(view[:start])
             continue
-        while position < len(data) and data[position] == 255:
+        while position < size and data[position] == 255:
             position += 1
-        if position == len(data):
+        if position == size:
             break
         marker = data[position]
         position += 1
-        if marker in (0, 1):
+        if marker < 2:
             if output is None:
                 output = bytearray(view[:start])
             continue
-        if marker in (0xDA, 0xD9):
+        if marker == 0xDA or marker == 0xD9:
             if output is not None:
                 output.extend(view[start:])
             break
@@ -138,10 +137,10 @@ def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
             if output is not None:
                 output.extend(view[start:position])
             continue
-        if position + 2 > len(data):
+        if position + 2 > size:
             break
-        length = int.from_bytes(view[position : position + 2], "big")
-        if length < 2 or position + length > len(data):
+        length = data[position] << 8 | data[position + 1]
+        if length < 2 or position + length > size:
             break
         if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
             seen_sof = True
@@ -161,40 +160,42 @@ def sanitize_jpeg(data: bytes) -> tuple[bytes, bool]:
     return cleaned, truncated
 
 
-def segments(data: bytes) -> Iterator[tuple[int, memoryview]]:
-    """Yield bounded header segments without copying unknown payloads."""
+def segments(data: bytes) -> list[tuple[int, memoryview]]:
+    """Return bounded header segments without copying unknown payloads."""
     view = memoryview(data)
+    size = len(data)
+    result = []
     position = 2
-    while position < len(data):
+    while position < size:
         if data[position] != 255:
+            position = data.find(b"\xff", position)
+            if position < 0:
+                break
+        while position < size and data[position] == 255:
             position += 1
-            continue
-        while position < len(data) and data[position] == 255:
-            position += 1
-        if position == len(data):
-            return
+        if position == size:
+            break
         marker = data[position]
         position += 1
-        if marker == 0xD9 and view[position : position + 2] == b"\xff\xd8":
+        if marker == 0xD9 and data[position : position + 2] == b"\xff\xd8":
             position += 2
             continue
-        if marker in (0xDA, 0xD9):
-            return
-        if marker in (0, 1) or 0xD0 <= marker <= 0xD8:
+        if marker == 0xDA or marker == 0xD9:
+            break
+        if marker < 2 or 0xD0 <= marker <= 0xD8:
             continue
-        if position + 2 > len(data):
-            return
-        length = int.from_bytes(view[position : position + 2], "big")
-        if length < 2 or position + length > len(data):
-            return
-        yield marker, view[position + 2 : position + length]
+        length = (data[position] << 8 | data[position + 1]) if position + 2 <= size else 0
+        if length < 2 or position + length > size:
+            break
+        result.append((marker, view[position + 2 : position + length]))
         position += length
+    return result
 
 
-def read_metadata(data: bytes) -> dict[object, object]:
+def read_metadata(data: bytes, parsed: list[tuple[int, memoryview]] | None = None) -> dict[object, object]:
     """Read JFIF density, Adobe interpretation, comments, and progression."""
     info: dict[object, object] = {}
-    for marker, payload in segments(data):
+    for marker, payload in segments(data) if parsed is None else parsed:
         if marker == 0xE0 and payload[:5] == b"JFIF\0" and len(payload) >= 12:
             version = int.from_bytes(payload[5:7], "big")
             density = struct.unpack_from(">HH", payload, 8)
@@ -244,13 +245,13 @@ def read_metadata(data: bytes) -> dict[object, object]:
     return info
 
 
-def read_attributes(data: bytes) -> dict[str, object]:
+def read_attributes(data: bytes, parsed: list[tuple[int, memoryview]] | None = None) -> dict[str, object]:
     """Read application markers, component sampling, and quantization tables."""
     app: dict[str, bytes] = {}
     applist: list[tuple[str, bytes]] = []
     quantization: dict[int, list[int]] = {}
     attributes: dict[str, object] = {"app": app, "applist": applist, "quantization": quantization}
-    for marker, payload in segments(data):
+    for marker, payload in segments(data) if parsed is None else parsed:
         if 0xE0 <= marker <= 0xEF or marker == 0xFE:
             name = "COM" if marker == 0xFE else f"APP{marker - 0xE0}"
             value = bytes(payload)
@@ -264,7 +265,7 @@ def read_attributes(data: bytes) -> dict[str, object]:
                 if position + 1 + precision * 64 > len(payload):
                     break
                 values = struct.unpack_from(">64H" if precision == 2 else "64B", payload, position + 1)
-                quantization[header & 15] = [values[index] for index in _ZIGZAG]
+                quantization[header & 15] = [values[i] for i in _ZIGZAG]
                 position += 1 + precision * 64
         elif 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC) and len(payload) >= 6:
             layers = payload[5]

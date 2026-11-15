@@ -147,18 +147,122 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
     Ok(sequence)
 }
 
+struct AnimEncoder(*mut libwebp_sys::WebPAnimEncoder);
+
+impl AnimEncoder {
+    fn error(&self, fallback: &str) -> PyErr {
+        // SAFETY: the encoder is live; libwebp returns null or a NUL-terminated message it owns.
+        let message = unsafe {
+            let message = libwebp_sys::WebPAnimEncoderGetError(self.0);
+            (!message.is_null()).then(|| std::ffi::CStr::from_ptr(message).to_string_lossy().into_owned())
+        };
+        PyValueError::new_err(message.filter(|message| !message.is_empty()).unwrap_or_else(|| fallback.into()))
+    }
+}
+
+impl Drop for AnimEncoder {
+    fn drop(&mut self) {
+        // SAFETY: the pointer came from WebPAnimEncoderNewInternal and is deleted once.
+        unsafe { libwebp_sys::WebPAnimEncoderDelete(self.0) };
+    }
+}
+
+struct Picture(libwebp_sys::WebPPicture);
+
+impl Drop for Picture {
+    fn drop(&mut self) {
+        // SAFETY: the picture was initialized by WebPPictureInitInternal.
+        unsafe { libwebp_sys::WebPPictureFree(&raw mut self.0) };
+    }
+}
+
+/// Encode RGB or RGBA frames with Pillow's animated defaults (method 0).
 pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Image>>, options: SaveOptions) -> PyResult<Vec<u8>> {
     let first = sequence.frames.first().ok_or_else(|| PyValueError::new_err("empty sequence"))?.image.borrow();
-    let mut encoder =
-        webpx::AnimationEncoder::with_options(first.width(), first.height(), false, sequence.loop_count.unwrap_or(0)).map_err(codec_error)?;
-    encoder.set_quality(f32::from(options.quality));
-    encoder.set_lossless(options.lossless);
+    let (width, height) = (first.width(), first.height());
+    if width == 0 || height == 0 || width > 16383 || height > 16383 {
+        return Err(PyValueError::new_err("invalid WebP dimensions"));
+    }
+    let loop_count = sequence.loop_count.unwrap_or(0);
+    if loop_count > u32::from(u16::MAX) {
+        return Err(PyValueError::new_err("WebP loop must be between 0 and 65535"));
+    }
+    let mut anim_options = std::mem::MaybeUninit::<libwebp_sys::WebPAnimEncoderOptions>::zeroed();
+    let mut config = std::mem::MaybeUninit::<libwebp_sys::WebPConfig>::zeroed();
+    // SAFETY: both structs start zeroed and are fully initialized by libwebp on success.
+    let (mut anim_options, mut config) = unsafe {
+        if libwebp_sys::WebPAnimEncoderOptionsInitInternal(anim_options.as_mut_ptr(), libwebp_sys::WEBP_MUX_ABI_VERSION as i32) == 0
+            || libwebp_sys::WebPConfigInitInternal(
+                config.as_mut_ptr(),
+                libwebp_sys::WebPPreset::WEBP_PRESET_DEFAULT,
+                f32::from(options.quality),
+                libwebp_sys::WEBP_ENCODER_ABI_VERSION as i32,
+            ) == 0
+        {
+            return Err(PyValueError::new_err("failed to initialize WebP encoder"));
+        }
+        (anim_options.assume_init(), config.assume_init())
+    };
+    anim_options.anim_params.loop_count = loop_count as i32;
+    config.lossless = i32::from(options.lossless);
+    config.method = 0;
+    config.thread_level = 1;
+    // SAFETY: options are initialized; a null result is handled below.
+    let encoder = AnimEncoder(unsafe {
+        libwebp_sys::WebPAnimEncoderNewInternal(width as i32, height as i32, &raw const anim_options, libwebp_sys::WEBP_MUX_ABI_VERSION as i32)
+    });
+    if encoder.0.is_null() {
+        return Err(PyValueError::new_err("failed to allocate WebP encoder"));
+    }
     let mut timestamp: i32 = 0;
     for frame in &sequence.frames {
-        encoder.add_frame_rgba(frame.image.borrow().pixel_data()?, timestamp).map_err(codec_error)?;
+        let image = frame.image.borrow();
+        let channels = match image.pixel_mode() {
+            PixelMode::Rgb => 3,
+            PixelMode::Rgba => 4,
+            _ => return Err(PyValueError::new_err("unsupported mode for WebP")),
+        };
+        let pixels = image.pixel_data()?;
+        if image.width() != width || image.height() != height || pixels.len() < width as usize * height as usize * channels {
+            return Err(PyValueError::new_err("WebP frames must share the canvas size"));
+        }
+        let mut picture = Picture(unsafe { std::mem::zeroed() });
+        // SAFETY: the zeroed picture is initialized, then imports a buffer covering every row.
+        let ok = unsafe {
+            libwebp_sys::WebPPictureInitInternal(&raw mut picture.0, libwebp_sys::WEBP_ENCODER_ABI_VERSION as i32) != 0 && {
+                picture.0.width = width as i32;
+                picture.0.height = height as i32;
+                picture.0.use_argb = 1;
+                let stride = (width as usize * channels) as i32;
+                if channels == 3 {
+                    libwebp_sys::WebPPictureImportRGB(&raw mut picture.0, pixels.as_ptr(), stride) != 0
+                } else {
+                    libwebp_sys::WebPPictureImportRGBA(&raw mut picture.0, pixels.as_ptr(), stride) != 0
+                }
+            }
+        };
+        if !ok {
+            return Err(PyValueError::new_err("failed to import WebP frame"));
+        }
+        // SAFETY: encoder, picture, and config are live and initialized.
+        if unsafe { libwebp_sys::WebPAnimEncoderAdd(encoder.0, &raw mut picture.0, timestamp, &raw const config) } == 0 {
+            return Err(encoder.error("failed to add WebP frame"));
+        }
         timestamp = timestamp.checked_add(frame.duration.unwrap_or(0.0) as i32).ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
     }
-    encoder.finish(timestamp).map_err(codec_error)
+    let mut data = libwebp_sys::WebPData::default();
+    // SAFETY: a null frame finalizes the encoder; assembled data is copied before being freed.
+    unsafe {
+        if libwebp_sys::WebPAnimEncoderAdd(encoder.0, std::ptr::null_mut(), timestamp, std::ptr::null()) == 0 {
+            return Err(encoder.error("failed to finalize WebP animation"));
+        }
+        if libwebp_sys::WebPAnimEncoderAssemble(encoder.0, &raw mut data) == 0 || data.bytes.is_null() {
+            return Err(encoder.error("failed to assemble WebP animation"));
+        }
+        let output = std::slice::from_raw_parts(data.bytes, data.size).to_vec();
+        libwebp_sys::WebPDataClear(&mut data);
+        Ok(output)
+    }
 }
 
 #[cfg(test)]
