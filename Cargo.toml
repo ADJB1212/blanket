@@ -109,12 +109,13 @@ flate2 = { version = "1", default-features = false, features = ["rust_backend", 
 memchr = {version = "2", default-features = false, features = ["std", "alloc"] }
 
 [patch.crates-io]
-dav1d-sys = {path = "third-party/dav1d-sys" }
-libheif-sys = {path = "third-party/libheif-sys" }
-jpegxl-sys = {path = "third-party/jpegxl-sys" }
-jpegxl-rs = {path = "third-party/jpegxl-rs" }
-jpegxl-src = {path = "third-party/jpegxl-src" }
-turbojpeg = {path = "third-party/turbojpeg" }
+dav1d-sys = { path = "third-party/dav1d-sys" }
+libheif-sys = { path = "third-party/libheif-sys" }
+jpegxl-sys = { path = "third-party/jpegxl-sys" }
+jpegxl-rs = { path = "third-party/jpegxl-rs" }
+jpegxl-src = { path = "third-party/jpegxl-src" }
+turbojpeg = { path = "third-party/turbojpeg" }
+png = { path = "third-party/png" }
 
 [profile.release]
 opt-level = 3
