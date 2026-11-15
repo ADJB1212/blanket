@@ -291,8 +291,8 @@ Rust backend for performance and functionality Pillow doesn't offer.
 ### Planned
 
 - [x] **SVG support** — read static SVG as raster images
-- [ ] **Batch processing API** — process multiple images in parallel with
-      shared pipeline configuration
+- [x] **Batch processing API** — `ImageBatch.Pipeline` applies shared transforms
+      to images or paths in parallel, with ordered results and bounded streaming
 - [x] **Smart cropping** — `ImageOps.smart_crop` fits a requested size using
       native color/edge/alpha saliency on a bounded thumbnail, with centered
       fallback for flat images and no model dependencies
