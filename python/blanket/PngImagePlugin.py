@@ -223,6 +223,26 @@ def putchunk(fp: Writable, cid: bytes, *data: bytes) -> None:
     write_all(fp, o32(len(payload)) + cid + payload + o32(checksum))
 
 
+def verify_png(data: bytes) -> None:
+    """Validate PNG chunk boundaries and checksums without inflating pixels."""
+    view = memoryview(data)
+    position = 8
+    while position + 12 <= len(data):
+        length = int.from_bytes(view[position : position + 4], "big")
+        end = position + 12 + length
+        if end > len(data):
+            raise OSError("truncated PNG chunk")
+        checksum = int.from_bytes(view[end - 4 : end], "big")
+        if zlib.crc32(view[position + 4 : end - 4]) != checksum:
+            raise OSError("broken PNG chunk checksum")
+        if view[position + 4 : position + 8] == b"IEND":
+            if length != 0:
+                raise OSError("invalid PNG IEND chunk")
+            return
+        position = end
+    raise OSError("truncated PNG file")
+
+
 class iTXt(str):
     """International text with its language and translated keyword."""
 

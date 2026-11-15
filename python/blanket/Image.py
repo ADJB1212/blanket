@@ -449,7 +449,7 @@ class Image:
     modes support a smaller operation set than 8-bit color modes.
     """
 
-    def __init__(self, native: _Image) -> None:
+    def __init__(self, native: _Image | ImageHeader) -> None:
         """Wrap a native image and initialize its Python metadata.
 
         Args:
@@ -463,7 +463,13 @@ class Image:
             image = Image.Image(source._native)
             ```
         """
-        self._native = native
+        self._header = native if isinstance(native, ImageHeader) else None
+        self._decoded: _Image | None = None
+        self._encoded: bytes | None = None
+        self._draft_scale = 1
+        self._draft_mode: str | None = None
+        if not isinstance(native, ImageHeader):
+            self._native = native
         self._bands = _BANDS[native.mode]
         self.filename: str | bytes = ""
         self.readonly = 0
@@ -478,11 +484,30 @@ class Image:
         self._seek_error: BaseException | None = None
         self._truncated_jpeg = False
         self._declared_frames: int | None = None
-        palette_data = native.palette_data()
+        palette_data = native.palette_data() if not isinstance(native, ImageHeader) else None
         if palette_data is not None:
             from .ImagePalette import ImagePalette
 
             self.palette = ImagePalette(*palette_data)
+
+    @property
+    def _native(self) -> _Image:
+        if self._decoded is None:
+            data = self._encoded
+            if data is None:
+                raise ValueError("operation on closed image")
+            if self._draft_mode is not None:
+                native = _draft_jpeg(data, self._draft_scale, self._draft_mode)
+            else:
+                native = _open_sequence(data, [self.format], None)[0][0]
+            self._native = native
+        return cast("_Image", self._decoded)
+
+    @_native.setter
+    def _native(self, native: _Image) -> None:
+        self._decoded = native
+        self._header = None
+        self._encoded = None
 
     @property
     def mode(self) -> str:
@@ -496,7 +521,7 @@ class Image:
             print(image.mode)
             ```
         """
-        return self._native.mode
+        return self._header.mode if self._header is not None else self._native.mode
 
     @property
     def bit_depth(self) -> int:
@@ -510,7 +535,7 @@ class Image:
             print(image.bit_depth)
             ```
         """
-        return self._native.bit_depth
+        return self._header.bit_depth if self._header is not None else self._native.bit_depth
 
     @property
     def size(self) -> tuple[int, int]:
@@ -524,7 +549,7 @@ class Image:
             print(image.size)
             ```
         """
-        return self._native.size
+        return self._header.size if self._header is not None else self._native.size
 
     @property
     def width(self) -> int:
@@ -538,7 +563,7 @@ class Image:
             print(image.width)
             ```
         """
-        return self._native.width
+        return self.size[0]
 
     @property
     def height(self) -> int:
@@ -552,7 +577,7 @@ class Image:
             print(image.height)
             ```
         """
-        return self._native.height
+        return self.size[1]
 
     @property
     def format(self) -> str | None:
@@ -566,7 +591,7 @@ class Image:
             print(image.format)
             ```
         """
-        return self._native.format
+        return self._header.format if self._header is not None else self._native.format
 
     @property
     def info(self) -> dict[object, object]:
@@ -623,7 +648,8 @@ class Image:
             assert Image.new("RGB", (2, 2)).tell() == 0
             ```
         """
-        self._native.load()
+        if self._encoded is None:
+            self._native.load()
         return self._frame
 
     def seek(self, frame: int) -> None:
@@ -640,7 +666,8 @@ class Image:
             image.seek(0)
             ```
         """
-        self._native.load()
+        if self._encoded is None:
+            self._native.load()
         frame = index(frame)
         if not 0 <= frame < self.n_frames:
             raise EOFError("attempt to seek outside sequence")
@@ -772,9 +799,10 @@ class Image:
         return self.im
 
     def verify(self) -> None:
-        """Confirm that the current decoded pixel buffer is available.
+        """Check the image container without decoding deferred pixels.
 
-        Decoding checks take place in ``Image.open`` and lazy ``seek`` calls.
+        PNG verification checks chunk lengths and checksums. JPEG and WebP
+        headers are checked when opening; pixel data is checked on load.
         Other frames are not decoded or checked by this method.
         This method raises ``ValueError`` if the image has been closed.
 
@@ -786,6 +814,12 @@ class Image:
             image.verify()
             ```
         """
+        if self._encoded is not None:
+            if self.format == "PNG":
+                from .PngImagePlugin import verify_png
+
+                verify_png(self._encoded)
+            return
         self.load()
 
     def load_djpeg(self) -> None:
@@ -817,7 +851,8 @@ class Image:
             image.draft("L", (4, 4))
             ```
         """
-        self._native.load()
+        if self._encoded is None:
+            self._native.load()
         data = self._draft_source
         if data is None:
             return None
@@ -825,9 +860,15 @@ class Image:
         ratio = 1 if not size else min(width // size[0], height // size[1])
         scale = next(value for value in (8, 4, 2, 1) if ratio >= value or value == 1)
         target = mode if self.mode == "RGB" and mode in ("L", "YCbCr") else self.mode
-        result = Image(_draft_jpeg(data, scale, target))
-        self._native = result._native
-        self._bands = result._bands
+        if self._encoded is not None:
+            self._draft_scale = scale
+            self._draft_mode = target
+            self._header = ImageHeader("JPEG", ((width + scale - 1) // scale, (height + scale - 1) // scale), target, 8, self.info)
+            self._bands = _BANDS[target]
+        else:
+            result = Image(_draft_jpeg(data, scale, target))
+            self._native = result._native
+            self._bands = result._bands
         self._draft_source = None
         return self.mode, (0, 0, width / scale, height / scale)
 
@@ -878,7 +919,9 @@ class Image:
             image.close()
             ```
         """
-        self._native.close()
+        if self._header is None:
+            self._native.close()
+        self._encoded = None
         self._draft_source = None
         if self._frames is not None:
             for frame in self._frames:
@@ -1079,7 +1122,8 @@ class Image:
             image.getexif()[305] = "Blanket"
             ```
         """
-        self._native.load()
+        if self._encoded is None:
+            self._native.load()
         info = self._info
         raw = info.get("exif")
         if raw is None and "Raw profile type exif" in info:
@@ -2607,7 +2651,7 @@ class Image:
         return None
 
     def __enter__(self) -> Self:
-        """Load the image and return it for use in a context manager.
+        """Return the open image for use in a context manager.
 
         Examples:
             ```python
@@ -2617,7 +2661,8 @@ class Image:
                 print(image.size)
             ```
         """
-        self._native.load()
+        if self._encoded is None:
+            self._native.load()
         return self
 
     def __exit__(self, *exc_info: object) -> None:
@@ -2933,6 +2978,10 @@ def open(
 ) -> Image:
     """Open an image, optionally decoding sequence frames on demand.
 
+    Still JPEG, WebP, and 8-bit non-indexed PNG images retain their encoded
+    bytes and decode pixels on first access. Metadata queries do not decode
+    pixels. Other images and frame zero of lazy sequences decode immediately.
+
     Args:
         fp: Image filename, path-like object, or binary stream.
         mode: Read mode; only `r` is supported.
@@ -2970,14 +3019,65 @@ def open(
     svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     data = _read_bytes(fp)
     try:
-        format, size, _, _ = _inspect(data, formats)
+        format, size, pixel_mode, bit_depth = _inspect(data, formats)
     except (OSError, ValueError):
         pass
     else:
         _decompression_bomb_check(size, format=format)
+        if not lazy and svg_size is None and svg_dpi is None and format in ("JPEG", "PNG", "WEBP"):
+            image = _open_deferred(data, ImageHeader(format, size, pixel_mode, bit_depth, {}))
+            if image is not None:
+                if not hasattr(fp, "read"):
+                    image.filename = os.fspath(fp)
+                return image
     image = _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi)
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
+    return image
+
+
+def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
+    """Retain still-image bytes when header and raster modes agree."""
+    if header.bit_depth != 8 or (header.format == "PNG" and header.mode == "P"):
+        return None
+    if header.format == "PNG":
+        position = 8
+        while position + 8 <= len(data):
+            chunk = data[position + 4 : position + 8]
+            if chunk == b"acTL":
+                return None
+            if chunk == b"IDAT":
+                break
+            position += int.from_bytes(data[position : position + 4], "big") + 12
+    if header.format == "WEBP" and int.from_bytes(data[4:8], "little") + 8 > len(data):
+        return None
+    if header.format != "JPEG":
+        try:
+            count, loop_count, _ = _index_sequence(data, [header.format])
+        except (OSError, ValueError):
+            return None
+        if count != 1 or loop_count is not None:
+            return None
+    info = read_metadata(data, header.format)
+    if header.format == "PNG" and "transparency" in info:
+        return None
+    image = Image(header)
+    image._info.update(info)
+    if header.format == "JPEG":
+        from ._jpeg import read_attributes, sanitize_jpeg
+
+        data, truncated = sanitize_jpeg(data)
+        if truncated:
+            # Preserve the existing truncated-stream recovery and load checks.
+            return None
+        image.__dict__.update(read_attributes(data))
+        image._draft_source = data
+        if "mp" in info:
+            try:
+                image._getmp()
+            except SyntaxError:
+                warnings.warn("Image appears to be a malformed MPO file, it will be interpreted as a base JPEG file", UserWarning, stacklevel=2)
+    image._encoded = data
     return image
 
 

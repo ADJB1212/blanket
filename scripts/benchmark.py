@@ -146,7 +146,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
             if not enabled("PNG"):
                 continue
             png = pillow_payload(p_img, "PNG", compress_level=6)
-            comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)), lambda p=png: pillow_load(p)))
+            comps.append((f"load PNG {label}", lambda p=png: BlanketImage.open(BytesIO(p)).load(), lambda p=png: pillow_load(p)))
         comps.extend((f"save PNG clvl={level}", lambda b=b_rgb, lv=level: b.save(BytesIO(), "PNG", compress_level=lv), lambda p=p_rgb, lv=level: p.save(BytesIO(), "PNG", compress_level=lv)) for level in (1, 6, 9) if enabled("PNG"))
 
         # ── JPEG ──────────────────────────────────────────────────────
@@ -154,7 +154,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
             if not enabled("JPEG"):
                 continue
             jpeg = pillow_payload(p_img, "JPEG", quality=85)
-            comps.append((f"load JPEG {label}", lambda p=jpeg: BlanketImage.open(BytesIO(p)), lambda p=jpeg: pillow_load(p)))
+            comps.append((f"load JPEG {label}", lambda p=jpeg: BlanketImage.open(BytesIO(p)).load(), lambda p=jpeg: pillow_load(p)))
         comps.extend((f"save JPEG q={quality}", lambda b=b_rgb, q=quality: b.save(BytesIO(), "JPEG", quality=q), lambda p=p_rgb, q=quality: p.save(BytesIO(), "JPEG", quality=q)) for quality in (50, 85, 95) if enabled("JPEG"))
 
         for mode, raw in (("CMYK", raw_rgba), ("YCbCr", raw_rgb)):
@@ -170,7 +170,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
                     if not enabled(fmt):
                         continue
                     payload = pillow_payload(pillow, fmt)
-                    comps.append((f"load {fmt} CMYK", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: pillow_load(data)))
+                    comps.append((f"load {fmt} CMYK", lambda data=payload: BlanketImage.open(BytesIO(data)).load(), lambda data=payload: pillow_load(data)))
                 if enabled("TIFF"):
                     comps.append(("save TIFF CMYK", lambda b=blanket: b.save(BytesIO(), "TIFF"), lambda p=pillow: p.save(BytesIO(), "TIFF")))
 
@@ -207,7 +207,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
             for mode in modes:
                 b_img, p_img = extended_images[mode]
                 payload = pillow_payload(p_img, fmt)
-                comps.append((f"load {label} {mode}", lambda p=payload: BlanketImage.open(BytesIO(p)), lambda p=payload: pillow_load(p)))
+                comps.append((f"load {label} {mode}", lambda p=payload: BlanketImage.open(BytesIO(p)).load(), lambda p=payload: pillow_load(p)))
                 comps.append((f"save {label} {mode}", lambda b=b_img, f=fmt: b.save(BytesIO(), f), lambda p=p_img, f=fmt: p.save(BytesIO(), f)))
 
         raw_u16 = make_integer(w, h, "I;16")
@@ -282,7 +282,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
                 if not enabled("WEBP"):
                     continue
                 webp = pillow_payload(p_img, "WEBP", **options)
-                comps.append((f"load WEBP {mode} {label}", lambda p=webp: BlanketImage.open(BytesIO(p)), lambda p=webp: pillow_load(p)))
+                comps.append((f"load WEBP {mode} {label}", lambda p=webp: BlanketImage.open(BytesIO(p)).load(), lambda p=webp: pillow_load(p)))
                 comps.append((f"save WEBP {mode} {label}", lambda b=b_img, opts=options: b.save(BytesIO(), "WEBP", **opts), lambda p=p_img, opts=options: p.save(BytesIO(), "WEBP", **opts)))
 
         # HEIC is an alias for the same HEIF codec.
@@ -582,7 +582,7 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
             comparisons.append(("save PNG PA (expands RGBA)", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.convert("RGBA").save(BytesIO(), "PNG")))
         elif mode not in ("HSV", "CMYK", "YCbCr"):
             payload = pillow_payload(pillow, "PNG")
-            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)).load(), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), lambda im=pillow: im.save(BytesIO(), "PNG")))
 
     for mode in ("I", "I;16", "I;16L", "I;16B"):
@@ -611,7 +611,7 @@ def mode_parity_comparisons(size: tuple[int, int]) -> list[Comparison]:
                 payload = output.getvalue()
             else:
                 payload = pillow_payload(pillow, "PNG")
-            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
+            comparisons.append((f"load PNG {mode}", lambda data=payload: BlanketImage.open(BytesIO(data)).load(), lambda data=payload: PillowImage.open(BytesIO(data)).load()))
         if mode in ("I", "I;16L"):
             comparisons.append((f"save PNG {mode}", lambda im=blanket: im.save(BytesIO(), "PNG"), None))
         else:

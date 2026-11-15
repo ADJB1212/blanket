@@ -158,7 +158,7 @@ def test_png_text_metadata_after_pixels_and_corrupt_pixels():
     damaged = data[:pos] + bytes([data[pos] ^ 255]) + data[pos + 1 :]
     assert Image.inspect(BytesIO(damaged)).info == Image.inspect(BytesIO(data)).info
     assert Image.inspect(BytesIO(data)).info["label"] == "inspection"
-    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(damaged)))
+    assert_raises(UnidentifiedImageError, lambda: Image.open(BytesIO(damaged)).load())
 
 
 def test_paths_streams_and_allowlists(tmp_path):
