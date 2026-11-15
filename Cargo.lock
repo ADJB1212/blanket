@@ -460,6 +460,7 @@ dependencies = [
  "blanket-convert-kernels",
  "blanket-core",
  "blanket-kernels",
+ "blanket-ops",
  "png",
  "pyo3",
  "rayon",

@@ -37,7 +37,14 @@ class LossyImageCompressor:
     ``max_rmse`` is the maximum RGB root-mean-square error relative to the
     normal save, on a 0-255 scale (including for high-bit-depth images).
     Alpha must match exactly. Hidden RGB values count toward the error.
-    This is a sample error bound, not a perceptual quality guarantee.
+    ``metric`` optionally adds a perceptual score floor via ``min_score``.
+    Choose ``"ssim"`` (-1 to 1), ``"ms_ssim"`` (0 to 1), or
+    ``"ssimulacra2"`` (up to 100); higher scores mean greater similarity.
+    Both settings must be supplied together. Scores use ImageMetrics' SDR
+    sRGB assumptions and minimum dimensions (11, 161, and 8 respectively),
+    relative to the normal save. Alpha still matches exactly, hidden RGB
+    still counts, and ``max_rmse`` remains an independent limit. Use 255
+    to allow the perceptual score to control color distortion alone.
 
     ``effort`` from 1 through 10 controls the number of candidate trials.
     PNG uses histogram-guided color quantization for 8-bit non-indexed images.
@@ -50,19 +57,22 @@ class LossyImageCompressor:
     Metadata is always stripped, including explicit metadata options.
 
     ``target_size`` optionally caps the complete encoded output in bytes,
-    after stripping metadata. The search still respects ``max_rmse`` and ``effort``.
+    after stripping metadata. The search still respects ``max_rmse``,
+    ``min_score``, and ``effort``.
     If no searched candidate fits, saving raises ``ValueError`` before writing
     output, reporting the smallest qualifying candidate's size. This does not
     guarantee that unsearched settings could not meet the budget.
     """
 
-    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7, target_size: int | str | None = None) -> None:
+    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7, target_size: int | str | None = None, metric: str | None = None, min_score: float | None = None) -> None:
         """Configure LossyImageCompressor.
 
         Args:
             max_rmse: Maximum additional RGB root mean square error relative to the normal save, from 0 through 255. Alpha must match exactly.
             effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
             target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
+            metric: Optional perceptual metric name: "ssim", "ms_ssim", or "ssimulacra2".
+            min_score: Minimum acceptable perceptual score; required together with metric.
 
         Examples:
             ```python
@@ -86,8 +96,35 @@ class LossyImageCompressor:
             raise TypeError("effort must be an integer")
         if not 1 <= effort <= 10:
             raise ValueError("effort must be between 1 and 10")
+        if metric is not None and not isinstance(metric, str):
+            raise TypeError("metric must be a string or None")
+        if metric is not None and metric not in {"ssim", "ms_ssim", "ssimulacra2"}:
+            raise ValueError("metric must be ssim, ms_ssim, or ssimulacra2")
+        if (metric is None) != (min_score is None):
+            raise ValueError("metric and min_score must be specified together")
+        if min_score is not None:
+            if isinstance(min_score, bool) or not isinstance(min_score, (int, float)):
+                raise TypeError("min_score must be a number")
+            try:
+                min_score = float(min_score)
+            except OverflowError:
+                raise ValueError("min_score must be finite and within the metric's score range") from None
+            maximum = 100 if metric == "ssimulacra2" else 1
+            minimum = -1 if metric == "ssim" else 0 if metric == "ms_ssim" else -math.inf
+            if not minimum <= min_score <= maximum or not math.isfinite(min_score):
+                raise ValueError("min_score must be finite and within the metric's score range")
         self._target_size = _validate_target_size(target_size)
-        self._native = _LossyImageCompressor(max_rmse=float(max_rmse), effort=effort)
+        self._native = _LossyImageCompressor(max_rmse=float(max_rmse), effort=effort, metric=metric, min_score=min_score)
+
+    @property
+    def metric(self) -> str | None:
+        """Configured perceptual metric, or None."""
+        return self._native.metric
+
+    @property
+    def min_score(self) -> float | None:
+        """Configured minimum perceptual score, or None."""
+        return self._native.min_score
 
     @property
     def target_size(self) -> int | None:

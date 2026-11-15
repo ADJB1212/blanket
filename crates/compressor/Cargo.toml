@@ -13,6 +13,7 @@ blanket-convert-kernels.workspace = true
 blanket-core.workspace = true
 blanket-codecs.workspace = true
 blanket-kernels.workspace = true
+blanket-ops.workspace = true
 pyo3.workspace = true
 png.workspace = true
 rayon.workspace = true

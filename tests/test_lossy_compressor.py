@@ -9,7 +9,7 @@ import pytest
 from helpers import assert_image_properties, assert_raises, encode_image as encode, image_buffer
 from PIL import Image as PillowImage
 
-from blanket import Image
+from blanket import Image, ImageMetrics
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 if TYPE_CHECKING:
@@ -199,3 +199,82 @@ def test_failed_save_does_not_write(tmp_path: Path) -> None:
     assert path.read_bytes() == b"keep"
     source.close()
     assert_raises(ValueError, lambda: encode(source, "PNG", compressor=LossyImageCompressor()), match="closed")
+
+
+@pytest.mark.parametrize(("metric", "minimum", "size"), [("ssim", 0.99, 33), ("ms_ssim", 0.99, 161), ("ssimulacra2", 95, 33)])
+@pytest.mark.parametrize(("format", "mode", "depth"), [("PNG", "RGBA", 8), ("JPEG", "RGB", 8), ("WEBP", "L", 8), ("JXL", "RGB", 10)])
+def test_perceptual_score_bounds(metric: str, minimum: float, size: int, format: str, mode: str, depth: int) -> None:
+    rng = random.Random(105)
+    samples = [rng.randrange(1 << depth) for _ in range(size * size * len(mode))]
+    raw = bytes(samples) if depth == 8 else b"".join(value.to_bytes(2, "little") for value in samples)
+    source = Image.frombytes(mode, (size, size), raw, bit_depth=depth)
+    baseline = encode(source, format)
+    compressor = LossyImageCompressor(max_rmse=255, metric=metric, min_score=minimum, effort=3)
+    output = encode(source, format, compressor=compressor)
+    assert_bounded(baseline, output, 255)
+    reference = Image.open(io.BytesIO(baseline)).convert("RGB", bit_depth=16)
+    candidate = Image.open(io.BytesIO(output)).convert("RGB", bit_depth=16)
+    assert getattr(ImageMetrics, metric)(reference, candidate) >= minimum
+    assert source.tobytes() == raw
+    assert compressor.metric == metric
+    assert compressor.min_score == minimum
+    for property in ("metric", "min_score"):
+        assert_raises(AttributeError, lambda: setattr(compressor, property, None))
+
+
+@pytest.mark.parametrize(("metric", "perfect", "size"), [("ssim", 1, 33), ("ms_ssim", 1, 161), ("ssimulacra2", 100, 33)])
+@pytest.mark.parametrize("format", ["PNG", "JPEG"])
+def test_perceptual_floor_rejects_distortion(metric: str, perfect: float, size: int, format: str) -> None:
+    source = Image.frombytes("RGB", (size, size), random.Random(37).randbytes(size * size * 3))
+    baseline = encode(source, format)
+    tight = encode(source, format, compressor=LossyImageCompressor(max_rmse=255, metric=metric, min_score=perfect, effort=3))
+    floor = {"ssim": -1, "ms_ssim": 0, "ssimulacra2": -1e6}[metric]
+    loose = encode(source, format, compressor=LossyImageCompressor(max_rmse=255, metric=metric, min_score=floor, effort=3))
+    assert Image.open(io.BytesIO(tight)).convert("RGB").tobytes() == Image.open(io.BytesIO(baseline)).convert("RGB").tobytes()
+    assert len(loose) < len(tight)
+
+
+@pytest.mark.parametrize("metric", ["ssim", "ms_ssim", "ssimulacra2"])
+def test_perceptual_metric_retains_rmse_limit(metric: str) -> None:
+    source = Image.frombytes("RGB", (161, 161), random.Random(83).randbytes(161 * 161 * 3))
+    baseline = encode(source, "JPEG")
+    floor = {"ssim": -1, "ms_ssim": 0, "ssimulacra2": -1e6}[metric]
+    output = encode(source, "JPEG", compressor=LossyImageCompressor(max_rmse=1, metric=metric, min_score=floor, effort=3))
+    assert_bounded(baseline, output, 1)
+
+
+@pytest.mark.parametrize("max_rmse", [0, 255])
+def test_lossless_skips_perceptual_dimension_requirements(max_rmse: float) -> None:
+    source = Image.new("RGB", (1, 1))
+    compressor = LossyImageCompressor(max_rmse=max_rmse, metric="ms_ssim", min_score=1, effort=1)
+    output = encode(source, "WEBP", lossless=True, compressor=compressor)
+    assert output == encode(source, "WEBP", lossless=True, compressor=LosslessImageCompressor(effort=1))
+
+
+@pytest.mark.parametrize(("metric", "minimum", "size"), [("ssim", 0.9, 10), ("ms_ssim", 0.9, 160), ("ssimulacra2", 90, 7)])
+def test_perceptual_minimum_dimensions(metric: str, minimum: float, size: int) -> None:
+    source = Image.new("RGB", (size, size))
+    compressor = LossyImageCompressor(metric=metric, min_score=minimum, effort=1)
+    assert_raises(ValueError, lambda: encode(source, "PNG", compressor=compressor), match="requires images at least")
+
+
+@pytest.mark.parametrize(
+    ("options", "error"),
+    [
+        ({"metric": "unknown", "min_score": 0}, ValueError),
+        ({"metric": []}, TypeError),
+        ({"metric": "ssim"}, ValueError),
+        ({"min_score": 0.9}, ValueError),
+        ({"metric": "ssim", "min_score": True}, TypeError),
+        ({"metric": "ssim", "min_score": "0.9"}, TypeError),
+        ({"metric": "ssim", "min_score": 1.1}, ValueError),
+        ({"metric": "ssim", "min_score": -1.1}, ValueError),
+        ({"metric": "ms_ssim", "min_score": -0.1}, ValueError),
+        ({"metric": "ssimulacra2", "min_score": 101}, ValueError),
+        ({"metric": "ssimulacra2", "min_score": float("nan")}, ValueError),
+        ({"metric": "ssimulacra2", "min_score": -float("inf")}, ValueError),
+        ({"metric": "ssimulacra2", "min_score": -(10**1000)}, ValueError),
+    ],
+)
+def test_perceptual_configuration_validation(options: dict, error: type[Exception]) -> None:
+    assert_raises(error, lambda: LossyImageCompressor(**options))

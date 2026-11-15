@@ -156,6 +156,11 @@ fn structural(mut a: Vec<[f64; 3]>, mut b: Vec<[f64; 3]>, mut width: usize, algo
 
 #[pyfunction]
 fn image_metric(py: Python<'_>, reference: &Image, distorted: &Image, algorithm: &str) -> PyResult<f64> {
+    py.detach(|| score(reference, distorted, algorithm))
+}
+
+/// Score normalized SDR images using the same contract as ImageMetrics.
+pub fn score(reference: &Image, distorted: &Image, algorithm: &str) -> PyResult<f64> {
     let minimum = match algorithm {
         "ssim" => WINDOW,
         "ms_ssim" => (WINDOW - 1) * 16 + 1,
@@ -174,16 +179,14 @@ fn image_metric(py: Python<'_>, reference: &Image, distorted: &Image, algorithm:
     if width < minimum || height < minimum {
         return Err(PyValueError::new_err(format!("{algorithm} requires images at least {minimum}x{minimum}")));
     }
-    py.detach(|| {
-        let a = normalized(reference, a)?;
-        let b = normalized(distorted, b)?;
-        if algorithm != "ssimulacra2" {
-            return Ok(structural(a, b, width, algorithm));
-        }
-        let rgb = |pixels: Vec<[f64; 3]>| {
-            Rgb::new(pixels.into_iter().map(|v| v.map(|c| c as f32)).collect(), width, height, TransferCharacteristic::SRGB, ColorPrimaries::BT709)
-                .map_err(|err| PyValueError::new_err(err.to_string()))
-        };
-        compute_frame_ssimulacra2(rgb(a)?, rgb(b)?).map_err(|err| PyValueError::new_err(err.to_string()))
-    })
+    let a = normalized(reference, a)?;
+    let b = normalized(distorted, b)?;
+    if algorithm != "ssimulacra2" {
+        return Ok(structural(a, b, width, algorithm));
+    }
+    let rgb = |pixels: Vec<[f64; 3]>| {
+        Rgb::new(pixels.into_iter().map(|v| v.map(|c| c as f32)).collect(), width, height, TransferCharacteristic::SRGB, ColorPrimaries::BT709)
+            .map_err(|err| PyValueError::new_err(err.to_string()))
+    };
+    compute_frame_ssimulacra2(rgb(a)?, rgb(b)?).map_err(|err| PyValueError::new_err(err.to_string()))
 }

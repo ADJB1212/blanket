@@ -16,20 +16,39 @@ pub struct LossyImageCompressor {
     max_rmse: f64,
     #[pyo3(get)]
     effort: u8,
+    #[pyo3(get)]
+    metric: Option<String>,
+    #[pyo3(get)]
+    min_score: Option<f64>,
 }
 
 #[pymethods]
 impl LossyImageCompressor {
     #[new]
-    #[pyo3(signature = (*, max_rmse=2.0, effort=7))]
-    fn new(max_rmse: f64, effort: u8) -> PyResult<Self> {
+    #[pyo3(signature = (*, max_rmse=2.0, effort=7, metric=None, min_score=None))]
+    fn new(max_rmse: f64, effort: u8, metric: Option<String>, min_score: Option<f64>) -> PyResult<Self> {
         if !max_rmse.is_finite() || !(0.0..=255.0).contains(&max_rmse) {
             return Err(PyValueError::new_err("max_rmse must be finite and between 0 and 255"));
         }
         if !(1..=10).contains(&effort) {
             return Err(PyValueError::new_err("effort must be between 1 and 10"));
         }
-        Ok(Self { max_rmse, effort })
+        match (metric.as_deref(), min_score) {
+            (None, None) => {}
+            (Some(algorithm), Some(score)) => {
+                let valid = match algorithm {
+                    "ssim" => score.is_finite() && (-1.0..=1.0).contains(&score),
+                    "ms_ssim" => score.is_finite() && (0.0..=1.0).contains(&score),
+                    "ssimulacra2" => score.is_finite() && score <= 100.0,
+                    _ => return Err(PyValueError::new_err("metric must be ssim, ms_ssim, or ssimulacra2")),
+                };
+                if !valid {
+                    return Err(PyValueError::new_err("min_score must be finite and within the metric's score range"));
+                }
+            }
+            _ => return Err(PyValueError::new_err("metric and min_score must be specified together")),
+        }
+        Ok(Self { max_rmse, effort, metric, min_score })
     }
 }
 
@@ -52,6 +71,7 @@ impl LossyImageCompressor {
             return self.optimize_png(image, options, output);
         }
         let reference = codecs::decode(&output, format).map_err(|error| error.into_pyerr(Some(format.as_str())))?;
+        self.within_perceptual_error(&reference, &reference)?;
         let mut lower = 1;
         let mut upper = options.quality.saturating_sub(1);
         let mut winner_quality = None;
@@ -65,7 +85,7 @@ impl LossyImageCompressor {
             let quality = if bracketed { lower + (upper - lower) / 2 } else { options.quality.saturating_sub(drop).max(1) };
             let candidate = codecs::encode(image, format, SaveOptions { quality, ..options })?;
             let decoded = codecs::decode(&candidate, format).map_err(|error| error.into_pyerr(Some(format.as_str())))?;
-            if within_error(&decoded, &reference, self.max_rmse)? {
+            if within_error(&decoded, &reference, self.max_rmse)? && self.within_perceptual_error(&decoded, &reference)? {
                 upper = quality - 1;
                 drop = drop.saturating_mul(2);
                 if candidate.len() < smallest {
@@ -91,6 +111,7 @@ impl LossyImageCompressor {
     }
 
     fn optimize_png(&self, image: &Image, options: SaveOptions, mut output: Vec<u8>) -> PyResult<Vec<u8>> {
+        self.within_perceptual_error(image, image)?;
         let channels = image.pixel_mode().channels();
         let pixels = image.raw_data()?;
         let histogram = png_rounding_histogram(pixels, channels);
@@ -107,6 +128,10 @@ impl LossyImageCompressor {
                 if tried.contains(&color_table) || !png_rounding_within_error(&histogram, &color_table, channels, limit) {
                     continue;
                 }
+                if trials == self.effort {
+                    break 'steps;
+                }
+                trials += 1;
                 tried.push(color_table);
                 if rounded.is_none() {
                     let mut scratch = Image::from_pixels(
@@ -122,6 +147,9 @@ impl LossyImageCompressor {
                 let rounded = rounded.as_mut().expect("initialized PNG rounding scratch");
                 let destination = rounded.pixels_mut().expect("validated image");
                 round_png_pixels(pixels, destination, channels, &color_table);
+                if !self.within_perceptual_error(rounded, image)? {
+                    continue;
+                }
                 let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;
                 if candidate.len() < smallest {
                     smallest = candidate.len();
@@ -129,10 +157,6 @@ impl LossyImageCompressor {
                     if candidate.len() < output.len() {
                         output = candidate;
                     }
-                }
-                trials += 1;
-                if trials == self.effort {
-                    break 'steps;
                 }
             }
         }
@@ -144,6 +168,13 @@ impl LossyImageCompressor {
             }
         }
         Ok(output)
+    }
+
+    fn within_perceptual_error(&self, candidate: &Image, reference: &Image) -> PyResult<bool> {
+        match (&self.metric, self.min_score) {
+            (Some(metric), Some(minimum)) => Ok(blanket_ops::metrics::score(reference, candidate, metric)? >= minimum),
+            _ => Ok(true),
+        }
     }
 }
 
