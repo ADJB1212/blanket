@@ -87,6 +87,24 @@ def test_in_place_and_embedded_output_profile() -> None:
     assert reopened.info["icc_profile"] == output.tobytes()
 
 
+@pytest.mark.parametrize("mode,depth", [("RGB", 8), ("RGBA", 8), ("RGB", 16), ("RGBA", 16), ("RGB;F", 32), ("RGBA;F", 32)])
+@pytest.mark.parametrize("proof", [False, True])
+def test_in_place_transform_matches_output_and_preserves_shared_source(mode: str, depth: int, proof: bool) -> None:
+    source, output = ImageCms.createProfile("Display P3"), ImageCms.createProfile("sRGB")
+    image = Image.frombytes("RGBA", (257, 259), bytes((i * 37 + i // 7) % 256 for i in range(257 * 259 * 4)))
+    image = image.convert(mode, bit_depth=16 if depth == 16 else None)
+    original = image.tobytes()
+    shared = image.copy()
+    if proof:
+        transform = ImageCms.buildProofTransform(source, output, source, mode, mode, flags=ImageCms.Flags.SOFTPROOFING)
+    else:
+        transform = ImageCms.buildTransform(source, output, mode, mode)
+    expected = transform.apply(image)
+    assert ImageCms.applyTransform(image, transform, inPlace=True) is None
+    assert image.tobytes() == expected.tobytes()
+    assert shared.tobytes() == original
+
+
 @pytest.mark.parametrize("depth", [8, 16])
 def test_transform_only_changes_current_frame(depth) -> None:
     first_image = Image.new("RGB", (2, 1), (80, 140, 220)).convert("RGB", bit_depth=depth)

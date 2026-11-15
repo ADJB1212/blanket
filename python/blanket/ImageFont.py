@@ -232,6 +232,7 @@ class TrueTypeFont(ImageFont):
         else:
             self.font_bytes = font.read()
         self._native = NativeFont(self.font_bytes, index)
+        self._name: tuple[str, str] | None = None
         ascent, descent = self._native.metrics(size)
         self._ascent, self._descent = ceil(ascent), ceil(descent)
 
@@ -241,7 +242,9 @@ class TrueTypeFont(ImageFont):
 
     def getname(self) -> tuple[str, str]:
         """Return the font family and style names when present."""
-        return self._native.name()
+        if self._name is None:
+            self._name = self._native.name()
+        return self._name
 
     def getlength(self, text: str | bytes, mode: str = "", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> float:
         """Return the shaped advance without constructing glyph outlines."""

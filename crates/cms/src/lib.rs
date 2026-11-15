@@ -279,8 +279,35 @@ impl CmsTransform {
         if self.input != self.output {
             return Err(error("in-place transforms require identical input and output modes"));
         }
-        let result = self.apply(py, image)?;
-        image.replace_storage(result)
+        if image.pixel_mode() != self.input {
+            return Err(error("image mode does not match transform input mode"));
+        }
+        let depth = image.bit_depth();
+        pixel_format(self.input, depth)?;
+        image.raw_data()?;
+        image.ensure_owned()?;
+        py.detach(|| {
+            let mut state = self.state.lock().map_err(|_| error("color transform lock poisoned"))?;
+            if !state.transforms.iter().any(|(cached_depth, _)| *cached_depth == depth) {
+                let transform = state.build(self.input, self.output, depth)?;
+                state.transforms.push((depth, transform));
+            }
+            let transform = &state.transforms.iter().find(|(cached_depth, _)| *cached_depth == depth).unwrap().1;
+            let stride = image.raw_bytes_per_pixel();
+            let pixels = image.pixels_mut().ok_or_else(|| error("operation on closed image"))?;
+            let swapped = depth > 8 && self.input.is_big_endian() != cfg!(target_endian = "big");
+            if swapped {
+                swap_samples(pixels, depth);
+            }
+            for chunk in pixels.chunks_mut(stride * 65536) {
+                transform.transform_in_place(chunk);
+            }
+            drop(state);
+            if swapped {
+                swap_samples(pixels, depth);
+            }
+            Ok(())
+        })
     }
 }
 
@@ -353,6 +380,13 @@ mod tests {
                 let output_mode = if mode == PixelMode::L { "I;16L" } else { mode.as_str() };
                 let inverse = CmsTransform::new(py, &gray, &gray, "F", output_mode, 1, 0, None, 3).unwrap();
                 assert_eq!(inverse.apply(py, &result).unwrap().raw_data().unwrap(), image.raw_data().unwrap());
+                let output = Profile::new_gray_context(&context, CIExyY::d50(), &ToneCurve::new(2.2)).unwrap().icc().unwrap();
+                let in_place = CmsTransform::new(py, &gray, &output, mode.as_str(), mode.as_str(), 1, 0, None, 3).unwrap();
+                let expected = in_place.apply(py, &image).unwrap();
+                let mut changed = image.clone();
+                in_place.apply_in_place(py, &mut changed).unwrap();
+                assert_eq!(changed.raw_data().unwrap(), expected.raw_data().unwrap());
+                assert_eq!(image.raw_data().unwrap(), inverse.apply(py, &result).unwrap().raw_data().unwrap());
             }
         });
     }

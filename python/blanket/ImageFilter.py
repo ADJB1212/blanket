@@ -847,8 +847,9 @@ class Color3DLUT(MultibandFilter):
             raise ValueError("Only 3 or 4 output channels are supported")
         table = [0.0] * (dimensions[0] * dimensions[1] * dimensions[2] * channels)
         offset = 0
-        for b, g, r in product(range(dimensions[2]), range(dimensions[1]), range(dimensions[0])):
-            table[offset : offset + channels] = callback(r / (dimensions[0] - 1), g / (dimensions[1] - 1), b / (dimensions[2] - 1))
+        axes = [[value / (length - 1) for value in range(length)] for length in dimensions]
+        for b, g, r in product(axes[2], axes[1], axes[0]):
+            table[offset : offset + channels] = callback(r, g, b)
             offset += channels
         return cls(dimensions, table, channels, target_mode, _copy_table=False)
 
@@ -876,12 +877,17 @@ class Color3DLUT(MultibandFilter):
         channels = channels or self.channels
         table = [0.0] * (self.size[0] * self.size[1] * self.size[2] * channels)
         source = destination = 0
-        for b, g, r in product(range(self.size[2]), range(self.size[1]), range(self.size[0])):
-            values = self.table[source : source + self.channels]
-            normals = (r / (self.size[0] - 1), g / (self.size[1] - 1), b / (self.size[2] - 1)) if with_normals else ()
-            table[destination : destination + channels] = callback(*normals, *values)
-            source += self.channels
-            destination += channels
+        if with_normals:
+            axes = [[value / (length - 1) for value in range(length)] for length in self.size]
+            for b, g, r in product(axes[2], axes[1], axes[0]):
+                values = self.table[source : source + self.channels]
+                table[destination : destination + channels] = callback(r, g, b, *values)
+                source += self.channels
+                destination += channels
+        else:
+            for source in range(0, self.size[0] * self.size[1] * self.size[2] * self.channels, self.channels):
+                table[destination : destination + channels] = callback(*self.table[source : source + self.channels])
+                destination += channels
         return type(self)(self.size, table, channels, target_mode or self.mode, _copy_table=False)
 
     def __repr__(self) -> str:
