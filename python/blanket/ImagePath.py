@@ -8,7 +8,7 @@ import struct
 from operator import index
 from typing import TYPE_CHECKING, cast, overload
 
-from ._blanket import path_bbox, path_compact, path_transform
+from ._blanket import path_bbox, path_compact, path_coordinates, path_map, path_transform
 
 if TYPE_CHECKING:
     from collections.abc import Buffer, Callable, Iterator, Sequence
@@ -45,18 +45,7 @@ class Path:
             return
         if not hasattr(xy, "__getitem__") or isinstance(xy, str):
             raise TypeError("argument must be a coordinate sequence")
-        values: list[float] = []
-        for value in cast("Sequence[float | tuple[float, float]]", xy):
-            if isinstance(value, (tuple, list)):
-                if len(value) != 2:
-                    raise ValueError("coordinate list must contain exactly 2 coordinates")
-                values.extend(self._pair(value))
-            else:
-                values.append(self._number(value))
-        if len(values) % 2:
-            raise ValueError("wrong number of coordinates")
-        coordinates = iter(values)
-        self._points = list(zip(coordinates, coordinates, strict=True))
+        self._points = path_coordinates(xy)
 
     @staticmethod
     def _number(value: float) -> float:
@@ -144,8 +133,7 @@ class Path:
         previous = self._mapping
         self._mapping = True
         try:
-            for i, (x, y) in enumerate(self._points):
-                self[i] = function(x, y)
+            path_map(self._points, function)
         finally:
             self._mapping = previous
 

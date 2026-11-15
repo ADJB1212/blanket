@@ -308,14 +308,9 @@ fn ops_xbm_bits(image: &Image) -> PyResult<Vec<u8>> {
     }
     let source = image.pixel_data()?;
     let width = image.width() as usize;
-    let row_bytes = width.div_ceil(8);
-    let mut result = vec![0_u8; row_bytes * image.height() as usize];
-    for (y, row) in source.chunks(width.max(1)).enumerate() {
-        for (x, &value) in row.iter().enumerate() {
-            if value != 0 {
-                result[y * row_bytes + x / 8] |= 1 << (x % 8);
-            }
-        }
+    let mut result = blanket_core::raster::pack_bilevel(source, width, image.height() as usize);
+    for value in &mut result {
+        *value = value.reverse_bits();
     }
     Ok(result)
 }

@@ -1,11 +1,67 @@
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyList;
+use pyo3::types::{PyByteArray, PyBytes, PyList, PyString, PyTuple};
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(path_compact, module)?)?;
     module.add_function(wrap_pyfunction!(path_bbox, module)?)?;
     module.add_function(wrap_pyfunction!(path_transform, module)?)?;
+    module.add_function(wrap_pyfunction!(path_coordinates, module)?)?;
+    module.add_function(wrap_pyfunction!(path_map, module)?)?;
+    Ok(())
+}
+
+fn coordinate(value: &Bound<'_, PyAny>) -> PyResult<f64> {
+    if value.is_instance_of::<PyString>() || value.is_instance_of::<PyBytes>() || value.is_instance_of::<PyByteArray>() {
+        return Err(PyValueError::new_err("coordinate list must contain numbers"));
+    }
+    value.extract()
+}
+
+#[pyfunction]
+fn path_coordinates<'py>(xy: &Bound<'py, PyAny>) -> PyResult<Bound<'py, PyList>> {
+    let points = PyList::empty(xy.py());
+    let mut pending = None;
+    for value in xy.try_iter()? {
+        let value = value?;
+        if value.is_instance_of::<PyTuple>() || value.is_instance_of::<PyList>() {
+            if value.len()? != 2 {
+                return Err(PyValueError::new_err("coordinate list must contain exactly 2 coordinates"));
+            }
+            for item in [value.get_item(0)?, value.get_item(1)?] {
+                let number = coordinate(&item)?;
+                if let Some(x) = pending.take() {
+                    points.append((x, number))?;
+                } else {
+                    pending = Some(number);
+                }
+            }
+        } else {
+            let number = coordinate(&value)?;
+            if let Some(x) = pending.take() {
+                points.append((x, number))?;
+            } else {
+                pending = Some(number);
+            }
+        }
+    }
+    if pending.is_some() {
+        return Err(PyValueError::new_err("wrong number of coordinates"));
+    }
+    Ok(points)
+}
+
+#[pyfunction]
+fn path_map(points: &Bound<'_, PyList>, function: &Bound<'_, PyAny>) -> PyResult<()> {
+    for index in 0..points.len() {
+        let point = points.get_item(index)?;
+        let result = function.call1(point.cast::<PyTuple>()?)?;
+        let pair = result.cast::<PyTuple>().map_err(|_| PyTypeError::new_err("coordinate must be a tuple"))?;
+        if pair.len() != 2 {
+            return Err(PyValueError::new_err("coordinate list must contain exactly 2 coordinates"));
+        }
+        points.set_item(index, (coordinate(&pair.get_item(0)?)?, coordinate(&pair.get_item(1)?)?))?;
+    }
     Ok(())
 }
 

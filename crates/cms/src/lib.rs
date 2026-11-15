@@ -132,8 +132,13 @@ struct TransformState {
 impl TransformState {
     fn build(&self, input: PixelMode, output: PixelMode, depth: u8) -> PyResult<Transform<u8, u8, ThreadContext>> {
         let mut options = Flags::default();
-        // Alpha is restored separately, including when channel counts differ.
         options.0 = self.flags & !Flags::COPY_ALPHA.0;
+        if matches!(input, PixelMode::Rgba | PixelMode::RgbaF)
+            && matches!(output, PixelMode::Rgba | PixelMode::RgbaF)
+            && mode_depth(output, depth) == depth
+        {
+            options.0 |= Flags::COPY_ALPHA.0;
+        }
         let input_format = pixel_format(input, depth)?;
         let output_format = pixel_format(output, mode_depth(output, depth))?;
         if let Some(proof) = &self.proof_profile {
@@ -260,7 +265,9 @@ impl CmsTransform {
             if output_depth > 8 && self.output.is_big_endian() != cfg!(target_endian = "big") {
                 swap_samples(&mut pixels, output_depth);
             }
-            if matches!(self.output, PixelMode::Rgba | PixelMode::RgbaF) {
+            if matches!(self.output, PixelMode::Rgba | PixelMode::RgbaF)
+                && (!matches!(self.input, PixelMode::Rgba | PixelMode::RgbaF) || depth != output_depth)
+            {
                 restore_alpha(&mut pixels, image.raw_data()?, self.input, depth, output_depth);
             }
             Ok::<_, PyErr>(())

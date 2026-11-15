@@ -143,6 +143,19 @@ def test_invalid_coordinates(coordinates: object) -> None:
     assert_raises((TypeError, ValueError), lambda: ImagePath.Path(coordinates))
 
 
+def test_mixed_coordinate_pairs_preserve_flattening_order() -> None:
+    assert ImagePath.Path([1, (2, 3), 4]).tolist() == [(1, 2), (3, 4)]
+
+
+@pytest.mark.parametrize("result,error", [([1, 2], TypeError), ((1,), ValueError), (("1", 2), ValueError)])
+def test_map_validation_preserves_partial_updates(result: object, error: type[Exception]) -> None:
+    path = ImagePath.Path([(1, 2), (3, 4)])
+    with pytest.raises(error):
+        path.map(lambda x, y: (x + 1, y + 1) if x == 1 else result)
+    assert path.tolist() == [(2, 3), (3, 4)]
+    assert path.compact(0) == 0
+
+
 @pytest.mark.parametrize(
     "method,mode", [(method, "RGB") for method in ("point", "line", "polygon", "rectangle", "ellipse", "rounded_rectangle")] + [("polygon", mode) for mode in ("1", "L", "LA", "RGBA", "P", "I", "I;16", "F", "CMYK", "YCbCr", "LAB", "HSV")]
 )
