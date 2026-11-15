@@ -53,8 +53,10 @@ from PIL import (
     Image as PillowImage,
     ImageChops as PillowChops,
     ImageCms as PillowCms,
+    ImageDraw as PillowDraw,
     ImageEnhance as PillowEnhance,
     ImageFilter as PillowFilter,
+    ImageFont as PillowFont,
     ImageMath as PillowMath,
     ImageOps as PillowOps,
     ImagePalette as PillowPalette,
@@ -65,6 +67,7 @@ from PIL import (
 from blanket import (
     Image as BlanketImage,
     ImageChops as BlanketChops,
+    ImageDraw as BlanketDraw,
     ImageEnhance as BlanketEnhance,
     ImageFilter as BlanketFilter,
     ImageMath as BlanketMath,
@@ -854,6 +857,66 @@ def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comps
 
 
+def imagedraw_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Compare drawing with equal copy costs and repeatable source images.
+
+    Text uses the same preloaded Pillow font in both libraries to measure
+    drawing rather than differences between the built-in default fonts.
+    """
+    w, h = size
+    box = (w // 8, h // 8, 7 * w // 8, 7 * h // 8)
+    vertices = [(w // 8, h // 4), (w // 2, h // 8), (7 * w // 8, 3 * h // 4), (w // 4, 7 * h // 8)]
+    points = [(i * (w - 1) // 255, (i * 37 % 256) * (h - 1) // 255) for i in range(256)]
+    width = max(1, min(size) // 100)
+    font = PillowFont.load_default(size=24)
+    text = "Blanket ImageDraw benchmark"
+    mask_size = (max(1, w // 4), max(1, h // 4))
+    mask_raw = make_gray(*mask_size)
+    b_mask = BlanketImage.frombytes("L", mask_size, mask_raw)
+    p_mask = PillowImage.frombytes("L", mask_size, mask_raw)
+    comparisons: list[Comparison] = []
+
+    def draw(module: ModuleType, image: Any, method: str, args: tuple[Any, ...], options: dict[str, Any], draw_mode: str | None = None) -> Any:
+        result = image.copy()
+        getattr(module.Draw(result, draw_mode), method)(*args, **options)
+        return result
+
+    def floodfill(module: ModuleType, image: Any, ink: Any) -> Any:
+        result = image.copy()
+        module.floodfill(result, (w // 2, h // 2), ink)
+        return result
+
+    for mode, ink in (("L", 173), ("RGB", (37, 173, 91)), ("RGBA", (37, 173, 91, 83))):
+        blanket = BlanketImage.new(mode, size)
+        pillow = PillowImage.new(mode, size)
+        cases = [
+            ("point", (points,), {"fill": ink}),
+            ("line", (vertices,), {"fill": ink}),
+            ("line wide", (vertices,), {"fill": ink, "width": width, "joint": "curve"}),
+            ("arc", (box, 15, 285), {"fill": ink, "width": width}),
+            ("regular_polygon", (((w // 2, h // 2), min(size) // 3), 7), {"fill": ink}),
+            ("text shared font", ((w // 8, h // 8), text), {"fill": ink, "font": font}),
+            ("multiline_text shared font", ((w // 8, h // 8), f"{text}\nPillow comparison"), {"fill": ink, "font": font, "align": "center"}),
+        ]
+        for name, args, extra in (("rectangle", (box,), {}), ("rounded_rectangle", (box,), {"radius": min(size) // 10}), ("ellipse", (box,), {}), ("polygon", (vertices,), {}), ("chord", (box, 15, 285), {}), ("pieslice", (box, 15, 285), {})):
+            cases.append((f"{name} fill", args, {"fill": ink, **extra}))
+            cases.append((f"{name} outline", args, {"outline": ink, "width": width, **extra}))
+        for label, args, options in cases:
+            method = label.split()[0]
+            comparisons.append((f"{label} {mode} (copy included)", partial(draw, BlanketDraw, blanket, method, args, options), partial(draw, PillowDraw, pillow, method, args, options)))
+        comparisons.append((f"bitmap {mode} (copy included)", partial(draw, BlanketDraw, blanket, "bitmap", ((w // 8, h // 8), b_mask), {"fill": ink}), partial(draw, PillowDraw, pillow, "bitmap", ((w // 8, h // 8), p_mask), {"fill": ink})))
+        comparisons.append((f"floodfill {mode} (copy included)", partial(floodfill, BlanketDraw, blanket, ink), partial(floodfill, PillowDraw, pillow, ink)))
+        if mode == "RGB":
+            comparisons.append(
+                (
+                    "rectangle RGBA blend on RGB (copy included)",
+                    partial(draw, BlanketDraw, blanket, "rectangle", (box,), {"fill": (37, 173, 91, 83)}, "RGBA"),
+                    partial(draw, PillowDraw, pillow, "rectangle", (box,), {"fill": (37, 173, 91, 83)}, "RGBA"),
+                )
+            )
+    return comparisons
+
+
 def imagechops_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Compare all channel operations with distinct, reusable source images."""
     comparisons: list[Comparison] = []
@@ -1049,7 +1112,7 @@ def imagepalette_comparisons(directory: Path) -> list[Comparison]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Metadata", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageChops", "ImageMath", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
+SECTION_NAMES = ("ImagePalette", "Codec I/O", "Metadata", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageDraw", "ImageChops", "ImageMath", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
 DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Mode Parity", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
@@ -1210,6 +1273,7 @@ def main() -> None:
             "Memory": partial(memory_comparisons, size),
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),
+            "ImageDraw": partial(imagedraw_comparisons, size),
             "ImageChops": partial(imagechops_comparisons, size),
             "ImageMath": partial(imagemath_comparisons, size),
             "ImageStat": partial(imagestat_comparisons, size),
