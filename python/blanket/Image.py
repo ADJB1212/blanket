@@ -77,17 +77,22 @@ from ._blanket import (
     ops_entropy,
     ops_histogram,
     ops_linear_gradient,
-    ops_lut,
+    ops_point,
     ops_reduce,
     ops_remap_indices,
     ops_resize,
+    ops_rotation_geometry,
     ops_seam_carve,
     ops_split,
     ops_spread,
+    ops_thumbnail_size,
     ops_transpose,
     ops_warp,
     ops_xbm,
+    palette_channels,
+    palette_remap,
     palette_to_pa,
+    palette_web,
     quantize as _native_quantize,
     tensor_export,
     wide_histogram,
@@ -194,7 +199,6 @@ def getmodetype(mode: str) -> str:
 
 
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
-_RESIZE_SUPPORT = {1: 3, 2: 1, 3: 2, 4: 0.5, 5: 1, 6: 2.5, 7: 4.5}
 _FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
 _SAVE_OPTIONS = {
     "PCX": frozenset(),
@@ -914,12 +918,13 @@ class Image:
         if mode not in _BANDS:
             raise ValueError("image has wrong mode")
         if matrix is not None:
-            result = Image(image_convert_matrix(self._native, mode, list(matrix)))
-            result.info.update(self._metadata_info())
             transparency = self.info.get("transparency")
-            if isinstance(transparency, tuple) and len(transparency) == 3:
-                values = [max(0, min(255, int(matrix[offset] * transparency[0] + matrix[offset + 1] * transparency[1] + matrix[offset + 2] * transparency[2] + matrix[offset + 3] * 0.5))) for offset in range(0, 4 if mode == "L" else 12, 4)]
-                result.info["transparency"] = values[0] if mode == "L" else tuple(values)
+            key = transparency if isinstance(transparency, tuple) and len(transparency) == 3 else None
+            native, converted_key = image_convert_matrix(self._native, mode, list(matrix), key)
+            result = Image(native)
+            result.info.update(self._metadata_info())
+            if converted_key is not None:
+                result.info["transparency"] = converted_key
             return result
         dither = Dither.FLOYDSTEINBERG if dither is None else index(dither)
         if mode == "1" and self.mode == "LAB":
@@ -970,7 +975,7 @@ class Image:
                 self._conversion_transparency(result)
                 return result
             reference = new("P", (1, 1))
-            entries = _GRAY_PALETTE if source.mode == "L" else bytes(30) + bytes(component for blue in range(0, 256, 51) for green in range(0, 256, 51) for red in range(0, 256, 51) for component in (red, green, blue))
+            entries = _GRAY_PALETTE if source.mode == "L" else palette_web()
             reference.putpalette(entries)
             result = source.quantize(palette=reference, dither=dither)
             self._conversion_transparency(result)
@@ -1313,16 +1318,7 @@ class Image:
         if mode not in ("RGB", "RGBA"):
             raise ValueError("unrecognized raw mode")
         data = self.palette.tobytes()
-        if mode == self.palette.mode:
-            return list(data)
-        if mode == "RGB":
-            rgb = bytearray(data)
-            del rgb[3::4]
-            return list(rgb)
-        rgba = bytearray(b"\xff" * (len(data) // 3 * 4))
-        for channel in range(3):
-            rgba[channel::4] = data[channel::3]
-        return list(rgba)
+        return palette_channels(data, self.palette.mode, mode)
 
     def remap_palette(self, dest_map: Sequence[int], source_palette: bytes | bytearray | None = None) -> Image:
         """Return a P image whose palette follows ``dest_map``.
@@ -1356,14 +1352,9 @@ class Image:
         else:
             entries = bytes(source_palette)
             palette_mode = "RGBA" if len(entries) > 768 else "RGB"
-        channels = len(palette_mode)
-        if len(entries) % channels or any(value * channels + channels > len(entries) for value in positions):
-            raise ValueError("source palette has too few entries")
-        mapping = bytearray(256)
-        for new_position, old_position in enumerate(positions):
-            mapping[old_position] = new_position
-        result = Image(ops_remap_indices(self._native, bytes(mapping)))
-        result.putpalette(b"".join(entries[value * channels : (value + 1) * channels] for value in positions), palette_mode)
+        mapping, entries = palette_remap(entries, len(palette_mode), positions)
+        result = Image(ops_remap_indices(self._native, mapping))
+        result.putpalette(entries, palette_mode)
         result.info.update(self._metadata_info())
         old_transparency = self.info.get("transparency")
         if isinstance(old_transparency, int):
@@ -2064,7 +2055,7 @@ class Image:
             expected = 256 * len(self.getbands())
         if len(values) != expected:
             raise ValueError("wrong number of lut entries")
-        result = Image(ops_lut(self._native, [max(0, min(255, round(v))) for v in values]))
+        result = Image(ops_point(self._native, values))
         result.info.update(self._metadata_info())
         return result
 
@@ -2085,21 +2076,10 @@ class Image:
             ```
         """
         self.load()
-        x, y = (math.floor(v) for v in size)
-        if x <= 0 or y <= 0:
-            raise ValueError("height and width must be > 0")
-        if x >= self.width and y >= self.height:
+        target = ops_thumbnail_size(self.size, size)
+        if target is None:
             return
-        if not self.width or not self.height:
-            return
-        aspect = self.width / self.height
-        if x / y >= aspect:
-            value = y * aspect
-            x = max(1, min(math.floor(value), math.ceil(value), key=lambda n: abs(aspect - n / y)))
-        else:
-            value = x / aspect
-            y = max(1, min(math.floor(value), math.ceil(value), key=lambda n: 0 if n == 0 else abs(aspect - x / n)))
-        resized = self.resize((x, y), resample, reducing_gap=reducing_gap)
+        resized = self.resize(target, resample, reducing_gap=reducing_gap)
         self._native = resized._native
         self.readonly = 0
         self.palette = resized.palette
@@ -2374,17 +2354,7 @@ class Image:
         if size == self.size and box == (0, 0, self.width, self.height):
             native = ops_transpose(native, 1)
         else:
-            if reducing_gap is not None and method != Resampling.NEAREST and self.mode not in ("LA", "RGBA", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
-                fx = max(1, int((box[2] - box[0]) / size[0] / reducing_gap))
-                fy = max(1, int((box[3] - box[1]) / size[1] / reducing_gap))
-                if fx > 1 or fy > 1:
-                    support = _RESIZE_SUPPORT[method] - 0.5
-                    sx = support * (box[2] - box[0]) / size[0]
-                    sy = support * (box[3] - box[1]) / size[1]
-                    safe = (max(0, int(box[0] - sx)), max(0, int(box[1] - sy)), min(self.width, math.ceil(box[2] + sx)), min(self.height, math.ceil(box[3] + sy)))
-                    native = ops_reduce(native, (fx, fy), safe)
-                    box = ((box[0] - safe[0]) / fx, (box[1] - safe[1]) / fy, (box[2] - safe[0]) / fx, (box[3] - safe[1]) / fy)
-            native = ops_resize(native, size, method, box, reducing_gap if self.mode in ("LA", "RGBA") else None)
+            native = ops_resize(native, size, method, box, reducing_gap)
         result = Image(native)
         result.info.update(self._metadata_info())
         return result
@@ -2466,25 +2436,9 @@ class Image:
                 raise ValueError("rotate supports NEAREST, BILINEAR and BICUBIC")
             if self.mode in ("1", "P", "PA"):
                 resample = Resampling.NEAREST
-            w, h = self.size
-            cx, cy = (w / 2, h / 2) if center is None else center
-            tx, ty = (0, 0) if translate is None else translate
-            if not all(math.isfinite(v) for v in (cx, cy, tx, ty)):
-                raise ValueError("center and translate must contain finite coordinates")
-            radians = -math.radians(angle)
-            a, b = round(math.cos(radians), 15), round(math.sin(radians), 15)
-            d, e = -b, a
-            c = a * (-cx - tx) + b * (-cy - ty) + cx
-            f = d * (-cx - tx) + e * (-cy - ty) + cy
-            if expand:
-                corners = [(a * x + b * y + c, d * x + e * y + f) for x, y in ((0, 0), (w, 0), (w, h), (0, h))]
-                nw = math.ceil(max(x for x, _ in corners)) - math.floor(min(x for x, _ in corners))
-                nh = math.ceil(max(y for _, y in corners)) - math.floor(min(y for _, y in corners))
-                dx, dy = -(nw - w) / 2, -(nh - h) / 2
-                c, f = a * dx + b * dy + c, d * dx + e * dy + f
-                w, h = nw, nh
+            size, matrix = ops_rotation_geometry(self.size, angle, expand, center, translate)
             fill = list(struct.pack("<f", 0.0 if fillcolor is None else float(cast("FloatInput", fillcolor)))) if self.mode == "F" else color_pixel(fillcolor, self.mode)
-            result = Image(ops_affine(self._native, (w, h), (a, b, c, d, e, f), resample, fill, isinstance(fillcolor, str)))
+            result = Image(ops_affine(self._native, size, matrix, resample, fill, isinstance(fillcolor, str)))
         result.info.update(self._metadata_info())
         return result
 

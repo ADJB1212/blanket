@@ -9,9 +9,11 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
+mod hdr;
 mod orientation;
 mod resolution;
 mod rewrite;
+pub use hdr::{_decode_hdr, _encode_hdr};
 pub use orientation::_exif_orientation;
 pub use resolution::_resolve_resolution;
 pub use rewrite::_rewrite_metadata;

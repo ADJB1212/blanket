@@ -4,8 +4,9 @@ use std::simd::num::{SimdFloat, SimdUint};
 use blanket_convert_kernels::{alpha, simd};
 use blanket_core::raster::alloc_pixels;
 use blanket_core::{Image, PixelMode};
-use pyo3::exceptions::{PyMemoryError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyMemoryError, PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 #[pyfunction(name = "image_convert_palette_alpha", signature = (source_image, mode, alpha=None, index=None, bit_depth=None))]
 pub fn convert_palette_alpha(
@@ -29,8 +30,10 @@ pub fn convert_palette_alpha(
     if bit_depth.is_some_and(|depth| depth != 8) { convert(py, &result, mode, bit_depth) } else { Ok(result) }
 }
 
-#[pyfunction(name = "image_convert_matrix")]
-pub fn convert_matrix(py: Python<'_>, source_image: &Image, mode: &str, matrix: Vec<f32>) -> PyResult<Image> {
+#[pyfunction(name = "image_convert_matrix", signature = (source_image, mode, matrix, transparency=None))]
+pub fn convert_matrix(
+    py: Python<'_>, source_image: &Image, mode: &str, matrix: Vec<f64>, transparency: Option<(f64, f64, f64)>,
+) -> PyResult<(Image, Option<Py<PyAny>>)> {
     if !matches!(mode, "L" | "RGB") {
         return Err(PyValueError::new_err("illegal conversion"));
     }
@@ -45,6 +48,28 @@ pub fn convert_matrix(py: Python<'_>, source_image: &Image, mode: &str, matrix: 
     if matrix.len() < channels * 4 {
         return Err(PyTypeError::new_err("matrix must be tuple of length 12"));
     }
+    let transparency = transparency
+        .map(|(r, g, b)| -> PyResult<Py<PyAny>> {
+            let values = matrix
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .take(channels)
+                .map(|row| {
+                    let value = row[0] * r + row[1] * g + row[2] * b + row[3] * 0.5;
+                    if value.is_nan() {
+                        return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+                    }
+                    if !value.is_finite() {
+                        return Err(PyOverflowError::new_err("cannot convert float infinity to integer"));
+                    }
+                    Ok(value.trunc().clamp(0.0, 255.0) as u8)
+                })
+                .collect::<PyResult<Vec<_>>>()?;
+            if channels == 1 { Ok(values[0].into_pyobject(py)?.into_any().unbind()) } else { Ok(PyTuple::new(py, values)?.into_any().unbind()) }
+        })
+        .transpose()?;
+    let matrix: Vec<_> = matrix.into_iter().map(|value| value as f32).collect();
     let source = source_image.pixel_data()?;
     let length = source.len() / 3 * channels;
     let mut pixels = blanket_core::buffers::reserved(length)?;
@@ -60,7 +85,7 @@ pub fn convert_matrix(py: Python<'_>, source_image: &Image, mode: &str, matrix: 
         // SAFETY: Every reserved byte is initialized by its pixel's matrix row.
         unsafe { pixels.set_len(length) };
     });
-    Image::from_pixels(source_image.width(), source_image.height(), destination, pixels, None)
+    Ok((Image::from_pixels(source_image.width(), source_image.height(), destination, pixels, None)?, transparency))
 }
 
 fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], matrix: &[f32]) {

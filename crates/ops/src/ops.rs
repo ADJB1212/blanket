@@ -6,9 +6,9 @@ use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use blanket_histogram::validate_mask;
 pub use blanket_histogram::{ops_histogram, wide_histogram};
 pub use blanket_image_ops::geometry::{ops_transpose, transpose};
-use pyo3::exceptions::{PyIndexError, PyOSError, PyValueError};
+use pyo3::exceptions::{PyIndexError, PyOSError, PyOverflowError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBytes, PyFloat, PyInt};
 use rayon::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -17,6 +17,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_autocontrast_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_composite, module)?)?;
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
+    module.add_function(wrap_pyfunction!(ops_point, module)?)?;
     module.add_function(wrap_pyfunction!(ops_linear_gradient, module)?)?;
     module.add_function(wrap_pyfunction!(wide_histogram, module)?)?;
     module.add_function(wrap_pyfunction!(ops_colorize, module)?)?;
@@ -340,6 +341,40 @@ fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'p
         Ok::<_, PyErr>(result)
     })?;
     Ok(PyBytes::new(py, &data))
+}
+
+#[pyfunction]
+fn ops_point(py: Python<'_>, image: &Image, values: Vec<Bound<'_, PyAny>>) -> PyResult<Image> {
+    let lut = values
+        .iter()
+        .map(|value| {
+            if value.is_exact_instance_of::<PyFloat>() {
+                let value = value.extract::<f64>()?;
+                if value.is_nan() {
+                    return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+                }
+                if !value.is_finite() {
+                    return Err(PyOverflowError::new_err("cannot convert float infinity to integer"));
+                }
+                return Ok(value.round_ties_even().clamp(0.0, 255.0) as u8);
+            }
+            let rounded;
+            let value = if value.is_exact_instance_of::<PyInt>() {
+                value
+            } else {
+                rounded = value.call_method0("__round__")?;
+                &rounded
+            };
+            if value.lt(0)? {
+                Ok(0)
+            } else if value.gt(255)? {
+                Ok(255)
+            } else {
+                value.extract()
+            }
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    ops_lut(py, image, lut)
 }
 
 #[pyfunction]

@@ -2,27 +2,20 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"xml.etree", "collections.abc"}
+__lazy_modules__ = {"collections.abc"}
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
-from xml.etree import ElementTree as ET
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+from ._blanket import _filter_xmp, _metadata_location as _location
 from ._ifd import Exif
 
 _POINTERS = (34665, 34853, 40965)
-_LOCATION = frozenset({"location", "locationcreated", "locationshown", "sublocation", "city", "state", "province", "country", "countrycode", "countryname", "locationdetails"})
 _XMP_ALIASES = ("xmp", "XML:com.adobe.xmp")
 _EXIF_ALIASES = ("exif", "Raw profile type exif")
-
-
-def _location(name: str) -> bool:
-    """Check whether an XML or metadata field name corresponds to location data."""
-    local = name.rsplit("}", 1)[-1].casefold()
-    return local.startswith("gps") or local in _LOCATION
 
 
 def _filtered_exif(raw: bytes, policy: MetadataPolicy) -> bytes:
@@ -59,35 +52,7 @@ def _filtered_exif(raw: bytes, policy: MetadataPolicy) -> bytes:
 
 def _filtered_xmp(raw: bytes, policy: MetadataPolicy) -> bytes:
     """Filter XMP XML elements and attributes according to the given metadata policy."""
-    if len(raw) > 16 * 1024 * 1024:
-        return b""
-    try:
-        text = raw.decode("utf-8")
-        upper = text.upper()
-        if "<!DOCTYPE" in upper or "<!ENTITY" in upper:
-            return b""
-        del upper
-        root = ET.fromstring(text)  # noqa: S314 - DTDs and entities are rejected above.
-    except (UnicodeDecodeError, ET.ParseError):
-        return b""
-    structural = {"adobe:ns:meta/", "http://www.w3.org/1999/02/22-rdf-syntax-ns#"}
-
-    def keep(name: str) -> bool:
-        """Determine whether an XMP element or attribute name should be retained."""
-        if not policy.location and _location(name):
-            return False
-        namespace = name[1:].split("}", 1)[0] if name.startswith("{") else ""
-        return policy.xmp_fields is None or namespace in structural or name in policy.xmp_fields
-
-    for element in root.iter():
-        for name in list(element.attrib):
-            if not keep(name):
-                del element.attrib[name]
-        children = list(element)
-        retained = [child for child in children if keep(child.tag)]
-        if len(retained) != len(children):
-            element[:] = retained
-    return ET.tostring(root, encoding="utf-8")
+    return _filter_xmp(raw, policy.location, policy.xmp_fields)
 
 
 @dataclass(frozen=True)

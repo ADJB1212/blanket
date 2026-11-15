@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 
-from ._blanket import color_getcolor
+from ._blanket import color_pixel as _native_color_pixel
 from ._color_names import CSS_COLORS
 from ._css_color import functional_rgb
 
@@ -52,42 +52,6 @@ def _parse_rgb(color: str) -> tuple[int, ...]:
 
 def color_pixel(color: str | int | tuple[int, ...] | None, mode: str, bit_depth: int = 8) -> list[int]:
     """Normalize fill values to the native interleaved channel representation."""
-    channels = 3 if mode == "YCbCr" else len(mode)
-    maximum = (1 << bit_depth) - 1
-    if color is None:
-        return [0] * channels
     if isinstance(color, str):
-        if mode in ("La", "RGBa"):
-            return list(color_getcolor(_rgb(color), mode))
-        rgb = _rgb(color)
-        if mode in ("1", "L", "LA"):
-            color = (rgb[0] * 19595 + rgb[1] * 38470 + rgb[2] * 7471 + 32768) >> 16
-            if mode == "LA":
-                color = (color, rgb[3] if len(rgb) == 4 else 255)
-        else:
-            color = rgb[:3] + ((rgb[3] if len(rgb) == 4 and mode == "RGBA" else 255,) if mode in ("RGBA", "RGBX") else ())
-        if bit_depth != 8:
-            if isinstance(color, int):
-                color = (color * maximum + 127) // 255
-            else:
-                color = tuple((v * maximum + 127) // 255 for v in color)
-    if isinstance(color, int):
-        if mode in ("1", "L"):
-            return [max(0, min(maximum, color))]
-        return [(color >> (bit_depth * i)) & maximum for i in range(channels)]
-    if not isinstance(color, tuple):
-        raise TypeError("color must be int or tuple")
-    if mode in ("1", "L"):
-        if len(color) != 1:
-            raise TypeError("color must be int or single-element tuple")
-    elif (len(color) == 1 and mode in ("LA", "La")) or (len(color) == 3 and mode in ("RGBA", "RGBa", "RGBX", "CMYK")):
-        color = (*color, maximum)
-    elif mode in ("RGB", "YCbCr") and len(color) == 4:
-        color = color[:3]
-    elif len(color) != channels:
-        raise TypeError("color must be int, or tuple of the appropriate channel count")
-    if not all(isinstance(v, int) for v in color):
-        raise TypeError("color components must be integers")
-    if mode == "1":
-        return [max(0, min(255, color[0]))]
-    return [max(0, min(maximum, v)) for v in color]
+        return _native_color_pixel(None, mode, bit_depth, _rgb(color))
+    return _native_color_pixel(color, mode, bit_depth)

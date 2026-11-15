@@ -9,6 +9,18 @@ from PIL import ImageColor as PillowColor
 from blanket import Image, ImageColor, ImageDraw, ImageOps
 
 
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
+@pytest.mark.parametrize("sign", [-1, 1])
+def test_fill_colors_preserve_arbitrary_precision_integers(depth: int, sign: int) -> None:
+    packed = sign * (1 << 1000) + 17 + (34 << depth) + (51 << (2 * depth))
+    image = Image.new("RGB", (1, 1)).convert("RGB", bit_depth=depth)
+    image.paste(packed, (0, 0, 1, 1))
+    assert image.getpixel((0, 0)) == (17, 34, 51)
+    image = Image.new("RGBA", (1, 1)).convert("RGBA", bit_depth=depth)
+    image.paste((-(1 << 1000), 1 << 1000, 123), (0, 0, 1, 1))
+    assert image.getpixel((0, 0)) == (0, (1 << depth) - 1, 123, (1 << depth) - 1)
+
+
 @pytest.mark.parametrize(
     "color,expected",
     [

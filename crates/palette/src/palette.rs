@@ -3,7 +3,7 @@
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyIndexError, PyOSError, PyOverflowError, PyValueError, PyZeroDivisionError};
 use pyo3::prelude::*;
-use pyo3::types::{PyByteArray, PyBytes, PyDict, PySlice, PyTuple};
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PySlice, PyTuple};
 use rustc_hash::FxHashSet;
 
 use crate::palette_simd as kernels;
@@ -23,7 +23,57 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(palette_gradient, module)?)?;
     module.add_function(wrap_pyfunction!(palette_save, module)?)?;
     module.add_function(wrap_pyfunction!(palette_format, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_channels, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_remap, module)?)?;
+    module.add_function(wrap_pyfunction!(palette_web, module)?)?;
     Ok(())
+}
+
+#[pyfunction]
+fn palette_channels<'py>(py: Python<'py>, data: &[u8], source: &str, destination: &str) -> PyResult<Bound<'py, PyList>> {
+    let values: Vec<u8> = match (source, destination) {
+        _ if source == destination => data.to_vec(),
+        ("RGBA", "RGB") => data.chunks(4).flat_map(|pixel| pixel.iter().take(3).copied()).collect(),
+        ("RGB", "RGBA") => {
+            if data.len() % 3 != 0 {
+                return Err(PyValueError::new_err("invalid RGB palette length"));
+            }
+            data.as_chunks::<3>().0.iter().flat_map(|pixel| [pixel[0], pixel[1], pixel[2], 255]).collect()
+        }
+        _ => return Err(PyValueError::new_err("unrecognized raw mode")),
+    };
+    PyList::new(py, values)
+}
+
+#[pyfunction]
+fn palette_remap<'py>(py: Python<'py>, entries: &[u8], channels: usize, positions: Vec<u8>) -> PyResult<(Bound<'py, PyBytes>, Bound<'py, PyBytes>)> {
+    if !matches!(channels, 3 | 4)
+        || !entries.len().is_multiple_of(channels)
+        || positions.iter().any(|&value| usize::from(value) * channels + channels > entries.len())
+    {
+        return Err(PyValueError::new_err("source palette has too few entries"));
+    }
+    let mut mapping = [0; 256];
+    let mut palette = Vec::with_capacity(positions.len() * channels);
+    for (index, &value) in positions.iter().enumerate() {
+        mapping[usize::from(value)] = index as u8;
+        let start = usize::from(value) * channels;
+        palette.extend_from_slice(&entries[start..start + channels]);
+    }
+    Ok((PyBytes::new(py, &mapping), PyBytes::new(py, &palette)))
+}
+
+#[pyfunction]
+fn palette_web(py: Python<'_>) -> Bound<'_, PyBytes> {
+    let mut entries = vec![0; 30];
+    for blue in (0..=255).step_by(51) {
+        for green in (0..=255).step_by(51) {
+            for red in (0..=255).step_by(51) {
+                entries.extend_from_slice(&[red, green, blue]);
+            }
+        }
+    }
+    PyBytes::new(py, &entries)
 }
 
 #[pyfunction]

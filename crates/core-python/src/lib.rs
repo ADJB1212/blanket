@@ -15,5 +15,6 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(io::tobytes, module)?)?;
     module.add_function(wrap_pyfunction!(tensor::tensor_export, module)?)?;
     module.add_function(wrap_pyfunction!(color::color_getcolor, module)?)?;
+    module.add_function(wrap_pyfunction!(color::color_pixel, module)?)?;
     Ok(())
 }

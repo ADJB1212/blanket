@@ -2,6 +2,7 @@ mod encode;
 mod features;
 mod sequence;
 mod xmp;
+mod xmp_filter;
 
 use blanket_codecs::open_bytes;
 use blanket_core::{Image, UnidentifiedImageError};
@@ -37,9 +38,13 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_container_previews, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_resolve_resolution, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_exif_orientation, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_encode_hdr, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_decode_hdr, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_native_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(features::_feature_info, module)?)?;
     module.add_function(wrap_pyfunction!(xmp::_getxmp, module)?)?;
+    module.add_function(wrap_pyfunction!(xmp_filter::_filter_xmp, module)?)?;
+    module.add_function(wrap_pyfunction!(xmp_filter::_metadata_location, module)?)?;
     blanket_enhance::enhance::register(module)?;
     blanket_enhance::hdr::register(module)?;
     blanket_composite::chops::register(module)?;

@@ -11,8 +11,21 @@ from PIL import Image as PillowImage
 
 from blanket import Image, ImageHdr, PngImagePlugin
 from blanket._exif import read_metadata
+from blanket._hdr import decode_chunk, encode_chunk
 
 MASTERING = (0.708, 0.292, 0.170, 0.797, 0.131, 0.046, 0.3127, 0.3290, 1000.0, 0.0005)
+
+
+def test_png_hdr_wire_rounding_and_density_limits() -> None:
+    payload = encode_chunk("content_light_level", (0.00025, 0.00035))
+    assert payload == struct.pack(">2I", 2, 4)
+    assert decode_chunk(b"cLLI", payload) == (0.0002, 0.0004)
+    maximum = struct.pack(">2I", 0xFFFFFFFF, 0)
+    assert encode_chunk("content_light_level", decode_chunk(b"cLLI", maximum)) == maximum
+    for length in range(8):
+        assert decode_chunk(b"cLLI", maximum[:length]) is None
+    with pytest.raises(OverflowError):
+        encode_chunk("content_light_level", (1e308, 0))
 
 
 @pytest.mark.parametrize("cicp", [([9], 16, 0, 1), (9, {}, 0, 1), (True, 16, 0, 1), (9.0, 16, 0, 1), (9, 16, False, True), (256, 16, 0, 1)])

@@ -12,11 +12,14 @@ use ops_simd::{RESAMPLE_BITS, RESAMPLE_ROUND, RESAMPLE_SCALE};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
+mod planning;
 mod seam;
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
 type Mesh = Vec<(BoxI, [f64; 8])>;
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add_function(wrap_pyfunction!(planning::ops_thumbnail_size, module)?)?;
+    module.add_function(wrap_pyfunction!(planning::ops_rotation_geometry, module)?)?;
     module.add_function(wrap_pyfunction!(seam::ops_seam_carve, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
@@ -468,6 +471,19 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
     if b[2] > f64::from(image.width()) || b[3] > f64::from(image.height()) {
         return Err(PyValueError::new_err("box can't exceed original image size"));
     }
+    if method != 0
+        && !image.pixel_mode().is_wide_scalar()
+        && !matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba)
+        && let Some(gap) = reducing_gap
+    {
+        if gap.is_nan() {
+            return Err(PyValueError::new_err("cannot convert float NaN to integer"));
+        }
+        if let Some(plan) = planning::reduction(image.size(), size, bounds, method, gap) {
+            let reduced = ops_reduce(py, image, plan.factor, plan.safe)?;
+            return ops_resize(py, &reduced, size, method, plan.bounds, None);
+        }
+    }
     if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
         let mut pixels = buffer(size, image.raw_bytes_per_pixel())?;
         if image.width() == 0 || image.height() == 0 {
@@ -552,47 +568,22 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         }
         let mut source = Cow::Borrowed(source);
         let mut reduced = None;
-        if let Some(gap) = reducing_gap {
-            let fx = (((bounds.2 - bounds.0) / f64::from(size.0) / gap) as u32).max(1);
-            let fy = (((bounds.3 - bounds.1) / f64::from(size.1) / gap) as u32).max(1);
-            if fx > 1 || fy > 1 {
-                if !matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba) {
-                    return Err(PyValueError::new_err("resize reduction requires an alpha image"));
-                }
-                let support = match method {
-                    6 => 2.5,
-                    7 => 4.5,
-                    1 => 3.0,
-                    3 => 2.0,
-                    4 => 0.5,
-                    _ => 1.0,
-                } - 0.5;
-                let sx = support * (bounds.2 - bounds.0) / f64::from(size.0);
-                let sy = support * (bounds.3 - bounds.1) / f64::from(size.1);
-                let safe = (
-                    (bounds.0 - sx).max(0.0) as u32,
-                    (bounds.1 - sy).max(0.0) as u32,
-                    (bounds.2 + sx).ceil().min(f64::from(image.width())) as u32,
-                    (bounds.3 + sy).ceil().min(f64::from(image.height())) as u32,
-                );
-                let reduced_size = ((safe.2 - safe.0).div_ceil(fx), (safe.3 - safe.1).div_ceil(fy));
-                let mut pixels = buffer(reduced_size, c)?;
-                let cropped = premultiplied_crop(&source, image.width(), safe, c)?;
-                let local = (0, 0, safe.2 - safe.0, safe.3 - safe.1);
-                if c == 2 {
-                    reduce_pixels::<2>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
-                } else {
-                    reduce_pixels::<4>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
-                }
-                b = [
-                    (bounds.0 - f64::from(safe.0)) / f64::from(fx),
-                    (bounds.1 - f64::from(safe.1)) / f64::from(fy),
-                    (bounds.2 - f64::from(safe.0)) / f64::from(fx),
-                    (bounds.3 - f64::from(safe.1)) / f64::from(fy),
-                ]
-                .map(|x| f64::from(x as f32));
-                reduced = Some(output(image, reduced_size, pixels)?);
+        if let Some(gap) = reducing_gap
+            && let Some(plan) = planning::reduction(image.size(), size, bounds, method, gap)
+        {
+            let (fx, fy) = plan.factor;
+            let safe = plan.safe;
+            let reduced_size = ((safe.2 - safe.0).div_ceil(fx), (safe.3 - safe.1).div_ceil(fy));
+            let mut pixels = buffer(reduced_size, c)?;
+            let cropped = premultiplied_crop(&source, image.width(), safe, c)?;
+            let local = (0, 0, safe.2 - safe.0, safe.3 - safe.1);
+            if c == 2 {
+                reduce_pixels::<2>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
+            } else {
+                reduce_pixels::<4>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
             }
+            b = <[_; 4]>::from(plan.bounds).map(|x| f64::from(x as f32));
+            reduced = Some(output(image, reduced_size, pixels)?);
         }
         let image = reduced.as_ref().unwrap_or(image);
         if reduced.is_some() {

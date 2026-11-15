@@ -141,6 +141,28 @@ def test_xmp_filter_preserves_sibling_order_attributes_and_nested_fields():
         assert len(child) == 1 and child[0].tag == "value" and child[0].text == str(i)
 
 
+def test_xmp_filter_retains_namespaces_escaped_values_and_text_tails():
+    raw = b'<r:root xmlns:r="urn:root" xmlns:p="urn:public" p:title="A &amp; B" GPSLatitude="private">before<gps>private</gps>private-tail<!--private-comment--><p:title>kept &lt;value&gt;</p:title>after<?private data?></r:root>'
+    policy = ImageMetadata.MetadataPolicy(location=False, xmp_fields=frozenset({"{urn:public}title"}))
+    filtered = policy.apply({"xmp": raw})["xmp"]
+    assert b"private" not in filtered
+    result = ET.fromstring(filtered)
+    assert result.tag == "{urn:root}root" and result.attrib == {"{urn:public}title": "A & B"}
+    assert result.text == "before" and len(result) == 1
+    assert result[0].tag == "{urn:public}title" and result[0].text == "kept <value>" and result[0].tail == "after"
+
+
+def test_xmp_filter_serializes_utf8_despite_source_encoding_declaration():
+    raw = '<?xml version="1.0" encoding="ISO-8859-1"?><root title="caf\u00e9" gps="private"/>'.encode()
+    filtered = ImageMetadata.MetadataPolicy(location=False).apply({"xmp": raw})["xmp"]
+    assert ET.fromstring(filtered).attrib == {"title": "caf\u00e9"}
+
+
+@pytest.mark.parametrize("name", ["GPSLatitude", "gp\u017fLongitude", "\ufb06ate", "{urn:meta}COUNTRY"])
+def test_location_filter_preserves_casefold_matching(name: str):
+    assert ImageMetadata.MetadataPolicy(location=False).apply({name: "private", "title": "kept"}) == {"title": "kept"}
+
+
 def test_png_text_categories_and_hdr_preservation():
     text = PngImagePlugin.PngInfo()
     text.add_text("Author", "public-author", zip=True)

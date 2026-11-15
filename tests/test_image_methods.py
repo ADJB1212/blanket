@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import struct
+from fractions import Fraction
 from io import BytesIO
 from pathlib import Path
 
@@ -10,6 +11,22 @@ from helpers import assert_image_properties, assert_pixels_equal, assert_raises,
 from PIL import Image as PIL
 
 from blanket import Image
+
+
+@pytest.mark.parametrize("exact", [False, True])
+def test_point_rounding_clips_after_rounding(exact: bool) -> None:
+    image = Image.frombytes("L", (8, 1), bytes(range(8)))
+    values = [Fraction(-1, 2), Fraction(1, 2), Fraction(3, 2), Fraction(5, 2), Fraction(7, 2), Fraction(509, 2), Fraction(511, 2), Fraction(10**100)]
+    table = values if exact else [float(value) for value in values]
+    result = image.point(table + [0] * 248)
+    assert result.tobytes() == bytes([0, 0, 2, 2, 4, 254, 255, 255])
+
+
+@pytest.mark.parametrize("value,error", [(math.nan, ValueError), (math.inf, OverflowError), (-math.inf, OverflowError)])
+def test_point_rejects_nonfinite_table_entries(value: float, error: type[Exception]) -> None:
+    image = Image.new("L", (1, 1))
+    with pytest.raises(error):
+        image.point([value] * 256)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])

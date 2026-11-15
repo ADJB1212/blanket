@@ -2,7 +2,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 
-fn name(namespace: Option<&str>, local: &str, strip: bool) -> String {
+pub(super) fn name(namespace: Option<&str>, local: &str, strip: bool) -> String {
     match namespace.filter(|_| !strip) {
         Some(uri) => format!("{{{uri}}}{local}"),
         None => local.to_owned(),
