@@ -114,6 +114,7 @@ libheif-sys = {path = "third-party/libheif-sys" }
 jpegxl-sys = {path = "third-party/jpegxl-sys" }
 jpegxl-rs = {path = "third-party/jpegxl-rs" }
 jpegxl-src = {path = "third-party/jpegxl-src" }
+turbojpeg = {path = "third-party/turbojpeg" }
 
 [profile.release]
 opt-level = 3

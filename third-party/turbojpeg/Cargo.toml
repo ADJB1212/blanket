@@ -1,0 +1,44 @@
+[package]
+edition = "2024"
+name = "turbojpeg"
+version = "1.5.1"
+authors = ["Jan Špaček <patek.mail@gmail.com>"]
+build = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "Fast and easy JPEG encoding, decoding and lossless transforms with TurboJPEG"
+homepage = "https://github.com/honzasp/rust-turbojpeg"
+documentation = "https://docs.rs/turbojpeg"
+keywords = ["jpeg", "image", "decoder", "encoder", "transform"]
+categories = ["compression", "api-bindings", "multimedia::images"]
+license = "Unlicense OR MIT"
+repository = "https://github.com/honzasp/rust-turbojpeg"
+resolver = "3"
+
+
+[lib]
+name = "turbojpeg"
+path = "src/lib.rs"
+doctest = false
+
+[dependencies]
+gcd = "2.3.0"
+image = {version = ">= 0.24, < 0.26", optional = true, default-features = false}
+libc = "0.2"
+thiserror = "2"
+turbojpeg-sys = { version = "^1.1.1", default-features = false }
+
+
+[dev-dependencies]
+anyhow = {version = "1.0"}
+image = {version = "^0.25", features = ["jpeg", "png", "bmp", "pnm"]}
+
+[features]
+bindgen = ["turbojpeg-sys/bindgen"]
+cmake = ["turbojpeg-sys/cmake"]
+default = [ "cmake", "pkg-config", "require-simd"]
+pkg-config = ["turbojpeg-sys/pkg-config"]
+require-simd = ["turbojpeg-sys/require-simd"]
