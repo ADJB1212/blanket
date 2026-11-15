@@ -30,6 +30,72 @@ if TYPE_CHECKING:
     from PIL import Image as PillowImage
 
 
+def mutate_copy(source: Any, method: str, *args: Any, **kwargs: Any) -> Any:
+    """Apply a mutation to an independent image copy on every iteration."""
+    result = source.copy()
+    getattr(result, method)(*args, **kwargs)
+    return result
+
+
+def mutate_path(module: ModuleType, source: Any, method: str, *args: Any) -> Any:
+    """Copy a path before applying an in-place coordinate operation."""
+    path = module.Path(source)
+    getattr(path, method)(*args)
+    return path
+
+
+def prepare_fonts(directory: Path) -> tuple[bytes, Path, Path]:
+    """Prepare identical outline bytes and a legacy bitmap atlas for both libraries."""
+    from PIL import Image, ImageFont
+    from PIL.FontFile import FontFile
+
+    raw = ImageFont.load_default(size=24).path.getvalue()
+    path = directory / "benchmark.ttf"
+    path.write_bytes(raw)
+    bitmap = FontFile()
+    for code in range(32, 127):
+        bitmap.glyph[code] = ((6, 0), (0, -7, 5, 0), (0, 0, 5, 7), Image.new("1", (5, 7), 1))
+    bitmap.save(str(directory / "bitmap"))
+    return raw, path, directory / "bitmap.pil"
+
+
+def parse_chunks(module: ModuleType, chunks: list[bytes]) -> Any:
+    """Feed prepared chunks into a new incremental decoder and finish decoding."""
+    parser = module.Parser()
+    for chunk in chunks:
+        parser.feed(chunk)
+    return parser.close()
+
+
+def make_outline(module: ModuleType, size: tuple[int, int], *, transform: bool = False) -> Any:
+    """Build a closed curved outline shared by the shape benchmark inputs."""
+    w, h = size
+    outline = module.Outline()
+    outline.move(w / 8, h / 8)
+    outline.line(7 * w / 8, h / 8)
+    outline.curve(w, h / 2, w / 2, h, w / 8, 7 * h / 8)
+    outline.close()
+    if transform:
+        outline.transform((0.8, 0.1, 3, -0.1, 0.8, 5))
+    return outline
+
+
+def sequence_frames(image_module: ModuleType, sequence_module: ModuleType, data: bytes, operation: str) -> Any:
+    """Open a fresh sequence and force frame decoding for the requested operation."""
+    with image_module.open(BytesIO(data)) as image:
+        if operation == "all_frames":
+            return sequence_module.all_frames(image)
+        if operation == "all_frames callback":
+            return sequence_module.all_frames(image, lambda frame: frame.transpose(0))
+        if operation == "seek/tell":
+            for index in (2, 0, 1, 2, 0):
+                image.seek(index)
+                image.load()
+                image.tell()
+            return image.copy()
+        return [frame.copy() for frame in sequence_module.Iterator(image)]
+
+
 def memory_profiler() -> ModuleType:
     """Load the development profiler without adding a runtime dependency."""
     if sys.platform not in ("darwin", "linux"):

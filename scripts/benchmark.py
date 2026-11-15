@@ -27,6 +27,7 @@ from _benchmark_helper import (
     make_integer,
     make_la,
     make_one,
+    make_outline,
     make_pa,
     make_rgb,
     make_rgba,
@@ -34,12 +35,17 @@ from _benchmark_helper import (
     measure,
     measure_memory,
     memory_profiler,
+    mutate_copy,
+    mutate_path,
+    parse_chunks,
     pillow_payload,
+    prepare_fonts,
     print_comparison,
     print_comparison_plain,
     print_detail_plain,
     print_summary_plain,
     run_metadata,
+    sequence_frames,
     slower_results,
 )
 
@@ -53,13 +59,17 @@ from PIL import (
     Image as PillowImage,
     ImageChops as PillowChops,
     ImageCms as PillowCms,
+    ImageColor as PillowColor,
     ImageDraw as PillowDraw,
     ImageEnhance as PillowEnhance,
+    ImageFile as PillowFile,
     ImageFilter as PillowFilter,
     ImageFont as PillowFont,
     ImageMath as PillowMath,
     ImageOps as PillowOps,
     ImagePalette as PillowPalette,
+    ImagePath as PillowPath,
+    ImageSequence as PillowSequence,
     ImageStat as PillowStat,
     PngImagePlugin as PillowPng,
 )
@@ -67,12 +77,18 @@ from PIL import (
 from blanket import (
     Image as BlanketImage,
     ImageChops as BlanketChops,
+    ImageCms as BlanketCms,
+    ImageColor as BlanketColor,
     ImageDraw as BlanketDraw,
     ImageEnhance as BlanketEnhance,
+    ImageFile as BlanketFile,
     ImageFilter as BlanketFilter,
+    ImageFont as BlanketFont,
     ImageMath as BlanketMath,
     ImageOps as BlanketOps,
     ImagePalette as BlanketPalette,
+    ImagePath as BlanketPath,
+    ImageSequence as BlanketSequence,
     ImageStat as BlanketStat,
     PngImagePlugin as BlanketPng,
     features as BlanketFeatures,
@@ -87,7 +103,7 @@ pillow_heif.register_heif_opener()
 # ── image sizes ──────────────────────────────────────────────────────────
 
 SIZES: dict[str, tuple[int, int]] = {"web": (800, 600), "square": (1024, 1024), "HD": (1280, 720), "photo": (1920, 1280), "4K": (3840, 2160)}
-CODEC_FORMATS = ("PNG", "JPEG", "JXL", "TIFF", "WEBP", "HEIF", "PBM", "PGM", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "MSP", "SPIDER", "FITS", "PIXAR", "SUN", "PALM", "XPM", "DDS", "EPS")
+CODEC_FORMATS = ("PNG", "JPEG", "JXL", "TIFF", "WEBP", "GIF", "PDF", "HEIF", "PBM", "PGM", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "MSP", "SPIDER", "FITS", "PIXAR", "SUN", "PALM", "XPM", "DDS", "EPS")
 CODEC_ALIASES = {"JPG": "JPEG", "TIF": "TIFF", "HEIC": "HEIF", "JP2": "JPEG2000", "J2K": "JPEG2000"}
 METADATA_FORMATS = ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
 
@@ -179,6 +195,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
             ("PPM", "PPM", ("RGB",)),
             ("TGA", "TGA", ("L", "LA", "RGB", "RGBA")),
             ("QOI", "QOI", ("RGB", "RGBA")),
+            ("GIF", "GIF", ("L", "RGB", "RGBA", "P")),
             ("JPEG2000", "JPEG2000", ("L", "LA", "RGB", "RGBA")),
             ("PCX", "PCX", ("1", "L", "P", "RGB")),
             ("SGI", "SGI", ("L", "RGB", "RGBA")),
@@ -207,6 +224,8 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
                 continue
             b_img, p_img = extended_images[mode]
             comps.append((f"save PALM {mode}", lambda b=b_img: b.save(BytesIO(), "PALM"), lambda p=p_img: p.save(BytesIO(), "PALM")))
+        if enabled("PDF"):
+            comps.append(("save PDF RGB", lambda: b_rgb.save(BytesIO(), "PDF"), lambda: p_rgb.save(BytesIO(), "PDF")))
         for mode in ("RGB", "RGBA"):
             if not enabled("XPM"):
                 continue
@@ -743,11 +762,6 @@ def image_method_comparisons(size: tuple[int, int]) -> list[Comparison]:
     p_mask = PillowImage.frombytes("L", size, mask_raw)
     comparisons: list[Comparison] = []
 
-    def mutate(image: Any, method: str, *args: Any, **kwargs: Any) -> Any:
-        result = image.copy()
-        getattr(result, method)(*args, **kwargs)
-        return result
-
     for mode, make_pixels in (("L", make_gray), ("RGB", make_rgb), ("RGBA", make_rgba)):
         raw = make_pixels(w, h)
         actual = BlanketImage.frombytes(mode, size, raw)
@@ -763,6 +777,9 @@ def image_method_comparisons(size: tuple[int, int]) -> list[Comparison]:
         value = 127 if mode == "L" else (17, 83, 149, 211)[:channels]
         comparisons.extend(
             [
+                (f"copy {mode}", actual.copy, expected.copy),
+                (f"instance frombytes {mode} (copy included)", partial(mutate_copy, actual, "frombytes", raw), partial(mutate_copy, expected, "frombytes", raw)),
+                (f"effect_spread {mode}", partial(actual.effect_spread, 8), partial(expected.effect_spread, 8)),
                 (f"getbands {mode}", actual.getbands, expected.getbands),
                 (f"getchannel {mode}", partial(actual.getchannel, channels - 1), partial(expected.getchannel, channels - 1)),
                 (f"getextrema {mode}", actual.getextrema, expected.getextrema),
@@ -771,20 +788,20 @@ def image_method_comparisons(size: tuple[int, int]) -> list[Comparison]:
                 (f"histogram masked {mode}", partial(actual.histogram, b_mask), partial(expected.histogram, p_mask)),
                 (f"point LUT {mode}", partial(actual.point, lut), partial(expected.point, lut)),
                 (f"point callable {mode}", partial(actual.point, lambda v: 255 - v), partial(expected.point, lambda v: 255 - v)),
-                (f"thumbnail {mode} (copy included)", partial(mutate, actual, "thumbnail", target), partial(mutate, expected, "thumbnail", target)),
+                (f"thumbnail {mode} (copy included)", partial(mutate_copy, actual, "thumbnail", target), partial(mutate_copy, expected, "thumbnail", target)),
                 (f"getdata list {mode}", actual.getdata, lambda im=expected: list(im.getdata())),
                 (f"get_flattened_data {mode}", actual.get_flattened_data, expected.get_flattened_data),
                 (f"getdata band {mode}", partial(actual.getdata, channels - 1), lambda im=expected, band=channels - 1: list(im.getdata(band))),
                 (f"getcolors 256 {mode}", actual.getcolors, expected.getcolors),
                 (f"getcolors limit=16 {mode}", partial(actual.getcolors, 16), partial(expected.getcolors, 16)),
-                (f"putpixel {mode} (copy included)", partial(mutate, actual, "putpixel", (w // 2, h // 2), value), partial(mutate, expected, "putpixel", (w // 2, h // 2), value)),
-                (f"putdata {mode} (copy included)", partial(mutate, actual, "putdata", data), partial(mutate, expected, "putdata", data)),
+                (f"putpixel {mode} (copy included)", partial(mutate_copy, actual, "putpixel", (w // 2, h // 2), value), partial(mutate_copy, expected, "putpixel", (w // 2, h // 2), value)),
+                (f"putdata {mode} (copy included)", partial(mutate_copy, actual, "putdata", data), partial(mutate_copy, expected, "putdata", data)),
                 (f"blend {mode}", partial(BlanketImage.blend, actual, other_actual, 0.35), partial(PillowImage.blend, expected, other_expected, 0.35)),
                 (f"composite {mode}", partial(BlanketImage.composite, actual, other_actual, b_mask), partial(PillowImage.composite, expected, other_expected, p_mask)),
             ]
         )
         if mode == "L":
-            comparisons.append(("putdata scaled L (copy included)", partial(mutate, actual, "putdata", data, 0.75, 20), partial(mutate, expected, "putdata", data, 0.75, 20)))
+            comparisons.append(("putdata scaled L (copy included)", partial(mutate_copy, actual, "putdata", data, 0.75, 20), partial(mutate_copy, expected, "putdata", data, 0.75, 20)))
         if mode == "RGBA":
             comparisons.append(("getbbox all channels RGBA", partial(actual.getbbox, alpha_only=False), partial(expected.getbbox, alpha_only=False)))
     return comparisons
@@ -799,11 +816,51 @@ def memory_comparisons(size: tuple[int, int]) -> list[Comparison]:
     p_img = PillowImage.frombytes("RGB", size, raw)
 
     return [
+        ("frombuffer RGB", lambda: BlanketImage.frombuffer("RGB", size, raw), lambda: PillowImage.frombuffer("RGB", size, raw)),
         ("fromarray RGB", lambda a=array: BlanketImage.fromarray(a), lambda a=array: PillowImage.fromarray(a)),
         ("frombytes RGB", lambda r=raw, s=size: BlanketImage.frombytes("RGB", s, r), lambda r=raw, s=size: PillowImage.frombytes("RGB", s, r)),
         ("tobytes RGB", lambda b=b_img: b.tobytes(), lambda p=p_img: p.tobytes()),
         ("to_pillow()", lambda b=b_img: b.to_pillow(), None),
     ]
+
+
+def image_extra_comparisons(size: tuple[int, int], formats: set[str] | None = None) -> list[Comparison]:
+    """Cover indexed pixels, raw exports, generators, and encoded-image queries."""
+    raw = make_gray(*size)
+    palette = bytes(value for i in range(256) for value in (i, 255 - i, i // 2))
+    actual, expected = BlanketImage.frombytes("P", size, raw), PillowImage.frombytes("P", size, raw)
+    actual.putpalette(palette)
+    expected.putpalette(palette)
+    mapping = list(range(255, -1, -1))
+    comparisons: list[Comparison] = [
+        ("getpalette P", actual.getpalette, expected.getpalette),
+        ("putpalette P (copy included)", partial(mutate_copy, actual, "putpalette", palette), partial(mutate_copy, expected, "putpalette", palette)),
+        ("remap_palette P", partial(actual.remap_palette, mapping), partial(expected.remap_palette, mapping)),
+    ]
+    comparisons.extend((f"linear_gradient {mode}", partial(BlanketImage.linear_gradient, mode), partial(PillowImage.linear_gradient, mode)) for mode in ("L", "F"))
+    one = BlanketImage.frombytes("1", size, make_one(*size))
+    one_reference = PillowImage.frombytes("1", size, one.tobytes())
+    comparisons.append(("tobitmap 1", one.tobitmap, one_reference.tobitmap))
+    source = PillowImage.frombytes("RGB", size, make_rgb(*size))
+    xmp = b'<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"><rdf:Description xmlns:dc="http://purl.org/dc/elements/1.1/" dc:creator="Benchmark"/></rdf:RDF></x:xmpmeta>'
+
+    def query(module: ModuleType, data: bytes, method: str) -> Any:
+        with module.open(BytesIO(data)) as image:
+            if method == "draft":
+                return image.draft("RGB", (max(1, size[0] // 4), max(1, size[1] // 4)))
+            return getattr(image, method)()
+
+    for fmt in ("JPEG", "PNG", "WEBP"):
+        if formats is not None and fmt not in formats:
+            continue
+        options = {"xmp": xmp}
+        if fmt == "PNG":
+            pnginfo = PillowPng.PngInfo()
+            pnginfo.add_itxt("XML:com.adobe.xmp", xmp.decode("utf-8"))
+            options = {"pnginfo": pnginfo}
+        data = pillow_payload(source, fmt, **options)
+        comparisons.extend((f"{method} {fmt} (open included)", partial(query, BlanketImage, data, method), partial(query, PillowImage, data, method)) for method in ("verify", "getxmp", "get_format_mimetype") + (("draft",) if fmt == "JPEG" else ()))
+    return comparisons
 
 
 class InsetMesh:
@@ -857,6 +914,160 @@ def imageops_comparisons(size: tuple[int, int]) -> list[Comparison]:
     return comps
 
 
+def imagepath_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Compare paths with width + height vertices and fresh copies for mutations."""
+    count = sum(size)
+    points = [(i / 4, (i % 97) / 2) for i in range(count)]
+    flat = [coordinate for point in points for coordinate in point]
+    raw = np.asarray(points, dtype=np.float32).tobytes()
+    actual, expected = BlanketPath.Path(points), PillowPath.Path(points)
+
+    comparisons: list[Comparison] = [(f"Path construct {label}", partial(BlanketPath.Path, source), partial(PillowPath.Path, source)) for label, source in (("pairs", points), ("flat", flat), ("float buffer", raw), ("zeros", count))]
+    comparisons.extend(
+        [
+            ("Path copy", partial(BlanketPath.Path, actual), partial(PillowPath.Path, expected)),
+            ("Path slice", lambda: actual[: count // 2], lambda: expected[: count // 2]),
+            ("Path getbbox", actual.getbbox, expected.getbbox),
+            ("Path tolist pairs", actual.tolist, expected.tolist),
+            ("Path tolist flat", partial(actual.tolist, True), partial(expected.tolist, True)),
+        ]
+    )
+    for label, method, args in (
+        ("compact", "compact", (2,)),
+        ("map", "map", (lambda x, y: (x * 0.5 + 3, y * 1.5 - 2),)),
+        ("transform", "transform", ((0.5, 0.1, 3, -0.1, 1.5, -2),)),
+        ("transform wrap", "transform", ((0.5, 0.1, 3, -0.1, 1.5, -2), 17)),
+    ):
+        comparisons.append((f"Path {label} (copy included)", partial(mutate_path, BlanketPath, actual, method, *args), partial(mutate_path, PillowPath, expected, method, *args)))
+    return comparisons
+
+
+def imagecolor_comparisons() -> list[Comparison]:
+    """Batch color parsing to keep small calls above the timer's reporting floor."""
+    colors = ["navy", "rebeccapurple", "#abc", "#123456", "#12345678", "rgb(37, 173, 91)", "hsl(120, 50%, 40%)", "hsv(210, 50%, 75%)"]
+    return [
+        ("getrgb mixed literals (256 calls)", lambda: [BlanketColor.getrgb(colors[i % len(colors)]) for i in range(256)], lambda: [PillowColor.getrgb(colors[i % len(colors)]) for i in range(256)]),
+        *[
+            (f"getcolor {mode} (256 calls)", lambda m=mode: [BlanketColor.getcolor(colors[i % len(colors)], m) for i in range(256)], lambda m=mode: [PillowColor.getcolor(colors[i % len(colors)], m) for i in range(256)])
+            for mode in ("1", "L", "LA", "RGB", "RGBA", "HSV")
+        ],
+    ]
+
+
+def imagecms_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Separate ICC profile and transform construction from pixel conversion."""
+    raw_profile = PillowCms.ImageCmsProfile(PillowCms.createProfile("sRGB")).tobytes()
+    actual_profile = BlanketCms.ImageCmsProfile(BytesIO(raw_profile))
+    expected_profile = PillowCms.ImageCmsProfile(BytesIO(raw_profile))
+    comparisons: list[Comparison] = [(f"createProfile {space}", partial(BlanketCms.createProfile, space), partial(PillowCms.createProfile, space)) for space in ("sRGB", "LAB", "XYZ")]
+    comparisons.extend(
+        [
+            ("ImageCmsProfile from bytes", lambda: BlanketCms.ImageCmsProfile(BytesIO(raw_profile)), lambda: PillowCms.ImageCmsProfile(BytesIO(raw_profile))),
+            ("getOpenProfile stream", lambda: BlanketCms.getOpenProfile(BytesIO(raw_profile)), lambda: PillowCms.getOpenProfile(BytesIO(raw_profile))),
+            ("profile tobytes", actual_profile.tobytes, expected_profile.tobytes),
+        ]
+    )
+    comparisons.extend(
+        (name, partial(getattr(BlanketCms, name), actual_profile), partial(getattr(PillowCms, name), expected_profile))
+        for name in ("getProfileName", "getProfileDescription", "getProfileInfo", "getProfileCopyright", "getProfileManufacturer", "getProfileModel")
+    )
+    for mode, make_pixels in (("RGB", make_rgb), ("RGBA", make_rgba)):
+        raw = make_pixels(*size)
+        actual, expected = BlanketImage.frombytes(mode, size, raw), PillowImage.frombytes(mode, size, raw)
+        transform = BlanketCms.buildTransform(actual_profile, actual_profile, mode, mode)
+        reference = PillowCms.buildTransform(expected_profile, expected_profile, mode, mode)
+        proof = BlanketCms.buildProofTransform(actual_profile, actual_profile, actual_profile, mode, mode)
+        proof_reference = PillowCms.buildProofTransform(expected_profile, expected_profile, expected_profile, mode, mode)
+        comparisons.extend(
+            [
+                (f"buildTransform {mode}", partial(BlanketCms.buildTransform, actual_profile, actual_profile, mode, mode), partial(PillowCms.buildTransform, expected_profile, expected_profile, mode, mode)),
+                (
+                    f"buildProofTransform {mode}",
+                    partial(BlanketCms.buildProofTransform, actual_profile, actual_profile, actual_profile, mode, mode),
+                    partial(PillowCms.buildProofTransform, expected_profile, expected_profile, expected_profile, mode, mode),
+                ),
+                (f"applyTransform {mode}", partial(BlanketCms.applyTransform, actual, transform), partial(PillowCms.applyTransform, expected, reference)),
+                (f"apply proof transform {mode}", partial(BlanketCms.applyTransform, actual, proof), partial(PillowCms.applyTransform, expected, proof_reference)),
+                (f"transform.apply {mode}", partial(transform.apply, actual), partial(reference.apply, expected)),
+                (f"applyTransform in place {mode} (copy included)", lambda im=actual, tr=transform: BlanketCms.applyTransform(im.copy(), tr, inPlace=True), lambda im=expected, tr=reference: PillowCms.applyTransform(im.copy(), tr, inPlace=True)),
+                (f"profileToProfile {mode}", partial(BlanketCms.profileToProfile, actual, actual_profile, actual_profile), partial(PillowCms.profileToProfile, expected, expected_profile, expected_profile)),
+                (
+                    f"profileToProfile in place {mode} (copy included)",
+                    lambda im=actual: BlanketCms.profileToProfile(im.copy(), actual_profile, actual_profile, inPlace=True),
+                    lambda im=expected: PillowCms.profileToProfile(im.copy(), expected_profile, expected_profile, inPlace=True),
+                ),
+            ]
+        )
+    raw = make_rgb(*size)
+    actual, expected = BlanketImage.frombytes("RGB", size, raw), PillowImage.frombytes("RGB", size, raw)
+    lab, lab_reference = BlanketCms.createProfile("LAB"), PillowCms.createProfile("LAB")
+    comparisons.append(("profileToProfile RGB to LAB", partial(BlanketCms.profileToProfile, actual, actual_profile, lab, outputMode="LAB"), partial(PillowCms.profileToProfile, expected, expected_profile, lab_reference, outputMode="LAB")))
+    return comparisons
+
+
+def imagefont_comparisons(directory: Path) -> list[Comparison]:
+    """Use the same bundled outline font and generated bitmap atlas in both libraries."""
+    raw, path, bitmap_path = prepare_fonts(directory)
+    actual, expected = BlanketFont.truetype(BytesIO(raw), 24), PillowFont.truetype(BytesIO(raw), 24)
+    comparisons: list[Comparison] = [
+        ("truetype stream", lambda: BlanketFont.truetype(BytesIO(raw), 24), lambda: PillowFont.truetype(BytesIO(raw), 24)),
+        ("truetype path", partial(BlanketFont.truetype, path, 24), partial(PillowFont.truetype, path, 24)),
+        ("load bitmap font", partial(BlanketFont.load, bitmap_path), partial(PillowFont.load, str(bitmap_path))),
+        ("load_default", BlanketFont.load_default, PillowFont.load_default),
+        ("font_variant", partial(actual.font_variant, size=32), partial(expected.font_variant, size=32)),
+        ("getmetrics (256 calls)", lambda: [actual.getmetrics() for _ in range(256)], lambda: [expected.getmetrics() for _ in range(256)]),
+        ("getname (256 calls)", lambda: [actual.getname() for _ in range(256)], lambda: [expected.getname() for _ in range(256)]),
+    ]
+    for label, text in (("short", "Blanket AV fi"), ("long", "Blanket AV fi benchmark " * 32)):
+        comparisons.extend((f"{name} {label}", partial(getattr(actual, name), text), partial(getattr(expected, name), text)) for name in ("getlength", "getbbox", "getmask", "getmask2"))
+        comparisons.append((f"getmask2 stroke {label}", partial(actual.getmask2, text, stroke_width=2), partial(expected.getmask2, text, stroke_width=2)))
+    return comparisons
+
+
+def sequence_comparisons(size: tuple[int, int], formats: set[str] | None = None) -> list[Comparison]:
+    """Compare fresh sequence decoding, navigation, frame copying, and encoding."""
+    raw = make_rgb(*size)
+    raws = [raw, raw[::-1], bytes(value ^ 0x55 for value in raw)]
+    actual = [BlanketImage.frombytes("RGB", size, data) for data in raws]
+    expected = [PillowImage.frombytes("RGB", size, data) for data in raws]
+    comparisons: list[Comparison] = []
+
+    for fmt in ("PNG", "GIF", "WEBP", "TIFF", "PDF"):
+        if formats is not None and fmt not in formats:
+            continue
+        options = {} if fmt in ("TIFF", "PDF") else {"duration": [40, 80, 120], "loop": 0}
+        payload = pillow_payload(expected[0], fmt, save_all=True, append_images=expected[1:], **options)
+        if fmt != "PDF":
+            comparisons.extend(
+                (f"{operation} {fmt} (open included)", partial(sequence_frames, BlanketImage, BlanketSequence, payload, operation), partial(sequence_frames, PillowImage, PillowSequence, payload, operation))
+                for operation in ("Iterator", "all_frames", "all_frames callback", "seek/tell")
+            )
+        if fmt != "TIFF":
+            comparisons.append(
+                (
+                    f"save_all {fmt} (3 frames)",
+                    lambda f=fmt, opts=options: actual[0].save(BytesIO(), f, save_all=True, append_images=actual[1:], **opts),
+                    lambda f=fmt, opts=options: expected[0].save(BytesIO(), f, save_all=True, append_images=expected[1:], **opts),
+                )
+            )
+    return comparisons
+
+
+def imagefile_comparisons(size: tuple[int, int], *, formats: set[str] | None = None) -> list[Comparison]:
+    """Feed pre-split encoded chunks into a fresh incremental decoder."""
+    source = PillowImage.frombytes("RGB", size, make_rgb(*size))
+    comparisons: list[Comparison] = []
+
+    if formats is not None and "JPEG" not in formats:
+        return comparisons
+    for label, options in (("baseline", {}), ("progressive", {"progressive": True})):
+        data = pillow_payload(source, "JPEG", **options)
+        for chunk_size in (1024, 65536):
+            chunks = [data[i : i + chunk_size] for i in range(0, len(data), chunk_size)]
+            comparisons.append((f"Parser JPEG {label} chunks={chunk_size}", partial(parse_chunks, BlanketFile, chunks), partial(parse_chunks, PillowFile, chunks)))
+    return comparisons
+
+
 def imagedraw_comparisons(size: tuple[int, int]) -> list[Comparison]:
     """Compare drawing with equal copy costs and repeatable source images.
 
@@ -890,6 +1101,7 @@ def imagedraw_comparisons(size: tuple[int, int]) -> list[Comparison]:
         blanket = BlanketImage.new(mode, size)
         pillow = PillowImage.new(mode, size)
         cases = [
+            ("circle", ((w // 2, h // 2), min(size) // 3), {"fill": ink}),
             ("point", (points,), {"fill": ink}),
             ("line", (vertices,), {"fill": ink}),
             ("line wide", (vertices,), {"fill": ink, "width": width, "joint": "curve"}),
@@ -905,6 +1117,13 @@ def imagedraw_comparisons(size: tuple[int, int]) -> list[Comparison]:
             method = label.split()[0]
             comparisons.append((f"{label} {mode} (copy included)", partial(draw, BlanketDraw, blanket, method, args, options), partial(draw, PillowDraw, pillow, method, args, options)))
         comparisons.append((f"bitmap {mode} (copy included)", partial(draw, BlanketDraw, blanket, "bitmap", ((w // 8, h // 8), b_mask), {"fill": ink}), partial(draw, PillowDraw, pillow, "bitmap", ((w // 8, h // 8), p_mask), {"fill": ink})))
+        b_outline, p_outline = make_outline(BlanketDraw, size), make_outline(PillowDraw, size)
+        comparisons.append((f"shape {mode} (copy included)", partial(draw, BlanketDraw, blanket, "shape", (b_outline,), {"fill": ink}), partial(draw, PillowDraw, pillow, "shape", (p_outline,), {"fill": ink})))
+        b_draw, p_draw = BlanketDraw.Draw(blanket), PillowDraw.Draw(pillow)
+        for method in ("textlength", "textbbox", "multiline_textbbox"):
+            value = f"{text}\nPillow comparison" if method == "multiline_textbbox" else text
+            args = (value,) if method == "textlength" else ((w // 8, h // 8), value)
+            comparisons.append((f"{method} shared font {mode}", partial(getattr(b_draw, method), *args, font=font), partial(getattr(p_draw, method), *args, font=font)))
         comparisons.append((f"floodfill {mode} (copy included)", partial(floodfill, BlanketDraw, blanket, ink), partial(floodfill, PillowDraw, pillow, ink)))
         if mode == "RGB":
             comparisons.append(
@@ -914,6 +1133,12 @@ def imagedraw_comparisons(size: tuple[int, int]) -> list[Comparison]:
                     partial(draw, PillowDraw, pillow, "rectangle", (box,), {"fill": (37, 173, 91, 83)}, "RGBA"),
                 )
             )
+    comparisons.extend(
+        [
+            ("Outline construction", partial(make_outline, BlanketDraw, size), partial(make_outline, PillowDraw, size)),
+            ("Outline construction and transform", partial(make_outline, BlanketDraw, size, transform=True), partial(make_outline, PillowDraw, size, transform=True)),
+        ]
+    )
     return comparisons
 
 
@@ -1067,7 +1292,10 @@ def imagefilter_comparisons(size: tuple[int, int]) -> list[Comparison]:
             def callback(r: float, g: float, b: float) -> tuple[float, float, float]:
                 return 1 - r, g * g, b
 
-            comparisons.append((f"Color3DLUT {mode} (17)", partial(actual.filter, BlanketFilter.Color3DLUT.generate(17, callback)), partial(expected.filter, PillowFilter.Color3DLUT.generate(17, callback))))
+            actual_lut, expected_lut = BlanketFilter.Color3DLUT.generate(17, callback), PillowFilter.Color3DLUT.generate(17, callback)
+            comparisons.append((f"Color3DLUT {mode} (17)", partial(actual.filter, actual_lut), partial(expected.filter, expected_lut)))
+            comparisons.append((f"Color3DLUT.generate {mode} (17)", partial(BlanketFilter.Color3DLUT.generate, 17, callback), partial(PillowFilter.Color3DLUT.generate, 17, callback)))
+            comparisons.append((f"Color3DLUT.transform {mode} (17)", partial(actual_lut.transform, callback), partial(expected_lut.transform, callback)))
     return comparisons
 
 
@@ -1112,7 +1340,32 @@ def imagepalette_comparisons(directory: Path) -> list[Comparison]:
 # ── main ─────────────────────────────────────────────────────────────────
 
 
-SECTION_NAMES = ("ImagePalette", "Codec I/O", "Metadata", "Conversions", "Mode Parity", "Resize", "Geometry", "Bands", "Memory", "ImageOps", "ImageDraw", "ImageChops", "ImageMath", "ImageStat", "ImageEnhance", "ImageFilter", "10-bit")
+SECTION_NAMES = (
+    "ImagePalette",
+    "Codec I/O",
+    "Metadata",
+    "Conversions",
+    "Mode Parity",
+    "Resize",
+    "Geometry",
+    "Bands",
+    "Memory",
+    "Image",
+    "ImageOps",
+    "ImageDraw",
+    "ImagePath",
+    "ImageColor",
+    "ImageCms",
+    "ImageFont",
+    "ImageSequence",
+    "ImageFile",
+    "ImageChops",
+    "ImageMath",
+    "ImageStat",
+    "ImageEnhance",
+    "ImageFilter",
+    "10-bit",
+)
 DEFAULT_SECTIONS = ("Codec I/O", "Conversions", "Mode Parity", "Resize", "Memory")
 RESULTS_DIRECTORY = Path(__file__).resolve().parents[1] / ".benchmarks"
 
@@ -1128,7 +1381,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-memory", action="store_true", help="skip allocation profiling (default: peak allocated memory from one separate run per operation, excluding input fixtures)")
     parser.add_argument("--only-memory", action="store_true", help="profile memory without timing operations; disables timing baselines and run history")
     parser.add_argument("--skip-jxl", action="store_true", help="skip JXL benchmarks (pillow-jxl-plugin required otherwise)")
-    parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O and Metadata")
+    parser.add_argument("-f", "--formats", nargs="+", type=lambda value: CODEC_ALIASES.get(value.upper(), value.upper()), choices=CODEC_FORMATS, help="only benchmark these formats in Codec I/O, Metadata, Image, ImageSequence, and ImageFile")
     parser.add_argument("--no-palette", action="store_true", help="skip the fixed-size ImagePalette benchmarks")
     parser.add_argument("-v", "--verbose", action="store_true", help="print every operation instead of section summaries")
     parser.add_argument("-so", "--slower-only", action="store_true", help="only output operations slower than Pillow")
@@ -1181,8 +1434,8 @@ def parse_args() -> argparse.Namespace:
     if arguments.no_palette:
         arguments.sections = [section for section in arguments.sections if section != "ImagePalette"]
     if arguments.formats:
-        if not {"Codec I/O", "Metadata"} & set(arguments.sections):
-            parser.error("--formats requires the Codec I/O or Metadata section")
+        if not {"Codec I/O", "Metadata", "Image", "ImageSequence", "ImageFile"} & set(arguments.sections):
+            parser.error("--formats requires a section that benchmarks encoded images")
         if arguments.skip_jxl and "JXL" in arguments.formats:
             parser.error("--formats JXL cannot be combined with --skip-jxl")
     return arguments
@@ -1271,9 +1524,16 @@ def main() -> None:
             "Geometry": partial(geometry_comparisons, size),
             "Bands": lambda: band_statistics_comparisons(size) + compositing_comparisons(size) + image_method_comparisons(size),
             "Memory": partial(memory_comparisons, size),
+            "Image": partial(image_extra_comparisons, size, formats=None if args.formats is None else set(args.formats)),
             "10-bit": partial(ten_bit_comparisons, size),
             "ImageOps": partial(imageops_comparisons, size),
             "ImageDraw": partial(imagedraw_comparisons, size),
+            "ImagePath": partial(imagepath_comparisons, size),
+            "ImageColor": imagecolor_comparisons,
+            "ImageCms": partial(imagecms_comparisons, size),
+            "ImageFont": lambda: imagefont_comparisons(Path(directory)),
+            "ImageSequence": partial(sequence_comparisons, size, formats=None if args.formats is None else set(args.formats)),
+            "ImageFile": partial(imagefile_comparisons, size, formats=None if args.formats is None else set(args.formats)),
             "ImageChops": partial(imagechops_comparisons, size),
             "ImageMath": partial(imagemath_comparisons, size),
             "ImageStat": partial(imagestat_comparisons, size),
@@ -1284,8 +1544,9 @@ def main() -> None:
 
         size_results: list[dict[str, Any]] = []
         for section_name, build in sections:
-            comparisons = build()
-            results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all, track_memory=not args.no_memory, only_memory=args.only_memory)
+            with TemporaryDirectory() as directory:
+                comparisons = build()
+                results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all, track_memory=not args.no_memory, only_memory=args.only_memory)
             del comparisons
             for r in results:
                 r["section"] = section_name

@@ -52,6 +52,7 @@ test = [
     "torch>=2.13"
 ]
 bench = [
+    "defusedxml>=0.7.1",
     "rich>=15",
     "memray>=1.20; sys_platform == 'linux' or sys_platform == 'darwin'",
     {include-group = "test"},
