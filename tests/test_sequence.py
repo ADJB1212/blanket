@@ -42,6 +42,52 @@ def test_apng_rgba_deltas_preserve_transparent_colors_and_sources() -> None:
     assert [frame.tobytes() for frame in frames] == originals
 
 
+@pytest.mark.parametrize("first_mode,second_mode", [("RGB", "LA"), ("P", "L"), ("P", "LA"), ("RGB", "P"), ("L", "PA")])
+@pytest.mark.parametrize("reverse", [False, True])
+@pytest.mark.parametrize("transparent_palette", [False, True])
+def test_apng_mixed_modes_preserve_frame_colors(first_mode, second_mode, reverse, transparent_palette) -> None:
+    colors = {"RGB": (200, 10, 20), "L": 1, "LA": (150, 0), "P": 0, "PA": (0, 73)}
+    frames = [Image.new(mode, (2, 2), colors[mode]) for mode in (first_mode, second_mode)]
+    for frame in frames:
+        if frame.mode in ("P", "PA"):
+            frame.putpalette([255, 0, 0, 0, 255, 0] + [0] * 762)
+            if frame.mode == "P" and transparent_palette:
+                frame.info["transparency"] = 0
+    if reverse:
+        frames.reverse()
+    expected = [frame.convert("RGBA").tobytes() for frame in frames]
+    data = frames[0].encode("PNG", save_all=True, append_images=frames[1:], duration=[10, 20], blend=0)
+    for opener in (Image.open, PillowImage.open):
+        with opener(BytesIO(data)) as image:
+            assert image.n_frames == 2
+            for position, pixels in enumerate(expected):
+                image.seek(position)
+                assert image.convert("RGBA").tobytes() == pixels
+    assert [frame.convert("RGBA").tobytes() for frame in frames] == expected
+
+
+@pytest.mark.parametrize("mode,palette_alpha", [("P", False), ("RGB", False), ("L", False), ("P", True)])
+def test_apng_preserves_per_frame_transparency(mode, palette_alpha) -> None:
+    first = Image.new(mode, (2, 2), (255, 0, 0) if mode == "RGB" else 0)
+    if mode == "P":
+        first.putpalette([255, 0, 0, 0, 255, 0] + [0] * 762)
+    second = first.copy()
+    if palette_alpha:
+        first.putpalette([255, 0, 0, 255, 0, 255, 0, 255], "RGBA")
+        second.putpalette([255, 0, 0, 0, 0, 255, 0, 255], "RGBA")
+    else:
+        first.info["transparency"] = (0, 255, 0) if mode == "RGB" else 1
+        second.info["transparency"] = (255, 0, 0) if mode == "RGB" else 0
+    expected = [frame.convert("RGBA").tobytes() for frame in (first, second)]
+    data = first.encode("PNG", save_all=True, append_images=[second], duration=[10, 20], blend=0)
+    for opener in (Image.open, PillowImage.open):
+        with opener(BytesIO(data)) as image:
+            assert image.n_frames == 2
+            for position, pixels in enumerate(expected):
+                image.seek(position)
+                assert image.convert("RGBA").tobytes() == pixels
+
+
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])
 def test_navigation_metadata_mutation_and_copy(format: str) -> None:
     image = animation(format, **({"lossless": True} if format == "WEBP" else {}))

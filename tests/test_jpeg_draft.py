@@ -31,3 +31,30 @@ def test_loaded_jpeg_draft_is_noop() -> None:
     assert actual.draft("L", (1, 1)) is None
     assert actual.mode == "RGB"
     assert actual.size == (17, 13)
+
+
+@pytest.mark.parametrize("opener", [lambda data: Image.open(BytesIO(data)), Image.decode])
+@pytest.mark.parametrize("access", ["getpixel", "putpixel", "tobytes", "copy"])
+def test_pixel_access_disables_jpeg_draft(opener, access) -> None:
+    encoded = Image.new("RGB", (32, 32), "red").encode("JPEG")
+    with opener(encoded) as image:
+        if access == "getpixel":
+            image.getpixel((0, 0))
+        elif access == "putpixel":
+            image.putpixel((0, 0), (0, 255, 0))
+        else:
+            getattr(image, access)()
+        assert image.draft("L", (4, 4)) is None
+        assert image.mode == "RGB"
+        assert image.size == (32, 32)
+        if access == "putpixel":
+            assert image.getpixel((0, 0)) == (0, 255, 0)
+
+
+def test_eager_jpeg_metadata_does_not_disable_draft() -> None:
+    with Image.decode(Image.new("RGB", (32, 32), "red").encode("JPEG")) as image:
+        assert (image.mode, image.size, image.format, image.bit_depth) == ("RGB", (32, 32), "JPEG", 8)
+        assert image.tell() == 0
+        image.seek(0)
+        assert image.draft("L", (4, 4)) == ("L", (0, 0, 4.0, 4.0))
+        assert image.size == (4, 4)

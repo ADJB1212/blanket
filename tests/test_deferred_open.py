@@ -6,7 +6,7 @@ from io import BytesIO
 import pytest
 from PIL import Image as PillowImage
 
-from blanket import Image
+from blanket import Image, ImageFile
 
 CASES = [("JPEG", mode) for mode in ("L", "RGB", "CMYK")] + [("PNG", mode) for mode in ("L", "LA", "RGB", "RGBA")] + [("WEBP", mode) for mode in ("RGB", "RGBA")]
 
@@ -45,6 +45,8 @@ def test_metadata_and_verify_do_not_decode(monkeypatch, format, mode):
             image.load()
         with pytest.raises(ValueError, match="closed"):
             image.verify()
+        with pytest.raises(ValueError, match="closed"):
+            image.draft("L", (1, 1))
 
 
 @pytest.mark.parametrize("format,mode", CASES)
@@ -73,6 +75,41 @@ def test_pixels_decode_once_and_retain_metadata(monkeypatch, format, mode):
     assert image.info["custom"] == "retained"
     assert len(calls) == 1
     image.close()
+
+
+@pytest.mark.parametrize("access", ["getpixel", "tobytes", "copy", "putpixel", "convert", "encode"])
+def test_pixel_access_checks_truncated_jpeg_policy(monkeypatch, access):
+    data = Image.new("RGB", (32, 32), "red").encode("JPEG")[:-2]
+    image = Image.open(BytesIO(data))
+
+    def pixels():
+        if access == "getpixel":
+            return image.getpixel((0, 0))
+        if access == "putpixel":
+            return image.putpixel((0, 0), (0, 255, 0))
+        if access == "convert":
+            return image.convert("L")
+        if access == "encode":
+            return image.encode("PNG")
+        return getattr(image, access)()
+
+    monkeypatch.setattr(ImageFile, "LOAD_TRUNCATED_IMAGES", False)
+    assert image.size == (32, 32)
+    with pytest.raises(OSError, match="broken data stream"):
+        pixels()
+    monkeypatch.setattr(ImageFile, "LOAD_TRUNCATED_IMAGES", True)
+    pixels()
+    image.close()
+
+
+def test_truncated_jpeg_can_close_without_loading(monkeypatch):
+    data = Image.new("RGB", (32, 32), "red").encode("JPEG")[:-2]
+    monkeypatch.setattr(ImageFile, "LOAD_TRUNCATED_IMAGES", False)
+    image = Image.open(BytesIO(data))
+    image.close()
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        image.load()
 
 
 @pytest.mark.parametrize("corruption", ["checksum", "truncated", "pixels"])

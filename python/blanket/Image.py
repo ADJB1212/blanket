@@ -492,6 +492,14 @@ class Image:
 
     @property
     def _native(self) -> _Image:
+        if self._truncated_jpeg:
+            from . import ImageFile
+
+            if not ImageFile.LOAD_TRUNCATED_IMAGES:
+                raise OSError("broken data stream when reading image file")
+            self._truncated_jpeg = False
+        elif self._seek_error is not None and self._frame == 0 and self._declared_frames is None:
+            raise self._seek_error
         if self._decoded is None:
             data = self._encoded
             if data is None:
@@ -501,6 +509,7 @@ class Image:
             else:
                 native = _open_sequence(data, [self.format], None)[0][0]
             self._native = native
+        self._draft_source = None
         return cast("_Image", self._decoded)
 
     @_native.setter
@@ -508,6 +517,13 @@ class Image:
         self._decoded = native
         self._header = None
         self._encoded = None
+
+    def _check_open(self) -> None:
+        """Check raster lifetime without decoding pixels or retiring JPEG draft data."""
+        if self._encoded is None:
+            if self._decoded is None:
+                raise ValueError("operation on closed image")
+            self._decoded.load()
 
     @property
     def mode(self) -> str:
@@ -521,7 +537,7 @@ class Image:
             print(image.mode)
             ```
         """
-        return self._header.mode if self._header is not None else self._native.mode
+        return self._header.mode if self._header is not None else cast("_Image", self._decoded).mode
 
     @property
     def bit_depth(self) -> int:
@@ -535,7 +551,7 @@ class Image:
             print(image.bit_depth)
             ```
         """
-        return self._header.bit_depth if self._header is not None else self._native.bit_depth
+        return self._header.bit_depth if self._header is not None else cast("_Image", self._decoded).bit_depth
 
     @property
     def size(self) -> tuple[int, int]:
@@ -549,7 +565,7 @@ class Image:
             print(image.size)
             ```
         """
-        return self._header.size if self._header is not None else self._native.size
+        return self._header.size if self._header is not None else cast("_Image", self._decoded).size
 
     @property
     def width(self) -> int:
@@ -591,7 +607,7 @@ class Image:
             print(image.format)
             ```
         """
-        return self._header.format if self._header is not None else self._native.format
+        return self._header.format if self._header is not None else cast("_Image", self._decoded).format
 
     @property
     def info(self) -> dict[object, object]:
@@ -648,8 +664,7 @@ class Image:
             assert Image.new("RGB", (2, 2)).tell() == 0
             ```
         """
-        if self._encoded is None:
-            self._native.load()
+        self._check_open()
         return self._frame
 
     def seek(self, frame: int) -> None:
@@ -666,8 +681,7 @@ class Image:
             image.seek(0)
             ```
         """
-        if self._encoded is None:
-            self._native.load()
+        self._check_open()
         frame = index(frame)
         if not 0 <= frame < self.n_frames:
             raise EOFError("attempt to seek outside sequence")
@@ -724,15 +738,6 @@ class Image:
             ```
         """
         self._native.load()
-        if self._truncated_jpeg:
-            from . import ImageFile
-
-            if not ImageFile.LOAD_TRUNCATED_IMAGES:
-                raise OSError("broken data stream when reading image file")
-            self._truncated_jpeg = False
-        elif self._seek_error is not None and self._frame == 0 and self._declared_frames is None:
-            raise self._seek_error
-        self._draft_source = None
         self._sync_palette()
         return PixelAccess(self._native)
 
@@ -851,8 +856,7 @@ class Image:
             image.draft("L", (4, 4))
             ```
         """
-        if self._encoded is None:
-            self._native.load()
+        self._check_open()
         data = self._draft_source
         if data is None:
             return None
@@ -919,10 +923,12 @@ class Image:
             image.close()
             ```
         """
-        if self._header is None:
-            self._native.close()
+        if self._decoded is not None:
+            self._decoded.close()
         self._encoded = None
         self._draft_source = None
+        self._truncated_jpeg = False
+        self._seek_error = None
         if self._frames is not None:
             for frame in self._frames:
                 frame._native.close()
@@ -2661,8 +2667,7 @@ class Image:
                 print(image.size)
             ```
         """
-        if self._encoded is None:
-            self._native.load()
+        self._check_open()
         return self
 
     def __exit__(self, *exc_info: object) -> None:

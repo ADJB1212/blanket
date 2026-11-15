@@ -557,9 +557,14 @@ def test_different_modes_in_later_frames(mode: str, default_image: bool, duplica
     test_file = tmp_path / "temp.png"
 
     im = Image.new("L", (1, 1))
-    im.save(test_file, save_all=True, default_image=default_image, append_images=[im.convert(mode) if duplicate else Image.new(mode, (1, 1), 1)])
+    second = im.convert(mode) if duplicate else Image.new(mode, (1, 1), 1)
+    expected = [frame.convert("RGBA").tobytes() for frame in (im, second)]
+    im.save(test_file, save_all=True, default_image=default_image, append_images=[second])
     with Image.open(test_file) as reloaded:
-        assert reloaded.mode == mode
+        assert reloaded.mode == ("RGB" if mode == "P" else mode)
+        for position, pixels in enumerate(expected):
+            reloaded.seek(position)
+            assert reloaded.convert("RGBA").tobytes() == pixels
 
 
 def test_different_durations(tmp_path: Path) -> None:

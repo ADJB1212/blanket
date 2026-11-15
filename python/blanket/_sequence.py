@@ -126,13 +126,22 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     png_palette = None
     if format == "PNG" and all(frame.bit_depth == 8 for frame in frames):
         modes = {frame.mode for frame in frames}
-        png_mode = next((mode for mode in ("RGBA", "RGB", "P", "LA", "L", "1") if mode in modes), "RGBA")
-        indexed = [frame for frame in frames if frame.mode == "P"]
-        if indexed:
-            png_palette = indexed[0].palette
-            palette_values = indexed[0].getpalette()
-            if any(frame.getpalette() != palette_values for frame in indexed[1:]):
-                png_mode = "RGBA" if any(frame.palette is not None and frame.palette.mode == "RGBA" for frame in indexed) else "RGB"
+        has_alpha = any(frame.has_transparency_data for frame in frames)
+        if len(modes) == 1:
+            png_mode = next(iter(modes))
+            if png_mode not in ("RGBA", "RGB", "P", "LA", "L", "1"):
+                png_mode = "RGBA"
+            if png_mode in ("P", "RGB", "L") and any(frame.info.get("transparency") != frames[0].info.get("transparency") for frame in frames[1:]):
+                png_mode = "RGBA"
+            if png_mode == "P":
+                png_palette = frames[0].palette
+                palette_values = frames[0].getpalette("RGBA")
+                if any(frame.getpalette("RGBA") != palette_values for frame in frames[1:]):
+                    png_mode = "RGBA" if has_alpha else "RGB"
+        elif modes <= {"1", "L", "LA"}:
+            png_mode = "LA" if has_alpha else "L"
+        else:
+            png_mode = "RGBA" if has_alpha else "RGB"
     for source in frames:
         frame = source
         if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):
