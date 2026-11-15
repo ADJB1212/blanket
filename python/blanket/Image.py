@@ -76,9 +76,11 @@ from ._blanket import (
     ops_color_resize,
     ops_entropy,
     ops_histogram,
+    ops_lens_map,
     ops_linear_gradient,
     ops_point,
     ops_reduce,
+    ops_remap,
     ops_remap_indices,
     ops_resize,
     ops_rotation_geometry,
@@ -2408,6 +2410,137 @@ class Image:
         result = Image(native)
         result.info.update(self._metadata_info())
         return result
+
+    def remap(self, coordinates: Image, resample: int = Resampling.NEAREST, *, border: str = "constant", fillcolor: float | Sequence[float] = 0, premultiply_alpha: bool = True) -> Image:
+        """Sample through a reusable RGB;F coordinate map.
+
+        Red stores source x, green stores source y, and blue is ignored.
+        Pixel centers are (x + 0.5, y + 0.5); map dimensions set output size.
+        Support L/LA/RGB/RGBA, their available 10/12/16-bit depths, I;16
+        variants, and F/RGB;F/RGBA;F. Convert other modes explicitly.
+        Nonfinite coordinates always use fillcolor. Nearest copies samples
+        exactly. Interpolation rounds integer samples and saturates to depth;
+        floats retain their range. Preserve current-frame metadata and leave
+        the source and map unchanged.
+
+        Args:
+            coordinates: Reusable RGB;F image of source coordinates.
+            resample: NEAREST, BILINEAR, or BICUBIC (Catmull-Rom).
+            border: "constant" fills missing taps, "clamp" repeats edge pixels,
+                "reflect" mirrors with repeated edge pixels, or "wrap" tiles.
+            fillcolor: Finite scalar or one value per channel, in native sample
+                units (0..255 for 8-bit, 0..1023 for 10-bit, and so on).
+            premultiply_alpha: Interpolate straight alpha colors in premultiplied
+                form; False samples channels independently. Nearest ignores this.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            coordinates = image.lens_map(k1=0.1)
+            result = image.remap(coordinates, Image.Resampling.BILINEAR, border="clamp")
+            ```
+        """
+        if not isinstance(coordinates, Image):
+            raise TypeError("coordinates must be a Blanket Image")
+        if resample not in (Resampling.NEAREST, Resampling.BILINEAR, Resampling.BICUBIC):
+            raise ValueError("remap supports NEAREST, BILINEAR, and BICUBIC")
+        if not isinstance(border, str) or border not in {"constant", "clamp", "reflect", "wrap"}:
+            raise ValueError("border must be constant, clamp, reflect, or wrap")
+        if not isinstance(premultiply_alpha, bool):
+            raise TypeError("premultiply_alpha must be a boolean")
+        if isinstance(fillcolor, (str, bytes, bytearray)):
+            raise TypeError("fillcolor must be a number or sequence of numbers")
+        self.load()
+        coordinates.load()
+        channels = len(self.getbands())
+        fill = [float(fillcolor)] * channels if isinstance(fillcolor, (int, float)) else [float(value) for value in fillcolor]
+        result = Image(ops_remap(self._native, coordinates._native, resample, border, fill, premultiply_alpha))
+        result.info.update(self._metadata_info())
+        return result
+
+    def lens_map(self, *, k1: float = 0, k2: float = 0, k3: float = 0, center: tuple[float, float] | None = None, focal: tuple[float, float] | None = None) -> Image:
+        """Build a reusable radial lens correction map for this image size.
+
+        For each destination pixel center, let u=(x-cx)/fx, v=(y-cy)/fy,
+        r2=u*u+v*v, and s=1+k1*r2+k2*r2*r2+k3*r2*r2*r2. Sample the source
+        at (cx+fx*u*s, cy+fy*v*s). This maps an undistorted output grid into
+        the distorted source using its calibrated radial coefficients; it does
+        not estimate calibration or numerically invert a distortion model.
+        Zero coefficients give an identity map. Map coordinates are float32;
+        overflow becomes nonfinite and remap uses fillcolor for those pixels.
+        Reuse the map across frames or images with the same source geometry,
+        including via ImageGpu after explicitly uploading it.
+
+        Args:
+            k1: First radial coefficient. Positive values sample farther from
+                the center toward the edges; negative values sample inward.
+            k2: Second radial coefficient.
+            k3: Third radial coefficient.
+            center: Optical center in pixel coordinates; defaults to (width/2, height/2).
+            focal: Positive (fx, fy) normalization lengths in pixels; both default
+                to max(width, height)/2. All parameters must be finite.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            coordinates = image.lens_map(k1=-0.1, k2=0.01)
+            result = image.remap(coordinates)
+            ```
+        """
+        self.load()
+        if center is None:
+            center = (self.width / 2, self.height / 2)
+        if focal is None:
+            radius = max(self.size) / 2
+            focal = (radius, radius)
+        return Image(ops_lens_map(self.size, (k1, k2, k3), center, focal))
+
+    def lens_correct(
+        self,
+        *,
+        k1: float = 0,
+        k2: float = 0,
+        k3: float = 0,
+        center: tuple[float, float] | None = None,
+        focal: tuple[float, float] | None = None,
+        resample: int = Resampling.BILINEAR,
+        border: str = "constant",
+        fillcolor: float | Sequence[float] = 0,
+        premultiply_alpha: bool = True,
+    ) -> Image:
+        """Return a radially corrected copy using lens_map followed by remap.
+
+        Preserve size, mode, sample depth, and current-frame metadata. Use
+        calibrated coefficients with the mapping direction described by lens_map.
+
+        Args:
+            k1: First radial coefficient.
+            k2: Second radial coefficient.
+            k3: Third radial coefficient.
+            center: Optical center; defaults to (width/2, height/2).
+            focal: Positive (fx, fy) normalization lengths in pixels.
+            resample: NEAREST, BILINEAR (default), or BICUBIC.
+            border: "constant", "clamp", "reflect", or "wrap".
+            fillcolor: Finite scalar or per-channel samples for constant borders.
+            premultiply_alpha: Interpolate straight alpha colors in premultiplied form.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            result = image.lens_correct(k1=-0.1, border="clamp")
+            ```
+        """
+        coordinates = self.lens_map(k1=k1, k2=k2, k3=k3, center=center, focal=focal)
+        try:
+            return self.remap(coordinates, resample, border=border, fillcolor=fillcolor, premultiply_alpha=premultiply_alpha)
+        finally:
+            coordinates.close()
 
     def seam_carve(self, size: tuple[int, int]) -> Image:
         """Return a content-aware resized copy by removing or inserting seams.

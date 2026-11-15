@@ -7,6 +7,8 @@ use std::simd::num::{SimdFloat, SimdInt, SimdUint};
 
 use blanket_kernels::pixels::{self, Bytes, load, store};
 
+pub mod remap;
+
 // Fixed-point resampling coefficients shared by scalar and vector passes.
 pub const RESAMPLE_BITS: u32 = 22;
 pub const RESAMPLE_SCALE: i32 = 1 << RESAMPLE_BITS;

@@ -441,8 +441,9 @@ with new processing semantics exposed explicitly.
 - [x] **Content-aware seam carving** — `Image.seam_carve(size)` shrinks or enlarges
       images using low-energy connected seams, preserving sample precision and
       favoring high-energy color/alpha edges
-- [ ] **Lens correction and remapping** — radial distortion correction and
-      reusable coordinate maps with configurable interpolation and borders
+- [x] **Lens correction and remapping** — `Image.lens_correct` and reusable
+      `Image.lens_map` / `Image.remap` coordinate maps, with nearest, bilinear,
+      or bicubic interpolation and constant, clamp, reflect, or wrap borders
 
 #### Compression and Animation Optimization
 

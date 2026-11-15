@@ -13,6 +13,7 @@ use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 
 mod planning;
+mod remap;
 mod seam;
 type BoxI = (i64, i64, i64, i64);
 type BoxF = (f64, f64, f64, f64);
@@ -21,6 +22,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(planning::ops_thumbnail_size, module)?)?;
     module.add_function(wrap_pyfunction!(planning::ops_rotation_geometry, module)?)?;
     module.add_function(wrap_pyfunction!(seam::ops_seam_carve, module)?)?;
+    module.add_function(wrap_pyfunction!(remap::ops_remap, module)?)?;
+    module.add_function(wrap_pyfunction!(remap::ops_lens_map, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_reduce, module)?)?;
