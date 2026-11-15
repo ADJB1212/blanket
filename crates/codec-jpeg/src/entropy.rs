@@ -51,15 +51,15 @@ impl Reader<'_> {
     }
 
     #[inline]
-    fn peek_byte(&mut self) -> Option<u8> {
-        if self.bits.remaining < 8 {
+    fn peek(&mut self, count: u8) -> Option<usize> {
+        if self.bits.remaining < count {
             let checkpoint = (self.pos, self.bits);
-            if self.fill(8).is_err() {
+            if self.fill(count).is_err() {
                 (self.pos, self.bits) = checkpoint;
                 return None;
             }
         }
-        Some((self.bits.buffer >> (self.bits.remaining - 8)) as u8)
+        Some(((self.bits.buffer >> (self.bits.remaining - count)) & ((1 << count) - 1)) as usize)
     }
 
     pub(super) fn signed(&mut self, count: u8) -> Result<i16> {
@@ -93,7 +93,10 @@ impl Reader<'_> {
 pub(super) struct Huffman {
     counts: [u8; 16],
     values: Vec<u8>,
-    fast: [u16; 256],
+    fast: [u16; 1024],
+    fast_value: [u32; 1024],
+    first_long: usize,
+    offset_long: usize,
 }
 
 impl Huffman {
@@ -108,35 +111,66 @@ impl Huffman {
         if values.is_empty() || values.len() > 256 || counts.iter().map(|&n| usize::from(n)).sum::<usize>() != values.len() {
             return Err(Error::Invalid);
         }
-        let mut fast = [0; 256];
+        let mut fast = [0; 1024];
         let mut code = 0;
         let mut offset = 0;
-        for (index, &count) in counts.iter().enumerate().take(8) {
+        for (index, &count) in counts.iter().enumerate().take(10) {
             let length = index + 1;
             for _ in 0..count {
                 let entry = ((length as u16) << 8) | u16::from(values[offset]);
-                fast[code << (8 - length)..(code + 1) << (8 - length)].fill(entry);
+                fast[code << (10 - length)..(code + 1) << (10 - length)].fill(entry);
                 code += 1;
                 offset += 1;
             }
             code <<= 1;
         }
-        Ok(Self { counts, values: values.to_vec(), fast })
+        let mut fast_value = [0; 1024];
+        for (prefix, &entry) in fast.iter().enumerate() {
+            let length = u32::from(entry >> 8);
+            let size = u32::from(entry & 15);
+            if length == 0 || length + size > 10 {
+                continue;
+            }
+            let amplitude = (prefix as u32 >> (10 - length - size)) & ((1 << size) - 1);
+            let value = if size != 0 && amplitude < 1 << (size - 1) { amplitude as i32 + 1 - (1 << size) } else { amplitude as i32 };
+            fast_value[prefix] = ((length + size) << 24) | (u32::from(entry & 255) << 16) | u32::from(value as i16 as u16);
+        }
+        Ok(Self { counts, values: values.to_vec(), fast, fast_value, first_long: code, offset_long: offset })
+    }
+
+    #[inline]
+    fn coefficient(&self, reader: &mut Reader<'_>) -> Result<(u8, i16)> {
+        if let Some(prefix) = reader.peek(10) {
+            let entry = self.fast_value[prefix];
+            if entry != 0 {
+                reader.bits.remaining -= (entry >> 24) as u8;
+                return Ok(((entry >> 16) as u8, entry as i16));
+            }
+            let entry = self.fast[prefix];
+            if entry != 0 {
+                reader.bits.remaining -= (entry >> 8) as u8;
+                let symbol = entry as u8;
+                return Ok((symbol, reader.signed(symbol & 15)?));
+            }
+        }
+        let symbol = self.symbol(reader)?;
+        Ok((symbol, reader.signed(symbol & 15)?))
     }
 
     #[inline]
     fn symbol(&self, reader: &mut Reader<'_>) -> Result<u8> {
-        if let Some(prefix) = reader.peek_byte() {
-            let entry = self.fast[usize::from(prefix)];
+        let (mut code, mut first, mut offset, start) = if let Some(prefix) = reader.peek(10) {
+            let entry = self.fast[prefix];
             if entry != 0 {
                 reader.bits.remaining -= (entry >> 8) as u8;
                 return Ok(entry as u8);
             }
-        }
-        let mut code = 0;
-        let mut first = 0;
-        let mut offset = 0;
-        for count in self.counts {
+            reader.bits.remaining -= 10;
+            (prefix, self.first_long, self.offset_long, 10)
+        } else {
+            (0, 0, 0, 0)
+        };
+        for &count in &self.counts[start..] {
             code = (code << 1) | usize::from(reader.read(1)?);
             if code < first + usize::from(count) {
                 return self.values.get(offset + code - first).copied().ok_or(Error::Invalid);
@@ -154,8 +188,11 @@ pub(super) const ZIGZAG: [usize; 64] = [
 ];
 
 pub(super) fn dc(reader: &mut Reader<'_>, table: &Huffman, predictor: &mut i16, block: &mut [i16; 64], al: u8) -> Result<()> {
-    let category = table.symbol(reader)?;
-    *predictor = predictor.checked_add(reader.signed(category)?).ok_or(Error::Invalid)?;
+    let (category, value) = table.coefficient(reader)?;
+    if category > 11 {
+        return Err(Error::Invalid);
+    }
+    *predictor = predictor.checked_add(value).ok_or(Error::Invalid)?;
     block[0] = predictor.checked_mul(1 << al).ok_or(Error::Invalid)?;
     Ok(())
 }
@@ -178,7 +215,7 @@ pub(super) fn ac(
     let mut k = start;
     if *eob == 0 {
         while k <= end {
-            let symbol = table.symbol(reader)?;
+            let (symbol, amplitude) = if refine { (table.symbol(reader)?, 0) } else { table.coefficient(reader)? };
             let mut run = usize::from(symbol >> 4);
             let size = symbol & 15;
             if !refine && size > 10 {
@@ -190,7 +227,7 @@ pub(super) fn ac(
                 }
                 if size == 1 { if reader.read(1)? == 1 { bit } else { -bit } } else { 0 }
             } else {
-                reader.signed(size)?.checked_mul(bit).ok_or(Error::Invalid)?
+                amplitude.checked_mul(bit).ok_or(Error::Invalid)?
             };
             if !(-1023..=1023).contains(&value) {
                 return Err(Error::Invalid);
@@ -247,6 +284,39 @@ pub(super) fn ac(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coefficient_lookup_matches_signed_amplitudes_and_byte_stuffing() {
+        let table = Huffman::new([1; 16], &(0..16).collect::<Vec<_>>()).unwrap();
+        let mut bits = Vec::new();
+        let mut expected = Vec::new();
+        for size in 0..=10 {
+            let length = size + 1;
+            let code = (1u32 << length) - 2;
+            for amplitude in 0..1u32 << size {
+                bits.extend((0..length).rev().map(|shift| ((code >> shift) & 1) as u8));
+                bits.extend((0..size).rev().map(|shift| ((amplitude >> shift) & 1) as u8));
+                let value = if size > 0 && amplitude < 1 << (size - 1) { amplitude as i32 + 1 - (1 << size) } else { amplitude as i32 };
+                expected.push((size as u8, value as i16));
+            }
+        }
+        bits.resize(bits.len().next_multiple_of(8), 1);
+        let mut data = Vec::new();
+        for byte in bits.as_chunks::<8>().0 {
+            let byte = byte.iter().fold(0, |value, bit| (value << 1) | bit);
+            data.push(byte);
+            if byte == 255 {
+                data.push(0);
+            }
+        }
+        let end = data.len();
+        data.extend_from_slice(&[255, 217]);
+        let mut reader = Reader { data: &data, pos: 0, bits: Bits::default() };
+        for coefficient in expected {
+            assert_eq!(table.coefficient(&mut reader).unwrap(), coefficient);
+        }
+        assert_eq!(reader.pos, end);
+    }
 
     #[test]
     fn huffman_lookup_handles_all_code_lengths_and_marker_boundaries() {

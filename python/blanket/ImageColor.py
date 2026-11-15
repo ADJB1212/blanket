@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import lru_cache
+
 from ._blanket import color_getcolor
 from ._color import _rgb
 from ._color_names import CSS_COLORS
@@ -9,6 +11,7 @@ from ._color_names import CSS_COLORS
 colormap = CSS_COLORS
 
 
+@lru_cache(maxsize=512)
 def getrgb(color: str) -> tuple[int, ...]:
     """Convert an absolute CSS color literal to an 8-bit sRGB or RGBA tuple.
 
@@ -19,6 +22,7 @@ def getrgb(color: str) -> tuple[int, ...]:
     return _rgb(color)
 
 
+@lru_cache(maxsize=512)
 def getcolor(color: str, mode: str) -> int | tuple[int, ...]:
     """Return Pillow-compatible color samples for *mode*.
 

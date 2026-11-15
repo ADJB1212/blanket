@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"struct", "collections.abc"}
+__lazy_modules__ = {"collections.abc"}
 
-import struct
 from operator import index
 from typing import TYPE_CHECKING, cast, overload
 
-from ._blanket import path_bbox, path_compact, path_coordinates, path_map, path_transform
+from ._blanket import _Path
 
 if TYPE_CHECKING:
     from collections.abc import Buffer, Callable, Iterator, Sequence
@@ -30,10 +29,13 @@ class Path:
         if isinstance(xy, int):
             if xy < 0:
                 raise MemoryError("negative path size")
-            self._points = [(0.0, 0.0)] * xy
+            self._points = _Path.zeros(xy)
             return
         if isinstance(xy, Path):
             self._points = xy._points.copy()
+            return
+        if isinstance(xy, bytes):
+            self._points = _Path.from_buffer(xy)
             return
         try:
             buffer = memoryview(cast("Buffer", xy))
@@ -41,11 +43,11 @@ class Path:
             buffer = None
         if buffer is not None and buffer.c_contiguous:
             data = buffer.cast("B")
-            self._points = list(struct.iter_unpack("=ff", data[: len(data) // 8 * 8]))
+            self._points = _Path.from_buffer(data.tobytes())
             return
         if not hasattr(xy, "__getitem__") or isinstance(xy, str):
             raise TypeError("argument must be a coordinate sequence")
-        self._points = path_coordinates(xy)
+        self._points = _Path(xy)
 
     @staticmethod
     def _number(value: float) -> float:
@@ -97,11 +99,11 @@ class Path:
     def __getitem__(self, key: int | slice) -> tuple[float, float] | Path:
         """Return a coordinate pair or an independent path for a contiguous slice."""
         if isinstance(key, slice):
-            points = self._points[key]
-            if points and key.step not in (None, 1):
+            start, stop, step = key.indices(len(self))
+            if range(start, stop, step) and step != 1:
                 raise TypeError("slice steps not supported")
             result = Path(0)
-            result._points = points
+            result._points = self._points.slice(start, max(start, stop)) if step == 1 else _Path.zeros(0)
             return result
         return self._points[index(key)]
 
@@ -122,28 +124,26 @@ class Path:
         """Remove vertices closer than the Manhattan distance; return the number removed."""
         if self._mapping:
             raise ValueError("Path compacted during mapping")
-        return path_compact(self._points, float(distance))
+        return self._points.compact(float(distance))
 
     def getbbox(self) -> tuple[float, float, float, float]:
         """Return (left, top, right, bottom), or four zeros for an empty path."""
-        return path_bbox(self._points)
+        return self._points.getbbox()
 
     def map(self, function: Callable[[float, float], tuple[float, float]]) -> None:
         """Replace each vertex with function(x, y), updating the path in place."""
         previous = self._mapping
         self._mapping = True
         try:
-            path_map(self._points, function)
+            self._points.map(function)
         finally:
             self._mapping = previous
 
     def tolist(self, flat: bool = False) -> list[tuple[float, float]] | list[float]:
         """Return copied coordinate pairs, or a flat list when flat is true."""
-        if flat:
-            return [value for point in self._points for value in point]
-        return self._points.copy()
+        return self._points.tolist(bool(flat))
 
     def transform(self, matrix: Sequence[float], wrap: float = 0) -> None:
         """Apply (a*x + b*y + c, d*x + e*y + f), optionally wrapping x with fmod."""
         a, b, c, d, e, f = (self._number(value) for value in matrix)
-        path_transform(self._points, (a, b, c, d, e, f), float(wrap))
+        self._points.transform((a, b, c, d, e, f), float(wrap))

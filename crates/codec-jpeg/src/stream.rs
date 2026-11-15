@@ -459,6 +459,10 @@ impl JpegStreamDecoder {
             previous = Some(coefficients);
         }
         let coefficients = previous.as_ref().unwrap_or_else(|| self.coefficients.as_ref().unwrap());
+        if let Some(image) = super::stream_render::render(coefficients, self.completed_color.1)? {
+            self.pixels = Some(image);
+            return Ok(());
+        }
         // Reconstruct coefficients without requantization and use the eager
         // backend for identical IDCT, upsampling, and color conversion.
         let mut encoded = write_coefficients(coefficients).map_err(|error| error.to_string())?;

@@ -147,6 +147,33 @@ def test_mixed_coordinate_pairs_preserve_flattening_order() -> None:
     assert ImagePath.Path([1, (2, 3), 4]).tolist() == [(1, 2), (3, 4)]
 
 
+def test_materialized_coordinates_remain_snapshots_across_native_mutations() -> None:
+    path = ImagePath.Path([(1, 2), (3, 4), (5, 6)])
+    original = path.tolist()
+    path[0] = (7, 8)
+    assert original == [(1, 2), (3, 4), (5, 6)]
+    snapshot = path.tolist()
+    copied = ImagePath.Path(path)
+    path.transform((2, 0, 1, 0, 3, -1))
+    assert path.tolist() == [(15, 23), (7, 11), (11, 17)]
+    assert snapshot == copied.tolist() == [(7, 8), (3, 4), (5, 6)]
+    path.map(lambda x, y: (x + 1, y - 1))
+    assert path.tolist() == [(16, 22), (8, 10), (12, 16)]
+
+
+def test_mapping_callback_can_read_and_edit_the_path() -> None:
+    path = ImagePath.Path([(1, 2), (3, 4)])
+
+    def update(x, y):
+        if x == 1:
+            assert path[0] == (1, 2)
+            path[1] = (30, 40)
+        return x + 1, y + 1
+
+    path.map(update)
+    assert path.tolist() == [(2, 3), (31, 41)]
+
+
 @pytest.mark.parametrize("result,error", [([1, 2], TypeError), ((1,), ValueError), (("1", 2), ValueError)])
 def test_map_validation_preserves_partial_updates(result: object, error: type[Exception]) -> None:
     path = ImagePath.Path([(1, 2), (3, 4)])

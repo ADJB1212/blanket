@@ -5,6 +5,7 @@ mod encode;
 mod entropy;
 mod markers;
 pub mod stream;
+mod stream_render;
 
 use std::cell::RefCell;
 
