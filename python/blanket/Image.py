@@ -46,6 +46,7 @@ from ._blanket import (
     _decode_region,
     _decode_svg,
     _draft_jpeg,
+    _draft_webp,
     _encode,
     _getxmp,
     _index_sequence,
@@ -507,7 +508,7 @@ class Image:
             if data is None:
                 raise ValueError("operation on closed image")
             if self._draft_mode is not None:
-                native = _draft_jpeg(data, self._draft_scale, self._draft_mode)
+                native = _draft_webp(data, self.size) if self.format == "WEBP" else _draft_jpeg(data, self._draft_scale, self._draft_mode)
             else:
                 native = _open_sequence(data, [self.format], None)[0][0]
             self._native = native
@@ -844,7 +845,13 @@ class Image:
         self.load()
 
     def draft(self, mode: str | None, size: tuple[int, int] | None) -> tuple[str, tuple[int, int, float, float]] | None:
-        """Configure reduced JPEG decoding before loading pixels.
+        """Configure reduced JPEG or still WebP decoding before loading pixels.
+
+        JPEG uses native 1/2, 1/4, or 1/8 decoding. Still WebP uses native
+        scaling by an integer divisor. Output is rounded up to cover the
+        requested minimum size, never enlarged. Unsupported formats and
+        images whose pixels have been accessed return None. Source dimension
+        safety limits still apply. Only one draft request is applied.
 
         Args:
             mode: Requested decoder mode, including L or YCbCr for RGB JPEGs.
@@ -863,7 +870,22 @@ class Image:
         if data is None:
             return None
         width, height = self.size
+        if size is not None:
+            if len(size) != 2:
+                raise ValueError("draft size must contain two positive integers")
+            if any(isinstance(value, bool) for value in size):
+                raise TypeError("draft size must contain integers")
+            size = (index(size[0]), index(size[1]))
+            if min(size) <= 0:
+                raise ValueError("draft size must contain two positive integers")
         ratio = 1 if not size else min(width // size[0], height // size[1])
+        if self.format == "WEBP":
+            scale = max(1, ratio)
+            dimensions = ((width + scale - 1) // scale, (height + scale - 1) // scale)
+            self._draft_mode = self.mode
+            self._header = ImageHeader("WEBP", dimensions, self.mode, 8, self.info)
+            self._draft_source = None
+            return self.mode, (0, 0, float(dimensions[0]), float(dimensions[1]))
         scale = next(value for value in (8, 4, 2, 1) if ratio >= value or value == 1)
         target = mode if self.mode == "RGB" and mode in ("L", "YCbCr") else self.mode
         if self._encoded is not None:
@@ -2114,6 +2136,11 @@ class Image:
     def thumbnail(self, size: tuple[float, float], resample: int = Resampling.BICUBIC, reducing_gap: float | None = 2.0) -> None:
         """Shrink in place to fit size, preserving aspect ratio without upscaling.
 
+        Before loading pixels, request native reduced decoding for unopened
+        JPEG and still WebP rasters. Other formats and loaded images use full
+        decoding followed by resizing. Set reducing_gap=None to disable
+        decoder reduction. Decoded pixels can differ from full-size resizing.
+
         Args:
             size: Output `(width, height)` in pixels.
             resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
@@ -2127,11 +2154,21 @@ class Image:
             image.thumbnail((4, 4))
             ```
         """
-        self.load()
+        self._check_open()
         target = ops_thumbnail_size(self.size, size)
         if target is None:
             return
-        resized = self.resize(target, resample, reducing_gap=reducing_gap)
+        if resample not in range(8):
+            raise ValueError(f"Unknown resampling filter ({resample})")
+        if reducing_gap is not None and (not math.isfinite(reducing_gap) or reducing_gap < 1.0):
+            raise ValueError("reducing_gap must be finite and 1.0 or greater")
+        box = None
+        if reducing_gap is not None:
+            requested = (max(1, int(min(self.width, size[0] * reducing_gap))), max(1, int(min(self.height, size[1] * reducing_gap))))
+            drafted = self.draft(None, requested)
+            if drafted is not None:
+                box = drafted[1]
+        resized = self.resize(target, resample, box=box, reducing_gap=reducing_gap)
         self._native = resized._native
         self.readonly = 0
         self.palette = resized.palette
@@ -3220,6 +3257,8 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
             except SyntaxError:
                 warnings.warn("Image appears to be a malformed MPO file, it will be interpreted as a base JPEG file", UserWarning, stacklevel=2)
     image._encoded = data
+    if header.format == "WEBP":
+        image._draft_source = data
     return image
 
 

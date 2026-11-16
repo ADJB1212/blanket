@@ -13,21 +13,65 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
 }
 
 pub fn decode_webp(data: &[u8]) -> Result<Image, DecodeError> {
+    decode_with_size(data, None)
+}
+
+pub fn decode_scaled(data: &[u8], size: (u32, u32)) -> Result<Image, DecodeError> {
+    decode_with_size(data, Some(size))
+}
+
+fn decode_with_size(data: &[u8], size: Option<(u32, u32)>) -> Result<Image, DecodeError> {
     let features = webpx::ImageInfo::from_webp(data).map_err(DecodeError::with_diagnostic_source)?;
     validate_dimensions(features.width, features.height)?;
     // Preserve the existing first-frame behavior for animated containers.
     if features.has_animation {
+        if size.is_some() {
+            return Err("scaled decoding is unsupported for animated WebP".into());
+        }
         return decode_rust_image(data, RustFormat::WebP, "WEBP");
     }
     let limits = webpx::Limits::default();
     limits.check_input_size(data.len() as u64).map_err(|error| format!("WebP limit exceeded: {error}"))?;
     limits.check_still_image(features.width, features.height).map_err(|error| format!("WebP limit exceeded: {error}"))?;
+    let (width, height) = size.unwrap_or((features.width, features.height));
+    if width == 0 || height == 0 || width > features.width || height > features.height {
+        return Err("invalid scaled WebP dimensions".into());
+    }
     let mode = if features.has_alpha { PixelMode::Rgba } else { PixelMode::Rgb };
-    let stride = (features.width as usize).checked_mul(mode.channels()).ok_or("WebP row size overflow")?;
-    let length = stride.checked_mul(features.height as usize).ok_or("WebP buffer size overflow")?;
+    let stride = (width as usize).checked_mul(mode.channels()).ok_or("WebP row size overflow")?;
+    let length = stride.checked_mul(height as usize).ok_or("WebP buffer size overflow")?;
     let stride = i32::try_from(stride).map_err(DecodeError::with_source)?;
     let mut pixels = Vec::<u8>::new();
     pixels.try_reserve_exact(length).map_err(DecodeError::with_source)?;
+    if (width, height) != (features.width, features.height) {
+        let mut config = libwebp_sys::WebPDecoderConfig::new().map_err(|()| "cannot initialize WebP decoder")?;
+        config.options.use_scaling = 1;
+        config.options.scaled_width = width as i32;
+        config.options.scaled_height = height as i32;
+        config.output.colorspace = if features.has_alpha { libwebp_sys::WEBP_CSP_MODE::MODE_RGBA } else { libwebp_sys::WEBP_CSP_MODE::MODE_RGB };
+        config.output.is_external_memory = 1;
+        config.output.u.RGBA = libwebp_sys::WebPRGBABuffer { rgba: pixels.as_mut_ptr(), stride, size: length };
+        // SAFETY: the initialized decoder writes into the externally owned buffer,
+        // whose capacity and stride cover the requested output. FreeDecBuffer never
+        // frees external storage and is called on both success and failure.
+        let status = unsafe {
+            let status = libwebp_sys::WebPDecode(data.as_ptr(), data.len(), &raw mut config);
+            libwebp_sys::WebPFreeDecBuffer(&raw mut config.output);
+            status
+        };
+        if status != libwebp_sys::VP8StatusCode::VP8_STATUS_OK {
+            if status == libwebp_sys::VP8StatusCode::VP8_STATUS_OUT_OF_MEMORY {
+                return Err("WebP decoder memory limit exceeded".into());
+            }
+            if status == libwebp_sys::VP8StatusCode::VP8_STATUS_UNSUPPORTED_FEATURE {
+                return Err("unsupported WebP scaled decoding feature".into());
+            }
+            return Err(format!("WebP scaled decode failed: {status:?}").into());
+        }
+        // SAFETY: successful decoding initialized every requested output sample.
+        unsafe { pixels.set_len(length) };
+        return Image::from_pixels(width, height, mode, pixels, Some("WEBP".into())).map_err(DecodeError::with_source);
+    }
     // SAFETY: dimensions and capacity cover every packed output row. The Into
     // APIs write the entire buffer on success and never retain its pointer.
     let output = unsafe {
@@ -42,7 +86,7 @@ pub fn decode_webp(data: &[u8]) -> Result<Image, DecodeError> {
     }
     // SAFETY: successful decoding initialized all length bytes above.
     unsafe { pixels.set_len(length) };
-    Image::from_pixels(features.width, features.height, mode, pixels, Some("WEBP".into())).map_err(DecodeError::with_source)
+    Image::from_pixels(width, height, mode, pixels, Some("WEBP".into())).map_err(DecodeError::with_source)
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
@@ -268,6 +312,30 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scaled_decoding_preserves_full_size_samples_and_validates_output_bounds() {
+        for mode in [PixelMode::Rgb, PixelMode::Rgba] {
+            let pixels: Vec<_> = (0..17 * 15 * mode.channels()).map(|i| (i * 137 + i / 7) as u8).collect();
+            let image = Image::from_pixels(17, 15, mode, pixels, None).unwrap();
+            for lossless in [false, true] {
+                let encoded = encode_webp(&image, image.pixel_data().unwrap(), SaveOptions { lossless, ..Default::default() }).unwrap();
+                let normal = decode_webp(&encoded).unwrap();
+                let scaled = decode_scaled(&encoded, (17, 15)).unwrap();
+                assert_eq!(normal.raw_data().unwrap(), scaled.raw_data().unwrap());
+                for size in [(1, 1), (3, 5), (9, 8)] {
+                    let reduced = decode_scaled(&encoded, size).unwrap();
+                    assert_eq!(reduced.size(), size);
+                    assert_eq!(reduced.pixel_mode(), normal.pixel_mode());
+                    assert_eq!(reduced.raw_data().unwrap().len(), size.0 as usize * size.1 as usize * normal.pixel_mode().channels());
+                }
+                for size in [(0, 1), (1, 0), (18, 15), (17, 16)] {
+                    assert!(decode_scaled(&encoded, size).is_err());
+                }
+                assert!(decode_scaled(&encoded[..encoded.len() / 2], (3, 5)).is_err());
+            }
+        }
+    }
 
     #[test]
     fn empty_animation_returns_an_error() {

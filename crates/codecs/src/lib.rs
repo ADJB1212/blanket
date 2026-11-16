@@ -15,6 +15,14 @@ pub fn _draft_jpeg(py: pyo3::Python<'_>, data: &[u8], scale: u32, mode: &str) ->
 }
 
 #[pyo3::pyfunction]
+pub fn _draft_webp(py: pyo3::Python<'_>, data: &[u8], size: (u32, u32)) -> pyo3::PyResult<blanket_core::Image> {
+    if size.0 == 0 || size.1 == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err("draft dimensions must be positive"));
+    }
+    py.detach(|| blanket_codec_webp::decode_scaled(data, size)).map_err(|error| error.into_pyerr(Some("WEBP")))
+}
+
+#[pyo3::pyfunction]
 #[pyo3(signature = (data, method, crop, trim, preserve_metadata))]
 pub fn _transform_jpeg<'py>(
     py: pyo3::Python<'py>, data: &[u8], method: Option<u8>, crop: Option<(usize, usize, usize, usize)>, trim: bool, preserve_metadata: bool,

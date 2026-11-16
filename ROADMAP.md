@@ -390,8 +390,9 @@ with new processing semantics exposed explicitly.
 - [x] **Header-only inspection** — `Image.inspect` reports dimensions, mode,
       sample depth, and available container metadata without allocating decoded
       image rasters
-- [ ] **Decode-time thumbnails** — request reduced-resolution decoding where
-      supported, making `draft` useful before full raster allocation
+- [x] **Decode-time thumbnails** — `thumbnail` requests native JPEG or still
+      WebP reduction through `draft` before raster allocation; other inputs
+      retain normal full-decode resizing and source dimension limits
 - [x] **Encoding capability queries** — report supported modes, sample depths,
       compression methods, and animation options for each installed backend
 - [x] **Structured codec errors** — distinguish unsupported features, corrupt
