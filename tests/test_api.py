@@ -32,12 +32,12 @@ def test_fromarray_supports_strided_arrays() -> None:
     assert_image_properties(image, mode="RGB", size=(8, 6), pixels=array.tobytes())
 
 
-@pytest.mark.parametrize(("shape", "dtype"), [((3, 5, 3), np.float16), ((3, 5, 5), np.uint8), ((3, 5, 2), np.uint16), ((3, 5, 2), np.float32)])
+@pytest.mark.parametrize(("shape", "dtype"), [((3, 5, 5), np.uint8), ((3, 5, 2), np.uint16), ((3, 5, 2), np.float32)])
 def test_fromarray_rejects_unsupported_arrays(shape: tuple[int, ...], dtype: object) -> None:
     assert_raises(TypeError, lambda: Image.fromarray(np.zeros(shape, dtype=dtype)), match="cannot handle this data type")
 
 
-@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
 @pytest.mark.parametrize("channels,mode", [(3, "RGB;F"), (4, "RGBA;F")])
 def test_fromarray_supports_float_color(dtype: object, channels: int, mode: str) -> None:
     values = np.arange(3 * 5 * channels, dtype=dtype).reshape(3, 5, channels) / 4

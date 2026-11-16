@@ -8,10 +8,13 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyByteArray;
 
-#[pyfunction]
+#[pyfunction(signature = (image, layout, normalize, mean, std, dtype="float32"))]
 pub(crate) fn tensor_export<'py>(
-    py: Python<'py>, image: &Image, layout: &str, normalize: bool, mean: Option<Vec<f32>>, std: Option<Vec<f32>>,
+    py: Python<'py>, image: &Image, layout: &str, normalize: bool, mean: Option<Vec<f32>>, std: Option<Vec<f32>>, dtype: &str,
 ) -> PyResult<Bound<'py, PyByteArray>> {
+    if !matches!(dtype, "float32" | "float16") {
+        return Err(PyValueError::new_err("dtype must be float32 or float16"));
+    }
     let channels = image.pixel_mode().channels();
     let planar = match layout {
         "CHW" => true,
@@ -60,7 +63,7 @@ pub(crate) fn tensor_export<'py>(
             }
         }
     };
-    PyByteArray::new_with(py, len, |output| {
+    let data = PyByteArray::new_with(py, len, |output| {
         py.detach(|| {
             if planar && bytes == 1 && !matches!(image.pixel_mode(), PixelMode::One | PixelMode::Lab) {
                 match channels {
@@ -103,6 +106,20 @@ pub(crate) fn tensor_export<'py>(
                     *dst = ((read(index) / divisor - mean[channel]) / std[channel]).to_ne_bytes();
                 }
             });
+        });
+        Ok(())
+    })?;
+    if dtype == "float32" {
+        return Ok(data);
+    }
+    // SAFETY: This newly allocated bytearray has not been exposed to Python.
+    // No other reference can mutate or resize it during the conversion.
+    let source = unsafe { data.as_bytes() };
+    PyByteArray::new_with(py, len / 2, |output| {
+        py.detach(|| {
+            for (src, dst) in source.as_chunks::<4>().0.iter().zip(output.as_chunks_mut::<2>().0) {
+                *dst = (f32::from_ne_bytes(*src) as f16).to_ne_bytes();
+            }
         });
         Ok(())
     })

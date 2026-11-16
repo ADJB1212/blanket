@@ -274,6 +274,24 @@ pub(crate) fn fromarray(
         let mut raw = array_bytes(obj)?;
         return py.detach(|| {
             let pixels = match typestr.as_str() {
+                "<f2" | "=f2" | ">f2" => {
+                    if !raw.len().is_multiple_of(2) {
+                        return Err(PyValueError::new_err("float16 array requires an even byte count"));
+                    }
+                    raw.as_chunks::<2>()
+                        .0
+                        .iter()
+                        .map(|bytes| {
+                            let value = match typestr.as_str() {
+                                ">f2" => f16::from_be_bytes(*bytes),
+                                "=f2" => f16::from_ne_bytes(*bytes),
+                                _ => f16::from_le_bytes(*bytes),
+                            };
+                            (value as f32).to_le_bytes()
+                        })
+                        .collect::<Vec<_>>()
+                        .into_flattened()
+                }
                 "<f4" | "=f4" => raw,
                 ">f4" => {
                     for bytes in raw.as_chunks_mut::<4>().0 {
@@ -287,7 +305,7 @@ pub(crate) fn fromarray(
                 ">f8" => {
                     raw.as_chunks::<8>().0.iter().map(|bytes| (f64::from_be_bytes(*bytes) as f32).to_le_bytes()).collect::<Vec<_>>().into_flattened()
                 }
-                _ => return Err(PyTypeError::new_err("float mode requires float32 or float64 array")),
+                _ => return Err(PyTypeError::new_err("float mode requires float16, float32, or float64 array")),
             };
             Image::from_color_float_bytes(width, height, mode, pixels)
         });
@@ -340,7 +358,7 @@ pub(crate) fn fromarray(
 }
 
 fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
-    if matches!(typestr, "<f4" | "=f4" | ">f4" | "<f8" | "=f8" | ">f8") {
+    if matches!(typestr, "<f2" | "=f2" | ">f2" | "<f4" | "=f4" | ">f4" | "<f8" | "=f8" | ">f8") {
         match shape {
             [_, _, 3] => return Ok(PixelMode::RgbF),
             [_, _, 4] => return Ok(PixelMode::RgbaF),
@@ -350,7 +368,7 @@ fn array_mode(shape: &[usize], typestr: &str) -> PyResult<PixelMode> {
     if matches!(shape, [_] | [_, _]) {
         match typestr {
             "<i4" | "=i4" => return Ok(PixelMode::I),
-            "<f4" | "=f4" | ">f4" | "<f8" | "=f8" | ">f8" => return Ok(PixelMode::F),
+            "<f2" | "=f2" | ">f2" | "<f4" | "=f4" | ">f4" | "<f8" | "=f8" | ">f8" => return Ok(PixelMode::F),
             "<u2" => return Ok(PixelMode::I16),
             "=u2" => return Ok(PixelMode::I16N),
             ">u2" => return Ok(PixelMode::I16B),

@@ -565,12 +565,12 @@ with new processing semantics exposed explicitly.
 
 #### Interoperability
 
-- [ ] **`Image.from_pillow`** — share or copy a Pillow image, copying only when
+- [x] **`Image.from_pillow`** — share or copy a Pillow image, copying only when
       the mode or stride cannot be viewed, matching `to_pillow`
-- [ ] **Native capsule export** — hand the Rust image to other extension
+- [x] **Native capsule export** — hand the Rust image to other extension
       modules through a PyCapsule with an explicit lifetime and a copy-out
       fallback
-- [ ] **`float16` array exchange** — import and export half-precision NumPy
+- [x] **`float16` array exchange** — import and export half-precision NumPy
       arrays by converting at the boundary, leaving storage as float32
 
 #### Hashes and Search

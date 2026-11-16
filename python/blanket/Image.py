@@ -61,6 +61,7 @@ from ._blanket import (
     image_alpha_composite,
     image_alpha_composite_inplace,
     image_buffer_view,
+    image_capsule,
     image_convert,
     image_convert_dithered_bilevel,
     image_convert_matrix,
@@ -97,6 +98,7 @@ from ._blanket import (
     palette_remap,
     palette_to_pa,
     palette_web,
+    pillow_buffer_view,
     quantize as _native_quantize,
     tensor_export,
     wide_histogram,
@@ -826,6 +828,21 @@ class Image:
 
         shape, typestr = self._array_layout()
         return np.frombuffer(self.buffer_view(), dtype=typestr).reshape(shape)
+
+    def to_capsule(self, *, copy: bool = False) -> object:
+        """Export a read-only native snapshot as a ``blanket.image.v1`` capsule.
+
+        The capsule owns its pixels until its last reference is released, even
+        after this image is changed or closed. copy=True creates independent
+        storage; the default shares native copy-on-write storage. Mapped inputs
+        are snapshotted. Consumers use the versioned BlanketImageV1 C descriptor
+        in crates/core-python/blanket_image.h and may copy its data.
+        Pixel bytes use native storage rather than the packed tobytes layout.
+        """
+        if not isinstance(copy, bool):
+            raise TypeError("copy must be a boolean")
+        self.load()
+        return image_capsule(self._native, copy)
 
     @property
     def im(self) -> _Image:
@@ -1693,8 +1710,8 @@ class Image:
         """
         return image_tobytes(self._native, *_raw_args(self.mode, encoder_name, args))
 
-    def to_numpy(self, *, layout: str = "HWC", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None) -> np.ndarray:
-        """Export an independent, writable, contiguous float32 NumPy array.
+    def to_numpy(self, *, layout: str = "HWC", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None, dtype: str = "float32") -> np.ndarray:
+        """Export an independent, writable, contiguous floating-point NumPy array.
 
         Fuse layout conversion, normalization, and ``(x - mean) / std`` in
         Rust. Layout is HWC, CHW, or HW (single-band only); HWC and CHW keep
@@ -1715,6 +1732,8 @@ class Image:
             normalize: Scale unsigned samples to 0..1 before standardization.
             mean: Per-band means, defaulting to zero.
             std: Per-band positive standard deviations, defaulting to one.
+            dtype: float32 (default) or float16. Half precision converts at the
+                boundary after float32 processing; image storage stays float32.
 
         Examples:
             ```python
@@ -1725,8 +1744,8 @@ class Image:
         import numpy as np
 
         self.load()
-        data = tensor_export(self._native, layout, normalize, mean, std)
-        return np.frombuffer(data, dtype=np.float32).reshape(self._tensor_shape(layout))
+        data = tensor_export(self._native, layout, normalize, mean, std, dtype)
+        return np.frombuffer(data, dtype=dtype).reshape(self._tensor_shape(layout))
 
     def to_torch(self, *, layout: str = "CHW", normalize: bool = True, mean: Sequence[float] | None = None, std: Sequence[float] | None = None) -> Tensor:
         """Export an independent, writable, contiguous CPU float32 tensor.
@@ -3617,11 +3636,56 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
     return MappedImage(mapping)
 
 
+def from_pillow(image: object, *, copy: bool = False) -> Image:
+    """Import the current frame of a Pillow image, retaining palette and info.
+
+    Share compatible contiguous storage through Pillow's Arrow interface by
+    default, copying modes or row layouts that require conversion. No PyArrow
+    dependency is needed. copy=True always creates independent pixels. Shared
+    inputs must be treated as immutable by the caller; Blanket mutations detach.
+    The shared allocation outlives the Pillow image, including close().
+    """
+    if not isinstance(copy, bool):
+        raise TypeError("copy must be a boolean")
+    try:
+        from PIL import Image as PillowImage
+    except ImportError as error:
+        raise ImportError("Pillow is required for from_pillow(); install pyblanket[test] or Pillow") from error
+    if not isinstance(image, PillowImage.Image):
+        raise TypeError("image must be a Pillow Image")
+    image.load()
+    result = None
+    if not copy:
+        try:
+            view = pillow_buffer_view(image, image.mode, image.size)
+        except (AttributeError, ValueError, NotImplementedError):
+            pass
+        else:
+            from ._buffer import BufferMap, MappedImage
+
+            depth = 32 if image.mode in ("I", "F") else 16 if image.mode.startswith("I;16") else 8
+            pixel_bytes = depth // 8 * len(image.getbands())
+            result = MappedImage(BufferMap(view, image.mode, image.size, image.width * pixel_bytes, 1, depth))
+    if result is None:
+        result = frombytes(image.mode, image.size, image.tobytes())
+    if image.palette is not None:
+        palette_mode, palette_data = image.palette.getdata()
+        if result.readonly:
+            from .ImagePalette import ImagePalette
+
+            result.palette = ImagePalette(palette_mode, palette_data)
+            result._bands = _BANDS[image.mode]
+        else:
+            result.putpalette(palette_data, palette_mode)
+    result.info.update(cast("dict[object, object]", image.info))
+    return result
+
+
 def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None, copy: bool = True) -> Image:
-    """Create an image from uint8, uint16, int32, float32, or float64 array samples.
+    """Create an image from uint8, uint16, int32, float16, float32, or float64 samples.
 
     Args:
-        obj: Object exposing the array interface with uint8, uint16, int32, float32, or float64 samples.
+        obj: Object exposing the array interface with uint8, uint16, int32, float16, float32, or float64 samples. Float16 samples convert to float32 storage.
         mode: Optional mode matching the array's channel layout.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth. Integer and float arrays map to `I` and `F`.
         copy: False retains compatible contiguous buffer storage. Source writes
@@ -3831,6 +3895,7 @@ __all__ = [
     "blend",
     "composite",
     "decode",
+    "from_pillow",
     "fromarray",
     "frombuffer",
     "frombytes",

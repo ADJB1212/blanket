@@ -60,8 +60,9 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   `ImageMetrics`, preserving integer sample depth.
 - **Batch processing.** `ImageBatch.Pipeline` reuses transforms across images
   or paths, with parallel execution and ordered, bounded streaming results.
-- **Interop.** Array imports, fused float32 NumPy/PyTorch exports, binary streams, perceptual hashes, an optional
-  Pillow bridge, and explicit Metal/CUDA pipelines.
+- **Interop.** Array imports (including float16), fused NumPy/PyTorch exports,
+  binary streams, perceptual hashes, a shared Pillow bridge, native capsules,
+  and explicit Metal/CUDA pipelines.
 
 Blanket is **alpha**. Mode and precision limits are operation-specific, the
 API covers a subset of Pillow, and it is not a drop-in for `PIL`. GPU paths
@@ -69,6 +70,25 @@ do not promise byte-exact Pillow output. Start with
 [getting started](https://adjb1212.github.io/blanket-docs/usage/),
 [sample precision](https://adjb1212.github.io/blanket-docs/high-bit-depth/), and
 [Pillow interoperability](https://adjb1212.github.io/blanket-docs/pillow-interop/).
+
+`Image.from_pillow(pillow_image)` shares compatible contiguous Pillow storage
+and copies other layouts; pass `copy=True` for independent pixels. Palette and
+metadata transfer with the current frame. Treat shared inputs as immutable;
+Blanket writes detach, and the shared allocation survives Pillow close.
+Pillow is imported only when using the bridge, with no PyArrow dependency.
+
+`Image.fromarray(half_array)` converts float16 samples to float32 storage.
+`image.to_numpy(dtype="float16", layout="HWC")` converts the existing float32
+export after layout, normalization, and standardization. Use `normalize=False`
+for unscaled unsigned samples and `layout="HW"` for a two-dimensional scalar
+array. Half precision uses IEEE rounding and can overflow to infinity.
+
+`image.to_capsule()` exports a read-only native snapshot named
+`blanket.image.v1`; `copy=True` forces independent storage. Extension consumers
+use the [C descriptor](crates/core-python/blanket_image.h), retain the capsule
+while using any pointers, and copy the bytes for independent ownership. Native
+mode `1` is unpacked and LAB chroma is biased; the descriptor uses native storage
+rather than the public `tobytes()` representation.
 
 ## Supported formats
 
