@@ -19,6 +19,20 @@ pub(super) struct Reader<'a> {
 }
 
 impl Reader<'_> {
+    /// Return whole unread entropy bytes to the input before committing its position.
+    pub(super) fn release_lookahead(&mut self) {
+        while self.bits.remaining >= 8 {
+            self.pos -= 1;
+            if self.data[self.pos] == 0 {
+                while self.pos > 0 && self.data[self.pos - 1] == 255 {
+                    self.pos -= 1;
+                }
+            }
+            self.bits.buffer >>= 8;
+            self.bits.remaining -= 8;
+        }
+    }
+
     /// Buffer entropy bytes up to the next marker or the end of the input.
     fn refill(&mut self) {
         while self.bits.remaining <= 56 {
@@ -99,6 +113,7 @@ impl Reader<'_> {
     }
 
     pub(super) fn restart(&mut self, expected: u8) -> Result<()> {
+        self.release_lookahead();
         self.bits = Bits::default();
         if self.data.get(self.pos) != Some(&255) {
             return Err(if self.pos == self.data.len() { Error::NeedInput } else { Error::Invalid });
@@ -409,6 +424,23 @@ mod tests {
             assert_eq!(table.symbol(&mut reader).unwrap(), 73);
             assert_eq!(reader.pos, 1);
         }
+    }
+
+    #[test]
+    fn released_lookahead_preserves_partial_bits_and_stuffed_bytes() {
+        let data = [0xa5, 255, 255, 0, 0x3c, 255, 0xd0];
+        let mut reader = Reader { data: &data, pos: 0, bits: Bits::default() };
+        assert_eq!(reader.read(3).unwrap(), 5);
+        reader.release_lookahead();
+        assert_eq!(reader.pos, 1);
+        assert_eq!(reader.bits.remaining, 5);
+        assert_eq!(reader.read(5).unwrap(), 5);
+        assert_eq!(reader.read(8).unwrap(), 255);
+        reader.release_lookahead();
+        assert_eq!(reader.pos, 4);
+        assert!(matches!(reader.restart(0), Err(Error::Invalid)));
+        assert_eq!(reader.read(8).unwrap(), 0x3c);
+        reader.restart(0).unwrap();
     }
 
     #[test]

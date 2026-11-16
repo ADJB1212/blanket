@@ -434,7 +434,14 @@ impl JpegStreamDecoder {
                     for &(index, block_index) in &blocks[..block_count] {
                         scan.undo(&mut coefficients.components[index].blocks[block_index]);
                     }
-                    return Ok(consumed.map(|_| checkpoint));
+                    if consumed.is_some() {
+                        reader.pos = checkpoint;
+                        reader.bits = scan.bits;
+                        reader.release_lookahead();
+                        scan.bits = reader.bits;
+                        consumed = Some(reader.pos);
+                    }
+                    return Ok(consumed);
                 }
                 Err(Error::Invalid) => return Err("invalid JPEG entropy data".into()),
                 Ok(()) => (),
@@ -449,6 +456,8 @@ impl JpegStreamDecoder {
                 if eob != 0 {
                     return Err("JPEG end-of-block run exceeds scan".into());
                 }
+                reader.release_lookahead();
+                consumed = Some(reader.pos);
                 self.scan = None;
                 self.seen_scan = true;
                 self.completed_color = (self.jfif, self.adobe);
@@ -518,6 +527,33 @@ mod tests {
         let pixels = (0..33 * 19 * mode.channels()).map(|i| (i * 71 + i / 7) as u8).collect();
         let image = Image::from_pixels(33, 19, mode, pixels, None).unwrap();
         encode_jpeg_variant(&image, SaveOptions { .. }, JpegCoding { progressive, .. }).unwrap()
+    }
+
+    #[test]
+    fn scan_lookahead_does_not_hide_extra_entropy_bytes() {
+        let mut header = vec![255, 216, 255, 219, 0, 67, 0];
+        header.extend([1; 64]);
+        header.extend([255, 192, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0]);
+        for class in [0, 0x10] {
+            header.extend([255, 196, 0, 20, class, 1]);
+            header.extend([0; 16]);
+        }
+        header.extend([255, 218, 0, 8, 1, 1, 0, 0, 63, 0]);
+        // Two one-bit codes encode zero DC and EOB, followed by padding.
+        header.push(0x3f);
+        for extra in [&[][..], &[0xaa][..], &[255, 0][..], &[255, 255, 0][..]] {
+            let mut data = header.clone();
+            data.extend_from_slice(extra);
+            data.extend([255, 217]);
+            for size in 1..=data.len() {
+                let mut decoder = JpegStreamDecoder::new().unwrap();
+                let result = data.chunks(size).try_for_each(|chunk| decoder.feed(chunk));
+                assert_eq!(result.is_ok(), extra.is_empty(), "extra={extra:?}, chunk={size}");
+                if result.is_ok() {
+                    assert!(decoder.complete);
+                }
+            }
+        }
     }
 
     #[test]
