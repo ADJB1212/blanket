@@ -36,6 +36,7 @@ venv/
 .dylibs
 .github/docker
 /fuzz
+.ignore
 
 # Installer logs
 pip-log.txt

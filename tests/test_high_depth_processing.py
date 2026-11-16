@@ -31,6 +31,33 @@ def samples(image):
     return list(struct.unpack(f"{'>' if image.mode == 'I;16B' else '<'}{len(raw) // 2}H", raw))
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("target", ["1", "LA"])
+@pytest.mark.parametrize("width", [1, 15, 16, 17, 33])
+def test_sample_grayscale_conversion_uses_full_precision(mode, depth, target, width):
+    maximum = (1 << depth) - 1
+    channels = {"L": 1, "RGB": 3, "RGBA": 4}[mode]
+    values = [0, maximum, maximum // 2, maximum // 2 + 1, 1, maximum - 1]
+    values = [values[i % len(values)] for i in range(width * channels)]
+    image = make_image(mode, depth, (width, 1), values)
+    original = image.tobytes()
+    expected = bytearray()
+    for i in range(0, len(values), channels):
+        pixel = values[i : i + channels]
+        gray = pixel[0] if channels == 1 else (pixel[0] * 19595 + pixel[1] * 38470 + pixel[2] * 7471 + 32768) >> 16
+        if target == "1":
+            expected.append(255 if gray > maximum // 2 else 0)
+        else:
+            alpha = pixel[3] if channels == 4 else maximum
+            expected.extend(((gray * 255 + maximum // 2) // maximum, (alpha * 255 + maximum // 2) // maximum))
+    reference = PillowImage.frombytes("L" if target == "1" else "LA", image.size, bytes(expected)).convert(target, dither=PillowImage.Dither.NONE)
+    actual = image.convert(target, bit_depth=8, dither=Image.Dither.NONE)
+    assert (actual.mode, actual.bit_depth, actual.size) == (target, 8, image.size)
+    assert actual.tobytes() == reference.tobytes()
+    assert image.tobytes() == original
+
+
 @pytest.mark.parametrize(("mode", "depth"), [("L", 10), ("RGB", 12), ("RGBA", 16), ("I;16", 16), ("I;16L", 16), ("I;16B", 16)])
 @pytest.mark.parametrize("masked", [False, True])
 @pytest.mark.parametrize("position", [(-2, -1), (47, 31), (100, 100)])

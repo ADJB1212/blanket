@@ -86,19 +86,25 @@ pub fn convert_samples(source: &[u8], from: PixelMode, to: PixelMode, source_dep
             _ => unreachable!("validated sample depth"),
         }
     }
+    let target_depth = if to == PixelMode::One { 1 } else { target_depth };
     match (from.channels(), to.channels()) {
+        (1, 1) => depths::<1, 1>(source, source_depth, target_depth),
+        (1, 2) => depths::<1, 2>(source, source_depth, target_depth),
         (1, 3) => depths::<1, 3>(source, source_depth, target_depth),
         (1, 4) => depths::<1, 4>(source, source_depth, target_depth),
         (3, 1) => depths::<3, 1>(source, source_depth, target_depth),
+        (3, 2) => depths::<3, 2>(source, source_depth, target_depth),
         (3, 4) => depths::<3, 4>(source, source_depth, target_depth),
         (4, 1) => depths::<4, 1>(source, source_depth, target_depth),
+        (4, 2) => depths::<4, 2>(source, source_depth, target_depth),
         (4, 3) => depths::<4, 3>(source, source_depth, target_depth),
-        _ => unreachable!("distinct L/RGB/RGBA modes"),
+        _ => unreachable!("validated sample conversion modes"),
     }
 }
 
 fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source: &[u8], target_depth: u8) -> Vec<u8> {
     match target_depth {
+        1 => convert_samples_to::<S, D, MAX, 1>(source),
         8 => convert_samples_to::<S, D, MAX, 255>(source),
         10 => convert_samples_to::<S, D, MAX, 1023>(source),
         12 => convert_samples_to::<S, D, MAX, 4095>(source),
@@ -109,9 +115,9 @@ fn convert_samples_inner<const S: usize, const D: usize, const MAX: u32>(source:
 
 fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARGET_MAX: u32>(source: &[u8]) -> Vec<u8> {
     let source_bytes = if MAX == 255 { 1 } else { 2 };
-    let target_bytes = if TARGET_MAX == 255 { 1 } else { 2 };
+    let target_bytes = if TARGET_MAX <= 255 { 1 } else { 2 };
     if target_bytes == 2
-        && D != 1
+        && D > 2
         && (MAX == TARGET_MAX || MAX == 255 && TARGET_MAX == 65535)
         && source.len() / (S * source_bytes) * D * target_bytes < 4 << 20
     {
@@ -129,14 +135,17 @@ fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARG
             let p: [Simd<u32, 16>; S] =
                 if source_bytes == 1 { load::<S>(input).map(|v| v.cast()) } else { load_sample_bytes::<S>(input).map(|v| v.cast()) };
             let values: [Simd<u32, 16>; D] = std::array::from_fn(|c| {
-                let v = if D == 1 {
-                    luminance_simd(p[0], p[1], p[2])
+                let v = if D <= 2 && c == 0 {
+                    if S == 1 { p[0] } else { luminance_simd(p[0], p[1], p[2]) }
+                } else if D == 2 {
+                    if S == 4 { p[3] } else { Simd::splat(MAX) }
                 } else if c == 3 {
                     Simd::splat(MAX)
                 } else {
                     p[if S == 1 { 0 } else { c }]
                 };
-                rescale_block::<MAX, TARGET_MAX>(v)
+                let scaled = rescale_block::<MAX, TARGET_MAX>(v);
+                if TARGET_MAX == 1 { scaled * Simd::splat(255) } else { scaled }
             });
             let out = &mut dst[i * D * target_bytes..];
             if target_bytes == 1 {
@@ -151,8 +160,10 @@ fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARG
             let sample =
                 |c: usize| if source_bytes == 1 { u32::from(input[c]) } else { u32::from(u16::from_le_bytes([input[c * 2], input[c * 2 + 1]])) };
             for (c, out) in output.chunks_exact_mut(target_bytes).enumerate() {
-                let v = if D == 1 {
-                    u32::from(luminance(sample(0) as u16, sample(1) as u16, sample(2) as u16))
+                let v = if D <= 2 && c == 0 {
+                    if S == 1 { sample(0) } else { u32::from(luminance(sample(0) as u16, sample(1) as u16, sample(2) as u16)) }
+                } else if D == 2 {
+                    if S == 4 { sample(3) } else { MAX }
                 } else if c == 3 {
                     MAX
                 } else {
@@ -160,7 +171,7 @@ fn convert_samples_to<const S: usize, const D: usize, const MAX: u32, const TARG
                 };
                 let v = ((v * target_max + MAX / 2) / MAX) as u16;
                 if target_bytes == 1 {
-                    out[0] = v as u8;
+                    out[0] = if TARGET_MAX == 1 { v as u8 * 255 } else { v as u8 };
                 } else {
                     out.copy_from_slice(&v.to_le_bytes());
                 }
@@ -1036,6 +1047,8 @@ mod tests {
                         .map(|i| match i / from.channels() % 7 {
                             0 => maximum,
                             1 => 0,
+                            2 => maximum / 2,
+                            3 => maximum / 2 + 1,
                             _ => (i as u32 * 719 + 127) & maximum,
                         })
                         .collect();
@@ -1050,21 +1063,31 @@ mod tests {
                         }
                         for target_depth in [8, 10, 12, 16] {
                             let target_max = (1_u32 << target_depth) - 1;
-                            for to in [PixelMode::L, PixelMode::Rgb, PixelMode::Rgba] {
-                                if from == to {
+                            for to in [PixelMode::One, PixelMode::L, PixelMode::La, PixelMode::Rgb, PixelMode::Rgba] {
+                                if from == to || matches!(to, PixelMode::One | PixelMode::La) && target_depth != 8 {
                                     continue;
                                 }
                                 let mut expected = Vec::new();
                                 for p in samples.chunks_exact(from.channels()) {
                                     for c in 0..to.channels() {
-                                        let value = if to == PixelMode::L {
-                                            ((u64::from(p[0]) * 19595 + u64::from(p[1]) * 38470 + u64::from(p[2]) * 7471 + 32768) >> 16) as u32
+                                        let value = if matches!(to, PixelMode::One | PixelMode::L | PixelMode::La) && c == 0 {
+                                            if from == PixelMode::L {
+                                                p[0]
+                                            } else {
+                                                ((u64::from(p[0]) * 19595 + u64::from(p[1]) * 38470 + u64::from(p[2]) * 7471 + 32768) >> 16) as u32
+                                            }
+                                        } else if to == PixelMode::La {
+                                            if from == PixelMode::Rgba { p[3] } else { maximum }
                                         } else if c == 3 {
                                             maximum
                                         } else {
                                             p[if from == PixelMode::L { 0 } else { c }]
                                         };
-                                        let value = ((u64::from(value) * u64::from(target_max) + u64::from(maximum / 2)) / u64::from(maximum)) as u16;
+                                        let value = if to == PixelMode::One {
+                                            u16::from(value > maximum / 2) * 255
+                                        } else {
+                                            ((u64::from(value) * u64::from(target_max) + u64::from(maximum / 2)) / u64::from(maximum)) as u16
+                                        };
                                         if target_depth == 8 {
                                             expected.push(value as u8);
                                         } else {

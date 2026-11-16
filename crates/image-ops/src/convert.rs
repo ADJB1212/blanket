@@ -472,6 +472,9 @@ pub fn convert(py: Python<'_>, source_image: &Image, mode: &str, bit_depth: Opti
         return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
     }
     if source_image.bit_depth() > 8 || depth > 8 {
+        if !matches!(destination, PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
+            return Err(PyValueError::new_err("unsupported sample conversion"));
+        }
         if source_image.palette().is_some() {
             let expanded = convert(py, source_image, mode, Some(8))?;
             return convert(py, &expanded, mode, Some(depth));
