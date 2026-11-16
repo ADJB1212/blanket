@@ -38,6 +38,15 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_rewrite_metadata, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_container_previews, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_resolve_resolution, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_get_gps, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_set_gps, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_get_capture_time, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_set_capture_time, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_get_iptc, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_rewrite_iptc, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_get_geometry, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_read_xmp_sidecar, module)?)?;
+    module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_write_xmp_sidecar, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_exif_orientation, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_encode_hdr, module)?)?;
     module.add_function(wrap_pyfunction!(blanket_codecs::metadata::_decode_hdr, module)?)?;

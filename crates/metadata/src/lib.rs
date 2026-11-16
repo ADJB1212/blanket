@@ -9,14 +9,23 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict};
 
+mod capture;
+mod geometry;
 mod hdr;
+mod iptc;
 mod orientation;
 mod resolution;
 mod rewrite;
+mod sidecar;
+mod tiff;
+pub use capture::{_get_capture_time, _get_gps, _set_capture_time, _set_gps};
+pub use geometry::_get_geometry;
 pub use hdr::{_decode_hdr, _encode_hdr};
+pub use iptc::{_get_iptc, _rewrite_iptc};
 pub use orientation::_exif_orientation;
 pub use resolution::_resolve_resolution;
 pub use rewrite::_rewrite_metadata;
+pub use sidecar::{_read_xmp_sidecar, _write_xmp_sidecar};
 
 #[pyfunction]
 pub fn _container_previews<'py>(py: Python<'py>, data: &[u8], format: &str) -> PyResult<Vec<(String, Bound<'py, PyBytes>)>> {

@@ -541,13 +541,13 @@ with new processing semantics exposed explicitly.
 
 #### Metadata Ergonomics
 
-- [ ] **GPS and capture time** — read and write EXIF GPS and datetime fields
+- [x] **GPS and capture time** — read and write EXIF GPS and datetime fields
       with explicit timezones and a defined result when a field is absent
-- [ ] **IPTC IIM** — read and write the legacy IIM record in JPEG and TIFF
+- [x] **IPTC IIM** — read and write the legacy IIM record in JPEG and TIFF
       when the container already carries it
-- [ ] **XMP sidecars** — read and write a sibling `.xmp` through the same
+- [x] **XMP sidecars** — read and write a sibling `.xmp` through the same
       metadata policy as embedded XMP
-- [ ] **Clean aperture and pixel aspect** — report TIFF, JPEG, and HEIF
+- [x] **Clean aperture and pixel aspect** — report TIFF, JPEG, and HEIF
       aperture boxes and pixel aspect without applying them
 
 #### Runtime Control

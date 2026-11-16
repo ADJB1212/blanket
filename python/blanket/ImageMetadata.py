@@ -5,17 +5,20 @@ from __future__ import annotations
 __lazy_modules__ = {"io", "collections.abc"}
 
 import math
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from io import BytesIO
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    import os
+    from collections.abc import Iterable
     from typing import BinaryIO, Literal
 
 from . import Image
-from ._blanket import _container_previews, _inspect, _rewrite_metadata
+from ._blanket import _container_previews, _get_geometry, _get_iptc, _inspect, _read_xmp_sidecar, _rewrite_iptc, _rewrite_metadata, _write_xmp_sidecar
+from ._capture import GPS, get_capture_time, get_gps, set_capture_time, set_gps
 from ._exif import exif_source, read_metadata
 from ._ifd import Exif
 from ._io import read_bytes, write_bytes
@@ -23,7 +26,25 @@ from ._metadata_policy import MetadataPolicy
 from ._resolution import Resolution, parse_resolution
 from .PngImagePlugin import PngInfo
 
-__all__ = ["EmbeddedPreview", "MetadataPolicy", "Resolution", "get_previews", "get_resolution", "rewrite"]
+__all__ = [
+    "GPS",
+    "EmbeddedPreview",
+    "ImageGeometry",
+    "MetadataPolicy",
+    "Resolution",
+    "get_capture_time",
+    "get_geometry",
+    "get_gps",
+    "get_iptc",
+    "get_previews",
+    "get_resolution",
+    "read_xmp_sidecar",
+    "rewrite",
+    "rewrite_iptc",
+    "set_capture_time",
+    "set_gps",
+    "write_xmp_sidecar",
+]
 
 type _File = str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO
 type _Bytes = bytes | bytearray | memoryview
@@ -205,6 +226,104 @@ def get_resolution(fp: _File, *, conflict: Literal["container", "exif", "error"]
     """
     data, format, info = _load(fp)
     return parse_resolution(data, format, info, conflict)
+
+
+def get_iptc(fp: _File) -> tuple[tuple[int, int, bytes], ...]:
+    """Read ordered (record, dataset, bytes) IIM fields in JPEG or classic TIFF.
+
+    Repeated datasets and character-set declarations retain their original bytes.
+    Missing records return an empty tuple. Malformed records raise ValueError.
+    TIFF reads the first page. Seekable input positions are restored.
+    """
+    data = read_bytes(fp, restore_position=True)
+    return tuple(_get_iptc(data))
+
+
+def rewrite_iptc(fp: _File, datasets: Iterable[tuple[int, int, bytes]], output: _File | None = None) -> bytes:
+    """Replace an existing JPEG APP13 or first-page TIFF IPTC IIM record.
+
+    Return encoded bytes and optionally write output after validation. An empty
+    iterable clears the record. A missing record raises ValueError. JPEG retains
+    other Photoshop resources and compressed scans; TIFF retains all directories
+    and pixel offsets. TIFF appends larger values; old bytes may remain in the
+    file. This is an edit, not a privacy wipe. BigTIFF is unsupported.
+    """
+    if output is fp and hasattr(fp, "read"):
+        raise ValueError("input and output streams must be distinct")
+    fields = list(datasets)
+    for record, dataset, value in fields:
+        if any(isinstance(v, bool) or not isinstance(v, int) for v in (record, dataset)) or not (0 <= record <= 255 and 0 <= dataset <= 255):
+            raise ValueError("IPTC record and dataset numbers must be bytes")
+        if not isinstance(value, bytes):
+            raise TypeError("IPTC dataset values must be bytes")
+    data = read_bytes(fp, restore_position=True)
+    encoded = _rewrite_iptc(data, fields)
+    if output is not None:
+        write_bytes(output, encoded)
+    return encoded
+
+
+def _sidecar_packet(raw: bytes, policy: MetadataPolicy | None) -> bytes | None:
+    """Apply the embedded XMP retention rules to a sidecar packet."""
+    if policy is not None and not isinstance(policy, MetadataPolicy):
+        raise TypeError("policy must be a MetadataPolicy or None")
+    info: dict[object, object] = {"xmp": raw}
+    value = (policy.apply(info) if policy is not None else info).get("xmp")
+    return value if isinstance(value, bytes) and value else None
+
+
+def read_xmp_sidecar(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes], *, policy: MetadataPolicy | None = None) -> bytes | None:
+    """Read the sibling .xmp packet with the embedded XMP policy rules.
+
+    Missing, empty, or policy-discarded packets return None. Other filesystem
+    errors propagate. Unfiltered packets retain their bytes; no embedded packet
+    is merged or changed. The image itself need not exist.
+    """
+    if policy is not None and not isinstance(policy, MetadataPolicy):
+        raise TypeError("policy must be a MetadataPolicy or None")
+    raw = _read_xmp_sidecar(os.fsdecode(fp))
+    if raw is None:
+        return None
+    return _sidecar_packet(raw, policy)
+
+
+def write_xmp_sidecar(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes], xmp: str | _Bytes | None, *, policy: MetadataPolicy | None = None) -> Path:
+    """Write the sibling .xmp using the same policy as embedded XMP.
+
+    None, empty, and policy-discarded packets write an empty file, preventing an
+    older packet from surviving. Returns the sidecar path. No image is opened.
+    """
+    raw = _sidecar_packet(_bytes(xmp, "xmp"), policy)
+    return Path(_write_xmp_sidecar(os.fsdecode(fp), raw or b""))
+
+
+def get_geometry(fp: _File) -> ImageGeometry:
+    """Report unapplied JPEG/TIFF/HEIF aperture and physical pixel aspect.
+
+    JPEG/TIFF use EXIF DefaultCropOrigin/DefaultCropSize and ActiveArea, with
+    density-based aspect. HEIF/AVIF use only primary-item clap/pasp properties.
+    Missing aperture returns None and missing aspect defaults to square pixels.
+    Coordinates precede orientation, crop, and resize; no pixels are decoded.
+    Malformed aperture fields raise ValueError. TIFF reads the first page.
+    """
+    data = read_bytes(fp, restore_position=True)
+    format, _, _, _ = _inspect(data, None)
+    aperture, native_aspect, source = _get_geometry(data, format)
+    return ImageGeometry(aperture, native_aspect if native_aspect is not None else 1.0, source)
+
+
+@dataclass(frozen=True)
+class ImageGeometry:
+    """Unapplied aperture and physical pixel width/height ratio.
+
+    clean_aperture is (left, top, right, bottom) in stored-pixel coordinates, or
+    None when absent. pixel_aspect defaults to 1.0. source identifies aperture
+    metadata. Orientation, rotation, crop, and resize are never applied.
+    """
+
+    clean_aperture: tuple[float, float, float, float] | None = None
+    pixel_aspect: float = 1.0
+    source: str | None = None
 
 
 @dataclass(frozen=True)
