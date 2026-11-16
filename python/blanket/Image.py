@@ -2958,7 +2958,7 @@ def linear_gradient(mode: str) -> Image:
     return Image(ops_linear_gradient(mode))
 
 
-def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] | None = 0) -> Image:
+def new(mode: str, size: tuple[int, int], color: str | float | tuple[float, ...] | None = 0) -> Image:
     """Create a supported-mode image filled with color.
 
     Args:
@@ -3007,7 +3007,7 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[int, ...] |
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))
     result = Image(image_new(native_mode, dimensions, color_pixel(0 if palette_color else cast("str | int | tuple[int, ...] | None", color), native_mode)))
     if mode in ("P", "PA"):
-        result.putpalette(bytes(color_pixel(color, "RGB")) if palette_color else b"")
+        result.putpalette(bytes(color_pixel(cast("str | tuple[int, ...]", color), "RGB")) if palette_color else b"")
     return result
 
 

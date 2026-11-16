@@ -143,6 +143,8 @@ pub(crate) fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8]
         2 => fill_span::<2>(pixels, ink, blend),
         3 => fill_span::<3>(pixels, ink, blend),
         4 => fill_span::<4>(pixels, ink, blend),
+        12 => fill_span::<12>(pixels, ink, blend),
+        16 => fill_span::<16>(pixels, ink, blend),
         _ => unreachable!(),
     }
 }
@@ -621,8 +623,14 @@ fn font_mask(glyphs: &[Vec<u8>], scale: usize) -> PyResult<(usize, usize, Vec<u8
 
 fn sample_distance(mode: PixelMode, a: &[u8], b: &[u8]) -> f64 {
     match mode {
-        PixelMode::I => (f64::from(i32::from_ne_bytes(a.try_into().unwrap())) - f64::from(i32::from_ne_bytes(b.try_into().unwrap()))).abs(),
-        PixelMode::F => (f64::from(f32::from_ne_bytes(a.try_into().unwrap())) - f64::from(f32::from_ne_bytes(b.try_into().unwrap()))).abs(),
+        PixelMode::I => (f64::from(i32::from_le_bytes(a.try_into().unwrap())) - f64::from(i32::from_le_bytes(b.try_into().unwrap()))).abs(),
+        PixelMode::F | PixelMode::RgbF | PixelMode::RgbaF => a
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<4>().0)
+            .map(|(&a, &b)| (f64::from(f32::from_le_bytes(a)) - f64::from(f32::from_le_bytes(b))).abs())
+            .sum(),
         PixelMode::I16N => (f64::from(u16::from_ne_bytes(a.try_into().unwrap())) - f64::from(u16::from_ne_bytes(b.try_into().unwrap()))).abs(),
         PixelMode::I16 | PixelMode::I16L => {
             (f64::from(u16::from_le_bytes(a.try_into().unwrap())) - f64::from(u16::from_le_bytes(b.try_into().unwrap()))).abs()
@@ -654,15 +662,13 @@ fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Optio
     let width = image.width() as usize;
     let seed_index = y as usize * image.width() as usize + x as usize;
     let pixels = image.pixels_mut().unwrap();
-    let mut seed = [0; 4];
-    seed[..stride].copy_from_slice(&pixels[seed_index * stride..(seed_index + 1) * stride]);
-    let seed = &seed[..stride];
-    if sample_distance(mode, seed, fill) <= threshold {
+    let seed = pixels[seed_index * stride..(seed_index + 1) * stride].to_vec();
+    if sample_distance(mode, &seed, fill) <= threshold {
         return;
     }
     let eligible = |pixel: &[u8]| match border {
         Some(border) => pixel != border && pixel != fill,
-        None => pixel != fill && sample_distance(mode, pixel, seed) <= threshold,
+        None => pixel != fill && sample_distance(mode, pixel, &seed) <= threshold,
     };
     if !eligible(&pixels[seed_index * stride..(seed_index + 1) * stride]) {
         return;
@@ -710,6 +716,51 @@ fn flood_run(pixels: &mut [u8], index: usize, width: usize, stride: usize, fill:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scalar_distances_follow_storage_byte_order() {
+        assert_eq!(sample_distance(PixelMode::I, &[0, 0, 1, 0], &[0, 1, 1, 0]), 256.0);
+        assert_eq!(sample_distance(PixelMode::F, &[0, 0, 128, 63], &[0, 0, 160, 63]), 0.25);
+        assert_eq!(sample_distance(PixelMode::I16N, &256_u16.to_ne_bytes(), &257_u16.to_ne_bytes()), 1.0);
+    }
+
+    #[test]
+    fn float_color_spans_match_individual_pixels() {
+        for mode in [PixelMode::RgbF, PixelMode::RgbaF] {
+            let ink: Vec<u8> = [-0.25_f32, 1.5, 3.25, 0.5][..mode.channels()].iter().flat_map(|value| value.to_le_bytes()).collect();
+            for width in [1, 15, 16, 17, 33] {
+                let source = Image::from_raw_bytes(width, 3, mode, vec![0; width as usize * 3 * ink.len()], 32).unwrap();
+                for (left, right) in [(-3, 5), (2, 999), (4, 2), (-9, -1), (0, i64::from(width) - 1)] {
+                    for y in [-1, 0, 1, 2, 3] {
+                        let mut actual = source.clone();
+                        let mut expected = source.clone();
+                        hline(&mut actual, left, right, y, &ink, false);
+                        for x in left..=right {
+                            paint(&mut expected, x, y, &ink, false);
+                        }
+                        assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap(), "{mode:?}, width {width}, ({left}, {y}, {right})");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn floodfill_float_color_preserves_disconnected_pixels() {
+        for mode in [PixelMode::RgbF, PixelMode::RgbaF] {
+            let pixel = |value: f32| value.to_le_bytes().repeat(mode.channels());
+            let seed = pixel(0.0);
+            let fill = pixel(1.0);
+            let barrier = pixel(2.0);
+            let source = [&seed, &barrier, &seed, &seed, &barrier, &seed, &seed, &barrier, &seed].map(Vec::as_slice).concat();
+            let expected = [&fill, &barrier, &seed, &fill, &barrier, &seed, &fill, &barrier, &seed].map(Vec::as_slice).concat();
+            for border in [None, Some(barrier.as_slice())] {
+                let mut image = Image::from_raw_bytes(3, 3, mode, source.clone(), 32).unwrap();
+                floodfill(&mut image, (0, 1), &fill, border, 0.0);
+                assert_eq!(image.raw_data().unwrap(), expected, "{mode:?}, border {border:?}");
+            }
+        }
+    }
 
     #[test]
     fn horizontal_edge_sweep_preserves_fill_and_stroke_samples() {

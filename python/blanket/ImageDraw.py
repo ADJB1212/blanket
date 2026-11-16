@@ -44,7 +44,7 @@ if TYPE_CHECKING:
     from .ImagePath import Path
 
     Coords = Sequence[float] | Sequence[tuple[float, float]] | Path
-    Color = int | float | str | tuple[int, ...] | None
+    Color = int | float | str | tuple[float, ...] | None
 
     class _FontOptions(TypedDict, total=False):
         direction: str
@@ -331,8 +331,14 @@ class ImageDraw:
             if ink is not None and points:
                 draw_polygon(self.im._native, points, 1, True, True, ink, bool(self.blend))
 
-    def _ink(self, fill: Color) -> int | float | tuple[int, ...]:
+    def _ink(self, fill: Color) -> int | float | tuple[float, ...]:
         """Normalize an ink to native pixel values in the drawing mode."""
+        if self.mode in ("RGB;F", "RGBA;F"):
+            if fill is None:
+                return (1.0,) * (3 if self.mode == "RGB;F" else 4)
+            if isinstance(fill, str):
+                raise ValueError(f"drawing in mode {self.mode!r} requires a numeric ink, got {fill!r}")
+            return fill
         if fill is None:
             fill = 1 if self.mode in ("I", "F") else -1
         if self.mode == "P" and not isinstance(fill, int):
