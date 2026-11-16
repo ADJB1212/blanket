@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from ._blanket import _Image, frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
 from .Image import Image, PixelAccess, _pixel_coordinates
 
 if TYPE_CHECKING:
+    from collections.abc import Buffer
+
+    import numpy as np
+
     from .ImagePalette import ImagePalette
 
 
@@ -21,10 +26,11 @@ class BufferMap:
     size: tuple[int, int]
     stride: int
     orientation: int
+    bit_depth: int = 8
 
     def snapshot(self, palette: ImagePalette | None) -> _Image:
         """Create an owned native raster snapshot from the mapped buffer."""
-        native = _native_frombuffer_copy("L" if self.mode == "P" else self.mode, self.size, self.data, 8, self.mode, self.stride, self.orientation)
+        native = _native_frombuffer_copy("L" if self.mode == "P" else self.mode, self.size, self.data, self.bit_depth, self.mode, self.stride, self.orientation)
         if palette is not None:
             native.set_palette(palette.mode, palette.tobytes())
         return native
@@ -52,7 +58,7 @@ class BufferPixelAccess(PixelAccess):
         if not isinstance(xy, tuple):
             raise TypeError("argument must be sequence of length 2")
         mapping = self._mapping
-        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy))
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy), mapping.bit_depth)
 
 
 class MappedImage(Image):
@@ -61,7 +67,8 @@ class MappedImage(Image):
     def __init__(self, mapping: BufferMap) -> None:
         """Initialize a mapped image backed by a buffer."""
         self._mapping: BufferMap | None = None
-        super().__init__(_Image._mapped_layout(mapping.mode, mapping.size))
+        depth = mapping.bit_depth if mapping.bit_depth != 8 else None
+        super().__init__(_Image._mapped_layout(mapping.mode, mapping.size, depth))
         self._mapping = mapping
         self.readonly = 1
 
@@ -120,6 +127,11 @@ class MappedImage(Image):
             self.readonly = 0
         super()._ensure_mutable()
 
+    def _check_open(self) -> None:
+        """Check mapped raster lifetime without taking a pixel snapshot."""
+        if self._mapping is None:
+            self._raster.load()
+
     def load(self) -> PixelAccess:
         """Load pixel access interface for the mapped buffer."""
         if self._mapping is not None:
@@ -135,12 +147,34 @@ class MappedImage(Image):
         mapping = self._mapping
         if mapping is None:
             return super().getpixel(xy)
-        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy))
+        return mapped_getpixel(mapping.data, mapping.mode, mapping.size, mapping.stride, mapping.orientation, _pixel_coordinates(xy), mapping.bit_depth)
+
+    def buffer_view(self) -> memoryview:
+        """Return a read-only view retaining physical mapped rows and padding."""
+        if self._mapping is None:
+            return super().buffer_view()
+        return self._mapping.data.toreadonly()
+
+    def array_view(self) -> np.ndarray:
+        """Return mapped samples with their row padding and orientation retained."""
+        if self._mapping is None:
+            return super().array_view()
+        import numpy as np
+
+        mapping = self._mapping
+        shape, typestr = self._array_layout()
+        sample_bytes = np.dtype(typestr).itemsize
+        pixel_bytes = sample_bytes * len(self.getbands())
+        row_stride = mapping.stride * mapping.orientation
+        strides = (row_stride, pixel_bytes) if len(shape) == 2 else (row_stride, pixel_bytes, sample_bytes)
+        offset = (self.height - 1) * mapping.stride if mapping.orientation == -1 and self.height else 0
+        return np.ndarray(shape, dtype=typestr, buffer=self.buffer_view(), offset=offset, strides=strides)
 
     def close(self) -> None:
         """Release buffer mapping and close native raster."""
         self._mapping = None
         super().close()
+        self._raster.close()
 
     def frombytes(self, data: object, decoder_name: str = "raw", *args: object) -> None:
         """Load pixel data from bytes into the mapped buffer or native raster."""
@@ -152,3 +186,47 @@ class MappedImage(Image):
 
         replacement = frombytes(self.mode, self.size, data, decoder_name, *args, bit_depth=self.bit_depth)
         replacement._native._write_mapped_rows(mapping.data, mapping.mode, mapping.stride, mapping.orientation)
+
+
+def from_array_view(obj: object, mode: str | None, bit_depth: int | None) -> Image:
+    """Map a compatible contiguous array without conversion or pixel allocation."""
+    if bit_depth is not None and (isinstance(bit_depth, bool) or not isinstance(bit_depth, int)):
+        raise TypeError("bit_depth must be an integer")
+    view = memoryview(cast("Buffer", obj))
+    shape = view.shape
+    if not view.c_contiguous or view.ndim not in (2, 3) or shape is None or min(shape) <= 0:
+        raise ValueError("copy=False requires a nonempty C-contiguous HW or HWC buffer")
+    channels = 1 if view.ndim == 2 else shape[2]
+    code = view.format.lstrip("@=<>!")
+    big_endian = view.format.startswith((">", "!")) or (not view.format.startswith("<") and sys.byteorder == "big")
+    if code == "B" and view.itemsize == 1:
+        inferred = {1: "L", 2: "LA", 3: "RGB", 4: "RGBA"}.get(channels)
+        depth = 8
+    elif code == "H" and view.itemsize == 2:
+        if channels == 1 and bit_depth is None:
+            inferred = "I;16B" if big_endian else "I;16L"
+        else:
+            inferred = {1: "L", 3: "RGB", 4: "RGBA"}.get(channels)
+        depth = 16 if bit_depth is None else bit_depth
+    elif code in ("i", "f") and view.itemsize == 4 and not big_endian:
+        if code == "i":
+            inferred = "I" if channels == 1 else None
+        else:
+            inferred = {1: "F", 3: "RGB;F", 4: "RGBA;F"}.get(channels)
+        depth = 32
+    else:
+        raise ValueError("copy=False requires uint8, uint16, little-endian int32, or little-endian float32 samples")
+    mode = inferred if mode is None else mode
+    compatible = {"B": {"L": 1, "LA": 2, "RGB": 3, "RGBA": 4, "RGBX": 4, "CMYK": 4, "P": 1}, "H": {"L": 1, "RGB": 3, "RGBA": 4, "I;16": 1, "I;16L": 1, "I;16B": 1, "I;16N": 1}, "i": {"I": 1}, "f": {"F": 1, "RGB;F": 3, "RGBA;F": 4}}
+    if mode is None or compatible[code].get(mode) != channels:
+        raise ValueError("copy=False mode must match the array sample type and channel count")
+    if (bit_depth is not None and bit_depth != depth) or (code == "H" and depth not in (10, 12, 16)):
+        raise ValueError("bit_depth does not match the array sample type")
+    if code == "H":
+        target_big = mode == "I;16B" or (mode == "I;16N" and sys.byteorder == "big")
+        if big_endian != target_big or (mode.startswith("I;") and depth != 16):
+            raise ValueError("copy=False requires matching sample byte order and depth")
+    width, height = shape[1], shape[0]
+    raw = view.cast("B")
+    mapping = BufferMap(raw, mode, (width, height), width * channels * view.itemsize, 1, depth)
+    return MappedImage(mapping)

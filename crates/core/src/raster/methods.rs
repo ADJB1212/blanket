@@ -541,14 +541,22 @@ impl Image {
     }
 
     #[staticmethod]
-    fn _mapped_layout(mode: &str, size: (u32, u32)) -> PyResult<Self> {
+    #[pyo3(signature = (mode, size, bit_depth=None))]
+    fn _mapped_layout(mode: &str, size: (u32, u32), bit_depth: Option<u8>) -> PyResult<Self> {
         // The Python mapping supplies pixels separately.
         let palette = (mode == "P").then(|| (PixelMode::Rgb, Vec::new()));
         let mode = if mode == "P" { PixelMode::L } else { PixelMode::parse(mode)? };
-        let bit_depth = (mode.sample_bytes() * 8) as u8;
-        expected_len(size.0, size.1, mode)?
-            .checked_mul(mode.sample_bytes())
-            .ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
+        let bit_depth = bit_depth.unwrap_or_else(|| (mode.sample_bytes() * 8) as u8);
+        let sample_bytes = if mode.is_wide_scalar() && bit_depth as usize == mode.sample_bytes() * 8 {
+            mode.sample_bytes()
+        } else if !mode.is_wide_scalar() && bit_depth == 8 {
+            1
+        } else if matches!(mode, PixelMode::L | PixelMode::Rgb | PixelMode::Rgba) && matches!(bit_depth, 10 | 12 | 16) {
+            2
+        } else {
+            return Err(PyValueError::new_err("invalid mapped sample bit depth"));
+        };
+        expected_len(size.0, size.1, mode)?.checked_mul(sample_bytes).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
         Ok(Self { width: size.0, height: size.1, mode, pixels: None, bit_depth, palette, .. })
     }
 

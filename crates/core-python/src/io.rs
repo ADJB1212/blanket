@@ -119,13 +119,29 @@ fn from_raw_input(
     Image::from_pixels(size.0, size.1, mode, data, None)
 }
 
-#[pyfunction]
+#[pyfunction(signature = (data, mode, size, stride, orientation, xy, bit_depth=8))]
 pub(crate) fn mapped_getpixel(
-    py: Python<'_>, data: &Bound<'_, PyAny>, mode: &str, size: (u32, u32), stride: usize, orientation: i8, xy: (i64, i64),
+    py: Python<'_>, data: &Bound<'_, PyAny>, mode: &str, size: (u32, u32), stride: usize, orientation: i8, xy: (i64, i64), bit_depth: u8,
 ) -> PyResult<Py<PyAny>> {
     let mode = PixelMode::parse(if mode == "P" { "L" } else { mode })?;
-    if !matches!(mode, PixelMode::L | PixelMode::Rgbx | PixelMode::Rgba | PixelMode::Cmyk | PixelMode::I16 | PixelMode::I16L | PixelMode::I16B)
-        || !matches!(orientation, -1 | 1)
+    if !matches!(
+        mode,
+        PixelMode::L
+            | PixelMode::La
+            | PixelMode::Rgb
+            | PixelMode::Rgbx
+            | PixelMode::Rgba
+            | PixelMode::Cmyk
+            | PixelMode::I
+            | PixelMode::I16
+            | PixelMode::I16L
+            | PixelMode::I16B
+            | PixelMode::I16N
+            | PixelMode::F
+            | PixelMode::RgbF
+            | PixelMode::RgbaF
+    ) || !matches!(orientation, -1 | 1)
+        || !matches!(bit_depth, 8 | 10 | 12 | 16 | 32)
     {
         return Err(PyValueError::new_err("invalid mapped pixel layout"));
     }
@@ -133,7 +149,11 @@ pub(crate) fn mapped_getpixel(
     if x < 0 || y < 0 || x >= i64::from(size.0) || y >= i64::from(size.1) {
         return Err(PyIndexError::new_err("image index out of range"));
     }
-    let pixel_bytes = mode.channels() * mode.sample_bytes();
+    let sample_bytes = if mode.is_wide_scalar() { mode.sample_bytes() } else { usize::from(bit_depth.div_ceil(8)) };
+    let pixel_bytes = mode.channels() * sample_bytes;
+    if pixel_bytes > 16 || !mode.is_wide_scalar() && bit_depth == 32 {
+        return Err(PyValueError::new_err("invalid mapped pixel layout"));
+    }
     let required = stride.checked_mul(size.1 as usize).ok_or_else(|| PyValueError::new_err("image dimensions are too large"))?;
     if stride < size.0 as usize * pixel_bytes {
         return Err(PyValueError::new_err("invalid mapped pixel stride"));
@@ -149,15 +169,34 @@ pub(crate) fn mapped_getpixel(
     let row = if orientation == 1 { y as usize } else { size.1 as usize - 1 - y as usize };
     let offset = row * stride + x as usize * pixel_bytes;
     let view = data.get_item(PySlice::new(py, offset as isize, (offset + pixel_bytes) as isize, 1))?;
-    let mut pixel = [0; 4];
+    let mut pixel = [0; 16];
     PyBuffer::<u8>::get(&view)?.copy_to_slice(py, &mut pixel[..pixel_bytes])?;
+    if mode.is_float() {
+        let values = pixel[..pixel_bytes].as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes));
+        return if mode.channels() == 1 {
+            Ok(values.into_iter().next().unwrap().into_pyobject(py)?.into_any().unbind())
+        } else {
+            Ok(PyTuple::new(py, values)?.into_any().unbind())
+        };
+    }
     if mode.is_integer() {
         return Ok(integer_value(mode, &pixel[..pixel_bytes]).into_pyobject(py)?.into_any().unbind());
+    }
+    if sample_bytes == 2 {
+        let values: Vec<_> = pixel[..pixel_bytes].as_chunks::<2>().0.iter().map(|bytes| u16::from_le_bytes(*bytes)).collect();
+        if values.iter().any(|&value| u32::from(value) >= 1_u32 << bit_depth) {
+            return Err(PyValueError::new_err("sample outside bit_depth range"));
+        }
+        return if mode.channels() == 1 {
+            Ok(values[0].into_pyobject(py)?.into_any().unbind())
+        } else {
+            Ok(PyTuple::new(py, values)?.into_any().unbind())
+        };
     }
     if mode == PixelMode::L {
         return Ok(pixel[0].into_pyobject(py)?.into_any().unbind());
     }
-    Ok(PyTuple::new(py, pixel)?.into_any().unbind())
+    Ok(PyTuple::new(py, &pixel[..pixel_bytes])?.into_any().unbind())
 }
 
 fn array_bytes(obj: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {

@@ -369,8 +369,9 @@ with new processing semantics exposed explicitly.
 
 #### Interoperability
 
-- [ ] **Buffer views and array exchange** — opt-in zero-copy access for compatible
-      layouts, with explicit ownership, lifetime, mutability, and stride rules
+- [x] **Buffer views and array exchange** — read-only `buffer_view` / `array_view`
+      exports and `fromarray(copy=False)` imports, with retained owners,
+      copy-on-write native storage, and explicit layout and mutation rules
 - [x] **Compressed-domain JPEG transforms** — lossless rotation, flips, and
       aligned cropping of encoded JPEGs with explicit metadata handling
 - [x] **Fused tensor export** — `Image.to_torch` / `Image.to_numpy` float32 snapshots with
@@ -458,6 +459,128 @@ with new processing semantics exposed explicitly.
       temporal stability and explicit transparency constraints
 - [ ] **Sequence editing helpers** — trim, concatenate, and retime animations
       while preserving source positions and validating frame compatibility
+
+#### Perceptual Color Editing
+
+- [ ] **OKLab and Oklch working conversions** — chroma-aware saturation, hue
+      rotation, and blends in OKLab, with an explicit gamut map back to the
+      source mode and sample depth
+- [ ] **White balance** — temperature/tint or a sampled neutral, using a named
+      chromatic adaptation transform and a defined clip into the destination gamut
+- [ ] **Histogram matching and color transfer** — match per-channel or
+      luminance histograms to a reference image, or apply a mean/variance
+      transfer, without changing geometry
+- [ ] **LUT file import** — load `.cube` (and similarly sized 3D tables) into
+      `Color3DLUT`, with trilinear interpolation by default and tetrahedral
+      interpolation as an explicit option
+- [ ] **Color-vision-deficiency preview** — protan, deutan, and tritan
+      simulation as a viewing transform, separate from any correction
+
+#### Gain Maps and Auxiliary Images
+
+- [ ] **Ultra HDR gain maps** — decode an ISO 21496-1 gain map plus its base
+      JPEG or HEIF into float HDR, and write a gain-map JPEG from an HDR source
+      using the existing tone-mapping operators as the SDR base
+- [ ] **Auxiliary image access** — open HEIF, AVIF, and JPEG MPF depth maps,
+      gain maps, alpha planes, and stereo pairs as their own images, distinct
+      from embedded preview blobs
+- [ ] **Reversible JPEG XL recompression** — transcode a JPEG bitstream to
+      JPEG XL without a pixel decode, and restore the original JPEG bytes when
+      the transcode is reversible
+- [ ] **Radiance RGBE** — read and write `.hdr` on the float HDR pipeline,
+      including the exposure header
+- [ ] **PSD/PSB composite read** — decode the flattened composite only;
+      layers, adjustment stacks, and smart objects stay out of this item
+- [ ] **CUR read** — Windows cursors through the ICO decoder, exposing the
+      hotspot alongside the raster
+
+#### Multi-band and Scientific Images
+
+- [ ] **N-band images** — storage beyond four channels, with select, stack,
+      reorder, and per-band statistics that do not collapse bands to RGB
+- [ ] **GeoTIFF tags** — read pixel scale, tie points, model transformation,
+      and CRS name; do not project or resample
+- [ ] **FITS image HDUs** — address later planes and image extensions
+      explicitly, separate from animation frames
+- [ ] **Single-frame DICOM** — decode uncompressed and baseline-JPEG pixel
+      data and apply a window/level into 8- or 16-bit grayscale; no network
+      stack and no diagnostic presentation states
+
+#### Geometry and Restoration
+
+- [ ] **Exemplar inpainting** — fill a mask of small holes from nearby patches
+      inside a documented search window, with no model weights
+- [ ] **Phase-correlation alignment** — estimate translation, and optionally
+      a small rotation, between two images and return a confidence score
+- [ ] **Polar resampling** — polar and log-polar mappings through the existing
+      coordinate-map path and border modes
+- [ ] **Richardson-Lucy deconvolution** — iterate a caller-supplied
+      point-spread kernel with an iteration cap and the same nonfinite rules
+      as float images
+- [ ] **Border and alpha trim** — return the bounding box of non-border or
+      non-transparent samples and the cropped image
+
+#### Text Layout Details
+
+- [ ] **OpenType feature selection** — `liga`, `kern`, `calt`, stylistic sets,
+      and character variants on the current shaper, with metrics that match
+      the glyphs that are drawn
+- [ ] **Text on a path** — draw a shaped run along a quadratic or cubic curve,
+      with start offset and side, once Bézier paths exist
+- [ ] **Embedded bitmap strikes** — prefer a matching bitmap strike in an
+      OpenType or CFF collection when the requested size has one
+
+#### Assembly and Sequences
+
+- [ ] **Contact sheets and sprite atlases** — grid or shelf-pack images and
+      return placement rectangles in source order
+- [ ] **Hold, duplicate, and reverse** — frame helpers that compose with trim,
+      concatenate, and retime, and that validate mode and size compatibility
+- [ ] **Animation contact sheets** — stamp frames after disposal and blend so
+      the sheet matches playback, not the stored deltas
+
+#### Metadata Ergonomics
+
+- [ ] **GPS and capture time** — read and write EXIF GPS and datetime fields
+      with explicit timezones and a defined result when a field is absent
+- [ ] **IPTC IIM** — read and write the legacy IIM record in JPEG and TIFF
+      when the container already carries it
+- [ ] **XMP sidecars** — read and write a sibling `.xmp` through the same
+      metadata policy as embedded XMP
+- [ ] **Clean aperture and pixel aspect** — report TIFF, JPEG, and HEIF
+      aperture boxes and pixel aspect without applying them
+
+#### Runtime Control
+
+- [ ] **Progress and cancellation** — callbacks for decode, resize, seam
+      carving, and compressor search, polled at tile or candidate boundaries
+      and safe to invoke from a worker
+- [ ] **Deterministic execution** — a mode that fixes worker ordering and the
+      seed for `effect_spread` and other stochastic helpers
+- [ ] **Free-threaded Python** — document which objects release the GIL, which
+      are safe to share across threads, and which operations require the caller
+      to copy first
+- [ ] **Decode profiles** — `strict` rejects truncated streams and unusual
+      optional chunks; `permissive` keeps the current recovery behavior
+
+#### Interoperability
+
+- [ ] **`Image.from_pillow`** — share or copy a Pillow image, copying only when
+      the mode or stride cannot be viewed, matching `to_pillow`
+- [ ] **Native capsule export** — hand the Rust image to other extension
+      modules through a PyCapsule with an explicit lifetime and a copy-out
+      fallback
+- [ ] **`float16` array exchange** — import and export half-precision NumPy
+      arrays by converting at the boundary, leaving storage as float32
+
+#### Hashes and Search
+
+- [ ] **Color and crop-resistant hashes** — additional `ImageHash` algorithms
+      with the same hexadecimal form and Hamming distance
+- [ ] **Focus measure** — variance of Laplacian or Tenengrad on a grayscale
+      view, for ranking frames or rejecting blurry captures
+- [ ] **Hash nearest neighbors** — group or query a list of hashes by Hamming
+      ball, for duplicate detection on top of the existing hash types
 
 ---
 
@@ -598,6 +721,25 @@ for cache limits, ownership, completion, and error contracts.
       from device memory
 - [ ] Release-build benchmarks for cold/warm execution, CPU upload plus download,
       and already-resident tensor pipelines; publish measured crossover sizes
+
+### GPU Future Ideas
+
+Same status as the CPU future ideas: exploratory, explicit opt-in, and no
+silent CPU fallback when a kernel is missing.
+
+- [ ] **Half-precision residency** — `float16` storage for HDR and tensor
+      pipelines, converting to float32 for operations that have no half kernel
+- [ ] **Resident tone mapping and gain maps** — run the CPU HDR operators and
+      ISO 21496-1 gain-map application on an already-resident image
+- [ ] **Resident perceptual color** — OKLab conversions, white balance, and
+      3D LUT application without a download between steps
+- [ ] **Async upload and download** — await the existing stream completion
+      from Python instead of blocking the caller thread
+- [ ] **Preview quantization** — GPU palette and dither for preview-sized
+      images, with the CPU quantizers remaining the reference result
+- [ ] **Platform still decode** — accept a VideoToolbox or NVDEC surface for
+      still JPEG and WebP through the direct-surface import path, so the
+      pixels are not uploaded a second time
 
 ---
 

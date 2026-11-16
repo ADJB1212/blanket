@@ -60,6 +60,7 @@ from ._blanket import (
     frombytes as _native_frombytes,
     image_alpha_composite,
     image_alpha_composite_inplace,
+    image_buffer_view,
     image_convert,
     image_convert_dithered_bilevel,
     image_convert_matrix,
@@ -753,26 +754,78 @@ class Image:
         mode 1 exposes booleans, and LAB retains its raw signed-chroma bytes.
         Unsigned high-depth samples retain their unscaled values in uint16.
         """
-        mode = self.mode
-        if mode == "1":
+        shape, typestr = self._array_layout()
+        if self.mode == "1":
             data = self._native._bilevel_array_bytes()
-            typestr = "|b1"
         else:
             data = self.tobytes()
-            if mode in ("F", "RGB;F", "RGBA;F"):
-                typestr = "<f4"
-            elif mode == "I":
-                typestr = "<i4"
-            elif mode == "I;16B" or (mode == "I;16N" and sys.byteorder == "big"):
-                typestr = ">u2"
-            elif self.bit_depth > 8:
-                typestr = "<u2"
-            else:
-                typestr = "|u1"
+        return {"version": 3, "data": data, "shape": shape, "typestr": typestr}
+
+    def _array_layout(self) -> tuple[tuple[int, ...], str]:
+        """Describe array shape and sample dtype without reading pixels."""
+        mode = self.mode
+        if mode == "1":
+            typestr = "|b1"
+        elif mode in ("F", "RGB;F", "RGBA;F"):
+            typestr = "<f4"
+        elif mode == "I":
+            typestr = "<i4"
+        elif mode == "I;16B" or (mode == "I;16N" and sys.byteorder == "big"):
+            typestr = ">u2"
+        elif self.bit_depth > 8:
+            typestr = "<u2"
+        else:
+            typestr = "|u1"
         shape = (self.height, self.width)
         if len(self._bands) > 1:
             shape += (len(self._bands),)
-        return {"version": 3, "data": data, "shape": shape, "typestr": typestr}
+        return shape, typestr
+
+    def buffer_view(self) -> memoryview:
+        """Return a read-only byte view without copying pixel storage.
+
+        The view keeps its allocation alive after image mutation, frame changes,
+        or close. Native image writes detach through copy-on-write. Mode 1 and
+        LAB require explicit conversion because their public byte representation
+        differs from storage. Palette modes expose indices. Mapped images expose
+        their physical buffer, including row padding and storage orientation;
+        external writes remain visible. Release the view to relinquish its owner.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixels = image.buffer_view()
+            assert pixels.readonly
+            pixels.release()
+            ```
+        """
+        self.load()
+        return image_buffer_view(self._native)
+
+    def array_view(self) -> np.ndarray:
+        """Return a read-only NumPy view of unscaled samples without copying.
+
+        Use (height, width) for single-band images and HWC otherwise, retaining
+        dtype and byte order. Ownership follows buffer_view; mapped arrays retain
+        padding and negative row strides. Mode 1 and LAB require conversion.
+        NumPy is imported only when this method is called. Use np.array(image)
+        for an independent writable copy; ordinary np.asarray remains a snapshot.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            pixels = image.array_view()
+            assert pixels.shape == (8, 8, 3)
+            ```
+        """
+        import numpy as np
+
+        shape, typestr = self._array_layout()
+        return np.frombuffer(self.buffer_view(), dtype=typestr).reshape(shape)
 
     @property
     def im(self) -> _Image:
@@ -3564,13 +3617,18 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
     return MappedImage(mapping)
 
 
-def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None) -> Image:
+def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = None, copy: bool = True) -> Image:
     """Create an image from uint8, uint16, int32, float32, or float64 array samples.
 
     Args:
         obj: Object exposing the array interface with uint8, uint16, int32, float32, or float64 samples.
         mode: Optional mode matching the array's channel layout.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16. None retains or infers the depth. Integer and float arrays map to `I` and `F`.
+        copy: False retains compatible contiguous buffer storage. Source writes
+            remain visible, image mutations detach, and direct pixel access is
+            read-only. Instance frombytes writes through writable inputs, as
+            with frombuffer. Native operations take owned snapshots. Unsupported
+            layouts raise ValueError instead of copying; see buffer view docs.
 
     Examples:
         ```python
@@ -3581,6 +3639,12 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
         image = Image.fromarray(pixels)
         ```
     """
+    if not isinstance(copy, bool):
+        raise TypeError("copy must be a boolean")
+    if not copy:
+        from ._buffer import from_array_view
+
+        return from_array_view(obj, mode, bit_depth)
     interface = getattr(obj, "__array_interface__", None)
     if interface is not None:
         if "typestr" not in interface:
