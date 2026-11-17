@@ -57,6 +57,20 @@ def test_wide_paste_copies_full_buffers_and_clipped_rows(mode: str, subtests: py
                 assert source.tobytes() == source_raw
 
 
+@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
+def test_paste_handles_binary_mask_blocks_and_fractional_tails(mask_mode: str) -> None:
+    size = (53, 3)
+    rng = random.Random(84)
+    actual, expected = image_pair("RGB", size, rng.randbytes(53 * 3 * 3))
+    source, reference = image_pair("RGB", size, rng.randbytes(53 * 3 * 3))
+    alpha = ([0] * 16 + [255] * 16 + [0, 255, 127] * 7) * 3
+    mask_pixels = bytes(alpha) if mask_mode == "L" else b"".join(bytes((32, 61, 77, value)) for value in alpha)
+    mask, reference_mask = image_pair(mask_mode, size, mask_pixels)
+    actual.paste(source, (0, 0), mask)
+    expected.paste(reference, (0, 0), reference_mask)
+    assert_pixels_equal(actual, expected)
+
+
 @pytest.mark.parametrize(("mode", "color"), [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
 def test_paste_fill_and_alias(mode, color):
     actual, expected = Image.new(mode, (6, 5)), PIL.new(mode, (6, 5))

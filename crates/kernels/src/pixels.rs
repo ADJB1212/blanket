@@ -1166,15 +1166,38 @@ pub fn blend(d: Bytes, s: Bytes, a: Bytes) -> Bytes {
 
 pub fn paste_masked<const C: usize, const M: usize>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool) -> usize {
     let end = dst.len() / C / 16 * 16;
+    if end != 0 {
+        let has_binary_runs = [0, end / 2, end - 1].into_iter().any(|i| matches!(mask[i * M + M - 1], 0 | 255));
+        if has_binary_runs {
+            paste_masked_blocks::<C, M, true>(dst, src, mask, fill, end);
+        } else {
+            paste_masked_blocks::<C, M, false>(dst, src, mask, fill, end);
+        }
+    }
+    end
+}
+
+#[inline]
+fn paste_masked_blocks<const C: usize, const M: usize, const BINARY_RUNS: bool>(dst: &mut [u8], src: &[u8], mask: &[u8], fill: bool, end: usize) {
     for i in (0..end).step_by(16) {
+        let a = load::<M>(&mask[i * M..])[M - 1];
+        if BINARY_RUNS {
+            match a[0] {
+                0 if a.simd_eq(Bytes::splat(0)).all() => continue,
+                255 if a.simd_eq(Bytes::splat(255)).all() => {
+                    let range = i * C..(i + 16) * C;
+                    dst[range.clone()].copy_from_slice(&src[range]);
+                    continue;
+                }
+                _ => {}
+            }
+        }
         let d = load::<C>(&dst[i * C..]);
         let s = load::<C>(&src[i * C..]);
-        let a = load::<M>(&mask[i * M..])[M - 1];
         let rgb_a =
             if fill && C == 4 && M == 1 { (d[C - 1].simd_eq(Bytes::splat(0)) & a.simd_ne(Bytes::splat(0))).select(Bytes::splat(255), a) } else { a };
         store(&mut dst[i * C..], std::array::from_fn::<_, C, _>(|c| blend(d[c], s[c], if c == 3 { a } else { rgb_a })));
     }
-    end
 }
 #[cfg(test)]
 mod tests {
