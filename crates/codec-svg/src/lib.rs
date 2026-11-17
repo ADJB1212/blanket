@@ -1,8 +1,11 @@
 mod safety;
+mod trace;
+mod writer;
 
 use blanket_codec_common::{CodecErrorKind, ImageHeader};
 use blanket_core::{Image, PixelMode};
 pub use safety::{Document, Error, Limits, RenderOptions, detect, parse};
+pub use trace::encode;
 
 impl Error {
     #[must_use]

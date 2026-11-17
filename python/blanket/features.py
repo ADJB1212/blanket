@@ -32,6 +32,7 @@ class EncodingCapabilities:
 
     Dimensions, metadata, and combinations of options can impose further
     restrictions. In particular TIFF JPEG compression requires 8-bit L/RGB.
+    SVG uses lossy vector tracing with thresholded alpha; its method is "trace".
     """
 
     format: str
@@ -67,7 +68,7 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
     known = {feature: label for label, feature in _FORMATS}
     if name not in known:
         raise ValueError(f"unknown encoding format {format!r}")
-    if name in ("dds", "eps", "fits", "spider", "pixar", "sun", "svg"):
+    if name in ("dds", "eps", "fits", "spider", "pixar", "sun"):
         return None
     if not check("heif_encoder" if name == "heif" else name):
         return None
@@ -85,6 +86,7 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
         "ico": ("deflate",),
         "bmp": ("raw",),
         "pdf": ("raw",),
+        "svg": ("trace",),
         "ppm": ("raw",),
         "pam": ("raw",),
         "tga": ("raw",),
@@ -323,7 +325,7 @@ def blanketinfo(out: TextIO | None = None, supported_formats: bool = True) -> No
                 write = info["heif_encoder"][0]
             elif feature == "pdf":
                 read = False
-            elif feature in ("dds", "eps", "svg"):
+            elif feature in ("dds", "eps"):
                 write = False
             capabilities = [name for name, available in (("open", read), ("save", write)) if available]
             print(f"  {label}: {', '.join(capabilities) or 'unavailable'}", file=out)

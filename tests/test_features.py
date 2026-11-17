@@ -31,7 +31,7 @@ def test_available_features(feature: str) -> None:
         assert features.version(feature)
 
 
-@pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "AVIF", "HEIF", "BMP", "GIF", "ICO", "PDF", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "XPM", "MSP", "PALM"])
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "JXL", "TIFF", "WEBP", "AVIF", "HEIF", "BMP", "GIF", "ICO", "PDF", "SVG", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "XPM", "MSP", "PALM"])
 def test_encoding_capabilities_can_encode(format: str) -> None:
     capability = features.encoding_capabilities(format)
     if capability is None:

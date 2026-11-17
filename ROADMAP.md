@@ -294,6 +294,8 @@ Rust backend for performance and functionality Pillow doesn't offer.
 ### Planned
 
 - [x] **SVG support** — read static SVG as raster images
+- [x] **SVG tracing export** — trace rasters into colored pixel, polygon, or
+      spline paths with configurable color, speckle, and curve fitting controls
 - [x] **Batch processing API** — `ImageBatch.Pipeline` applies shared transforms
       to images or paths in parallel, with ordered results and bounded streaming
 - [x] **Smart cropping** — `ImageOps.smart_crop` fits a requested size using

@@ -11,6 +11,9 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 blanket-codec-common.workspace = true
+pyo3.workspace = true
+rustc-hash.workspace = true
+visioncortex = { version = "0.9", default-features = false }
 resvg = { version = "0.50", default-features = false, features = ["raster-images"] }
 quick-xml = { version = "0.42", default-features = false }
 base64 = { version = "0.23", default-features = false, features = ["simd-unsafe", "std"] }

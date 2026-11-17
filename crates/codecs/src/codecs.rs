@@ -516,7 +516,7 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
 
 fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
     if format == ImageFormat::Svg {
-        return Err(CodecErrorKind::Unsupported.into_pyerr("SVG is a read-only format".into(), Some("SVG"), "encode"));
+        return blanket_codec_svg::encode(image, options);
     }
     if format == ImageFormat::Tiff && options.tiff_compression != 0 {
         return blanket_codec_tiff::encode_compressed_tiff(image, options);

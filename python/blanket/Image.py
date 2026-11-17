@@ -208,6 +208,7 @@ def getmodetype(mode: str) -> str:
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
 _FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
 _SAVE_OPTIONS = {
+    "SVG": frozenset({"svg_mode", "svg_color_precision", "svg_filter_speckle", "svg_layer_difference", "svg_corner_threshold", "svg_length_threshold", "svg_splice_threshold", "svg_path_precision", "svg_alpha_threshold"}),
     "PCX": frozenset(),
     "SGI": frozenset(),
     "XBM": frozenset(),
@@ -2879,6 +2880,12 @@ class Image:
     def encode(self, format: str, **options: object) -> bytes:
         """Return encoded image bytes using the same options as save().
 
+        SVG traces the raster into vector paths. ``svg_mode`` selects pixel,
+        polygon, or spline fitting (default); ``svg_color_precision`` (1..8,
+        default 6) and ``svg_filter_speckle`` (default 4) control detail.
+        Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
+        pixels become opaque. Original SVG geometry is not retained.
+
         Args:
             format: Output format name, such as PNG, JPEG, or WEBP.
             **options: Save options, including metadata, compressors, and sequences.
@@ -2900,8 +2907,8 @@ class Image:
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
         output_format = _output_format(fp, format)
-        if output_format == "SVG":
-            raise UnsupportedCodecError("SVG is a read-only format", format="SVG", operation="encode")
+        if output_format == "SVG" and compressor is not None:
+            raise ValueError("compression optimization is not supported for SVG tracing")
         if output_format == "JPEG" and (self.width == 0 or self.height == 0):
             raise ValueError("cannot write empty image as JPEG")
         if {"save_all", "append_images", "duration", "loop", "disposal", "blend", "default_image"} & options.keys():
@@ -3806,8 +3813,6 @@ def _output_format(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Wri
     if requested is not None:
         normalized = requested.upper().replace(" ", "")
         normalized = _FORMAT_ALIASES.get(normalized, normalized)
-        if normalized == "SVG":
-            raise UnsupportedCodecError("SVG is a read-only format", format="SVG", operation="encode")
         if normalized not in _SAVE_OPTIONS:
             raise UnsupportedCodecError(f"unsupported image format {requested!r}", format=normalized, operation="encode")
         return normalized
@@ -3861,6 +3866,26 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
     values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    if format == "SVG":
+        mode = supplied.get("svg_mode", "spline")
+        if not isinstance(mode, str):
+            raise TypeError("svg_mode must be a string")
+        if mode not in ("pixel", "polygon", "spline"):
+            raise ValueError("svg_mode must be pixel, polygon, or spline")
+        values["svg_mode"] = mode
+        for name, default, minimum, maximum in (("svg_color_precision", 6, 1, 8), ("svg_filter_speckle", 4, 0, 4096), ("svg_layer_difference", 16, 0, 765), ("svg_path_precision", 2, 0, 8), ("svg_alpha_threshold", 128, 1, 255)):
+            values[name] = _bounded_int(name, supplied.get(name, default), minimum, maximum)
+        for name, default, minimum, maximum in (("svg_corner_threshold", 60.0, 0.0, 180.0), ("svg_length_threshold", 4.0, 1.0, math.inf), ("svg_splice_threshold", 45.0, 0.0, 180.0)):
+            value = supplied.get(name, default)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise TypeError(f"{name} must be a number")
+            try:
+                number = float(value)
+            except OverflowError as error:
+                raise ValueError(f"{name} must be finite") from error
+            if not math.isfinite(number) or not minimum <= number <= maximum:
+                raise ValueError(f"{name} must be finite and between {minimum} and {maximum}")
+            values[name] = number
     if format == "JPEG":
         subsampling = jpeg_sampling
         if isinstance(subsampling, str) and subsampling in presets:

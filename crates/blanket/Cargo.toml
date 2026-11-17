@@ -22,7 +22,7 @@ blanket-resample.workspace = true
 blanket-codec-extended.workspace = true
 blanket-codec-jpeg2000.workspace = true
 pyo3.workspace = true
-roxmltree = {version = "0.21", default-features = false, features = ["std", "positions"]}
+rustc-hash.workspace = true
 blanket-core.workspace = true
 blanket-cms.workspace = true
 blanket-codecs.workspace = true
@@ -34,6 +34,7 @@ blanket-filter.workspace = true
 blanket-palette.workspace = true
 blanket-stat.workspace = true
 blanket-draw.workspace = true
+roxmltree = {version = "0.21", default-features = false, features = ["std", "positions"]}
 
 [features]
 gpu-metal = ["dep:blanket-gpu-python"]
