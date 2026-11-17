@@ -2,10 +2,14 @@
 use blanket_core::Image;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use smallvec::SmallVec;
 
 struct Quarter {
     a: i64,
     b: i64,
+    a_squared: i128,
+    b_squared: i128,
+    product: i128,
     x: i64,
     y: i64,
     done: bool,
@@ -13,12 +17,13 @@ struct Quarter {
 
 impl Quarter {
     fn new(a: i64, b: i64) -> Self {
-        Self { a, b, x: a, y: b % 2, done: a < 0 || b < 0 }
+        let a_squared = i128::from(a) * i128::from(a);
+        let b_squared = i128::from(b) * i128::from(b);
+        Self { a, b, a_squared, b_squared, product: a_squared * b_squared, x: a, y: b % 2, done: a < 0 || b < 0 }
     }
 
     fn delta(&self, x: i64, y: i64) -> i128 {
-        let (a, b, x, y) = (i128::from(self.a), i128::from(self.b), i128::from(x), i128::from(y));
-        (a * a * y * y + b * b * x * x - a * a * b * b).abs()
+        (self.a_squared * i128::from(y * y) + self.b_squared * i128::from(x * x) - self.product).abs()
     }
 
     fn next(&mut self) -> Option<(i64, i64)> {
@@ -122,14 +127,14 @@ impl Clip {
         }
     }
 
-    fn spans(&self, mut left: i64, y: i64, mut right: i64) -> Vec<(i64, i64)> {
+    fn spans(&self, mut left: i64, y: i64, mut right: i64) -> SmallVec<[(i64, i64); 2]> {
         match self {
-            Self::Pass => vec![(left, right)],
+            Self::Pass => SmallVec::from_slice(&[(left, right)]),
             Self::Plane(a, b, c) => {
                 let row = b * y as f64 + c;
                 if a.abs() < 1e-9 {
                     if row < -1e-9 {
-                        return Vec::new();
+                        return SmallVec::new();
                     }
                 } else {
                     let x = -row / a;
@@ -140,14 +145,14 @@ impl Clip {
                         right = (right as f64).min(x).round() as i64;
                     }
                 }
-                if left <= right { vec![(left, right)] } else { Vec::new() }
+                if left <= right { SmallVec::from_slice(&[(left, right)]) } else { SmallVec::new() }
             }
             Self::And(a, b) => a.spans(left, y, right).into_iter().flat_map(|(l, r)| b.spans(l, y, r)).collect(),
             Self::Or(a, b) => {
                 let mut spans = a.spans(left, y, right);
                 spans.extend(b.spans(left, y, right));
                 spans.sort_unstable();
-                let mut result: Vec<(i64, i64)> = Vec::new();
+                let mut result = SmallVec::<[(i64, i64); 2]>::new();
                 for (l, r) in spans {
                     if let Some(last) = result.last_mut().filter(|last| last.1 >= l) {
                         last.1 = last.1.max(r);
@@ -207,17 +212,19 @@ fn pie_clip(a: i64, b: i64, start: f32, end: f32) -> Clip {
 fn render(image: &mut Image, bounds: (i64, i64, i64, i64), width: i64, clip: &Clip, ink: &[u8], blend: bool) {
     let (x0, y0, x1, y1) = bounds;
     let (a, b) = (x1 - x0, y1 - y0);
+    let height = i64::from(image.height());
+    let mut spans = super::draw::SpanWriter::new(image, ink, blend);
     ellipse_spans(a, b, width, |l, y, r| {
         let row = y0 + (y + b) / 2;
-        if row < 0 || row >= i64::from(image.height()) {
+        if row < 0 || row >= height {
             return;
         }
         if matches!(clip, Clip::Pass) {
-            super::draw::hline(image, x0 + (l + a) / 2, x0 + (r + a) / 2, row, ink, blend);
+            spans.write(x0 + (l + a) / 2, x0 + (r + a) / 2, row);
             return;
         }
         for (left, right) in clip.spans(l, y, r) {
-            super::draw::hline(image, x0 + (left + a) / 2, x0 + (right + a) / 2, row, ink, blend);
+            spans.write(x0 + (left + a) / 2, x0 + (right + a) / 2, row);
         }
     });
 }
@@ -464,7 +471,7 @@ fn draw_polygon(
         return Ok(());
     }
     let (w, h) = (image.width() as usize, image.height());
-    let mut interior = if closed && !filled && width > 1 { Some(vec![Vec::new(); h as usize]) } else { None };
+    let mut interior = if closed && !filled && width > 1 { Some(vec![SmallVec::<[_; 1]>::new(); h as usize]) } else { None };
     value.py().detach(|| {
         if !filled && width == 1 {
             let line = |image: &mut Image, a: (i64, i64), b: (i64, i64)| {
@@ -505,6 +512,7 @@ fn draw_polygon(
                 spans.truncate(kept);
             }
         }
+        let mut spans = super::draw::SpanWriter::new(image, &ink, blend);
         let mut emit = |l: i64, y: i64, r: i64| {
             if let Some(interior) = &interior {
                 if y < 0 || y >= i64::from(h) {
@@ -515,11 +523,11 @@ fn draw_polygon(
                         break;
                     }
                     if right >= l {
-                        super::draw::hline(image, left.max(l), right.min(r), y, &ink, blend);
+                        spans.write(left.max(l), right.min(r), y);
                     }
                 }
             } else {
-                super::draw::hline(image, l, r, y, &ink, blend);
+                spans.write(l, r, y);
             }
         };
         if filled {

@@ -11,6 +11,7 @@ publish = false
 [dependencies]
 blanket-core.workspace = true
 pyo3.workspace = true
+smallvec = { version = "1", default-features = false, features = ["const_generics"] }
 
 [lib]
 doctest = false

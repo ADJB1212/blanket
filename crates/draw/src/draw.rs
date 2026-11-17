@@ -42,19 +42,31 @@ pub(crate) fn ink(image: &Image, value: &Bound<'_, PyAny>, blend: bool) -> PyRes
 }
 
 pub(crate) fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) {
-    if x < 0 || y < 0 || x >= i64::from(image.width()) || y >= i64::from(image.height()) {
-        return;
-    }
+    paint_points(image, std::iter::once((x, y)), ink, blend);
+}
+
+fn paint_points(image: &mut Image, points: impl Iterator<Item = (i64, i64)>, ink: &[u8], blend: bool) {
+    let width = i64::from(image.width());
+    let height = i64::from(image.height());
     let stride = image.pixel_mode().channels() * image.pixel_mode().sample_bytes();
-    let offset = (y as usize * image.width() as usize + x as usize) * stride;
-    let pixel = &mut image.pixels_mut().unwrap()[offset..offset + stride];
+    let mut offsets =
+        points.filter(|&(x, y)| x >= 0 && y >= 0 && x < width && y < height).map(|(x, y)| (y as usize * width as usize + x as usize) * stride);
+    let Some(first) = offsets.next() else {
+        return;
+    };
+    let pixels = image.pixels_mut().unwrap();
+    let offsets = std::iter::once(first).chain(offsets);
     if blend {
         let alpha = u32::from(ink[3]);
-        for (dst, src) in pixel.iter_mut().zip(ink) {
-            *dst = ((u32::from(*dst) * (255 - alpha) + u32::from(*src) * alpha + 127) / 255) as u8;
+        for offset in offsets {
+            for (dst, src) in pixels[offset..offset + stride].iter_mut().zip(ink) {
+                *dst = ((u32::from(*dst) * (255 - alpha) + u32::from(*src) * alpha + 127) / 255) as u8;
+            }
         }
     } else {
-        pixel.copy_from_slice(ink);
+        for offset in offsets {
+            pixels[offset..offset + stride].copy_from_slice(ink);
+        }
     }
 }
 
@@ -62,11 +74,7 @@ pub(crate) fn paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool) 
 fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
     let ink = ink(image, value, blend)?;
     image.ensure_owned()?;
-    value.py().detach(|| {
-        for (x, y) in points {
-            paint(image, x, y, &ink, blend);
-        }
-    });
+    value.py().detach(|| paint_points(image, points.into_iter(), &ink, blend));
     Ok(())
 }
 
@@ -76,30 +84,33 @@ pub(crate) fn draw_rectangle(image: &mut Image, bounds: (i64, i64, i64, i64), va
     image.ensure_owned()?;
     let (left, top, right, bottom) = bounds;
     value.py().detach(|| {
+        let size = (image.width(), image.height());
+        let mut spans = SpanWriter::new(image, &ink, blend);
         if width == 0 {
-            for y in top.max(0)..=bottom.min(i64::from(image.height()) - 1) {
-                hline(image, left, right, y, &ink, blend);
+            for y in top.max(0)..=bottom.min(i64::from(size.1) - 1) {
+                spans.write(left, right, y);
             }
         } else if !blend && width > 0 && width <= right.saturating_sub(left) / 2 && width <= bottom.saturating_sub(top) / 2 {
-            for y in top.max(0)..=bottom.min(i64::from(image.height()) - 1) {
+            for y in top.max(0)..=bottom.min(i64::from(size.1) - 1) {
                 if y.saturating_sub(top) < width || bottom.saturating_sub(y) < width {
-                    hline(image, left, right, y, &ink, false);
+                    spans.write(left, right, y);
                 } else {
-                    hline(image, left, left + width - 1, y, &ink, false);
-                    hline(image, right - width + 1, right, y, &ink, false);
+                    spans.write(left, left + width - 1, y);
+                    spans.write(right - width + 1, right, y);
                 }
             }
         } else {
-            let ranges = outline_ranges(bounds, width, (image.width(), image.height()));
+            let ranges = outline_ranges(bounds, width, size);
             for i in ranges.into_iter().flatten() {
-                hline(image, left, right, top.saturating_add(i), &ink, blend);
-                hline(image, left, right, bottom.saturating_sub(i), &ink, blend);
+                spans.write(left, right, top.saturating_add(i));
+                spans.write(left, right, bottom.saturating_sub(i));
                 let start = top.saturating_add(width);
                 let end = bottom.saturating_sub(width).saturating_add(1);
                 let (first, last) = if start < end { (start, end - 1) } else { (end.saturating_add(1), start) };
-                for y in first.max(0)..=last.min(i64::from(image.height()) - 1) {
-                    paint(image, right.saturating_sub(i), y, &ink, blend);
-                    paint(image, left.saturating_add(i), y, &ink, blend);
+                let (r, l) = (right.saturating_sub(i), left.saturating_add(i));
+                for y in first.max(0)..=last.min(i64::from(size.1) - 1) {
+                    spans.write(r, r, y);
+                    spans.write(l, l, y);
                 }
             }
         }
@@ -126,52 +137,67 @@ fn outline_ranges(bounds: (i64, i64, i64, i64), width: i64, size: (u32, u32)) ->
     ranges
 }
 
-pub(crate) fn hline(image: &mut Image, left: i64, right: i64, y: i64, ink: &[u8], blend: bool) {
-    if y < 0 || y >= i64::from(image.height()) {
-        return;
+pub(crate) struct SpanWriter<'image, 'ink> {
+    image: Option<&'image mut Image>,
+    pixels: &'image mut [u8],
+    width: i64,
+    height: i64,
+    stride: usize,
+    ink: &'ink [u8],
+    alpha: u8,
+    rgb_tile: [u8; 48],
+}
+
+impl<'image, 'ink> SpanWriter<'image, 'ink> {
+    pub(crate) fn new(image: &'image mut Image, ink: &'ink [u8], blend: bool) -> Self {
+        let stride = image.pixel_mode().channels() * image.pixel_mode().sample_bytes();
+        let alpha = if blend { ink[3] } else { 255 };
+        Self {
+            width: i64::from(image.width()),
+            height: i64::from(image.height()),
+            stride,
+            ink,
+            alpha,
+            rgb_tile: if stride == 3 && alpha == 255 { std::array::from_fn(|i| ink[i % 3]) } else { [0; 48] },
+            image: Some(image),
+            pixels: &mut [],
+        }
     }
-    let left = left.max(0);
-    let right = right.min(i64::from(image.width()) - 1);
-    if left > right {
-        return;
-    }
-    let stride = image.pixel_mode().channels() * image.pixel_mode().sample_bytes();
-    let start = (y as usize * image.width() as usize + left as usize) * stride;
-    let pixels = &mut image.pixels_mut().unwrap()[start..start + (right - left + 1) as usize * stride];
-    match stride {
-        1 => fill_span::<1>(pixels, ink, blend),
-        2 => fill_span::<2>(pixels, ink, blend),
-        3 => fill_span::<3>(pixels, ink, blend),
-        4 => fill_span::<4>(pixels, ink, blend),
-        12 => fill_span::<12>(pixels, ink, blend),
-        16 => fill_span::<16>(pixels, ink, blend),
-        _ => unreachable!(),
+
+    pub(crate) fn write(&mut self, left: i64, right: i64, y: i64) {
+        let left = left.max(0);
+        let right = right.min(self.width - 1);
+        if y < 0 || y >= self.height || left > right || self.alpha == 0 {
+            return;
+        }
+        // Defer copy-on-write until a visible span needs painting.
+        if let Some(image) = self.image.take() {
+            self.pixels = image.pixels_mut().unwrap();
+        }
+        let start = (y as usize * self.width as usize + left as usize) * self.stride;
+        let pixels = &mut self.pixels[start..start + (right - left + 1) as usize * self.stride];
+        if self.alpha != 255 {
+            blanket_core::pixels::blend_solid_rgb(pixels, [self.ink[0], self.ink[1], self.ink[2]], self.alpha);
+            return;
+        }
+        match self.stride {
+            1 => pixels.fill(self.ink[0]),
+            2 => fill_span::<2>(pixels, self.ink),
+            3 => {
+                let (tiles, tail) = pixels.as_chunks_mut::<48>();
+                tiles.fill(self.rgb_tile);
+                tail.copy_from_slice(&self.rgb_tile[..tail.len()]);
+            }
+            4 => fill_span::<4>(pixels, self.ink),
+            12 => fill_span::<12>(pixels, self.ink),
+            16 => fill_span::<16>(pixels, self.ink),
+            _ => unreachable!(),
+        }
     }
 }
 
-fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8], blend: bool) {
-    if blend && ink[3] != 255 {
-        let alpha = u32::from(ink[3]);
-        if alpha == 0 {
-            return;
-        }
-        if C == 3 {
-            blanket_core::pixels::blend_solid_rgb(pixels, [ink[0], ink[1], ink[2]], ink[3]);
-            return;
-        }
-        for pixel in pixels.as_chunks_mut::<C>().0 {
-            for c in 0..C {
-                pixel[c] = ((u32::from(pixel[c]) * (255 - alpha) + u32::from(ink[c]) * alpha + 127) / 255) as u8;
-            }
-        }
-    } else if C == 3 {
-        let tile = std::array::from_fn::<_, 48, _>(|i| ink[i % C]);
-        let (tiles, tail) = pixels.as_chunks_mut::<48>();
-        tiles.fill(tile);
-        tail.as_chunks_mut::<C>().0.fill(std::array::from_fn(|c| ink[c]));
-    } else {
-        pixels.as_chunks_mut::<C>().0.fill(std::array::from_fn(|c| ink[c]));
-    }
+fn fill_span<const C: usize>(pixels: &mut [u8], ink: &[u8]) {
+    pixels.as_chunks_mut::<C>().0.fill(ink.try_into().unwrap());
 }
 
 fn coverage_paint(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, coverage: u8) {
@@ -266,15 +292,15 @@ pub(crate) fn thin_line(image: &mut Image, a: (f64, f64), b: (f64, f64), ink: &[
     let end = start + delta;
     let first = start.min(end).ceil().clamp(0.0, f64::from(limit)) as u32;
     let last = (start.max(end).floor() + 1.0).clamp(0.0, f64::from(limit)) as u32;
-    for coordinate in first..last {
+    let points = (first..last).filter_map(|coordinate| {
         let step = (f64::from(coordinate) - start) * sign;
         if step < 0.0 || step >= length {
-            continue;
+            return None;
         }
         let offset = (step * minor.abs() / length + 0.5).floor() * minor.signum();
-        let point = if horizontal { (i64::from(coordinate), (a.1 + offset) as i64) } else { ((a.0 + offset) as i64, i64::from(coordinate)) };
-        paint(image, point.0, point.1, ink, blend);
-    }
+        Some(if horizontal { (i64::from(coordinate), (a.1 + offset) as i64) } else { ((a.0 + offset) as i64, i64::from(coordinate)) })
+    });
+    paint_points(image, points, ink, blend);
 }
 
 #[pyfunction]
@@ -657,29 +683,52 @@ fn draw_floodfill(
 
 fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Option<&[u8]>, threshold: f64) {
     let (x, y) = position;
-    let stride = image.pixel_mode().channels() * image.pixel_mode().sample_bytes();
     let mode = image.pixel_mode();
+    let stride = mode.channels() * mode.sample_bytes();
     let width = image.width() as usize;
-    let seed_index = y as usize * image.width() as usize + x as usize;
+    let seed_index = y as usize * width + x as usize;
     let pixels = image.pixels_mut().unwrap();
-    let seed = pixels[seed_index * stride..(seed_index + 1) * stride].to_vec();
-    if sample_distance(mode, &seed, fill) <= threshold {
+    match stride {
+        1 => flood_pixels::<1>(pixels, seed_index, width, fill, border, mode, threshold),
+        2 => flood_pixels::<2>(pixels, seed_index, width, fill, border, mode, threshold),
+        3 => flood_pixels::<3>(pixels, seed_index, width, fill, border, mode, threshold),
+        4 => flood_pixels::<4>(pixels, seed_index, width, fill, border, mode, threshold),
+        12 => flood_pixels::<12>(pixels, seed_index, width, fill, border, mode, threshold),
+        16 => flood_pixels::<16>(pixels, seed_index, width, fill, border, mode, threshold),
+        _ => unreachable!(),
+    }
+}
+
+fn flood_pixels<const C: usize>(
+    pixels: &mut [u8], seed_index: usize, width: usize, fill: &[u8], border: Option<&[u8]>, mode: PixelMode, threshold: f64,
+) {
+    let pixels = pixels.as_chunks_mut::<C>().0;
+    let fill: [u8; C] = fill.try_into().unwrap();
+    let seed = pixels[seed_index];
+    if sample_distance(mode, &seed, &fill) <= threshold {
         return;
     }
-    let eligible = |pixel: &[u8]| match border {
-        Some(border) => pixel != border && pixel != fill,
-        None => pixel != fill && sample_distance(mode, pixel, &seed) <= threshold,
-    };
-    if !eligible(&pixels[seed_index * stride..(seed_index + 1) * stride]) {
+    if let Some(border) = border {
+        let border: [u8; C] = border.try_into().unwrap();
+        flood_spans(pixels, seed_index, width, fill, |pixel| *pixel != border && *pixel != fill);
+    } else if mode.sample_bytes() == 1 && (0.0..1.0).contains(&threshold) {
+        flood_spans(pixels, seed_index, width, fill, |pixel| *pixel == seed);
+    } else {
+        flood_spans(pixels, seed_index, width, fill, |pixel| *pixel != fill && sample_distance(mode, pixel, &seed) <= threshold);
+    }
+}
+
+fn flood_spans<const C: usize>(pixels: &mut [[u8; C]], seed_index: usize, width: usize, fill: [u8; C], eligible: impl Fn(&[u8; C]) -> bool) {
+    if !eligible(&pixels[seed_index]) {
         return;
     }
-    let count = pixels.len() / stride;
-    let mut pending = vec![flood_run(pixels, seed_index, width, stride, fill, &eligible)];
+    let count = pixels.len();
+    let mut pending = vec![flood_run(pixels, seed_index, width, fill, &eligible)];
     while let Some((left, right)) = pending.pop() {
         let mut scan = |mut index: usize, end: usize| {
             while index <= end {
-                if eligible(&pixels[index * stride..(index + 1) * stride]) {
-                    let span = flood_run(pixels, index, width, stride, fill, &eligible);
+                if eligible(&pixels[index]) {
+                    let span = flood_run(pixels, index, width, fill, &eligible);
                     index = span.1 + 1;
                     pending.push(span);
                 } else {
@@ -696,20 +745,20 @@ fn floodfill(image: &mut Image, position: (i64, i64), fill: &[u8], border: Optio
     }
 }
 
-fn flood_run(pixels: &mut [u8], index: usize, width: usize, stride: usize, fill: &[u8], eligible: &impl Fn(&[u8]) -> bool) -> (usize, usize) {
+fn flood_run<const C: usize>(
+    pixels: &mut [[u8; C]], index: usize, width: usize, fill: [u8; C], eligible: &impl Fn(&[u8; C]) -> bool,
+) -> (usize, usize) {
     let row = index / width * width;
     let mut left = index;
     let mut right = index;
-    while left > row && eligible(&pixels[(left - 1) * stride..left * stride]) {
+    while left > row && eligible(&pixels[left - 1]) {
         left -= 1;
     }
-    while right + 1 < row + width && eligible(&pixels[(right + 1) * stride..(right + 2) * stride]) {
+    while right + 1 < row + width && eligible(&pixels[right + 1]) {
         right += 1;
     }
     // Painted runs cannot be eligible again, so no image-sized visited map is needed.
-    for pixel in pixels[left * stride..(right + 1) * stride].chunks_exact_mut(stride) {
-        pixel.copy_from_slice(fill);
-    }
+    pixels[left..=right].fill(fill);
     (left, right)
 }
 
@@ -734,7 +783,7 @@ mod tests {
                     for y in [-1, 0, 1, 2, 3] {
                         let mut actual = source.clone();
                         let mut expected = source.clone();
-                        hline(&mut actual, left, right, y, &ink, false);
+                        SpanWriter::new(&mut actual, &ink, false).write(left, right, y);
                         for x in left..=right {
                             paint(&mut expected, x, y, &ink, false);
                         }
