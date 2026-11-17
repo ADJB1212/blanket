@@ -207,6 +207,35 @@ pub(crate) fn ops_remap(
 }
 
 #[pyfunction]
+pub(crate) fn ops_polar_map(py: Python<'_>, size: (u32, u32), center: (f64, f64), radius: f64, scaling: &str) -> PyResult<Image> {
+    if size.0 == 0 || size.1 == 0 || !center.0.is_finite() || !center.1.is_finite() || !radius.is_finite() || radius <= 0.0 {
+        return Err(PyValueError::new_err("polar maps require positive dimensions and radius, and finite parameters"));
+    }
+    let radial: fn(f64, f64) -> f64 = match scaling {
+        "linear" => |t, radius| t * radius,
+        "log" => |t, radius| (t * radius.ln_1p()).exp_m1(),
+        _ => return Err(PyValueError::new_err("scaling must be linear or log")),
+    };
+    let mut pixels = buffer(size, 12)?;
+    py.detach(|| {
+        chunks_mut(&mut pixels, 12 * 4096, |chunk, destination| {
+            for (i, pixel) in destination.as_chunks_mut::<12>().0.iter_mut().enumerate() {
+                let index = chunk * 4096 + i;
+                let x = index % size.0 as usize;
+                let y = index / size.0 as usize;
+                let r = radial((x as f64 + 0.5) / f64::from(size.0), radius);
+                let theta = std::f64::consts::TAU * (y as f64 + 0.5) / f64::from(size.1);
+                let (sin, cos) = theta.sin_cos();
+                pixel[..4].copy_from_slice(&((center.0 + r * cos) as f32).to_le_bytes());
+                pixel[4..8].copy_from_slice(&((center.1 + r * sin) as f32).to_le_bytes());
+                pixel[8..].copy_from_slice(&0_f32.to_le_bytes());
+            }
+        });
+        Image::from_color_float_bytes(size.0, size.1, PixelMode::RgbF, pixels)
+    })
+}
+
+#[pyfunction]
 pub(crate) fn ops_lens_map(py: Python<'_>, size: (u32, u32), coefficients: [f64; 3], center: (f64, f64), focal: (f64, f64)) -> PyResult<Image> {
     if size.0 == 0
         || size.1 == 0

@@ -512,7 +512,7 @@ with new processing semantics exposed explicitly.
       inside a documented search window, with no model weights
 - [ ] **Phase-correlation alignment** — estimate translation, and optionally
       a small rotation, between two images and return a confidence score
-- [ ] **Polar resampling** — polar and log-polar mappings through the existing
+- [x] **Polar resampling** — polar and log-polar mappings through the existing
       coordinate-map path and border modes
 - [ ] **Richardson-Lucy deconvolution** — iterate a caller-supplied
       point-spread kernel with an iteration cap and the same nonfinite rules

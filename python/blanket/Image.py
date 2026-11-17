@@ -82,6 +82,7 @@ from ._blanket import (
     ops_lens_map,
     ops_linear_gradient,
     ops_point,
+    ops_polar_map,
     ops_reduce,
     ops_remap,
     ops_remap_indices,
@@ -2568,6 +2569,81 @@ class Image:
         result = Image(ops_remap(self._native, coordinates._native, resample, border, fill, premultiply_alpha))
         result.info.update(self._metadata_info())
         return result
+
+    def polar_map(self, size: tuple[int, int] | None = None, *, center: tuple[float, float] | None = None, radius: float | None = None, scaling: str = "linear") -> Image:
+        """Build a reusable RGB;F map from polar output to Cartesian source.
+
+        Columns represent radius and rows represent angle. At output (x, y),
+        t=(x+0.5)/width and theta=2*pi*(y+0.5)/height. Linear scaling uses
+        r=radius*t; log scaling uses r=expm1(t*log1p(radius)), retaining the
+        origin and concentrating samples near it. Source coordinates are
+        (cx+r*cos(theta), cy+r*sin(theta)). Angles increase clockwise from
+        the right in image coordinates. Neither angular endpoint is repeated.
+        Coordinates use the same pixel-center convention as remap and are
+        stored as float32; overflow uses remap's nonfinite fill behavior.
+        Reuse maps across frames or images with the same source geometry.
+
+        Args:
+            size: Positive (radial samples, angular samples); defaults to source size.
+            center: Finite source center; defaults to (width/2, height/2).
+            radius: Finite positive outer radius in pixels; defaults to min(source size)/2.
+            scaling: "linear" for polar or "log" for log-polar spacing.
+
+        Examples:
+            ```python
+            coordinates = image.polar_map((256, 360), scaling="log")
+            result = image.remap(coordinates, Image.Resampling.BILINEAR, border="reflect")
+            ```
+        """
+        self.load()
+        if not self.width or not self.height:
+            raise ValueError("polar maps require positive source dimensions")
+        if size is None:
+            size = self.size
+        if center is None:
+            center = (self.width / 2, self.height / 2)
+        if radius is None:
+            radius = min(self.size) / 2
+        return Image(ops_polar_map(size, center, radius, scaling))
+
+    def polar(
+        self,
+        size: tuple[int, int] | None = None,
+        resample: int = Resampling.BILINEAR,
+        *,
+        center: tuple[float, float] | None = None,
+        radius: float | None = None,
+        scaling: str = "linear",
+        border: str = "constant",
+        fillcolor: float | Sequence[float] = 0,
+        premultiply_alpha: bool = True,
+    ) -> Image:
+        """Resample into polar coordinates using polar_map followed by remap.
+
+        Preserve mode, sample depth, and current-frame metadata. See polar_map
+        for radial spacing, angular orientation, and pixel-center conventions;
+        see remap for supported modes, interpolation, and border behavior.
+
+        Args:
+            size: Positive (radial samples, angular samples); defaults to source size.
+            resample: NEAREST, BILINEAR (default), or BICUBIC.
+            center: Finite source center; defaults to (width/2, height/2).
+            radius: Finite positive outer radius; defaults to min(source size)/2.
+            scaling: "linear" or "log" radial spacing.
+            border: "constant", "clamp", "reflect", or "wrap".
+            fillcolor: Finite scalar or per-channel samples for constant borders.
+            premultiply_alpha: Interpolate straight alpha colors in premultiplied form.
+
+        Examples:
+            ```python
+            result = image.polar((256, 360), scaling="log", border="clamp")
+            ```
+        """
+        coordinates = self.polar_map(size, center=center, radius=radius, scaling=scaling)
+        try:
+            return self.remap(coordinates, resample, border=border, fillcolor=fillcolor, premultiply_alpha=premultiply_alpha)
+        finally:
+            coordinates.close()
 
     def lens_map(self, *, k1: float = 0, k2: float = 0, k3: float = 0, center: tuple[float, float] | None = None, focal: tuple[float, float] | None = None) -> Image:
         """Build a reusable radial lens correction map for this image size.

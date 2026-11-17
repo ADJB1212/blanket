@@ -24,6 +24,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(seam::ops_seam_carve, module)?)?;
     module.add_function(wrap_pyfunction!(remap::ops_remap, module)?)?;
     module.add_function(wrap_pyfunction!(remap::ops_lens_map, module)?)?;
+    module.add_function(wrap_pyfunction!(remap::ops_polar_map, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_resize, module)?)?;
     module.add_function(wrap_pyfunction!(ops_reduce, module)?)?;

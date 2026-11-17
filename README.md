@@ -50,6 +50,10 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   color, and linear-light resize and compositing.
 - **Content-aware resizing.** `image.seam_carve(size)` shrinks or enlarges images
   while favoring salient color and alpha edges.
+- **Polar resampling.** `image.polar(size, scaling="log")` unwraps
+  radius into columns and angle into rows; `image.polar_map()` builds reusable
+  linear or log-polar coordinate maps for sampling with constant, clamp,
+  reflect, or wrap borders.
 - **Frames and pages.** Read GIF, WebP, APNG, and TIFF with eager or lazy
   access; write animations and multi-page PDFs.
 - **Color and metadata.** ICC transforms, HDR tone mapping, editable EXIF,
@@ -65,30 +69,11 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   and explicit Metal/CUDA pipelines.
 
 Blanket is **alpha**. Mode and precision limits are operation-specific, the
-API covers a subset of Pillow, and it is not a drop-in for `PIL`. GPU paths
+API covers a subset of Pillow, and it is not a drop-in for `PIL` (yet). GPU paths
 do not promise byte-exact Pillow output. Start with
 [getting started](https://adjb1212.github.io/blanket-docs/usage/),
 [sample precision](https://adjb1212.github.io/blanket-docs/high-bit-depth/), and
 [Pillow interoperability](https://adjb1212.github.io/blanket-docs/pillow-interop/).
-
-`Image.from_pillow(pillow_image)` shares compatible contiguous Pillow storage
-and copies other layouts; pass `copy=True` for independent pixels. Palette and
-metadata transfer with the current frame. Treat shared inputs as immutable;
-Blanket writes detach, and the shared allocation survives Pillow close.
-Pillow is imported only when using the bridge, with no PyArrow dependency.
-
-`Image.fromarray(half_array)` converts float16 samples to float32 storage.
-`image.to_numpy(dtype="float16", layout="HWC")` converts the existing float32
-export after layout, normalization, and standardization. Use `normalize=False`
-for unscaled unsigned samples and `layout="HW"` for a two-dimensional scalar
-array. Half precision uses IEEE rounding and can overflow to infinity.
-
-`image.to_capsule()` exports a read-only native snapshot named
-`blanket.image.v1`; `copy=True` forces independent storage. Extension consumers
-use the [C descriptor](crates/core-python/blanket_image.h), retain the capsule
-while using any pointers, and copy the bytes for independent ownership. Native
-mode `1` is unpacked and LAB chroma is biased; the descriptor uses native storage
-rather than the public `tobytes()` representation.
 
 ## Supported formats
 
