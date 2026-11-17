@@ -6,42 +6,7 @@ const COLOR_TABLE_SIZE: usize = 1 << COLOR_TABLE_BITS;
 pub(super) type ColorCounts = [(u64, usize, usize); COLOR_TABLE_SIZE];
 
 pub(super) fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usize, usize, usize)> {
-    let top = pixels.chunks_exact(width).position(|row| row.iter().any(|&v| v != 0))?;
-    let bottom = pixels.chunks_exact(width).rposition(|row| row.iter().any(|&v| v != 0)).unwrap();
-    let first = &pixels[top * width..(top + 1) * width];
-    let mut left = first.iter().position(|&v| v != 0).unwrap();
-    let mut right = first.iter().rposition(|&v| v != 0).unwrap() + 1;
-    let remaining = &pixels[(top + 1) * width..(bottom + 1) * width];
-    if left > 8 || width - right > 8 {
-        // Wide empty margins are cheaper to scan contiguously by row.
-        for row in remaining.chunks_exact(width) {
-            if let Some(x) = row[..left].iter().position(|&v| v != 0) {
-                left = x;
-            }
-            if let Some(x) = row[right..].iter().rposition(|&v| v != 0) {
-                right += x + 1;
-            }
-            if left == 0 && right == width {
-                break;
-            }
-        }
-        return Some((left, top, right, bottom + 1));
-    }
-    // Search only columns outside the first occupied row's bounds. Separate
-    // edges avoid revisiting an already complete right edge on every row.
-    for x in 0..left {
-        if remaining.chunks_exact(width).any(|row| row[x] != 0) {
-            left = x;
-            break;
-        }
-    }
-    for x in (right..width).rev() {
-        if remaining.chunks_exact(width).any(|row| row[x] != 0) {
-            right = x + 1;
-            break;
-        }
-    }
-    Some((left, top, right, bottom + 1))
+    bounding_box_packed::<1>(pixels, width, false)
 }
 
 pub(super) fn bounding_box_packed<const C: usize>(pixels: &[u8], width: usize, alpha: bool) -> Option<(usize, usize, usize, usize)> {
