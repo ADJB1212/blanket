@@ -1,4 +1,5 @@
 #![feature(portable_simd)]
+mod alignment;
 mod color_transfer;
 mod geometry;
 pub mod hash;

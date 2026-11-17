@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "array", "os", "pathlib", "blanket._palette"}
+__lazy_modules__ = {"collections.abc", "array", "os", "pathlib", "blanket._palette", "math"}
 
 import math
 import os

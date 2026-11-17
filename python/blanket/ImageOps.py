@@ -10,9 +10,10 @@ indices and palette alpha.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "struct"}
+__lazy_modules__ = {"collections.abc", "struct", "operator"}
 
 import struct
+from dataclasses import dataclass
 from operator import index
 from typing import TYPE_CHECKING, Protocol, cast, overload
 
@@ -38,6 +39,7 @@ from ._blanket import (
     ops_lut,
     ops_mesh,
     ops_pad_offset,
+    ops_phase_correlate,
     ops_reference_transfer,
     ops_scale_size,
     ops_smart_crop_box,
@@ -50,6 +52,7 @@ from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
 __all__ = [
+    "Alignment",
     "SupportsGetMesh",
     "autocontrast",
     "color_transfer",
@@ -68,6 +71,7 @@ __all__ = [
     "match_histogram",
     "mirror",
     "pad",
+    "phase_correlate",
     "posterize",
     "scale",
     "smart_crop",
@@ -76,6 +80,65 @@ __all__ = [
 
 Color = str | int | tuple[int, ...]
 Border = int | tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class Alignment:
+    """Correction to align the moving image to its reference.
+
+    Rotate counterclockwise by ``rotation`` degrees about the image center,
+    then translate by ``dx`` pixels right and ``dy`` pixels down.
+    ``confidence`` is the normalized phase-correlation peak in [0, 1],
+    not a probability. Flat inputs return zero offsets and confidence.
+    """
+
+    dx: float
+    dy: float
+    rotation: float
+    confidence: float
+
+
+def phase_correlate(reference: Image.Image, image: Image.Image, *, max_rotation: float = 0.0, rotation_step: float = 1.0, window: Literal["hann"] | None = "hann") -> Alignment:
+    """Estimate translation and optionally a small rotation to a reference.
+
+    Require equal dimensions, each at least 3, and at most 4,194,304 pixels.
+    Accept L, LA, RGB, RGBA, I;16 variants and F/RGB;F/RGBA;F, at their
+    supported depths. Color samples must be finite; alpha is ignored.
+    Analyze encoded Rec.601 luma with mean removal and optional Hann window.
+    No ICC or EXIF orientation is applied. Current frames, metadata and
+    navigation are preserved. No runtime Python dependencies are required.
+
+    Return the correction to apply to image: rotate about its center, then
+    translate. Translation is cyclic in [-width/2, width/2) and
+    [-height/2, height/2), with approximate subpixel parabolic refinement.
+    A half-size displacement is reported negative. Large shifts can alias;
+    repeated patterns, cropping, occlusion or unrelated images can be ambiguous.
+    Confidence is the inverse cross-power peak divided by pixel count in
+    [0, 1], with weak frequencies suppressed. Higher is better, not a
+    calibrated probability. Inspect confidence before applying a correction.
+
+    Args:
+        reference: Fixed reference image.
+        image: Moving image to align, without editing it.
+        max_rotation: Search both directions up to 15 degrees; zero disables.
+        rotation_step: Positive search interval in degrees, including endpoints
+            and zero; at most 60 intervals per direction. Rotation uses bilinear
+            sampling with zero fill after mean removal. Choose a smaller step
+            for finer rotation estimates at greater computational cost.
+        window: Use "hann" to reduce border effects, or None for cyclic data.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        reference = Image.frombytes("L", (32, 32), bytes((i * 37 + i // 32) % 256 for i in range(1024)))
+        alignment = ImageOps.phase_correlate(reference, reference.copy())
+        print(alignment.dx, alignment.dy, alignment.confidence)
+        ```
+    """
+    if not isinstance(reference, Image.Image) or not isinstance(image, Image.Image):
+        raise TypeError("reference and image must be Blanket Images")
+    return Alignment(*ops_phase_correlate(reference._native, image._native, max_rotation, rotation_step, window))
 
 
 def match_histogram(image: Image.Image, reference: Image.Image, *, mode: Literal["channels", "luminance"] = "channels") -> Image.Image:

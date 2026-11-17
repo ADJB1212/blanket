@@ -64,3 +64,7 @@ Their full license texts accompany the wheels and corresponding-source archives.
 
 Perceptual quality scoring uses ssimulacra2 (BSD-2-Clause), with yuvxyb and
 yuvxyb-math (MIT). Their license texts accompany the wheels and source archives.
+
+Phase-correlation alignment uses RustFFT (MIT OR Apache-2.0) with its
+architecture-specific SIMD features disabled. Blanket's sample preparation and
+cross-power normalization use portable SIMD.

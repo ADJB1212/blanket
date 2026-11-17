@@ -511,8 +511,9 @@ with new processing semantics exposed explicitly.
 
 - [ ] **Exemplar inpainting** — fill a mask of small holes from nearby patches
       inside a documented search window, with no model weights
-- [ ] **Phase-correlation alignment** — estimate translation, and optionally
+- [x] **Phase-correlation alignment** — estimate translation, and optionally
       a small rotation, between two images and return a confidence score
+      (`ImageOps.phase_correlate`; subpixel translation and bounded rotation search)
 - [x] **Polar resampling** — polar and log-polar mappings through the existing
       coordinate-map path and border modes
 - [ ] **Richardson-Lucy deconvolution** — iterate a caller-supplied
