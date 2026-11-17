@@ -1156,7 +1156,9 @@ pub fn paste_nontransparent_rgba(dst: &mut [u8], src: &[u8]) {
     }
 }
 
-fn blend(d: Bytes, s: Bytes, a: Bytes) -> Bytes {
+/// Interpolate byte lanes from destination to source, rounding to the nearest byte.
+#[inline]
+pub fn blend(d: Bytes, s: Bytes, a: Bytes) -> Bytes {
     let a = a.cast::<u16>();
     let sum = d.cast::<u16>() * (Simd::splat(255) - a) + s.cast::<u16>() * a + Simd::splat(128);
     ((sum + (sum >> 8)) >> 8).cast()

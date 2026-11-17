@@ -3,7 +3,7 @@ use std::simd::num::{SimdFloat, SimdUint};
 use std::simd::{Select, Simd};
 
 use blanket_core::parallel::{MIN_PARALLEL_BYTES, chunks_mut_above};
-use blanket_core::pixels::{Bytes, load, store};
+use blanket_core::pixels::{Bytes, blend, load, store};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
@@ -450,6 +450,12 @@ fn composite_row(pixels: &mut [u8], source: &[u8]) {
             continue;
         }
         let dst = load::<4>(&pixels[i..]);
+        if dst[3].simd_eq(Bytes::splat(255)).all() {
+            // Opaque destinations reduce Pillow's fixed-point formula to a byte blend.
+            let [r, g, b] = std::array::from_fn(|c| blend(dst[c], src[c], src[3]));
+            store(&mut pixels[i..], [r, g, b, dst[3]]);
+            continue;
+        }
         let source_alpha = src[3].cast::<u32>();
         let alpha = source_alpha * Simd::splat(255) + dst[3].cast::<u32>() * (Simd::splat(255) - source_alpha);
         // Inactive lanes can have zero combined alpha.
