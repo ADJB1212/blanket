@@ -19,6 +19,15 @@ def test_crop(mode: str) -> None:
     assert cropped.size == (50, 50)
 
 
+def test_full_crop_has_independent_pixels() -> None:
+    image = Image.new("RGB", (9, 7), "red")
+    cropped = image.crop((0, 0, 9, 7))
+    cropped.putpixel((8, 6), (0, 0, 255))
+    assert image.getpixel((8, 6)) == (255, 0, 0)
+    image.putpixel((0, 0), (0, 255, 0))
+    assert cropped.getpixel((0, 0)) == (255, 0, 0)
+
+
 def test_wide_crop() -> None:
     def crop(bbox: tuple[int, int, int, int]) -> tuple[int, ...]:
         i = im.crop(bbox)

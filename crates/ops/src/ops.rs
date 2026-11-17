@@ -590,6 +590,9 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
             fill
         }
     };
+    if offset == (0, 0) && size == image.size() {
+        return image.copy(py);
+    }
     let channels = image.raw_bytes_per_pixel();
     if offset.0 <= 0
         && offset.1 <= 0
