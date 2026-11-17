@@ -467,9 +467,10 @@ with new processing semantics exposed explicitly.
       source mode and sample depth
 - [ ] **White balance** — temperature/tint or a sampled neutral, using a named
       chromatic adaptation transform and a defined clip into the destination gamut
-- [ ] **Histogram matching and color transfer** — match per-channel or
+- [x] **Histogram matching and color transfer** — match per-channel or
       luminance histograms to a reference image, or apply a mean/variance
-      transfer, without changing geometry
+      transfer, without changing geometry (`ImageOps.match_histogram` and
+      `ImageOps.color_transfer`; unsigned grayscale/RGB through 16 bits)
 - [ ] **LUT file import** — load `.cube` (and similarly sized 3D tables) into
       `Color3DLUT`, with trilinear interpolation by default and tetrahedral
       interpolation as an explicit option

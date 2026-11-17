@@ -12,6 +12,7 @@ use pyo3::types::{PyBytes, PyFloat, PyInt};
 use rayon::prelude::*;
 
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    crate::color_transfer::register(module)?;
     crate::geometry::register(module)?;
     module.add_function(wrap_pyfunction!(ops_tone_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_autocontrast_lut, module)?)?;

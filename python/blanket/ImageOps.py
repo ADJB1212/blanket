@@ -2,8 +2,10 @@
 
 Geometry, canvas, and resampling work on the current Image modes, including
 `1`, `LA`, `PA`, integer, float, and print/luma/chroma modes.
-Histogram operations accept `L` and `RGB`. Invert, posterize, and solarize
-also transform P palettes while preserving indices and palette alpha.
+Equalize and autocontrast accept `L` and `RGB`; reference transfers also
+accept unsigned grayscale/RGB with alpha and high sample depths.
+Invert, posterize, and solarize also transform P palettes while preserving
+indices and palette alpha.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from ._blanket import (
     ops_lut,
     ops_mesh,
     ops_pad_offset,
+    ops_reference_transfer,
     ops_scale_size,
     ops_smart_crop_box,
     ops_smart_crop_size,
@@ -46,10 +49,95 @@ from ._blanket import (
 from ._color import _rgb, color_pixel
 from ._exif import transpose_metadata
 
-__all__ = ["SupportsGetMesh", "autocontrast", "colorize", "contain", "cover", "crop", "deform", "equalize", "exif_transpose", "expand", "fit", "flip", "grayscale", "invert", "mirror", "pad", "posterize", "scale", "smart_crop", "solarize"]
+__all__ = [
+    "SupportsGetMesh",
+    "autocontrast",
+    "color_transfer",
+    "colorize",
+    "contain",
+    "cover",
+    "crop",
+    "deform",
+    "equalize",
+    "exif_transpose",
+    "expand",
+    "fit",
+    "flip",
+    "grayscale",
+    "invert",
+    "match_histogram",
+    "mirror",
+    "pad",
+    "posterize",
+    "scale",
+    "smart_crop",
+    "solarize",
+]
 
 Color = str | int | tuple[int, ...]
 Border = int | tuple[int, ...]
+
+
+def match_histogram(image: Image.Image, reference: Image.Image, *, mode: Literal["channels", "luminance"] = "channels") -> Image.Image:
+    """Match the source's cumulative histogram to a reference image.
+
+    Accept unsigned L, LA, RGB, RGBA and I;16 variants, at supported depths
+    through 16 bits. Reference size and depth may differ. Channels mode
+    requires matching color channel counts; luminance mode also permits a
+    grayscale reference for RGB. Use the smallest reference sample whose CDF
+    reaches the source CDF, scaling to the source depth and rounding half up.
+    A deterministic lookup table cannot split equal source samples.
+
+    Luminance is rounded encoded Rec.601 luma (0.299 R + 0.587 G + 0.114 B).
+    Apply its change equally to RGB channels, clipping to the source range.
+    Alpha is preserved; zero-alpha pixels are excluded and left unchanged,
+    and all other pixels have equal weight. Empty or fully transparent inputs
+    raise ValueError. Geometry, depth and source metadata are preserved.
+    ICC profiles and EXIF orientation are not applied.
+
+    Args:
+        image: Source image, processed without editing it.
+        reference: Image supplying the target distribution.
+        mode: Match individual channels or luminance.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 80, 120))
+        reference = Image.new("L", (4, 4), 100)
+        result = ImageOps.match_histogram(image, reference, mode="luminance")
+        ```
+    """
+    return _result(image, ops_reference_transfer(image._native, reference._native, mode, "histogram"))
+
+
+def color_transfer(image: Image.Image, reference: Image.Image, *, mode: Literal["channels", "luminance"] = "channels") -> Image.Image:
+    """Transfer a reference image's mean and population standard deviation.
+
+    Use the same modes, depth scaling, alpha policy and luminance adjustment
+    as match_histogram. Transform encoded samples by
+    ``(sample - source_mean) * reference_std / source_std + reference_mean``,
+    then round half up and clip. A constant source maps to the reference mean;
+    a constant reference removes source variation. Clipping and quantization
+    can prevent the output from attaining the reference moments exactly.
+    Inputs are not edited and geometry and source metadata are preserved.
+
+    Args:
+        image: Source image, processed without editing it.
+        reference: Image supplying the target moments.
+        mode: Transfer individual channel or luminance moments.
+
+    Examples:
+        ```python
+        from blanket import Image, ImageOps
+
+        image = Image.new("RGB", (8, 8), (40, 80, 120))
+        reference = Image.new("RGB", (4, 4), (60, 100, 140))
+        result = ImageOps.color_transfer(image, reference)
+        ```
+    """
+    return _result(image, ops_reference_transfer(image._native, reference._native, mode, "moments"))
 
 
 def _result(image: Image.Image, native: _Image) -> Image.Image:
