@@ -130,7 +130,8 @@ pub(super) fn render(coefficients: &JpegCoefficients, adobe: Option<u8>) -> Resu
     {
         return Ok(None);
     }
-    let parallel = blanket_core::parallel::should_parallel(width * height, 256 * 1024, 1024 * 1024);
+    // IDCT and color conversion cost a few nanoseconds per pixel, so modest images amortize scheduling.
+    let parallel = blanket_core::parallel::should_parallel(width * height, 64 * 1024, 128 * 1024);
     let plane = |component: &libjpeg_turbo_rs::ComponentCoefficients| {
         let stride = component.blocks_x * 8;
         let mut plane = vec![0; stride * component.blocks_y * 8];

@@ -49,10 +49,17 @@ def assert_python_progress[T](operation: Callable[[], T], *, timeout: float = 5.
         assert not thread.is_alive()
 
 
-def test_small_copy_releases_gil() -> None:
-    image = Image.new("L", (1, 1), 73).getim()
-    result = assert_python_progress(image.copy)
-    assert result.getpixel((0, 0)) == 73
+def test_copy_on_write_releases_gil() -> None:
+    image = Image.new("L", (2048, 2048), 73).getim()
+
+    def write_to_copy() -> _blanket._Image:
+        result = image.copy()
+        result.putpixel((0, 0), 42)
+        return result
+
+    result = assert_python_progress(write_to_copy)
+    assert result.getpixel((0, 0)) == 42
+    assert image.getpixel((0, 0)) == 73
 
 
 @pytest.mark.parametrize("mode", ["RGB;F", "RGBA;F"])

@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::{PyList, PyTuple};
 
 // Include points on a stroke boundary despite floating-point roundoff.
 const STROKE_EPSILON: f64 = 1e-12;
@@ -70,8 +71,50 @@ fn paint_points(image: &mut Image, points: impl Iterator<Item = (i64, i64)>, ink
     }
 }
 
+/// Truncate a coordinate toward zero, as Python's int() does for numbers.
+fn coordinate(value: &Bound<'_, PyAny>) -> PyResult<i64> {
+    match value.extract::<i64>() {
+        Ok(value) => Ok(value),
+        Err(_) => crate::geometry::integer(value.extract::<f64>()?),
+    }
+}
+
+/// Normalize a flat coordinate sequence or a sequence of `(x, y)` pairs.
+fn coords(xy: &Bound<'_, PyAny>) -> PyResult<Vec<(i64, i64)>> {
+    if let Ok(points) = xy.extract::<Vec<(i64, i64)>>() {
+        return Ok(points);
+    }
+    let values = xy.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+    let Some(first) = values.first() else {
+        return Ok(Vec::new());
+    };
+    if first.is_instance_of::<PyTuple>() || first.is_instance_of::<PyList>() {
+        return values
+            .iter()
+            .map(|pair| {
+                if let Ok(tuple) = pair.cast_exact::<PyTuple>()
+                    && tuple.len() == 2
+                {
+                    return Ok((coordinate(&tuple.get_item(0)?)?, coordinate(&tuple.get_item(1)?)?));
+                }
+                let items = pair.try_iter()?.collect::<PyResult<Vec<_>>>()?;
+                match items.as_slice() {
+                    [x, y] => Ok((coordinate(x)?, coordinate(y)?)),
+                    [_] | [] => Err(PyValueError::new_err(format!("not enough values to unpack (expected 2, got {})", items.len()))),
+                    _ => Err(PyValueError::new_err("too many values to unpack (expected 2)")),
+                }
+            })
+            .collect();
+    }
+    if values.len() % 2 != 0 {
+        return Err(PyValueError::new_err(format!("wrong number of coordinates: {}", values.len())));
+    }
+    values.as_chunks::<2>().0.iter().map(|[x, y]| Ok((coordinate(x)?, coordinate(y)?))).collect()
+}
+
 #[pyfunction]
-fn draw_points(image: &mut Image, points: Vec<(i64, i64)>, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
+fn draw_points(image: &mut Image, xy: &Bound<'_, PyAny>, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
+    let points = coords(xy)?;
     let ink = ink(image, value, blend)?;
     image.ensure_owned()?;
     value.py().detach(|| paint_points(image, points.into_iter(), &ink, blend));

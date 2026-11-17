@@ -2,7 +2,7 @@
 
 use std::f64::consts::PI;
 
-use pyo3::exceptions::{PyOverflowError, PyValueError};
+use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
 type Point = (f64, f64);
@@ -10,11 +10,8 @@ type IntPoint = (i64, i64);
 type Edge = (IntPoint, IntPoint);
 type Bounds = (f64, f64, f64, f64);
 type IntBounds = (i64, i64, i64, i64);
-type OutlineTransform = (Vec<Edge>, IntPoint, IntPoint);
-
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add_function(wrap_pyfunction!(draw_bezier_edges, module)?)?;
-    module.add_function(wrap_pyfunction!(draw_outline_transform, module)?)?;
+    module.add_class::<Outline>()?;
     module.add_function(wrap_pyfunction!(draw_regular_vertices, module)?)?;
     module.add_function(wrap_pyfunction!(draw_arc_points, module)?)?;
     module.add_function(wrap_pyfunction!(draw_rounded_points, module)?)?;
@@ -37,8 +34,7 @@ fn int_point(point: Point) -> PyResult<IntPoint> {
     Ok((integer(point.0)?, integer(point.1)?))
 }
 
-#[pyfunction]
-fn draw_bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>, Point)> {
+fn bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>, Point)> {
     let [(x1, y1), (x2, y2), (x3, y3)] = controls;
     let mut previous = start;
     let mut edges = Vec::with_capacity(32);
@@ -57,18 +53,99 @@ fn draw_bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>,
     Ok((edges, previous))
 }
 
-#[pyfunction]
-fn draw_outline_transform(edges: Vec<Edge>, position: Point, origin: Point, matrix: [f64; 6]) -> PyResult<OutlineTransform> {
-    if !matrix.iter().all(|value| value.is_finite()) {
-        return Err(PyValueError::new_err("transform matrix must be finite"));
+/// Flattened cubic Bezier and line segments for ImageDraw.shape().
+///
+/// Edges are integer point pairs. `x` and `y` give the current position;
+/// `x0` and `y0` give the origin used by `close()`.
+#[pyclass(name = "Outline", module = "blanket.ImageDraw")]
+#[derive(Default)]
+pub(crate) struct Outline {
+    edges: Vec<Edge>,
+    #[pyo3(get)]
+    x: f64,
+    #[pyo3(get)]
+    y: f64,
+    #[pyo3(get)]
+    x0: f64,
+    #[pyo3(get)]
+    y0: f64,
+}
+
+#[pymethods]
+impl Outline {
+    /// Initialize an empty Outline at the origin.
+    #[new]
+    fn new() -> Self {
+        Self::default()
     }
-    let [a, b, c, d, e, f] = matrix;
-    let point = |(x, y): Point| int_point((a * x + b * y + c, d * x + e * y + f));
-    let edges = edges
-        .into_iter()
-        .map(|(start, end)| Ok((point((start.0 as f64, start.1 as f64))?, point((end.0 as f64, end.1 as f64))?)))
-        .collect::<PyResult<Vec<_>>>()?;
-    Ok((edges, point(position)?, point(origin)?))
+
+    /// Move the current position and origin to (x0, y0) without drawing an edge.
+    #[pyo3(name = "move")]
+    fn move_to(&mut self, x0: f64, y0: f64) {
+        (self.x, self.y, self.x0, self.y0) = (x0, y0, x0, y0);
+    }
+
+    /// Add a line segment from the current position to (x1, y1).
+    fn line(&mut self, x1: f64, y1: f64) -> PyResult<()> {
+        self.edges.push((int_point((self.x, self.y))?, int_point((x1, y1))?));
+        (self.x, self.y) = (x1, y1);
+        Ok(())
+    }
+
+    /// Add a 32-segment cubic Bezier curve through two control points to (x3, y3).
+    fn curve(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64) -> PyResult<()> {
+        let (edges, position) = bezier_edges((self.x, self.y), [(x1, y1), (x2, y2), (x3, y3)])?;
+        self.edges.extend(edges);
+        (self.x, self.y) = position;
+        Ok(())
+    }
+
+    /// Connect the current position back to the origin unless they are equal.
+    fn close(&mut self) -> PyResult<()> {
+        if self.x == self.x0 && self.y == self.y0 {
+            return Ok(());
+        }
+        self.line(self.x0, self.y0)
+    }
+
+    /// Apply the affine matrix `(a, b, c, d, e, f)` to every point, truncating to integers.
+    fn transform(&mut self, matrix: &Bound<'_, PyAny>) -> PyResult<()> {
+        let describe = || matrix.repr().map(|text| text.to_string()).unwrap_or_default();
+        if matrix.len().ok() != Some(6) {
+            return Err(PyTypeError::new_err(format!("transform matrix must contain six values, got {}", describe())));
+        }
+        let values = matrix.try_iter()?.map(|value| value?.extract::<f64>()).collect::<PyResult<Vec<_>>>()?;
+        let Ok([a, b, c, d, e, f]) = <[f64; 6]>::try_from(values) else {
+            return Err(PyTypeError::new_err(format!("transform matrix must contain six values, got {}", describe())));
+        };
+        if ![a, b, c, d, e, f].iter().all(|value| value.is_finite()) {
+            return Err(PyValueError::new_err(format!("transform matrix must be finite, got {}", describe())));
+        }
+        let point = |(x, y): Point| int_point((a * x + b * y + c, d * x + e * y + f));
+        let edges = self
+            .edges
+            .iter()
+            .map(|&(start, end)| Ok((point((start.0 as f64, start.1 as f64))?, point((end.0 as f64, end.1 as f64))?)))
+            .collect::<PyResult<Vec<_>>>()?;
+        let (position, origin) = (point((self.x, self.y))?, point((self.x0, self.y0))?);
+        self.edges = edges;
+        (self.x, self.y) = (position.0 as f64, position.1 as f64);
+        (self.x0, self.y0) = (origin.0 as f64, origin.1 as f64);
+        Ok(())
+    }
+
+    /// A copy of the edges as `((x0, y0), (x1, y1))` integer pairs.
+    #[getter]
+    fn edges(&self) -> Vec<Edge> {
+        self.edges.clone()
+    }
+
+    /// Return the polygon vertices traced by the edges.
+    fn _points(&self) -> Vec<IntPoint> {
+        let mut points: Vec<_> = self.edges.iter().map(|edge| edge.0).collect();
+        points.extend(self.edges.last().map(|edge| edge.1));
+        points
+    }
 }
 
 fn round_hundredths(value: f64) -> f64 {

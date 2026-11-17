@@ -9,21 +9,21 @@ from __future__ import annotations
 
 __lazy_modules__ = {"collections.abc", "blanket.ImagePath", "blanket._draw_font", "math", "operator"}
 
+import sys
 from math import ceil, isfinite
 from operator import index
 from typing import TYPE_CHECKING, cast
 
 from . import Image
 from ._blanket import (
+    Outline,
     draw_arc_points,
-    draw_bezier_edges,
     draw_curve,
     draw_ellipse,
     draw_floodfill,
     draw_image_mask,
     draw_line_joints,
     draw_mask,
-    draw_outline_transform,
     draw_path,
     draw_points,
     draw_polygon,
@@ -85,131 +85,15 @@ if TYPE_CHECKING:
 __all__ = ["Draw", "ImageDraw", "Outline", "floodfill"]
 
 
-class Outline:
-    """Flattened cubic Bezier and line segments for ImageDraw.shape()."""
-
-    def __init__(self) -> None:
-        """Initialize an empty Outline.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            ```
-        """
-        self.x = self.x0 = 0.0
-        self.y = self.y0 = 0.0
-        self.edges: list[tuple[tuple[int, int], tuple[int, int]]] = []
-
-    def move(self, x0: float, y0: float) -> None:
-        """Move the current position to (x0, y0) without drawing an edge.
-
-        Args:
-            x0: Target x-coordinate.
-            y0: Target y-coordinate.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            outline.move(10.0, 10.0)
-            ```
-        """
-        self.x = self.x0 = float(x0)
-        self.y = self.y0 = float(y0)
-
-    def line(self, x1: float, y1: float) -> None:
-        """Add a line segment from the current position to (x1, y1).
-
-        Args:
-            x1: Ending x-coordinate.
-            y1: Ending y-coordinate.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            outline.move(0.0, 0.0)
-            outline.line(10.0, 10.0)
-            ```
-        """
-        x1, y1 = float(x1), float(y1)
-        self.edges.append(((int(self.x), int(self.y)), (int(x1), int(y1))))
-        self.x, self.y = x1, y1
-
-    def curve(self, x1: float, y1: float, x2: float, y2: float, x3: float, y3: float) -> None:
-        """Add a cubic Bezier curve segment to (x3, y3).
-
-        Args:
-            x1: First control point x-coordinate.
-            y1: First control point y-coordinate.
-            x2: Second control point x-coordinate.
-            y2: Second control point y-coordinate.
-            x3: Destination endpoint x-coordinate.
-            y3: Destination endpoint y-coordinate.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            outline.move(0.0, 0.0)
-            outline.curve(5.0, 0.0, 10.0, 5.0, 10.0, 10.0)
-            ```
-        """
-        x1, y1, x2, y2, x3, y3 = float(x1), float(y1), float(x2), float(y2), float(x3), float(y3)
-        edges, position = draw_bezier_edges((self.x, self.y), [(x1, y1), (x2, y2), (x3, y3)])
-        self.edges.extend(edges)
-        self.x, self.y = position
-
-    def close(self) -> None:
-        """Close the outline by connecting the current position back to the origin.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            outline.move(0.0, 0.0)
-            outline.line(10.0, 0.0)
-            outline.line(10.0, 10.0)
-            outline.close()
-            ```
-        """
-        if self.x == self.x0 and self.y == self.y0:
-            return
-        self.line(self.x0, self.y0)
-
-    def transform(self, matrix: Sequence[float]) -> None:
-        """Transform all points in the outline using an affine matrix.
-
-        Args:
-            matrix: Sequence of 6 transformation coefficients `(a, b, c, d, e, f)`.
-
-        Examples:
-            ```python
-            from blanket.ImageDraw import Outline
-
-            outline = Outline()
-            outline.move(1.0, 1.0)
-            outline.transform([1.0, 0.0, 5.0, 0.0, 1.0, 5.0])
-            ```
-        """
-        if len(matrix) != 6:
-            raise TypeError(f"transform matrix must contain six values, got {matrix!r}")
-        a, b, c, d, e, f = (float(value) for value in matrix)
-        if not all(isfinite(value) for value in (a, b, c, d, e, f)):
-            raise ValueError(f"transform matrix must be finite, got {matrix!r}")
-
-        self.edges, position, origin = draw_outline_transform(self.edges, (self.x, self.y), (self.x0, self.y0), (a, b, c, d, e, f))
-        self.x, self.y = position
-        self.x0, self.y0 = origin
-
-
 _BINARY_TABLE = bytes([0] + [255] * 255)
+
+
+def _mask_bytes(mask: _Mask) -> bytes:
+    """Return row-major mask samples without indexing Pillow cores per pixel."""
+    pillow = sys.modules.get("PIL.Image")
+    if pillow is not None and type(mask).__name__ == "ImagingCore" and getattr(mask, "mode", None) == "L":
+        return pillow.Image()._new(mask).tobytes()
+    return bytes(mask)
 
 
 def _compute_regular_polygon_vertices(bounding_circle: Sequence[Sequence[float] | float], n_sides: int, rotation: float) -> list[tuple[float, float]]:
@@ -320,9 +204,7 @@ class ImageDraw:
     def shape(self, shape: Outline, fill: Color = None, outline: Color = None) -> None:
         """Close and rasterize an Outline using the scanline polygon filler."""
         shape.close()
-        points = [edge[0] for edge in shape.edges]
-        if shape.edges:
-            points.append(shape.edges[-1][1])
+        points = shape._points()
         if fill is None and outline is None:
             outline = 1 if self.mode in ("I", "F") else -1
         fill_ink = None if fill is None else self._ink(fill)
@@ -628,7 +510,7 @@ class ImageDraw:
             For Pillow compatibility, points on 16-bit integer images write
             samples in native byte order, even in explicit-endian modes.
         """
-        draw_points(self.im._native, self._coords(xy), self._ink(fill), bool(self.blend))
+        draw_points(self.im._native, xy, self._ink(fill), bool(self.blend))
 
     def polygon(self, xy: Coords, fill: Color = None, outline: Color = None, width: int = 1) -> None:
         """Draw a closed polygon using the even-odd fill rule.
@@ -880,7 +762,7 @@ class ImageDraw:
             else:
                 mask = cast("_MaskFont", font).getmask(text, mode, stroke_width=outline, **options)
                 offset = font.getbbox(text, anchor=anchor, stroke_width=outline, **options)[:2]
-            data = bytes(mask)
+            data = _mask_bytes(mask)
             if mode == "1" and not isinstance(font, BitmapFont):
                 data = data.translate(_BINARY_TABLE)
             position = (int(xy[0]) + int(offset[0]), int(xy[1]) + int(offset[1]))

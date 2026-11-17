@@ -407,6 +407,46 @@ def test_supplied_font_stroke_and_fractional_position(mode: str, draw_mode: str 
     assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("mode", ["1", "P"])
+def test_supplied_font_binary_masks_match_pillow(mode: str) -> None:
+    font = PILFont.load_default(size=15)
+    actual, expected = Image.new(mode, (50, 30)), PILImage.new(mode, (50, 30))
+    for module, image in ((ImageDraw, actual), (PILDraw, expected)):
+        module.Draw(image).text((3.5, 3), "Ab!", font=font, fill=1)
+    assert actual.tobytes() == expected.tobytes()
+    for fontmode in ("1", "L"):
+        mask, _ = font.getmask2("Ab!", fontmode)
+        assert ImageDraw._mask_bytes(mask) == bytes(mask)
+
+
+def test_point_coordinates_truncate_and_reject_malformed_input() -> None:
+    image = Image.new("L", (10, 10))
+    draw = ImageDraw.Draw(image)
+    draw.point((2, 3), fill=9)
+    draw.point([2.7, -0.5, 4, 4], fill=7)
+    draw.point([[1, 1], (5.9, 5.1)], fill=5)
+    draw.point(((x, 9 - x) for x in range(2)), fill=3)
+    draw.point([], fill=2)
+    expected = {(2, 3): 9, (2, 0): 7, (4, 4): 7, (1, 1): 5, (5, 5): 5, (0, 9): 3, (1, 8): 3}
+    assert {(x, y): image.getpixel((x, y)) for x in range(10) for y in range(10) if image.getpixel((x, y))} == expected
+    for coords, error in (([1, 2, 3], ValueError), ([(1, 2, 3)], ValueError), ([(1,)], ValueError), ([float("nan"), 0], ValueError), ([float("inf"), 0], OverflowError), (["a", "b"], TypeError)):
+        assert_raises(error, lambda coords=coords: draw.point(coords, fill=1))
+
+
+def test_native_outline_exposes_float_positions_and_edge_copies() -> None:
+    outline = ImageDraw.Outline()
+    assert (outline.x, outline.y, outline.x0, outline.y0, outline.edges) == (0.0, 0.0, 0.0, 0.0, [])
+    outline.move(1, 2)
+    outline.line(4.5, 6.5)
+    outline.edges.clear()
+    assert outline.edges == [((1, 2), (4, 6))]
+    assert (outline.x, outline.y, outline.x0, outline.y0) == (4.5, 6.5, 1.0, 2.0)
+    outline.close()
+    assert outline.edges[-1] == ((4, 6), (1, 2))
+    assert_raises(ValueError, lambda: outline.line(float("nan"), 0))
+    assert outline.edges[-1] == ((4, 6), (1, 2))
+
+
 @pytest.mark.parametrize("background", [(30, 80, 110, 91), (30, 80, 110, 0), (30, 80, 110, 255)])
 def test_translucent_rgba_font_masks_match_pillow(background: tuple[int, ...]) -> None:
     font = PILFont.load_default(size=15)
