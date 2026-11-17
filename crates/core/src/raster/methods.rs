@@ -9,7 +9,7 @@ use rustc_hash::FxHashMap;
 use super::pixels::{
     float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel, wide_pixel_data,
 };
-use super::queries::{bounding_box_l, count_colors, count_colors_map, extrema, sample_extrema};
+use super::queries::{bounding_box_l, bounding_box_packed, count_colors, count_colors_map, extrema, sample_extrema};
 use super::validation::expected_len;
 use super::{Image, PixelMode};
 
@@ -454,21 +454,25 @@ impl Image {
                 return None;
             }
             let stride = channels * sample_bytes;
-            if stride == 1 {
-                return bounding_box_l(pixels, self.width as usize)
-                    .map(|(left, top, right, bottom)| (left as u32, top as u32, right as u32, bottom as u32));
+            let alpha = alpha_only
+                && matches!(
+                    self.mode,
+                    PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::RgbaF | PixelMode::La | PixelMode::PremulLa | PixelMode::Pa
+                );
+            if sample_bytes == 1 {
+                let width = self.width as usize;
+                let bounds = match channels {
+                    1 => bounding_box_l(pixels, width),
+                    2 => bounding_box_packed::<2>(pixels, width, alpha),
+                    3 => bounding_box_packed::<3>(pixels, width, false),
+                    4 => bounding_box_packed::<4>(pixels, width, alpha),
+                    _ => unreachable!(),
+                };
+                return bounds.map(|(left, top, right, bottom)| (left as u32, top as u32, right as u32, bottom as u32));
             }
             let row_bytes = self.width as usize * stride;
             let occupied = |pixel: &[u8]| {
-                let values = if alpha_only
-                    && matches!(
-                        self.mode,
-                        PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::RgbaF | PixelMode::La | PixelMode::PremulLa | PixelMode::Pa
-                    ) {
-                    &pixel[(channels - 1) * sample_bytes..]
-                } else {
-                    pixel
-                };
+                let values = if alpha { &pixel[(channels - 1) * sample_bytes..] } else { pixel };
                 if matches!(self.mode, PixelMode::RgbF | PixelMode::RgbaF) {
                     values.as_chunks::<4>().0.iter().any(|bytes| float_value(bytes) != 0.0)
                 } else {

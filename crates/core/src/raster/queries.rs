@@ -44,6 +44,61 @@ pub(super) fn bounding_box_l(pixels: &[u8], width: usize) -> Option<(usize, usiz
     Some((left, top, right, bottom + 1))
 }
 
+pub(super) fn bounding_box_packed<const C: usize>(pixels: &[u8], width: usize, alpha: bool) -> Option<(usize, usize, usize, usize)> {
+    let pixels = pixels.as_chunks::<C>().0;
+    let rows = pixels.chunks_exact(width);
+    let occupied = |pixel: &[u8; C]| {
+        if alpha { pixel[C - 1] != 0 } else { *pixel != [0; C] }
+    };
+    let edge = |row: &[[u8; C]], reverse: bool| {
+        use std::simd::cmp::SimdPartialEq;
+
+        if reverse && row.last().is_some_and(occupied) {
+            return Some(row.len() - 1);
+        }
+        if !reverse && row.first().is_some_and(occupied) {
+            return Some(0);
+        }
+        let (blocks, tail) = row.as_chunks::<16>();
+        let block_occupied = |block: &[[u8; C]; 16]| {
+            let bytes = block.as_flattened();
+            if alpha {
+                crate::pixels::load::<C>(bytes)[C - 1].simd_ne(crate::pixels::Bytes::splat(0)).any()
+            } else {
+                bytes.as_chunks::<16>().0.iter().any(|&chunk| crate::pixels::Bytes::from_array(chunk).simd_ne(crate::pixels::Bytes::splat(0)).any())
+            }
+        };
+        let offset = blocks.len() * 16;
+        if reverse {
+            tail.iter().rposition(occupied).map(|i| offset + i).or_else(|| {
+                let i = blocks.iter().rposition(block_occupied)?;
+                blocks[i].iter().rposition(occupied).map(|x| i * 16 + x)
+            })
+        } else {
+            blocks
+                .iter()
+                .position(block_occupied)
+                .and_then(|i| blocks[i].iter().position(occupied).map(|x| i * 16 + x))
+                .or_else(|| tail.iter().position(occupied).map(|i| offset + i))
+        }
+    };
+    let (top, mut left) = rows.clone().enumerate().find_map(|(y, row)| edge(row, false).map(|x| (y, x)))?;
+    let bottom = rows.clone().rposition(|row| edge(row, true).is_some()).unwrap();
+    let mut right = edge(&pixels[top * width..(top + 1) * width], true).unwrap() + 1;
+    for row in rows.skip(top + 1).take(bottom - top) {
+        if left == 0 && right == width {
+            break;
+        }
+        if let Some(x) = edge(&row[..left], false) {
+            left = x;
+        }
+        if let Some(x) = edge(&row[right..], true) {
+            right += x + 1;
+        }
+    }
+    Some((left, top, right, bottom + 1))
+}
+
 pub(super) fn extrema<const C: usize>(data: &[u8]) -> Vec<(u16, u16)> {
     use std::simd::Simd;
     use std::simd::cmp::SimdOrd;
