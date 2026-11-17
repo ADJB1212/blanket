@@ -11,6 +11,13 @@ from PIL import Image as PIL
 from blanket import Image
 
 
+def test_grayscale_snapshots_return_all_byte_values():
+    raw = bytes(range(256)) * 5
+    image = Image.frombytes("L", (256, 5), raw)
+    assert image.getdata() == list(raw)
+    assert image.get_flattened_data() == tuple(raw)
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "PA", "RGB", "RGBA", "HSV", "CMYK", "YCbCr", "LAB", "I", "I;16", "I;16L", "I;16B", "F"])
 def test_load_returns_mutable_pixel_access(mode):
     expected = PIL.new(mode, (3, 2))

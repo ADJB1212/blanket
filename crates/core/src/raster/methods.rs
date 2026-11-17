@@ -7,7 +7,8 @@ use pyo3::types::{PyByteArray, PyBytes, PyDict, PyList, PyMemoryView, PySlice, P
 use rustc_hash::FxHashMap;
 
 use super::pixels::{
-    float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel, wide_pixel_data,
+    byte_pixel_data, float_value, integer_bytes, integer_value, packed_pixel_data, parse_pixel, pixel_sequence, put_pixels, put_sample_pixel,
+    wide_pixel_data,
 };
 use super::queries::{bounding_box_l, bounding_box_packed, count_colors, count_colors_map, extrema, sample_extrema};
 use super::validation::expected_len;
@@ -166,6 +167,9 @@ impl Image {
             return Ok(PyList::new(py, data.chunks_exact(self.mode.sample_bytes()).map(|bytes| integer_value(self.mode, bytes)))?.unbind());
         }
         if self.bit_depth == 8 {
+            if data.len() >= 1024 {
+                return Ok(byte_pixel_data(py, data, false)?.cast_into::<PyList>()?.unbind());
+            }
             return Ok(PyList::new(py, data.iter().copied())?.unbind());
         }
         Ok(wide_pixel_data(py, self, false)?.cast_into::<PyList>()?.unbind())
@@ -189,6 +193,9 @@ impl Image {
             return Ok(PyTuple::new(py, data.chunks_exact(self.mode.sample_bytes()).map(|bytes| integer_value(self.mode, bytes)))?.unbind());
         }
         if self.bit_depth == 8 {
+            if data.len() >= 1024 {
+                return Ok(byte_pixel_data(py, data, true)?.cast_into::<PyTuple>()?.unbind());
+            }
             return Ok(PyTuple::new(py, data.iter().copied())?.unbind());
         }
         Ok(wide_pixel_data(py, self, true)?.cast_into::<PyTuple>()?.unbind())

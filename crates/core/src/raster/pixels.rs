@@ -67,6 +67,11 @@ pub(super) fn packed_pixel_data<'py, const C: usize>(py: Python<'py>, data: &[u8
     pixel_sequence(py, items, tuple)
 }
 
+pub(super) fn byte_pixel_data<'py>(py: Python<'py>, data: &[u8], tuple: bool) -> PyResult<Bound<'py, PyAny>> {
+    let values: [_; 256] = std::array::from_fn(|v| (v as u8).into_pyobject(py).unwrap().into_any());
+    pixel_sequence(py, data.iter().map(|&v| Ok(values[usize::from(v)].clone())), tuple)
+}
+
 pub(super) fn wide_pixel_data<'py>(py: Python<'py>, image: &Image, tuple: bool) -> PyResult<Bound<'py, PyAny>> {
     let data = image.raw_data()?;
     let channels = image.mode.channels();
