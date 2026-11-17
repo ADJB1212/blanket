@@ -809,9 +809,10 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
 
 fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize]) {
     let row_bytes = xs.len() * C;
+    let contiguous = xs.first().copied().filter(|&start| xs.iter().enumerate().all(|(i, &x)| x == start + i));
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
-    let double_rgb = C == 3 && xs.len() == width as usize * 2 && xs.iter().enumerate().all(|(x, &sx)| sx == x / 2);
-    let map = (C == 3 && !half_width && !double_rgb && row_bytes >= 16 && ys.len() >= 4)
+    let double_width = xs.len() == width as usize * 2 && xs.iter().enumerate().all(|(x, &sx)| sx == x / 2);
+    let map = (C == 3 && contiguous.is_none() && !half_width && !double_width && row_bytes >= 16 && ys.len() >= 4)
         .then(|| {
             let columns: Vec<_> = xs.iter().flat_map(|&x| (0..C).map(move |c| Some(x * C + c))).collect();
             crate::ops_simd::NearestL::new(&columns, width as usize * C).expect("validated resize coordinates")
@@ -829,8 +830,16 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
             let src = &source[sy * width as usize..(sy + 1) * width as usize];
             let row = &mut rows[i * row_bytes..(i + 1) * row_bytes];
             let dst = row.as_chunks_mut::<C>().0;
-            if double_rgb {
-                crate::ops_simd::nearest_double_rgb(src.as_flattened(), dst.as_flattened_mut());
+            if let Some(start) = contiguous {
+                dst.copy_from_slice(&src[start..start + dst.len()]);
+            } else if double_width {
+                if C == 3 {
+                    crate::ops_simd::nearest_double_rgb(src.as_flattened(), dst.as_flattened_mut());
+                } else {
+                    for (pair, &pixel) in dst.as_chunks_mut::<2>().0.iter_mut().zip(src) {
+                        *pair = [pixel; 2];
+                    }
+                }
             } else if half_width && C <= 8 {
                 // Contiguous pairs expose the common 2:1 gather to SIMD.
                 crate::ops_simd::nearest_half::<C>(src.as_flattened(), dst.as_flattened_mut());

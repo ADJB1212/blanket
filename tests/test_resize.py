@@ -7,6 +7,16 @@ from PIL import Image as PillowImage
 from blanket import Image
 
 
+@pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
+def test_nearest_resize_contiguous_and_doubled_columns(mode: str) -> None:
+    raw = bytes((i * 37 + i // 7) % 256 for i in range(67 * 49 * len(mode)))
+    image, reference = image_pair(mode, (67, 49), raw)
+    for size, box in [((63, 27), (2, 0, 65, 49)), ((134, 98), None)]:
+        actual = image.resize(size, Image.Resampling.NEAREST, box)
+        expected = reference.resize(size, PillowImage.Resampling.NEAREST, box)
+        assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("mode,width", [(mode, width) for mode in ("L", "LA", "RGBA") for width in (1, 16, 17, 129)] + [(mode, 17) for mode in ("RGB", "HSV", "CMYK", "YCbCr", "LAB")])
 def test_box_half_preserves_separate_pass_rounding(mode: str, width: int) -> None:
     channels = 3 if mode == "YCbCr" else len(mode)
