@@ -1997,18 +1997,10 @@ class Image:
                 background = self.crop(box)
                 self.paste(alpha_composite(background, overlay, linear_light=linear_light, transfer=transfer), box)
             return
-        if full_image:
+        if full_image or (self.mode == overlay.mode == "RGBA" and self.bit_depth == overlay.bit_depth == 8 and -(1 << 63) < dest[0] < (1 << 63) and -(1 << 63) < dest[1] < (1 << 63)):
             overlay = overlay.copy() if overlay is self or overlay._native is self._native else overlay
             self._ensure_mutable()
-            image_alpha_composite_inplace(self._native, overlay._native)
-            return
-        if 0 <= box[0] <= box[2] <= self.width and 0 <= box[1] <= box[3] <= self.height and self.mode == overlay.mode == "RGBA" and self.bit_depth == overlay.bit_depth == 8:
-            target = self._native
-            source_native = overlay._native
-            if source_native is target:
-                source_native = source_native.copy()
-            self._ensure_mutable()
-            image_alpha_composite_inplace(self._native, source_native, dest)
+            image_alpha_composite_inplace(self._native, overlay._native, None if full_image else dest)
             return
         self.paste(alpha_composite(self.crop(box), overlay), box)
 

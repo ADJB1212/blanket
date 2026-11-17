@@ -378,16 +378,12 @@ pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image
 
 #[pyfunction]
 #[pyo3(signature = (image, overlay, position=None))]
-fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image, position: Option<(u32, u32)>) -> PyResult<()> {
+fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image, position: Option<(i64, i64)>) -> PyResult<()> {
     image.ensure_owned()?;
     if image.pixel_mode() != PixelMode::Rgba || overlay.pixel_mode() != PixelMode::Rgba || image.palette().is_some() || overlay.palette().is_some() {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    let (x, y) = position.unwrap_or((0, 0));
-    if position.is_none() && image.size() != overlay.size()
-        || x.saturating_add(overlay.width()) > image.width()
-        || y.saturating_add(overlay.height()) > image.height()
-    {
+    if position.is_none() && image.size() != overlay.size() {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(image) {
@@ -398,26 +394,30 @@ fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Im
     }
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
-    if source.is_empty() {
+    let position = position.unwrap_or((0, 0));
+    let (left, top, right, bottom) = paste_bounds(position, image.width() as usize, image.height() as usize, overlay.width(), overlay.height());
+    if right <= left || bottom <= top {
         return Ok(());
     }
     let stride = image.width() as usize * 4;
-    let row_bytes = overlay.width() as usize * 4;
-    let start = x as usize * 4;
-    let top = y as usize * stride;
-    let bottom = top + overlay.height() as usize * stride;
+    let src_stride = overlay.width() as usize * 4;
+    let row_bytes = (right - left) as usize * 4;
+    let src_left = (left - position.0) as usize * 4;
+    let src_top = (top - position.1) as usize * src_stride;
+    let source = &source[src_top..src_top + (bottom - top) as usize * src_stride];
+    let start = left as usize * 4;
     let pixels = image.pixels_mut().expect("validated open image");
     py.detach(|| {
-        let pixels = &mut pixels[top..bottom];
-        if row_bytes == stride {
+        let pixels = &mut pixels[top as usize * stride..bottom as usize * stride];
+        if row_bytes == stride && row_bytes == src_stride {
             composite_pixels(pixels, source, None);
         } else {
             const ROWS: usize = 16;
             let threshold = MIN_PARALLEL_BYTES.div_ceil(row_bytes).saturating_mul(stride);
             chunks_mut_above(pixels, stride.saturating_mul(ROWS), threshold, |band, rows| {
-                let src = &source[band * ROWS * row_bytes..];
-                for (dst, src) in rows.chunks_exact_mut(stride).zip(src.chunks_exact(row_bytes)) {
-                    composite_row(&mut dst[start..start + row_bytes], src);
+                let src = &source[band * ROWS * src_stride..];
+                for (dst, src) in rows.chunks_exact_mut(stride).zip(src.chunks_exact(src_stride)) {
+                    composite_row(&mut dst[start..start + row_bytes], &src[src_left..src_left + row_bytes]);
                 }
             });
         }
