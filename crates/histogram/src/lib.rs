@@ -1,4 +1,5 @@
 //! Shared byte and wide-sample image histograms.
+#![feature(portable_simd)]
 
 use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, should_parallel};
 use blanket_core::{Image, PixelMode};
@@ -109,6 +110,10 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
                     }
                     return bins;
                 }
+                if C == 1 && has_repeated_values(bytes) {
+                    bins[0] = grayscale_histogram(bytes);
+                    return bins;
+                }
                 for pixel in pixels {
                     for c in 0..C {
                         bins[c][usize::from(pixel[c])] += 1;
@@ -141,6 +146,33 @@ fn histogram<const C: usize>(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
         count(0, source)
     };
     bins.into_iter().flatten().collect()
+}
+
+fn has_repeated_values(source: &[u8]) -> bool {
+    use std::simd::cmp::SimdPartialEq;
+
+    use blanket_core::pixels::Bytes;
+
+    source.len() >= 4096 && Bytes::from_slice(source).simd_eq(Bytes::from_slice(&source[1..])).to_bitmask().count_ones() >= 8
+}
+
+fn grayscale_histogram(source: &[u8]) -> [u64; 256] {
+    // Independent accumulators let repeated values update without serializing every increment.
+    let [mut first, mut second, mut third, mut fourth] = [[0_u64; 256]; 4];
+    let (blocks, tail) = source.as_chunks::<4>();
+    for &[a, b, c, d] in blocks {
+        first[usize::from(a)] += 1;
+        second[usize::from(b)] += 1;
+        third[usize::from(c)] += 1;
+        fourth[usize::from(d)] += 1;
+    }
+    for &value in tail {
+        first[usize::from(value)] += 1;
+    }
+    for (i, count) in first.iter_mut().enumerate() {
+        *count += second[i] + third[i] + fourth[i];
+    }
+    first
 }
 
 #[cfg(test)]
