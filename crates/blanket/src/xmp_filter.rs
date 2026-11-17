@@ -1,9 +1,8 @@
 //! XMP field retention using validated XML source ranges.
 
-use std::collections::HashSet;
-
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
+use rustc_hash::FxHashSet;
 
 #[pyfunction]
 pub(crate) fn _metadata_location(name: &str) -> bool {
@@ -26,7 +25,7 @@ pub(crate) fn _metadata_location(name: &str) -> bool {
         )
 }
 
-fn keep(namespace: Option<&str>, local: &str, location: bool, fields: Option<&HashSet<String>>) -> bool {
+fn keep(namespace: Option<&str>, local: &str, location: bool, fields: Option<&FxHashSet<String>>) -> bool {
     if !location && _metadata_location(local) {
         return false;
     }
@@ -36,7 +35,7 @@ fn keep(namespace: Option<&str>, local: &str, location: bool, fields: Option<&Ha
     })
 }
 
-fn filter(raw: &[u8], location: bool, fields: Option<&HashSet<String>>) -> Vec<u8> {
+fn filter(raw: &[u8], location: bool, fields: Option<&FxHashSet<String>>) -> Vec<u8> {
     if raw.len() > 16 * 1024 * 1024 {
         return Vec::new();
     }
@@ -91,7 +90,7 @@ fn filter(raw: &[u8], location: bool, fields: Option<&HashSet<String>>) -> Vec<u
 }
 
 #[pyfunction]
-pub(crate) fn _filter_xmp<'py>(py: Python<'py>, raw: &[u8], location: bool, fields: Option<HashSet<String>>) -> Bound<'py, PyBytes> {
+pub(crate) fn _filter_xmp<'py>(py: Python<'py>, raw: &[u8], location: bool, fields: Option<FxHashSet<String>>) -> Bound<'py, PyBytes> {
     let output = py.detach(|| filter(raw, location, fields.as_ref()));
     PyBytes::new(py, &output)
 }

@@ -1,15 +1,15 @@
 from __future__ import annotations
 
 import base64
+import os
 from io import BytesIO, StringIO
-from typing import TYPE_CHECKING
+from pathlib import Path
+from xml.etree import ElementTree as ET
 
 import pytest
 
-from blanket import CodecResourceLimitError, CorruptImageError, Image, UnidentifiedImageError, UnsupportedCodecError, features
-
-if TYPE_CHECKING:
-    from pathlib import Path
+from blanket import CodecResourceLimitError, CorruptImageError, Image, ImageDraw, UnidentifiedImageError, UnsupportedCodecError, features
+from blanket.Compressor import LosslessImageCompressor
 
 SVG = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='red' fill-opacity='0.5'/></svg>"
 
@@ -126,10 +126,12 @@ def test_inspection_and_diagnostics() -> None:
     assert Image.registered_extensions()[".svg"] == "SVG"
     assert features.check("svg") and "svg" in features.get_supported()
     assert features.version("svg") == "resvg 0.50.0"
-    assert features.encoding_capabilities("SVG") is None
+    capabilities = features.encoding_capabilities("SVG")
+    assert capabilities is not None
+    assert ("RGBA", (8,)) in capabilities.mode_depths
     output = StringIO()
     features.blanketinfo(output)
-    assert "SVG: open\n" in output.getvalue()
+    assert "SVG: open, save\n" in output.getvalue()
 
 
 @pytest.mark.parametrize("body,error", [(b"<script/>", UnsupportedCodecError), (b"<image href='../file'/>", UnsupportedCodecError), (b"<g>", CorruptImageError)])
@@ -155,10 +157,125 @@ def test_inspection_does_not_decode_embedded_png_pixels() -> None:
         Image.decode(data)
 
 
-def test_svg_save_is_explicitly_unavailable(tmp_path: Path) -> None:
-    image = Image.decode(SVG)
-    for output in [BytesIO(), tmp_path / "image.svg"]:
-        with pytest.raises(UnsupportedCodecError, match="read-only") as caught:
-            image.save(output, "SVG" if isinstance(output, BytesIO) else None)
+@pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA", "P", "PA"])
+def test_svg_trace_roundtrip_and_outputs(mode: str, tmp_path: Path) -> None:
+    image = Image.new("RGB", (12, 8), "red").convert(mode)
+    expected = image.convert("RGBA")
+    data = image.encode("svg", svg_mode="pixel", svg_filter_speckle=0, svg_color_precision=8)
+    assert b"<path " in data and b"<image" not in data
+    assert Image.decode(data).tobytes() == expected.tobytes()
+    for output in [BytesIO(), tmp_path / "image.svg", bytes(tmp_path / "bytes.svg")]:
+        image.save(output, "SVG" if isinstance(output, BytesIO) else None, svg_mode="pixel", svg_filter_speckle=0, svg_color_precision=8)
+        saved = output.getvalue() if isinstance(output, BytesIO) else Path(os.fsdecode(output)).read_bytes()
+        assert saved == data
+
+
+@pytest.mark.parametrize("fit", ["pixel", "polygon", "spline"])
+def test_svg_trace_transparency_holes_and_paint_order(fit: str) -> None:
+    image = Image.new("RGBA", (24, 24), "red")
+    for y in range(6, 18):
+        for x in range(6, 18):
+            image.putpixel((x, y), (0, 0, 255, 255))
+    for y in range(10, 14):
+        for x in range(10, 14):
+            image.putpixel((x, y), (255, 0, 0, 0))
+    data = image.encode("SVG", svg_mode=fit, svg_filter_speckle=0, svg_color_precision=8)
+    result = Image.decode(data)
+    assert result.size == image.size
+    assert result.getpixel((2, 2)) == (255, 0, 0, 255)
+    assert result.getpixel((8, 8)) == (0, 0, 255, 255)
+    assert result.getpixel((12, 12)) == (0, 0, 0, 0)
+    assert data == image.encode("SVG", svg_mode=fit, svg_filter_speckle=0, svg_color_precision=8)
+
+
+def test_svg_trace_alpha_policy_and_empty_document() -> None:
+    image = Image.new("RGBA", (8, 8), (40, 80, 120, 127))
+    assert Image.decode(image.encode("SVG")).getbbox() is None
+    assert Image.decode(image.encode("SVG", svg_alpha_threshold=127)).getpixel((4, 4)) == (40, 80, 120, 255)
+    image.putpixel((7, 7), (0, 255, 0, 255))
+    result = Image.decode(image.encode("SVG", svg_mode="pixel", svg_filter_speckle=0))
+    assert result.getpixel((7, 7)) == (0, 255, 0, 255)
+    assert result.getpixel((0, 0)) == (0, 0, 0, 0)
+
+
+@pytest.mark.parametrize("size", [(1, 1), (1, 17), (17, 1)])
+@pytest.mark.parametrize("fit", ["pixel", "polygon", "spline"])
+def test_svg_trace_small_dimensions(size: tuple[int, int], fit: str) -> None:
+    image = Image.new("RGB", size, "red")
+    data = image.encode("SVG", svg_mode=fit, svg_filter_speckle=0)
+    result = Image.decode(data)
+    assert result.size == size
+    assert result.getpixel((0, 0))[0] == 255
+
+
+@pytest.mark.parametrize(
+    "options,error",
+    [
+        ({"svg_mode": "unknown"}, ValueError),
+        ({"svg_mode": 1}, TypeError),
+        ({"svg_color_precision": 0}, ValueError),
+        ({"svg_color_precision": 9}, ValueError),
+        ({"svg_filter_speckle": -1}, ValueError),
+        ({"svg_filter_speckle": True}, TypeError),
+        ({"svg_layer_difference": 766}, ValueError),
+        ({"svg_path_precision": 9}, ValueError),
+        ({"svg_alpha_threshold": 0}, ValueError),
+        ({"svg_alpha_threshold": 256}, ValueError),
+        ({"svg_corner_threshold": float("nan")}, ValueError),
+        ({"svg_corner_threshold": 181}, ValueError),
+        ({"svg_length_threshold": float("inf")}, ValueError),
+        ({"svg_length_threshold": 0}, ValueError),
+        ({"svg_splice_threshold": -1}, ValueError),
+        ({"svg_splice_threshold": True}, TypeError),
+        ({"svg_length_threshold": 10**1000}, ValueError),
+        ({"quality": 90}, TypeError),
+    ],
+)
+def test_svg_trace_option_validation(options: dict, error: type[Exception]) -> None:
+    with pytest.raises(error):
+        Image.new("RGB", (8, 8)).encode("SVG", **options)
+
+
+def test_svg_trace_modes_limits_and_other_formats() -> None:
+    with pytest.raises(TypeError, match="unsupported PNG"):
+        Image.new("RGB", (8, 8)).encode("PNG", svg_mode="pixel")
+    for image in [Image.new("RGB", (1, 1)).convert("RGB", bit_depth=16), Image.new("F", (1, 1)), Image.new("CMYK", (1, 1))]:
+        with pytest.raises(UnsupportedCodecError) as caught:
+            image.encode("SVG")
         assert caught.value.format == "SVG"
         assert caught.value.operation == "encode"
+    with pytest.raises(ValueError, match="empty"):
+        Image.new("RGB", (0, 0)).encode("SVG")
+    with pytest.raises(CodecResourceLimitError):
+        Image.new("RGB", (4097, 1)).encode("SVG")
+    with pytest.raises(ValueError, match="compression optimization"):
+        Image.new("RGB", (8, 8)).encode("SVG", compressor=LosslessImageCompressor())
+    with pytest.raises(ValueError, match="multi-frame"):
+        Image.new("RGB", (8, 8)).encode("SVG", save_all=True)
+
+
+def test_svg_trace_fitting_color_and_speckle_controls() -> None:
+    image = Image.new("RGB", (32, 32), "white")
+    ImageDraw.Draw(image).ellipse((4, 4, 27, 27), fill="black")
+    paths = {}
+    for fit in ("pixel", "polygon", "spline"):
+        root = ET.fromstring(image.encode("SVG", svg_mode=fit, svg_filter_speckle=0))
+        paths[fit] = "".join(element.attrib["d"] for element in root)
+    assert len(paths["polygon"]) < len(paths["pixel"])
+    assert any(command in paths["spline"] for command in "CcSs")
+    assert not any(command in paths["pixel"] + paths["polygon"] for command in "CcSs")
+
+    image = Image.new("RGB", (32, 16), (100, 100, 100))
+    ImageDraw.Draw(image).rectangle((16, 0, 31, 15), fill=(110, 110, 110))
+    coarse = image.encode("SVG", svg_color_precision=1, svg_filter_speckle=0, svg_layer_difference=0)
+    detailed = image.encode("SVG", svg_color_precision=8, svg_filter_speckle=0, svg_layer_difference=0)
+    coarse_image = Image.decode(coarse)
+    detailed_image = Image.decode(detailed)
+    assert coarse_image.getpixel((8, 8)) == coarse_image.getpixel((24, 8))
+    assert detailed_image.getpixel((8, 8)) != detailed_image.getpixel((24, 8))
+
+    image = Image.new("RGB", (32, 32), "white")
+    ImageDraw.Draw(image).rectangle((10, 10, 12, 12), fill="red")
+    unfiltered = image.encode("SVG", svg_filter_speckle=0, svg_layer_difference=0)
+    filtered = image.encode("SVG", svg_filter_speckle=4, svg_layer_difference=0)
+    assert filtered.count(b"<path") < unfiltered.count(b"<path")
