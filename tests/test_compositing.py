@@ -88,6 +88,18 @@ def test_alpha_composite_rounding():
     assert_pixels_equal(ba, a)
 
 
+def test_alpha_composite_region_preserves_shared_background():
+    rng = random.Random(807)
+    background, expected = image_pair("RGBA", (81, 67), rng.randbytes(81 * 67 * 4))
+    overlay, foreground = image_pair("RGBA", (33, 35), rng.randbytes(33 * 35 * 4))
+    snapshot = background.copy()
+    original = expected.tobytes()
+    background.alpha_composite(overlay, (9, 11))
+    expected.alpha_composite(foreground, (9, 11))
+    assert_pixels_equal(background, expected)
+    assert snapshot.tobytes() == original
+
+
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])
 @pytest.mark.parametrize("alpha", [0, 128, 255, -1, 300, "band"])
 def test_putalpha(mode, alpha):

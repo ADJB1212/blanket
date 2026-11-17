@@ -377,21 +377,51 @@ pub fn image_alpha_composite(py: Python<'_>, background: &Image, overlay: &Image
 }
 
 #[pyfunction]
-fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image) -> PyResult<()> {
+#[pyo3(signature = (image, overlay, position=None))]
+fn image_alpha_composite_inplace(py: Python<'_>, image: &mut Image, overlay: &Image, position: Option<(u32, u32)>) -> PyResult<()> {
     image.ensure_owned()?;
     if image.pixel_mode() != PixelMode::Rgba || overlay.pixel_mode() != PixelMode::Rgba || image.palette().is_some() || overlay.palette().is_some() {
         return Err(PyValueError::new_err("image has wrong mode"));
     }
-    if (image.width(), image.height()) != (overlay.width(), overlay.height()) {
+    let (x, y) = position.unwrap_or((0, 0));
+    if position.is_none() && image.size() != overlay.size()
+        || x.saturating_add(overlay.width()) > image.width()
+        || y.saturating_add(overlay.height()) > image.height()
+    {
         return Err(PyValueError::new_err("images do not match"));
     }
     if blanket_core::samples::supported(image) {
+        if position.is_some() {
+            return Err(PyValueError::new_err("regional compositing requires 8-bit pixels"));
+        }
         return py.detach(|| crate::high_depth::composite_inplace(image, overlay));
     }
     image.pixel_data()?;
     let source = overlay.pixel_data()?;
+    if source.is_empty() {
+        return Ok(());
+    }
+    let stride = image.width() as usize * 4;
+    let row_bytes = overlay.width() as usize * 4;
+    let start = x as usize * 4;
+    let top = y as usize * stride;
+    let bottom = top + overlay.height() as usize * stride;
     let pixels = image.pixels_mut().expect("validated open image");
-    py.detach(|| composite_pixels(pixels, source, None));
+    py.detach(|| {
+        let pixels = &mut pixels[top..bottom];
+        if row_bytes == stride {
+            composite_pixels(pixels, source, None);
+        } else {
+            const ROWS: usize = 16;
+            let threshold = MIN_PARALLEL_BYTES.div_ceil(row_bytes).saturating_mul(stride);
+            chunks_mut_above(pixels, stride.saturating_mul(ROWS), threshold, |band, rows| {
+                let src = &source[band * ROWS * row_bytes..];
+                for (dst, src) in rows.chunks_exact_mut(stride).zip(src.chunks_exact(row_bytes)) {
+                    composite_row(&mut dst[start..start + row_bytes], src);
+                }
+            });
+        }
+    });
     Ok(())
 }
 
@@ -403,42 +433,46 @@ fn composite_pixels(pixels: &mut [u8], source: &[u8], background: Option<&[u8]>)
         if let Some(background) = background {
             pixels.copy_from_slice(&background[i * CHUNK..i * CHUNK + pixels.len()]);
         }
-        let done = pixels.len() / 64 * 64;
-        for i in (0..done).step_by(64) {
-            let src = load::<4>(&source[i..]);
-            let active = src[3].simd_ne(Bytes::splat(0));
-            if !active.any() {
-                continue;
-            }
-            if src[3].simd_eq(Bytes::splat(255)).all() {
-                pixels[i..i + 64].copy_from_slice(&source[i..i + 64]);
-                continue;
-            }
-            let dst = load::<4>(&pixels[i..]);
-            let source_alpha = src[3].cast::<u32>();
-            let alpha = source_alpha * Simd::splat(255) + dst[3].cast::<u32>() * (Simd::splat(255) - source_alpha);
-            // Inactive lanes can have zero combined alpha.
-            let numerator = source_alpha * Simd::splat(255 * 255 * 128);
-            let denominator = alpha.simd_max(Simd::splat(1));
-            // The float quotient is within one integer; correct it exactly.
-            let estimate = (numerator.cast::<f32>() / denominator.cast::<f32>()).cast::<u32>();
-            let estimate = estimate - (estimate * denominator).simd_gt(numerator).select(Simd::splat(1), Simd::splat(0));
-            let coefficient = estimate + (numerator - estimate * denominator).simd_ge(denominator).select(Simd::splat(1), Simd::splat(0));
-            let output = std::array::from_fn::<_, 4, _>(|c| {
-                let value = if c == 3 {
-                    let value = alpha + Simd::splat(128);
-                    ((value >> 8) + value) >> 8
-                } else {
-                    let value =
-                        src[c].cast::<u32>() * coefficient + dst[c].cast::<u32>() * (Simd::splat(255 * 128) - coefficient) + Simd::splat(128 << 7);
-                    ((value >> 8) + value) >> 15
-                };
-                active.select(value.cast::<u8>(), dst[c])
-            });
-            store(&mut pixels[i..], output);
-        }
-        composite_scalar(&mut pixels[done..], &source[done..]);
+        composite_row(pixels, source);
     });
+}
+
+fn composite_row(pixels: &mut [u8], source: &[u8]) {
+    let done = pixels.len() / 64 * 64;
+    for i in (0..done).step_by(64) {
+        let src = load::<4>(&source[i..]);
+        let active = src[3].simd_ne(Bytes::splat(0));
+        if !active.any() {
+            continue;
+        }
+        if src[3].simd_eq(Bytes::splat(255)).all() {
+            pixels[i..i + 64].copy_from_slice(&source[i..i + 64]);
+            continue;
+        }
+        let dst = load::<4>(&pixels[i..]);
+        let source_alpha = src[3].cast::<u32>();
+        let alpha = source_alpha * Simd::splat(255) + dst[3].cast::<u32>() * (Simd::splat(255) - source_alpha);
+        // Inactive lanes can have zero combined alpha.
+        let numerator = source_alpha * Simd::splat(255 * 255 * 128);
+        let denominator = alpha.simd_max(Simd::splat(1));
+        // The float quotient is within one integer; correct it exactly.
+        let estimate = (numerator.cast::<f32>() / denominator.cast::<f32>()).cast::<u32>();
+        let estimate = estimate - (estimate * denominator).simd_gt(numerator).select(Simd::splat(1), Simd::splat(0));
+        let coefficient = estimate + (numerator - estimate * denominator).simd_ge(denominator).select(Simd::splat(1), Simd::splat(0));
+        let output = std::array::from_fn::<_, 4, _>(|c| {
+            let value = if c == 3 {
+                let value = alpha + Simd::splat(128);
+                ((value >> 8) + value) >> 8
+            } else {
+                let value =
+                    src[c].cast::<u32>() * coefficient + dst[c].cast::<u32>() * (Simd::splat(255 * 128) - coefficient) + Simd::splat(128 << 7);
+                ((value >> 8) + value) >> 15
+            };
+            active.select(value.cast::<u8>(), dst[c])
+        });
+        store(&mut pixels[i..], output);
+    }
+    composite_scalar(&mut pixels[done..], &source[done..]);
 }
 
 fn composite_scalar(pixels: &mut [u8], source: &[u8]) {

@@ -2001,6 +2001,14 @@ class Image:
             self._ensure_mutable()
             image_alpha_composite_inplace(self._native, overlay._native)
             return
+        if 0 <= box[0] <= box[2] <= self.width and 0 <= box[1] <= box[3] <= self.height and self.mode == overlay.mode == "RGBA" and self.bit_depth == overlay.bit_depth == 8:
+            target = self._native
+            source_native = overlay._native
+            if source_native is target:
+                source_native = source_native.copy()
+            self._ensure_mutable()
+            image_alpha_composite_inplace(self._native, source_native, dest)
+            return
         self.paste(alpha_composite(self.crop(box), overlay), box)
 
     def putalpha(self, alpha: Image | int) -> None:
