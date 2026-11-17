@@ -116,6 +116,7 @@ jpegxl-rs = { path = "third-party/jpegxl-rs" }
 jpegxl-src = { path = "third-party/jpegxl-src" }
 turbojpeg = { path = "third-party/turbojpeg" }
 png = { path = "third-party/png" }
+flo_curves = { path = "third-party/flo_curves" }
 
 [profile.release]
 opt-level = 3
