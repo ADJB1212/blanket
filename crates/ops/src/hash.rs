@@ -1,4 +1,6 @@
-//! Perceptual hashes of small, grayscale thumbnails.
+//! Perceptual hashes of grayscale thumbnails and orderless histograms.
+
+mod histogram;
 
 use std::simd::Simd;
 
@@ -10,6 +12,7 @@ use pyo3::types::PyBytes;
 pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_hash, module)?)?;
     module.add_function(wrap_pyfunction!(image_hash_native, module)?)?;
+    module.add_function(wrap_pyfunction!(histogram::image_histogram_hash_native, module)?)?;
     Ok(())
 }
 

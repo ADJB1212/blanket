@@ -575,7 +575,7 @@ with new processing semantics exposed explicitly.
 
 #### Hashes and Search
 
-- [ ] **Color and crop-resistant hashes** — additional `ImageHash` algorithms
+- [x] **Color and crop-resistant hashes** — additional `ImageHash` algorithms
       with the same hexadecimal form and Hamming distance
 - [ ] **Focus measure** — variance of Laplacian or Tenengrad on a grayscale
       view, for ranking frames or rejecting blurry captures

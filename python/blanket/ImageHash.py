@@ -1,6 +1,7 @@
 """Perceptual image hashes for deduplication and similarity search.
 
-All algorithms convert the current frame to 8-bit L and resize with Lanczos.
+The spatial algorithms convert to 8-bit L and resize with Lanczos. Color and
+crop-resistant hashes use orderless histograms without resizing the image.
 Alpha is discarded, orientation is not applied, and ICC profiles are not used.
 Compare hashes produced with the same algorithm and settings. These are visual
 fingerprints, not cryptographic hashes or guarantees of identical pixels.
@@ -11,13 +12,14 @@ from __future__ import annotations
 __lazy_modules__ = {"math", "string"}
 
 import string
+from contextlib import ExitStack
 from dataclasses import dataclass
 from math import isqrt
 
 from . import Image
-from ._blanket import image_hash_native
+from ._blanket import image_hash_native, image_histogram_hash_native
 
-__all__ = ["ImageHash", "average_hash", "dhash", "hex_to_hash", "phash"]
+__all__ = ["ImageHash", "average_hash", "colorhash", "crop_resistant_hash", "dhash", "hex_to_hash", "phash"]
 
 
 def _size(hash_size: int) -> int:
@@ -103,6 +105,72 @@ def average_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     """
     size = _size(hash_size)
     return _hash(image, size, size, "average")
+
+
+def _histogram_hash(image: Image.Image, hash_size: int, algorithm: str, mode: str) -> ImageHash:
+    """Convert the current frame and project its native histogram to bits."""
+    size = _size(hash_size)
+    if not isinstance(image, Image.Image):
+        raise TypeError("image must be a Blanket Image")
+    image.load()
+    if not image.width or not image.height:
+        raise ValueError("cannot hash an empty image")
+    with ExitStack() as cleanup:
+        source = image
+        if mode == "L" and source.mode in ("RGB;F", "RGBA;F"):
+            source = source.convert("RGB", bit_depth=8)
+            cleanup.callback(source.close)
+        converted = source if source.mode == mode and source.bit_depth == 8 else source.convert(mode, bit_depth=8)
+        if converted is not source:
+            cleanup.callback(converted.close)
+        packed = image_histogram_hash_native(converted._native, size, algorithm)
+        return ImageHash(int.from_bytes(packed, "big"), size)
+
+
+def colorhash(image: Image.Image, hash_size: int = 8) -> ImageHash:
+    """Hash the color distribution without retaining spatial arrangement.
+
+    Convert the current frame to 8-bit RGB without resizing. Count a 4x4x4
+    RGB histogram (each channel divided into four equal bins), take square
+    roots of its counts, and project onto fixed deterministic sign vectors.
+    Positive projections set bits; ties leave bits clear. Square-root weights
+    reduce the influence of dominant colors. Pixel order does not matter.
+
+    Alpha is discarded, including hidden colors. ICC and orientation are
+    ignored. Quantization boundaries can change bits abruptly; different
+    arrangements of the same colors collide. This is Blanket's algorithm,
+    with no promise of bit compatibility with other color-hash libraries.
+
+    Args:
+        image: Nonempty source image; the current frame stays unchanged.
+        hash_size: Square side from 2 to 64; the default produces 64 bits.
+    """
+    return _histogram_hash(image, hash_size, "color", "RGB")
+
+
+def crop_resistant_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:
+    """Hash local grayscale texture while discarding spatial arrangement.
+
+    Convert the current frame to 8-bit L without resizing (float color goes
+    through 8-bit RGB first). For each interior
+    pixel, compare its eight neighbors with the center (greater or equal),
+    starting at northwest and proceeding clockwise, least significant bit
+    first. Count the resulting 256 local binary patterns and project their
+    square-root counts onto fixed deterministic sign vectors, setting bits
+    for positive projections and clearing ties.
+
+    Crops retaining similar texture distributions tend to have small Hamming
+    distances. This does not match arbitrary crops, and resizing can change
+    local texture. Spatially different scenes with the same texture can
+    collide; all constant grayscale images share a hash. Alpha, ICC, and
+    orientation are ignored. This is a single fixed-size Blanket fingerprint,
+    not a segmented multi-hash compatible with other libraries.
+
+    Args:
+        image: Source at least 3x3 pixels; the current frame stays unchanged.
+        hash_size: Square side from 2 to 64; the default produces 64 bits.
+    """
+    return _histogram_hash(image, hash_size, "crop-resistant", "L")
 
 
 def dhash(image: Image.Image, hash_size: int = 8) -> ImageHash:

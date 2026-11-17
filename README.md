@@ -62,6 +62,9 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   and save-time compression search.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
+- **Visual fingerprints.** `ImageHash` provides average, difference, perceptual,
+  color-distribution, and crop-resistant local-texture hashes with hexadecimal
+  serialization and Hamming distance.
 - **Batch processing.** `ImageBatch.Pipeline` reuses transforms across images
   or paths, with parallel execution and ordered, bounded streaming results.
 - **Interop.** Array imports (including float16), fused NumPy/PyTorch exports,
