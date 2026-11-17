@@ -648,7 +648,7 @@ impl Image {
     pub fn copy(&self, py: Python<'_>) -> PyResult<Self> {
         let source = self.raw_data()?;
         let pixels = if let Some(pixels) = &self.pixels {
-            py.detach(|| Arc::clone(pixels))
+            Arc::clone(pixels)
         } else {
             let mut pixels = crate::buffers::reserved::<u8>(source.len())?;
             let chunk = 256 * 1024;

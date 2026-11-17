@@ -1159,8 +1159,9 @@ class Image:
 
     def _sync_palette(self) -> None:
         """Copy the Python palette to the native indexed raster when present."""
-        if self.mode in ("P", "PA") and self.palette is not None:
-            self._native.set_palette(self.palette.mode, self.palette.tobytes())
+        palette = self.palette
+        if palette is not None and self.mode in ("P", "PA"):
+            self._native.set_palette(palette.mode, palette.tobytes())
 
     def copy(self) -> Image:
         """Return an independent copy of the pixels, palette, and metadata.
