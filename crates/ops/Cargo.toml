@@ -17,6 +17,7 @@ blanket-histogram.workspace = true
 blanket-math.workspace = true
 pyo3.workspace = true
 rayon.workspace = true
+rustc-hash.workspace = true
 rustfft = { version = "6", default-features = false, features = ["avx", "neon", "sse"] }
 ssimulacra2 = { version = "0.5", default-features = false, features = ["rayon"] }
 

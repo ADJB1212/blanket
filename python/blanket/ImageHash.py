@@ -15,11 +15,15 @@ import string
 from contextlib import ExitStack
 from dataclasses import dataclass
 from math import isqrt
+from typing import TYPE_CHECKING
 
 from . import Image
-from ._blanket import image_hash_native, image_histogram_hash_native
+from ._blanket import hash_group, hash_nearest_neighbors, image_hash_native, image_histogram_hash_native
 
-__all__ = ["ImageHash", "average_hash", "colorhash", "crop_resistant_hash", "dhash", "hex_to_hash", "phash"]
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+
+__all__ = ["ImageHash", "average_hash", "colorhash", "crop_resistant_hash", "dhash", "group_hashes", "hex_to_hash", "nearest_neighbors", "phash"]
 
 
 def _size(hash_size: int) -> int:
@@ -83,6 +87,62 @@ def hex_to_hash(hexstr: str, hash_size: int | None = None) -> ImageHash:
     if len(hexstr) != (size**2 + 3) // 4:
         raise ValueError("hex length does not match hash size")
     return ImageHash(int(hexstr, 16), size)
+
+
+def _validate_max_distance(max_distance: int) -> None:
+    if isinstance(max_distance, bool) or not isinstance(max_distance, int):
+        raise TypeError("max_distance must be an integer")
+    if max_distance < 0:
+        raise ValueError("max_distance must be nonnegative")
+
+
+def _pack_hashes(hashes: Iterable[ImageHash], hash_size: int | None = None) -> tuple[bytes, int]:
+    width = 0 if hash_size is None else (hash_size**2 + 7) // 8
+    packed = bytearray()
+    for fingerprint in hashes:
+        if not isinstance(fingerprint, ImageHash):
+            raise TypeError("hashes must contain ImageHash objects")
+        if hash_size is None:
+            hash_size = fingerprint.hash_size
+            width = (hash_size**2 + 7) // 8
+        elif fingerprint.hash_size != hash_size:
+            raise ValueError("hash sizes must match")
+        packed.extend(int.to_bytes(fingerprint.value, width, "big"))
+    return bytes(packed), width
+
+
+def nearest_neighbors(query: ImageHash, hashes: Iterable[ImageHash], max_distance: int) -> list[tuple[int, int]]:
+    """Return ``(index, distance)`` pairs within the inclusive Hamming radius.
+
+    Indices are zero-based positions in ``hashes``. Sort by distance, breaking
+    ties by input order. Every occurrence of a matching hash is returned.
+    Use hashes from the same algorithm and settings. All sizes must match
+    the query, and ``max_distance`` must be a nonnegative integer.
+    """
+    _validate_max_distance(max_distance)
+    if not isinstance(query, ImageHash):
+        raise TypeError("query must be an ImageHash")
+    packed, width = _pack_hashes(hashes, query.hash_size)
+    query_bytes = int.to_bytes(query.value, width, "big")
+    return hash_nearest_neighbors(query_bytes, packed, min(max_distance, width * 8))
+
+
+def group_hashes(hashes: Iterable[ImageHash], max_distance: int) -> list[list[int]]:
+    """Group zero-based input positions linked within the Hamming radius.
+
+    Two positions share a group if a chain of pairs at distance at most
+    ``max_distance`` connects them. Include singletons and duplicate positions.
+    Order positions within each group by input order and groups by their first
+    position. Use hashes from the same algorithm and settings. All sizes must
+    match, and ``max_distance`` must be a nonnegative integer.
+
+    Grouping may compare every pair of distinct hashes in the worst case.
+    """
+    _validate_max_distance(max_distance)
+    packed, width = _pack_hashes(hashes)
+    if not packed:
+        return []
+    return hash_group(packed, width, min(max_distance, width * 8))
 
 
 def _hash(image: Image.Image, hash_size: int, side: int, algorithm: str) -> ImageHash:

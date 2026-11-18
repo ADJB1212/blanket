@@ -1,6 +1,7 @@
-//! Perceptual hashes of grayscale thumbnails and orderless histograms.
+//! Perceptual hashing and Hamming-distance search.
 
 mod histogram;
+mod search;
 
 use std::simd::Simd;
 
@@ -13,6 +14,8 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(image_hash, module)?)?;
     module.add_function(wrap_pyfunction!(image_hash_native, module)?)?;
     module.add_function(wrap_pyfunction!(histogram::image_histogram_hash_native, module)?)?;
+    module.add_function(wrap_pyfunction!(search::hash_nearest_neighbors, module)?)?;
+    module.add_function(wrap_pyfunction!(search::hash_group, module)?)?;
     Ok(())
 }
 

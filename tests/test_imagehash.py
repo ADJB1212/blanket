@@ -129,6 +129,53 @@ def test_hash_values_serialization_distance_and_keys() -> None:
     assert ImageHash.hex_to_hash("100", 3) == ImageHash.ImageHash(256, 3)
 
 
+@pytest.mark.parametrize("hash_size", [2, 8, 9, 64])
+def test_nearest_neighbors_are_ranked_stably_and_keep_duplicates(hash_size: int) -> None:
+    high_bit = 1 << (hash_size**2 - 1)
+    query = ImageHash.ImageHash(high_bit, hash_size)
+    hashes = [ImageHash.ImageHash(value, hash_size) for value in (0, high_bit | 3, high_bit, high_bit | 1, high_bit)]
+
+    assert ImageHash.nearest_neighbors(query, iter(hashes), 1) == [(2, 0), (4, 0), (0, 1), (3, 1)]
+    assert ImageHash.nearest_neighbors(query, hashes, 0) == [(2, 0), (4, 0)]
+    assert ImageHash.nearest_neighbors(query, hashes, 1 << 100) == [(2, 0), (4, 0), (0, 1), (3, 1), (1, 2)]
+    assert ImageHash.nearest_neighbors(query, hashes[:2], 0) == []
+    assert ImageHash.nearest_neighbors(query, [], 1) == []
+
+
+def test_group_hashes_connects_transitive_matches_in_input_order() -> None:
+    hashes = [ImageHash.ImageHash(value, 2) for value in (0b0000, 0b1100, 0b0011, 0b0010, 0b1100, 0b0000, 0b1001)]
+
+    assert hashes[0] - hashes[2] == 2
+    assert ImageHash.group_hashes(iter(hashes), 1) == [[0, 2, 3, 5], [1, 4], [6]]
+    assert ImageHash.group_hashes(hashes, 0) == [[0, 5], [1, 4], [2], [3], [6]]
+    assert ImageHash.group_hashes(hashes, 4) == [[0, 1, 2, 3, 4, 5, 6]]
+    assert ImageHash.group_hashes([], 1) == []
+
+
+@pytest.mark.parametrize("max_distance,error", [(-1, ValueError), (True, TypeError), (1.0, TypeError)])
+def test_hash_search_rejects_invalid_radii(max_distance, error) -> None:
+    with pytest.raises(error, match="max_distance"):
+        ImageHash.nearest_neighbors(ImageHash.ImageHash(0), [], max_distance)
+    with pytest.raises(error, match="max_distance"):
+        ImageHash.group_hashes([], max_distance)
+
+
+def test_hash_search_rejects_invalid_hashes() -> None:
+    query = ImageHash.ImageHash(0)
+    with pytest.raises(TypeError, match="query"):
+        ImageHash.nearest_neighbors(0, [], 0)
+    with pytest.raises(TypeError, match="hashes"):
+        ImageHash.nearest_neighbors(query, [query, 0], 0)
+    with pytest.raises(TypeError, match="hashes"):
+        ImageHash.group_hashes([query, 0], 0)
+
+    mixed_sizes = [query, ImageHash.ImageHash(0, 9)]
+    with pytest.raises(ValueError, match="sizes"):
+        ImageHash.nearest_neighbors(query, mixed_sizes, 0)
+    with pytest.raises(ValueError, match="sizes"):
+        ImageHash.group_hashes(mixed_sizes, 0)
+
+
 @pytest.mark.parametrize("text", ["", "xyz", " 00", "+00", "0x00", "0_0", "00000", "fff"])
 def test_invalid_hex(text: str) -> None:
     assert_raises(ValueError, lambda: ImageHash.hex_to_hash(text))

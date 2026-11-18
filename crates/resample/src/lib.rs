@@ -484,7 +484,7 @@ fn reduce_pixels<const C: usize>(
 }
 
 #[pyfunction(signature = (image, size, method, bounds, reducing_gap=None, progress=None))]
-fn ops_resize(
+pub fn ops_resize(
     py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>, progress: Option<Py<PyAny>>,
 ) -> PyResult<Image> {
     let progress = Progress::new(py, progress)?;

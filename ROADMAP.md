@@ -583,7 +583,7 @@ with new processing semantics exposed explicitly.
       with the same hexadecimal form and Hamming distance
 - [ ] **Focus measure** — variance of Laplacian or Tenengrad on a grayscale
       view, for ranking frames or rejecting blurry captures
-- [ ] **Hash nearest neighbors** — group or query a list of hashes by Hamming
+- [x] **Hash nearest neighbors** — group or query a list of hashes by Hamming
       ball, for duplicate detection on top of the existing hash types
 
 ---

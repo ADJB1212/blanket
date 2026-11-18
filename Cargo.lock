@@ -671,6 +671,7 @@ dependencies = [
  "blanket-math",
  "pyo3",
  "rayon",
+ "rustc-hash",
  "rustfft",
  "ssimulacra2",
 ]
