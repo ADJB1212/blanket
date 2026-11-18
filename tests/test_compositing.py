@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import random
+from struct import pack, unpack
 
 import pytest
 from helpers import assert_pixels_equal, assert_raises, image_pair, new_pair
@@ -71,6 +72,22 @@ def test_paste_handles_binary_mask_blocks_and_fractional_tails(mask_mode: str) -
     assert_pixels_equal(actual, expected)
 
 
+@pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
+@pytest.mark.parametrize("mask_mode", ["L", "RGBA"])
+def test_masked_float_paste_preserves_finite_large_samples(mode, channels, mask_mode):
+    maximum = unpack("<f", bytes.fromhex("ffff7f7f"))[0]
+    background = (maximum, -maximum, maximum) * 3
+    foreground = (maximum, -maximum, -maximum) * 3
+    coverage = (1, 128, 254) * 3
+    expected = [(old * (255 - weight) + new * weight) / 255 for old, new, weight in zip(background, foreground, coverage, strict=True)]
+    size = (9, 1)
+    actual = Image.frombytes(mode, size, b"".join(pack("<f", x) * channels for x in background))
+    source = Image.frombytes(mode, size, b"".join(pack("<f", x) * channels for x in foreground))
+    mask_data = bytes(coverage) if mask_mode == "L" else b"".join(bytes((0, 0, 0, weight)) for weight in coverage)
+    actual.paste(source, mask=Image.frombytes(mask_mode, size, mask_data))
+    assert actual.tobytes() == b"".join(pack("<f", x) * channels for x in expected)
+
+
 @pytest.mark.parametrize(("mode", "color"), [("L", 99), ("RGB", "red"), ("RGBA", (21, 73, 92, 111)), ("P", 3)])
 def test_paste_fill_and_alias(mode, color):
     actual, expected = Image.new(mode, (6, 5)), PIL.new(mode, (6, 5))
@@ -128,6 +145,25 @@ def test_putalpha(mode, alpha):
     expected.putalpha(pa)
     assert_pixels_equal(actual, expected)
     assert actual.info["custom"] == "kept"
+
+
+def test_putalpha_can_use_its_own_grayscale_samples():
+    image = Image.frombytes("L", (17, 1), bytes(range(17)))
+    image.putalpha(image)
+    assert image.mode == "LA"
+    assert image.getbands() == ("L", "A")
+    assert image.getdata() == [(sample, sample) for sample in range(17)]
+
+
+@pytest.mark.parametrize("mode,color", [("RGBa", (11, 22, 33, 64)), ("La", (21, 64)), ("RGBX", (9, 40, 72, 19))])
+def test_putalpha_rejection_leaves_original_mode_and_pixels(mode, color):
+    image = Image.new(mode, (3, 2), color)
+    alpha = Image.new("L", image.size, 44).convert("L", bit_depth=12)
+    before = image.getbands(), image.tobytes()
+    with pytest.raises(ValueError, match="8-bit"):
+        image.putalpha(alpha)
+    assert image.mode == mode
+    assert (image.getbands(), image.tobytes()) == before
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

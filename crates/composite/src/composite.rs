@@ -308,7 +308,8 @@ fn paste_float(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_ch
         let old = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from_le_bytes(dst[(i + c) * 4..(i + c + 1) * 4].try_into().unwrap())));
         let new = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from_le_bytes(src[(i + c) * 4..(i + c + 1) * 4].try_into().unwrap())));
         let a = Simd::<f32, 8>::from_array(std::array::from_fn(|c| f32::from(mask[(i + c) / channels * mask_channels + mask_channels - 1])));
-        let mixed = (old * (Simd::splat(255.0) - a) + new * a) / Simd::splat(255.0);
+        let weight = a.cast::<f64>();
+        let mixed = ((old.cast::<f64>() * (Simd::splat(255.0) - weight) + new.cast::<f64>() * weight) / Simd::splat(255.0)).cast::<f32>();
         let result = a.simd_eq(Simd::splat(0.0)).select(old, a.simd_eq(Simd::splat(255.0)).select(new, mixed));
         for (c, v) in result.to_array().iter().enumerate() {
             dst[(i + c) * 4..(i + c + 1) * 4].copy_from_slice(&v.to_le_bytes());
@@ -321,7 +322,8 @@ fn paste_float(dst: &mut [u8], src: &[u8], mask: &[u8], channels: usize, mask_ch
         } else if a != 0 {
             let old = f32::from_le_bytes(dst[i * 4..i * 4 + 4].try_into().unwrap());
             let new = f32::from_le_bytes(src[i * 4..i * 4 + 4].try_into().unwrap());
-            dst[i * 4..i * 4 + 4].copy_from_slice(&((old * f32::from(255 - a) + new * f32::from(a)) / 255.0).to_le_bytes());
+            let mixed = (f64::from(old) * f64::from(255 - a) + f64::from(new) * f64::from(a)) / 255.0;
+            dst[i * 4..i * 4 + 4].copy_from_slice(&(mixed as f32).to_le_bytes());
         }
     }
 }
@@ -607,19 +609,19 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
     if alpha.pixel_mode() != PixelMode::L || alpha.palette().is_some() || (alpha.width(), alpha.height()) != (image.width(), image.height()) {
         return Err(PyValueError::new_err("illegal image mode or size for alpha"));
     }
-    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
-        let mode = if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" };
-        let converted = blanket_image_ops::convert::convert(py, image, mode, None)?;
-        image.replace_storage(converted)?;
-    }
     if blanket_core::samples::supported(image) {
         if !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba) {
             return Err(PyValueError::new_err("high-depth putalpha requires RGB or RGBA"));
         }
         return py.detach(|| crate::high_depth::putalpha(image, alpha));
     }
-    let source = image.pixel_data()?;
     let alpha = alpha.pixel_data()?;
+    if matches!(image.pixel_mode(), PixelMode::PremulLa | PixelMode::PremulRgba | PixelMode::Rgbx) {
+        let mode = if image.pixel_mode() == PixelMode::PremulLa { "LA" } else { "RGBA" };
+        let converted = blanket_image_ops::convert::convert(py, image, mode, None)?;
+        image.replace_storage(converted)?;
+    }
+    let source = image.pixel_data()?;
     if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Pa) {
         let pixels = image.pixels_mut().expect("validated open image");
         py.detach(|| {
@@ -679,7 +681,7 @@ fn image_putalpha(py: Python<'_>, image: &mut Image, alpha: &Image) -> PyResult<
 mod tests {
     #[test]
     fn float_paste_matches_scalar_with_guards() {
-        let values = [-0.0_f32, 0.0, -2.0, 0.5, 1e30, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        let values = [-0.0_f32, 0.0, -2.0, 0.5, f32::MAX, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
         for channels in [1, 3, 4] {
             for mc in [1, 4] {
                 for count in 0..35 {
@@ -701,7 +703,8 @@ mod tests {
                             } else if a != 0 {
                                 let old = f32::from_le_bytes(expected[begin..begin + 4].try_into().unwrap());
                                 let new = f32::from_le_bytes(source[begin..begin + 4].try_into().unwrap());
-                                expected[begin..begin + 4].copy_from_slice(&((old * f32::from(255 - a) + new * f32::from(a)) / 255.0).to_le_bytes());
+                                let mixed = (f64::from(old) * f64::from(255 - a) + f64::from(new) * f64::from(a)) / 255.0;
+                                expected[begin..begin + 4].copy_from_slice(&(mixed as f32).to_le_bytes());
                             }
                         }
                         super::paste_float(

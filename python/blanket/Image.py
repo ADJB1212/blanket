@@ -1276,9 +1276,9 @@ class Image:
             result.info.update(self._metadata_info())
             return result
         transparency = self.info.get("transparency")
-        if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None and self.bit_depth == 8:
+        if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None:
             key = [transparency] if isinstance(transparency, int) else list(cast("Iterable[int]", transparency))
-            result = Image(image_convert_transparent_alpha(self._native, mode, key))
+            result = Image(image_convert_transparent_alpha(self._native, mode, key, bit_depth))
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
@@ -1331,18 +1331,26 @@ class Image:
     def _conversion_transparency(self, result: Image) -> None:
         """Update transparency metadata across compatible mode conversions."""
         transparency = self.info.get("transparency")
-        if transparency is None or self.mode == result.mode:
+        if transparency is None or (self.mode == result.mode and self.bit_depth == result.bit_depth):
+            return
+        alpha_modes = ("LA", "La", "PA", "RGBA", "RGBa", "RGBA;F")
+        if self.mode in alpha_modes and result.mode not in alpha_modes:
+            result.info.pop("transparency", None)
             return
         if self.mode not in ("L", "RGB", "P") or result.mode not in ("L", "RGB", "P"):
             return
-        if not isinstance(transparency, (int, tuple)):
+        if not isinstance(transparency, (int, tuple, list)):
             result.info.pop("transparency", None)
             return
-        key = new(self.mode, (1, 1), transparency)
+        if self.bit_depth > 8:
+            samples = _png_key_samples(self.mode, transparency, (1 << self.bit_depth) - 1)
+            key = frombytes(self.mode, (1, 1), b"".join(sample.to_bytes(2, "little") for sample in samples), bit_depth=self.bit_depth)
+        else:
+            key = new(self.mode, (1, 1), tuple(transparency) if isinstance(transparency, list) else transparency)
         if self.palette is not None:
             key.putpalette(self.palette)
         if result.mode != "P":
-            result.info["transparency"] = key.convert(result.mode).getpixel((0, 0))
+            result.info["transparency"] = key.convert(result.mode, bit_depth=result.bit_depth).getpixel((0, 0))
         elif self.mode == "L":
             result.info["transparency"] = transparency
         elif result.palette is not None:
@@ -2345,6 +2353,8 @@ class Image:
             return
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
+        if band is self:
+            band = band.copy()
         self._ensure_mutable()
         image_putalpha(self._native, band._native)
         self.readonly = 0
@@ -3423,7 +3433,19 @@ class Image:
                     native.set_palette_alpha(index=transparency)
                 else:
                     native.set_palette_alpha(alpha=transparency)
+        png_key = None
+        if output_format == "PNG" and self.mode in ("1", "L", "RGB"):
+            explicit_key = "transparency" in options
+            color_key = options.pop("transparency", self.info.get("transparency"))
+            if color_key is not None:
+                try:
+                    png_key = _png_color_key(self.mode, color_key, self.bit_depth)
+                except (TypeError, ValueError):
+                    if explicit_key:
+                        raise
         metadata = save_metadata(self, output_format, options, strip=compressor is not None)
+        if png_key is not None and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
+            metadata[3].append((b"tRNS", png_key, False))
         values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
@@ -3431,7 +3453,8 @@ class Image:
             native,
             output_format,
             **values,
-            compressor=None if compressor is None else compressor._native,
+            # PNG candidates can change sample values or the color type, invalidating the key.
+            compressor=None if compressor is None or png_key is not None else compressor._native,
             target_size=None if compressor is None else compressor.target_size,
             output=output,
             icc_profile=metadata[2],
@@ -4541,6 +4564,26 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
             raise UnsupportedCodecError(f"unsupported TIFF compression {compression!r}", format=format, operation="encode")
         values["tiff_compression"] = methods[compression]
     return values
+
+
+def _png_key_samples(mode: str, value: object, maximum: int) -> list[int]:
+    """Validate the samples of a grayscale or RGB transparency key."""
+    if mode == "RGB":
+        if not isinstance(value, (tuple, list)) or len(value) != 3:
+            raise TypeError("RGB transparency must contain three samples")
+        samples = value
+    else:
+        samples = (value,)
+    return [_bounded_int("transparency", sample, 0, maximum) for sample in samples]
+
+
+def _png_color_key(mode: str, value: object, depth: int = 8) -> bytes:
+    """Encode a PNG transparency key in the same sample range as the encoded raster."""
+    maximum = 1 if mode == "1" else (1 << depth) - 1
+    keys = _png_key_samples(mode, value, maximum)
+    if depth > 8:
+        keys = [(sample * 65535 + maximum // 2) // maximum for sample in keys]
+    return struct.pack(">H" if len(keys) == 1 else ">3H", *keys)
 
 
 def _bounded_int(name: str, value: object, minimum: int, maximum: int) -> int:

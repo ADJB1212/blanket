@@ -121,6 +121,73 @@ def test_file_save_matches_stream(tmp_path: Path, mode: str, depth: int, format:
         assert_pixels_equal(actual, expected)
 
 
+@pytest.mark.parametrize("mode,key,other", [("1", 1, 0), ("L", 42, 9), ("RGB", (4, 5, 6), (7, 8, 9))])
+@pytest.mark.parametrize("explicit", [False, True])
+def test_png_save_preserves_transparent_color_key(mode, key, other, explicit):
+    image = Image.new(mode, (2, 1), key)
+    image.putpixel((1, 0), other)
+    if not explicit:
+        image.info["transparency"] = key
+    data = image.encode("PNG", **({"transparency": key} if explicit else {}))
+    for decoder in (Image, PillowImage):
+        with decoder.open(BytesIO(data)) as decoded:
+            rgba = decoded.convert("RGBA")
+            assert rgba.getpixel((0, 0))[3] == 0
+            assert rgba.getpixel((1, 0))[3] == 255
+    assert image.info.get("transparency") == (None if explicit else key)
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_png_save_scales_wide_transparency_key_with_samples(depth):
+    key = 343
+    image = Image.frombytes("L", (2, 1), key.to_bytes(2, "little") + (key + 1).to_bytes(2, "little"), bit_depth=depth)
+    data = image.encode("PNG", transparency=key)
+    decoded = Image.decode(data).convert("RGBA")
+    assert decoded.getpixel((0, 0))[3] == 0
+    assert decoded.getpixel((1, 0))[3] == (1 << decoded.bit_depth) - 1
+
+
+def test_png_save_after_depth_conversion_uses_rescaled_key():
+    image = Image.frombytes("L", (2, 1), bytes((42, 9)))
+    image.info["transparency"] = 42
+    converted = image.convert("L", bit_depth=12)
+    assert converted.info["transparency"] == converted.getpixel((0, 0))
+    decoded = Image.decode(converted.encode("PNG")).convert("RGBA")
+    assert decoded.getpixel((0, 0))[3] == 0
+    assert decoded.getpixel((1, 0))[3] > 0
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize("source_depth,out_depth", [(8, 12), (12, 12), (16, 8)])
+def test_keyed_conversion_to_rgba_honors_depth(mode, source_depth, out_depth):
+    image = Image.new(mode, (2, 1), 42).convert(mode, bit_depth=source_depth)
+    image.putpixel((1, 0), 9 if mode == "L" else (9, 10, 11))
+    image.info["transparency"] = image.getpixel((0, 0))
+    converted = image.convert("RGBA", bit_depth=out_depth)
+    assert converted.bit_depth == out_depth
+    assert converted.getpixel((0, 0))[3] == 0
+    assert converted.getpixel((1, 0))[3] == (1 << out_depth) - 1
+    assert "transparency" not in converted.info
+
+
+def test_png_save_after_discarding_decoded_alpha_does_not_restore_color_key():
+    original = Image.new("RGB", (2, 1), (4, 5, 6))
+    rgba = Image.decode(original.encode("PNG", transparency=(4, 5, 6)))
+    grayscale = rgba.convert("L")
+    assert "transparency" not in grayscale.info
+    assert Image.decode(grayscale.encode("PNG")).mode == "L"
+
+
+@pytest.mark.parametrize("compressor", [LosslessImageCompressor(), LossyImageCompressor(max_rmse=255)])
+def test_png_compressor_keeps_transparent_color_key(compressor):
+    source = Image.frombytes("RGB", (2, 1), bytes((4, 5, 6, 7, 8, 9)))
+    source.info["transparency"] = (4, 5, 6)
+    encoded = source.encode("PNG", compressor=compressor)
+    decoded = Image.decode(encoded).convert("RGBA")
+    assert decoded.getdata() == [(4, 5, 6, 0), (7, 8, 9, 255)]
+    assert len(encoded) <= len(source.encode("PNG"))
+
+
 def test_file_save_encoding_failure_preserves_existing_file(tmp_path: Path) -> None:
     path = tmp_path / "image.ico"
     path.write_bytes(b"original")

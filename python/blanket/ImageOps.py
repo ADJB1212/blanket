@@ -393,7 +393,7 @@ def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resam
     """
     size = ops_contain_size(image.size, size)
     if min(size) == 0:
-        return Image.new(image.mode, size)
+        return image.crop((0, 0, *size))
     return _resize(image, size, method)
 
 
@@ -419,7 +419,7 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
     empty = image.height == 0 or size[1] == 0
     size = ops_cover_size(image.size, size)
     if empty:
-        return Image.new(image.mode, size)
+        return image.crop((0, 0, *size))
     return _resize(image, size, method)
 
 
@@ -657,7 +657,7 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
     """
     box = ops_fit_box(image.size, size, bleed, centering)
     if box is None:
-        return Image.new(image.mode, size)
+        return image.crop((0, 0, *size))
     return _resize(image, size, method, box)
 
 

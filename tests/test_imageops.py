@@ -68,6 +68,16 @@ def test_small_geometry(method, source, target, color, expected) -> None:
     assert_image_properties(result, **expected)
 
 
+@pytest.mark.parametrize("method, source_size, target, expected", [("contain", (7, 1), (2, 2), (2, 0)), ("cover", (7, 0), (4, 5), (4, 0)), ("fit", (7, 0), (4, 5), (4, 5)), ("pad", (7, 1), (2, 2), (2, 2))])
+def test_geometry_with_empty_rasters_preserves_depth_and_metadata(method, source_size, target, expected):
+    source = Image.new("RGB", source_size, "red").convert("RGB", bit_depth=12)
+    source.info["custom"] = "kept"
+    result = getattr(ImageOps, method)(source, target)
+    assert (result.mode, result.size, result.bit_depth) == ("RGB", expected, 12)
+    assert result.info["custom"] == "kept"
+    assert result.tobytes() == bytes(expected[0] * expected[1] * 6)
+
+
 @pytest.mark.parametrize("new_size", ((256, 256), (512, 256), (256, 512)))
 def test_contain(new_size: tuple[int, int]) -> None:
     im = hopper()

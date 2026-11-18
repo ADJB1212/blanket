@@ -113,28 +113,36 @@ fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUni
     }
 }
 
-#[pyfunction(name = "image_convert_transparent_alpha")]
-pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &str, key: Vec<u8>) -> PyResult<Image> {
+#[pyfunction(name = "image_convert_transparent_alpha", signature = (source_image, mode, key, bit_depth=None))]
+pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &str, key: Vec<u16>, bit_depth: Option<u8>) -> PyResult<Image> {
+    let maximum = (1_u32 << source_image.bit_depth().min(16)) - 1;
     if !matches!(source_image.pixel_mode(), PixelMode::L | PixelMode::Rgb)
         || key.len() != source_image.pixel_mode().channels()
-        || source_image.bit_depth() != 8
+        || source_image.palette().is_some()
+        || key.iter().any(|&value| u32::from(value) > maximum)
     {
         return Err(PyValueError::new_err("invalid transparency color"));
     }
     let destination = if matches!(mode, "LA" | "La") { "LA" } else { "RGBA" };
-    let mut image = convert(py, source_image, destination, None)?;
-    let channels = image.pixel_mode().channels();
-    let source = source_image.pixel_data()?;
+    let mut image = convert(py, source_image, destination, if destination == mode { bit_depth } else { Some(8) })?;
+    let sample_bytes = usize::from(source_image.bit_depth().div_ceil(8));
+    let stride = image.raw_bytes_per_pixel();
+    let alpha_start = stride - usize::from(image.bit_depth().div_ceil(8));
+    let red = ((u32::from(key[0]) * 255 + maximum / 2) / maximum) as u8;
+    let key: Vec<u8> = key.into_iter().flat_map(|value| value.to_le_bytes().into_iter().take(sample_bytes)).collect();
+    let source = source_image.raw_data()?;
     let output = image.pixels_mut().unwrap();
     py.detach(|| {
-        for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(channels)) {
-            output[channels - 1] = if pixel == key { 0 } else { 255 };
-            if pixel == key && source_image.pixel_mode() == PixelMode::Rgb && destination == "LA" {
-                output[0] = key[0];
+        for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(stride)) {
+            if pixel == key {
+                output[alpha_start..].fill(0);
+                if source_image.pixel_mode() == PixelMode::Rgb && destination == "LA" {
+                    output[0] = red;
+                }
             }
         }
     });
-    if mode == destination { Ok(image) } else { convert(py, &image, mode, None) }
+    if mode == destination { Ok(image) } else { convert(py, &image, mode, bit_depth) }
 }
 
 #[pyfunction(name = "image_convert_dithered_bilevel")]

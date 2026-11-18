@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os", "collections.abc", "math", "itertools", "struct"}
+__lazy_modules__ = {"os", "collections.abc", "math", "itertools"}
 
 import math
 import os
-import struct
 from collections.abc import Iterable
 from itertools import islice, repeat
 from typing import TYPE_CHECKING
@@ -18,7 +17,7 @@ from ._blanket import _encode_sequence, _png_frame_plan
 from ._exif import save_metadata
 from ._io import write_bytes
 from .errors import UnsupportedCodecError
-from .Image import Image, _bounded_int, _save_options
+from .Image import Image, _bounded_int, _png_color_key, _save_options
 
 
 def _png_regions(
@@ -139,14 +138,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 transparency = frames[0].info.get("transparency")
                 if any(frame.info.get("transparency") != transparency for frame in frames[1:]):
                     png_mode = "RGBA"
-                elif transparency is not None and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
-                    if png_mode == "L":
-                        metadata[3].append((b"tRNS", struct.pack(">H", _bounded_int("transparency", transparency, 0, 255)), False))
-                    elif png_mode == "RGB":
-                        if not isinstance(transparency, tuple) or len(transparency) != 3:
-                            raise TypeError("RGB transparency must be an RGB tuple")
-                        payload = struct.pack(">3H", *(_bounded_int("transparency", sample, 0, 255) for sample in transparency))
-                        metadata[3].append((b"tRNS", payload, False))
+                elif transparency is not None and png_mode in ("L", "RGB") and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
+                    metadata[3].append((b"tRNS", _png_color_key(png_mode, transparency), False))
             if png_mode == "P":
                 png_palette = frames[0].palette
                 palette_values = frames[0].getpalette("RGBA")

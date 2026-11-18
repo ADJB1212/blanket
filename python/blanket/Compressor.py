@@ -51,7 +51,7 @@ class LossyImageCompressor:
     JPEG, WebP, JPEG XL, AVIF, and HEIF/HEIC adaptively search lower codec
     quality settings using the measured error of each trial.
     Explicit ``lossless=True`` disables additional loss. Other formats and
-    indexed or high-bit-depth PNG retain lossless optimization behavior.
+    indexed, color-keyed, or high-bit-depth PNG retain lossless behavior.
     The normal save remains eligible, so output cannot grow relative to it.
     The source image is unchanged and this configuration is reusable.
     Metadata is always stripped, including explicit metadata options.
@@ -220,7 +220,7 @@ class LosslessImageCompressor:
     it does not turn a lossy save into a pixel-exact copy of the input image.
     Opened images are encoded from their current pixels, not their source
     bitstream. Quality and lossless settings retain their normal meaning.
-    High-bit-depth and indexed PNG and other formats keep normal encoding.
+    High-bit-depth, indexed, and color-keyed PNG keep normal encoding.
     Metadata is always stripped, including explicit metadata options. The object is reusable and affects
     only the save it is passed to, without modifying the image.
 

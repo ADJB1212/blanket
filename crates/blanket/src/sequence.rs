@@ -24,7 +24,7 @@ fn rgba(py: Python<'_>, image: &Image, transparency: Option<&Bound<'_, PyAny>>) 
         && let Some(value) = transparency
     {
         let key = if value.is_instance_of::<PyInt>() { vec![value.extract()?] } else { value.extract()? };
-        return convert_transparent_alpha(py, image, "RGBA", key);
+        return convert_transparent_alpha(py, image, "RGBA", key, None);
     }
     convert(py, image, "RGBA", None)
 }
