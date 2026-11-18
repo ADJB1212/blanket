@@ -17,10 +17,9 @@ extra_checks = []
 itertools = { version = "0.14", default-features = false, features = ["use_std"] }
 roots = "0.0.8"
 smallvec = { version = "1", default-features = false, features = ["const_generics"] }
-ouroboros = { version = "0.18", default-features = false, features = ["std"] }
 
 [dev-dependencies]
-rand = "0.9"
+rand = { version = "0.10", default-features = false, features = ["std", "std_rng"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(extra_checks)'] }

@@ -1,3 +1,7 @@
+use std::simd::Simd;
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdFloat;
+
 use super::basis::*;
 use super::curve::*;
 use crate::geo::*;
@@ -302,7 +306,12 @@ fn chords_for_points<Point: Coordinate>(points: &[Point]) -> Vec<f64> {
     }
 
     // Normalize to the range 0..1
-    for distance in distances.iter_mut() {
+    let scale = Simd::<f64, 4>::splat(total_distance);
+    let (blocks, tail) = distances.as_chunks_mut::<4>();
+    for block in blocks {
+        *block = (Simd::from_array(*block) / scale).to_array();
+    }
+    for distance in tail {
         *distance /= total_distance;
     }
 
@@ -312,18 +321,63 @@ fn chords_for_points<Point: Coordinate>(points: &[Point]) -> Vec<f64> {
 ///
 /// Normalizes a set of predicted t values to between 0-1
 ///
-fn chords_for_predicted_t(predicted_t: &[f64]) -> Vec<f64> {
-    // Determine the minimum and maximum values in the predicted range
-    let Some((min_t, max_t)) = predicted_t
-        .iter()
-        .fold(None, |minmax, &val| if let Some((min, max)) = minmax { Some((val.min(min), val.max(max))) } else { Some((val, val)) })
-    else {
-        return vec![];
-    };
+fn cubic_basis_weights(chords: &[f64]) -> Vec<[f64; 4]> {
+    let mut weights = vec![[0.0; 4]; chords.len()];
+    let (blocks, tail) = chords.as_chunks::<4>();
+    let (out_blocks, out_tail) = weights.as_chunks_mut::<4>();
+    for (block, out) in blocks.iter().zip(out_blocks) {
+        let t = Simd::<f64, 4>::from_slice(block);
+        let u = Simd::splat(1.0) - t;
+        let uu = u * u;
+        let tt = t * t;
+        let b0 = (uu * u).to_array();
+        let b1 = (Simd::splat(3.0) * t * uu).to_array();
+        let b2 = (Simd::splat(3.0) * tt * u).to_array();
+        let b3 = (tt * t).to_array();
+        for lane in 0..4 {
+            out[lane] = [b0[lane], b1[lane], b2[lane], b3[lane]];
+        }
+    }
+    for (chord, out) in tail.iter().zip(out_tail) {
+        let inverse = 1.0 - chord;
+        let inverse_squared = inverse * inverse;
+        *out = [inverse_squared * inverse, 3.0 * chord * inverse_squared, 3.0 * chord * chord * inverse, chord * chord * chord];
+    }
+    weights
+}
 
-    // The 'chords' are the predicted 't' values mapped to a 0-1 range
+fn chords_for_predicted_t(predicted_t: &[f64]) -> Vec<f64> {
+    if predicted_t.is_empty() {
+        return vec![];
+    }
+
+    let (blocks, tail) = predicted_t.as_chunks::<4>();
+    let mut min_v = Simd::<f64, 4>::splat(f64::INFINITY);
+    let mut max_v = Simd::<f64, 4>::splat(f64::NEG_INFINITY);
+    for block in blocks {
+        let values = Simd::from_slice(block);
+        min_v = min_v.simd_min(values);
+        max_v = max_v.simd_max(values);
+    }
+    let mut min_t = min_v.reduce_min();
+    let mut max_t = max_v.reduce_max();
+    for &val in tail {
+        min_t = val.min(min_t);
+        max_t = val.max(max_t);
+    }
+
     let diff = max_t - min_t;
-    predicted_t.iter().map(|t| (*t - min_t) / diff).collect()
+    let mut chords = Vec::with_capacity(predicted_t.len());
+    let min_s = Simd::<f64, 4>::splat(min_t);
+    let diff_s = Simd::<f64, 4>::splat(diff);
+    for block in blocks {
+        let values = (Simd::from_slice(block) - min_s) / diff_s;
+        chords.extend_from_slice(&values.to_array());
+    }
+    for &val in tail {
+        chords.push((val - min_t) / diff);
+    }
+    chords
 }
 
 ///
@@ -333,17 +387,8 @@ fn generate_bezier<Curve: BezierCurveFactory>(
     points: &[Curve::Point], chords: &[f64], start_tangent: &Curve::Point, end_tangent: &Curve::Point,
 ) -> Curve {
     // Precompute the RHS as 'a'
-    let a: Vec<_> = chords
-        .iter()
-        .map(|chord| {
-            let inverse_chord = 1.0 - chord;
-
-            let b1 = 3.0 * chord * (inverse_chord * inverse_chord);
-            let b2 = 3.0 * chord * chord * inverse_chord;
-
-            (*start_tangent * b1, *end_tangent * b2)
-        })
-        .collect();
+    let basis = cubic_basis_weights(chords);
+    let a: Vec<_> = basis.iter().map(|[_, b1, b2, _]| (*start_tangent * *b1, *end_tangent * *b2)).collect();
 
     // Create the 'C' and 'X' matrices
     let mut c = [[0.0, 0.0], [0.0, 0.0]];
@@ -357,13 +402,7 @@ fn generate_bezier<Curve: BezierCurveFactory>(
         c[1][0] = c[0][1];
         c[1][1] += a[point].1.dot(&a[point].1);
 
-        let chord = chords[point];
-        let inverse_chord = 1.0 - chord;
-        let b0 = inverse_chord * inverse_chord * inverse_chord;
-        let b1 = 3.0 * chord * (inverse_chord * inverse_chord);
-        let b2 = 3.0 * chord * chord * inverse_chord;
-        let b3 = chord * chord * chord;
-
+        let [b0, b1, b2, b3] = basis[point];
         let tmp = points[point] - ((points[0] * b0) + (points[0] * b1) + (last_point * b2) + (last_point * b3));
 
         x[0] += a[point].0.dot(&tmp);

@@ -1,3 +1,4 @@
+use std::simd::Simd;
 use std::vec;
 
 #[inline]
@@ -104,26 +105,67 @@ where TXposIterator: Iterator<Item = f64>
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(x_pos) = self.x_positions.next() {
-            // Consume parabolas until we get one that intercepts its following parabola after the current x position
-            loop {
-                if let Some(next_intercept) = &self.next_intercept {
-                    if next_intercept.intercept_xpos >= x_pos {
-                        break;
-                    } else {
-                        // Move the intercept on
-                        self.current_intercept = *next_intercept;
-                        self.next_intercept = self.following_intercepts.next();
-                    }
-                } else {
+        self.x_positions.next().map(|x_pos| {
+            self.advance_to(x_pos);
+            self.current_intercept.parabola.distance_squared(x_pos)
+        })
+    }
+}
+
+impl<TXposIterator> MarchingParabolasIterator<TXposIterator>
+where TXposIterator: Iterator<Item = f64>
+{
+    /// Writes one squared distance per x position, evaluating each active parabola across up to four positions at a time.
+    pub fn extend_squared(mut self, output: &mut Vec<f64>) {
+        let mut xs = [0.0; 4];
+        let mut count = 0;
+        let mut run = self.current_intercept.parabola;
+        while let Some(x_pos) = self.x_positions.next() {
+            self.advance_to(x_pos);
+            let parabola = self.current_intercept.parabola;
+            if count > 0 && (parabola.xpos != run.xpos || parabola.ypos != run.ypos) {
+                store_parabola_run(run, &xs, count, output);
+                count = 0;
+            }
+            run = parabola;
+            xs[count] = x_pos;
+            count += 1;
+            if count == 4 {
+                store_parabola_run(run, &xs, count, output);
+                count = 0;
+            }
+        }
+        if count > 0 {
+            store_parabola_run(run, &xs, count, output);
+        }
+    }
+
+    #[inline]
+    fn advance_to(&mut self, x_pos: f64) {
+        loop {
+            if let Some(next_intercept) = &self.next_intercept {
+                if next_intercept.intercept_xpos >= x_pos {
                     break;
                 }
+                self.current_intercept = *next_intercept;
+                self.next_intercept = self.following_intercepts.next();
+            } else {
+                break;
             }
+        }
+    }
+}
 
-            Some(self.current_intercept.parabola.distance_squared(x_pos))
-        } else {
-            // Finished: no more x positions
-            None
+fn store_parabola_run(parabola: Parabola, xs: &[f64; 4], count: usize, output: &mut Vec<f64>) {
+    let start = output.len();
+    output.resize(start + count, 0.0);
+    if count == 4 {
+        let delta = Simd::from_array(*xs) - Simd::splat(parabola.xpos);
+        let distances = delta * delta + Simd::splat(parabola.ypos);
+        output[start..].copy_from_slice(&distances.to_array());
+    } else {
+        for (slot, x_pos) in output[start..].iter_mut().zip(xs) {
+            *slot = parabola.distance_squared(*x_pos).0;
         }
     }
 }
@@ -298,5 +340,22 @@ mod test {
         assert!((distances[7].0 - 4.0).abs() < 0.01, "{:?}", distances); // x = 8.0
         assert!((distances[8].0 - 9.0).abs() < 0.01, "{:?}", distances); // x = 9.0
         assert!((distances[9].0 - 16.0).abs() < 0.01, "{:?}", distances); // x = 10.0
+    }
+
+    #[test]
+    fn extend_squared_matches_iterator() {
+        let parabolas = vec![
+            Parabola { xpos: 4.0, ypos: 0.0 },
+            Parabola { xpos: 4.0, ypos: 1.0 },
+            Parabola { xpos: 5.0, ypos: 2.0 },
+            Parabola { xpos: 5.0, ypos: 0.0 },
+            Parabola { xpos: 6.0, ypos: 3.0 },
+            Parabola { xpos: 6.0, ypos: 0.0 },
+        ];
+        let positions = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0];
+        let scalar = MarchingParabolasIterator::new(parabolas.clone(), positions.clone()).map(|distance| distance.0).collect::<Vec<_>>();
+        let mut simd = Vec::new();
+        MarchingParabolasIterator::new(parabolas, positions).extend_squared(&mut simd);
+        assert_eq!(simd, scalar);
     }
 }

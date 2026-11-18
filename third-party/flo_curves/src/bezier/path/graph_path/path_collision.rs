@@ -423,7 +423,7 @@ impl<Point: Coordinate + Coordinate2D, Label: Copy> GraphPath<Point, Label> {
     ///
     /// Return value is a list of nearby points
     ///
-    fn sweep_for_nearby_points(&mut self, accuracy: f64) -> impl Iterator<Item = (usize, usize)> + use<Point, Label> {
+    fn sweep_for_nearby_points(&self, accuracy: f64) -> impl Iterator<Item = (usize, usize)> + use<Point, Label> {
         // Structure to attach a bounding box to a point within this graph: this limits us as to the maximum distance we can use as it's used for sweeping
         struct PointArea<'a, Point, Label>(&'a GraphPath<Point, Label>, usize);
 

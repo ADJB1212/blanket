@@ -1,3 +1,5 @@
+#![feature(portable_simd)]
+
 //!
 //! # flo_curves
 //!

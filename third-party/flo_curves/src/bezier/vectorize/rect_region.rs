@@ -154,7 +154,7 @@ impl RectRegion {
 
         // Short circuit if we're empty too
         if self.slices.is_empty() {
-            *self = new_region.clone();
+            *self = new_region;
             return;
         }
 

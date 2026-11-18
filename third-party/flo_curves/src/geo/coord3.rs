@@ -1,7 +1,21 @@
 use std::ops::*;
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdFloat;
+use std::simd::{Select, Simd};
 
 use super::coord2::*;
 use super::coordinate::*;
+
+#[inline]
+fn lanes(x: f64, y: f64, z: f64) -> Simd<f64, 4> {
+    Simd::from_array([x, y, z, 0.0])
+}
+
+#[inline]
+fn from_lanes(values: Simd<f64, 4>) -> Coord3 {
+    let [x, y, z, _] = values.to_array();
+    Coord3(x, y, z)
+}
 
 /// Represents a 2D point
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -38,7 +52,7 @@ impl Add<Coord3> for Coord3 {
 
     #[inline]
     fn add(self, rhs: Coord3) -> Coord3 {
-        Coord3(self.0 + rhs.0, self.1 + rhs.1, self.2 + rhs.2)
+        from_lanes(lanes(self.0, self.1, self.2) + lanes(rhs.0, rhs.1, rhs.2))
     }
 }
 
@@ -47,7 +61,7 @@ impl Sub<Coord3> for Coord3 {
 
     #[inline]
     fn sub(self, rhs: Coord3) -> Coord3 {
-        Coord3(self.0 - rhs.0, self.1 - rhs.1, self.2 - rhs.2)
+        from_lanes(lanes(self.0, self.1, self.2) - lanes(rhs.0, rhs.1, rhs.2))
     }
 }
 
@@ -56,7 +70,7 @@ impl Mul<f64> for Coord3 {
 
     #[inline]
     fn mul(self, rhs: f64) -> Coord3 {
-        Coord3(self.0 * rhs, self.1 * rhs, self.2 * rhs)
+        from_lanes(lanes(self.0, self.1, self.2) * Simd::splat(rhs))
     }
 }
 
@@ -117,24 +131,25 @@ impl Coordinate for Coord3 {
     }
 
     fn from_biggest_components(p1: Coord3, p2: Coord3) -> Coord3 {
-        Coord3(f64::from_biggest_components(p1.0, p2.0), f64::from_biggest_components(p1.1, p2.1), f64::from_biggest_components(p1.2, p2.2))
+        let left = lanes(p1.0, p1.1, p1.2);
+        let right = lanes(p2.0, p2.1, p2.2);
+        from_lanes(left.simd_gt(right).select(left, right))
     }
 
     fn from_smallest_components(p1: Coord3, p2: Coord3) -> Coord3 {
-        Coord3(f64::from_smallest_components(p1.0, p2.0), f64::from_smallest_components(p1.1, p2.1), f64::from_smallest_components(p1.2, p2.2))
+        let left = lanes(p1.0, p1.1, p1.2);
+        let right = lanes(p2.0, p2.1, p2.2);
+        from_lanes(left.simd_lt(right).select(left, right))
     }
 
     #[inline]
     fn distance_to(&self, target: &Coord3) -> f64 {
-        let dist_x = target.0 - self.0;
-        let dist_y = target.1 - self.1;
-        let dist_z = target.2 - self.2;
-
-        f64::sqrt(dist_x * dist_x + dist_y * dist_y + dist_z * dist_z)
+        let delta = lanes(target.0, target.1, target.2) - lanes(self.0, self.1, self.2);
+        (delta * delta).reduce_sum().sqrt()
     }
 
     #[inline]
     fn dot(&self, target: &Self) -> f64 {
-        self.0 * target.0 + self.1 * target.1 + self.2 * target.2
+        (lanes(self.0, self.1, self.2) * lanes(target.0, target.1, target.2)).reduce_sum()
     }
 }

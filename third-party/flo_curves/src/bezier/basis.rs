@@ -1,6 +1,16 @@
+use std::simd::Simd;
+
 use smallvec::*;
 
 use crate::geo::*;
+
+#[inline]
+fn bernstein_weights(t: f64) -> Simd<f64, 4> {
+    let u = 1.0 - t;
+    let uu = u * u;
+    let tt = t * t;
+    Simd::from_array([uu * u, 3.0 * uu * t, 3.0 * u * tt, tt * t])
+}
 
 ///
 /// Computes the bezier coefficients (A, B, C, D) for a bezier curve
@@ -19,14 +29,8 @@ pub fn bezier_coefficients<Point: Coordinate>(dimension: usize, w1: &Point, w2: 
 ///
 #[inline]
 pub fn basis<Point: Coordinate>(t: f64, w1: Point, w2: Point, w3: Point, w4: Point) -> Point {
-    let t_squared = t * t;
-    let t_cubed = t_squared * t;
-
-    let one_minus_t = 1.0 - t;
-    let one_minus_t_squared = one_minus_t * one_minus_t;
-    let one_minus_t_cubed = one_minus_t_squared * one_minus_t;
-
-    w1 * one_minus_t_cubed + w2 * 3.0 * one_minus_t_squared * t + w3 * 3.0 * one_minus_t * t_squared + w4 * t_cubed
+    let [b0, b1, b2, b3] = bernstein_weights(t).to_array();
+    w1 * b0 + w2 * b1 + w3 * b2 + w4 * b3
 }
 
 ///

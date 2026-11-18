@@ -1,5 +1,3 @@
-use ouroboros::*;
-
 use super::basis::*;
 use super::curve::*;
 use super::derivative::*;
@@ -30,33 +28,7 @@ where Curve: BezierCurve {
 ///
 pub fn walk_curve_evenly<Curve>(curve: &Curve, distance: f64, max_error: f64) -> EvenWalkIterator<'_, Curve>
 where Curve: BezierCurve {
-    const INITIAL_INCREMENT: f64 = 0.01;
-
-    // Too small or negative values might produce bad effects due to floating point inprecision
-    let max_error = if max_error < 1e-10 { 1e-10 } else { max_error };
-    let distance = if distance < 1e-10 { 1e-10 } else { distance };
-
-    // Compute the derivative of the curve
-    let (cp1, cp2) = curve.control_points();
-    let (wn1, wn2, wn3) = derivative4(curve.start_point(), cp1, cp2, curve.end_point());
-
-    // We can calculate the initial speed from close to the first point of the curve
-    let initial_speed = de_casteljau3(0.001, wn1, wn2, wn3).magnitude();
-    let initial_speed = if distance / (initial_speed.abs()) > 0.25 { de_casteljau3(0.01, wn1, wn2, wn3).magnitude() } else { initial_speed };
-
-    let initial_increment = if initial_speed.abs() < 0.00000001 { INITIAL_INCREMENT } else { distance / initial_speed };
-
-    let initial_increment = if initial_increment > 0.25 { INITIAL_INCREMENT } else { initial_increment };
-
-    EvenWalkIterator {
-        last_point: curve.start_point(),
-        curve: curve,
-        derivative: (wn1, wn2, wn3),
-        last_t: 0.0,
-        last_increment: initial_increment,
-        distance: distance,
-        max_error: max_error,
-    }
+    EvenWalkIterator { curve, state: EvenWalkState::new(curve, distance, max_error) }
 }
 
 ///
@@ -100,9 +72,11 @@ impl<'a, Curve: BezierCurve> Iterator for UnevenWalkIterator<'a, Curve> {
 /// Iterator implementation that performs an even walk along a curve
 ///
 pub struct EvenWalkIterator<'a, Curve: BezierCurve> {
-    /// The curve that is being walked
     curve: &'a Curve,
+    state: EvenWalkState<Curve>,
+}
 
+struct EvenWalkState<Curve: BezierCurve> {
     /// The wn1, wn2, wn3 of the derivative of the curve
     derivative: (Curve::Point, Curve::Point, Curve::Point),
 
@@ -151,10 +125,35 @@ impl<'a, Curve: BezierCurve> Iterator for EvenWalkIterator<'a, Curve> {
     type Item = CurveSection<'a, Curve>;
 
     fn next(&mut self) -> Option<Self::Item> {
+        self.state.next_section(self.curve)
+    }
+}
+
+impl<Curve: BezierCurve> EvenWalkState<Curve> {
+    fn new(curve: &Curve, distance: f64, max_error: f64) -> Self {
+        const INITIAL_INCREMENT: f64 = 0.01;
+
+        // Clamp small or negative values to avoid floating-point precision problems.
+        let max_error = if max_error < 1e-10 { 1e-10 } else { max_error };
+        let distance = if distance < 1e-10 { 1e-10 } else { distance };
+
+        let (cp1, cp2) = curve.control_points();
+        let (wn1, wn2, wn3) = derivative4(curve.start_point(), cp1, cp2, curve.end_point());
+
+        // Estimate the initial speed near the start of the curve.
+        let initial_speed = de_casteljau3(0.001, wn1, wn2, wn3).magnitude();
+        let initial_speed = if distance / initial_speed.abs() > 0.25 { de_casteljau3(0.01, wn1, wn2, wn3).magnitude() } else { initial_speed };
+
+        let initial_increment = if initial_speed.abs() < 0.00000001 { INITIAL_INCREMENT } else { distance / initial_speed };
+        let initial_increment = if initial_increment > 0.25 { INITIAL_INCREMENT } else { initial_increment };
+
+        Self { last_point: curve.start_point(), derivative: (wn1, wn2, wn3), last_t: 0.0, last_increment: initial_increment, distance, max_error }
+    }
+
+    fn next_section<'a>(&mut self, curve: &'a Curve) -> Option<CurveSection<'a, Curve>> {
         const MAX_ITERATIONS: usize = 32;
 
         // Gather values
-        let curve = self.curve;
         let (wn1, wn2, wn3) = self.derivative;
         let distance = self.distance;
         let max_error = self.max_error;
@@ -246,7 +245,7 @@ impl<'a, Curve: BezierCurve> Iterator for EvenWalkIterator<'a, Curve> {
         self.last_t = next_t;
 
         // Return the section that we found
-        Some(self.curve.section(last_t, next_t))
+        Some(curve.section(last_t, next_t))
     }
 }
 
@@ -258,9 +257,10 @@ impl<'a, Curve: BezierCurve, DistanceIter: 'a + Iterator<Item = f64>> Iterator f
         if let Some(distance_iterator) = &mut self.distance_iterator {
             if let Some(distance) = distance_iterator.next() {
                 // Update the distance in the 'even' iterator
-                let ratio = distance / self.even_iterator.distance;
-                self.even_iterator.distance = distance;
-                self.even_iterator.last_increment *= ratio;
+                let state = &mut self.even_iterator.state;
+                let ratio = distance / state.distance;
+                state.distance = distance;
+                state.last_increment *= ratio;
             } else {
                 // No more distance changes
                 self.distance_iterator = None;
@@ -283,38 +283,8 @@ pub fn walk_curve_evenly_map<TCurve, TResult>(
     curve: TCurve, distance: f64, max_error: f64, map_fn: impl for<'a> Fn(CurveSection<'a, TCurve>) -> TResult,
 ) -> impl Iterator<Item = TResult>
 where TCurve: 'static + BezierCurve {
-    EvenWalkMapIteratorBuilder { curve: curve, map_fn: map_fn, walk_iterator_builder: move |curve| walk_curve_evenly(curve, distance, max_error) }
-        .build()
-}
-
-#[self_referencing]
-struct EvenWalkMapIterator<TCurve, TMapFn, TResult>
-where
-    TCurve: 'static + BezierCurve,
-    TMapFn: for<'a> Fn(CurveSection<'a, TCurve>) -> TResult,
-{
-    curve: TCurve,
-    map_fn: TMapFn,
-
-    #[borrows(curve)]
-    #[not_covariant]
-    walk_iterator: EvenWalkIterator<'this, TCurve>,
-}
-
-impl<TCurve, TMapFn, TResult> Iterator for EvenWalkMapIterator<TCurve, TMapFn, TResult>
-where
-    TCurve: 'static + BezierCurve,
-    TMapFn: for<'a> Fn(CurveSection<'a, TCurve>) -> TResult,
-{
-    type Item = TResult;
-
-    #[inline]
-    fn next(&mut self) -> Option<TResult> {
-        self.with_mut(|fields| {
-            let next = fields.walk_iterator.next();
-            let next = next.map(|next| (fields.map_fn)(next));
-
-            next
-        })
-    }
+    // Keep the iterator movable even when the curve itself is not Unpin.
+    let curve = Box::new(curve);
+    let mut state = EvenWalkState::new(curve.as_ref(), distance, max_error);
+    std::iter::from_fn(move || state.next_section(curve.as_ref()).map(&map_fn))
 }

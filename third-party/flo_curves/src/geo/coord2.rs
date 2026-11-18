@@ -1,6 +1,20 @@
 use std::ops::*;
+use std::simd::cmp::SimdPartialOrd;
+use std::simd::num::SimdFloat;
+use std::simd::{Select, Simd};
 
 use super::coordinate::*;
+
+#[inline]
+fn lanes(x: f64, y: f64) -> Simd<f64, 2> {
+    Simd::from_array([x, y])
+}
+
+#[inline]
+fn from_lanes(values: Simd<f64, 2>) -> Coord2 {
+    let [x, y] = values.to_array();
+    Coord2(x, y)
+}
 
 /// Represents a 2D point
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -39,7 +53,7 @@ impl Add<Coord2> for Coord2 {
 
     #[inline]
     fn add(self, rhs: Coord2) -> Coord2 {
-        Coord2(self.0 + rhs.0, self.1 + rhs.1)
+        from_lanes(lanes(self.0, self.1) + lanes(rhs.0, rhs.1))
     }
 }
 
@@ -48,7 +62,7 @@ impl Sub<Coord2> for Coord2 {
 
     #[inline]
     fn sub(self, rhs: Coord2) -> Coord2 {
-        Coord2(self.0 - rhs.0, self.1 - rhs.1)
+        from_lanes(lanes(self.0, self.1) - lanes(rhs.0, rhs.1))
     }
 }
 
@@ -57,7 +71,7 @@ impl Mul<f64> for Coord2 {
 
     #[inline]
     fn mul(self, rhs: f64) -> Coord2 {
-        Coord2(self.0 * rhs, self.1 * rhs)
+        from_lanes(lanes(self.0, self.1) * Simd::splat(rhs))
     }
 }
 
@@ -111,23 +125,25 @@ impl Coordinate for Coord2 {
     }
 
     fn from_biggest_components(p1: Coord2, p2: Coord2) -> Coord2 {
-        Coord2(f64::from_biggest_components(p1.0, p2.0), f64::from_biggest_components(p1.1, p2.1))
+        let left = lanes(p1.0, p1.1);
+        let right = lanes(p2.0, p2.1);
+        from_lanes(left.simd_gt(right).select(left, right))
     }
 
     fn from_smallest_components(p1: Coord2, p2: Coord2) -> Coord2 {
-        Coord2(f64::from_smallest_components(p1.0, p2.0), f64::from_smallest_components(p1.1, p2.1))
+        let left = lanes(p1.0, p1.1);
+        let right = lanes(p2.0, p2.1);
+        from_lanes(left.simd_lt(right).select(left, right))
     }
 
     #[inline]
     fn distance_to(&self, target: &Coord2) -> f64 {
-        let dist_x = target.0 - self.0;
-        let dist_y = target.1 - self.1;
-
-        f64::sqrt(dist_x * dist_x + dist_y * dist_y)
+        let delta = lanes(target.0, target.1) - lanes(self.0, self.1);
+        (delta * delta).reduce_sum().sqrt()
     }
 
     #[inline]
     fn dot(&self, target: &Self) -> f64 {
-        self.0 * target.0 + self.1 * target.1
+        (lanes(self.0, self.1) * lanes(target.0, target.1)).reduce_sum()
     }
 }

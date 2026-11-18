@@ -102,13 +102,13 @@ where C: BezierCurve {
 
         // The numerator will converge to 0 as the guess improves
         if numerator.abs() < EPSILON {
-            return estimated_t.max(0.0).min(1.0);
+            return estimated_t.clamp(0.0, 1.0);
         }
 
         // u = u - f(u)/f'(u)
         let next_t = if denominator == 0.0 {
             // Found a singularity
-            return estimated_t.max(0.0).min(1.0);
+            return estimated_t.clamp(0.0, 1.0);
         } else {
             estimated_t - (numerator / denominator)
         };
@@ -117,5 +117,5 @@ where C: BezierCurve {
         estimated_t = next_t;
     }
 
-    estimated_t.max(0.0).min(1.0)
+    estimated_t.clamp(0.0, 1.0)
 }

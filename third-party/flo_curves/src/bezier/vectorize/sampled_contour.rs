@@ -1,4 +1,6 @@
 use std::ops::Range;
+use std::simd::cmp::SimdPartialEq;
+use std::simd::{Mask, Simd};
 
 use smallvec::*;
 
@@ -335,20 +337,7 @@ impl BoolSampledContour {
     }
 }
 
-impl U8SampledContour {
-    ///
-    /// Returns true if the specified point is inside the contour, or false if it's outside
-    ///
-    /// A y-value of 0 is considered to be the 'top' of the bitmap
-    ///
-    #[inline]
-    fn point_is_inside(&self, pos: ContourPosition) -> bool {
-        // Position as an offset into the vector array, without bounds checking
-        let idx = pos.0 + (pos.1) * self.0.0;
-
-        self.1[idx] != 0
-    }
-}
+impl U8SampledContour {}
 
 impl SampledContour for BoolSampledContour {
     ///
@@ -370,13 +359,19 @@ impl SampledContour for BoolSampledContour {
 
         let mut ranges = smallvec![];
         let mut inside = None;
-
-        for x in 0..width {
-            // Transitioning from 'outside' to 'inside' sets a start position, and doing the opposite generates a range
+        let mut x = 0;
+        while x + 16 <= width {
+            let mut samples = [0u8; 16];
+            for lane in 0..16 {
+                samples[lane] = u8::from(self.point_is_inside(ContourPosition(x + lane, y)));
+            }
+            let filled = Simd::<u8, 16>::from_array(samples).simd_ne(Simd::splat(0));
+            scan_filled_lanes(x, filled, &mut inside, &mut ranges);
+            x += 16;
+        }
+        for x in x..width {
             match (inside, self.point_is_inside(ContourPosition(x, y))) {
-                (None, true) => {
-                    inside = Some(x);
-                }
+                (None, true) => inside = Some(x),
                 (Some(start_x), false) => {
                     inside = None;
                     ranges.push((start_x as f64)..(x as f64));
@@ -384,7 +379,6 @@ impl SampledContour for BoolSampledContour {
                 _ => {}
             }
         }
-
         if let Some(start_x) = inside {
             ranges.push((start_x as f64)..(width as f64));
         }
@@ -410,16 +404,20 @@ impl SampledContour for U8SampledContour {
     fn intercepts_on_line(&self, y: f64) -> SmallVec<[Range<f64>; 4]> {
         let width = self.contour_size().width();
         let y = y.floor() as usize;
+        let row = &self.1[y * width..(y + 1) * width];
 
         let mut ranges = smallvec![];
         let mut inside = None;
-
-        for x in 0..width {
-            // Transitioning from 'outside' to 'inside' sets a start position, and doing the opposite generates a range
-            match (inside, self.point_is_inside(ContourPosition(x, y))) {
-                (None, true) => {
-                    inside = Some(x);
-                }
+        let (blocks, tail) = row.as_chunks::<16>();
+        for (block_index, block) in blocks.iter().enumerate() {
+            let filled = Simd::<u8, 16>::from_slice(block).simd_ne(Simd::splat(0));
+            scan_filled_lanes(block_index * 16, filled, &mut inside, &mut ranges);
+        }
+        let tail_start = blocks.len() * 16;
+        for (offset, byte) in tail.iter().enumerate() {
+            let x = tail_start + offset;
+            match (inside, *byte != 0) {
+                (None, true) => inside = Some(x),
                 (Some(start_x), false) => {
                     inside = None;
                     ranges.push((start_x as f64)..(x as f64));
@@ -433,6 +431,37 @@ impl SampledContour for U8SampledContour {
         }
 
         ranges
+    }
+}
+
+fn scan_filled_lanes(x0: usize, filled: Mask<i8, 16>, inside: &mut Option<usize>, ranges: &mut SmallVec<[Range<f64>; 4]>) {
+    let bits = filled.to_bitmask();
+    if bits == 0 {
+        if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x0 as f64));
+        }
+        return;
+    }
+    if bits == u16::MAX as u64 {
+        if inside.is_none() {
+            *inside = Some(x0);
+        }
+        return;
+    }
+
+    let mut was_inside = inside.is_some();
+    for lane in 0..16 {
+        let is_inside = (bits >> lane) & 1 == 1;
+        if is_inside == was_inside {
+            continue;
+        }
+        let x = x0 + lane;
+        if is_inside {
+            *inside = Some(x);
+        } else if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x as f64));
+        }
+        was_inside = is_inside;
     }
 }
 
@@ -510,6 +539,18 @@ mod test {
     }
 
     #[test]
+    fn u8_intercepts_cross_simd_lanes() {
+        let mut samples = vec![0u8; 40];
+        for x in [0, 1, 15, 16, 17, 31, 32, 39] {
+            samples[x] = 1;
+        }
+        samples[20] = 1;
+        samples[21] = 1;
+        let contour = U8SampledContour(ContourSize(40, 1), samples);
+        let ranges = contour.intercepts_on_line(0.0);
+        assert_eq!(ranges.as_slice(), &[0.0..2.0, 15.0..18.0, 20.0..22.0, 31.0..33.0, 39.0..40.0]);
+    }
+
     fn bottom_at_coordinate() {
         let size = ContourSize(80, 80);
         let bottom = ContourEdge::bottom();

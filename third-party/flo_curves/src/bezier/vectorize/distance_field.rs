@@ -1,4 +1,6 @@
 use std::ops::Range;
+use std::simd::cmp::{SimdOrd, SimdPartialOrd};
+use std::simd::{Mask, Simd};
 
 use smallvec::*;
 
@@ -166,7 +168,21 @@ impl SampledContour for F32SampledDistanceField {
     }
     #[inline]
     fn intercepts_on_line(&self, y: f64) -> SmallVec<[Range<f64>; 4]> {
-        ContourFromDistanceField(self).intercepts_on_line(y)
+        let (width, height) = (self.0.0, self.0.1);
+        let y = y.floor() as usize;
+        if y >= height {
+            return smallvec![];
+        }
+        let row = &self.1[y * width..(y + 1) * width];
+        let mut ranges = smallvec![];
+        let mut inside = None;
+        let (blocks, tail) = row.as_chunks::<8>();
+        for (block_index, block) in blocks.iter().enumerate() {
+            let filled = Simd::<f32, 8>::from_slice(block).simd_lt(Simd::splat(0.0));
+            scan_inside_lanes(block_index * 8, filled, &mut inside, &mut ranges);
+        }
+        finish_inside_tail(blocks.len() * 8, tail, |sample| *sample < 0.0, width, &mut inside, &mut ranges);
+        ranges
     }
 }
 
@@ -204,7 +220,21 @@ impl SampledContour for F64SampledDistanceField {
     }
     #[inline]
     fn intercepts_on_line(&self, y: f64) -> SmallVec<[Range<f64>; 4]> {
-        ContourFromDistanceField(self).intercepts_on_line(y)
+        let (width, height) = (self.0.0, self.0.1);
+        let y = y.floor() as usize;
+        if y >= height {
+            return smallvec![];
+        }
+        let row = &self.1[y * width..(y + 1) * width];
+        let mut ranges = smallvec![];
+        let mut inside = None;
+        let (blocks, tail) = row.as_chunks::<4>();
+        for (block_index, block) in blocks.iter().enumerate() {
+            let filled = Simd::<f64, 4>::from_slice(block).simd_lt(Simd::splat(0.0));
+            scan_inside_lanes(block_index * 4, filled, &mut inside, &mut ranges);
+        }
+        finish_inside_tail(blocks.len() * 4, tail, |sample| *sample < 0.0, width, &mut inside, &mut ranges);
+        ranges
     }
 }
 
@@ -237,6 +267,87 @@ impl SampledContour for U8SampledDistanceField {
     }
     #[inline]
     fn intercepts_on_line(&self, y: f64) -> SmallVec<[Range<f64>; 4]> {
-        ContourFromDistanceField(self).intercepts_on_line(y)
+        let width = self.0.0;
+        let y = y.floor() as usize;
+        let row = &self.1[y * width..(y + 1) * width];
+        let mut ranges = smallvec![];
+        let mut inside = None;
+        let (blocks, tail) = row.as_chunks::<16>();
+        for (block_index, block) in blocks.iter().enumerate() {
+            let filled = Simd::<u8, 16>::from_slice(block).simd_lt(Simd::splat(127));
+            scan_inside_lanes(block_index * 16, filled, &mut inside, &mut ranges);
+        }
+        finish_inside_tail(blocks.len() * 16, tail, |sample| *sample < 127, width, &mut inside, &mut ranges);
+        ranges
+    }
+}
+
+fn scan_inside_lanes<T, const N: usize>(x0: usize, filled: Mask<T, N>, inside: &mut Option<usize>, ranges: &mut SmallVec<[Range<f64>; 4]>)
+where T: std::simd::MaskElement {
+    let bits = filled.to_bitmask();
+    let full = if N == 64 { u64::MAX } else { (1u64 << N) - 1 };
+    if bits == 0 {
+        if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x0 as f64));
+        }
+        return;
+    }
+    if bits == full {
+        if inside.is_none() {
+            *inside = Some(x0);
+        }
+        return;
+    }
+
+    let mut was_inside = inside.is_some();
+    for lane in 0..N {
+        let is_inside = (bits >> lane) & 1 == 1;
+        if is_inside == was_inside {
+            continue;
+        }
+        let x = x0 + lane;
+        if is_inside {
+            *inside = Some(x);
+        } else if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x as f64));
+        }
+        was_inside = is_inside;
+    }
+}
+
+fn finish_inside_tail<T>(
+    tail_start: usize, tail: &[T], is_inside_sample: impl Fn(&T) -> bool, width: usize, inside: &mut Option<usize>,
+    ranges: &mut SmallVec<[Range<f64>; 4]>,
+) {
+    for (offset, sample) in tail.iter().enumerate() {
+        let x = tail_start + offset;
+        match (*inside, is_inside_sample(sample)) {
+            (None, true) => *inside = Some(x),
+            (Some(start_x), false) => {
+                *inside = None;
+                ranges.push((start_x as f64)..(x as f64));
+            }
+            _ => {}
+        }
+    }
+    if let Some(start_x) = inside.take() {
+        ranges.push((start_x as f64)..(width as f64));
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn f64_intercepts_follow_negative_runs() {
+        let mut samples = vec![1.0; 10];
+        samples[1] = -0.5;
+        samples[2] = -1.0;
+        samples[7] = -0.25;
+        samples[8] = 0.0;
+        let field = F64SampledDistanceField(ContourSize(10, 1), samples);
+        assert_eq!(field.intercepts_on_line(0.0).as_slice(), &[1.0..3.0, 7.0..8.0]);
+        assert!(field.intercepts_on_line(3.0).is_empty());
     }
 }
