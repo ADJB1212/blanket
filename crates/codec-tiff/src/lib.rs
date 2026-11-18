@@ -746,10 +746,11 @@ fn write_compressed_strips<W: std::io::Write + std::io::Seek>(
         output.finish().map_err(codec_error)
     };
     let strips = &pixels[..row_bytes * image.height() as usize];
-    let strips: Vec<Vec<u8>> = if strips.len() > rows_per_strip * row_bytes {
-        strips.par_chunks(rows_per_strip * row_bytes).map(compress).collect::<PyResult<_>>()?
+    let strip_bytes = rows_per_strip * row_bytes;
+    let strips: Vec<Vec<u8>> = if blanket_core::parallel::should_parallel(strips.len(), strip_bytes, 0) {
+        strips.par_chunks(strip_bytes).map(compress).collect::<PyResult<_>>()?
     } else {
-        vec![compress(strips)?]
+        strips.chunks(strip_bytes).map(compress).collect::<PyResult<_>>()?
     };
     // Out-of-line tag values are written immediately, so keep the serial encoder's order.
     let mut directory = encoder.image_directory().map_err(codec_error)?;

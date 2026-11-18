@@ -1837,6 +1837,8 @@ class Image:
     def effect_spread(self, distance: int) -> Image:
         """Return an image with pixels randomly sampled from nearby positions.
 
+        With `BLANKET_DETERMINISTIC=1`, each call uses the same seed.
+
         Args:
             distance: Maximum horizontal and vertical sample displacement.
 

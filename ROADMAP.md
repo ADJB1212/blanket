@@ -422,7 +422,7 @@ with new processing semantics exposed explicitly.
       joins, caps, dash patterns, and fill rules
 - [ ] **Gradient and pattern fills** — linear and radial gradients, repeated
       image patterns, and reusable clipping masks for drawing operations
-- [ ] **Vector export** — serialize path geometry, text runs, and basic shapes
+- [x] **Vector export** — serialize path geometry, text runs, and basic shapes
       to clean SVG documents
 - [ ] **Extended blend modes** — compositing operators such as multiply, screen,
       overlay, and soft light with defined alpha behavior
@@ -559,7 +559,7 @@ with new processing semantics exposed explicitly.
 - [ ] **Progress and cancellation** — callbacks for decode, resize, seam
       carving, and compressor search, polled at tile or candidate boundaries
       and safe to invoke from a worker
-- [ ] **Deterministic execution** — a mode that fixes worker ordering and the
+- [x] **Deterministic execution** — a mode that fixes worker ordering and the
       seed for `effect_spread` and other stochastic helpers
 - [ ] **Free-threaded Python** — document which objects release the GIL, which
       are safe to share across threads, and which operations require the caller

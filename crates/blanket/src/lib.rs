@@ -8,6 +8,11 @@ use blanket_codecs::open_bytes;
 use blanket_core::{Image, UnidentifiedImageError};
 use pyo3::prelude::*;
 
+#[pyfunction]
+fn _deterministic_seed() -> Option<u64> {
+    blanket_core::parallel::deterministic_seed()
+}
+
 /// Native implementation details for the public `blanket` Python package.
 #[pymodule]
 fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -16,6 +21,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("__version__", env!("CARGO_PKG_VERSION"))?;
     module.add("UnidentifiedImageError", module.py().get_type::<UnidentifiedImageError>())?;
     module.add_class::<Image>()?;
+    module.add_function(wrap_pyfunction!(_deterministic_seed, module)?)?;
     module.add_class::<blanket_core::raster::PixelAccess>()?;
     blanket_image_ops::register(module)?;
     blanket_core_python::register(module)?;

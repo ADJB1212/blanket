@@ -8,6 +8,7 @@ mod encode;
 pub mod stream;
 
 use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
+use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::decode::{Event, Events, PixelFormat};
 use jpegxl_rs::decoder_builder;
@@ -126,7 +127,7 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
 pub fn decode_jxl(data: &[u8]) -> Result<Image, DecodeError> {
     use jpegxl_sys::common::types::{JxlDataType, JxlEndianness};
 
-    let use_parallel = data.len() >= JXL_PARALLEL_MIN_BYTES;
+    let use_parallel = !deterministic() && data.len() >= JXL_PARALLEL_MIN_BYTES;
 
     let (info, pixels) = JXL_DECODE_RUNNER.with(|runner_cell| -> Result<_, DecodeError> {
         let mut decoder = if use_parallel {
@@ -222,6 +223,9 @@ fn encode_jxl_samples(image: &Image, pixels: JxlSamples<'_>, options: SaveOption
 }
 
 fn with_jxl_runner<T>(threads: JxlThreads, image: &Image, encode: impl FnOnce(Option<&dyn ParallelRunner>) -> PyResult<T>) -> PyResult<T> {
+    if deterministic() {
+        return encode(None);
+    }
     match threads {
         JxlThreads::Fixed(0 | 1) => encode(None),
         JxlThreads::Fixed(workers) => JXL_CANDIDATE_RUNNER.with(|cached| {
@@ -473,6 +477,9 @@ pub fn read_metadata(data: &[u8]) -> PyResult<Vec<(String, Vec<u8>)>> {
 #[inline]
 #[must_use]
 pub fn jxl_candidate_threads(image: &Image, workers: usize) -> usize {
+    if deterministic() {
+        return 1;
+    }
     let groups = (image.width() as usize).div_ceil(256) * (image.height() as usize).div_ceil(256);
     (rayon::current_num_threads() / workers.max(1)).clamp(1, groups.max(1))
 }

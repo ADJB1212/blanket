@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from operator import index
 
 from . import Image
+from ._blanket import _deterministic_seed
 
 type Source = Image.Image | str | os.PathLike[str]
 type Step = Callable[[Image.Image], Image.Image]
@@ -79,6 +80,8 @@ class Pipeline:
         the CPU count, capped at 32. Source images are copied on the consuming
         thread before submission, including nested metadata; paths are opened
         and closed by workers. Custom metadata must support deep copying.
+        With `BLANKET_DETERMINISTIC=1`, each item is processed on the consuming
+        thread before the next source is read.
         Only the current frame is processed. Callers must not mutate source
         images during iteration, and own each yielded result.
 
@@ -95,6 +98,10 @@ class Pipeline:
         return self._iterate(sources, workers)
 
     def _iterate(self, sources: Iterable[Source], workers: int) -> Generator[Image.Image, None, None]:
+        if _deterministic_seed() is not None:
+            for source in sources:
+                yield self(source)
+            return
         inputs = iter(sources)
         pending: deque[Future[Image.Image]] = deque()
         with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="blanket-batch") as executor:

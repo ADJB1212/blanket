@@ -1,5 +1,6 @@
 use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
+use blanket_core::parallel::{deterministic, with_rayon_worker_limit};
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::prelude::*;
@@ -121,9 +122,13 @@ pub fn encode_avif(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResu
         (pixels, color_type(image.pixel_mode()))
     };
     let mut output = Vec::new();
-    image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, 11 - options.effort, options.quality)
-        .write_image(pixels, image.width(), image.height(), color)
-        .map_err(codec_error)?;
+    with_rayon_worker_limit(|| {
+        image::codecs::avif::AvifEncoder::new_with_speed_quality(&mut output, 11 - options.effort, options.quality)
+            .with_num_threads(deterministic().then_some(1))
+            .write_image(pixels, image.width(), image.height(), color)
+    })
+    .map_err(codec_error)?
+    .map_err(codec_error)?;
     Ok(output)
 }
 

@@ -1,7 +1,7 @@
 //! Pixel primitives used by the Python ImageOps API.
 
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
-use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, should_parallel};
+use blanket_core::parallel::{CHUNK_PIXELS, MIN_PARALLEL_BYTES, chunks_mut, deterministic_seed, should_parallel};
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
 use blanket_histogram::validate_mask;
 pub use blanket_histogram::{ops_histogram, wide_histogram};
@@ -247,7 +247,8 @@ fn ops_spread(py: Python<'_>, image: &Image, distance: i64) -> PyResult<Image> {
     if distance == 0 || image.width() == 0 || image.height() == 0 {
         return output(image, (image.width(), image.height()), py.detach(|| source.to_vec()));
     }
-    let mut state = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 | 1;
+    let mut state = deterministic_seed()
+        .unwrap_or_else(|| std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64 | 1);
     let mut pixels = reserved_buffer((image.width(), image.height()), channels)?;
     py.detach(|| {
         let spare = &mut pixels.spare_capacity_mut()[..source.len()];

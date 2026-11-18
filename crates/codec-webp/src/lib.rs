@@ -2,6 +2,7 @@ use std::borrow::Borrow;
 
 use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
 use blanket_codec_image::decode_rust_image;
+use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use image::ImageFormat as RustFormat;
 use pyo3::exceptions::PyValueError;
@@ -90,11 +91,12 @@ fn decode_with_size(data: &[u8], size: Option<(u32, u32)>) -> Result<Image, Deco
 }
 
 pub fn encode_webp(image: &Image, pixels: &[u8], options: SaveOptions) -> PyResult<Vec<u8>> {
-    encode_webp_config(image, pixels, options, webpx::EncoderConfig::new().thread_level(1))
+    encode_webp_config(image, pixels, options, webpx::EncoderConfig::new().thread_level(u8::from(!deterministic())))
 }
 
 pub fn encode_webp_variant(image: &Image, options: SaveOptions, method: u8) -> PyResult<Vec<u8>> {
-    encode_webp_config(image, image.pixel_data()?, options, webpx::EncoderConfig::new().thread_level(1).method(method).exact(true))
+    let config = webpx::EncoderConfig::new().thread_level(u8::from(!deterministic())).method(method).exact(true);
+    encode_webp_config(image, image.pixel_data()?, options, config)
 }
 
 fn encode_webp_config(image: &Image, pixels: &[u8], options: SaveOptions, config: webpx::EncoderConfig) -> PyResult<Vec<u8>> {
@@ -250,7 +252,7 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
     anim_options.anim_params.loop_count = loop_count as i32;
     config.lossless = i32::from(options.lossless);
     config.method = 0;
-    config.thread_level = 1;
+    config.thread_level = i32::from(!deterministic());
     // SAFETY: options are initialized; a null result is handled below.
     let encoder = AnimEncoder(unsafe {
         libwebp_sys::WebPAnimEncoderNewInternal(width as i32, height as i32, &raw const anim_options, libwebp_sys::WEBP_MUX_ABI_VERSION as i32)

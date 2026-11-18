@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from typing import IO
 
-from ._blanket import ops_histogram, palette_colors, palette_decode, palette_format, palette_gamma, palette_linear, palette_ramp, palette_save, palette_sepia
+from ._blanket import _deterministic_seed, ops_histogram, palette_colors, palette_decode, palette_format, palette_gamma, palette_linear, palette_ramp, palette_save, palette_sepia
 from ._color import _rgb
 from ._palette import load_palette
 from .Image import Image
@@ -328,6 +328,8 @@ def negative(mode: str = "RGB") -> ImagePalette:
 def random(mode: str = "RGB") -> ImagePalette:
     """Create a palette with 256 random colors.
 
+    With `BLANKET_DETERMINISTIC=1`, each call uses the same seed.
+
     Args:
         mode: Palette channel layout, normally `RGB` or `RGBA`.
 
@@ -338,9 +340,11 @@ def random(mode: str = "RGB") -> ImagePalette:
         result = ImagePalette.random()
         ```
     """
-    from random import randint
+    from random import Random, randint
 
-    return ImagePalette(mode, [randint(0, 255) for _ in range(256 * len(mode))])
+    seed = _deterministic_seed()
+    sample = randint if seed is None else Random(seed).randint
+    return ImagePalette(mode, [sample(0, 255) for _ in range(256 * len(mode))])
 
 
 def sepia(white: str = "#fff0c0") -> ImagePalette:

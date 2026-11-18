@@ -96,6 +96,23 @@ JPEG saves keep EXIF and ICC profiles. Pass `xmp=image.info.get("xmp")` if
 you want XMP to come along. Retention rules and pixel-preserving edits are
 in the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
 
+## Deterministic execution
+
+Set `BLANKET_DETERMINISTIC=1` before starting Python for repeatable CPU image
+processing. Blanket processes pixel partitions and compression candidates in
+serial order. `ImageBatch.Pipeline` processes one source at a time in input
+order, even when given a larger `max_workers`. Each call to
+`image.effect_spread()` or `ImagePalette.random()` starts from the same seed.
+
+```sh
+BLANKET_DETERMINISTIC=1 python process_images.py
+```
+
+Serial execution can be slower. Use the same Blanket build, platform, codec
+backends, inputs, and options when comparing results. GPU execution, worker
+scheduling internal to codecs without thread controls, and randomness inside
+user-supplied pipeline steps are outside this setting.
+
 ## Development
 
 Source builds use the nightly Rust toolchain pinned in `rust-toolchain.toml`

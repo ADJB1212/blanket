@@ -42,6 +42,7 @@ from blanket import (
     ImageStat as BlanketStat,
     features,
 )
+from blanket._blanket import _deterministic_seed
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 
@@ -653,7 +654,8 @@ def check_imagepalette() -> int:
     try:
         random.seed(12)
         actual = BlanketPalette.random()
-        random.seed(12)
+        seed = _deterministic_seed()
+        random.seed(12 if seed is None else seed)
         assert actual.getdata() == PillowPalette.random().getdata()
         checks += 1
     finally:

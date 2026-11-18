@@ -1,7 +1,8 @@
 //! Full-reference perceptual quality scores for normalized SDR samples.
 
+use blanket_core::parallel::with_rayon_worker_limit;
 use blanket_core::{Image, PixelMode};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use ssimulacra2::{ColorPrimaries, Rgb, TransferCharacteristic, compute_frame_ssimulacra2};
 
@@ -188,5 +189,8 @@ pub fn score(reference: &Image, distorted: &Image, algorithm: &str) -> PyResult<
         Rgb::new(pixels.into_iter().map(|v| v.map(|c| c as f32)).collect(), width, height, TransferCharacteristic::SRGB, ColorPrimaries::BT709)
             .map_err(|err| PyValueError::new_err(err.to_string()))
     };
-    compute_frame_ssimulacra2(rgb(a)?, rgb(b)?).map_err(|err| PyValueError::new_err(err.to_string()))
+    let (a, b) = (rgb(a)?, rgb(b)?);
+    with_rayon_worker_limit(|| compute_frame_ssimulacra2(a, b))
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?
+        .map_err(|err| PyValueError::new_err(err.to_string()))
 }

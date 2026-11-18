@@ -4,6 +4,7 @@ use std::ffi::{CStr, c_void};
 use std::ptr;
 
 use blanket_codec_common::{codec_error, validate_dimensions};
+use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use openjpeg_sys::*;
 use pyo3::exceptions::PyOSError;
@@ -108,15 +109,20 @@ unsafe extern "C" fn skip(offset: i64, context: *mut c_void) -> i64 {
 
 impl Handles {
     fn configure_threads(&self) {
-        if std::env::var_os("OPJ_NUM_THREADS").is_none() {
+        let threads = if deterministic() {
+            0
+        } else if std::env::var_os("OPJ_NUM_THREADS").is_none() {
             let threads = std::thread::available_parallelism().map_or(1, |count| count.get().min(8));
-            if threads > 1 {
-                // SAFETY: The codec is live and has not created a tile coder yet.
-                // OpenJPEG falls back to serial execution if worker creation fails.
-                unsafe {
-                    opj_codec_set_threads(self.codec, threads as i32);
-                }
+            if threads <= 1 {
+                return;
             }
+            threads as i32
+        } else {
+            return;
+        };
+        // SAFETY: The codec is live, configured, and has not started processing tiles.
+        unsafe {
+            opj_codec_set_threads(self.codec, threads);
         }
     }
 

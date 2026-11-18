@@ -1,4 +1,5 @@
 //! Coarse, disjoint output partitions with a serial path for small images.
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rayon::prelude::*;
@@ -11,6 +12,25 @@ pub const CHUNK_PIXELS: usize = 16 * 1024;
 const MIN_CANDIDATE_BYTES: usize = 128 * 1024;
 // Four input-sized buffers per encoder share an approximate 256 MiB budget.
 const CANDIDATE_INPUT_BUDGET: usize = 64 * 1024 * 1024;
+
+static DETERMINISTIC: LazyLock<bool> = LazyLock::new(|| std::env::var_os("BLANKET_DETERMINISTIC").is_some_and(|value| value == "1"));
+
+/// Whether deterministic execution is enabled. Read the mode once per process.
+pub fn deterministic() -> bool {
+    *DETERMINISTIC
+}
+
+/// Seed for stochastic operations in deterministic mode.
+pub fn deterministic_seed() -> Option<u64> {
+    deterministic().then_some(1)
+}
+
+/// Restrict dependencies that schedule directly on Rayon to one worker.
+pub fn with_rayon_worker_limit<T: Send>(operation: impl FnOnce() -> T + Send) -> Result<T, &'static rayon::ThreadPoolBuildError> {
+    static SERIAL_POOL: LazyLock<Result<rayon::ThreadPool, rayon::ThreadPoolBuildError>> =
+        LazyLock::new(|| rayon::ThreadPoolBuilder::new().num_threads(1).build());
+    if deterministic() { SERIAL_POOL.as_ref().map(|pool| pool.install(operation)) } else { Ok(operation()) }
+}
 
 /// Live exclusive bound. Encoders may recheck it after expensive work, before
 /// copying or decoding a candidate that a concurrent job has already beaten.
@@ -97,7 +117,7 @@ pub fn best_candidate<T: Sync, E: Send>(
 }
 
 pub fn candidate_workers(work_bytes: usize, jobs: usize) -> usize {
-    if work_bytes >= MIN_CANDIDATE_BYTES && jobs > 1 {
+    if work_bytes >= MIN_CANDIDATE_BYTES && jobs > 1 && !deterministic() {
         // Candidates are single-threaded, so every pool thread can run one.
         rayon::current_num_threads().min(jobs).min((CANDIDATE_INPUT_BUDGET / work_bytes.max(1)).max(1))
     } else {
@@ -129,7 +149,7 @@ impl<E> CandidateResult<E> {
 /// or items). Preserve operation-specific cost cutoffs, but only schedule work
 /// when there are multiple partitions and workers to execute them.
 pub fn should_parallel(work: usize, chunk_size: usize, minimum_work: usize) -> bool {
-    work >= minimum_work && work > chunk_size && rayon::current_num_threads() > 1
+    work >= minimum_work && work > chunk_size && !deterministic() && rayon::current_num_threads() > 1
 }
 
 pub fn chunks_mut(output: &mut [u8], chunk_size: usize, operation: impl Fn(usize, &mut [u8]) + Sync + Send) {
@@ -267,7 +287,9 @@ mod tests {
                 assert!(!should_parallel(0, 16, 32));
                 assert!(!should_parallel(31, 16, 32));
                 assert!(!should_parallel(32, 32, 32));
-                assert_eq!(should_parallel(32, 16, 32), threads > 1);
+                assert_eq!(should_parallel(32, 16, 32), threads > 1 && !deterministic());
+                assert_eq!(candidate_workers(MIN_CANDIDATE_BYTES, 8), if deterministic() { 1 } else { threads });
+                assert_eq!(with_rayon_worker_limit(rayon::current_num_threads).unwrap(), if deterministic() { 1 } else { threads });
             });
         }
     }

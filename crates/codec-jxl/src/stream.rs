@@ -2,6 +2,7 @@ use std::mem::MaybeUninit;
 use std::ptr;
 
 use blanket_codec_common::{DecodeError, validate_dimensions};
+use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use jpegxl_rs::parallel::ParallelRunner;
 use jpegxl_rs::parallel::resizable_runner::ResizableRunner;
@@ -11,7 +12,7 @@ use jpegxl_sys::metadata::codestream_header::JxlBasicInfo;
 
 pub struct JxlStreamDecoder {
     decoder: *mut JxlDecoder,
-    runner: ResizableRunner<'static>,
+    runner: Option<ResizableRunner<'static>>,
     input: Vec<u8> = Vec::new(),
     pixels: Vec<u8> = Vec::new(),
     preview: Option<Image> = None,
@@ -57,16 +58,18 @@ impl JxlStreamDecoder {
     }
 
     pub fn new() -> Result<Self, DecodeError> {
-        let runner = ResizableRunner::new(None).ok_or("cannot allocate JPEG XL thread pool")?;
+        let runner = if deterministic() { None } else { Some(ResizableRunner::new(None).ok_or("cannot allocate JPEG XL thread pool")?) };
         // SAFETY: null selects the default allocator.
         let decoder = unsafe { JxlDecoderCreate(ptr::null()) };
         if decoder.is_null() {
             return Err("cannot allocate JPEG XL decoder".into());
         }
         let stream = Self { decoder, runner, .. };
-        // SAFETY: the owned decoder and runner are live for these configuration calls.
+        // SAFETY: the owned decoder and any runner are live for these configuration calls.
         unsafe {
-            check(JxlDecoderSetParallelRunner(decoder, stream.runner.runner(), stream.runner.as_opaque_ptr()))?;
+            if let Some(runner) = &stream.runner {
+                check(JxlDecoderSetParallelRunner(decoder, runner.runner(), runner.as_opaque_ptr()))?;
+            }
             check(JxlDecoderSubscribeEvents(
                 decoder,
                 JxlDecoderStatus::BasicInfo as i32 | JxlDecoderStatus::FullImage as i32 | JxlDecoderStatus::FrameProgression as i32,
@@ -139,7 +142,9 @@ impl JxlStreamDecoder {
                     // SAFETY: GetBasicInfo succeeded and initialized every field.
                     let info = info.assume_init();
                     validate_dimensions(info.xsize, info.ysize)?;
-                    self.runner.callback_basic_info(&info);
+                    if let Some(runner) = &self.runner {
+                        runner.callback_basic_info(&info);
+                    }
                     if info.have_animation == JxlBool::True {
                         return Err("streaming JPEG XL animation is not supported".into());
                     }

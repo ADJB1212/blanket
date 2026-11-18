@@ -1,6 +1,7 @@
 use std::sync::LazyLock;
 
 use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
+use blanket_core::parallel::deterministic;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -42,14 +43,20 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
 pub fn decode_heif(data: &[u8]) -> Result<Image, DecodeError> {
     use libheif_rs::HeifContext;
     let _lib = &*HEIF_LIBRARY;
-    let context = HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    let mut context = HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    if deterministic() {
+        context.set_max_decoding_threads(0);
+    }
     let handle = context.primary_image_handle().map_err(DecodeError::with_source)?;
     decode_handle(&handle)
 }
 
 pub fn previews(data: &[u8]) -> Result<Vec<Image>, DecodeError> {
     let _library = &*HEIF_LIBRARY;
-    let context = libheif_rs::HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    let mut context = libheif_rs::HeifContext::read_from_bytes(data).map_err(DecodeError::with_source)?;
+    if deterministic() {
+        context.set_max_decoding_threads(0);
+    }
     let primary = context.primary_image_handle().map_err(DecodeError::with_source)?;
     let mut ids = vec![0; primary.number_of_thumbnails()];
     let count = primary.thumbnail_ids(&mut ids);
@@ -81,7 +88,7 @@ fn decode_handle(handle: &libheif_rs::ImageHandle) -> Result<Image, DecodeError>
     let mut options = DecodingOptions::new().ok_or("cannot allocate HEIF decoding options")?;
     // The context's tile-thread limit does not enable HEVC codec workers.
     // Small images do not have enough CTU rows to amortize starting workers.
-    let threads = if u64::from(handle.width()) * u64::from(handle.height()) >= 256 * 1024 {
+    let threads = if !deterministic() && u64::from(handle.width()) * u64::from(handle.height()) >= 256 * 1024 {
         std::thread::available_parallelism().map_or(1, |count| count.get().min(8))
     } else {
         1
@@ -206,6 +213,11 @@ impl PreparedHeif {
         // x265-specific parameter.
         if self.presets {
             self.encoder.set_parameter_value("preset", EncoderParameterValue::String(preset.into())).map_err(codec_error)?;
+            if deterministic() {
+                for (parameter, value) in [("x265:pools", "none"), ("x265:frame-threads", "1")] {
+                    self.encoder.set_parameter_value(parameter, EncoderParameterValue::String(value.into())).map_err(codec_error)?;
+                }
+            }
         }
         self.encoder
             .set_quality(if options.lossless { EncoderQuality::LossLess } else { EncoderQuality::Lossy(options.quality) })
