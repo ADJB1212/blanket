@@ -72,7 +72,11 @@ class ImageFont:
     """
 
     def __init__(self, size: float | None = None) -> None:
-        """Create the public-domain bitmap font, optionally scaled to a pixel size."""
+        """Create the public-domain bitmap font, optionally scaled to a pixel size.
+
+        Args:
+            size: Pixel height, rounded to a whole multiple of eight. None uses the native 8-pixel height.
+        """
         self._fallback = PublicDomainFont(size)
         self._atlas: Image.Image | None = None
         self._glyphs: list[tuple[int, ...]] = []
@@ -81,7 +85,11 @@ class ImageFont:
         self.size = self._ascent
 
     def getmetrics(self) -> tuple[int, int]:
-        """Return the ascent and positive descent in pixels."""
+        """Return the ascent and positive descent in pixels.
+
+        Returns:
+            ``(ascent, descent)`` in pixels.
+        """
         return self._ascent, self._descent
 
     def _layout(self, text: str, direction: str | None, features: Sequence[str] | None, language: str | None, render: bool, start: tuple[float, float] = (0, 0)) -> tuple[float, tuple[int, int, int, int], bytes]:
@@ -144,6 +152,20 @@ class ImageFont:
         feature strings include `kern`, `-kern`, and `liga=0`. `language` is a
         BCP 47 language tag. Bitmap fonts accept only left-to-right layout.
         The optional `mode` is accepted for Pillow compatibility.
+
+        Args:
+            text: One line of text, or UTF-8 bytes.
+            mode: Accepted for compatibility and ignored.
+            direction: ``ltr``, ``rtl``, or ``ttb`` for outline fonts. Bitmap fonts accept only left-to-right.
+            features: OpenType feature tags such as ``kern`` or ``liga=0``.
+            language: BCP 47 language tag.
+
+        Returns:
+            The advance width in pixels.
+
+        Raises:
+            TypeError: ``text`` is not a string or bytes.
+            ValueError: The text has more than one line, exceeds ``MAX_STRING_LENGTH``, or the layout is unsupported.
         """
         del mode
         return self._layout(_text(text), direction, features, language, False)[0]
@@ -154,6 +176,22 @@ class ImageFont:
         Horizontal anchors combine `l`, `m`, or `r` with `a` (ascender), `t`
         (ink top), `m` (metrics middle), `s` (baseline), `b` (ink bottom), or
         `d` (descender). Vertical anchors use `l/m/r/s` and `t/m/b`.
+
+        Args:
+            text: One line of text, or UTF-8 bytes.
+            mode: Accepted for compatibility and ignored.
+            direction: ``ltr``, ``rtl``, or ``ttb`` for outline fonts.
+            features: OpenType feature tags.
+            language: BCP 47 language tag.
+            stroke_width: Extra outline width in pixels, rounded up.
+            anchor: Two-character alignment, or None for the default anchor.
+
+        Returns:
+            ``(left, top, right, bottom)`` relative to the anchor.
+
+        Raises:
+            TypeError: ``text`` is not a string or bytes.
+            ValueError: The text, stroke width, anchor, or layout is invalid.
         """
         del mode
         stroke = _stroke_width(stroke_width)
@@ -180,6 +218,25 @@ class ImageFont:
         `mode="1"` thresholds coverage; `L` preserves antialiasing. Strokes
         expand the filled mask. `start` supplies fractional pixel offsets for
         outline fonts. `ink` and `stroke_filled` are compatibility arguments.
+
+        Args:
+            text: One line of text, or UTF-8 bytes.
+            mode: ``"1"`` for a thresholded mask, or ``"L"`` for coverage.
+            direction: ``ltr``, ``rtl``, or ``ttb`` for outline fonts.
+            features: OpenType feature tags.
+            language: BCP 47 language tag.
+            stroke_width: Extra outline width in pixels, rounded up.
+            anchor: Two-character alignment, or None for the default anchor.
+            ink: Accepted for compatibility and ignored.
+            start: Fractional pixel offset used by outline fonts.
+            stroke_filled: Accepted for compatibility and ignored.
+
+        Returns:
+            The coverage mask and its ``(x, y)`` offset from the anchor.
+
+        Raises:
+            TypeError: ``text`` is not a string or bytes.
+            ValueError: The text, mask mode, stroke width, anchor, or layout is invalid.
         """
         del ink, stroke_filled
         if mode not in ("", "1", "L"):
@@ -197,7 +254,24 @@ class ImageFont:
         return BitmapMask((width, height), data), (bounds[0] + x - stroke, bounds[1] + y - stroke)
 
     def getmask(self, text: str | bytes, mode: str = "L", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None, stroke_width: float = 0, anchor: str | None = None) -> BitmapMask:
-        """Return the font coverage mask; see :meth:`getmask2` for options."""
+        """Return the font coverage mask; see :meth:`getmask2` for options.
+
+        Args:
+            text: One line of text, or UTF-8 bytes.
+            mode: ``"1"`` for a thresholded mask, or ``"L"`` for coverage.
+            direction: ``ltr``, ``rtl``, or ``ttb`` for outline fonts.
+            features: OpenType feature tags.
+            language: BCP 47 language tag.
+            stroke_width: Extra outline width in pixels, rounded up.
+            anchor: Two-character alignment, or None for the default anchor.
+
+        Returns:
+            The coverage mask.
+
+        Raises:
+            TypeError: ``text`` is not a string or bytes.
+            ValueError: The text, mask mode, stroke width, anchor, or layout is invalid.
+        """
         return self.getmask2(text, mode, direction, features, language, stroke_width, anchor)[0]
 
 
@@ -214,6 +288,17 @@ class TrueTypeFont(ImageFont):
 
         ``index`` selects a collection face. Only Unicode encoding is supported;
         both layout engines use the native OpenType shaper.
+
+        Args:
+            font: Filesystem path or binary stream containing the font.
+            size: Pixels per em. Must be finite, positive, and at most 1000000.
+            index: Nonnegative collection face index.
+            encoding: Empty string or ``"unic"``.
+            layout_engine: ``Layout`` value. None selects the native shaper.
+
+        Raises:
+            ValueError: The size, index, or encoding is unsupported.
+            OSError: A path cannot be read, or the font bytes are invalid.
         """
         if not isfinite(size) or size <= 0 or size > _MAX_FONT_SIZE:
             raise ValueError("font size must be finite, positive, and at most 1000000")
@@ -241,18 +326,52 @@ class TrueTypeFont(ImageFont):
         return self._native.layout(text, self.size, direction, [] if features is None else list(features), language, render, start)
 
     def getname(self) -> tuple[str, str]:
-        """Return the font family and style names when present."""
+        """Return the font family and style names when present.
+
+        Returns:
+            ``(family, style)``.
+        """
         if self._name is None:
             self._name = self._native.name()
         return self._name
 
     def getlength(self, text: str | bytes, mode: str = "", direction: str | None = None, features: Sequence[str] | None = None, language: str | None = None) -> float:
-        """Return the shaped advance without constructing glyph outlines."""
+        """Return the shaped advance without constructing glyph outlines.
+
+        Args:
+            text: One line of text, or UTF-8 bytes.
+            mode: Accepted for compatibility and ignored.
+            direction: ``ltr``, ``rtl``, or ``ttb``.
+            features: OpenType feature tags.
+            language: BCP 47 language tag.
+
+        Returns:
+            The advance width in pixels.
+
+        Raises:
+            TypeError: ``text`` is not a string or bytes.
+            ValueError: The text has more than one line or exceeds ``MAX_STRING_LENGTH``.
+        """
         del mode
         return self._native.layout(_text(text), self.size, direction, [] if features is None else list(features), language, False, (0, 0), True)[0]
 
     def font_variant(self, font: str | bytes | os.PathLike[str] | BinaryIO | None = None, size: float | None = None, index: int | None = None, encoding: str | None = None, layout_engine: Layout | int | None = None) -> TrueTypeFont:
-        """Create another face, reusing the loaded bytes unless `font` is set."""
+        """Create another face, reusing the loaded bytes unless `font` is set.
+
+        Args:
+            font: Replacement path or stream. None reuses the loaded bytes.
+            size: Replacement pixels per em. None keeps the current size.
+            index: Replacement collection face. None keeps the current index.
+            encoding: Replacement encoding. None keeps the current encoding.
+            layout_engine: Replacement layout engine. None keeps the current engine.
+
+        Returns:
+            A new face with the requested changes.
+
+        Raises:
+            ValueError: A replacement size, index, or encoding is unsupported.
+            OSError: A replacement path or font is unreadable.
+        """
         from io import BytesIO
 
         return TrueTypeFont(
@@ -269,12 +388,33 @@ def truetype(font: str | bytes | os.PathLike[str] | BinaryIO, size: float = 10, 
 
     The path is used directly; system font discovery is not performed. Both
     `Layout` values select the native shaper and require no system RAQM library.
+
+    Args:
+        font: Filesystem path or binary stream containing the font.
+        size: Pixels per em. Must be finite, positive, and at most 1000000.
+        index: Nonnegative collection face index.
+        encoding: Empty string or ``"unic"``.
+        layout_engine: ``Layout`` value. None selects the native shaper.
+
+    Returns:
+        The loaded outline font.
+
+    Raises:
+        ValueError: The size, index, or encoding is unsupported.
+        OSError: A path cannot be read, or the font bytes are invalid.
     """
     return TrueTypeFont(font, size, index, encoding, layout_engine)
 
 
 def load_default(size: float | None = None) -> ImageFont:
-    """Return the public-domain 8x8 font, scaled in whole multiples of eight."""
+    """Return the public-domain 8x8 font, scaled in whole multiples of eight.
+
+    Args:
+        size: Pixel height, rounded to a whole multiple of eight. None uses 8 pixels.
+
+    Returns:
+        The built-in bitmap font.
+    """
     return ImageFont(size)
 
 
@@ -283,6 +423,15 @@ def load(filename: str | bytes | os.PathLike[str]) -> ImageFont:
 
     The atlas shares the font's basename. Glyphs use Latin-1 encoding. Invalid
     or truncated files raise `OSError`; the font requires no Pillow installation.
+
+    Args:
+        filename: Path to a ``PILfont`` metrics file. The atlas shares its basename.
+
+    Returns:
+        A bitmap font using the loaded atlas.
+
+    Raises:
+        OSError: The metrics or atlas file is missing, truncated, or invalid.
     """
     path = Path(os.fsdecode(filename))
     with path.open("rb") as stream:

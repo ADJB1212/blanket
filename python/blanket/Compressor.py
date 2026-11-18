@@ -74,6 +74,10 @@ class LossyImageCompressor:
             metric: Optional perceptual metric name: "ssim", "ms_ssim", or "ssimulacra2".
             min_score: Minimum acceptable perceptual score; required together with metric.
 
+        Raises:
+            TypeError: A numeric or string argument has the wrong type.
+            ValueError: An effort, error limit, metric, score, or size budget is outside its allowed range.
+
         Examples:
             ```python
             from blanket import Image
@@ -118,17 +122,29 @@ class LossyImageCompressor:
 
     @property
     def metric(self) -> str | None:
-        """Configured perceptual metric, or None."""
+        """Configured perceptual metric, or None.
+
+        Returns:
+            ``ssim``, ``ms_ssim``, ``ssimulacra2``, or None when no metric is set.
+        """
         return self._native.metric
 
     @property
     def min_score(self) -> float | None:
-        """Configured minimum perceptual score, or None."""
+        """Configured minimum perceptual score, or None.
+
+        Returns:
+            The minimum accepted score for ``metric``, or None when no metric is set.
+        """
         return self._native.min_score
 
     @property
     def target_size(self) -> int | None:
-        """Configured byte budget after stripping metadata, or None."""
+        """Configured byte budget after stripping metadata, or None.
+
+        Returns:
+            The maximum encoded size in bytes, or None when no budget is set.
+        """
         return self._target_size
 
     @property
@@ -147,6 +163,8 @@ class LossyImageCompressor:
             print(compressor.max_rmse)
             ```
 
+        Returns:
+            The maximum additional decoded RGB error accepted by the search.
         """
         return self._native.max_rmse
 
@@ -166,6 +184,8 @@ class LossyImageCompressor:
             print(compressor.effort)
             ```
 
+        Returns:
+            The search effort, from 1 through 10.
         """
         return self._native.effort
 
@@ -219,6 +239,10 @@ class LosslessImageCompressor:
             effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
             target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
 
+        Raises:
+            TypeError: ``effort`` is not an integer.
+            ValueError: ``effort`` or ``target_size`` is outside its allowed range.
+
         Examples:
             ```python
             from blanket import Image
@@ -242,7 +266,11 @@ class LosslessImageCompressor:
 
     @property
     def target_size(self) -> int | None:
-        """Configured byte budget after stripping metadata, or None."""
+        """Configured byte budget after stripping metadata, or None.
+
+        Returns:
+            The maximum encoded size in bytes, or None when no budget is set.
+        """
         return self._target_size
 
     @property
@@ -261,5 +289,7 @@ class LosslessImageCompressor:
             print(compressor.effort)
             ```
 
+        Returns:
+            The search effort, from 1 through 10.
         """
         return self._native.effort

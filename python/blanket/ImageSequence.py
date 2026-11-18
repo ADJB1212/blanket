@@ -16,7 +16,11 @@ class Iterator:
     """Iterate from frame zero, yielding the source image at each position."""
 
     def __init__(self, image: Image) -> None:
-        """Retain the source image and start iteration at frame zero."""
+        """Retain the source image and start iteration at frame zero.
+
+        Args:
+            image: Image whose frames this iterator seeks.
+        """
         self.image = image
         self.position = 0
 
@@ -40,7 +44,15 @@ class Iterator:
 
 
 def all_frames(image: Image | Sequence[Image], func: Callable[[Image], Image] | None = None) -> list[Image]:
-    """Copy all frames, optionally transform them, and restore source positions."""
+    """Copy all frames, optionally transform them, and restore source positions.
+
+    Args:
+        image: One image or a sequence of images. Each source is restored to its starting frame.
+        func: Optional transform applied to each copied frame.
+
+    Returns:
+        Independent copies of every frame, in source order.
+    """
     images = [image] if isinstance(image, Image) else image
     frames: list[Image] = []
     for source in images:

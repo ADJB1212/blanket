@@ -56,6 +56,12 @@ def logical_and(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First mode 1 image; output uses the top-left overlap.
         image2: Second mode 1 image.
 
+    Returns:
+        A new mode 1 image of the top-left overlap.
+
+    Raises:
+        ValueError: Either image is not mode 1.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -75,6 +81,12 @@ def logical_or(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First mode 1 image; output uses the top-left overlap.
         image2: Second mode 1 image.
 
+    Returns:
+        A new mode 1 image of the top-left overlap.
+
+    Raises:
+        ValueError: Either image is not mode 1.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -93,6 +105,12 @@ def logical_xor(image1: Image.Image, image2: Image.Image) -> Image.Image:
     Args:
         image1: First mode 1 image; output uses the top-left overlap.
         image2: Second mode 1 image.
+
+    Returns:
+        A new mode 1 image of the top-left overlap.
+
+    Raises:
+        ValueError: Either image is not mode 1.
 
     Examples:
         ```python
@@ -121,6 +139,12 @@ def difference(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -139,6 +163,12 @@ def multiply(image1: Image.Image, image2: Image.Image) -> Image.Image:
     Args:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
+
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
 
     Examples:
         ```python
@@ -159,6 +189,12 @@ def screen(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -178,6 +214,12 @@ def lighter(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -196,6 +238,12 @@ def darker(image1: Image.Image, image2: Image.Image) -> Image.Image:
     Args:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
+
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
 
     Examples:
         ```python
@@ -218,6 +266,12 @@ def add(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offset: in
         scale: Divisor applied before the offset; must be nonzero.
         offset: Value added after scaling.
 
+    Returns:
+        A new image of the top-left overlap, clipped to the sample range.
+
+    Raises:
+        ValueError: The images do not match, or ``scale`` is zero.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -239,6 +293,12 @@ def subtract(image1: Image.Image, image2: Image.Image, scale: float = 1.0, offse
         scale: Divisor applied before the offset; must be nonzero.
         offset: Value added after scaling.
 
+    Returns:
+        A new image of the top-left overlap, clipped to the sample range.
+
+    Raises:
+        ValueError: The images do not match, or ``scale`` is zero.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -257,6 +317,12 @@ def add_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
     Args:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
+
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
 
     Examples:
         ```python
@@ -277,6 +343,12 @@ def subtract_modulo(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -295,6 +367,12 @@ def soft_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
     Args:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
+
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
 
     Examples:
         ```python
@@ -315,6 +393,12 @@ def hard_light(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -334,6 +418,12 @@ def overlay(image1: Image.Image, image2: Image.Image) -> Image.Image:
         image1: First input image; modes and depths must match. Output uses the top-left overlap.
         image2: Second input image.
 
+    Returns:
+        A new image of the top-left overlap, in the input mode.
+
+    Raises:
+        ValueError: The images do not match in mode or depth.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -351,6 +441,12 @@ def invert(image: Image.Image) -> Image.Image:
 
     Args:
         image: Input image.
+
+    Returns:
+        A new image with each channel inverted.
+
+    Raises:
+        ValueError: The image mode cannot be inverted.
 
     Examples:
         ```python
@@ -374,6 +470,9 @@ def offset(image: Image.Image, xoffset: int, yoffset: int | None = None) -> Imag
         xoffset: Horizontal translation in pixels; pixels wrap around.
         yoffset: Vertical translation, or None to use the horizontal offset.
 
+    Returns:
+        A new image of the same size, with pixels wrapped around the edges.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -395,6 +494,9 @@ def constant(image: Image.Image, value: int) -> Image.Image:
         image: Input image.
         value: Grayscale fill value from 0 through 255.
 
+    Returns:
+        A mode ``L`` image filled with ``value``.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -411,6 +513,9 @@ def duplicate(image: Image.Image) -> Image.Image:
 
     Args:
         image: Input image.
+
+    Returns:
+        A copy of ``image``.
 
     Examples:
         ```python
@@ -431,6 +536,12 @@ def blend(image1: Image.Image, image2: Image.Image, alpha: float) -> Image.Image
         image2: Second input image.
         alpha: Blending weight: 0 selects the first image and 1 the second; values outside this range extrapolate.
 
+    Returns:
+        A new image interpolated between the inputs.
+
+    Raises:
+        ValueError: The images differ in mode or size.
+
     Examples:
         ```python
         from blanket import Image, ImageChops
@@ -450,6 +561,12 @@ def composite(image1: Image.Image, image2: Image.Image, mask: Image.Image) -> Im
         image1: First input image; its mode and dimensions must match the second image.
         image2: Second input image.
         mask: L or RGBA mask selecting pixels from the first image.
+
+    Returns:
+        A new image combining the inputs through ``mask``.
+
+    Raises:
+        ValueError: The images or mask are incompatible.
 
     Examples:
         ```python

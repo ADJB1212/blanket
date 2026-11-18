@@ -126,7 +126,11 @@ class ImageCmsProfile:
 
     @property
     def profile_description(self) -> str:
-        """The profile's English description, or an empty string if absent."""
+        """The profile's English description, or an empty string if absent.
+
+        Returns:
+            The description text without a trailing newline.
+        """
         return self._description
 
 

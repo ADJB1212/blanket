@@ -24,7 +24,15 @@ class Path:
     """
 
     def __init__(self, xy: int | Sequence[float] | Sequence[tuple[float, float]] | Buffer | Path) -> None:
-        """Copy coordinates or native float pairs, or allocate an integer count of zero vertices."""
+        """Copy coordinates or native float pairs, or allocate an integer count of zero vertices.
+
+        Args:
+            xy: Vertex count, coordinate sequence, flat buffer, or another path.
+
+        Raises:
+            MemoryError: ``xy`` is a negative vertex count.
+            TypeError: ``xy`` is not a coordinate sequence or buffer.
+        """
         self._mapping = False
         if isinstance(xy, int):
             if xy < 0:
@@ -121,17 +129,35 @@ class Path:
         raise TypeError("cannot delete from path")
 
     def compact(self, distance: float = 2) -> int:
-        """Remove vertices closer than the Manhattan distance; return the number removed."""
+        """Remove vertices closer than the Manhattan distance.
+
+        Args:
+            distance: Minimum Manhattan separation to retain. Closer vertices are removed.
+
+        Returns:
+            The number of vertices removed.
+
+        Raises:
+            ValueError: The path is being mapped.
+        """
         if self._mapping:
             raise ValueError("Path compacted during mapping")
         return self._points.compact(float(distance))
 
     def getbbox(self) -> tuple[float, float, float, float]:
-        """Return (left, top, right, bottom), or four zeros for an empty path."""
+        """Return (left, top, right, bottom), or four zeros for an empty path.
+
+        Returns:
+            The axis-aligned bounds of the vertices.
+        """
         return self._points.getbbox()
 
     def map(self, function: Callable[[float, float], tuple[float, float]]) -> None:
-        """Replace each vertex with function(x, y), updating the path in place."""
+        """Replace each vertex with function(x, y), updating the path in place.
+
+        Args:
+            function: Callable receiving ``x`` and ``y`` and returning a new pair.
+        """
         previous = self._mapping
         self._mapping = True
         try:
@@ -140,10 +166,22 @@ class Path:
             self._mapping = previous
 
     def tolist(self, flat: bool = False) -> list[tuple[float, float]] | list[float]:
-        """Return copied coordinate pairs, or a flat list when flat is true."""
+        """Return copied coordinate pairs, or a flat list when flat is true.
+
+        Args:
+            flat: Return ``[x, y, ...]`` when true, otherwise ``[(x, y), ...]``.
+
+        Returns:
+            A copy of the coordinates.
+        """
         return self._points.tolist(bool(flat))
 
     def transform(self, matrix: Sequence[float], wrap: float = 0) -> None:
-        """Apply (a*x + b*y + c, d*x + e*y + f), optionally wrapping x with fmod."""
+        """Apply (a*x + b*y + c, d*x + e*y + f), optionally wrapping x with fmod.
+
+        Args:
+            matrix: Six coefficients ``(a, b, c, d, e, f)``.
+            wrap: Period used to wrap x with ``fmod``. Zero leaves x unwrapped.
+        """
         a, b, c, d, e, f = (self._number(value) for value in matrix)
         self._points.transform((a, b, c, d, e, f), float(wrap))

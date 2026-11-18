@@ -196,13 +196,23 @@ class ImageDraw:
         self.antialias = antialias
 
     def getfont(self) -> _Font:
-        """Return the active default font, initializing it on first access."""
+        """Return the active default font, initializing it on first access.
+
+        Returns:
+            The font set on this context, or the built-in bitmap font.
+        """
         if self.font is None:
             self.font = load_default()
         return self.font
 
     def shape(self, shape: Outline, fill: Color = None, outline: Color = None) -> None:
-        """Close and rasterize an Outline using the scanline polygon filler."""
+        """Close and rasterize an Outline using the scanline polygon filler.
+
+        Args:
+            shape: Closed outline to fill and stroke.
+            fill: Interior ink, or None to skip the fill.
+            outline: Border ink, or None to skip the outline.
+        """
         shape.close()
         points = shape._points()
         if fill is None and outline is None:
@@ -305,7 +315,16 @@ class ImageDraw:
         self._shape(self._curve(xy, start, end), fill, outline, width)
 
     def bitmap(self, xy: Sequence[float], bitmap: Image.Image, fill: Color = None) -> None:
-        """Draw ink through a bilevel, grayscale, or RGBA alpha mask."""
+        """Draw ink through a bilevel, grayscale, or RGBA alpha mask.
+
+        Args:
+            xy: Top-left position. Fractional coordinates are truncated toward zero.
+            bitmap: Mode 1, L, or RGBA mask.
+            fill: Ink drawn through the mask.
+
+        Raises:
+            ValueError: The mask is not mode 1, L, or RGBA.
+        """
         x, y = xy
         mask = bitmap.getchannel("A") if bitmap.mode == "RGBA" else bitmap
         if mask.mode not in ("1", "L"):
@@ -321,7 +340,15 @@ class ImageDraw:
         self.im.paste(ink, position, mask)
 
     def circle(self, xy: Sequence[float], radius: float, fill: Color = None, outline: Color = None, width: int = 1) -> None:
-        """Draw a circle centered at xy using the ellipse rasterizer."""
+        """Draw a circle centered at xy using the ellipse rasterizer.
+
+        Args:
+            xy: Center point.
+            radius: Radius in pixels.
+            fill: Interior ink, or None to skip the fill.
+            outline: Border ink, or None to skip the outline.
+            width: Border thickness in pixels. Nonpositive values skip it.
+        """
         x, y = xy
         self.ellipse((x - radius, y - radius, x + radius, y + radius), fill, outline, width)
 

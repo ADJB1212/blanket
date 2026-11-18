@@ -24,7 +24,14 @@ _SYNTAX_ERROR = SyntaxError
 
 
 def sanitize_apng(data: bytes) -> tuple[bytes, BaseException | None, int | None]:
-    """Strip invalid APNG control chunks and classify deferred frame errors."""
+    """Strip invalid APNG control chunks and classify deferred frame errors.
+
+    Args:
+        data: PNG or APNG file bytes.
+
+    Returns:
+        Sanitized bytes, an exception to raise when a later frame is unreadable, and the frame count when known.
+    """
     if not data.startswith(_MAGIC):
         return data, None, None
     for pos in _chunk_offsets(data):
@@ -190,6 +197,12 @@ def o16(value: int) -> bytes:
     Args:
         value: Integer value in range 0 to 65535.
 
+    Returns:
+        Two big-endian bytes.
+
+    Raises:
+        struct.error: ``value`` does not fit in an unsigned 16-bit integer.
+
     Examples:
         ```python
         from blanket.PngImagePlugin import o16
@@ -206,6 +219,12 @@ def o32(value: int) -> bytes:
     Args:
         value: Integer value in range 0 to 4294967295.
 
+    Returns:
+        Four big-endian bytes.
+
+    Raises:
+        struct.error: ``value`` does not fit in an unsigned 32-bit integer.
+
     Examples:
         ```python
         from blanket.PngImagePlugin import o32
@@ -217,14 +236,27 @@ def o32(value: int) -> bytes:
 
 
 def putchunk(fp: Writable, cid: bytes, *data: bytes) -> None:
-    """Write a PNG chunk with its length and checksum."""
+    """Write a PNG chunk with its length and checksum.
+
+    Args:
+        fp: Binary stream that accepts ``write``.
+        cid: Four-byte chunk type.
+        data: Chunk payload pieces, concatenated in order.
+    """
     payload = b"".join(data)
     checksum = zlib.crc32(payload, zlib.crc32(cid))
     write_all(fp, o32(len(payload)) + cid + payload + o32(checksum))
 
 
 def verify_png(data: bytes) -> None:
-    """Validate PNG chunk boundaries and checksums without inflating pixels."""
+    """Validate PNG chunk boundaries and checksums without inflating pixels.
+
+    Args:
+        data: PNG file bytes, including the signature.
+
+    Raises:
+        OSError: A chunk is truncated, has a bad checksum, or the file has no valid IEND.
+    """
     view = memoryview(data)
     position = 8
     while position + 12 <= len(data):
@@ -264,13 +296,31 @@ class PngInfo:
         self.chunks: list[tuple[bytes, bytes, bool]] = []
 
     def add(self, cid: bytes, data: bytes, after_idat: bool = False) -> None:
-        """Append an ancillary chunk, optionally after the pixel data."""
+        """Append an ancillary chunk, optionally after the pixel data.
+
+        Args:
+            cid: Four-byte chunk type. Text chunks and ancillary types are accepted.
+            data: Raw chunk payload.
+            after_idat: Place the chunk after the image data when true.
+
+        Raises:
+            ValueError: ``cid`` is not a valid ancillary chunk type.
+        """
         if cid not in (b"tEXt", b"zTXt", b"iTXt") and (len(cid) != 4 or not cid.isalpha() or not cid[:1].islower() or not cid[2:3].isupper()):
             raise ValueError("PNG chunk must have a valid ancillary identifier")
         self.chunks.append((cid, bytes(data), bool(after_idat)))
 
     def add_text(self, key: str | bytes, value: str | bytes, zip: bool = False) -> None:
-        """Add Latin-1 text, using international text for Unicode values."""
+        """Add Latin-1 text, using international text for Unicode values.
+
+        Args:
+            key: Keyword of 1 to 79 non-null Latin-1 bytes.
+            value: Text value. Non-Latin-1 strings are stored as iTXt.
+            zip: Compress the value when true.
+
+        Raises:
+            ValueError: ``key`` is empty, longer than 79 bytes, or contains a null.
+        """
         if isinstance(value, iTXt):
             self.add_itxt(key, value, value.lang, value.tkey, zip)
             return
@@ -283,7 +333,18 @@ class PngInfo:
         self.add(b"zTXt" if zip else b"tEXt", keyword + b"\0" + (b"\0" + zlib.compress(raw) if zip else raw))
 
     def add_itxt(self, key: str | bytes, value: str | bytes, lang: str = "", tkey: str = "", zip: bool = False) -> None:
-        """Add UTF-8 text with optional language and translated keyword."""
+        """Add UTF-8 text with optional language and translated keyword.
+
+        Args:
+            key: Keyword of 1 to 79 non-null Latin-1 bytes.
+            value: UTF-8 text value.
+            lang: ASCII language tag.
+            tkey: Translated keyword.
+            zip: Compress the value when true.
+
+        Raises:
+            ValueError: ``key`` is empty, longer than 79 bytes, or contains a null.
+        """
         raw = value.encode("utf-8") if isinstance(value, str) else bytes(value)
         fields = self._keyword(key) + b"\0" + bytes((int(zip), 0)) + lang.encode("ascii") + b"\0" + tkey.encode("utf-8") + b"\0"
         self.add(b"iTXt", fields + (zlib.compress(raw) if zip else raw))

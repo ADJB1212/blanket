@@ -303,6 +303,9 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
         A Future whose result is a synchronized GpuImage or GpuUnsignedImage.
         Calling result() waits and re-raises upload errors. CUDA work uses
         the stream current when the transfer was submitted.
+
+    Raises:
+        ValueError: The runtime is not native Metal or CUDA.
     """
     if runtime != "native":
         raise ValueError("asynchronous transfers require native Metal or CUDA")
@@ -408,6 +411,9 @@ def merge(mode: str, bands: Sequence[GpuImage]) -> GpuImage:
     Returns:
         An independent resident image carrying metadata from the first band.
         Band sample values are copied without rescaling.
+
+    Raises:
+        ValueError: The mode, band count, size, dtype, or execution context does not match.
     """
     if mode not in _MODES or len(bands) != _MODES[mode][0]:
         raise ValueError("mode and number of bands do not match")
@@ -456,6 +462,9 @@ class GpuImage:
             unified_memory: Enable shared CPU exports for native Metal storage.
 
         Use from_image or from_torch for validated public construction.
+
+        Raises:
+            ValueError: ``unified_memory`` is set for a runtime other than native Metal.
         """
         if unified_memory and runtime != "native":
             raise ValueError("unified memory requires native Metal")
@@ -567,6 +576,9 @@ class GpuImage:
         Returns:
             An image with the requested size and original mode. Interpolation
             clamps neighbor reads to source edges; alpha is sampled independently.
+
+        Raises:
+            ValueError: The method, coefficient count, resampling filter, or fill color is invalid.
         """
         self._check()
         if method not in (Image.Transform.AFFINE, Image.Transform.PERSPECTIVE):
@@ -630,6 +642,9 @@ class GpuImage:
 
         Returns:
             A new GPU image in the source mode, with independently sampled alpha.
+
+        Raises:
+            ValueError: The coordinate map, resampling filter, or fill color is invalid.
         """
         coordinates._check()
         if coordinates.mode != "RGB;F":
@@ -658,6 +673,9 @@ class GpuImage:
             An independent image of the original size and mode. Every channel,
             including alpha, is interpolated separately; source alpha does not
             implicitly supply coverage.
+
+        Raises:
+            ValueError: The source, box, or mask does not match this image.
         """
         self._check()
         source._check()
@@ -815,6 +833,9 @@ class GpuImage:
         Returns:
             A new GPU image with the same size and mode. Alpha is processed as
             a channel; byte results saturate to 0..255.
+
+        Raises:
+            ValueError: ``percent`` does not fit a signed 32-bit integer.
         """
         self._check()
         percent = index(percent)
@@ -836,6 +857,9 @@ class GpuImage:
         Returns:
             A resident image with replicated edges and unchanged size/mode.
             Alpha is filtered too; any NaN in a float window propagates.
+
+        Raises:
+            ValueError: The size is not an odd value from 1 through 7, or the rank is invalid.
         """
         size, rank = index(size), index(rank)
         if size not in (1, 3, 5, 7) or not 0 <= rank < size * size:
@@ -904,6 +928,9 @@ class GpuImage:
         Returns:
             An independent GPU image of the requested size and original mode.
             Byte results retain fixed-point rounding; float colors are not clipped.
+
+        Raises:
+            ValueError: The size, resampling filter, transfer, or color mode is unsupported.
         """
         self._check()
         _validate(size, self.mode)
@@ -957,6 +984,9 @@ class GpuImage:
         Returns:
             A resident image of the same size/mode. All channels, including alpha,
             are processed; borders lacking a full window retain the source.
+
+        Raises:
+            ValueError: The kernel is not 3x3 or 5x5, or its parameters are invalid.
         """
         if size not in (3, 5) or len(kernel) != size * size:
             raise ValueError("kernel must be 3x3 or 5x5")
@@ -975,6 +1005,9 @@ class GpuImage:
         Returns:
             A resident image sized (right-left, bottom-top) in the source mode.
             Out-of-bounds alpha is zero as well.
+
+        Raises:
+            ValueError: The crop box is not four in-range integers.
         """
         self._check()
         if len(box) != 4:
@@ -994,6 +1027,9 @@ class GpuImage:
         Returns:
             An independent image in the original mode. Quarter-turn rotations
             and diagonal transposes swap width and height.
+
+        Raises:
+            ValueError: ``method`` is not a supported transpose.
         """
         self._check()
         method = index(method)
@@ -1099,6 +1135,10 @@ class GpuImage:
         Returns:
             A resident image using trilinear lookup. A three-channel table
             preserves an existing alpha band; four-channel tables supply alpha.
+
+        Raises:
+            TypeError: ``lut`` is not an ``ImageFilter.Color3DLUT``.
+            ValueError: The table and image modes or dtypes are incompatible.
         """
         from .ImageFilter import Color3DLUT
 
@@ -1175,6 +1215,9 @@ class GpuImage:
         Returns:
             A resident byte image with the mask applied to every band, including
             alpha. Float sources are unsupported.
+
+        Raises:
+            ValueError: ``bits`` is outside 0 through 8, or the image is not byte storage.
         """
         bits = index(bits)
         if bits not in range(9):
@@ -1303,6 +1346,9 @@ class GpuImage:
         Returns:
             A new resident image in the source mode. Float alpha is clamped to
             0..1 with NaNs treated as zero; float color remains unbounded.
+
+        Raises:
+            ValueError: The transfer, alpha mode, size, or execution context does not match.
         """
         self._check()
         source._check()
@@ -1345,6 +1391,9 @@ class GpuImage:
             copied. With native Metal unified_memory, the CPU image instead
             shares immutable storage and detaches when modified. It remains
             valid after the GPU handle is closed.
+
+        Raises:
+            ValueError: The image is closed.
         """
         if self.runtime == "native":
             self._check()
@@ -1472,7 +1521,12 @@ class GpuReduction:
     """
 
     def __init__(self, image: GpuImage, kind: str) -> None:
-        """Wrap a resident result image with kind 'histogram' or 'statistics'."""
+        """Wrap a resident result image with kind 'histogram' or 'statistics'.
+
+        Args:
+            image: Resident image holding histogram or statistics samples.
+            kind: ``"histogram"`` or ``"statistics"``.
+        """
         self._image = image
         self.kind = kind
 

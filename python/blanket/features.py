@@ -52,6 +52,13 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
     Args:
         format: Format name or alias, matched case insensitively.
 
+    Returns:
+        Encoding support for a known encoder, or None when that encoder is unavailable.
+
+    Raises:
+        TypeError: ``format`` is not a string.
+        ValueError: ``format`` is not a known encoding name.
+
     Examples:
         ```python
         from blanket import features
@@ -263,14 +270,34 @@ def version(feature: str) -> str | None:
 
 
 def check_codec(codec: str) -> bool:
-    """Return availability for a Pillow codec identifier."""
+    """Return availability for a Pillow codec identifier.
+
+    Args:
+        codec: One of ``jpg``, ``jpg_2000``, ``zip``, or ``libtiff``.
+
+    Returns:
+        Whether the corresponding encoder is available. ``zip`` reports PNG support.
+
+    Raises:
+        ValueError: ``codec`` is not one of the Pillow codec identifiers.
+    """
     if codec not in ("jpg", "jpg_2000", "zip", "libtiff"):
         raise ValueError(f"Unknown codec {codec}")
     return check("png" if codec == "zip" else codec)
 
 
 def version_codec(codec: str) -> str | None:
-    """Return the native backend version for a Pillow codec identifier."""
+    """Return the native backend version for a Pillow codec identifier.
+
+    Args:
+        codec: One of ``jpg``, ``jpg_2000``, ``zip``, or ``libtiff``.
+
+    Returns:
+        The backend version when that codec is available, otherwise None.
+
+    Raises:
+        ValueError: ``codec`` is not one of the Pillow codec identifiers.
+    """
     if not check_codec(codec):
         return None
     return version("png" if codec == "zip" else codec)
@@ -335,14 +362,34 @@ pilinfo = blanketinfo
 
 
 def check_feature(feature: str) -> bool | None:
-    """Check whether an optional Pillow feature flag is enabled."""
+    """Check whether an optional Pillow feature flag is enabled.
+
+    Args:
+        feature: A Pillow feature name such as ``libjpeg_turbo`` or ``raqm``.
+
+    Returns:
+        True when ``libjpeg_turbo`` is available, otherwise False for a known flag.
+
+    Raises:
+        ValueError: ``feature`` is not a known Pillow feature flag.
+    """
     if feature not in ("raqm", "fribidi", "harfbuzz", "libjpeg_turbo", "mozjpeg", "zlib_ng", "libimagequant", "xcb"):
         raise ValueError(f"Unknown feature {feature}")
     return feature == "libjpeg_turbo" and check("libjpeg_turbo")
 
 
 def check_module(feature: str) -> bool:
-    """Check if an optional module backend is available."""
+    """Check if an optional module backend is available.
+
+    Args:
+        feature: A Pillow module name such as ``webp``, ``littlecms2``, or ``pil``.
+
+    Returns:
+        Whether this build provides that backend. Pillow-only modules return False.
+
+    Raises:
+        ValueError: ``feature`` is not a known module name.
+    """
     canonical = feature.lower().replace("-", "_")
     if canonical in ("pil", "tkinter", "tk", "freetype2", "freetype", "raqm", "fribidi"):
         return False

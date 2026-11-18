@@ -78,6 +78,17 @@ def hex_to_hash(hexstr: str, hash_size: int | None = None) -> ImageHash:
 
     If omitted, the side length is inferred from the number of hex digits.
     Leading zero digits must be retained. Nonzero padding bits are rejected.
+
+    Args:
+        hexstr: Lowercase or uppercase hexadecimal digits, including leading zeros.
+        hash_size: Square side from 2 to 64, or None to infer it from ``hexstr``.
+
+    Returns:
+        An image hash whose integer value is ``hexstr``.
+
+    Raises:
+        TypeError: ``hexstr`` is not a string, or ``hash_size`` is not an integer.
+        ValueError: The text is not hexadecimal, or its length does not match the side.
     """
     if not isinstance(hexstr, str):
         raise TypeError("hexstr must be a string")
@@ -118,6 +129,18 @@ def nearest_neighbors(query: ImageHash, hashes: Iterable[ImageHash], max_distanc
     ties by input order. Every occurrence of a matching hash is returned.
     Use hashes from the same algorithm and settings. All sizes must match
     the query, and ``max_distance`` must be a nonnegative integer.
+
+    Args:
+        query: Hash to compare against every entry.
+        hashes: Candidate hashes. Every size must match ``query``.
+        max_distance: Inclusive Hamming radius. Negative values are rejected.
+
+    Returns:
+        ``(index, distance)`` pairs sorted by distance, then input order.
+
+    Raises:
+        TypeError: ``query`` or an entry is not an ``ImageHash``, or ``max_distance`` is not an integer.
+        ValueError: A hash size differs from the query, or ``max_distance`` is negative.
     """
     _validate_max_distance(max_distance)
     if not isinstance(query, ImageHash):
@@ -137,6 +160,17 @@ def group_hashes(hashes: Iterable[ImageHash], max_distance: int) -> list[list[in
     match, and ``max_distance`` must be a nonnegative integer.
 
     Grouping may compare every pair of distinct hashes in the worst case.
+
+    Args:
+        hashes: Hashes to cluster. Every size must match.
+        max_distance: Inclusive Hamming radius linking positions into a group.
+
+    Returns:
+        Groups of zero-based input positions, ordered by first position.
+
+    Raises:
+        TypeError: An entry is not an ``ImageHash``, or ``max_distance`` is not an integer.
+        ValueError: Hash sizes differ, or ``max_distance`` is negative.
     """
     _validate_max_distance(max_distance)
     packed, width = _pack_hashes(hashes)
@@ -162,6 +196,17 @@ def average_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     """Return aHash: each bit is true when a sample exceeds the thumbnail mean.
 
     ``hash_size`` is a side length from 2 to 64; the default produces 64 bits.
+
+    Args:
+        image: Nonempty source image. Alpha, orientation, and ICC are ignored.
+        hash_size: Square side from 2 to 64.
+
+    Returns:
+        A square bit hash of the grayscale thumbnail.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image, or ``hash_size`` is not an integer.
+        ValueError: The image is empty, or ``hash_size`` is outside 2 through 64.
     """
     size = _size(hash_size)
     return _hash(image, size, size, "average")
@@ -204,6 +249,13 @@ def colorhash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     Args:
         image: Nonempty source image; the current frame stays unchanged.
         hash_size: Square side from 2 to 64; the default produces 64 bits.
+
+    Returns:
+        A square bit hash of the color histogram.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image, or ``hash_size`` is not an integer.
+        ValueError: The image is empty, or ``hash_size`` is outside 2 through 64.
     """
     return _histogram_hash(image, hash_size, "color", "RGB")
 
@@ -229,6 +281,13 @@ def crop_resistant_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     Args:
         image: Source at least 3x3 pixels; the current frame stays unchanged.
         hash_size: Square side from 2 to 64; the default produces 64 bits.
+
+    Returns:
+        A square bit hash of the local binary-pattern histogram.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image, or ``hash_size`` is not an integer.
+        ValueError: The image is smaller than 3x3, or ``hash_size`` is outside 2 through 64.
     """
     return _histogram_hash(image, hash_size, "crop-resistant", "L")
 
@@ -237,6 +296,17 @@ def dhash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     """Return horizontal dHash: a bit is true when the right sample is brighter.
 
     The thumbnail is ``(hash_size + 1, hash_size)``. Side lengths are 2 to 64.
+
+    Args:
+        image: Nonempty source image. Alpha, orientation, and ICC are ignored.
+        hash_size: Square side from 2 to 64.
+
+    Returns:
+        A square bit hash of horizontal brightness changes.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image, or ``hash_size`` is not an integer.
+        ValueError: The image is empty, or ``hash_size`` is outside 2 through 64.
     """
     size = _size(hash_size)
     return _hash(image, size, size, "difference")
@@ -250,6 +320,18 @@ def phash(image: Image.Image, hash_size: int = 8, highfreq_factor: int = 4) -> I
     Near-zero AC coefficients are rounded to zero to suppress numerical noise.
     Side lengths are 2 to 64; the positive integer factor must keep the resized
     side at most 256. Default settings produce a 64-bit hash from 32x32 samples.
+
+    Args:
+        image: Nonempty source image. Alpha, orientation, and ICC are ignored.
+        hash_size: Square side from 2 to 64.
+        highfreq_factor: Positive integer resize factor. ``hash_size * highfreq_factor`` must be at most 256.
+
+    Returns:
+        A square bit hash of the low-frequency DCT coefficients.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image, or a size argument is not an integer.
+        ValueError: The image is empty, or a size argument is outside its allowed range.
     """
     size = _size(hash_size)
     if isinstance(highfreq_factor, bool) or not isinstance(highfreq_factor, int):

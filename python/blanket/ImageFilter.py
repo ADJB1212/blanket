@@ -63,26 +63,32 @@ def _gradients(image: Image.Image, operator: str) -> tuple[Image.Image, Image.Im
 def sobel(image: Image.Image) -> tuple[Image.Image, Image.Image]:
     """Return signed x/y Sobel derivatives as two mode ``F`` images.
 
-    Args:
-        image: Nonempty L, LA, RGB, RGBA, I;16 variant, F, RGB;F, or RGBA;F image.
+        Args:
+            image: Nonempty L, LA, RGB, RGBA, I;16 variant, F, RGB;F, or RGBA;F image.
 
-    Integer samples are normalized by their depth (8/10/12/16 bits); float
-    color samples must be finite and in [0, 1]. RGB luminance uses
-    0.299 R + 0.587 G + 0.114 B. Alpha, ICC, and EXIF orientation are ignored.
-    Composite first to include transparency in the displayed appearance.
+        Integer samples are normalized by their depth (8/10/12/16 bits); float
+        color samples must be finite and in [0, 1]. RGB luminance uses
+        0.299 R + 0.587 G + 0.114 B. Alpha, ICC, and EXIF orientation are ignored.
+        Composite first to include transparency in the displayed appearance.
 
-    Use the 3x3 x kernel [-1, 0, 1; -2, 0, 2; -1, 0, 1] divided by 8,
-    and its transpose for y. Positive derivatives point right and down.
-    Borders replicate the nearest pixel, including for one-pixel dimensions.
+        Use the 3x3 x kernel [-1, 0, 1; -2, 0, 2; -1, 0, 1] divided by 8,
+        and its transpose for y. Positive derivatives point right and down.
+        Borders replicate the nearest pixel, including for one-pixel dimensions.
     Output size and metadata match the current frame; the source is unchanged.
 
-    Examples:
-        ```python
-        from blanket import Image, ImageFilter
+    Returns:
+        Horizontal and vertical derivative images in mode ``F``.
 
-        image = Image.new("L", (32, 32))
-        gx, gy = ImageFilter.sobel(image)
-        ```
+    Raises:
+        ValueError: The image is empty or its mode is unsupported.
+
+    Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("L", (32, 32))
+            gx, gy = ImageFilter.sobel(image)
+            ```
     """
     return _gradients(image, "sobel")
 
@@ -90,20 +96,26 @@ def sobel(image: Image.Image) -> tuple[Image.Image, Image.Image]:
 def scharr(image: Image.Image) -> tuple[Image.Image, Image.Image]:
     """Return signed x/y Scharr derivatives as two mode ``F`` images.
 
-    Args:
-        image: Nonempty image in one of the modes supported by ``sobel``.
+        Args:
+            image: Nonempty image in one of the modes supported by ``sobel``.
 
-    Use the 3x3 x kernel [-3, 0, 3; -10, 0, 10; -3, 0, 3] divided by 32,
-    and its transpose for y. Sample normalization, luminance, alpha handling,
+        Use the 3x3 x kernel [-3, 0, 3; -10, 0, 10; -3, 0, 3] divided by 32,
+        and its transpose for y. Sample normalization, luminance, alpha handling,
     replicated borders, and metadata follow ``sobel``.
 
-    Examples:
-        ```python
-        from blanket import Image, ImageFilter
+    Returns:
+        Horizontal and vertical derivative images in mode ``F``.
 
-        image = Image.new("L", (32, 32))
-        gx, gy = ImageFilter.scharr(image)
-        ```
+    Raises:
+        ValueError: The image is empty or its mode is unsupported.
+
+    Examples:
+            ```python
+            from blanket import Image, ImageFilter
+
+            image = Image.new("L", (32, 32))
+            gx, gy = ImageFilter.scharr(image)
+            ```
     """
     return _gradients(image, "scharr")
 
@@ -126,6 +138,13 @@ def canny(image: Image.Image, low_threshold: float = 0.1, high_threshold: float 
     along the selected positive neighbor offset. The outermost border is zero;
     dimensions below three therefore produce a blank mask. Output retains the
     current frame's size and metadata without editing the source.
+
+    Returns:
+        A mode ``L`` mask whose samples are only 0 or 255.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image.
+        ValueError: A threshold, sigma, or image mode is unsupported.
 
     Examples:
         ```python
@@ -163,7 +182,17 @@ class Filter(ABC):
 
     @abstractmethod
     def filter(self, image: _Image) -> _Image:
-        """Filter a native image band and return a native image."""
+        """Filter a native image band and return a native image.
+
+        Args:
+            image: Native image supplied by ``Image.filter``.
+
+        Returns:
+            The filtered native image.
+
+        Raises:
+            NotImplementedError: The subclass does not implement filtering.
+        """
         raise NotImplementedError
 
 
@@ -205,6 +234,12 @@ class BuiltinFilter(MultibandFilter):
             image = Image.new("RGB", (8, 8), (40, 100, 180))
             result = image.filter(ImageFilter.BLUR)
             ```
+
+        Returns:
+            The convolved native image.
+
+        Raises:
+            ValueError: The image uses a palette mode.
         """
         if image.mode == "P":
             raise ValueError("cannot filter palette images")
@@ -224,6 +259,9 @@ class Kernel(BuiltinFilter):
             kernel: Row-major convolution coefficients for a 3 by 3 or 5 by 5 kernel.
             scale: Divisor for the kernel coefficients; None uses their sum.
             offset: Value added after scaling.
+
+        Raises:
+            ValueError: The kernel length does not match ``size``.
 
         Examples:
             ```python
@@ -252,6 +290,9 @@ class RankFilter(Filter):
             size: Odd neighborhood width in pixels.
             rank: Zero-based rank within the window, from 0 through size squared minus 1.
 
+        Raises:
+            ValueError: ``size`` is even or too large, or ``rank`` is outside the window.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -274,6 +315,12 @@ class RankFilter(Filter):
 
         Args:
             image: Native image supplied by `Image.filter`.
+
+        Returns:
+            The ranked native image.
+
+        Raises:
+            ValueError: The kernel size is invalid or the image uses a palette mode.
 
         Examples:
             ```python
@@ -412,6 +459,9 @@ class ModeFilter(Filter):
         Args:
             image: Native image supplied by `Image.filter`.
 
+        Returns:
+            The filtered native image.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -463,6 +513,9 @@ class GaussianBlur(MultibandFilter):
         Args:
             image: Native image supplied by `Image.filter`.
 
+        Returns:
+            The blurred native image.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -485,6 +538,9 @@ class BoxBlur(MultibandFilter):
         Args:
             radius: Nonnegative blur radius, or separate horizontal and vertical radii.
 
+        Raises:
+            ValueError: A radius is negative or too large.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -505,6 +561,9 @@ class BoxBlur(MultibandFilter):
 
         Args:
             image: Native image supplied by `Image.filter`.
+
+        Returns:
+            The blurred native image.
 
         Examples:
             ```python
@@ -556,6 +615,9 @@ class UnsharpMask(MultibandFilter):
 
         Args:
             image: Native image supplied by `Image.filter`.
+
+        Returns:
+            The sharpened native image.
 
         Examples:
             ```python
@@ -763,6 +825,9 @@ class Color3DLUT(MultibandFilter):
             target_mode: Optional output mode, such as `RGB` or `RGBA`.
             **kwargs: Internal table-copy option; leave omitted for normal use.
 
+        Raises:
+            ValueError: The size, channel count, or table length is invalid.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -833,6 +898,12 @@ class Color3DLUT(MultibandFilter):
             channels: Number of output channels, 3 or 4.
             target_mode: Optional output mode, such as `RGB` or `RGBA`.
 
+        Returns:
+            A table filled by ``callback``.
+
+        Raises:
+            ValueError: The size or channel count is invalid.
+
         Examples:
             ```python
             from blanket import Image, ImageFilter
@@ -861,6 +932,12 @@ class Color3DLUT(MultibandFilter):
             with_normals: Prepend normalized red, green, blue coordinates to the callback's input channel values.
             channels: Output channel count, or None to retain the existing count.
             target_mode: Optional output mode, such as `RGB` or `RGBA`.
+
+        Returns:
+            A new table with the transformed entries.
+
+        Raises:
+            ValueError: The channel count is not 3 or 4.
 
         Examples:
             ```python
@@ -911,6 +988,9 @@ class Color3DLUT(MultibandFilter):
 
         Args:
             image: Native image supplied by `Image.filter`.
+
+        Returns:
+            The color-mapped native image.
 
         Examples:
             ```python

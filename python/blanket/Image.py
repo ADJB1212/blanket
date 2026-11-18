@@ -180,17 +180,47 @@ _MODE_BANDS = _BANDS | {**dict.fromkeys(("I;16S", "I;16LS", "I;16BS", "I;16NS", 
 
 
 def getmodebandnames(mode: str) -> tuple[str, ...]:
-    """Return mode metadata, including modes without native raster support."""
+    """Return mode metadata, including modes without native raster support.
+
+    Args:
+        mode: Pillow-style mode name.
+
+    Returns:
+        Band names such as ``("R", "G", "B")``.
+
+    Raises:
+        KeyError: ``mode`` is unknown.
+    """
     return _MODE_BANDS[mode]
 
 
 def getmodebands(mode: str) -> int:
-    """Return the number of bands described by a mode."""
+    """Return the number of bands described by a mode.
+
+    Args:
+        mode: Pillow-style mode name.
+
+    Returns:
+        The number of bands in ``mode``.
+
+    Raises:
+        KeyError: ``mode`` is unknown.
+    """
     return len(getmodebandnames(mode))
 
 
 def getmodebase(mode: str) -> str:
-    """Return the grayscale, palette, or color base mode."""
+    """Return the grayscale, palette, or color base mode.
+
+    Args:
+        mode: Pillow-style mode name.
+
+    Returns:
+        ``"L"``, ``"P"``, or ``"RGB"``.
+
+    Raises:
+        KeyError: ``mode`` is unknown.
+    """
     bands = getmodebandnames(mode)
     if mode == "P":
         return "P"
@@ -198,7 +228,17 @@ def getmodebase(mode: str) -> str:
 
 
 def getmodetype(mode: str) -> str:
-    """Return the L, I, or F storage type described by a mode."""
+    """Return the L, I, or F storage type described by a mode.
+
+    Args:
+        mode: Pillow-style mode name.
+
+    Returns:
+        ``"L"`` for unsigned storage, ``"I"`` for mode ``I``, or ``"F"`` for float modes.
+
+    Raises:
+        KeyError: ``mode`` is unknown.
+    """
     getmodebandnames(mode)
     if mode in ("F", "RGB;F", "RGBA;F"):
         return "F"
@@ -254,7 +294,11 @@ _MIME_TYPES = {
 
 
 def registered_extensions() -> dict[str, str]:
-    """Return known filename extensions, including read-only formats."""
+    """Return known filename extensions, including read-only formats.
+
+    Returns:
+        A copy of the extension-to-format map. Keys include the leading dot.
+    """
     return _EXTENSIONS.copy()
 
 
@@ -368,6 +412,9 @@ class SupportsGetData(Protocol):
     def getdata(self) -> tuple[int, Sequence[object]]:
         """Return the transformation identifier and its associated data.
 
+        Returns:
+            The transformation method and the data it requires.
+
         Examples:
             ```python
             from blanket import Image
@@ -396,6 +443,12 @@ class ImageTransformHandler:
             image: Input image.
             resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
             fill: Pillow-compatible fill flag.
+
+        Returns:
+            The transformed image.
+
+        Raises:
+            NotImplementedError: The handler does not implement this method.
 
         Examples:
             ```python
@@ -552,6 +605,9 @@ class Image:
     def mode(self) -> str:
         """Pixel mode of this image.
 
+        Returns:
+            The mode string, such as ``"RGB"``.
+
         Examples:
             ```python
             from blanket import Image
@@ -565,6 +621,9 @@ class Image:
     @property
     def bit_depth(self) -> int:
         """Sample depth: 8, 10, 12, 16, or 32 for signed integer and float modes.
+
+        Returns:
+            Significant bits per sample.
 
         Examples:
             ```python
@@ -580,6 +639,9 @@ class Image:
     def size(self) -> tuple[int, int]:
         """Image dimensions as (width, height).
 
+        Returns:
+            ``(width, height)`` in pixels.
+
         Examples:
             ```python
             from blanket import Image
@@ -593,6 +655,9 @@ class Image:
     @property
     def width(self) -> int:
         """Image width in pixels.
+
+        Returns:
+            The width in pixels.
 
         Examples:
             ```python
@@ -608,6 +673,9 @@ class Image:
     def height(self) -> int:
         """Image height in pixels.
 
+        Returns:
+            The height in pixels.
+
         Examples:
             ```python
             from blanket import Image
@@ -621,6 +689,9 @@ class Image:
     @property
     def format(self) -> str | None:
         """Detected input format, or None for a newly created image.
+
+        Returns:
+            The format name, such as ``"PNG"``, or None.
 
         Examples:
             ```python
@@ -636,6 +707,9 @@ class Image:
     def info(self) -> dict[object, object]:
         """Mutable metadata dictionary.
 
+        Returns:
+            Metadata copied from the source and updated by later operations.
+
         Examples:
             ```python
             from blanket import Image
@@ -650,6 +724,9 @@ class Image:
     def is_animated(self) -> bool:
         """Whether the image contains more than one frame or page.
 
+        Returns:
+            True when ``n_frames`` is greater than one.
+
         Examples:
             ```python
             from blanket import Image
@@ -663,6 +740,9 @@ class Image:
     @property
     def n_frames(self) -> int:
         """Number of frames or pages.
+
+        Returns:
+            The frame or page count. A still image returns 1.
 
         Examples:
             ```python
@@ -686,6 +766,12 @@ class Image:
 
             assert Image.new("RGB", (2, 2)).tell() == 0
             ```
+
+        Returns:
+            The zero-based index of the current frame.
+
+        Raises:
+            ValueError: The image is closed.
         """
         self._check_open()
         return self._frame
@@ -704,6 +790,10 @@ class Image:
             image = Image.new("RGB", (2, 2))
             image.seek(0)
             ```
+
+        Raises:
+            EOFError: ``frame`` is outside the sequence.
+            ValueError: The image is closed or ``progress`` is not callable.
         """
         _validate_progress(progress)
         self._check_open()
@@ -736,6 +826,9 @@ class Image:
     def has_transparency_data(self) -> bool:
         """Whether alpha or transparency metadata exists, even if opaque.
 
+        Returns:
+            True when the image has an alpha band or transparency metadata.
+
         Examples:
             ```python
             from blanket import Image
@@ -755,6 +848,12 @@ class Image:
 
         Args:
             progress: Callback for decoding deferred pixels, as in decode().
+
+        Returns:
+            A pixel accessor bound to the current raster.
+
+        Raises:
+            ValueError: The image is closed or ``progress`` is not callable.
 
         Examples:
             ```python
@@ -810,22 +909,28 @@ class Image:
     def buffer_view(self) -> memoryview:
         """Return a read-only byte view without copying pixel storage.
 
-        The view keeps its allocation alive after image mutation, frame changes,
-        or close. Native image writes detach through copy-on-write. Mode 1 and
-        LAB require explicit conversion because their public byte representation
-        differs from storage. Palette modes expose indices. Mapped images expose
+                The view keeps its allocation alive after image mutation, frame changes,
+                or close. Native image writes detach through copy-on-write. Mode 1 and
+                LAB require explicit conversion because their public byte representation
+                differs from storage. Palette modes expose indices. Mapped images expose
         their physical buffer, including row padding and storage orientation;
         external writes remain visible. Release the view to relinquish its owner.
 
-        Examples:
-            ```python
-            from blanket import Image
+                Returns:
+                    A read-only ``memoryview`` of the pixel bytes.
 
-            image = Image.new("RGB", (8, 8), (40, 100, 180))
-            pixels = image.buffer_view()
-            assert pixels.readonly
-            pixels.release()
-            ```
+                Raises:
+                    ValueError: The image is closed or its mode cannot be viewed directly.
+
+                Examples:
+                    ```python
+                    from blanket import Image
+
+                    image = Image.new("RGB", (8, 8), (40, 100, 180))
+                    pixels = image.buffer_view()
+                    assert pixels.readonly
+                    pixels.release()
+                    ```
         """
         self.load()
         return image_buffer_view(self._native)
@@ -838,6 +943,13 @@ class Image:
         padding and negative row strides. Mode 1 and LAB require conversion.
         NumPy is imported only when this method is called. Use np.array(image)
         for an independent writable copy; ordinary np.asarray remains a snapshot.
+
+        Returns:
+            A read-only NumPy array sharing the image buffer.
+
+        Raises:
+            ImportError: NumPy is not installed.
+            ValueError: The image is closed or its mode cannot be viewed directly.
 
         Examples:
             ```python
@@ -862,6 +974,16 @@ class Image:
         are snapshotted. Consumers use the versioned BlanketImageV1 C descriptor
         in crates/core-python/blanket_image.h and may copy its data.
         Pixel bytes use native storage rather than the packed tobytes layout.
+
+        Args:
+            copy: Copy pixels into storage owned only by the capsule when true.
+
+        Returns:
+            A ``blanket.image.v1`` capsule.
+
+        Raises:
+            TypeError: ``copy`` is not a bool.
+            ValueError: The image is closed.
         """
         if not isinstance(copy, bool):
             raise TypeError("copy must be a boolean")
@@ -873,6 +995,9 @@ class Image:
         """Blanket's native image core, available after loading the image.
 
         This is a Blanket ``_Image`` object, not a Pillow ``ImagingCore``.
+
+        Returns:
+            The loaded native image.
 
         Examples:
             ```python
@@ -889,6 +1014,9 @@ class Image:
         """Return Blanket's native image core.
 
         The result is the same object as ``im``; it is not a Pillow capsule.
+
+        Returns:
+            The loaded native image.
 
         Examples:
             ```python
@@ -950,6 +1078,13 @@ class Image:
         Args:
             mode: Requested decoder mode, including L or YCbCr for RGB JPEGs.
             size: Requested minimum decoder dimensions, or None for full size.
+
+        Returns:
+            ``(mode, box)`` after a draft is applied, or None when drafting is unavailable.
+
+        Raises:
+            TypeError: ``mode`` or ``size`` has the wrong type.
+            ValueError: The requested draft is invalid.
 
         Examples:
             ```python
@@ -1070,6 +1205,13 @@ class Image:
             colors: Maximum number of colors for adaptive palette conversion, from 1 through 256.
             bit_depth: Output sample depth for high-bit-depth storage, or None to retain the input depth. `I` and `F` use 32-bit samples.
 
+        Returns:
+            A new image in the requested mode. This image is unchanged.
+
+        Raises:
+            TypeError: An argument has the wrong type.
+            ValueError: The mode, matrix, palette, color count, or depth is unsupported.
+
         Examples:
             ```python
             from blanket import Image
@@ -1188,6 +1330,9 @@ class Image:
     def copy(self) -> Image:
         """Return an independent copy of the pixels, palette, and metadata.
 
+        Returns:
+            A new image with the same pixels and metadata.
+
         Examples:
             ```python
             from blanket import Image
@@ -1238,6 +1383,9 @@ class Image:
 
     def getexif(self) -> Exif:
         """Return the image's editable EXIF tags, including nested IFDs.
+
+        Returns:
+            The image EXIF object. Later edits are stored on this image.
 
         Examples:
             ```python
@@ -1343,6 +1491,9 @@ class Image:
     def get_child_images(self) -> list[Image]:
         """Return embedded thumbnail or child images referenced in EXIF.
 
+        Returns:
+            Decoded child images, in the order referenced by the EXIF.
+
         Examples:
             ```python
             from blanket import Image
@@ -1363,6 +1514,12 @@ class Image:
 
         Args:
             strip_namespaces: Strip namespace URIs from tag and attribute names.
+
+        Returns:
+            Nested XMP dictionaries. An image without XMP returns an empty dictionary.
+
+        Raises:
+            ValueError: The XMP packet cannot be parsed.
 
         Examples:
             ```python
@@ -1418,6 +1575,9 @@ class Image:
     def get_format_mimetype(self) -> str | None:
         """Return the detected format's MIME type, or None when unknown.
 
+        Returns:
+            A MIME type such as ``"image/png"``, or None.
+
         Examples:
             ```python
             from blanket import Image
@@ -1452,6 +1612,9 @@ class Image:
         Args:
             xy: Pixel `(x, y)` coordinates. Negative coordinates count from the right or bottom.
 
+        Returns:
+            An integer for single-band modes, or a channel tuple.
+
         Examples:
             ```python
             from blanket import Image
@@ -1471,6 +1634,12 @@ class Image:
 
         Args:
             rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
+
+        Returns:
+            Interleaved palette samples, or None when the image has no palette.
+
+        Raises:
+            ValueError: ``rawmode`` is unsupported.
 
         Examples:
             ```python
@@ -1498,6 +1667,12 @@ class Image:
         Args:
             dest_map: Old indices in the desired palette order.
             source_palette: Optional interleaved RGB or RGBA palette bytes.
+
+        Returns:
+            A new mode ``P`` image using the reordered palette.
+
+        Raises:
+            ValueError: The map or palette bytes are invalid.
 
         Examples:
             ```python
@@ -1542,6 +1717,9 @@ class Image:
             xy: Pixel `(x, y)` coordinates. Negative coordinates count from the right or bottom.
             value: Pixel value or channel tuple.
 
+        Raises:
+            ValueError: The coordinate or pixel value is invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -1564,6 +1742,12 @@ class Image:
         Args:
             band: Zero-based channel index, or None for all channels.
 
+        Returns:
+            Pixel values in row-major order.
+
+        Raises:
+            ValueError: ``band`` is outside the image.
+
         Examples:
             ```python
             from blanket import Image
@@ -1585,6 +1769,12 @@ class Image:
 
         Args:
             band: Zero-based channel index, or None for all channels.
+
+        Returns:
+            Pixel values in row-major order.
+
+        Raises:
+            ValueError: ``band`` is outside the image.
 
         Examples:
             ```python
@@ -1627,6 +1817,9 @@ class Image:
         Args:
             maxcolors: Maximum number of distinct colors to return; exceeding it returns None.
 
+        Returns:
+            ``(count, pixel)`` pairs, or None when more than ``maxcolors`` colors are present.
+
         Examples:
             ```python
             from blanket import Image
@@ -1640,18 +1833,21 @@ class Image:
     def putpalette(self, data: Sequence[int] | bytes | ImagePalette, rawmode: str = "RGB") -> None:
         """Attach an RGB or RGBA palette to an L, P, or PA image.
 
-        Args:
-            data: Interleaved palette entries or an ImagePalette object.
-            rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
+            Args:
+        data: Interleaved palette entries or an ImagePalette object.
+        rawmode: Channel layout of the palette data, normally `RGB` or `RGBA`.
 
-        Examples:
-            ```python
-            from blanket import Image
+            Raises:
+                ValueError: The image mode or palette data is unsupported.
 
-            image = Image.new("RGB", (8, 8), (40, 100, 180))
-            image = Image.new("P", (8, 8))
-            image.putpalette([0, 0, 0, 255, 0, 0])
-            ```
+            Examples:
+                ```python
+                from blanket import Image
+
+                image = Image.new("RGB", (8, 8), (40, 100, 180))
+                image = Image.new("P", (8, 8))
+                image.putpalette([0, 0, 0, 255, 0, 0])
+                ```
         """
         from .ImagePalette import ImagePalette
 
@@ -1677,6 +1873,12 @@ class Image:
             kmeans: Number of k-means refinement iterations for supported quantizers.
             palette: Optional indexed image supplying the destination palette.
             dither: Dithering mode from `Image.Dither`.
+
+        Returns:
+            A new mode ``P`` image.
+
+        Raises:
+            ValueError: The color count, method, or source mode is unsupported.
 
         Examples:
             ```python
@@ -1722,8 +1924,14 @@ class Image:
 
         Args:
             encoder_name: Only `raw` is supported.
-            *args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
+            args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
                 Supports the image mode, 8-bit RGB as BGR/BGRX, and RGBA as BGRA; padding is zero-filled.
+
+        Returns:
+            Packed pixel bytes.
+
+        Raises:
+            ValueError: The encoder or raw arguments are unsupported.
 
         Examples:
             ```python
@@ -1760,6 +1968,13 @@ class Image:
             dtype: float32 (default) or float16. Half precision converts at the
                 boundary after float32 processing; image storage stays float32.
 
+        Returns:
+            A contiguous floating-point array. The caller owns it.
+
+        Raises:
+            ValueError: The layout, dtype, mean, or standard deviation is invalid.
+            ImportError: NumPy is not installed.
+
         Examples:
             ```python
             image = Image.new("RGB", (8, 8), (40, 100, 180))
@@ -1785,6 +2000,13 @@ class Image:
             normalize: Scale unsigned samples to 0..1 before standardization.
             mean: Per-band means, defaulting to zero.
             std: Per-band positive standard deviations, defaulting to one.
+
+        Returns:
+            A contiguous float32 CPU tensor. The caller owns it.
+
+        Raises:
+            ValueError: The layout, mean, or standard deviation is invalid.
+            ImportError: PyTorch is not installed.
 
         Examples:
             ```python
@@ -1815,7 +2037,11 @@ class Image:
         Args:
             data: Buffer or byte sequence containing packed pixel values.
             decoder_name: Decoder name, default is "raw".
-            *args: Additional decoder arguments such as rawmode and stride.
+            args: Additional decoder arguments such as rawmode and stride.
+
+        Raises:
+            TypeError: ``data`` is not a buffer.
+            ValueError: The decoder or buffer does not match this image.
 
         Examples:
             ```python
@@ -1841,6 +2067,12 @@ class Image:
         Args:
             name: ASCII prefix for the bitmap width, height, and data names.
 
+        Returns:
+            X11 bitmap source text encoded as bytes.
+
+        Raises:
+            ValueError: The image is not mode 1, or ``name`` is not a valid identifier.
+
         Examples:
             ```python
             from blanket import Image
@@ -1864,6 +2096,9 @@ class Image:
         Args:
             distance: Maximum horizontal and vertical sample displacement.
 
+        Returns:
+            A new image of the same mode and size.
+
         Examples:
             ```python
             from blanket import Image
@@ -1883,6 +2118,13 @@ class Image:
 
         Args:
             filter: Filter instance or filter class from `ImageFilter`.
+
+        Returns:
+            A new filtered image.
+
+        Raises:
+            TypeError: ``filter`` is not a filter instance or class.
+            ValueError: The filter rejects this image.
 
         Examples:
             ```python
@@ -1921,6 +2163,10 @@ class Image:
             im: Source image or fill color.
             box: Destination origin or rectangle, or a mask image as the second positional argument.
             mask: Optional L or RGBA mask selecting source pixels.
+
+        Raises:
+            TypeError: The source or box has the wrong type.
+            ValueError: The source, box, or mask is incompatible with this image.
 
         Examples:
             ```python
@@ -1987,6 +2233,9 @@ class Image:
             linear_light: Decode the selected transfer before source-over blending.
             transfer: "srgb" or "linear"; applies when linear_light is true.
 
+        Raises:
+            ValueError: The source region, destination, or transfer is invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -2038,6 +2287,9 @@ class Image:
         Args:
             alpha: L image matching the image size, or a constant in the image's sample range. High-depth images accept matching-depth or scaled 8-bit alpha images.
 
+        Raises:
+            ValueError: The image has no alpha channel, or ``alpha`` does not match.
+
         Examples:
             ```python
             from blanket import Image
@@ -2068,6 +2320,9 @@ class Image:
     def split(self) -> tuple[Image, ...]:
         """Return independent single-band images in channel order.
 
+        Returns:
+            One image per band, in channel order.
+
         Examples:
             ```python
             from blanket import Image
@@ -2088,6 +2343,9 @@ class Image:
     def getbands(self) -> tuple[str, ...]:
         """Return channel names in pixel order.
 
+        Returns:
+            Band names such as ``("R", "G", "B")``.
+
         Examples:
             ```python
             from blanket import Image
@@ -2103,6 +2361,12 @@ class Image:
 
         Args:
             channel: Channel name, such as `R`, or zero-based channel index.
+
+        Returns:
+            A single-band image.
+
+        Raises:
+            ValueError: ``channel`` is not a band of this image.
 
         Examples:
             ```python
@@ -2134,6 +2398,12 @@ class Image:
             mask: Optional 1 or L mask; pixels with a zero mask value are excluded.
             extrema: Optional I/F lower and upper bounds; ignored for 8-bit modes.
 
+        Returns:
+            Concatenated bin counts, one range per band.
+
+        Raises:
+            ValueError: The mask or bounds are invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -2156,6 +2426,9 @@ class Image:
 
     def getextrema(self) -> tuple[int | float, int | float] | tuple[tuple[int | float, int | float], ...] | None:
         """Return the minimum and maximum sample value of each band.
+
+        Returns:
+            One ``(minimum, maximum)`` pair, or a tuple of pairs for multiband images. None when the image is empty.
 
         Examples:
             ```python
@@ -2183,6 +2456,9 @@ class Image:
         Args:
             alpha_only: For LA, La, PA, RGBA, and RGBa images, inspect only alpha when true; otherwise inspect all channels.
 
+        Returns:
+            ``(left, top, right, bottom)`` of nonzero content, or None when every inspected sample is zero.
+
         Examples:
             ```python
             from blanket import Image
@@ -2201,6 +2477,12 @@ class Image:
         Args:
             lut: 256 entries per input channel, a callable evaluated for each 8-bit value, or a per-sample callable for mode `F`.
             mode: Optional output mode; must match the input mode.
+
+        Returns:
+            A new image with the lookup or function applied.
+
+        Raises:
+            ValueError: The lookup length or output mode is invalid.
 
         Examples:
             ```python
@@ -2245,6 +2527,9 @@ class Image:
             resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
             reducing_gap: Optional pre-reduction optimization threshold; must be at least 1.0.
 
+        Raises:
+            ValueError: ``size`` or ``reducing_gap`` is invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -2282,6 +2567,13 @@ class Image:
         Args:
             factor: Positive integer reduction factor, or separate `(x, y)` factors.
             box: Optional source `(left, top, right, bottom)` rectangle.
+
+        Returns:
+            A new image reduced by ``factor``.
+
+        Raises:
+            TypeError: ``factor`` has the wrong type.
+            ValueError: ``factor`` or ``box`` is invalid.
 
         Examples:
             ```python
@@ -2327,6 +2619,9 @@ class Image:
             mask: Optional L mask; pixels with a zero mask value are excluded.
             extrema: Optional lower and upper sample values for wide images.
 
+        Returns:
+            The Shannon entropy of the selected samples.
+
         Examples:
             ```python
             from blanket import Image
@@ -2346,6 +2641,12 @@ class Image:
 
         Args:
             method: Flip or right-angle rotation from `Image.Transpose`.
+
+        Returns:
+            A new image. Quarter turns swap width and height.
+
+        Raises:
+            ValueError: ``method`` is not a supported transpose.
 
         Examples:
             ```python
@@ -2381,6 +2682,13 @@ class Image:
             resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
             fill: Pillow-compatible fill flag.
             fillcolor: Color for pixels outside the source image.
+
+        Returns:
+            A new transformed image.
+
+        Raises:
+            TypeError: The method or data has the wrong type.
+            ValueError: The size, method, or coefficients are invalid.
 
         Examples:
             ```python
@@ -2450,6 +2758,12 @@ class Image:
         Args:
             box: `(left, top, right, bottom)` rectangle, or None to copy the image; outside pixels are zero-filled.
 
+        Returns:
+            A new image containing the selected region.
+
+        Raises:
+            ValueError: ``box`` does not contain four coordinates.
+
         Examples:
             ```python
             from blanket import Image
@@ -2502,6 +2816,13 @@ class Image:
             transfer: "srgb" or "linear"; applies when linear_light is true.
             premultiply_alpha: Filter premultiplied color; applies to float or linear-light resizing.
             progress: Callback at row-tile boundaries, as in decode().
+
+        Returns:
+            A new image of the requested size.
+
+        Raises:
+            TypeError: ``size`` or ``resample`` has the wrong type.
+            ValueError: The size, box, filter, or transfer is invalid.
 
         Examples:
             ```python
@@ -2584,6 +2905,13 @@ class Image:
             premultiply_alpha: Interpolate straight alpha colors in premultiplied
                 form; False samples channels independently. Nearest ignores this.
 
+        Returns:
+            A new image sampled through ``coordinates``.
+
+        Raises:
+            TypeError: ``coordinates`` is not an image.
+            ValueError: The coordinate mode, border, or fill color is invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -2630,6 +2958,12 @@ class Image:
             radius: Finite positive outer radius in pixels; defaults to min(source size)/2.
             scaling: "linear" for polar or "log" for log-polar spacing.
 
+        Returns:
+            An ``RGB;F`` coordinate image for ``remap``.
+
+        Raises:
+            ValueError: The size, center, radius, or scaling is invalid.
+
         Examples:
             ```python
             coordinates = image.polar_map((256, 360), scaling="log")
@@ -2675,6 +3009,12 @@ class Image:
             fillcolor: Finite scalar or per-channel samples for constant borders.
             premultiply_alpha: Interpolate straight alpha colors in premultiplied form.
 
+        Returns:
+            A new image in polar coordinates.
+
+        Raises:
+            ValueError: The size, center, or scaling is invalid.
+
         Examples:
             ```python
             result = image.polar((256, 360), scaling="log", border="clamp")
@@ -2707,6 +3047,12 @@ class Image:
             center: Optical center in pixel coordinates; defaults to (width/2, height/2).
             focal: Positive (fx, fy) normalization lengths in pixels; both default
                 to max(width, height)/2. All parameters must be finite.
+
+        Returns:
+            An ``RGB;F`` coordinate image for ``remap``.
+
+        Raises:
+            ValueError: A coefficient, center, or focal length is not finite.
 
         Examples:
             ```python
@@ -2754,6 +3100,12 @@ class Image:
             fillcolor: Finite scalar or per-channel samples for constant borders.
             premultiply_alpha: Interpolate straight alpha colors in premultiplied form.
 
+        Returns:
+            A new image with radial distortion corrected.
+
+        Raises:
+            ValueError: A coefficient, center, focal length, border, or fill color is invalid.
+
         Examples:
             ```python
             from blanket import Image
@@ -2785,6 +3137,13 @@ class Image:
         Args:
             size: Output (width, height) in integer pixels.
             progress: Callback between row tiles and seams, as in decode().
+
+        Returns:
+            A new image of the requested size.
+
+        Raises:
+            TypeError: ``size`` has the wrong type.
+            ValueError: A dimension is not positive, or ``progress`` is not callable.
 
         Examples:
             ```python
@@ -2820,6 +3179,12 @@ class Image:
             center: Rotation center in pixel coordinates, or None for the image center.
             translate: Optional `(x, y)` translation after rotation.
             fillcolor: Color for pixels outside the source image.
+
+        Returns:
+            A new rotated image.
+
+        Raises:
+            ValueError: The angle, resampling filter, center, translation, or fill color is invalid.
 
         Examples:
             ```python
@@ -2858,6 +3223,13 @@ class Image:
 
         High-bit-depth `L`/`RGB`/`RGBA` images must be converted to 8 bits first.
         `I`, `F`, and `I;16` variants transfer at their native sample width.
+
+        Returns:
+            A Pillow image of the current frame.
+
+        Raises:
+            ImportError: Pillow is not installed.
+            ValueError: The mode cannot be represented by Pillow.
 
         Examples:
             ```python
@@ -2902,7 +3274,12 @@ class Image:
             fp: Filename, path-like object, or binary stream.
             format: Output format name; inferred from the filename when omitted.
             progress: Callback between compressor candidates, as in decode(). Requires a compressor.
-            **options: Format-specific encoder options and optional `compressor`; see the formats guide.
+            options: Format-specific encoder options and optional ``compressor``; see the formats guide.
+
+        Raises:
+            TypeError: ``fp`` or an option has the wrong type.
+            ValueError: The format or an option is unsupported.
+            OSError: The destination cannot be written.
 
         Examples:
             ```python
@@ -2923,24 +3300,31 @@ class Image:
     def encode(self, format: str, *, progress: ProgressCallback | None = None, **options: object) -> bytes:
         """Return encoded image bytes using the same options as save().
 
-        SVG traces the raster into vector paths. ``svg_mode`` selects pixel,
-        polygon, or spline fitting (default); ``svg_color_precision`` (1..8,
-        default 6) and ``svg_filter_speckle`` (default 4) control detail.
-        Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
-        pixels become opaque. Original SVG geometry is not retained.
-        ``LosslessImageCompressor`` removes formatting whitespace from the generated SVG.
+            SVG traces the raster into vector paths. ``svg_mode`` selects pixel,
+            polygon, or spline fitting (default); ``svg_color_precision`` (1..8,
+            default 6) and ``svg_filter_speckle`` (default 4) control detail.
+            Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
+            pixels become opaque. Original SVG geometry is not retained.
+            ``LosslessImageCompressor`` removes formatting whitespace from the generated SVG.
 
-        Args:
-            format: Output format name, such as PNG, JPEG, or WEBP.
-            progress: Callback between compressor candidates, as in save().
-            **options: Save options, including metadata, compressors, and sequences.
+            Args:
+                format: Output format name, such as PNG, JPEG, or WEBP.
+                progress: Callback between compressor candidates, as in save().
+                options: Save options, including metadata, compressors, and sequences.
 
-        Examples:
-            ```python
-            from blanket import Image
+        Returns:
+            Encoded image bytes.
 
-            data = Image.new("RGB", (8, 6), "red").encode("WEBP", quality=85)
-            ```
+        Raises:
+            TypeError: ``format`` or an option has the wrong type.
+            ValueError: The format or an option is unsupported.
+
+            Examples:
+                ```python
+                from blanket import Image
+
+                data = Image.new("RGB", (8, 6), "red").encode("WEBP", quality=85)
+                ```
         """
         if not isinstance(format, str):
             raise TypeError("format must be a string")
@@ -3098,6 +3482,12 @@ def linear_gradient(mode: str) -> Image:
     Args:
         mode: Output mode, L or F.
 
+    Returns:
+        A 256 by 256 gradient.
+
+    Raises:
+        ValueError: ``mode`` is not ``L`` or ``F``.
+
     Examples:
         ```python
         from blanket import Image
@@ -3116,6 +3506,12 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[float, ...]
         mode: Image mode: `1`, `L`, `LA`, `La`, `P`, `PA`, `RGB`, `RGBA`, `RGBa`, `RGBX`, `HSV`, `CMYK`, `YCbCr`, `LAB`, `I`, `F`, `RGB;F`, `RGBA;F`, or an `I;16` variant.
         size: Output `(width, height)` in pixels.
         color: Fill value, channel tuple, or CSS color string.
+
+    Returns:
+        A new image filled with ``color``.
+
+    Raises:
+        ValueError: The mode, size, or color is invalid.
 
     Examples:
         ```python
@@ -3172,6 +3568,12 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
         mode: Destination mode with as many channels as supplied L bands.
         bands: Sequence of single-channel L images, one per output band.
 
+    Returns:
+        A new image in ``mode``.
+
+    Raises:
+        ValueError: The band count, mode, or band sizes do not match.
+
     Examples:
         ```python
         from blanket import Image
@@ -3200,6 +3602,12 @@ def blend(im1: Image, im2: Image, alpha: float) -> Image:
         im2: Second image.
         alpha: Blending weight: 0 selects the first image and 1 the second; values outside this range extrapolate.
 
+    Returns:
+        A new interpolated image.
+
+    Raises:
+        ValueError: The images differ in mode, size, or depth.
+
     Examples:
         ```python
         from blanket import Image
@@ -3226,6 +3634,12 @@ def composite(image1: Image, image2: Image, mask: Image) -> Image:
         image1: First input image; its mode and dimensions must match the second image.
         image2: Second input image.
         mask: L or RGBA mask selecting pixels from the first image.
+
+    Returns:
+        A new image combining the inputs through ``mask``.
+
+    Raises:
+        ValueError: The images or mask are incompatible.
 
     Examples:
         ```python
@@ -3255,6 +3669,12 @@ def alpha_composite(im1: Image, im2: Image, *, linear_light: bool = False, trans
         im2: Second image.
         linear_light: Decode the selected transfer before source-over blending.
         transfer: "srgb" or "linear"; applies when linear_light is true.
+
+    Returns:
+        A new image with ``im2`` composited over ``im1``.
+
+    Raises:
+        ValueError: The images differ in mode, size, or depth, or ``transfer`` is invalid.
 
     Examples:
         ```python
@@ -3304,12 +3724,20 @@ class ImageHeader:
 
     @property
     def width(self) -> int:
-        """Image width in pixels."""
+        """Image width in pixels.
+
+        Returns:
+            The width reported by the header.
+        """
         return self.size[0]
 
     @property
     def height(self) -> int:
-        """Image height in pixels."""
+        """Image height in pixels.
+
+        Returns:
+            The height reported by the header.
+        """
         return self.size[1]
 
 
@@ -3325,6 +3753,13 @@ def inspect(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, 
     Args:
         fp: Image filename, path-like object, or binary stream.
         formats: Optional allowlist of format names to inspect.
+
+    Returns:
+        A header describing format, size, mode, depth, and metadata.
+
+    Raises:
+        TypeError: ``fp`` or ``formats`` has the wrong type.
+        UnidentifiedImageError: The file is not a recognized image.
 
     Examples:
         ```python
@@ -3380,6 +3815,14 @@ def open(
             unsupported. The decoded image does not retain its source document.
         progress: Decode callback, as in decode(). Passing it decodes still
             images eagerly. For lazy sequences it applies to frame zero.
+
+    Returns:
+        The opened image. Pixels may stay encoded until they are accessed.
+
+    Raises:
+        ValueError: A mode, cache size, or SVG option is invalid.
+        UnidentifiedImageError: The file is not a recognized image.
+        OperationCancelledError: ``progress`` returns false.
 
     Examples:
         ```python
@@ -3488,6 +3931,15 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
             Checkpoints occur between PNG row groups, TIFF strips or tiles
             where supported, and sequence frames. Whole-image decoders report
             at the start and end of the native operation.
+
+    Returns:
+        The decoded image.
+
+    Raises:
+        TypeError: ``data`` is not a buffer.
+        UnidentifiedImageError: The bytes are not a recognized image.
+        OperationCancelledError: ``progress`` returns false.
+        ValueError: An SVG or cache option is invalid.
 
     Examples:
         ```python
@@ -3635,6 +4087,14 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
         formats: Optional allowlist of format names.
         progress: Decode callback at strip or tile boundaries, as in decode().
 
+    Returns:
+        The decoded region.
+
+    Raises:
+        NotImplementedError: The layout needs a full decode and ``fallback`` is ``"error"``.
+        TypeError: ``fp`` or ``box`` has the wrong type.
+        ValueError: ``box`` is empty or outside the image.
+
     Examples:
         ```python
         from io import BytesIO
@@ -3702,9 +4162,16 @@ def frombytes(mode: str, size: tuple[int, int], data: object, decoder_name: str 
         size: Output `(width, height)` in pixels.
         data: Contiguous packed pixel buffer. `I` uses little-endian int32, `F` uses little-endian float32, and `I;16B` uses big-endian uint16.
         decoder_name: `raw`, `hex`, or `packbits`.
-        *args: Raw mode, byte stride (0 means packed), and orientation (1 top-down, -1 bottom-up).
+        args: Raw mode, byte stride (0 means packed), and orientation (1 top-down, -1 bottom-up).
             Supports the image mode at its sample depth, 8-bit BGR/BGRX to RGB, and BGRA to RGBA.
         bit_depth: Significant bits per channel: 8, 10, 12, or 16 for unsigned storage. Signed integer and float modes use 32 bits regardless of the default value.
+
+    Returns:
+        A new image filled from ``data``.
+
+    Raises:
+        TypeError: ``data`` is not a buffer.
+        ValueError: The mode, size, decoder, or buffer length is invalid.
 
     Examples:
         ```python
@@ -3742,7 +4209,13 @@ def frombuffer(mode: str, size: tuple[int, int], data: Buffer, decoder_name: str
         size: Output (width, height) in pixels.
         data: Contiguous pixel buffer, including final-row padding for mappings.
         decoder_name: Decoder name; only raw layouts can be mapped.
-        *args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
+        args: Raw mode, byte stride (0 means packed), and orientation (1 or -1).
+
+    Returns:
+        An image that shares ``data`` when the layout can be mapped.
+
+    Raises:
+        ValueError: The mode, size, or buffer cannot form an image.
 
     Examples:
         ```python
@@ -3791,6 +4264,17 @@ def from_pillow(image: object, *, copy: bool = False) -> Image:
     dependency is needed. copy=True always creates independent pixels. Shared
     inputs must be treated as immutable by the caller; Blanket mutations detach.
     The shared allocation outlives the Pillow image, including close().
+
+    Args:
+        image: Pillow image. Only the current frame is imported.
+        copy: Copy pixels into independent storage when true.
+
+    Returns:
+        A Blanket image of the current frame.
+
+    Raises:
+        ImportError: Pillow is not installed.
+        TypeError: ``image`` is not a Pillow image, or ``copy`` is not a bool.
     """
     if not isinstance(copy, bool):
         raise TypeError("copy must be a boolean")
@@ -3840,6 +4324,13 @@ def fromarray(obj: object, mode: str | None = None, *, bit_depth: int | None = N
             read-only. Instance frombytes writes through writable inputs, as
             with frombuffer. Native operations take owned snapshots. Unsupported
             layouts raise ValueError instead of copying; see buffer view docs.
+
+    Returns:
+        A new image using the array's samples.
+
+    Raises:
+        TypeError: ``obj`` does not expose a supported array interface.
+        ValueError: The mode, depth, or layout is unsupported.
 
     Examples:
         ```python

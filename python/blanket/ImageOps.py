@@ -127,6 +127,13 @@ def phase_correlate(reference: Image.Image, image: Image.Image, *, max_rotation:
             for finer rotation estimates at greater computational cost.
         window: Use "hann" to reduce border effects, or None for cyclic data.
 
+    Returns:
+        The translation and optional rotation that aligns ``image`` to ``reference``.
+
+    Raises:
+        TypeError: An argument has the wrong type.
+        ValueError: The dimensions, mode, or rotation settings are unsupported.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -163,6 +170,12 @@ def match_histogram(image: Image.Image, reference: Image.Image, *, mode: Literal
         reference: Image supplying the target distribution.
         mode: Match individual channels or luminance.
 
+    Returns:
+        A new image with the source geometry and matched sample distribution.
+
+    Raises:
+        ValueError: The modes are incompatible or an input has no opaque samples.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -190,6 +203,12 @@ def color_transfer(image: Image.Image, reference: Image.Image, *, mode: Literal[
         image: Source image, processed without editing it.
         reference: Image supplying the target moments.
         mode: Transfer individual channel or luminance moments.
+
+    Returns:
+        A new image with the source geometry and transferred color moments.
+
+    Raises:
+        ValueError: The modes are incompatible or an input has no opaque samples.
 
     Examples:
         ```python
@@ -283,6 +302,13 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
         mask: Optional L mask; pixels with a zero mask value are excluded.
         preserve_tone: Use a shared luminance histogram to preserve relative channel tone.
 
+    Returns:
+        A new image with stretched histogram endpoints.
+
+    Raises:
+        NotImplementedError: The image mode is unsupported.
+        ValueError: A cutoff or mask is invalid.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -318,6 +344,12 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
         whitepoint: Input intensity mapped to white, in 0 through 255.
         midpoint: Input intensity mapped to the middle color.
 
+    Returns:
+        A new color image mapped from the grayscale input.
+
+    Raises:
+        ValueError: The image is not grayscale or a color point is invalid.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -347,6 +379,9 @@ def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resam
         size: Output `(width, height)` in pixels.
         method: Resampling filter from `Image.Resampling`.
 
+    Returns:
+        A new image that fits inside ``size``.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -368,6 +403,9 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
         image: Input image.
         size: Output `(width, height)` in pixels.
         method: Resampling filter from `Image.Resampling`.
+
+    Returns:
+        A new image that covers ``size``. The aspect ratio is preserved.
 
     Examples:
         ```python
@@ -393,6 +431,9 @@ def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
         method: Resampling filter from `Image.Resampling`.
         color: Fill value, channel tuple, or CSS color string.
         centering: Horizontal and vertical alignment in 0 through 1; 0.5 centers each axis.
+
+    Returns:
+        A new image of exactly ``size``.
 
     Examples:
         ```python
@@ -420,6 +461,9 @@ def crop(image: Image.Image, border: int = 0) -> Image.Image:
         image: Input image.
         border: Border width in pixels.
 
+    Returns:
+        A new image with the border removed.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -439,6 +483,12 @@ def scale(image: Image.Image, factor: float, resample: int = Image.Resampling.BI
         image: Input image.
         factor: Positive multiplier for both image dimensions.
         resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
+
+    Returns:
+        A new image scaled by ``factor``.
+
+    Raises:
+        ValueError: ``factor`` is not positive.
 
     Examples:
         ```python
@@ -492,6 +542,13 @@ def deform(image: Image.Image, deformer: SupportsGetMesh, resample: int = Image.
         deformer: Object implementing `getmesh(image)` and returning destination boxes with source quadrilaterals.
         resample: Resampling filter from `Image.Resampling`; supported filters depend on the operation.
 
+    Returns:
+        A new image warped by the mesh.
+
+    Raises:
+        ValueError: The resampling filter is unsupported.
+        ZeroDivisionError: A destination box has zero width or height.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -524,6 +581,9 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
         image: Input image.
         mask: Optional L mask; pixels with a zero mask value are excluded.
 
+    Returns:
+        A new image with equalized channels.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -544,6 +604,12 @@ def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Ima
         image: Input image.
         border: Integer, `(horizontal, vertical)`, or `(left, top, right, bottom)` widths.
         fill: Border value, channel tuple, or CSS color.
+
+    Returns:
+        A new image enlarged by ``border``.
+
+    Raises:
+        ValueError: The resulting width or height is negative.
 
     Examples:
         ```python
@@ -573,6 +639,12 @@ def fit(image: Image.Image, size: tuple[int, int], method: int = Image.Resamplin
         method: Resampling filter from `Image.Resampling`.
         bleed: Fraction to remove from each edge before fitting; must be less than 0.5.
         centering: Horizontal and vertical alignment in 0 through 1; 0.5 centers each axis.
+
+    Returns:
+        A new image of exactly ``size``.
+
+    Raises:
+        ValueError: ``bleed`` is 0.5 or greater.
 
     Examples:
         ```python
@@ -606,6 +678,13 @@ def smart_crop(image: Image.Image, size: tuple[int, int], method: int = Image.Re
     ignores ICC profiles and does not apply EXIF orientation; call
     ``exif_transpose`` first when needed. No optional dependencies are required.
 
+    Returns:
+        A new image of exactly ``size``.
+
+    Raises:
+        TypeError: ``image`` is not a Blanket image.
+        ValueError: ``size`` is not two positive integers, or the image is empty.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -638,6 +717,9 @@ def flip(image: Image.Image) -> Image.Image:
     Args:
         image: Input image.
 
+    Returns:
+        A new vertically flipped image.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -655,6 +737,9 @@ def grayscale(image: Image.Image) -> Image.Image:
     Args:
         image: Input image.
 
+    Returns:
+        A new mode ``L`` image.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -671,6 +756,9 @@ def invert(image: Image.Image) -> Image.Image:
 
     Args:
         image: Input image.
+
+    Returns:
+        A new image with inverted channels.
 
     Examples:
         ```python
@@ -694,6 +782,9 @@ def mirror(image: Image.Image) -> Image.Image:
     Args:
         image: Input image.
 
+    Returns:
+        A new horizontally flipped image.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -711,6 +802,12 @@ def posterize(image: Image.Image, bits: int) -> Image.Image:
     Args:
         image: Input image.
         bits: Number of high bits to retain per channel, from 1 through 8.
+
+    Returns:
+        A new image using only the retained high bits.
+
+    Raises:
+        ValueError: ``bits`` is outside 1 through 8.
 
     Examples:
         ```python
@@ -732,6 +829,9 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
         image: Input image.
         threshold: Intensity threshold, on the 0 through 255 scale.
 
+    Returns:
+        A new image with samples at or above ``threshold`` inverted.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -747,6 +847,10 @@ def solarize(image: Image.Image, threshold: int = 128) -> Image.Image:
 def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None:
     """Apply EXIF orientation in-place and return None.
 
+    Args:
+        image: Input image.
+        in_place: Must be true for this overload.
+
     Examples:
         ```python
         from blanket import Image, ImageOps
@@ -760,6 +864,13 @@ def exif_transpose(image: Image.Image, *, in_place: Literal[True]) -> None:
 @overload
 def exif_transpose(image: Image.Image, *, in_place: Literal[False] = False) -> Image.Image:
     """Apply EXIF orientation and return a transformed copy.
+
+    Args:
+        image: Input image.
+        in_place: Must be false for this overload.
+
+    Returns:
+        A transformed copy with orientation metadata removed.
 
     Examples:
         ```python
@@ -780,6 +891,9 @@ def exif_transpose(image: Image.Image, *, in_place: bool = False) -> Image.Image
     Args:
         image: Input image.
         in_place: Modify the input and return None when true; otherwise return a transformed copy.
+
+    Returns:
+        The transformed copy, or None when ``in_place`` is true.
 
     Examples:
         ```python

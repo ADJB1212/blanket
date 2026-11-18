@@ -140,6 +140,13 @@ def rewrite(
         dpi: Physical resolution in dots per inch, or None to remove.
         policy: Optional retention policy, applied after explicit replacements.
 
+    Returns:
+        The rewritten encoded bytes. ``output`` receives the same bytes when it is set.
+
+    Raises:
+        TypeError: A replacement value has the wrong type.
+        ValueError: The format or a replacement is unsupported, or the streams are not distinct.
+
     Examples:
         ```python
         from blanket import ImageMetadata
@@ -216,6 +223,12 @@ def get_resolution(fp: _File, *, conflict: Literal["container", "exif", "error"]
         fp: Source path or binary stream.
         conflict: Conflict rule: container, exif, or error.
 
+    Returns:
+        Physical resolution and pixel aspect. Missing density uses square pixels.
+
+    Raises:
+        ValueError: ``conflict`` is ``"error"`` and the densities disagree.
+
     Examples:
         ```python
         from blanket import ImageMetadata
@@ -234,6 +247,15 @@ def get_iptc(fp: _File) -> tuple[tuple[int, int, bytes], ...]:
     Repeated datasets and character-set declarations retain their original bytes.
     Missing records return an empty tuple. Malformed records raise ValueError.
     TIFF reads the first page. Seekable input positions are restored.
+
+    Args:
+        fp: JPEG or classic TIFF path or binary stream.
+
+    Returns:
+        Ordered ``(record, dataset, bytes)`` fields. Missing records return an empty tuple.
+
+    Raises:
+        ValueError: An IPTC record is malformed.
     """
     data = read_bytes(fp, restore_position=True)
     return tuple(_get_iptc(data))
@@ -247,6 +269,18 @@ def rewrite_iptc(fp: _File, datasets: Iterable[tuple[int, int, bytes]], output: 
     other Photoshop resources and compressed scans; TIFF retains all directories
     and pixel offsets. TIFF appends larger values; old bytes may remain in the
     file. This is an edit, not a privacy wipe. BigTIFF is unsupported.
+
+    Args:
+        fp: JPEG or classic TIFF path or binary stream.
+        datasets: Replacement ``(record, dataset, bytes)`` fields. An empty iterable clears the record.
+        output: Optional destination path or stream, distinct from ``fp`` when ``fp`` is a stream.
+
+    Returns:
+        The rewritten encoded bytes.
+
+    Raises:
+        TypeError: A dataset value is not bytes.
+        ValueError: A record is missing or invalid, or the streams are not distinct.
     """
     if output is fp and hasattr(fp, "read"):
         raise ValueError("input and output streams must be distinct")
@@ -278,6 +312,17 @@ def read_xmp_sidecar(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes], *,
     Missing, empty, or policy-discarded packets return None. Other filesystem
     errors propagate. Unfiltered packets retain their bytes; no embedded packet
     is merged or changed. The image itself need not exist.
+
+    Args:
+        fp: Image path whose sibling ``.xmp`` file is read. The image itself need not exist.
+        policy: Optional retention policy. None returns the packet unchanged.
+
+    Returns:
+        The sidecar packet, or None when it is missing, empty, or discarded.
+
+    Raises:
+        TypeError: ``policy`` is not a ``MetadataPolicy``.
+        OSError: The sidecar exists but cannot be read.
     """
     if policy is not None and not isinstance(policy, MetadataPolicy):
         raise TypeError("policy must be a MetadataPolicy or None")
@@ -292,6 +337,17 @@ def write_xmp_sidecar(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes], x
 
     None, empty, and policy-discarded packets write an empty file, preventing an
     older packet from surviving. Returns the sidecar path. No image is opened.
+
+    Args:
+        fp: Image path whose sibling ``.xmp`` file is written.
+        xmp: Replacement packet, or None to clear it.
+        policy: Optional retention policy applied before writing.
+
+    Returns:
+        The sidecar path.
+
+    Raises:
+        TypeError: ``policy`` or ``xmp`` has the wrong type.
     """
     raw = _sidecar_packet(_bytes(xmp, "xmp"), policy)
     return Path(_write_xmp_sidecar(os.fsdecode(fp), raw or b""))
@@ -305,6 +361,15 @@ def get_geometry(fp: _File) -> ImageGeometry:
     Missing aperture returns None and missing aspect defaults to square pixels.
     Coordinates precede orientation, crop, and resize; no pixels are decoded.
     Malformed aperture fields raise ValueError. TIFF reads the first page.
+
+    Args:
+        fp: JPEG, TIFF, HEIF, or AVIF path or binary stream.
+
+    Returns:
+        The unapplied aperture and pixel aspect.
+
+    Raises:
+        ValueError: An aperture field is malformed.
     """
     data = read_bytes(fp, restore_position=True)
     format, _, _, _ = _inspect(data, None)
@@ -342,6 +407,9 @@ class EmbeddedPreview:
     def open(self) -> Image.Image:
         """Decode this preview as an independent image.
 
+        Returns:
+            A new image. The preview bytes are not changed.
+
         Examples:
             ```python
             from blanket import ImageMetadata
@@ -363,6 +431,12 @@ def get_previews(fp: _File) -> tuple[EmbeddedPreview, ...]:
 
     Args:
         fp: Source path or binary stream.
+
+    Returns:
+        Embedded previews. Missing previews return an empty tuple.
+
+    Raises:
+        ValueError: A referenced preview is malformed or exceeds a pixel budget.
 
     Examples:
         ```python

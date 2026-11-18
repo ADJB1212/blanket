@@ -41,7 +41,11 @@ class Parser:
 
     @property
     def image(self) -> Image | None:
-        """Return the latest available raster snapshot, or None before a pass."""
+        """Return the latest available raster snapshot, or None before a pass.
+
+        Returns:
+            An independent image once a progressive pass is available, otherwise None.
+        """
         if self._closed or self._decoder is None:
             return self._image
         native = self._decoder.image
@@ -52,6 +56,11 @@ class Parser:
 
         Args:
             data: The next bytes of a JPEG or JPEG XL image, in file order.
+
+        Raises:
+            ValueError: The parser is already closed.
+            UnidentifiedImageError: The prefix is neither JPEG nor JPEG XL.
+            OSError: The chunk is malformed.
         """
         if self._closed:
             raise ValueError("closed image parser")
@@ -86,7 +95,15 @@ class Parser:
             raise
 
     def close(self) -> Image:
-        """Finish decoding; raise OSError if the image is incomplete."""
+        """Finish decoding; raise OSError if the image is incomplete.
+
+        Returns:
+            The decoded image.
+
+        Raises:
+            ValueError: The parser was already closed without an image.
+            OSError: The header or image data is incomplete.
+        """
         if self._closed:
             if self._image is None:
                 raise ValueError("closed image parser")
@@ -118,6 +135,9 @@ class PngWriter:
             size: Width and height in pixels.
             bit_depth: Significant sample bits; mode 1 uses the default of 8.
             compress_level: PNG deflate level from 0 through 9.
+
+        Raises:
+            ValueError: The dimensions, bit depth, compression level, or mode is invalid.
         """
         width, height = size
         if width <= 0 or height <= 0:
@@ -135,6 +155,9 @@ class PngWriter:
 
         Args:
             data: Raw rows in the declared mode and sample depth.
+
+        Raises:
+            ValueError: The writer is closed or the rows exceed the image.
         """
         if self._writer is None:
             raise ValueError("closed PNG writer")

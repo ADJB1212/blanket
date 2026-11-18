@@ -218,6 +218,13 @@ def lambda_eval(expression: Callable[[dict[str, object]], object], **operands: o
     Helpers are int, float, convert, min, max, equal, and notequal. Image
     arithmetic runs in Rust and returns I or F images. Use split and merge
     to process multiband images.
+
+    Args:
+        expression: Callable that receives the evaluation environment.
+        operands: Images and other values added to that environment.
+
+    Returns:
+        The unwrapped image or scalar produced by ``expression``.
     """
     return _unwrap(expression(_context(operands)))
 
@@ -227,6 +234,16 @@ def unsafe_eval(expression: str, **operands: object) -> object:
 
     This calls Python eval and is not a sandbox for untrusted expressions
     or operands. Prefer lambda_eval for callable expressions.
+
+    Args:
+        expression: Trusted Python expression compiled in ``"eval"`` mode.
+        operands: Images and other values available to the expression.
+
+    Returns:
+        The unwrapped image or scalar produced by the expression.
+
+    Raises:
+        ValueError: An operand or referenced name is not allowed.
     """
     for name in operands:
         if "__" in name or hasattr(builtins, name):
@@ -248,5 +265,16 @@ def unsafe_eval(expression: str, **operands: object) -> object:
 
 
 def eval(expression: str, **operands: object) -> object:
-    """Compatibility alias for unsafe_eval; evaluate only trusted expressions."""
+    """Compatibility alias for unsafe_eval; evaluate only trusted expressions.
+
+    Args:
+        expression: Trusted Python expression compiled in ``"eval"`` mode.
+        operands: Images and other values available to the expression.
+
+    Returns:
+        The unwrapped image or scalar produced by the expression.
+
+    Raises:
+        ValueError: An operand or referenced name is not allowed.
+    """
     return unsafe_eval(expression, **operands)

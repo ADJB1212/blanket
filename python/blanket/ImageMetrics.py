@@ -34,6 +34,17 @@ def ssim(reference: Image.Image, distorted: Image.Image) -> float:
     K1=0.01 and K2=0.03. Average valid window centers, then RGB channels.
     Both dimensions must be at least 11. Identical images score 1.
     No automatic pre-downsampling is applied.
+
+    Args:
+        reference: Original image. Both dimensions must be at least 11.
+        distorted: Image to score. Size must match ``reference``.
+
+    Returns:
+        Mean structural similarity in the range -1 through 1.
+
+    Raises:
+        TypeError: Either argument is not a Blanket image.
+        ValueError: A mode, depth, size, or sample value is unsupported.
     """
     return _score(reference, distorted, "ssim")
 
@@ -47,6 +58,17 @@ def ms_ssim(reference: Image.Image, distorted: Image.Image) -> float:
     average RGB. Negative terms are clamped to zero before exponentiation.
     Downsample with 2x2 averages, replicating odd right/bottom edges.
     Both dimensions must be at least 161. Identical images score 1.
+
+    Args:
+        reference: Original image. Both dimensions must be at least 161.
+        distorted: Image to score. Size must match ``reference``.
+
+    Returns:
+        Five-scale structural similarity in the range 0 through 1.
+
+    Raises:
+        TypeError: Either argument is not a Blanket image.
+        ValueError: A mode, depth, size, or sample value is unsupported.
     """
     return _score(reference, distorted, "ms_ssim")
 
@@ -58,5 +80,16 @@ def ssimulacra2(reference: Image.Image, distorted: Image.Image) -> float:
     this metric is asymmetric. Very poor matches can have negative scores.
     Both dimensions must be at least 8. Uses the native Rust ssimulacra2
     implementation; floating-point results may vary slightly by platform.
+
+    Args:
+        reference: Original image. Both dimensions must be at least 8.
+        distorted: Modified or encoded copy. Size must match ``reference``.
+
+    Returns:
+        SSIMULACRA2 quality. Identical images score 100; poor matches can be negative.
+
+    Raises:
+        TypeError: Either argument is not a Blanket image.
+        ValueError: A mode, depth, size, or sample value is unsupported.
     """
     return _score(reference, distorted, "ssimulacra2")

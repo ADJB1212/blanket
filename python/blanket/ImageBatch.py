@@ -42,7 +42,14 @@ class Pipeline:
     steps: tuple[Step, ...]
 
     def __init__(self, steps: Iterable[Step] = ()) -> None:
-        """Capture the transforms, rejecting non-callable steps."""
+        """Capture the transforms, rejecting non-callable steps.
+
+        Args:
+            steps: Callables that each accept an image and return an image.
+
+        Raises:
+            TypeError: A step is not callable.
+        """
         configured = tuple(steps)
         for position, step in enumerate(configured):
             if not callable(step):
@@ -70,6 +77,17 @@ class Pipeline:
 
         See :meth:`iter` for concurrency, ownership, and failure semantics. This
         method retains all output images; use the iterator for large batches.
+
+        Args:
+            sources: Images or filesystem paths, processed in order.
+            max_workers: Maximum concurrent workers. Defaults to the CPU count, capped at 32.
+
+        Returns:
+            Processed images in input order.
+
+        Raises:
+            ValueError: ``max_workers`` is less than 1.
+            TypeError: A source or step result is not an image.
         """
         return list(self.iter(sources, max_workers=max_workers))
 
@@ -91,6 +109,17 @@ class Pipeline:
         calls finish before the worker pool closes. Side effects in steps
         are not rolled back. Close the iterator when stopping early (for
         example, using ``contextlib.closing``).
+
+        Args:
+            sources: Images or filesystem paths, processed in order.
+            max_workers: Maximum concurrent workers. Defaults to the CPU count, capped at 32.
+
+        Returns:
+            A generator of processed images. It can be consumed only once.
+
+        Raises:
+            ValueError: ``max_workers`` is less than 1.
+            TypeError: A source or step result is not an image.
         """
         workers = min(32, os.cpu_count() or 1) if max_workers is None else index(max_workers)
         if workers < 1:

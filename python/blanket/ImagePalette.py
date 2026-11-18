@@ -43,6 +43,9 @@ class ImagePalette:
             mode: Palette channel layout, normally `RGB` or `RGBA`.
             palette: Interleaved channel values, or None for an empty palette.
 
+        Raises:
+            ValueError: ``mode`` is not RGB, RGBA, or CMYK.
+
         Examples:
             ```python
             from blanket import ImagePalette
@@ -68,12 +71,19 @@ class ImagePalette:
             palette = ImagePalette.wedge()
             print(palette.palette)
             ```
+
+        Returns:
+            The interleaved channel values.
         """
         return self._palette
 
     @palette.setter
     def palette(self, palette: Sequence[int] | bytes | bytearray) -> None:
-        """Replace palette entries and invalidate the cached color lookup."""
+        """Replace palette entries and invalidate the cached color lookup.
+
+        Args:
+            palette: Replacement interleaved channel values.
+        """
         self._palette = palette
         self._colors: dict[tuple[int, ...], int] | None = None
 
@@ -88,6 +98,9 @@ class ImagePalette:
             palette = ImagePalette.wedge()
             print(palette.colors)
             ```
+
+        Returns:
+            A mapping from channel tuples to their first palette index.
         """
         if self._colors is None:
             palette = self.palette
@@ -98,7 +111,11 @@ class ImagePalette:
 
     @colors.setter
     def colors(self, colors: dict[tuple[int, ...], int]) -> None:
-        """Replace the cached mapping from colors to palette indices."""
+        """Replace the cached mapping from colors to palette indices.
+
+        Args:
+            colors: Replacement index lookup.
+        """
         self._colors = colors
 
     def copy(self) -> ImagePalette:
@@ -111,6 +128,9 @@ class ImagePalette:
             palette = ImagePalette.wedge()
             result = palette.copy()
             ```
+
+        Returns:
+            An independent palette with the same entries and flags.
         """
         result = ImagePalette(self.mode)
         result.rawmode = self.rawmode
@@ -128,6 +148,9 @@ class ImagePalette:
             palette = ImagePalette.wedge()
             mode, entries = palette.getdata()
             ```
+
+        Returns:
+            The raw mode and raw bytes, or the palette mode and serialized entries.
         """
         return (self.rawmode, bytes(self.palette)) if self.rawmode else (self.mode, self.tobytes())
 
@@ -141,6 +164,12 @@ class ImagePalette:
             palette = ImagePalette.wedge()
             entries = palette.tobytes()
             ```
+
+        Returns:
+            Serialized palette bytes.
+
+        Raises:
+            ValueError: The palette still holds raw encoded data.
         """
         self._check_raw()
         if isinstance(self.palette, bytes):
@@ -191,6 +220,13 @@ class ImagePalette:
             palette = ImagePalette.ImagePalette("RGB")
             index = palette.getcolor((255, 0, 0))
             ```
+
+        Returns:
+            The existing or newly allocated palette index.
+
+        Raises:
+            TypeError: Color allocation requires a bytearray palette.
+            ValueError: The palette is raw, the color does not match the mode, or all 256 slots are in use.
         """
         if self.rawmode:
             raise ValueError("palette contains raw palette data")
@@ -261,6 +297,9 @@ def raw(rawmode: str, data: Sequence[int] | bytes | bytearray) -> ImagePalette:
 
         result = ImagePalette.raw("RGB", bytes([0, 0, 0, 255, 0, 0]))
         ```
+
+    Returns:
+        A palette that preserves ``data`` without decoding it.
     """
     result = ImagePalette()
     if rawmode != "RGB":
@@ -283,6 +322,12 @@ def make_linear_lut(black: int, white: float) -> list[int]:
 
         result = ImagePalette.make_linear_lut(0, 255)
         ```
+
+    Returns:
+        256 integer samples from black to ``white``.
+
+    Raises:
+        NotImplementedError: ``black`` is not zero.
     """
     if black != 0:
         raise NotImplementedError("unavailable when black is non-zero")
@@ -303,6 +348,9 @@ def make_gamma_lut(exp: float) -> list[int]:
 
         result = ImagePalette.make_gamma_lut(2.2)
         ```
+
+    Returns:
+        256 gamma-corrected integer samples.
     """
     if isinstance(exp, (int, float)) and 0 <= exp <= 1e300 and math.isfinite(exp):
         return palette_gamma(exp)
@@ -321,6 +369,9 @@ def negative(mode: str = "RGB") -> ImagePalette:
 
         result = ImagePalette.negative()
         ```
+
+    Returns:
+        A palette running from white to black.
     """
     return ImagePalette(mode, palette_ramp(len(mode), True))
 
@@ -339,6 +390,9 @@ def random(mode: str = "RGB") -> ImagePalette:
 
         result = ImagePalette.random()
         ```
+
+    Returns:
+        A palette of 256 random colors.
     """
     from random import Random, randint
 
@@ -359,6 +413,12 @@ def sepia(white: str = "#fff0c0") -> ImagePalette:
 
         result = ImagePalette.sepia("#fff0c0")
         ```
+
+    Returns:
+        An RGB palette from black to ``white``.
+
+    Raises:
+        ValueError: ``white`` is not a supported color.
     """
     channels = _rgb(white)
     return ImagePalette("RGB", palette_sepia(channels[:3]))
@@ -376,6 +436,9 @@ def wedge(mode: str = "RGB") -> ImagePalette:
 
         result = ImagePalette.wedge()
         ```
+
+    Returns:
+        A palette running from black to white.
     """
     return ImagePalette(mode, palette_ramp(len(mode), False))
 
@@ -397,6 +460,13 @@ def load(filename: str | bytes | os.PathLike[str] | os.PathLike[bytes]) -> tuple
             ImagePalette.wedge().save(path)
             entries, mode = ImagePalette.load(path)
         ```
+
+    Returns:
+        Raw palette bytes and the palette mode.
+
+    Raises:
+        OSError: The file cannot be read.
+        SyntaxError: The file is not a supported palette or gradient.
     """
     with Path(os.fsdecode(filename)).open("rb") as stream:
         return load_palette(stream)

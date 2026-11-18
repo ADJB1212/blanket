@@ -31,6 +31,12 @@ def tone_map(image: Image.Image, operator: str = "reinhard", *, transfer: str | 
     output depth without a transfer function. Output uses sRGB encoding;
     stale ICC, HDR, and gamma metadata is removed. No ICC transform is applied.
     Source pixels, metadata, and frame position are unchanged.
+
+    Returns:
+        A new SDR image with sRGB transfer metadata. LA output is 8-bit; other modes use ``bit_depth``.
+
+    Raises:
+        ValueError: The mode, cICP metadata, peak luminance, or tone-mapping options are unsupported.
     """
     if image.mode not in ("L", "LA", "RGB", "RGBA", "F", "I;16", "I;16L", "I;16B", "I;16N"):
         raise ValueError("tone mapping requires L, LA, RGB, RGBA, F, or I;16 pixels")

@@ -22,7 +22,14 @@ class JpegImageFile(PluginImage):
 
 
 def get_sampling(image: Image.Image) -> int:
-    """Return the JPEG chroma subsampling identifier, or -1 when unknown."""
+    """Return the JPEG chroma subsampling identifier, or -1 when unknown.
+
+    Args:
+        image: Opened image whose JPEG layer metadata supplies sampling factors.
+
+    Returns:
+        ``0`` for 4:4:4, ``1`` for 4:2:2, ``2`` for 4:2:0, or ``-1`` when unknown.
+    """
     layer = getattr(image, "layer", ())
     if len(layer) != 3:
         return -1
@@ -53,6 +60,21 @@ def transform(data: bytes | bytearray | memoryview, method: Image.Transpose | in
     unsupported JPEGs raise OSError. Output encoding and decoded pixels need
     not be byte-identical: IDCT rounding and chroma upsampling can differ after
     transforms even though no coefficient requantization occurs.
+
+    Args:
+        data: Encoded JPEG bytes.
+        method: ``Image.Transpose`` value, or None to keep the source orientation.
+        crop: Optional ``(left, top, right, bottom)`` box in source pixels, applied before ``method``.
+        trim: Discard partial edge blocks that cannot be transformed exactly.
+        metadata: ``"strip"`` removes ancillary markers; ``"preserve"`` keeps them.
+
+    Returns:
+        Transformed JPEG bytes with the original quantized coefficients.
+
+    Raises:
+        TypeError: ``data``, ``method``, ``trim``, or ``crop`` has the wrong type.
+        ValueError: ``metadata`` or a crop coordinate is invalid.
+        OSError: The JPEG is malformed, unsupported, or the transform is imperfect and ``trim`` is false.
     """
     if not isinstance(data, (bytes, bytearray, memoryview)):
         raise TypeError("data must be JPEG bytes")

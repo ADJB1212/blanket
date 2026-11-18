@@ -36,6 +36,10 @@ class Stat:
             image_or_list: An image or a histogram with 256 nonnegative integer counts per band.
             mask: Optional 1 or 8-bit L mask; zero mask values are excluded.
 
+        Raises:
+            TypeError: The first argument is neither an image nor a histogram list.
+            ValueError: The histogram length is not a multiple of the bin count.
+
         Examples:
             ```python
             from blanket import Image, ImageStat
@@ -71,7 +75,11 @@ class Stat:
 
     @property
     def h(self) -> list[int]:
-        """Materialize the mutable histogram only when it is requested."""
+        """Materialize the mutable histogram only when it is requested.
+
+        Returns:
+            Bin counts for every band.
+        """
         histogram = self._histogram
         if not isinstance(histogram, list):
             histogram = histogram.tolist()
@@ -80,7 +88,11 @@ class Stat:
 
     @h.setter
     def h(self, histogram: list[int]) -> None:
-        """Retain a mutable histogram for subsequent uncached calculations."""
+        """Retain a mutable histogram for subsequent uncached calculations.
+
+        Args:
+            histogram: Replacement bin counts.
+        """
         self._histogram = histogram
 
     def __getstate__(self) -> dict[str, object]:
@@ -102,6 +114,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.bands)
             ```
+
+        Returns:
+            Band indexes from zero through the last band.
         """
         return list(range(self._band_count))
 
@@ -117,6 +132,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.extrema)
             ```
+
+        Returns:
+            ``(minimum, maximum)`` occupied bins for each band.
         """
         return stat_extrema(self._histogram, self._bins)
 
@@ -132,6 +150,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.count)
             ```
+
+        Returns:
+            Selected pixel counts, one per band.
         """
         return stat_count(self._histogram, self._bins)
 
@@ -147,6 +168,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.sum)
             ```
+
+        Returns:
+            Sums of selected samples, one per band.
         """
         return stat_sum(self._histogram, False, self._bins)
 
@@ -162,6 +186,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.sum2)
             ```
+
+        Returns:
+            Sums of squared selected samples, one per band.
         """
         return stat_sum(self._histogram, True, self._bins)
 
@@ -177,6 +204,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.mean)
             ```
+
+        Returns:
+            Arithmetic means, or zero for an empty band.
         """
         return stat_normalize(self.sum, self.count)
 
@@ -192,6 +222,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.median)
             ```
+
+        Returns:
+            Upper medians, or the maximum sample value for an empty band.
         """
         return stat_median(self._histogram, self.count, self._bins)
 
@@ -207,6 +240,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.rms)
             ```
+
+        Returns:
+            Root-mean-square values, or zero for an empty band.
         """
         return stat_sqrt(stat_normalize(self.sum2, self.count))
 
@@ -222,6 +258,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.var)
             ```
+
+        Returns:
+            Population variances, or zero for an empty band.
         """
         if self._bins > 256:
             return stat_variance(self._histogram, self.count, self.sum, self._bins)
@@ -239,6 +278,9 @@ class Stat:
             statistics = ImageStat.Stat(image)
             print(statistics.stddev)
             ```
+
+        Returns:
+            Population standard deviations, one per band.
         """
         return stat_sqrt(self.var)
 
