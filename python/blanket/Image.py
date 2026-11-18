@@ -751,10 +751,10 @@ class Image:
             assert Image.new("RGB", (2, 2)).n_frames == 1
             ```
         """
-        if self._lazy_frames is not None:
-            return self._lazy_frames.count
         if self._declared_frames is not None:
             return self._declared_frames
+        if self._lazy_frames is not None:
+            return self._lazy_frames.count
         return len(self._frames) if self._frames is not None else 1
 
     def tell(self) -> int:
@@ -1792,13 +1792,13 @@ class Image:
             raise ValueError("band index out of range")
         return self._native.getbanddata(band, True)
 
-    def putdata(self, data: Sequence[int | float | tuple[int, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
-        """Write pixels in row order; scale/offset apply to single-band data.
+    def putdata(self, data: Sequence[int | float | tuple[int | float, ...]], scale: float = 1.0, offset: float = 0.0) -> None:
+        """Write pixels in row order.
 
         Args:
             data: Pixel values in row order. Short input leaves remaining pixels unchanged.
-            scale: Multiplier for single-band input values.
-            offset: Offset added after multiplying single-band values.
+            scale: Multiplier for single-band data and float color channels.
+            offset: Offset added after multiplying the affected samples.
 
         Examples:
             ```python
@@ -2970,7 +2970,7 @@ class Image:
             result = image.remap(coordinates, Image.Resampling.BILINEAR, border="reflect")
             ```
         """
-        self.load()
+        self._check_open()
         if not self.width or not self.height:
             raise ValueError("polar maps require positive source dimensions")
         if size is None:
@@ -3063,7 +3063,7 @@ class Image:
             result = image.remap(coordinates)
             ```
         """
-        self.load()
+        self._check_open()
         if center is None:
             center = (self.width / 2, self.height / 2)
         if focal is None:
@@ -4028,8 +4028,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         image._info = first._info
         image.palette = first.palette
         image._lazy_frames = storage
-        if image.format == "JPEG":
-            image._draft_source = data
+        image._seek_error = seek_error
+        image._declared_frames = declared_frames
         return image
     frames, controls, loop_count, default_image = _open_sequence(data, formats, None, progress)
     image = Image(frames[0])

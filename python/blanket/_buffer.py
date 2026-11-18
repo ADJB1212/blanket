@@ -170,7 +170,9 @@ class MappedImage(Image):
         row_stride = mapping.stride * mapping.orientation
         strides = (row_stride, pixel_bytes) if len(shape) == 2 else (row_stride, pixel_bytes, sample_bytes)
         offset = (self.height - 1) * mapping.stride if mapping.orientation == -1 and self.height else 0
-        return np.ndarray(shape, dtype=typestr, buffer=self.buffer_view(), offset=offset, strides=strides)
+        array = np.ndarray(shape, dtype=typestr, buffer=self.buffer_view(), offset=offset, strides=strides)
+        # Keep the read-only buffer export as the base even if the original owner is writable.
+        return np.asarray(memoryview(array))
 
     def close(self) -> None:
         """Release buffer mapping and close native raster."""

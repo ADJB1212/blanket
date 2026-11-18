@@ -29,6 +29,22 @@ fn rgba(py: Python<'_>, image: &Image, transparency: Option<&Bound<'_, PyAny>>) 
     convert(py, image, "RGBA", None)
 }
 
+fn is_opaque(py: Python<'_>, image: &Image, has_transparency_key: bool) -> PyResult<bool> {
+    if has_transparency_key {
+        return Ok(false);
+    }
+    if let Some((mode, _)) = image.palette() {
+        return Ok(*mode == PixelMode::Rgb);
+    }
+    let mode = image.pixel_mode();
+    if matches!(mode, PixelMode::La | PixelMode::Rgba) {
+        let pixels = image.pixel_data()?;
+        let channels = mode.channels();
+        return Ok(py.detach(|| pixels.chunks_exact(channels).all(|pixel| pixel[channels - 1] == 255)));
+    }
+    Ok(true)
+}
+
 #[pyfunction]
 pub(crate) fn _png_frame_plan(
     py: Python<'_>, images: Vec<PyRef<'_, Image>>, durations: Vec<f64>, disposals: Vec<u8>, blends: Vec<u8>,
@@ -43,63 +59,48 @@ pub(crate) fn _png_frame_plan(
     }
     let canvas = images.iter().fold((0, 0), |(w, h), image| (w.max(image.width()), h.max(image.height())));
     let mut records: Vec<PlannedFrame> = Vec::new();
+    let mut comparison_base: Option<(usize, Option<Bounds>)> = None;
     for (position, frame) in images.iter().enumerate().skip(start) {
         let mut bbox = None;
         let (duration, disposal, blend) = (durations[position], disposals[position], blends[position]);
-        if let Some(&(previous, previous_bbox, previous_duration, previous_disposal, previous_blend)) = records.last() {
-            let previous_disposal = if previous_disposal == 2 && records.len() < 2 { 1 } else { previous_disposal };
-            let base_index = if previous_disposal == 2 { records[records.len() - 2].0 } else { previous };
+        let replaces_pixels = blend == 0 || is_opaque(py, frame, transparencies[position].is_some())?;
+        if let Some((base_index, clear)) = comparison_base
+            // Preserve Pillow-compatible delta bounds for differently sized frames.
+            && (frame.size() != images[base_index].size() || replaces_pixels)
+        {
             let base = &images[base_index];
-            let mut clear = if previous_disposal == 1 {
-                Some(previous_bbox.unwrap_or_else(|| (0, 0, images[0].width() as usize, images[0].height() as usize)))
-            } else {
-                None
-            };
+            let clear = clear.map(|(l, t, r, b)| (l as u32, t as u32, r as u32, b as u32));
             let direct = frame.pixel_mode() == base.pixel_mode()
                 && frame.palette().is_none()
                 && base.palette().is_none()
-                && matches!(frame.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba)
+                && (clear.is_none() || matches!(frame.pixel_mode(), PixelMode::La | PixelMode::Rgba))
                 && transparencies[position].is_none()
                 && transparencies[base_index].is_none();
-            let bounds = |clear: Option<Bounds>| clear.map(|(l, t, r, b)| (l as u32, t as u32, r as u32, b as u32));
             if direct {
-                bbox = blanket_composite::chops::_difference_bbox(py, frame, base, bounds(clear))?;
+                bbox = blanket_composite::chops::_difference_bbox(py, frame, base, clear)?;
             } else {
-                let mut cleared;
-                let comparison_base = if let Some((left, top, right, bottom)) = clear
-                    && base.pixel_mode() != PixelMode::Rgba
-                {
-                    cleared = base.copy(py)?;
-                    cleared.ensure_owned()?;
-                    let channels = base.pixel_mode().channels();
-                    let width = base.width() as usize;
-                    let height = base.height() as usize;
-                    let pixels = cleared.pixels_mut().expect("owned pixel storage");
-                    py.detach(|| {
-                        for y in top.min(height)..bottom.min(height) {
-                            let row = &mut pixels[y * width * channels..(y + 1) * width * channels];
-                            row[left.min(width) * channels..right.min(width) * channels].fill(0);
-                        }
-                    });
-                    clear = None;
-                    &cleared
-                } else {
-                    base
-                };
                 let current = rgba(py, frame, transparencies[position].as_ref())?;
-                let comparison = rgba(py, comparison_base, transparencies[base_index].as_ref())?;
-                bbox = blanket_composite::chops::_difference_bbox(py, &current, &comparison, bounds(clear))?;
+                let comparison = rgba(py, base, transparencies[base_index].as_ref())?;
+                bbox = blanket_composite::chops::_difference_bbox(py, &current, &comparison, clear)?;
             }
-            let combined = previous_duration + duration;
             if bbox.is_none()
-                && previous_disposal == disposal
-                && previous_blend == blend
+                && frame.size() == base.size()
                 && duration_known
-                && blanket_codecs::codecs::frame_delay(combined).is_ok()
+                && disposal == 0
+                && let Some((_, _, previous_duration, 0, previous_blend)) = records.last_mut()
+                && *previous_blend == blend
+                && blanket_codecs::codecs::frame_delay(*previous_duration + duration).is_ok()
             {
-                records.last_mut().expect("previous frame").2 = combined;
+                *previous_duration += duration;
                 continue;
             }
+        }
+        // PREVIOUS leaves the pre-frame canvas intact, even across consecutive frames.
+        if disposal == 1 || (disposal == 2 && records.is_empty()) {
+            let (width, height) = if records.is_empty() && !default_image { canvas } else { frame.size() };
+            comparison_base = Some((position, Some(bbox.unwrap_or((0, 0, width as usize, height as usize)))));
+        } else if disposal == 0 {
+            comparison_base = replaces_pixels.then_some((position, None));
         }
         records.push((position, bbox, duration, disposal, blend));
     }

@@ -33,6 +33,15 @@ def test_half_size_displacement_is_negative():
     assert (result.dx, result.dy) == pytest.approx((-32, -24), abs=1e-8)
 
 
+def test_default_window_preserves_information_on_three_sample_axes():
+    reference = Image.new("L", (3, 3))
+    reference.putpixel((1, 1), 255)
+    shifted = ImageChops.offset(reference, 1, -1)
+    result = ImageOps.phase_correlate(reference, shifted)
+    assert (result.dx, result.dy) == pytest.approx((-1, 1), abs=1e-8)
+    assert result.confidence > 0.8
+
+
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "I;16", "I;16L", "I;16B", "I;16N", "F", "RGB;F", "RGBA;F"])
 def test_modes_and_source_preservation(mode):
     reference = texture()

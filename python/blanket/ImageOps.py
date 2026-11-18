@@ -126,6 +126,7 @@ def phase_correlate(reference: Image.Image, image: Image.Image, *, max_rotation:
             sampling with zero fill after mean removal. Choose a smaller step
             for finer rotation estimates at greater computational cost.
         window: Use "hann" to reduce border effects, or None for cyclic data.
+            Axes with only three samples keep uniform weights.
 
     Returns:
         The translation and optional rotation that aligns ``image`` to ``reference``.

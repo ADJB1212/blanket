@@ -753,7 +753,17 @@ fn flood_pixels<const C: usize>(
     }
     if let Some(border) = border {
         let border: [u8; C] = border.try_into().unwrap();
-        flood_spans(pixels, seed_index, width, fill, |pixel| *pixel != border && *pixel != fill);
+        let matches = |pixel: &[u8; C], ink: &[u8; C]| {
+            pixel == ink
+                || (mode.is_float()
+                    && pixel
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .zip(ink.as_chunks::<4>().0)
+                        .all(|(&a, &b)| a == b || f32::from_le_bytes(a) == f32::from_le_bytes(b)))
+        };
+        flood_spans(pixels, seed_index, width, fill, |pixel| !matches(pixel, &border) && !matches(pixel, &fill));
     } else if mode.sample_bytes() == 1 && (0.0..1.0).contains(&threshold) {
         flood_spans(pixels, seed_index, width, fill, |pixel| *pixel == seed);
     } else {

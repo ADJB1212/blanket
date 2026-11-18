@@ -112,6 +112,22 @@ def test_truncated_jpeg_can_close_without_loading(monkeypatch):
         image.load()
 
 
+@pytest.mark.parametrize("method", ["lens_map", "polar_map"])
+def test_coordinate_map_preserves_deferred_decode(monkeypatch, method):
+    data = Image.new("RGB", (63, 47), "red").encode("JPEG")
+
+    def unexpected_decode(*args):
+        pytest.fail("coordinate map decoded source pixels")
+
+    monkeypatch.setattr(Image, "_open_sequence", unexpected_decode)
+    with Image.open(BytesIO(data)) as image:
+        assert getattr(image, method)().size == (63, 47)
+        assert image.draft(None, (8, 7)) is not None
+    image.close()
+    with pytest.raises(ValueError, match="closed"):
+        getattr(image, method)()
+
+
 @pytest.mark.parametrize("corruption", ["checksum", "truncated", "pixels"])
 def test_png_verification_and_deferred_decode_errors(corruption):
     encoded = bytearray(Image.new("RGB", (19, 13), "red").encode("PNG"))

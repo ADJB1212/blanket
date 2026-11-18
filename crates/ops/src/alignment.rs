@@ -256,12 +256,15 @@ fn ops_phase_correlate(
     let image = grayscale(image)?;
     py.detach(|| {
         let mut weights = zeros(width * height)?;
-        for (i, value) in weights.iter_mut().enumerate() {
-            *value = if window.is_some() {
-                0.25 * (1.0 - (TAU * (i % width) as f64 / (width - 1) as f64).cos()) * (1.0 - (TAU * (i / width) as f64 / (height - 1) as f64).cos())
-            } else {
-                1.0
+        if window.is_some() {
+            let hann = |index, length| {
+                if length == 3 { 1.0 } else { 0.5 * (1.0 - (TAU * index as f64 / (length - 1) as f64).cos()) }
             };
+            for (i, value) in weights.iter_mut().enumerate() {
+                *value = hann(i % width, width) * hann(i / width, height);
+            }
+        } else {
+            weights.fill(1.0);
         }
         let mut planner = FftPlannerScalar::new();
         let reference = spectrum(&reference, width, &weights, &mut planner)?;

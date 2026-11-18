@@ -369,6 +369,7 @@ impl Image {
         if self.mode.is_float() && self.mode.channels() > 1 {
             let channels = self.mode.channels();
             let stride = channels * 4;
+            let identity = scale == 1.0 && offset == 0.0;
             let pixels = self.write_pixels(data.py())?;
             for (i, item) in data.try_iter()?.enumerate() {
                 if i >= length {
@@ -391,7 +392,8 @@ impl Image {
                     values.copy_from_slice(&samples);
                 }
                 for (&value, dst) in values.iter().zip(pixels[i * stride..(i + 1) * stride].as_chunks_mut::<4>().0) {
-                    *dst = ((value * scale + offset) as f32).to_le_bytes();
+                    let value = if identity { value } else { value * scale + offset };
+                    *dst = (value as f32).to_le_bytes();
                 }
             }
             return Ok(());

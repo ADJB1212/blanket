@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"os", "collections.abc", "math", "itertools"}
+__lazy_modules__ = {"os", "collections.abc", "math", "itertools", "struct"}
 
 import math
 import os
+import struct
 from collections.abc import Iterable
 from itertools import islice, repeat
 from typing import TYPE_CHECKING
@@ -122,8 +123,11 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     if loop is not None:
         loop = _bounded_int("loop", loop, 0, 65535 if format in ("GIF", "WEBP") else 0x7FFFFFFF)
     prepared: list[Image] = []
+    png_depth = 8
     png_mode = "RGBA"
     png_palette = None
+    if format == "PNG" and any(frame.bit_depth in (10, 12, 16) or frame.mode == "I" for frame in frames):
+        png_depth = 16
     if format == "PNG" and all(frame.bit_depth == 8 for frame in frames):
         modes = {frame.mode for frame in frames}
         has_alpha = any(frame.has_transparency_data for frame in frames)
@@ -131,8 +135,18 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             png_mode = next(iter(modes))
             if png_mode not in ("RGBA", "RGB", "P", "LA", "L", "1"):
                 png_mode = "RGBA"
-            if png_mode in ("P", "RGB", "L") and any(frame.info.get("transparency") != frames[0].info.get("transparency") for frame in frames[1:]):
-                png_mode = "RGBA"
+            if png_mode in ("P", "L", "RGB"):
+                transparency = frames[0].info.get("transparency")
+                if any(frame.info.get("transparency") != transparency for frame in frames[1:]):
+                    png_mode = "RGBA"
+                elif transparency is not None and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
+                    if png_mode == "L":
+                        metadata[3].append((b"tRNS", struct.pack(">H", _bounded_int("transparency", transparency, 0, 255)), False))
+                    elif png_mode == "RGB":
+                        if not isinstance(transparency, tuple) or len(transparency) != 3:
+                            raise TypeError("RGB transparency must be an RGB tuple")
+                        payload = struct.pack(">3H", *(_bounded_int("transparency", sample, 0, 255) for sample in transparency))
+                        metadata[3].append((b"tRNS", payload, False))
             if png_mode == "P":
                 png_palette = frames[0].palette
                 palette_values = frames[0].getpalette("RGBA")
@@ -158,7 +172,11 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             target = "RGBA"
         if frame.bit_depth != 8 and format != "PNG" and frame.mode not in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             raise UnsupportedCodecError("high-bit-depth images require explicit conversion for this format", format=format, operation="encode")
-        prepared.append(frame.convert(target) if frame.mode != target else frame)
+        if frame.mode != target:
+            frame = frame.convert(target)
+        if format == "PNG" and png_depth == 16 and frame.bit_depth != png_depth:
+            frame = frame.convert(target, bit_depth=png_depth)
+        prepared.append(frame)
     regions = None
     if format == "PNG" and prepared[0].bit_depth == 8:
         prepared, durations, disposals, blends, regions = _png_regions(prepared, durations, disposals, blends, default_image, "duration" in controls or any("duration" in frame.info for frame in frames))
@@ -170,6 +188,11 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 prepared[0]._native.set_palette_alpha(index=transparency)
             elif isinstance(transparency, bytes):
                 prepared[0]._native.set_palette_alpha(alpha=transparency)
+    elif format == "PNG":
+        canvas = max(frame.width for frame in prepared), max(frame.height for frame in prepared)
+        if prepared[0].size != canvas:
+            prepared[0] = prepared[0].crop((0, 0, *canvas))
+        regions = (canvas, [(0, 0)] * len(prepared))
     output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
     encoded = _encode_sequence(
         [frame._native for frame in prepared],

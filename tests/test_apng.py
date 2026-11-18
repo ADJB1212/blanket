@@ -317,11 +317,16 @@ def test_apng_high_frame_count() -> None:
 
 
 @pytest.mark.parametrize("test_file", ("sequence_start.png", "sequence_gap.png", "sequence_repeat.png", "sequence_repeat_chunk.png", "sequence_reorder.png", "sequence_reorder_chunk.png", "sequence_fdat_fctl.png"))
-def test_apng_sequence_errors(test_file: str) -> None:
-    with pytest.raises(SyntaxError), Image.open(PILLOW_IMAGES / f"apng/{test_file}") as im:
+@pytest.mark.parametrize("lazy", [False, True])
+def test_apng_sequence_errors(test_file: str, lazy: bool) -> None:
+    with Image.open(PILLOW_IMAGES / f"apng/{test_file}", lazy=lazy) as im:
         assert isinstance(im, PngImagePlugin.PngImageFile)
-        im.seek(im.n_frames - 1)
-        im.load()
+        original = im.tobytes()
+        assert im.n_frames > 1
+        with pytest.raises(SyntaxError):
+            im.seek(im.n_frames - 1)
+        assert im.tell() == 0
+        assert im.tobytes() == original
 
 
 def test_apng_save(tmp_path: Path) -> None:
@@ -364,6 +369,82 @@ def test_apng_save_alpha(tmp_path: Path) -> None:
 
         reloaded.seek(1)
         assert reloaded.getpixel((0, 0)) == (255, 0, 0, 127)
+
+
+@pytest.mark.parametrize("mode, key, other", [("L", 12, 48), ("RGB", (12, 24, 36), (48, 60, 72))])
+def test_apng_save_shared_transparency_key(mode, key, other):
+    first = Image.new(mode, (4, 4), key)
+    second = Image.new(mode, first.size, other)
+    second.putpixel((0, 0), key)
+    first.info["transparency"] = second.info["transparency"] = key
+    encoded = first.encode("PNG", save_all=True, append_images=[second])
+    with Image.decode(encoded) as decoded:
+        for position, frame in enumerate((first, second)):
+            decoded.seek(position)
+            assert decoded.convert("RGBA").tobytes() == frame.convert("RGBA").tobytes()
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_consecutive_previous_disposals_restore_the_same_canvas(lazy):
+    frames = [Image.new("RGBA", (4, 4), color) for color in ("red", "green", "blue", "green")]
+    frames[-1].putpixel((0, 0), (150, 10, 50, 255))
+    encoded = frames[0].encode("PNG", save_all=True, append_images=frames[1:], disposal=[0, 2, 2, 0])
+    with Image.decode(encoded, lazy=lazy) as decoded:
+        for position, frame in enumerate(frames):
+            decoded.seek(position)
+            assert decoded.tobytes() == frame.tobytes()
+
+
+def test_apng_over_composites_repeated_semitransparent_frames():
+    background = Image.new("RGBA", (4, 4), "blue")
+    frame = Image.new("RGBA", (4, 4), (255, 0, 0, 128))
+    clear = Image.new("RGBA", frame.size)
+    encoded = background.encode("PNG", save_all=True, append_images=[frame, frame.copy(), clear], duration=[100] * 4, blend=[0, 1, 1, 0])
+    with Image.decode(encoded) as decoded:
+        assert decoded.n_frames == 4
+        assert decoded.tobytes() == background.tobytes()
+        decoded.seek(1)
+        assert decoded.getpixel((0, 0)) == (128, 0, 127, 191)
+        decoded.seek(2)
+        assert decoded.getpixel((0, 0)) == (192, 0, 63, 159)
+        decoded.seek(3)
+        assert decoded.tobytes() == clear.tobytes()
+
+
+def test_apng_background_disposal_does_not_merge_with_cleared_frame():
+    frame = Image.new("RGBA", (4, 4), "red")
+    clear = Image.new("RGBA", frame.size)
+    encoded = frame.encode("PNG", save_all=True, append_images=[clear], duration=[100, 100], disposal=1)
+    with Image.decode(encoded) as decoded:
+        assert decoded.n_frames == 2
+        assert decoded.tobytes() == frame.tobytes()
+        decoded.seek(1)
+        assert decoded.tobytes() == clear.tobytes()
+
+
+def test_apng_does_not_merge_frames_with_identical_overlap_but_different_sizes():
+    first = Image.new("RGBA", (4, 4), "red")
+    second = Image.new("RGBA", (4, 6), "red")
+    data = first.encode("PNG", save_all=True, append_images=[second], duration=[100, 100])
+    with Image.decode(data) as decoded:
+        assert decoded.n_frames == 2
+        assert decoded.getpixel((0, 5)) == (0, 0, 0, 0)
+        decoded.seek(1)
+        assert decoded.tobytes() == second.tobytes()
+
+
+@pytest.mark.parametrize("depths", [(8, 12), (12, 8), (10, 16)])
+@pytest.mark.parametrize("second_size", [(4, 4), (5, 6)])
+def test_apng_promotes_mixed_depths_without_losing_samples(depths, second_size):
+    sources = [Image.frombytes("RGB", (4, 4), bytes((27, 81, 179)) * 16), Image.frombytes("RGB", second_size, bytes((47, 101, 207)) * (second_size[0] * second_size[1]))]
+    first, second = [source.convert("RGB", bit_depth=depth) for source, depth in zip(sources, depths, strict=True)]
+    data = first.encode("PNG", save_all=True, append_images=[second])
+    with Image.decode(data) as decoded:
+        for position, frame in enumerate((first, second)):
+            decoded.seek(position)
+            assert decoded.bit_depth == 16
+            assert decoded.size == second_size
+            assert decoded.tobytes() == frame.convert("RGBA", bit_depth=16).crop((0, 0, *second_size)).tobytes()
 
 
 def test_apng_save_split_fdat(tmp_path: Path) -> None:

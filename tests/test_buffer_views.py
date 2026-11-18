@@ -99,6 +99,8 @@ def test_fromarray_without_copy_retains_source_changes_and_owner(dtype, shape, m
     assert source.readonly == 1
     exported = source.array_view()
     assert np.shares_memory(values, exported)
+    with pytest.raises(ValueError):
+        exported.setflags(write=True)
     values[...] = 7
     np.testing.assert_array_equal(exported, values)
     pixel = 7 if len(shape) == 2 else (7,) * shape[-1]
@@ -152,6 +154,8 @@ def test_mapped_export_retains_padding_orientation_and_lifetime(orientation):
     assert view.strides == (12 * orientation, 4, 1)
     assert source.buffer_view().nbytes == 24
     assert not view.flags.writeable
+    with pytest.raises(ValueError):
+        view.setflags(write=True)
     np.testing.assert_array_equal(view, np.asarray(source))
     data[0] = 99
     assert view[0 if orientation == 1 else 1, 0, 0] == 99

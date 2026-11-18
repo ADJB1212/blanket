@@ -1,3 +1,5 @@
+from struct import pack
+
 import pytest
 
 from blanket import Image, ImageDraw
@@ -40,6 +42,13 @@ def test_float_color_drawing_rejects_named_inks(mode):
         ImageDraw.Draw(image).point((0, 0), fill="white")
 
 
+@pytest.mark.parametrize("mode,channels", [("RGB;F", 3), ("RGBA;F", 4)])
+def test_float_color_putdata_preserves_negative_zero(mode, channels):
+    image = Image.new(mode, (1, 1))
+    image.putdata([(-0.0,) * channels])
+    assert image.tobytes() == pack("<f", -0.0) * channels
+
+
 @pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
 def test_float_floodfill_uses_numeric_channel_distances(mode, channels):
     def pixel(value):
@@ -56,7 +65,17 @@ def test_float_floodfill_treats_signed_zero_as_equal(mode, channels):
     def pixel(value):
         return value if channels == 1 else (value,) * channels
 
-    image = Image.new(mode, (2, 1))
-    image.putdata([pixel(0.0), pixel(-0.0)])
+    image = Image.frombytes(mode, (2, 1), pack("<f", 0.0) * channels + pack("<f", -0.0) * channels)
     ImageDraw.floodfill(image, (0, 0), pixel(1.0))
     assert list(image.getdata()) == [pixel(1.0)] * 2
+
+
+@pytest.mark.parametrize("mode,channels", [("F", 1), ("RGB;F", 3), ("RGBA;F", 4)])
+def test_float_floodfill_stops_at_negative_zero_border(mode, channels):
+    def pixel(value):
+        return value if channels == 1 else (value,) * channels
+
+    raw = b"".join(pack("<f", value) * channels for value in (2.0, -0.0, 2.0))
+    image = Image.frombytes(mode, (3, 1), raw)
+    ImageDraw.floodfill(image, (0, 0), pixel(1.0), border=pixel(0.0))
+    assert list(image.getdata()) == [pixel(1.0), pixel(0.0), pixel(2.0)]
