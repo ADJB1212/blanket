@@ -1,10 +1,11 @@
 """Describe Python conversion and binary output contracts for API adapters."""
 
-from collections.abc import Buffer, Iterable
+from collections.abc import Buffer, Callable, Iterable
 from typing import Protocol, SupportsBytes, SupportsFloat, SupportsIndex
 
 type FloatInput = str | Buffer | SupportsFloat | SupportsIndex
 type BytesInput = Iterable[SupportsIndex] | SupportsIndex | SupportsBytes | Buffer
+type ProgressCallback = Callable[[int], bool | None]
 
 
 class Writable(Protocol):

@@ -1,4 +1,4 @@
-"""Structured failures from image codecs.
+"""Structured failures from image codecs and cooperative cancellation.
 
 File access errors and ordinary API argument errors retain their usual Python
 types. Unrecognized input retains UnidentifiedImageError. Recognized codec
@@ -7,9 +7,9 @@ failures expose their format and operation without requiring message parsing.
 
 from __future__ import annotations
 
-from ._blanket import UnidentifiedImageError
+from ._blanket import OperationCancelledError, UnidentifiedImageError
 
-__all__ = ["CodecError", "CodecResourceLimitError", "CorruptImageError", "MissingBackendError", "UnsupportedCodecError"]
+__all__ = ["CodecError", "CodecResourceLimitError", "CorruptImageError", "MissingBackendError", "OperationCancelledError", "UnsupportedCodecError"]
 
 
 class CodecError(OSError):

@@ -1,6 +1,7 @@
 //! Save-time size reduction with a decoded-sample error bound.
 
 use blanket_codecs::codecs::{self, ImageFormat, SaveOptions};
+use blanket_core::progress::Progress;
 use blanket_core::raster::{Image, PixelMode};
 use blanket_kernels::ops as ops_simd;
 use pyo3::exceptions::PyValueError;
@@ -54,11 +55,17 @@ impl LossyImageCompressor {
 
 impl LossyImageCompressor {
     pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+        self.encode_with_progress(image, format, options, &Progress::default())
+    }
+
+    pub(crate) fn encode_with_progress(&self, image: &Image, format: ImageFormat, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         let lossless = LosslessImageCompressor { effort: self.effort };
         let mut output = if format == ImageFormat::Jpeg && self.max_rmse > 0.0 && !options.lossless {
-            codecs::encode(image, format, options)?
+            let baseline = codecs::encode(image, format, options)?;
+            progress.checkpoint()?;
+            baseline
         } else {
-            lossless.encode(image, format, options)?
+            lossless.encode_with_progress(image, format, options, progress)?
         };
         if self.max_rmse == 0.0 || options.lossless {
             return Ok(output);
@@ -68,7 +75,7 @@ impl LossyImageCompressor {
             return Ok(output);
         }
         if png {
-            return self.optimize_png(image, options, output);
+            return self.optimize_png(image, options, output, progress);
         }
         let reference = codecs::decode(&output, format).map_err(|error| error.into_pyerr(Some(format.as_str())))?;
         self.within_perceptual_error(&reference, &reference)?;
@@ -99,10 +106,11 @@ impl LossyImageCompressor {
                 lower = quality + 1;
                 bracketed = true;
             }
+            progress.checkpoint()?;
         }
         if matches!(format, ImageFormat::Jpeg | ImageFormat::Webp) {
             let quality = winner_quality.unwrap_or(options.quality);
-            let optimized = lossless.encode(image, format, SaveOptions { quality, ..options })?;
+            let optimized = lossless.encode_with_progress(image, format, SaveOptions { quality, ..options }, progress)?;
             if optimized.len() < output.len() {
                 output = optimized;
             }
@@ -110,7 +118,7 @@ impl LossyImageCompressor {
         Ok(output)
     }
 
-    fn optimize_png(&self, image: &Image, options: SaveOptions, mut output: Vec<u8>) -> PyResult<Vec<u8>> {
+    fn optimize_png(&self, image: &Image, options: SaveOptions, mut output: Vec<u8>, progress: &Progress) -> PyResult<Vec<u8>> {
         self.within_perceptual_error(image, image)?;
         let channels = image.pixel_mode().channels();
         let pixels = image.raw_data()?;
@@ -148,8 +156,10 @@ impl LossyImageCompressor {
                 let destination = rounded.pixels_mut().expect("validated image");
                 round_png_pixels(pixels, destination, channels, &color_table);
                 if !self.within_perceptual_error(rounded, image)? {
+                    progress.checkpoint()?;
                     continue;
                 }
+                progress.checkpoint()?;
                 let candidate = codecs::encode(rounded, ImageFormat::Png, options)?;
                 if candidate.len() < smallest {
                     smallest = candidate.len();
@@ -162,7 +172,7 @@ impl LossyImageCompressor {
         }
         if let (Some(color_table), Some(mut winner)) = (winner, rounded) {
             round_png_pixels(pixels, winner.pixels_mut().expect("validated image"), channels, &color_table);
-            let optimized = LosslessImageCompressor { effort: self.effort }.encode(&winner, ImageFormat::Png, options)?;
+            let optimized = LosslessImageCompressor { effort: self.effort }.encode_with_progress(&winner, ImageFormat::Png, options, progress)?;
             if optimized.len() < output.len() {
                 output = optimized;
             }

@@ -13,6 +13,7 @@ use std::sync::OnceLock;
 use blanket_codecs::codecs::{self, ImageFormat, JpegCoding, JxlThreads, SaveOptions};
 use blanket_core::parallel;
 use blanket_core::parallel::CandidateLimit;
+use blanket_core::progress::Progress;
 use blanket_core::raster::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -33,9 +34,13 @@ pub enum Compressor {
 
 impl Compressor {
     pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+        self.encode_with_progress(image, format, options, &Progress::default())
+    }
+
+    pub fn encode_with_progress(&self, image: &Image, format: ImageFormat, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         match self {
-            Self::Lossless(compressor) => compressor.encode(image, format, options),
-            Self::Lossy(compressor) => compressor.encode(image, format, options),
+            Self::Lossless(compressor) => compressor.encode_with_progress(image, format, options, progress),
+            Self::Lossy(compressor) => compressor.encode_with_progress(image, format, options, progress),
         }
     }
 }
@@ -61,28 +66,35 @@ impl LosslessImageCompressor {
 
 impl LosslessImageCompressor {
     pub fn encode(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+        self.encode_with_progress(image, format, options, &Progress::default())
+    }
+
+    pub(crate) fn encode_with_progress(&self, image: &Image, format: ImageFormat, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         match format {
-            ImageFormat::Png if image.bit_depth() == 8 => self.optimize_png(image, options.compress_level),
-            ImageFormat::Jpeg => self.optimize_jpeg(image, options),
-            ImageFormat::Webp => self.optimize_webp(image, options),
-            ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options),
+            ImageFormat::Png if image.bit_depth() == 8 => self.optimize_png(image, options.compress_level, progress),
+            ImageFormat::Jpeg => self.optimize_jpeg(image, options, progress),
+            ImageFormat::Webp => self.optimize_webp(image, options, progress),
+            ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options, progress),
             _ => codecs::encode(image, format, options),
         }
     }
 
-    fn optimize_webp(&self, image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
+    fn optimize_webp(&self, image: &Image, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         let mut output = codecs::encode(image, ImageFormat::Webp, options)?;
         let reference = codecs::decode(&output, ImageFormat::Webp).map_err(codec_error)?;
+        progress.checkpoint()?;
         for method in (0..=6).rev().take(usize::from(self.effort)) {
             let candidate = codecs::encode_webp_variant(image, options, method)?;
             keep_equivalent(&mut output, candidate, &reference, ImageFormat::Webp)?;
+            progress.checkpoint()?;
             let candidate = codecs::encode_webp_variant(&reference, SaveOptions { lossless: true, ..options }, method)?;
             keep_equivalent(&mut output, candidate, &reference, ImageFormat::Webp)?;
+            progress.checkpoint()?;
         }
         Ok(output)
     }
 
-    fn optimize_jpeg(&self, image: &Image, options: SaveOptions) -> PyResult<Vec<u8>> {
+    fn optimize_jpeg(&self, image: &Image, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         // Keep ordinary Huffman JPEG compatibility; arithmetic coding is not
         // supported by many consumers. Every candidate shares the normal
         // save's coefficients, quantization tables, subsampling, partial edge
@@ -95,11 +107,11 @@ impl LosslessImageCompressor {
         let jobs = &JOBS[..if self.effort >= 3 { 3 } else { 2 }];
         let work_bytes = image.raw_data()?.len();
         let output =
-            parallel::best_candidate(jobs, work_bytes, usize::MAX, |&coding, _| codecs::encode_jpeg_variant(image, options, coding).map(Some))?;
+            best_candidate(jobs, work_bytes, usize::MAX, progress, |&coding, _| codecs::encode_jpeg_variant(image, options, coding).map(Some))?;
         Ok(output.expect("the normal save always produces a candidate"))
     }
 
-    fn optimize_sample_codec(&self, image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
+    fn optimize_sample_codec(&self, image: &Image, format: ImageFormat, options: SaveOptions, progress: &Progress) -> PyResult<Vec<u8>> {
         // Candidate encoders use one thread each, avoiding nested libjxl pools.
         // Account conservatively for libjxl's larger working set when deciding
         // whether multiple encoders fit the candidate memory budget.
@@ -109,10 +121,11 @@ impl LosslessImageCompressor {
             && image.raw_data()?.len() >= codecs::JXL_PARALLEL_MIN_BYTES
             && parallel::candidate_workers(work_bytes, candidate_count) > 1
         {
-            return self.optimize_jxl_parallel(image, options, work_bytes);
+            return self.optimize_jxl_parallel(image, options, work_bytes, progress);
         }
         let mut prepared = PreparedSampleCodec::new(image, format)?;
         let mut output = prepared.encode(options, true)?;
+        progress.checkpoint()?;
         let mut reference = None;
         let mut priority = 0;
         // More thorough encoders usually set the tightest size bound. Try them
@@ -128,6 +141,7 @@ impl LosslessImageCompressor {
             }
             let candidate = prepared.encode(candidate_options, false)?;
             keep_equivalent_ranked(&mut output, candidate, &mut reference, format, &mut priority, effort)?;
+            progress.checkpoint()?;
         }
         drop(prepared);
         if !options.lossless {
@@ -159,14 +173,16 @@ impl LosslessImageCompressor {
                         }
                     }
                 }
+                progress.checkpoint()?;
             }
         }
         Ok(output)
     }
 
-    fn optimize_jxl_parallel(&self, image: &Image, options: SaveOptions, work_bytes: usize) -> PyResult<Vec<u8>> {
+    fn optimize_jxl_parallel(&self, image: &Image, options: SaveOptions, work_bytes: usize, progress: &Progress) -> PyResult<Vec<u8>> {
         let prepared = codecs::PreparedJxl::new(image)?;
         let baseline = prepared.encode(options)?;
+        progress.checkpoint()?;
         let reference = OnceLock::new();
         let jobs: Vec<_> = (1..=self.effort).filter(|&effort| effort != options.effort).collect();
         // The memory budget may admit fewer concurrent candidates than there
@@ -175,7 +191,7 @@ impl LosslessImageCompressor {
         // alone on one core while the rest of the pool idles.
         let threads = |jobs: usize| JxlThreads::Fixed(codecs::jxl_candidate_threads(image, parallel::candidate_workers(work_bytes, jobs)));
         let candidate_threads = threads(jobs.len());
-        let candidate = parallel::best_candidate(&jobs, work_bytes, baseline.len(), |&effort, limit| {
+        let candidate = best_candidate(&jobs, work_bytes, baseline.len(), progress, |&effort, limit| {
             let candidate = prepared.encode_with_threads(SaveOptions { effort, ..options }, candidate_threads)?;
             if candidate.len() >= limit.get() {
                 return Ok(None);
@@ -192,7 +208,7 @@ impl LosslessImageCompressor {
             let prepared = codecs::PreparedJxl::new(reference)?;
             let jobs: Vec<_> = (1..=self.effort).collect();
             let candidate_threads = threads(jobs.len());
-            let candidate = parallel::best_candidate(&jobs, work_bytes, output.len(), |&effort, limit| {
+            let candidate = best_candidate(&jobs, work_bytes, output.len(), progress, |&effort, limit| {
                 let candidate = prepared.encode_with_threads(SaveOptions { effort, lossless: true, quality: 100, ..options }, candidate_threads)?;
                 if candidate.len() >= limit.get() {
                     return Ok(None);
@@ -206,7 +222,7 @@ impl LosslessImageCompressor {
         Ok(output)
     }
 
-    fn optimize_png(&self, image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
+    fn optimize_png(&self, image: &Image, compress_level: u8, progress: &Progress) -> PyResult<Vec<u8>> {
         let pixels = image.pixel_data()?;
         // Prepare every pixel representation first, then search all of their
         // filter and level trials in one queue alongside the normal save.
@@ -226,7 +242,7 @@ impl LosslessImageCompressor {
         }];
         let properties = self.palette_candidates(image, pixels, &mut candidates);
         self.gray_or_key_candidates(image, pixels, &mut candidates, properties);
-        self.search_png(image, &candidates, compress_level, None)
+        self.search_png(image, &candidates, compress_level, None, progress)
     }
 
     fn png_levels(&self, compress_level: u8) -> Vec<u8> {
@@ -274,7 +290,9 @@ impl LosslessImageCompressor {
     /// Ties favor earlier jobs: the normal save, then representations and
     /// their trials in order. With `baseline`, that existing encoding is the
     /// fallback and the initial exclusive bound instead of the normal save.
-    fn search_png(&self, image: &Image, candidates: &[PngCandidate<'_>], compress_level: u8, baseline: Option<Vec<u8>>) -> PyResult<Vec<u8>> {
+    fn search_png(
+        &self, image: &Image, candidates: &[PngCandidate<'_>], compress_level: u8, baseline: Option<Vec<u8>>, progress: &Progress,
+    ) -> PyResult<Vec<u8>> {
         let pixels = image.pixel_data()?;
         let mut jobs = Vec::new();
         if baseline.is_none() {
@@ -285,7 +303,7 @@ impl LosslessImageCompressor {
             jobs.extend(trials.into_iter().map(|(level, filter)| PngJob::Trial { candidate, level, filter }));
         }
         let limit = baseline.as_ref().map_or(usize::MAX, Vec::len);
-        let best = parallel::best_candidate(&jobs, pixels.len(), limit, |job, bound| match *job {
+        let best = best_candidate(&jobs, pixels.len(), limit, progress, |job, bound| match *job {
             PngJob::NormalSave => codecs::encode_png(image, pixels, compress_level).map(Some),
             PngJob::Trial { candidate, level, filter } => {
                 let candidate = &candidates[candidate];
@@ -868,6 +886,20 @@ fn codec_error(error: impl std::fmt::Display) -> PyErr {
     PyOSError::new_err(error.to_string())
 }
 
+fn best_candidate<T: Sync>(
+    jobs: &[T], work_bytes: usize, limit: usize, progress: &Progress, encode: impl Fn(&T, &CandidateLimit) -> PyResult<Option<Vec<u8>>> + Sync,
+) -> PyResult<Option<Vec<u8>>> {
+    if !progress.enabled() {
+        return parallel::best_candidate(jobs, work_bytes, limit, encode);
+    }
+    // Report between jobs on the caller, where callbacks can run nested operations.
+    parallel::best_candidate(jobs, 0, limit, |job, bound| {
+        let candidate = encode(job, bound)?;
+        progress.checkpoint()?;
+        Ok(candidate)
+    })
+}
+
 fn keep_equivalent(output: &mut Vec<u8>, candidate: Vec<u8>, reference: &Image, format: ImageFormat) -> PyResult<()> {
     if candidate.len() < output.len() && equivalent(&candidate, reference, format)? {
         *output = candidate;
@@ -971,7 +1003,9 @@ mod tests {
                 for lossless in [false, true] {
                     let options = SaveOptions { quality: 71, lossless, effort: 1, .. };
                     let expected = serial.install(|| compressor.encode(&image, ImageFormat::Jxl, options)).unwrap();
-                    let actual = parallel.install(|| compressor.optimize_jxl_parallel(&image, options, image.raw_data().unwrap().len() * 4)).unwrap();
+                    let actual = parallel
+                        .install(|| compressor.optimize_jxl_parallel(&image, options, image.raw_data().unwrap().len() * 4, &Progress::default()))
+                        .unwrap();
                     assert_eq!(actual, expected, "mode={mode:?}, depth={depth}, lossless={lossless}");
                 }
             }
@@ -1248,9 +1282,10 @@ mod tests {
             // chunk bytes alone rule out an improvement.
             let invalid = [PngCandidate { pixels: Cow::Borrowed(&[]), ..candidate }];
             let compressor = LosslessImageCompressor { effort: 10 };
-            let output = compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap();
+            let progress = Progress::default();
+            let output = compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum]), &progress).unwrap();
             assert_eq!(output, vec![19; minimum]);
-            assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1])).is_err());
+            assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1]), &progress).is_err());
         }
     }
 
@@ -1276,8 +1311,9 @@ mod tests {
                 // A baseline at the bound rules the candidate out without
                 // encoding; one byte more must run the encoder on the samples.
                 let invalid = [PngCandidate { pixels: Cow::Borrowed(&[]), ..candidate }];
-                assert_eq!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum])).unwrap(), vec![19; minimum]);
-                assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1])).is_err());
+                let progress = Progress::default();
+                assert_eq!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum]), &progress).unwrap(), vec![19; minimum]);
+                assert!(compressor.search_png(&image, &invalid, 6, Some(vec![19; minimum + 1]), &progress).is_err());
             }
         }
         // Packed depths shrink rows, and the bound must follow the packed width.

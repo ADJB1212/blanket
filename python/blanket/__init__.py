@@ -29,7 +29,7 @@ from . import (
     features,
 )
 from ._blanket import UnidentifiedImageError, __version__
-from .errors import CodecError, CodecResourceLimitError, CorruptImageError, MissingBackendError, UnsupportedCodecError
+from .errors import CodecError, CodecResourceLimitError, CorruptImageError, MissingBackendError, OperationCancelledError, UnsupportedCodecError
 
 __all__ = [
     "CodecError",
@@ -60,6 +60,7 @@ __all__ = [
     "ImageStat",
     "JpegImagePlugin",
     "MissingBackendError",
+    "OperationCancelledError",
     "PngImagePlugin",
     "UnidentifiedImageError",
     "UnsupportedCodecError",

@@ -65,6 +65,7 @@ fn _blanket(module: &Bound<'_, PyModule>) -> PyResult<()> {
     blanket_enhance::hdr::register(module)?;
     blanket_composite::chops::register(module)?;
     blanket_composite::composite::register(module)?;
+    module.add("OperationCancelledError", module.py().get_type::<blanket_core::OperationCancelledError>())?;
     blanket_compressor::register(module)?;
     blanket_filter::filter::register(module)?;
     blanket_ops::math::register(module)?;

@@ -8,7 +8,7 @@ import pytest
 from helpers import assert_image_properties, assert_raises, encode_image, image_buffer
 from PIL import Image as Pillow
 
-from blanket import Image, UnidentifiedImageError
+from blanket import Image, OperationCancelledError, UnidentifiedImageError
 
 
 @pytest.mark.parametrize("source_mode,target_mode", [("RGB;F", "RGBA;F"), ("RGBA;F", "RGB;F")])
@@ -203,6 +203,15 @@ def test_tiled_region_edges_and_unrequested_corrupt_tile(channels: int, depth: i
     bounds = (1, 1, 5, 3)
     expected = Pillow.open(BytesIO(data)).crop(bounds)
     result = Image.open_region(BytesIO(data), bounds)
+    seen = []
+    assert Image.open_region(BytesIO(data), bounds, progress=seen.append).tobytes() == result.tobytes()
+    assert seen == list(range(7))
+    decoded = Image.decode(data)
+    seen.clear()
+    assert Image.decode(data, progress=seen.append).tobytes() == decoded.tobytes()
+    assert seen == list(range(9))
+    with pytest.raises(OperationCancelledError):
+        Image.decode(data, progress=lambda completed: completed < 2)
     if depth == 8:
         assert result.tobytes() == expected.tobytes()
     else:

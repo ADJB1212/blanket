@@ -123,7 +123,7 @@ pub fn backend_version() -> String {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, DecodeError> {
-    decode_frames(data, None)
+    decode_frames(data, None, &blanket_core::progress::Progress::default())
 }
 
 pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
@@ -157,11 +157,13 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
 }
 
 pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, DecodeError> {
-    decode_frames(data, Some(target))
+    decode_frames(data, Some(target), &blanket_core::progress::Progress::default())
 }
 
-fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, DecodeError> {
-    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+pub fn decode_frames(
+    data: &[u8], target: Option<usize>, progress: &blanket_core::progress::Progress,
+) -> Result<blanket_codec_common::Sequence, DecodeError> {
+    use blanket_codec_common::{Frame, Sequence, decode_checkpoint, validate_frame_budget};
     let info = webpx::ImageInfo::from_webp(data).map_err(DecodeError::with_diagnostic_source)?;
     if !info.has_animation {
         return decode_webp(data).map(Sequence::single);
@@ -185,6 +187,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
                 blend: 0,
             });
         }
+        decode_checkpoint(progress)?;
         if target == Some(frame_index) {
             return Ok(sequence);
         }

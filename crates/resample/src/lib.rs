@@ -3,6 +3,7 @@ use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock, Mutex};
 
 use blanket_core::buffers::{buffer, copy_rows, output, reserved_buffer};
+use blanket_core::progress::Progress;
 use blanket_core::raster::{Image, PixelMode};
 use blanket_image_ops::geometry::ops_transpose;
 use blanket_kernels::cache::ByteLru;
@@ -34,12 +35,33 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
-fn ops_color_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, method, bounds, srgb, premultiply, progress=None))]
+fn ops_color_resize(
+    py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool, progress: Option<Py<PyAny>>,
+) -> PyResult<Image> {
+    let progress = Progress::new(py, progress)?;
+    progress.checkpoint()?;
     let prepared = py.detach(|| blanket_image_ops::float::prepare(image, srgb, premultiply))?;
-    let resized = ops_resize(py, &prepared, size, method, bounds, None)?;
+    progress.checkpoint()?;
+    let resized = resize(py, &prepared, size, method, bounds, None, &progress)?;
     drop(prepared);
-    py.detach(|| blanket_image_ops::float::finish(&resized, image, srgb, premultiply))
+    let result = py.detach(|| blanket_image_ops::float::finish(&resized, image, srgb, premultiply))?;
+    progress.checkpoint()?;
+    Ok(result)
+}
+
+fn resize_tiles<T: Send>(
+    pixels: &mut [T], tile: usize, minimum_bytes: usize, progress: &Progress, operation: impl Fn(usize, &mut [T]) + Sync + Send,
+) -> PyResult<()> {
+    if progress.enabled() && !pixels.is_empty() {
+        for (index, pixels) in pixels.chunks_mut(tile).enumerate() {
+            operation(index, pixels);
+            progress.checkpoint()?;
+        }
+    } else {
+        chunks_mut_above(pixels, tile, minimum_bytes, operation);
+    }
+    Ok(())
 }
 
 fn kernel(x: f64, method: u8) -> f64 {
@@ -214,6 +236,10 @@ fn unpremultiply_image(mode: PixelMode, pixels: &mut [u8]) {
 /// Integer box reduction used by resize's reducing_gap optimization.
 #[pyfunction]
 fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32)) -> PyResult<Image> {
+    reduce(py, image, factor, bounds, &Progress::default())
+}
+
+fn reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u32, u32, u32), progress: &Progress) -> PyResult<Image> {
     if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
         return Err(PyValueError::new_err("use resize for float color images"));
     }
@@ -268,24 +294,27 @@ fn ops_reduce(py: Python<'_>, image: &Image, factor: (u32, u32), bounds: (u32, u
     let mut pixels = buffer(size, c)?;
     py.detach(|| -> PyResult<()> {
         match image.pixel_mode() {
-            PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width(), size, factor, bounds),
-            PixelMode::Pa | PixelMode::PremulLa => reduce_pixels::<2>(source, &mut pixels, image.width(), size, factor, bounds),
+            PixelMode::One | PixelMode::L => reduce_pixels::<1>(source, &mut pixels, image.width(), size, factor, bounds, progress),
+            PixelMode::Pa | PixelMode::PremulLa => reduce_pixels::<2>(source, &mut pixels, image.width(), size, factor, bounds, progress),
             PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                reduce_pixels::<3>(source, &mut pixels, image.width(), size, factor, bounds)
+                reduce_pixels::<3>(source, &mut pixels, image.width(), size, factor, bounds, progress)
             }
-            PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => reduce_pixels::<4>(source, &mut pixels, image.width(), size, factor, bounds),
+            PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => {
+                reduce_pixels::<4>(source, &mut pixels, image.width(), size, factor, bounds, progress)
+            }
             PixelMode::La | PixelMode::Rgba => {
-                let source = premultiplied_crop(source, image.width(), bounds, c)?;
+                let source = premultiplied_crop(source, image.width(), bounds, c, progress)?;
+                let local = (0, 0, right - left, bottom - top);
                 if c == 2 {
-                    reduce_pixels::<2>(&source, &mut pixels, right - left, size, factor, (0, 0, right - left, bottom - top));
+                    reduce_pixels::<2>(&source, &mut pixels, right - left, size, factor, local, progress)?;
                 } else {
-                    reduce_pixels::<4>(&source, &mut pixels, right - left, size, factor, (0, 0, right - left, bottom - top));
+                    reduce_pixels::<4>(&source, &mut pixels, right - left, size, factor, local, progress)?;
                 }
                 unpremultiply_image(image.pixel_mode(), &mut pixels);
+                Ok(())
             }
             _ => unreachable!(),
         }
-        Ok(())
     })?;
     output(image, size, pixels)
 }
@@ -301,14 +330,14 @@ fn reduction_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), chann
     Ok(pixels)
 }
 
-fn premultiplied_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), channels: usize) -> PyResult<Vec<u8>> {
+fn premultiplied_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), channels: usize, progress: &Progress) -> PyResult<Vec<u8>> {
     let (left, top, right, bottom) = bounds;
     let mut pixels = buffer((right - left, bottom - top), channels)?;
     let row_bytes = (right - left) as usize * channels;
     if row_bytes == 0 {
         return Ok(pixels);
     }
-    chunks_mut(&mut pixels, row_bytes * 16, |band, rows| {
+    resize_tiles(&mut pixels, row_bytes * 16, MIN_PARALLEL_BYTES, progress, |band, rows| {
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let start = ((top as usize + band * 16 + i) * width as usize + left as usize) * channels;
             row.copy_from_slice(&source[start..start + row_bytes]);
@@ -318,13 +347,15 @@ fn premultiplied_crop(source: &[u8], width: u32, bounds: (u32, u32, u32, u32), c
         } else {
             blanket_core::pixels::alpha_scale::<4, false>(rows);
         }
-    });
+    })?;
     Ok(pixels)
 }
 
-fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, size: (u32, u32), factor: (u32, u32), bounds: (u32, u32, u32, u32)) {
+fn reduce_pixels<const C: usize>(
+    source: &[u8], output: &mut [u8], width: u32, size: (u32, u32), factor: (u32, u32), bounds: (u32, u32, u32, u32), progress: &Progress,
+) -> PyResult<()> {
     if output.is_empty() {
-        return;
+        return Ok(());
     }
     let (fx, fy) = factor;
     let (left, top, right, bottom) = bounds;
@@ -336,7 +367,7 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
     } else {
         MIN_PARALLEL_BYTES / (fx as usize * fy as usize).max(1)
     };
-    chunks_mut_above(output, row_bytes * 8, threshold, |band, rows| {
+    resize_tiles(output, row_bytes * 8, threshold, progress, |band, rows| {
         let mut column_sums = if fx == 1 { vec![0_u64; row_bytes] } else { Vec::new() };
         for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let y0 = top + (band * 8 + i) as u32 * fy;
@@ -449,11 +480,23 @@ fn reduce_pixels<const C: usize>(source: &[u8], output: &mut [u8], width: u32, s
                 }
             }
         }
-    });
+    })
 }
 
-#[pyfunction(signature = (image, size, method, bounds, reducing_gap=None))]
-pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, method, bounds, reducing_gap=None, progress=None))]
+fn ops_resize(
+    py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>, progress: Option<Py<PyAny>>,
+) -> PyResult<Image> {
+    let progress = Progress::new(py, progress)?;
+    progress.checkpoint()?;
+    let result = resize(py, image, size, method, bounds, reducing_gap, &progress)?;
+    progress.checkpoint()?;
+    Ok(result)
+}
+
+fn resize(
+    py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, reducing_gap: Option<f64>, progress: &Progress,
+) -> PyResult<Image> {
     let source = image.raw_data()?;
     if method > 7 {
         return Err(PyValueError::new_err("unknown resampling filter"));
@@ -484,8 +527,8 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             return Err(PyValueError::new_err("cannot convert float NaN to integer"));
         }
         if let Some(plan) = planning::reduction(image.size(), size, bounds, method, gap) {
-            let reduced = ops_reduce(py, image, plan.factor, plan.safe)?;
-            return ops_resize(py, &reduced, size, method, plan.bounds, None);
+            let reduced = reduce(py, image, plan.factor, plan.safe, progress)?;
+            return resize(py, &reduced, size, method, plan.bounds, None, progress);
         }
     }
     if matches!(image.pixel_mode(), PixelMode::RgbF | PixelMode::RgbaF) {
@@ -497,25 +540,25 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             py.detach(|| {
                 let (xs, ys) = nearest_positions(b, size, image.width(), image.height());
                 if image.pixel_mode() == PixelMode::RgbF {
-                    resize_nearest::<12>(source, &mut pixels, image.width(), &xs, &ys);
+                    resize_nearest::<12>(source, &mut pixels, image.width(), &xs, &ys, progress)
                 } else {
-                    resize_nearest::<16>(source, &mut pixels, image.width(), &xs, &ys);
+                    resize_nearest::<16>(source, &mut pixels, image.width(), &xs, &ys, progress)
                 }
-            });
+            })?;
         } else {
             let stride = image.raw_bytes_per_pixel();
             for c in 0..image.pixel_mode().channels() {
                 let band = image.getchannel(py, c)?;
-                let resized = ops_resize(py, &band, size, method, bounds, reducing_gap)?;
+                let resized = resize(py, &band, size, method, bounds, reducing_gap, progress)?;
                 let samples = resized.raw_data()?;
                 py.detach(|| {
-                    chunks_mut_above(&mut pixels, size.0 as usize * stride * 16, MIN_PARALLEL_BYTES, |band, rows| {
+                    resize_tiles(&mut pixels, size.0 as usize * stride * 16, MIN_PARALLEL_BYTES, progress, |band, rows| {
                         let first = band * 16 * size.0 as usize;
                         for (i, pixel) in rows.chunks_exact_mut(stride).enumerate() {
                             pixel[c * 4..c * 4 + 4].copy_from_slice(&samples[(first + i) * 4..(first + i + 1) * 4]);
                         }
-                    });
-                });
+                    })
+                })?;
             }
         }
         return output(image, size, pixels);
@@ -526,15 +569,16 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         && image.width() > 0
     {
         let transposed = ops_transpose(py, image, 5)?;
-        let resized = ops_resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap)?;
+        progress.checkpoint()?;
+        let resized = resize(py, &transposed, (size.1, size.0), method, (bounds.1, bounds.0, bounds.3, bounds.2), reducing_gap, progress)?;
         drop(transposed);
         return ops_transpose(py, &resized, 5);
     }
     if image.pixel_mode().is_wide_scalar() {
-        return py.detach(|| resize_integer(image, size, b, method));
+        return py.detach(|| resize_integer(image, size, b, method, progress));
     }
     if image.bit_depth() > 8 {
-        return py.detach(|| resize_wide(image, size, b, method));
+        return py.detach(|| resize_wide(image, size, b, method, progress));
     }
     let c = image.pixel_mode().channels();
     if image.width() == 0 || image.height() == 0 {
@@ -558,16 +602,16 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             let xs = positions(b[0], dx, size.0, image.width());
             let ys = positions(b[1], dy, size.1, image.height());
             match image.pixel_mode() {
-                PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width(), &xs, &ys),
-                PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width(), &xs, &ys),
+                PixelMode::One | PixelMode::L => resize_nearest::<1>(source, &mut result, image.width(), &xs, &ys, progress),
+                PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<2>(source, &mut result, image.width(), &xs, &ys, progress),
                 PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                    resize_nearest::<3>(source, &mut result, image.width(), &xs, &ys)
+                    resize_nearest::<3>(source, &mut result, image.width(), &xs, &ys, progress)
                 }
                 PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                    resize_nearest::<4>(source, &mut result, image.width(), &xs, &ys)
+                    resize_nearest::<4>(source, &mut result, image.width(), &xs, &ys, progress)
                 }
                 _ => unreachable!(),
-            }
+            }?;
             return Ok(result);
         }
         let mut source = Cow::Borrowed(source);
@@ -579,12 +623,12 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
             let safe = plan.safe;
             let reduced_size = ((safe.2 - safe.0).div_ceil(fx), (safe.3 - safe.1).div_ceil(fy));
             let mut pixels = buffer(reduced_size, c)?;
-            let cropped = premultiplied_crop(&source, image.width(), safe, c)?;
+            let cropped = premultiplied_crop(&source, image.width(), safe, c, progress)?;
             let local = (0, 0, safe.2 - safe.0, safe.3 - safe.1);
             if c == 2 {
-                reduce_pixels::<2>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
+                reduce_pixels::<2>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local, progress)?;
             } else {
-                reduce_pixels::<4>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local);
+                reduce_pixels::<4>(&cropped, &mut pixels, local.2, reduced_size, (fx, fy), local, progress)?;
             }
             b = <[_; 4]>::from(plan.bounds).map(|x| f64::from(x as f32));
             reduced = Some(output(image, reduced_size, pixels)?);
@@ -595,11 +639,13 @@ pub fn ops_resize(py: Python<'_>, image: &Image, size: (u32, u32), method: u8, b
         }
         let premultiply = reduced.is_none() && matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba);
         let mut result = match image.pixel_mode() {
-            PixelMode::One | PixelMode::L => resample::<1>(&source, image, size, b, method, premultiply),
-            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resample::<2>(&source, image, size, b, method, premultiply),
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resample::<3>(&source, image, size, b, method, premultiply),
+            PixelMode::One | PixelMode::L => resample::<1>(&source, image, size, b, method, premultiply, progress),
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resample::<2>(&source, image, size, b, method, premultiply, progress),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                resample::<3>(&source, image, size, b, method, premultiply, progress)
+            }
             PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                resample::<4>(&source, image, size, b, method, premultiply)
+                resample::<4>(&source, image, size, b, method, premultiply, progress)
             }
             _ => unreachable!(),
         }?;
@@ -619,7 +665,7 @@ fn nearest_positions(bounds: [f64; 4], size: (u32, u32), src_width: u32, src_hei
     (xs, ys)
 }
 
-fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8, progress: &Progress) -> PyResult<Image> {
     let source = image.raw_data()?;
     let stride = image.pixel_mode().sample_bytes();
     let mut pixels = buffer(size, stride)?;
@@ -638,9 +684,9 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
     if method == 0 {
         let (xs, ys) = nearest_positions(bounds, size, image.width(), image.height());
         if stride == 4 {
-            resize_nearest::<4>(source, &mut pixels, image.width(), &xs, &ys);
+            resize_nearest::<4>(source, &mut pixels, image.width(), &xs, &ys, progress)?;
         } else {
-            resize_nearest::<2>(source, &mut pixels, image.width(), &xs, &ys);
+            resize_nearest::<2>(source, &mut pixels, image.width(), &xs, &ys, progress)?;
         }
     } else {
         let horizontal = normalized_weights(image.width(), size.0, bounds[0], bounds[2], method, |v| v);
@@ -649,7 +695,7 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
         let (last, tail) = vertical.get(size.1 as usize - 1);
         let mut rows = vec![0.0; (last + tail.len() - first) * size.0 as usize];
         let row_width = size.0 as usize;
-        blanket_core::parallel::chunks_mut_above(&mut rows, row_width * 16, 256 * 1024, |band, chunk| {
+        resize_tiles(&mut rows, row_width * 16, 256 * 1024, progress, |band, chunk| {
             let vector_rows = if image.pixel_mode() == PixelMode::F { chunk.len() / row_width / 4 * 4 } else { 0 };
             for row in (0..vector_rows).step_by(4) {
                 let sy = first + band * 16 + row;
@@ -672,8 +718,8 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     };
                 }
             }
-        });
-        blanket_core::parallel::chunks_mut_above(&mut pixels, row_width * stride * 16, 256 << 10, |band, chunk| {
+        })?;
+        resize_tiles(&mut pixels, row_width * stride * 16, 256 << 10, progress, |band, chunk| {
             for (row, dst) in chunk.chunks_exact_mut(row_width * stride).enumerate() {
                 let (start, coefficients) = vertical.get(band * 16 + row);
                 if image.pixel_mode() == PixelMode::F {
@@ -692,23 +738,23 @@ fn resize_integer(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8)
                     }
                 }
             }
-        });
+        })?;
     }
     output(image, size, pixels)
 }
 
 // Fixed-size pixels let LLVM inline the gathers instead of calling memcpy
 // for every output pixel. Repeated source rows only need one gather per band.
-fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+fn resize_wide(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8, progress: &Progress) -> PyResult<Image> {
     match image.pixel_mode().channels() {
-        1 => resize_wide_channels::<1>(image, size, bounds, method),
-        3 => resize_wide_channels::<3>(image, size, bounds, method),
-        4 => resize_wide_channels::<4>(image, size, bounds, method),
+        1 => resize_wide_channels::<1>(image, size, bounds, method, progress),
+        3 => resize_wide_channels::<3>(image, size, bounds, method, progress),
+        4 => resize_wide_channels::<4>(image, size, bounds, method, progress),
         _ => unreachable!("validated wide mode"),
     }
 }
 
-fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8) -> PyResult<Image> {
+fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds: [f64; 4], method: u8, progress: &Progress) -> PyResult<Image> {
     let channels = C;
     let bytes = image.raw_data()?;
     let mut pixels = buffer(size, channels << 1)?;
@@ -718,14 +764,16 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
     if method == 0 {
         let (xs, ys) = nearest_positions(bounds, size, image.width(), image.height());
         match image.pixel_mode() {
-            PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width(), &xs, &ys),
-            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width(), &xs, &ys),
-            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => resize_nearest::<6>(bytes, &mut pixels, image.width(), &xs, &ys),
+            PixelMode::One | PixelMode::L => resize_nearest::<2>(bytes, &mut pixels, image.width(), &xs, &ys, progress),
+            PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<4>(bytes, &mut pixels, image.width(), &xs, &ys, progress),
+            PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
+                resize_nearest::<6>(bytes, &mut pixels, image.width(), &xs, &ys, progress)
+            }
             PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                resize_nearest::<8>(bytes, &mut pixels, image.width(), &xs, &ys)
+                resize_nearest::<8>(bytes, &mut pixels, image.width(), &xs, &ys, progress)
             }
             _ => unreachable!(),
-        }
+        }?;
         return output(image, size, pixels);
     }
     let maximum = f64::from((1_u32 << image.bit_depth()) - 1);
@@ -739,7 +787,7 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
     let mut temp = blanket_core::buffers::reserved(length)?;
     temp.resize(length, 0.0);
     let sample = |i: usize| f64::from(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]]));
-    chunks_mut_above(&mut temp, stride * 8, MIN_PARALLEL_BYTES, |band, rows| {
+    resize_tiles(&mut temp, stride * 8, MIN_PARALLEL_BYTES, progress, |band, rows| {
         let four = if C == 1 { rows.len() / (stride * 4) * 4 } else { 0 };
         for group in 0..four / 4 {
             let y = first + band * 8 + group * 4;
@@ -775,8 +823,8 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
                 }
             }
         }
-    });
-    chunks_mut(&mut pixels, stride * 2 * 8, |band, rows| {
+    })?;
+    resize_tiles(&mut pixels, stride * 2 * 8, MIN_PARALLEL_BYTES, progress, |band, rows| {
         let mut values = vec![0.0; stride];
         for (y, row) in rows.chunks_exact_mut(stride * 2).enumerate() {
             let (start, coefficients) = vertical.get(band * 8 + y);
@@ -803,11 +851,11 @@ fn resize_wide_channels<const C: usize>(image: &Image, size: (u32, u32), bounds:
                 }
             }
         }
-    });
+    })?;
     output(image, size, pixels)
 }
 
-fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize]) {
+fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, xs: &[usize], ys: &[usize], progress: &Progress) -> PyResult<()> {
     let row_bytes = xs.len() * C;
     let contiguous = xs.first().copied().filter(|&start| xs.iter().enumerate().all(|(i, &x)| x == start + i));
     let half_width = xs.len() * 2 == width as usize && xs.iter().enumerate().all(|(x, &sx)| sx == x * 2 + 1);
@@ -820,7 +868,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
         .filter(crate::ops_simd::NearestL::is_shuffled);
     let source = source.as_chunks::<C>().0;
     // Per-pixel gathers cost more than copies; split them like arithmetic.
-    chunks_mut_above(output, row_bytes << 4, MIN_PARALLEL_BYTES, |band, rows| {
+    resize_tiles(output, row_bytes << 4, MIN_PARALLEL_BYTES, progress, |band, rows| {
         for i in 0..rows.len() / row_bytes {
             let sy = ys[band * 16 + i];
             if i > 0 && sy == ys[band * 16 + i - 1] {
@@ -851,7 +899,7 @@ fn resize_nearest<const C: usize>(source: &[u8], output: &mut [u8], width: u32, 
                 }
             }
         }
-    });
+    })
 }
 
 fn resample_source(source: &[u8], mode: PixelMode, premultiply: bool) -> Cow<'_, [u8]> {
@@ -864,7 +912,9 @@ fn resample_source(source: &[u8], mode: PixelMode, premultiply: bool) -> Cow<'_,
     }
 }
 
-fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8, premultiply: bool) -> PyResult<Vec<u8>> {
+fn resample<const C: usize>(
+    source: &[u8], image: &Image, size: (u32, u32), b: [f64; 4], method: u8, premultiply: bool, progress: &Progress,
+) -> PyResult<Vec<u8>> {
     if method == 4
         && u64::from(size.0) * 2 == u64::from(image.width())
         && u64::from(size.1) * 2 == u64::from(image.height())
@@ -873,7 +923,7 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
         let mut output = buffer(size, C)?;
         let stride = image.width() as usize * C;
         let row_bytes = size.0 as usize * C;
-        chunks_mut(&mut output, row_bytes * 16, |band, rows| {
+        resize_tiles(&mut output, row_bytes * 16, MIN_PARALLEL_BYTES, progress, |band, rows| {
             for (i, row) in rows.chunks_exact_mut(row_bytes).enumerate() {
                 let start = (band * 16 + i) * 2 * stride;
                 if premultiply {
@@ -894,14 +944,14 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
                     crate::ops_simd::box_half::<C>(&source[start..start + stride], &source[start + stride..start + 2 * stride], row);
                 }
             }
-        });
+        })?;
         return Ok(output);
     }
     let alpha_mode = premultiply.then(|| image.pixel_mode());
     if size.1 == image.height() && b[1] == 0.0 && b[3] == f64::from(image.height()) {
         let mut output = buffer(size, C)?;
         let horizontal = weights(image.width(), size.0, b[0], b[2], method);
-        resample_horizontal::<C>(source, &mut output, image.width() as usize, &horizontal, alpha_mode);
+        resample_horizontal::<C>(source, &mut output, image.width() as usize, &horizontal, alpha_mode, progress)?;
         return Ok(output);
     }
     let vertical = weights(image.height(), size.1, b[1], b[3], method);
@@ -917,11 +967,11 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
         let horizontal = weights(image.width(), size.0, b[0], b[2], method);
         let mut temp = buffer((size.0, (last_row - first_row) as u32), C)?;
         let source = &source[first_row * input_stride..last_row * input_stride];
-        resample_horizontal::<C>(source, &mut temp, image.width() as usize, &horizontal, alpha_mode);
+        resample_horizontal::<C>(source, &mut temp, image.width() as usize, &horizontal, alpha_mode, progress)?;
         Cow::Owned(temp)
     };
     let mut output = buffer(size, C)?;
-    chunks_mut(&mut output, row_bytes << 4, |band, rows| {
+    resize_tiles(&mut output, row_bytes << 4, MIN_PARALLEL_BYTES, progress, |band, rows| {
         for (i, dst) in rows.chunks_exact_mut(row_bytes).enumerate() {
             let (start, coefficients) = vertical.get(band * 16 + i);
             let src = &temp[(start - first_row) * row_bytes..];
@@ -934,7 +984,7 @@ fn resample<const C: usize>(source: &[u8], image: &Image, size: (u32, u32), b: [
                 *out = (sum >> RESAMPLE_BITS).clamp(0, 255) as u8;
             }
         }
-    });
+    })?;
     Ok(output)
 }
 
@@ -944,7 +994,9 @@ fn horizontal_input(source: &[u8], input_stride: usize, band: usize, rows: usize
     if let Some(mode) = alpha_mode { resample_source(source, mode, true) } else { Cow::Borrowed(source) }
 }
 
-fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>) {
+fn resample_horizontal<const C: usize>(
+    source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>, progress: &Progress,
+) -> PyResult<()> {
     let row_bytes = horizontal.bounds.len() * C;
     let input_stride = width * C;
     let narrow = horizontal.iter().all(|(_, coefficients)| {
@@ -964,7 +1016,7 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
             })
             .collect();
         if blocks.iter().any(Option::is_some) {
-            chunks_mut(output, row_bytes * 16, |band, rows| {
+            resize_tiles(output, row_bytes * 16, MIN_PARALLEL_BYTES, progress, |band, rows| {
                 let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
                 for (src, dst) in input.chunks_exact(input_stride).zip(rows.chunks_exact_mut(row_bytes)) {
                     for (block, out) in dst.chunks_mut(16 * C).enumerate() {
@@ -986,16 +1038,15 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
                         }
                     }
                 }
-            });
-            return;
+            })?;
+            return Ok(());
         }
     }
     let batch_rows = narrow && (matches!(C, 2 | 3) || horizontal.iter().all(|(_, coefficients)| coefficients.len() <= 8));
     if batch_rows && output.len() >= row_bytes * 4 {
-        resample_horizontal_batched::<C>(source, output, width, horizontal, alpha_mode);
-        return;
+        return resample_horizontal_batched::<C>(source, output, width, horizontal, alpha_mode, progress);
     }
-    chunks_mut(output, row_bytes << 4, |band, rows| {
+    resize_tiles(output, row_bytes << 4, MIN_PARALLEL_BYTES, progress, |band, rows| {
         let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
         for (src, dst) in input.chunks_exact(input_stride).zip(rows.chunks_exact_mut(row_bytes)) {
             let src = src.as_chunks::<C>().0;
@@ -1021,15 +1072,15 @@ fn resample_horizontal<const C: usize>(source: &[u8], output: &mut [u8], width: 
                 }
             }
         }
-    });
+    })
 }
 
 fn resample_horizontal_batched<const C: usize>(
-    source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>,
-) {
+    source: &[u8], output: &mut [u8], width: usize, horizontal: &ResampleWeights, alpha_mode: Option<PixelMode>, progress: &Progress,
+) -> PyResult<()> {
     let row_bytes = horizontal.bounds.len() * C;
     let input_stride = width * C;
-    chunks_mut(output, row_bytes * 16, |band, rows| {
+    resize_tiles(output, row_bytes * 16, MIN_PARALLEL_BYTES, progress, |band, rows| {
         let input = horizontal_input(source, input_stride, band, rows.len() / row_bytes, alpha_mode);
         let four = rows.len() / (row_bytes * 4) * 4;
         for group in 0..four / 4 {
@@ -1057,7 +1108,7 @@ fn resample_horizontal_batched<const C: usize>(
                 }
             }
         }
-    });
+    })
 }
 
 fn cubic(v: [f64; 4], t: f64) -> f64 {
@@ -1289,17 +1340,21 @@ pub fn ops_affine(
             if columns.iter().all(Option::is_some) && row_origins.iter().all(|&(_, y)| y >= 0.0 && y < image.height() as f64) {
                 let xs: Vec<_> = columns.iter().map(|x| x.unwrap() / channels).collect();
                 let ys: Vec<_> = row_origins.iter().map(|&(_, y)| y as usize).collect();
+                let progress = Progress::default();
                 match image.pixel_mode() {
                     PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => {
-                        resize_nearest::<3>(&source, &mut pixels, image.width(), &xs, &ys)
+                        resize_nearest::<3>(&source, &mut pixels, image.width(), &xs, &ys, &progress)
                     }
                     PixelMode::Rgba | PixelMode::PremulRgba | PixelMode::Rgbx | PixelMode::Cmyk => {
-                        resize_nearest::<4>(&source, &mut pixels, image.width(), &xs, &ys)
+                        resize_nearest::<4>(&source, &mut pixels, image.width(), &xs, &ys, &progress)
                     }
                     PixelMode::One | PixelMode::L => unreachable!(),
-                    PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => resize_nearest::<2>(&source, &mut pixels, image.width(), &xs, &ys),
+                    PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => {
+                        resize_nearest::<2>(&source, &mut pixels, image.width(), &xs, &ys, &progress)
+                    }
                     _ => unreachable!(),
                 }
+                .expect("resize without a callback is infallible");
                 return;
             }
         }
@@ -1556,7 +1611,15 @@ mod tests {
                 let xs: Vec<_> = (0..target).map(|x| if reverse { width - 1 - x * width / target } else { x * width / target }).collect();
                 let ys: Vec<_> = (0..rows).map(|y| y / 3 % height).collect();
                 let mut output = vec![91; target * rows * 3 + 2];
-                resize_nearest::<3>(&source[1..source.len() - 1], &mut output[1..target * rows * 3 + 1], width as u32, &xs, &ys);
+                resize_nearest::<3>(
+                    &source[1..source.len() - 1],
+                    &mut output[1..target * rows * 3 + 1],
+                    width as u32,
+                    &xs,
+                    &ys,
+                    &Progress::default(),
+                )
+                .unwrap();
                 for (y, row) in output[1..output.len() - 1].chunks_exact(target * 3).enumerate() {
                     for (x, pixel) in row.as_chunks::<3>().0.iter().enumerate() {
                         let start = 1 + (ys[y] * width + xs[x]) * 3;

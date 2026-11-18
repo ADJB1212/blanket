@@ -5,8 +5,9 @@ use std::io::{Cursor, Write};
 mod encode;
 pub mod stream;
 
-use blanket_codec_common::{DecodeError, SaveOptions, codec_error, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, decode_checkpoint, validate_dimensions};
 use blanket_codec_image::color_type;
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use image::ImageEncoder;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
@@ -73,7 +74,7 @@ pub fn encode_palette_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>
 }
 
 /// Decode packed rows of non-interlaced, opaque 1-bit grayscale PNGs.
-fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, DecodeError> {
+fn decode_bilevel_png(data: &[u8], progress: &Progress) -> Result<Option<Image>, DecodeError> {
     // IHDR bit depth, color type, and interlace method.
     if data.get(24..29).is_none_or(|header| header[0] != 1 || header[1] != 0 || header[4] != 0) {
         return Ok(None);
@@ -87,7 +88,11 @@ fn decode_bilevel_png(data: &[u8]) -> Result<Option<Image>, DecodeError> {
     let (width, height) = reader.info().size();
     validate_dimensions(width, height)?;
     let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
-    reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
+    if progress.enabled() {
+        read_frame(&mut reader, &mut packed, progress)?;
+    } else {
+        reader.next_frame(&mut packed).map_err(|error| error.to_string())?;
+    }
     let pixels = blanket_core::raster::unpack_bilevel(&packed, width as usize, height as usize);
     Image::from_pixels(width, height, PixelMode::One, pixels, Some("PNG".into())).map(Some).map_err(DecodeError::with_diagnostic_source)
 }
@@ -146,7 +151,11 @@ pub fn encode_one_png(image: &Image, compress_level: u8) -> PyResult<Vec<u8>> {
 }
 
 pub fn decode_png(data: &[u8]) -> Result<Image, DecodeError> {
-    if let Some(image) = decode_bilevel_png(data)? {
+    decode_png_with_progress(data, &Progress::default())
+}
+
+fn decode_png_with_progress(data: &[u8], progress: &Progress) -> Result<Image, DecodeError> {
+    if let Some(image) = decode_bilevel_png(data, progress)? {
         return Ok(image);
     }
     let mut decoder = decoder(data);
@@ -156,7 +165,7 @@ pub fn decode_png(data: &[u8]) -> Result<Image, DecodeError> {
         let mut reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
         let palette = reader.info().palette.as_deref().ok_or("missing PNG palette")?.to_vec();
         let mut packed = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
-        let frame = reader.next_frame(&mut packed).map_err(DecodeError::with_diagnostic_source)?;
+        let frame = read_frame(&mut reader, &mut packed, progress)?;
         let bits = frame.bit_depth as usize;
         let pixels = if bits == 8 {
             packed.truncate(frame.buffer_size());
@@ -178,14 +187,41 @@ pub fn decode_png(data: &[u8]) -> Result<Image, DecodeError> {
     let bilevel = header.color_type == png::ColorType::Grayscale && header.bit_depth == png::BitDepth::One;
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
-    decode_png_reader(reader, bilevel)
+    decode_png_reader(reader, bilevel, progress)
 }
 
-fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool) -> Result<Image, DecodeError> {
+fn read_frame(reader: &mut png::Reader<Cursor<&[u8]>>, pixels: &mut [u8], progress: &Progress) -> Result<png::OutputInfo, DecodeError> {
+    if !progress.enabled() {
+        return reader.next_frame(pixels).map_err(DecodeError::with_diagnostic_source);
+    }
+    let info = reader.info();
+    let (width, height) = info.frame_control.map_or((info.width, info.height), |frame| (frame.width, frame.height));
+    let (color_type, bit_depth) = reader.output_color_type();
+    let line_size = reader.output_line_size(width).ok_or("PNG row size overflow")?;
+    let bits_per_pixel = color_type.samples() as u8 * bit_depth as u8;
+    let mut rows = 0;
+    while let Some(row) = reader.next_interlaced_row().map_err(DecodeError::with_diagnostic_source)? {
+        if let png::InterlaceInfo::Adam7(pass) = row.interlace() {
+            png::expand_interlaced_row(pixels, line_size, row.data(), pass, bits_per_pixel);
+        } else {
+            pixels[rows * line_size..][..line_size].copy_from_slice(row.data());
+        }
+        rows += 1;
+        if rows % 16 == 0 {
+            decode_checkpoint(progress)?;
+        }
+    }
+    if rows % 16 != 0 {
+        decode_checkpoint(progress)?;
+    }
+    Ok(png::OutputInfo { width, height, color_type, bit_depth, line_size })
+}
+
+fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool, progress: &Progress) -> Result<Image, DecodeError> {
     let (width, height) = reader.info().size();
     validate_dimensions(width, height)?;
     let mut pixels = vec![0; reader.output_buffer_size().ok_or("image dimensions overflow addressable memory")?];
-    let frame = reader.next_frame(&mut pixels).map_err(DecodeError::with_diagnostic_source)?;
+    let frame = read_frame(&mut reader, &mut pixels, progress)?;
     pixels.truncate(frame.buffer_size());
     let mode = match frame.color_type {
         png::ColorType::Grayscale if bilevel => PixelMode::One,
@@ -248,4 +284,4 @@ pub fn encode_wide_png(image: &Image, pixels: &[u8], options: SaveOptions) -> Py
     Ok(output)
 }
 mod sequence;
-pub use sequence::{decode_frame, decode_sequence, encode_sequence, encode_sequence_regions, frame_delay, index_sequence};
+pub use sequence::{decode_frame, decode_frames, decode_sequence, encode_sequence, encode_sequence_regions, frame_delay, index_sequence};

@@ -15,6 +15,7 @@ from ._exif import read_metadata, read_tiff_metadata
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+    from ._typing import ProgressCallback
     from .Image import Image
 
 
@@ -33,14 +34,14 @@ class LazyFrames:
         self._tiff_frame = 0
         self._metadata: dict[object, object] | None = None
 
-    def get(self, frame: int) -> Image:
+    def get(self, frame: int, progress: ProgressCallback | None = None) -> Image:
         """Decode or retrieve a cached frame by its zero-based index."""
         from .Image import Image
 
         if frame in self.cache:
             self.cache.move_to_end(frame)
             return self.cache[frame]
-        frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None)
+        frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None, progress)
         selected = Image(frames[0])
         if selected.format == "TIFF":
             if self._tiff_metadata is None or frame < self._tiff_frame:

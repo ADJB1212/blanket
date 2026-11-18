@@ -77,9 +77,9 @@ def test_lazy_cache_lru_edits_and_close(monkeypatch):
     calls = []
     decode = _lazy_frames._open_sequence
 
-    def tracked(data, formats, frame):
+    def tracked(data, formats, frame, progress=None):
         calls.append(frame)
-        return decode(data, formats, frame)
+        return decode(data, formats, frame, progress)
 
     monkeypatch.setattr(_lazy_frames, "_open_sequence", tracked)
     image = Image.open(BytesIO(sequence_data()), lazy=True, frame_cache_size=2)

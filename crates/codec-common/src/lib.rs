@@ -1,6 +1,7 @@
 #![feature(default_field_values)]
 
 use blanket_core::Image;
+use blanket_core::progress::Progress;
 use pyo3::exceptions::PyOSError;
 use pyo3::prelude::*;
 use zerocopy::IntoBytes;
@@ -69,6 +70,17 @@ pub struct DecodeError {
     kind: CodecErrorKind,
     message: String,
     source: Option<Box<dyn std::error::Error + Send + Sync + pyo3::marker::Ungil>>,
+    callback_error: Option<PyErr>,
+}
+
+/// Poll a decode boundary while preserving the original callback exception.
+pub fn decode_checkpoint(progress: &Progress) -> Result<(), DecodeError> {
+    progress.checkpoint().map_err(|error| DecodeError {
+        kind: CodecErrorKind::Other,
+        message: "decode interrupted by progress callback".into(),
+        source: None,
+        callback_error: Some(error),
+    })
 }
 
 impl DecodeError {
@@ -105,6 +117,9 @@ impl DecodeError {
             }
             error
         }
+        if let Some(error) = self.callback_error {
+            return error;
+        }
         let error = self.kind.into_pyerr(self.message, format, "decode");
         if let Some(source) = self.source {
             Python::attach(|py| error.set_cause(py, Some(cause(py, source.as_ref()))));
@@ -115,7 +130,7 @@ impl DecodeError {
 
 impl From<String> for DecodeError {
     fn from(message: String) -> Self {
-        Self { kind: diagnostic_kind(&message, CodecErrorKind::Corrupt), message, source: None }
+        Self { kind: diagnostic_kind(&message, CodecErrorKind::Corrupt), message, source: None, callback_error: None }
     }
 }
 

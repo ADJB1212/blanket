@@ -2,16 +2,17 @@ use std::borrow::{Borrow, Cow};
 
 use blanket_codec_common::codec_error;
 use blanket_codec_image::color_type;
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
-    decode_frames(data, None)
+    decode_frames(data, None, &Progress::default()).map_err(String::from)
 }
 
 pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, String> {
-    decode_frames(data, Some(target))
+    decode_frames(data, Some(target), &Progress::default()).map_err(String::from)
 }
 
 pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
@@ -38,8 +39,10 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
     Ok(sequence)
 }
 
-fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_common::Sequence, String> {
-    use blanket_codec_common::{Frame, Sequence, validate_frame_budget};
+pub fn decode_frames(
+    data: &[u8], target: Option<usize>, progress: &Progress,
+) -> Result<blanket_codec_common::Sequence, blanket_codec_common::DecodeError> {
+    use blanket_codec_common::{Frame, Sequence, decode_checkpoint, validate_frame_budget};
     if target == Some(0) {
         return Ok(Sequence { frames: vec![decode_first_frame(data)?], ..Sequence::default() });
     }
@@ -122,6 +125,7 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<blanket_codec_com
             };
             sequence.frames.push(Frame { image, duration: Some(f64::from(frame.delay) * 10.0), disposal: frame.dispose as u8, blend: 0 });
         }
+        decode_checkpoint(progress)?;
         if terminal {
             return Ok(sequence);
         }

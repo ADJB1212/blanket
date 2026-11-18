@@ -7,13 +7,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from ._blanket import _Image, frombuffer_copy as _native_frombuffer_copy, mapped_getpixel
-from .Image import Image, PixelAccess, _pixel_coordinates
+from .Image import Image, PixelAccess, _pixel_coordinates, _validate_progress
 
 if TYPE_CHECKING:
     from collections.abc import Buffer
 
     import numpy as np
 
+    from ._typing import ProgressCallback
     from .ImagePalette import ImagePalette
 
 
@@ -132,11 +133,12 @@ class MappedImage(Image):
         if self._mapping is None:
             self._raster.load()
 
-    def load(self) -> PixelAccess:
+    def load(self, *, progress: ProgressCallback | None = None) -> PixelAccess:
         """Load pixel access interface for the mapped buffer."""
         if self._mapping is not None:
+            _validate_progress(progress)
             return BufferPixelAccess(self._mapping, self.palette)
-        return super().load()
+        return super().load(progress=progress)
 
     def _sync_palette(self) -> None:
         if self._mapping is None:

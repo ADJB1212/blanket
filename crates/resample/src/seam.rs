@@ -1,18 +1,23 @@
 use blanket_core::buffers::{buffer, copy, output, reserved, reserved_buffer};
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-#[pyfunction]
-pub(crate) fn ops_seam_carve(py: Python<'_>, image: &Image, size: (u32, u32)) -> PyResult<Image> {
+#[pyfunction(signature = (image, size, progress=None))]
+pub(crate) fn ops_seam_carve(py: Python<'_>, image: &Image, size: (u32, u32), progress: Option<Py<PyAny>>) -> PyResult<Image> {
     if image.palette().is_some() || !matches!(image.pixel_mode(), PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("seam carving supports L, LA, RGB, and RGBA images"));
     }
     if size.0 == 0 || size.1 == 0 || image.width() == 0 || image.height() == 0 {
         return Err(PyValueError::new_err("seam carving requires positive image dimensions"));
     }
+    let progress = Progress::new(py, progress)?;
+    progress.checkpoint()?;
     if size == image.size() {
-        return image.copy(py);
+        let result = image.copy(py)?;
+        progress.checkpoint()?;
+        return Ok(result);
     }
     // Validate the final allocation before starting the iterative work.
     let channels = image.pixel_mode().channels();
@@ -27,13 +32,15 @@ pub(crate) fn ops_seam_carve(py: Python<'_>, image: &Image, size: (u32, u32)) ->
         maximum: (1_u32 << image.bit_depth()) - 1,
     };
     py.detach(|| {
-        raster.resize_width(size.0 as usize)?;
+        raster.resize_width(size.0 as usize, &progress)?;
         if raster.height != size.1 as usize {
             raster.transpose()?;
-            raster.resize_width(size.1 as usize)?;
+            raster.resize_width(size.1 as usize, &progress)?;
             raster.transpose()?;
         }
-        output(image, size, raster.pixels)
+        let result = output(image, size, raster.pixels)?;
+        progress.checkpoint()?;
+        Ok(result)
     })
 }
 
@@ -77,7 +84,7 @@ impl Raster {
         distance
     }
 
-    fn seam(&self) -> PyResult<Vec<usize>> {
+    fn seam(&self, progress: &Progress) -> PyResult<Vec<usize>> {
         let mut costs = reserved::<u64>(self.width)?;
         costs.resize(self.width, 0);
         let mut next = copy(&costs)?;
@@ -103,6 +110,9 @@ impl Raster {
                 *cost = energy + costs[parent];
             }
             std::mem::swap(&mut costs, &mut next);
+            if (y + 1) % 16 == 0 {
+                progress.checkpoint()?;
+            }
         }
         let mut seam = reserved(self.height)?;
         seam.resize(self.height, 0);
@@ -114,20 +124,21 @@ impl Raster {
         Ok(seam)
     }
 
-    fn resize_width(&mut self, target: usize) -> PyResult<()> {
+    fn resize_width(&mut self, target: usize, progress: &Progress) -> PyResult<()> {
         while self.width > target {
-            let seam = self.seam()?;
+            let seam = self.seam(progress)?;
             let stride = self.stride();
             remove_seam(&mut self.pixels, self.width, stride, &seam);
             self.width -= 1;
+            progress.checkpoint()?;
         }
         while self.width < target {
-            self.insert_seams((target - self.width).min(self.width.saturating_sub(1).max(1)))?;
+            self.insert_seams((target - self.width).min(self.width.saturating_sub(1).max(1)), progress)?;
         }
         Ok(())
     }
 
-    fn insert_seams(&mut self, count: usize) -> PyResult<()> {
+    fn insert_seams(&mut self, count: usize, progress: &Progress) -> PyResult<()> {
         let stride = self.stride();
         let mut selected = reserved::<bool>(self.width * self.height)?;
         selected.resize(self.width * self.height, false);
@@ -138,13 +149,14 @@ impl Raster {
             indices.extend((0..self.height).flat_map(|_| 0..self.width));
             let mut work = Self { pixels: copy(&self.pixels)?, ..*self };
             for _ in 0..count {
-                let seam = work.seam()?;
+                let seam = work.seam(progress)?;
                 for (y, &x) in seam.iter().enumerate() {
                     selected[y * self.width + indices[y * work.width + x]] = true;
                 }
                 remove_seam(&mut indices, work.width, 1, &seam);
                 remove_seam(&mut work.pixels, work.width, stride, &seam);
                 work.width -= 1;
+                progress.checkpoint()?;
             }
         }
         let mut pixels = reserved_buffer(((self.width + count) as u32, self.height as u32), stride)?;
@@ -156,7 +168,7 @@ impl Raster {
         }
         self.pixels = pixels;
         self.width += count;
-        Ok(())
+        progress.checkpoint()
     }
 
     fn transpose(&mut self) -> PyResult<()> {
@@ -199,7 +211,7 @@ mod tests {
             for (mode, depth) in [(PixelMode::L, 8), (PixelMode::La, 8), (PixelMode::Rgb, 10), (PixelMode::Rgba, 16)] {
                 let bytes = 6 * mode.channels() * if depth == 8 { 1 } else { 2 };
                 let image = Image::from_raw_bytes(3, 2, mode, vec![0; bytes], depth).unwrap();
-                let mut result = ops_seam_carve(py, &image, image.size()).unwrap();
+                let mut result = ops_seam_carve(py, &image, image.size(), None).unwrap();
                 assert_eq!(image.raw_data().unwrap().as_ptr(), result.raw_data().unwrap().as_ptr());
                 result.pixels_mut().unwrap()[0] = 1;
                 assert_eq!(image.raw_data().unwrap()[0], 0);

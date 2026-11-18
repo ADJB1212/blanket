@@ -19,6 +19,7 @@ pub use blanket_codec_png::{encode_one_png, encode_palette_png, encode_png, fram
 use blanket_codec_tiff::{decode_tiff, encode_float_tiff, encode_lab_tiff, encode_raw_tiff, encode_tiff, encode_wide_tiff, is_dng};
 pub use blanket_codec_webp::encode_webp_variant;
 use blanket_codec_webp::{decode_webp, encode_webp};
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode, UnidentifiedImageError};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
@@ -219,21 +220,32 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
 type Inspection = (String, (u32, u32), String, u8);
 
 #[pyfunction]
-#[pyo3(signature = (data, formats=None, size=None, dpi=96.0))]
-pub fn _decode_svg(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, size: Option<(u32, u32)>, dpi: f32) -> PyResult<Image> {
+#[pyo3(signature = (data, formats=None, size=None, dpi=96.0, progress=None))]
+pub fn _decode_svg(
+    py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, size: Option<(u32, u32)>, dpi: f32, progress: Option<Py<PyAny>>,
+) -> PyResult<Image> {
     let format = input_format(data, formats)?;
     if format != ImageFormat::Svg {
         return Err(PyValueError::new_err("SVG rasterization options require SVG input"));
     }
-    py.detach(|| blanket_codec_svg::decode_options(data, blanket_codec_svg::RenderOptions { size, dpi }))
-        .map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"))
+    let progress = Progress::new(py, progress)?;
+    progress.checkpoint()?;
+    let image = py
+        .detach(|| blanket_codec_svg::decode_options(data, blanket_codec_svg::RenderOptions { size, dpi }))
+        .map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"))?;
+    progress.checkpoint()?;
+    Ok(image)
 }
 
-#[pyfunction]
-pub fn _decode_region(py: Python<'_>, data: &[u8], bounds: (u32, u32, u32, u32), formats: Option<Vec<String>>) -> PyResult<Option<Image>> {
+#[pyfunction(signature = (data, bounds, formats, progress=None))]
+pub fn _decode_region(
+    py: Python<'_>, data: &[u8], bounds: (u32, u32, u32, u32), formats: Option<Vec<String>>, progress: Option<Py<PyAny>>,
+) -> PyResult<Option<Image>> {
     let format = input_format(data, formats)?;
     if format == ImageFormat::Tiff {
-        py.detach(|| blanket_codec_tiff::decode_region(data, bounds)).map_err(|message| decode_error(message, Some(format.as_str()), "decode"))
+        let progress = Progress::new(py, progress)?;
+        py.detach(|| blanket_codec_tiff::decode_region_with_progress(data, bounds, &progress))
+            .map_err(|error| error.into_pyerr(Some(format.as_str())))
     } else {
         Ok(None)
     }
@@ -294,27 +306,26 @@ pub fn _index_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>
     Ok((sequence.count, sequence.loop_count, sequence.default_image))
 }
 
-#[pyfunction]
-pub fn _open_sequence(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, frame: Option<usize>) -> PyResult<OpenSequence> {
+#[pyfunction(signature = (data, formats, frame, progress=None))]
+pub fn _open_sequence(
+    py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, frame: Option<usize>, progress: Option<Py<PyAny>>,
+) -> PyResult<OpenSequence> {
     use blanket_codec_common::Sequence;
     let format = input_format(data, formats)?;
     check_backend(format, "decode")?;
+    let progress = Progress::new(py, progress)?;
+    progress.checkpoint()?;
     let sequence = py
-        .detach(|| match (format, frame) {
-            (ImageFormat::Gif, Some(frame)) => blanket_codec_gif::decode_frame(data, frame).map_err(DecodeError::from),
-            (ImageFormat::Webp, Some(frame)) => blanket_codec_webp::decode_frame(data, frame),
-            (ImageFormat::Png, Some(frame)) => blanket_codec_png::decode_frame(data, frame),
-            (ImageFormat::Tiff, Some(frame)) => blanket_codec_tiff::decode_frame(data, frame),
-            _ => match format {
-                ImageFormat::Gif => blanket_codec_gif::decode_sequence(data).map_err(DecodeError::from),
-                ImageFormat::Webp => blanket_codec_webp::decode_sequence(data),
-                ImageFormat::Png => blanket_codec_png::decode_sequence(data),
-                ImageFormat::Tiff => blanket_codec_tiff::decode_sequence(data),
-                _ => decode(data, format).map(Sequence::single),
-            },
+        .detach(|| match format {
+            ImageFormat::Gif => blanket_codec_gif::decode_frames(data, frame, &progress),
+            ImageFormat::Webp => blanket_codec_webp::decode_frames(data, frame, &progress),
+            ImageFormat::Png => blanket_codec_png::decode_frames(data, frame, &progress),
+            ImageFormat::Tiff => blanket_codec_tiff::decode_frames(data, frame, &progress),
+            _ => decode(data, format).map(Sequence::single),
         })
         .map_err(|error| error.into_pyerr(Some(format.as_str())))?;
     let (images, metadata) = sequence.frames.into_iter().map(|frame| (frame.image, (frame.duration, frame.disposal, frame.blend))).unzip();
+    progress.checkpoint()?;
     Ok((images, metadata, sequence.loop_count, sequence.default_image))
 }
 

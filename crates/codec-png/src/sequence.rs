@@ -2,6 +2,7 @@ use std::borrow::Borrow;
 use std::io::Cursor;
 
 use blanket_codec_common::{DecodeError, Frame, SaveOptions, Sequence, codec_error, validate_frame_budget};
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -102,11 +103,11 @@ impl CanvasSample for u16 {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<Sequence, DecodeError> {
-    decode_frames(data, None)
+    decode_frames(data, None, &Progress::default())
 }
 
 pub fn decode_frame(data: &[u8], target: usize) -> Result<Sequence, DecodeError> {
-    decode_frames(data, Some(target))
+    decode_frames(data, Some(target), &Progress::default())
 }
 
 pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
@@ -132,7 +133,7 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
     Ok(SequenceInfo { count: count as usize, loop_count: Some(animation.num_plays), default_image })
 }
 
-fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, DecodeError> {
+pub fn decode_frames(data: &[u8], target: Option<usize>, progress: &Progress) -> Result<Sequence, DecodeError> {
     let mut decoder = super::decoder(data);
     decoder.set_transformations(png::Transformations::EXPAND);
     let reader = decoder.read_info().map_err(DecodeError::with_diagnostic_source)?;
@@ -140,23 +141,23 @@ fn decode_frames(data: &[u8], target: Option<usize>) -> Result<Sequence, DecodeE
         if reader.info().color_type == png::ColorType::Indexed
             || reader.info().color_type == png::ColorType::Grayscale && reader.info().bit_depth == png::BitDepth::One
         {
-            return super::decode_png(data).map(Sequence::single);
+            return super::decode_png_with_progress(data, progress).map(Sequence::single);
         }
-        return super::decode_png_reader(reader, false).map(Sequence::single);
+        return super::decode_png_reader(reader, false, progress).map(Sequence::single);
     };
     if reader.info().color_type == png::ColorType::Indexed {
         let reader = super::decoder(data).read_info().map_err(DecodeError::with_diagnostic_source)?;
-        return decode_animation::<u8>(reader, animation, target);
+        return decode_animation::<u8>(reader, animation, target, progress);
     }
     if reader.info().bit_depth == png::BitDepth::Sixteen {
-        decode_animation::<u16>(reader, animation, target)
+        decode_animation::<u16>(reader, animation, target, progress)
     } else {
-        decode_animation::<u8>(reader, animation, target)
+        decode_animation::<u8>(reader, animation, target, progress)
     }
 }
 
 fn decode_animation<T: CanvasSample>(
-    mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl, target: Option<usize>,
+    mut reader: png::Reader<Cursor<&[u8]>>, animation: png::AnimationControl, target: Option<usize>, progress: &Progress,
 ) -> Result<Sequence, DecodeError> {
     let (width, height) = (reader.info().width, reader.info().height);
     let color_type = reader.info().color_type;
@@ -181,7 +182,10 @@ fn decode_animation<T: CanvasSample>(
     canvas.resize(length, [zero; 4]);
     let mut previous = Vec::new();
     for frame_index in 0..count {
-        let output = reader.next_frame(&mut buffer).map_err(DecodeError::with_diagnostic_source)?;
+        if progress.enabled() && frame_index > 0 {
+            reader.next_frame_info().map_err(DecodeError::with_diagnostic_source)?;
+        }
+        let output = super::read_frame(&mut reader, &mut buffer, progress)?;
         let control = reader.info().frame_control;
         let (x, y) = control.map_or((0, 0), |c| (c.x_offset, c.y_offset));
         if x.checked_add(output.width).is_none_or(|v| v > width) || y.checked_add(output.height).is_none_or(|v| v > height) {

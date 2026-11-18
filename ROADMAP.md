@@ -556,7 +556,7 @@ with new processing semantics exposed explicitly.
 
 #### Runtime Control
 
-- [ ] **Progress and cancellation** — callbacks for decode, resize, seam
+- [x] **Progress and cancellation** — callbacks for decode, resize, seam
       carving, and compressor search, polled at tile or candidate boundaries
       and safe to invoke from a worker
 - [x] **Deterministic execution** — a mode that fixes worker ordering and the

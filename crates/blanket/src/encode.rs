@@ -2,13 +2,14 @@ use std::io::{BufWriter, Write};
 
 use blanket_codecs::codecs::{self, ImageFormat, SaveOptions, output_error, output_path, write_path};
 use blanket_compressor::Compressor;
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyOSError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0, target_size=None, pdf_dpi=72.0, svg_mode="spline", svg_color_precision=6, svg_filter_speckle=4, svg_layer_difference=16, svg_corner_threshold=60.0, svg_length_threshold=4.0, svg_splice_threshold=45.0, svg_path_precision=2, svg_alpha_threshold=128))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0, target_size=None, pdf_dpi=72.0, svg_mode="spline", svg_color_precision=6, svg_filter_speckle=4, svg_layer_difference=16, svg_corner_threshold=60.0, svg_length_threshold=4.0, svg_splice_threshold=45.0, svg_path_precision=2, svg_alpha_threshold=128, progress=None))]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
@@ -16,11 +17,12 @@ pub(crate) fn _encode(
     jpeg_progressive: bool, jpeg_keep_rgb: bool, jpeg_qtables: Vec<[u16; 64]>, jpeg_smooth: i32, jpeg_qtable_quality: i16,
     jpeg_restart_marker_blocks: u32, jpeg_restart_marker_rows: u32, jpeg_streamtype: i32, target_size: Option<u64>, pdf_dpi: f64, svg_mode: &str,
     svg_color_precision: u8, svg_filter_speckle: u32, svg_layer_difference: u32, svg_corner_threshold: f64, svg_length_threshold: f64,
-    svg_splice_threshold: f64, svg_path_precision: u8, svg_alpha_threshold: u8,
+    svg_splice_threshold: f64, svg_path_precision: u8, svg_alpha_threshold: u8, progress: Option<Py<PyAny>>,
 ) -> PyResult<Option<Py<PyBytes>>> {
     if target_size == Some(0) {
         return Err(PyValueError::new_err("target_size must be positive"));
     }
+    let progress = Progress::new(py, progress)?;
     let format = ImageFormat::parse(format)?;
     let options = SaveOptions {
         quality,
@@ -75,7 +77,9 @@ pub(crate) fn _encode(
         py.detach(|| writer.flush().map_err(|error| (error.raw_os_error(), error.to_string()))).map_err(|error| output_error(error, output))?;
         return Ok(None);
     }
-    let encoded = encode_image(py, image, format, options, compressor).map_err(|error| blanket_codecs::encode_error(error, format.as_str()))?;
+    progress.checkpoint()?;
+    let encoded = encode_image(py, image, format, options, compressor, &progress)
+        .map_err(|error| if progress.failed() { error } else { blanket_codecs::encode_error(error, format.as_str()) })?;
     let encoded = if attach_metadata && !(format == ImageFormat::Jpeg && jpeg_streamtype == 1) {
         py.detach(|| {
             let (xmp, icc) =
@@ -93,6 +97,7 @@ pub(crate) fn _encode(
             encoded.len()
         )));
     }
+    progress.checkpoint()?;
     if let Some(output) = output {
         write_path(py, &output, encoded)?;
         return Ok(None);
@@ -100,7 +105,9 @@ pub(crate) fn _encode(
     Ok(Some(PyBytes::new(py, &encoded).unbind()))
 }
 
-fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: SaveOptions, compressor: Option<Compressor>) -> PyResult<Vec<u8>> {
+fn encode_image(
+    py: Python<'_>, image: &Image, format: ImageFormat, options: SaveOptions, compressor: Option<Compressor>, progress: &Progress,
+) -> PyResult<Vec<u8>> {
     if format == ImageFormat::Jpeg && matches!(options.jpeg_streamtype, 1 | 2) && compressor.is_some() {
         return Err(PyValueError::new_err("compression optimization requires a complete JPEG stream"));
     }
@@ -133,7 +140,7 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
         if target != "LA" {
             let expanded = blanket_image_ops::convert::convert(py, image, target, None)?;
             return py.detach(|| match compressor {
-                Some(compressor) => compressor.encode(&expanded, format, options),
+                Some(compressor) => compressor.encode_with_progress(&expanded, format, options, progress),
                 None => codecs::encode(&expanded, format, options),
             });
         }
@@ -154,12 +161,12 @@ fn encode_image(py: Python<'_>, image: &Image, format: ImageFormat, options: Sav
         let mode = palette_mode.as_str();
         let expanded = blanket_image_ops::convert::convert(py, image, mode, None)?;
         return py.detach(|| match compressor {
-            Some(compressor) => compressor.encode(&expanded, format, options),
+            Some(compressor) => compressor.encode_with_progress(&expanded, format, options, progress),
             None => codecs::encode(&expanded, format, options),
         });
     }
     py.detach(|| match compressor {
-        Some(compressor) => compressor.encode(image, format, options),
+        Some(compressor) => compressor.encode_with_progress(image, format, options, progress),
         None => codecs::encode(image, format, options),
     })
 }

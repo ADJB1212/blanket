@@ -60,6 +60,9 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   XMP parsing, and metadata rewrites that leave the pixels alone.
 - **Encoding.** JPEG controls, coefficient transforms without a recompress,
   and save-time compression search.
+- **Progress and cancellation.** Pass `progress=callback` to decode, resize,
+  seam carving, or a save with a compressor. The callback receives consecutive
+  checkpoint numbers starting at zero.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
 - **Visual fingerprints.** `ImageHash` provides average, difference, perceptual,

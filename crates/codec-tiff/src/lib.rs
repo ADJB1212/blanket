@@ -1,8 +1,9 @@
 use std::borrow::Cow;
 use std::io::Cursor;
 
-use blanket_codec_common::{DecodeError, SaveOptions, codec_error, u16_bytes, validate_dimensions};
+use blanket_codec_common::{DecodeError, SaveOptions, codec_error, decode_checkpoint, u16_bytes, validate_dimensions};
 use blanket_codec_image::{color_type, decode_rust_image};
+use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use image::{ExtendedColorType, ImageEncoder, ImageFormat as RustFormat};
 use pyo3::exceptions::PyValueError;
@@ -12,6 +13,10 @@ use rayon::prelude::*;
 use zerocopy::FromBytes;
 
 pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option<Image>, String> {
+    decode_region_with_progress(data, bounds, &Progress::default()).map_err(String::from)
+}
+
+pub fn decode_region_with_progress(data: &[u8], bounds: (u32, u32, u32, u32), progress: &Progress) -> Result<Option<Image>, DecodeError> {
     use tiff::tags::Tag;
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(|e| e.to_string())?;
     if decoder.get_tag_u32(Tag::Orientation).is_ok_and(|value| (2..=8).contains(&value)) {
@@ -44,6 +49,7 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
     let across = width.div_ceil(cw);
     let stride = mode.channels() * (depth as usize / 8);
     let ow = (right - left) as usize;
+    decode_checkpoint(progress)?;
     let mut pixels = blanket_core::raster::alloc_pixels(ow * (bottom - top) as usize * stride).map_err(|e| e.to_string())?;
     for cy in top / ch..=(bottom - 1) / ch {
         for cx in left / cw..=(right - 1) / cw {
@@ -75,6 +81,7 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
                     _ => unreachable!("validated TIFF sample type"),
                 }
             }
+            decode_checkpoint(progress)?;
         }
     }
     let result = if depth == 8 {
@@ -87,7 +94,7 @@ pub fn decode_region(data: &[u8], bounds: (u32, u32, u32, u32)) -> Result<Option
     } else {
         Image::from_sample_bytes(right - left, bottom - top, mode, pixels, depth, Some("TIFF".into()))
     };
-    result.map(Some).map_err(|e| e.to_string())
+    result.map(Some).map_err(|e| e.to_string().into())
 }
 
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
@@ -125,10 +132,10 @@ pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String>
     blanket_codec_common::ImageHeader::new(width, height, mode, depth.try_into().map_err(|_| "invalid TIFF depth")?)
 }
 
-fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
+fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Option<Image>, DecodeError> {
     let photometric = decoder.get_tag_u32(tiff::tags::Tag::PhotometricInterpretation).ok();
     if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(7) {
-        return decode_jpeg_tiff(data, decoder).map(Some);
+        return decode_jpeg_tiff(data, decoder, progress).map(Some);
     }
     if matches!(photometric, Some(8 | 9)) {
         let signed = photometric == Some(8);
@@ -144,7 +151,7 @@ fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<
             return Err("invalid LAB TIFF samples".into());
         };
         let pixels = if signed { blanket_core::raster::lab_raw_bytes(&pixels) } else { pixels };
-        return Image::from_pixels(width, height, PixelMode::Lab, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string());
+        return Image::from_pixels(width, height, PixelMode::Lab, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string().into());
     }
     if decoder.colortype().ok() == Some(tiff::ColorType::CMYK(8)) {
         let (width, height) = decoder.dimensions().map_err(|error| error.to_string())?;
@@ -152,14 +159,15 @@ fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<
         let tiff::decoder::DecodingResult::U8(pixels) = decoder.read_image().map_err(|error| error.to_string())? else {
             return Err("invalid CMYK TIFF samples".into());
         };
-        return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string());
+        return Image::from_pixels(width, height, PixelMode::Cmyk, pixels, Some("TIFF".into())).map(Some).map_err(|error| error.to_string().into());
     }
-    if decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(5)
+    if !progress.enabled()
+        && decoder.get_tag_u32(tiff::tags::Tag::Compression).ok() == Some(5)
         && let Some(image) = decode_lzw_strips(data, decoder)?
     {
         return Ok(Some(image));
     }
-    if let Some(image) = decode_direct_tiff(decoder)? {
+    if let Some(image) = decode_direct_tiff(decoder, progress)? {
         return Ok(Some(image));
     }
     let mode = match decoder.colortype().ok() {
@@ -179,7 +187,7 @@ fn decode_special_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<
     Ok(Some(image))
 }
 
-fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
+fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Option<Image>, DecodeError> {
     use tiff::tags::SampleFormat;
 
     let (mode, depth) = match decoder.colortype().map_err(|error| error.to_string())? {
@@ -216,7 +224,11 @@ fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Re
         return Err("TIFF decoding buffer limit exceeded".into());
     }
     let mut pixels = blanket_core::buffers::buffer((width, height), mode.channels() * sample_bytes).map_err(|error| error.to_string())?;
-    decoder.read_image_bytes(&mut pixels).map_err(|error| error.to_string())?;
+    if progress.enabled() {
+        read_chunks(decoder, &mut pixels, (width, height), mode.channels() * sample_bytes, progress)?;
+    } else {
+        decoder.read_image_bytes(&mut pixels).map_err(|error| error.to_string())?;
+    }
     if cfg!(target_endian = "big") && sample_bytes > 1 {
         for sample in pixels.chunks_exact_mut(sample_bytes) {
             sample.reverse();
@@ -232,7 +244,41 @@ fn decode_direct_tiff(decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Re
     } else {
         Image::from_sample_bytes(width, height, mode, pixels, depth, Some("TIFF".into()))
     };
-    image.map(Some).map_err(|error| error.to_string())
+    image.map(Some).map_err(|error| error.to_string().into())
+}
+
+fn read_chunks(
+    decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, pixels: &mut [u8], (width, height): (u32, u32), stride: usize, progress: &Progress,
+) -> Result<(), DecodeError> {
+    let (cw, ch) = decoder.chunk_dimensions();
+    if cw == 0 || ch == 0 {
+        return Err("invalid TIFF chunk dimensions".into());
+    }
+    let across = width.div_ceil(cw);
+    let count = across * height.div_ceil(ch);
+    let mut tile = Vec::new();
+    for index in 0..count {
+        let x = index % across * cw;
+        let y = index / across * ch;
+        let (w, h) = decoder.chunk_data_dimensions(index);
+        if w != cw.min(width - x) || h != ch.min(height - y) {
+            return Err("invalid TIFF chunk dimensions".into());
+        }
+        let row_bytes = w as usize * stride;
+        let offset = (y as usize * width as usize + x as usize) * stride;
+        if w == width {
+            decoder.read_chunk_bytes(index, &mut pixels[offset..][..row_bytes * h as usize]).map_err(DecodeError::with_diagnostic_source)?;
+        } else {
+            tile.resize(row_bytes * h as usize, 0);
+            decoder.read_chunk_bytes(index, &mut tile).map_err(DecodeError::with_diagnostic_source)?;
+            for (row, source) in tile.chunks_exact(row_bytes).enumerate() {
+                let offset = offset + row * width as usize * stride;
+                pixels[offset..][..row_bytes].copy_from_slice(source);
+            }
+        }
+        decode_checkpoint(progress)?;
+    }
+    Ok(())
 }
 
 fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Option<Image>, String> {
@@ -273,7 +319,7 @@ fn decode_lzw_strips(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[
     Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map(Some).map_err(|e| e.to_string())
 }
 
-fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>) -> Result<Image, String> {
+fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u8]>>, progress: &Progress) -> Result<Image, DecodeError> {
     use tiff::tags::Tag;
 
     let (width, height) = decoder.dimensions().map_err(|e| e.to_string())?;
@@ -342,8 +388,9 @@ fn decode_jpeg_tiff(data: &[u8], decoder: &mut tiff::decoder::Decoder<Cursor<&[u
             let src = row * decoded.width() as usize * channels;
             pixels[dst..dst + columns as usize * channels].copy_from_slice(&raw[src..src + columns as usize * channels]);
         }
+        decode_checkpoint(progress)?;
     }
-    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map_err(|e| e.to_string())
+    Image::from_pixels(width, height, mode, pixels, Some("TIFF".into())).map_err(|e| e.to_string().into())
 }
 
 fn lab_tiff_as_rgb(data: &[u8]) -> Result<Vec<u8>, String> {
@@ -473,9 +520,13 @@ pub fn encode_raw_tiff(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 }
 
 pub fn decode_tiff(data: &[u8]) -> Result<Image, DecodeError> {
+    decode_tiff_with_progress(data, &Progress::default())
+}
+
+fn decode_tiff_with_progress(data: &[u8], progress: &Progress) -> Result<Image, DecodeError> {
     let mut decoder = tiff::decoder::Decoder::new(Cursor::new(data)).map_err(DecodeError::with_diagnostic_source)?;
     let orientation = decoder.get_tag_u32(tiff::tags::Tag::Orientation).unwrap_or(1);
-    let mut image = decode_special_tiff(data, &mut decoder)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
+    let mut image = decode_special_tiff(data, &mut decoder, progress)?.map_or_else(|| decode_rust_image(data, RustFormat::Tiff, "TIFF"), Ok)?;
     if image.pixel_mode() == PixelMode::L && image.bit_depth() == 16 {
         image.reinterpret_mode(PixelMode::I16).map_err(DecodeError::with_source)?;
     }
@@ -513,13 +564,7 @@ pub fn decode_tiff(data: &[u8]) -> Result<Image, DecodeError> {
 }
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, DecodeError> {
-    use blanket_codec_common::{Frame, Sequence};
-    let mut sequence = Sequence::default();
-    visit_pages(data, |page| {
-        sequence.frames.push(Frame { image: decode_tiff(page)?, duration: None, disposal: 0, blend: 0 });
-        Ok(())
-    })?;
-    Ok(sequence)
+    decode_frames(data, None, &Progress::default())
 }
 
 pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
@@ -532,12 +577,17 @@ pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo,
 }
 
 pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::Sequence, DecodeError> {
+    decode_frames(data, Some(target), &Progress::default())
+}
+
+pub fn decode_frames(data: &[u8], target: Option<usize>, progress: &Progress) -> Result<blanket_codec_common::Sequence, DecodeError> {
     use blanket_codec_common::{Frame, Sequence};
     let mut sequence = Sequence::default();
     let mut index = 0;
     visit_pages(data, |page| {
-        if index == target {
-            sequence.frames.push(Frame { image: decode_tiff(page)?, duration: None, disposal: 0, blend: 0 });
+        if target.is_none_or(|target| index == target) {
+            sequence.frames.push(Frame { image: decode_tiff_with_progress(page, progress)?, duration: None, disposal: 0, blend: 0 });
+            decode_checkpoint(progress)?;
         }
         index += 1;
         Ok(())
