@@ -158,7 +158,9 @@ fn find_libheif() -> Vec<String> {
         if let Some(existing) = std::env::var_os("PKG_CONFIG_PATH") {
             paths.extend(std::env::split_paths(&existing));
         }
-        std::env::set_var("PKG_CONFIG_PATH", std::env::join_paths(paths).expect("invalid pkg-config search paths"));
+        unsafe {
+            std::env::set_var("PKG_CONFIG_PATH", std::env::join_paths(paths).expect("invalid pkg-config search paths"));
+        }
         config.statik(true);
     }
 
