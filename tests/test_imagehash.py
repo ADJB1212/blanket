@@ -87,6 +87,16 @@ def test_modes_use_explicit_eight_bit_grayscale(hasher, mode: str) -> None:
     assert source.tobytes() == before
 
 
+@pytest.mark.parametrize("hasher", HASHERS)
+@pytest.mark.parametrize("mode", ["RGB;F", "RGBA;F"])
+def test_spatial_hashes_accept_float_color(hasher, mode: str) -> None:
+    raw = bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * 3))
+    source = Image.frombytes("RGB", (17, 13), raw).convert(mode)
+    before = source.tobytes()
+    assert hasher(source) == hasher(source.convert("RGB", bit_depth=8))
+    assert source.tobytes() == before
+
+
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("hasher", HASHERS)
 def test_high_depth_is_normalized_to_eight_bits(hasher, depth: int) -> None:

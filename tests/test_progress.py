@@ -156,3 +156,88 @@ def test_callback_exceptions_propagate_without_codec_wrapping():
         image.resize(image.size, progress=False)
     with pytest.raises(ValueError, match="requires a compressor"):
         image.encode("PNG", progress=fail)
+
+
+@pytest.mark.parametrize("format", ["PNG", "JPEG", "WEBP"])
+def test_closing_from_progress_keeps_deferred_image_closed(format):
+    data = Image.new("RGB", (64, 48), "red").encode(format)
+    image = Image.open(BytesIO(data))
+    if format != "PNG":
+        assert image.draft(None, (12, 10)) is not None
+
+    def close(completed):
+        assert completed == 0
+        image.close()
+
+    with pytest.raises(ValueError, match="closed"):
+        image.load(progress=close)
+    with pytest.raises(ValueError, match="closed"):
+        image.load()
+
+
+def test_draft_from_progress_can_be_loaded_on_retry():
+    data = Image.new("RGB", (64, 48), "red").encode("JPEG")
+    image = Image.open(BytesIO(data))
+
+    def draft(completed):
+        if completed == 0:
+            assert image.draft("L", (12, 10)) is not None
+
+    with pytest.raises(ValueError, match="draft"):
+        image.load(progress=draft)
+    assert image.mode == "L"
+    assert image.size == (16, 12)
+    assert isinstance(image.load()[0, 0], int)
+
+
+def test_deferred_load_keeps_replacement_raster_created_during_progress():
+    source = Image.new("RGB", (16, 16), "red")
+    image = Image.open(BytesIO(source.encode("PNG")))
+
+    def edit(completed):
+        if completed == 0:
+            image.thumbnail((8, 8))
+
+    image.load(progress=edit)
+    assert image.size == (8, 8)
+    assert image.tobytes() == source.resize((8, 8)).tobytes()
+
+
+@pytest.mark.parametrize("action", ["close", "seek"])
+def test_lazy_seek_progress_cannot_overwrite_callback_action(action):
+    first = Image.new("RGB", (16, 16), "red")
+    frames = [Image.new("RGB", first.size, color) for color in ("green", "blue")]
+    image = Image.decode(first.encode("PNG", save_all=True, append_images=frames), lazy=True)
+
+    def change(completed):
+        assert completed == 0
+        if action == "close":
+            image.close()
+        else:
+            image.seek(2)
+
+    with pytest.raises(ValueError, match="closed" if action == "close" else "frame changed"):
+        image.seek(1, progress=change)
+    if action == "close":
+        with pytest.raises(ValueError, match="closed"):
+            image.load()
+    else:
+        assert image.tell() == 2
+        assert image.tobytes() == frames[1].tobytes()
+        image.seek(1)
+        assert image.tobytes() == frames[0].tobytes()
+
+
+def test_lazy_seek_retains_changes_to_current_frame_made_during_progress():
+    first = Image.new("RGB", (16, 16), "red")
+    second = Image.new("RGB", first.size, "blue")
+    image = Image.decode(first.encode("PNG", save_all=True, append_images=[second]), lazy=True, frame_cache_size=2)
+
+    def edit(completed):
+        if completed == 0:
+            image.thumbnail((8, 8))
+
+    image.seek(1, progress=edit)
+    image.seek(0)
+    assert image.size == (8, 8)
+    assert image.tobytes() == first.resize((8, 8)).tobytes()

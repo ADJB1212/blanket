@@ -186,9 +186,12 @@ def _hash(image: Image.Image, hash_size: int, side: int, algorithm: str) -> Imag
     if image.width == 0 or image.height == 0:
         raise ValueError("cannot hash an empty image")
     width, height = (hash_size + 1, hash_size) if algorithm == "difference" else (side, side)
-    grayscale = image if image.mode == "L" and image.bit_depth == 8 else image.convert("L", bit_depth=8)
-    thumbnail = grayscale if grayscale.size == (width, height) else grayscale.resize((width, height), Image.Resampling.LANCZOS)
-    packed = image_hash_native(thumbnail._native, hash_size, side, algorithm)
+    with ExitStack() as cleanup:
+        thumbnail = _hash_raster(image, "L", cleanup)
+        if thumbnail.size != (width, height):
+            thumbnail = thumbnail.resize((width, height), Image.Resampling.LANCZOS)
+            cleanup.callback(thumbnail.close)
+        packed = image_hash_native(thumbnail._native, hash_size, side, algorithm)
     return ImageHash(int.from_bytes(packed, "big"), hash_size)
 
 
@@ -212,6 +215,18 @@ def average_hash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     return _hash(image, size, size, "average")
 
 
+def _hash_raster(image: Image.Image, mode: str, cleanup: ExitStack) -> Image.Image:
+    """Use common eight-bit conversion for spatial and histogram hashes."""
+    if mode == "L" and image.mode in ("RGB;F", "RGBA;F"):
+        image = image.convert("RGB", bit_depth=8)
+        cleanup.callback(image.close)
+    if image.mode == mode and image.bit_depth == 8:
+        return image
+    converted = image.convert(mode, bit_depth=8)
+    cleanup.callback(converted.close)
+    return converted
+
+
 def _histogram_hash(image: Image.Image, hash_size: int, algorithm: str, mode: str) -> ImageHash:
     """Convert the current frame and project its native histogram to bits."""
     size = _size(hash_size)
@@ -221,13 +236,7 @@ def _histogram_hash(image: Image.Image, hash_size: int, algorithm: str, mode: st
     if not image.width or not image.height:
         raise ValueError("cannot hash an empty image")
     with ExitStack() as cleanup:
-        source = image
-        if mode == "L" and source.mode in ("RGB;F", "RGBA;F"):
-            source = source.convert("RGB", bit_depth=8)
-            cleanup.callback(source.close)
-        converted = source if source.mode == mode and source.bit_depth == 8 else source.convert(mode, bit_depth=8)
-        if converted is not source:
-            cleanup.callback(converted.close)
+        converted = _hash_raster(image, mode, cleanup)
         packed = image_histogram_hash_native(converted._native, size, algorithm)
         return ImageHash(int.from_bytes(packed, "big"), size)
 
@@ -241,7 +250,7 @@ def colorhash(image: Image.Image, hash_size: int = 8) -> ImageHash:
     Positive projections set bits; ties leave bits clear. Square-root weights
     reduce the influence of dominant colors. Pixel order does not matter.
 
-    Alpha is discarded, including hidden colors. ICC and orientation are
+    Alpha is discarded and hidden colors still contribute. ICC and orientation are
     ignored. Quantization boundaries can change bits abruptly; different
     arrangements of the same colors collide. This is Blanket's algorithm,
     with no promise of bit compatibility with other color-hash libraries.

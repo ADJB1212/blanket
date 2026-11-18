@@ -61,6 +61,13 @@ def test_color_quantization_boundaries() -> None:
     assert ImageHash.colorhash(Image.new("RGB", (1, 1), (64, 64, 128))) != ImageHash.colorhash(Image.new("RGB", (1, 1), (63, 64, 128)))
 
 
+@pytest.mark.parametrize("repeat", [1, 2, 3, 4, 6])
+def test_color_projection_ties_survive_proportional_replication(repeat: int) -> None:
+    raw = bytes((0, 0, 0)) + bytes((0, 0, 64)) * 4 + bytes((0, 0, 128)) * 9
+    image = Image.frombytes("RGB", (14 * repeat, 1), raw * repeat)
+    assert str(ImageHash.colorhash(image)) == "94000792288d4050"
+
+
 @pytest.mark.parametrize("box", [(0, 0, 96, 96), (32, 16, 128, 112), (40, 40, 88, 88)])
 def test_crop_similarity_and_texture_discrimination(box: tuple[int, int, int, int]) -> None:
     y, x = np.indices((128, 128))

@@ -575,16 +575,33 @@ class Image:
         elif self._seek_error is not None and self._frame == 0 and self._declared_frames is None:
             raise self._seek_error
         if self._decoded is None:
-            data = self._encoded
-            if data is None:
+            data, header = self._encoded, self._header
+            if data is None or header is None:
                 raise ValueError("operation on closed image")
+            if progress is not None:
+                callback = progress
+
+                def report(completed: int) -> bool | None:
+                    result = callback(completed)
+                    if result is not False:
+                        self._check_open()
+                        if self._decoded is None and self._header is not header:
+                            raise ValueError("image draft changed during decode")
+                    return result
+
+                progress = report
             if self._draft_mode is not None:
+                scale, mode = self._draft_scale, self._draft_mode
                 _checkpoint(progress, 0)
-                native = _draft_webp(data, self.size) if self.format == "WEBP" else _draft_jpeg(data, self._draft_scale, self._draft_mode)
+                native = _draft_webp(data, header.size) if header.format == "WEBP" else _draft_jpeg(data, scale, mode)
                 _checkpoint(progress, 1)
             else:
-                native = _open_sequence(data, [self.format], None, progress)[0][0]
-            self._native = native
+                native = _open_sequence(data, [header.format], None, progress)[0][0]
+            self._check_open()
+            if self._decoded is None:
+                if self._header is not header:
+                    raise ValueError("image draft changed during decode")
+                self._native = native
         self._draft_source = None
         return cast("_Image", self._decoded)
 
@@ -793,7 +810,8 @@ class Image:
 
         Raises:
             EOFError: ``frame`` is outside the sequence.
-            ValueError: The image is closed or ``progress`` is not callable.
+            TypeError: ``progress`` is not callable.
+            ValueError: The image is closed or its frame changes during decoding.
         """
         _validate_progress(progress)
         self._check_open()
@@ -806,10 +824,24 @@ class Image:
             return
         self._sync_palette()
         frames = cast("list[Image]", self._frames)
-        current = self._lazy_frames.cache[self._frame] if self._lazy_frames is not None else frames[self._frame]
+        storage = self._lazy_frames
+        current_frame = self._frame
+        current = storage.cache[current_frame] if storage is not None else frames[current_frame]
+        if storage is not None and progress is not None:
+            callback = progress
+
+            def report(completed: int) -> bool | None:
+                result = callback(completed)
+                if result is not False:
+                    self._check_open()
+                    if self._frame != current_frame or storage.cache.get(current_frame) is not current:
+                        raise ValueError("current frame changed during decode")
+                return result
+
+            progress = report
+        selected = storage.get(frame, progress) if storage is not None else frames[frame]
         current._native, current.palette, current._info = self._native, self.palette, self._info
         current._exif, current._exif_source = self._exif, self._exif_source
-        selected = self._lazy_frames.get(frame, progress) if self._lazy_frames is not None else frames[frame]
         self._native, self.palette, self._info = selected._native, selected.palette, selected._info
         self._exif, self._exif_source = selected._exif, selected._exif_source
         self._bands = _BANDS[self._native.mode]
@@ -853,7 +885,8 @@ class Image:
             A pixel accessor bound to the current raster.
 
         Raises:
-            ValueError: The image is closed or ``progress`` is not callable.
+            TypeError: ``progress`` is not callable.
+            ValueError: The image is closed or its draft changes during decoding.
 
         Examples:
             ```python

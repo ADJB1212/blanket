@@ -17,10 +17,12 @@ fn mix(mut value: u64) -> u64 {
 fn project(counts: &[u64], bits: usize) -> Vec<u8> {
     let weights: Vec<(usize, f64)> =
         counts.iter().enumerate().filter(|&(_, &count)| count != 0).map(|(i, &count)| (i, (count as f64).sqrt())).collect();
+    // Tied projections can accumulate rounding error when counts are scaled.
+    let tolerance = weights.iter().map(|&(_, weight)| weight).sum::<f64>() * f64::EPSILON * weights.len() as f64;
     super::pack((0..bits).map(|bit| {
         let seed = (bit as u64 + 1).wrapping_mul(PROJECTION_SEED_STEP);
         let sum: f64 = weights.iter().map(|&(bin, weight)| if mix(seed ^ bin as u64) & 1 == 0 { weight } else { -weight }).sum();
-        sum > 0.0
+        sum > tolerance
     }))
 }
 
