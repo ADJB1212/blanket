@@ -1017,6 +1017,16 @@ class Image:
         Raises:
             TypeError: ``copy`` is not a bool.
             ValueError: The image is closed.
+
+        Examples:
+            ```python
+            from blanket import Image
+
+            image = Image.new("RGB", (8, 8), (40, 100, 180))
+            capsule = image.to_capsule()
+            image.close()
+            # The capsule still owns the pixel snapshot.
+            ```
         """
         if not isinstance(copy, bool):
             raise TypeError("copy must be a boolean")
@@ -3343,17 +3353,17 @@ class Image:
     def encode(self, format: str, *, progress: ProgressCallback | None = None, **options: object) -> bytes:
         """Return encoded image bytes using the same options as save().
 
-            SVG traces the raster into vector paths. ``svg_mode`` selects pixel,
-            polygon, or spline fitting (default); ``svg_color_precision`` (1..8,
-            default 6) and ``svg_filter_speckle`` (default 4) control detail.
-            Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
-            pixels become opaque. Original SVG geometry is not retained.
-            ``LosslessImageCompressor`` removes formatting whitespace from the generated SVG.
+        SVG traces the raster into vector paths. ``svg_mode`` selects pixel,
+        polygon, or spline fitting (default); ``svg_color_precision`` (1..8,
+        default 6) and ``svg_filter_speckle`` (default 4) control detail.
+        Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
+        pixels become opaque. Original SVG geometry is not retained.
+        ``LosslessImageCompressor`` removes formatting whitespace from the generated SVG.
 
-            Args:
-                format: Output format name, such as PNG, JPEG, or WEBP.
-                progress: Callback between compressor candidates, as in save().
-                options: Save options, including metadata, compressors, and sequences.
+        Args:
+            format: Output format name, such as PNG, JPEG, or WEBP.
+            progress: Callback between compressor candidates, as in save().
+            options: Save options, including metadata, compressors, and sequences.
 
         Returns:
             Encoded image bytes.
@@ -3362,12 +3372,12 @@ class Image:
             TypeError: ``format`` or an option has the wrong type.
             ValueError: The format or an option is unsupported.
 
-            Examples:
-                ```python
-                from blanket import Image
+        Examples:
+            ```python
+            from blanket import Image
 
-                data = Image.new("RGB", (8, 6), "red").encode("WEBP", quality=85)
-                ```
+            data = Image.new("RGB", (8, 6), "red").encode("WEBP", quality=85)
+            ```
         """
         if not isinstance(format, str):
             raise TypeError("format must be a string")
