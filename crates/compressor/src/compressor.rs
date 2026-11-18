@@ -75,6 +75,12 @@ impl LosslessImageCompressor {
             ImageFormat::Jpeg => self.optimize_jpeg(image, options, progress),
             ImageFormat::Webp => self.optimize_webp(image, options, progress),
             ImageFormat::Jxl | ImageFormat::Heif => self.optimize_sample_codec(image, format, options, progress),
+            ImageFormat::Svg => {
+                let mut output = codecs::encode(image, format, options)?;
+                // The trace writer uses newlines only to separate tags and terminate the document.
+                output.retain(|&byte| byte != b'\n');
+                Ok(output)
+            }
             _ => codecs::encode(image, format, options),
         }
     }

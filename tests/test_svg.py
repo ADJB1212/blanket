@@ -9,7 +9,7 @@ from xml.etree import ElementTree as ET
 import pytest
 
 from blanket import CodecResourceLimitError, CorruptImageError, Image, ImageDraw, UnidentifiedImageError, UnsupportedCodecError, features
-from blanket.Compressor import LosslessImageCompressor
+from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
 
 SVG = b"<svg xmlns='http://www.w3.org/2000/svg' width='4' height='2'><rect width='2' height='2' fill='red' fill-opacity='0.5'/></svg>"
 
@@ -249,9 +249,28 @@ def test_svg_trace_modes_limits_and_other_formats() -> None:
     with pytest.raises(CodecResourceLimitError):
         Image.new("RGB", (4097, 1)).encode("SVG")
     with pytest.raises(ValueError, match="compression optimization"):
-        Image.new("RGB", (8, 8)).encode("SVG", compressor=LosslessImageCompressor())
+        Image.new("RGB", (8, 8)).encode("SVG", compressor=LossyImageCompressor())
     with pytest.raises(ValueError, match="multi-frame"):
         Image.new("RGB", (8, 8)).encode("SVG", save_all=True)
+
+
+@pytest.mark.parametrize("fit", ["pixel", "polygon", "spline"])
+def test_svg_lossless_compressor_minifies_trace(tmp_path: Path, fit: str) -> None:
+    image = Image.new("RGBA", (24, 24), "red")
+    ImageDraw.Draw(image).ellipse((4, 4, 19, 19), fill="blue")
+    baseline = image.encode("SVG", svg_mode=fit)
+    expected = baseline.replace(b"\n", b"")
+    compressor = LosslessImageCompressor(target_size=len(expected))
+    encoded = image.encode("SVG", svg_mode=fit, compressor=compressor)
+    assert len(encoded) < len(baseline)
+    assert encoded == expected
+    assert Image.decode(encoded).tobytes() == Image.decode(baseline).tobytes()
+
+    path = tmp_path / "minified.svg"
+    stream = BytesIO()
+    image.save(path, svg_mode=fit, compressor=compressor)
+    image.save(stream, "SVG", svg_mode=fit, compressor=compressor)
+    assert path.read_bytes() == stream.getvalue() == encoded
 
 
 def test_svg_trace_fitting_color_and_speckle_controls() -> None:

@@ -194,6 +194,7 @@ class LosslessImageCompressor:
     when their decoded samples
     exactly match the normal save. For lossy saves, this also tries lossless
     encoding of the normal save's decoded pixels.
+    SVG saves remove formatting whitespace while preserving the traced paths.
 
     Optimization introduces no additional loss relative to the requested save;
     it does not turn a lossy save into a pixel-exact copy of the input image.

@@ -2928,6 +2928,7 @@ class Image:
         default 6) and ``svg_filter_speckle`` (default 4) control detail.
         Alpha below ``svg_alpha_threshold`` (default 128) is omitted; retained
         pixels become opaque. Original SVG geometry is not retained.
+        ``LosslessImageCompressor`` removes formatting whitespace from the generated SVG.
 
         Args:
             format: Output format name, such as PNG, JPEG, or WEBP.
@@ -2954,7 +2955,7 @@ class Image:
         if progress is not None and compressor is None:
             raise ValueError("progress requires a compressor")
         output_format = _output_format(fp, format)
-        if output_format == "SVG" and compressor is not None:
+        if output_format == "SVG" and isinstance(compressor, LossyImageCompressor):
             raise ValueError("compression optimization is not supported for SVG tracing")
         if output_format == "JPEG" and (self.width == 0 or self.height == 0):
             raise ValueError("cannot write empty image as JPEG")
