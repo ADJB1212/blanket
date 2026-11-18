@@ -90,6 +90,9 @@ pub(super) fn jpeg(data: &[u8], exif: bool, xmp: bool, icc: bool, text: bool, dp
         }
         let marker = *data.get(pos).ok_or_else(|| codec_error("truncated JPEG marker"))?;
         pos += 1;
+        if marker == 0 {
+            return Err(codec_error("invalid JPEG marker"));
+        }
         if marker == 0xd9 {
             output.extend_from_slice(&data[start..]);
             ended = true;
@@ -345,6 +348,12 @@ mod tests {
                 assert!(jpeg(&input[..end], false, false, false, false, None, false).is_err());
             }
         }
+    }
+
+    #[test]
+    fn jpeg_rejects_stuffed_bytes_outside_scans() {
+        let input = b"\xff\xd8\xff\0\0\x02\xff\xd9";
+        assert!(jpeg(input, false, false, false, false, None, false).is_err());
     }
 
     #[test]
