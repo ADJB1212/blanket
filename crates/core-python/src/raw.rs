@@ -1,6 +1,9 @@
 use std::borrow::Cow;
+use std::simd::Simd;
+use std::simd::num::SimdUint;
 
 use blanket_core::PixelMode;
+use blanket_core::pixels::{Bytes, load, store};
 use pyo3::exceptions::{PyMemoryError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
@@ -317,6 +320,33 @@ fn raw_kind(mode: PixelMode, rawmode: &str) -> Option<RawKind> {
     })
 }
 
+/// Converts whole 16-pixel blocks; returns the pixel count processed.
+fn cmyk_to_rgb(source: &[u8], target: &mut [u8]) -> usize {
+    let mut done = 0;
+    for (input, output) in source.as_chunks::<64>().0.iter().zip(target.as_chunks_mut::<48>().0) {
+        let [c, m, y, k] = load::<4>(input);
+        let inverse = Simd::<u16, 16>::splat(255) - k.cast::<u16>();
+        let channel = |value: Bytes| {
+            let product = value.cast::<u16>() * inverse + Simd::splat(128);
+            (Simd::splat(255) - k.cast::<u16>() - ((product + (product >> 8)) >> 8)).cast::<u8>()
+        };
+        store::<3>(output, [channel(c), channel(m), channel(y)]);
+        done += 16;
+    }
+    done
+}
+
+/// Expands whole 16-pixel blocks of 8-bit LA into RGBA; returns the pixel count processed.
+fn luminance_alpha_to_rgba(source: &[u8], target: &mut [u8]) -> usize {
+    let mut done = 0;
+    for (input, output) in source.as_chunks::<32>().0.iter().zip(target.as_chunks_mut::<64>().0) {
+        let [l, a] = load::<2>(input);
+        store::<4>(output, [l, l, l, a]);
+        done += 16;
+    }
+    done
+}
+
 fn extended_transform<'a>(
     data: &'a [u8], mode: PixelMode, size: (u32, u32), depth: u8, rawmode: Option<&str>, stride: usize, orientation: i8, encode: bool,
 ) -> Option<PyResult<Cow<'a, [u8]>>> {
@@ -401,7 +431,8 @@ fn extended_transform<'a>(
                     if encode {
                         return Err(PyValueError::new_err("unsupported CMYK raw encoder"));
                     }
-                    for (input, pixel) in source.as_chunks::<4>().0.iter().zip(target[..image_row].as_chunks_mut::<3>().0) {
+                    let done = cmyk_to_rgb(source, &mut target[..image_row]);
+                    for (input, pixel) in source.as_chunks::<4>().0.iter().zip(target[..image_row].as_chunks_mut::<3>().0).skip(done) {
                         for c in 0..3 {
                             let product = u32::from(input[c]) * u32::from(255 - input[3]) + 128;
                             pixel[c] = (255 - u32::from(input[3]) - ((product + (product >> 8)) >> 8)) as u8;
@@ -432,7 +463,8 @@ fn extended_transform<'a>(
                     if encode {
                         return Err(PyValueError::new_err("unsupported luminance alpha encoder"));
                     }
-                    for (input, pixel) in source.chunks_exact(bytes * 2).zip(target[..image_row].as_chunks_mut::<4>().0) {
+                    let done = if *bytes == 1 { luminance_alpha_to_rgba(source, &mut target[..image_row]) } else { 0 };
+                    for (input, pixel) in source.chunks_exact(bytes * 2).zip(target[..image_row].as_chunks_mut::<4>().0).skip(done) {
                         let offset = if *bytes == 2 && !big { 1 } else { 0 };
                         pixel[..3].fill(input[offset]);
                         pixel[3] = input[bytes + offset];
@@ -610,6 +642,25 @@ mod tests {
         assert_eq!(encoded.as_ref(), &[1, 2, 3, 4, 5, 6, 0, 0, 7, 8, 9, 10, 11, 12, 0, 0]);
         assert_eq!(data[0], 99);
         assert_eq!(data[15], 99);
+    }
+
+    #[test]
+    fn vector_cmyk_and_luminance_alpha_match_scalar() {
+        for width in [1usize, 15, 16, 17, 33] {
+            let cmyk: Vec<u8> = (0..width * 4).map(|i| (i * 59 + 13) as u8).collect();
+            let rgb = transform(&cmyk, PixelMode::Rgb, (width as u32, 1), 8, Some("CMYK"), 0, 1, false).unwrap();
+            for (input, pixel) in cmyk.as_chunks::<4>().0.iter().zip(rgb.as_chunks::<3>().0) {
+                for c in 0..3 {
+                    let product = u32::from(input[c]) * u32::from(255 - input[3]) + 128;
+                    assert_eq!(pixel[c], (255 - u32::from(input[3]) - ((product + (product >> 8)) >> 8)) as u8);
+                }
+            }
+            let la: Vec<u8> = (0..width * 2).map(|i| (i * 41 + 5) as u8).collect();
+            let rgba = transform(&la, PixelMode::Rgba, (width as u32, 1), 8, Some("LA"), 0, 1, false).unwrap();
+            for (input, pixel) in la.as_chunks::<2>().0.iter().zip(rgba.as_chunks::<4>().0) {
+                assert_eq!(*pixel, [input[0], input[0], input[0], input[1]]);
+            }
+        }
     }
 
     #[test]

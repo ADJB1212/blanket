@@ -1,8 +1,23 @@
+#![feature(portable_simd)]
+
 use std::io::Cursor;
+use std::simd::{Simd, ToBytes};
 
 use blanket_codec_common::{DecodeError, validate_dimensions};
 use blanket_core::{Image, PixelMode};
 use image::{ColorType, ExtendedColorType, ImageDecoder, ImageFormat as RustFormat};
+
+/// Shifts native-endian 16-bit samples right and stores them little-endian.
+fn native_to_le_shifted(pixels: &mut [u8], shift: u8) {
+    let (blocks, tail) = pixels.as_chunks_mut::<32>();
+    let shift = Simd::<u16, 16>::splat(u16::from(shift));
+    for block in blocks {
+        *block = (Simd::<u16, 16>::from_ne_bytes(Simd::from_array(*block)) >> shift).to_le_bytes().to_array();
+    }
+    for bytes in tail.as_chunks_mut::<2>().0 {
+        *bytes = (u16::from_ne_bytes(*bytes) >> shift[0]).to_le_bytes();
+    }
+}
 
 pub fn inspect_rust_image(data: &[u8], format: RustFormat) -> Result<blanket_codec_common::ImageHeader, String> {
     let decoder = image::ImageReader::with_format(Cursor::new(data), format).into_decoder().map_err(|e| e.to_string())?;
@@ -67,9 +82,7 @@ pub fn decode_with_metadata(
         pixels.try_reserve_exact(length).map_err(DecodeError::with_source)?;
         pixels.resize(length, 0);
         decoder.read_image(&mut pixels).map_err(DecodeError::with_diagnostic_source)?;
-        for bytes in pixels.as_chunks_mut::<2>().0 {
-            *bytes = (u16::from_ne_bytes(*bytes) >> (16 - depth)).to_le_bytes();
-        }
+        native_to_le_shifted(&mut pixels, 16 - depth);
         return Image::from_sample_bytes(dimensions.0, dimensions.1, mode, pixels, depth, Some(format_name.into())).map_err(DecodeError::with_source);
     }
     let image = image::DynamicImage::from_decoder(decoder).map_err(DecodeError::with_diagnostic_source)?;
@@ -103,4 +116,25 @@ pub fn decode_with_metadata(
         _ => (PixelMode::Rgba, image.into_rgba8().into_raw()),
     };
     Image::from_pixels(width, height, mode, pixels, Some(format_name.to_owned())).map_err(DecodeError::with_source)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shifted_samples_match_scalar_across_blocks_and_tails() {
+        for samples in [0, 1, 15, 16, 17, 33] {
+            for shift in [0, 4, 6] {
+                let source: Vec<u8> = (0..samples * 2).map(|i| (i * 91 + 17) as u8).collect();
+                let mut actual = source.clone();
+                native_to_le_shifted(&mut actual, shift);
+                let mut expected = source;
+                for bytes in expected.as_chunks_mut::<2>().0 {
+                    *bytes = (u16::from_ne_bytes(*bytes) >> shift).to_le_bytes();
+                }
+                assert_eq!(actual, expected);
+            }
+        }
+    }
 }

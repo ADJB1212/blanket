@@ -1,4 +1,9 @@
+#![feature(portable_simd)]
+
 use std::borrow::{Borrow, Cow};
+use std::simd::cmp::SimdPartialEq;
+use std::simd::num::SimdUint;
+use std::simd::{Select, Simd};
 
 use blanket_codec_common::codec_error;
 use blanket_codec_image::color_type;
@@ -6,6 +11,26 @@ use blanket_core::progress::Progress;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+
+/// Writes palette colors over `pixels`, skipping entries with zero alpha.
+fn composite_indexed(pixels: &mut [[u8; 4]], indices: &[u8], colors: &[[u8; 4]; 256]) {
+    let table = colors.map(u32::from_ne_bytes);
+    let alpha_mask = Simd::splat(u32::from_ne_bytes([0, 0, 0, 255]));
+    let mut done = 0;
+    for (block, indices) in pixels.as_chunks_mut::<8>().0.iter_mut().zip(indices.as_chunks::<8>().0) {
+        let new = Simd::<u32, 8>::gather_or_default(&table, Simd::<u8, 8>::from_array(*indices).cast::<usize>());
+        let old = Simd::<u32, 8>::from_array(block.map(u32::from_ne_bytes));
+        let merged = (new & alpha_mask).simd_ne(Simd::splat(0)).select(new, old);
+        *block = merged.to_array().map(u32::to_ne_bytes);
+        done += 8;
+    }
+    for (pixel, &index) in pixels[done..].iter_mut().zip(&indices[done..]) {
+        let color = colors[usize::from(index)];
+        if color[3] != 0 {
+            *pixel = color;
+        }
+    }
+}
 
 pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, String> {
     decode_frames(data, None, &Progress::default()).map_err(String::from)
@@ -106,12 +131,7 @@ pub fn decode_frames(
             let src = row * w as usize;
             let dst = (y as usize + row) * width as usize + x as usize;
             let pixels = &mut canvas.as_chunks_mut::<4>().0[dst..dst + w as usize];
-            for (pixel, &index) in pixels.iter_mut().zip(&frame.buffer[src..src + w as usize]) {
-                let color = colors[usize::from(index)];
-                if color[3] != 0 {
-                    *pixel = color;
-                }
-            }
+            composite_indexed(pixels, &frame.buffer[src..src + w as usize], &colors);
         }
         if target.is_none_or(|target| target == frame_index) {
             let image = if frame_index == 0 {
@@ -284,6 +304,23 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn indexed_composite_skips_transparent_entries_across_blocks_and_tails() {
+        let mut colors = [[0; 4]; 256];
+        for (i, color) in colors.iter_mut().enumerate() {
+            *color = [i as u8, (i * 3) as u8, (i * 7) as u8, if i % 5 == 0 { 0 } else { 255 }];
+        }
+        for count in [0, 1, 7, 8, 9, 16, 23] {
+            let indices: Vec<u8> = (0..count).map(|i| (i * 37 + 3) as u8).collect();
+            let background: Vec<[u8; 4]> = (0..count).map(|i| [9, i as u8, 8, 7]).collect();
+            let mut actual = background.clone();
+            composite_indexed(&mut actual, &indices, &colors);
+            let expected: Vec<[u8; 4]> =
+                background.iter().zip(&indices).map(|(&old, &i)| if colors[usize::from(i)][3] != 0 { colors[usize::from(i)] } else { old }).collect();
+            assert_eq!(actual, expected);
+        }
+    }
 
     #[test]
     fn empty_animation_returns_an_error() {

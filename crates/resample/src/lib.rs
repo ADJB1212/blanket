@@ -427,6 +427,12 @@ fn reduce_pixels<const C: usize>(
                 let lower = source[start + width as usize..end + width as usize].as_chunks::<2>().0;
                 let done = if C == 1 {
                     crate::ops_simd::reduce_two_l(upper.as_flattened().as_flattened(), lower.as_flattened().as_flattened(), row)
+                } else if matches!(C, 2..=4) {
+                    crate::ops_simd::reduce_two::<C>(
+                        upper.as_flattened().as_flattened(),
+                        lower.as_flattened().as_flattened(),
+                        &mut row[..upper.len() * C],
+                    )
                 } else {
                     0
                 };

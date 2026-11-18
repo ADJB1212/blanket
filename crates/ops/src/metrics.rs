@@ -1,5 +1,8 @@
 //! Full-reference perceptual quality scores for normalized SDR samples.
 
+use std::simd::Simd;
+use std::simd::num::SimdFloat;
+
 use blanket_core::parallel::with_rayon_worker_limit;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
@@ -80,29 +83,83 @@ fn gaussian() -> [f64; WINDOW] {
     weights
 }
 
-fn statistics(a: &[[f64; 3]], b: &[[f64; 3]], width: usize, channel: usize, weights: &[f64; WINDOW]) -> (f64, f64) {
+const LANES: usize = 4;
+type Vector = Simd<f64, LANES>;
+
+fn plane(pixels: &[[f64; 3]], channel: usize) -> Vec<f64> {
+    pixels.iter().map(|pixel| pixel[channel]).collect()
+}
+
+fn statistics(a: &[f64], b: &[f64], width: usize, weights: &[f64; WINDOW]) -> (f64, f64) {
     let height = a.len() / width;
     let output_width = width - WINDOW + 1;
-    let mut rows = vec![[0.0; 5]; output_width * height];
-    for (y, row) in rows.chunks_exact_mut(output_width).enumerate() {
-        for (x, moments) in row.iter_mut().enumerate() {
+    let output_height = height - WINDOW + 1;
+    let mut rows: [Vec<f64>; 5] = std::array::from_fn(|_| vec![0.0; output_width * height]);
+    for y in 0..height {
+        let (a_row, b_row) = (&a[y * width..(y + 1) * width], &b[y * width..(y + 1) * width]);
+        let base = y * output_width;
+        let mut x = 0;
+        while x + LANES <= output_width {
+            let mut moments = [Vector::splat(0.0); 5];
             for (k, &weight) in weights.iter().enumerate() {
-                let av = a[y * width + x + k][channel];
-                let bv = b[y * width + x + k][channel];
+                let weight = Vector::splat(weight);
+                let av = Vector::from_slice(&a_row[x + k..]);
+                let bv = Vector::from_slice(&b_row[x + k..]);
                 for (sum, value) in moments.iter_mut().zip([av, bv, av * av, bv * bv, av * bv]) {
                     *sum += weight * value;
                 }
+            }
+            for (row, sum) in rows.iter_mut().zip(moments) {
+                row[base + x..base + x + LANES].copy_from_slice(&sum.to_array());
+            }
+            x += LANES;
+        }
+        for x in x..output_width {
+            let mut moments = [0.0; 5];
+            for (k, &weight) in weights.iter().enumerate() {
+                let (av, bv) = (a_row[x + k], b_row[x + k]);
+                for (sum, value) in moments.iter_mut().zip([av, bv, av * av, bv * bv, av * bv]) {
+                    *sum += weight * value;
+                }
+            }
+            for (row, sum) in rows.iter_mut().zip(moments) {
+                row[base + x] = sum;
             }
         }
     }
     let mut ssim = 0.0;
     let mut cs = 0.0;
-    for y in 0..height - WINDOW + 1 {
-        for x in 0..output_width {
+    let (c1, c2) = (Vector::splat(C1), Vector::splat(C2));
+    let (zero, two) = (Vector::splat(0.0), Vector::splat(2.0));
+    for y in 0..output_height {
+        let mut x = 0;
+        while x + LANES <= output_width {
+            let mut moments = [zero; 5];
+            for (k, &weight) in weights.iter().enumerate() {
+                let weight = Vector::splat(weight);
+                let at = (y + k) * output_width + x;
+                for (sum, row) in moments.iter_mut().zip(&rows) {
+                    *sum += weight * Vector::from_slice(&row[at..]);
+                }
+            }
+            let [ma, mb, aa, bb, ab] = moments;
+            let va = (aa - ma * ma).simd_max(zero);
+            let vb = (bb - mb * mb).simd_max(zero);
+            let covariance = ab - ma * mb;
+            let contrast = (two * covariance + c2) / (va + vb + c2);
+            let structure = (two * ma * mb + c1) / (ma * ma + mb * mb + c1) * contrast;
+            // Lanes are summed in pixel order to match the scalar accumulation.
+            for (contrast, structure) in contrast.to_array().into_iter().zip(structure.to_array()) {
+                cs += contrast;
+                ssim += structure;
+            }
+            x += LANES;
+        }
+        for x in x..output_width {
             let mut moments = [0.0; 5];
             for (k, &weight) in weights.iter().enumerate() {
-                for (sum, value) in moments.iter_mut().zip(rows[(y + k) * output_width + x]) {
-                    *sum += weight * value;
+                for (sum, row) in moments.iter_mut().zip(&rows) {
+                    *sum += weight * row[(y + k) * output_width + x];
                 }
             }
             let [ma, mb, aa, bb, ab] = moments;
@@ -114,32 +171,41 @@ fn statistics(a: &[[f64; 3]], b: &[[f64; 3]], width: usize, channel: usize, weig
             ssim += (2.0 * ma * mb + C1) / (ma * ma + mb * mb + C1) * contrast;
         }
     }
-    let count = (output_width * (height - WINDOW + 1)) as f64;
+    let count = (output_width * output_height) as f64;
     ((ssim / count).clamp(-1.0, 1.0), (cs / count).clamp(-1.0, 1.0))
 }
 
-fn downsample(pixels: &[[f64; 3]], width: usize) -> Vec<[f64; 3]> {
+fn downsample(pixels: &[f64], width: usize) -> Vec<f64> {
     let height = pixels.len() / width;
     let mut output = Vec::with_capacity(width.div_ceil(2) * height.div_ceil(2));
+    let pairs = width / 2;
     for y in (0..height).step_by(2) {
-        for x in (0..width).step_by(2) {
+        let upper = &pixels[y * width..(y + 1) * width];
+        let lower = &pixels[(y + 1).min(height - 1) * width..][..width];
+        let mut x = 0;
+        while x + 16 <= 2 * pairs {
+            let (top_even, top_odd) = Simd::<f64, 8>::from_slice(&upper[x..]).deinterleave(Simd::<f64, 8>::from_slice(&upper[x + 8..]));
+            let (low_even, low_odd) = Simd::<f64, 8>::from_slice(&lower[x..]).deinterleave(Simd::<f64, 8>::from_slice(&lower[x + 8..]));
+            output.extend_from_slice(&((((top_even + top_odd) + low_even) + low_odd) * Simd::splat(0.25)).to_array());
+            x += 16;
+        }
+        for x in (x..width).step_by(2) {
             let x1 = (x + 1).min(width - 1);
-            let y1 = (y + 1).min(height - 1);
-            output.push(std::array::from_fn(|c| {
-                (pixels[y * width + x][c] + pixels[y * width + x1][c] + pixels[y1 * width + x][c] + pixels[y1 * width + x1][c]) * 0.25
-            }));
+            output.push((upper[x] + upper[x1] + lower[x] + lower[x1]) * 0.25);
         }
     }
     output
 }
 
-fn structural(mut a: Vec<[f64; 3]>, mut b: Vec<[f64; 3]>, mut width: usize, algorithm: &str) -> f64 {
+fn structural(a: Vec<[f64; 3]>, b: Vec<[f64; 3]>, mut width: usize, algorithm: &str) -> f64 {
+    let planes = |pixels: Vec<[f64; 3]>| std::array::from_fn::<_, 3, _>(|channel| plane(&pixels, channel));
+    let (mut a, mut b) = (planes(a), planes(b));
     let weights = gaussian();
     let mut scores = [1.0; 3];
     let levels = if algorithm == "ssim" { 1 } else { WEIGHTS.len() };
     for (level, &weight) in WEIGHTS.iter().enumerate().take(levels) {
         for (channel, score) in scores.iter_mut().enumerate() {
-            let (ssim, cs) = statistics(&a, &b, width, channel, &weights);
+            let (ssim, cs) = statistics(&a[channel], &b[channel], width, &weights);
             if levels == 1 {
                 *score = ssim;
             } else {
@@ -147,8 +213,8 @@ fn structural(mut a: Vec<[f64; 3]>, mut b: Vec<[f64; 3]>, mut width: usize, algo
             }
         }
         if level + 1 < levels {
-            a = downsample(&a, width);
-            b = downsample(&b, width);
+            a = a.map(|plane| downsample(&plane, width));
+            b = b.map(|plane| downsample(&plane, width));
             width = width.div_ceil(2);
         }
     }
@@ -193,4 +259,79 @@ pub fn score(reference: &Image, distorted: &Image, algorithm: &str) -> PyResult<
     with_rayon_worker_limit(|| compute_frame_ssimulacra2(a, b))
         .map_err(|err| PyRuntimeError::new_err(err.to_string()))?
         .map_err(|err| PyValueError::new_err(err.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn scalar_statistics(a: &[[f64; 3]], b: &[[f64; 3]], width: usize, channel: usize, weights: &[f64; WINDOW]) -> (f64, f64) {
+        let height = a.len() / width;
+        let output_width = width - WINDOW + 1;
+        let mut rows = vec![[0.0; 5]; output_width * height];
+        for (y, row) in rows.chunks_exact_mut(output_width).enumerate() {
+            for (x, moments) in row.iter_mut().enumerate() {
+                for (k, &weight) in weights.iter().enumerate() {
+                    let av = a[y * width + x + k][channel];
+                    let bv = b[y * width + x + k][channel];
+                    for (sum, value) in moments.iter_mut().zip([av, bv, av * av, bv * bv, av * bv]) {
+                        *sum += weight * value;
+                    }
+                }
+            }
+        }
+        let mut ssim = 0.0;
+        let mut cs = 0.0;
+        for y in 0..height - WINDOW + 1 {
+            for x in 0..output_width {
+                let mut moments = [0.0; 5];
+                for (k, &weight) in weights.iter().enumerate() {
+                    for (sum, value) in moments.iter_mut().zip(rows[(y + k) * output_width + x]) {
+                        *sum += weight * value;
+                    }
+                }
+                let [ma, mb, aa, bb, ab] = moments;
+                let va = (aa - ma * ma).max(0.0);
+                let vb = (bb - mb * mb).max(0.0);
+                let covariance = ab - ma * mb;
+                let contrast = (2.0 * covariance + C2) / (va + vb + C2);
+                cs += contrast;
+                ssim += (2.0 * ma * mb + C1) / (ma * ma + mb * mb + C1) * contrast;
+            }
+        }
+        let count = (output_width * (height - WINDOW + 1)) as f64;
+        ((ssim / count).clamp(-1.0, 1.0), (cs / count).clamp(-1.0, 1.0))
+    }
+
+    #[test]
+    fn vector_statistics_match_scalar() {
+        let weights = gaussian();
+        for (width, height) in [(11, 11), (12, 13), (15, 11), (20, 17), (31, 12)] {
+            let make = |seed: u64| -> Vec<[f64; 3]> {
+                (0..width * height).map(|i| std::array::from_fn(|c| ((i as u64 * 2654435761 + c as u64 * 97 + seed) % 1000) as f64 / 999.0)).collect()
+            };
+            let (a, b) = (make(1), make(5));
+            for channel in 0..3 {
+                assert_eq!(
+                    statistics(&plane(&a, channel), &plane(&b, channel), width, &weights),
+                    scalar_statistics(&a, &b, width, channel, &weights)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn vector_downsample_matches_scalar() {
+        for (width, height) in [(1, 1), (2, 2), (7, 5), (8, 4), (16, 3), (17, 6), (40, 9)] {
+            let pixels: Vec<f64> = (0..width * height).map(|i| ((i * 7919) % 1000) as f64 / 999.0).collect();
+            let mut expected = Vec::new();
+            for y in (0..height).step_by(2) {
+                for x in (0..width).step_by(2) {
+                    let (x1, y1) = ((x + 1).min(width - 1), (y + 1).min(height - 1));
+                    expected.push((pixels[y * width + x] + pixels[y * width + x1] + pixels[y1 * width + x] + pixels[y1 * width + x1]) * 0.25);
+                }
+            }
+            assert_eq!(downsample(&pixels, width), expected, "{width}x{height}");
+        }
+    }
 }

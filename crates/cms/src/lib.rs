@@ -1,4 +1,7 @@
+#![feature(portable_simd)]
+
 use std::borrow::Cow;
+use std::simd::Simd;
 use std::sync::Mutex;
 
 use blanket_core::raster::{Image, PixelMode, alloc_pixels};
@@ -58,9 +61,36 @@ fn pixel_format(mode: PixelMode, depth: u8) -> PyResult<PixelFormat> {
     Ok(format)
 }
 
-fn swap_samples(pixels: &mut [u8], depth: u8) {
-    for sample in pixels.chunks_exact_mut(usize::from(depth / 8)) {
+const fn reverse_indices<const W: usize>() -> Simd<u8, 32> {
+    let mut indices = [0; 32];
+    let mut i = 0;
+    while i < 32 {
+        indices[i] = ((i / W) * W + (W - 1 - i % W)) as u8;
+        i += 1;
+    }
+    Simd::from_array(indices)
+}
+
+fn swap_samples_wide<const W: usize>(pixels: &mut [u8]) {
+    let indices = const { reverse_indices::<W>() };
+    let (blocks, tail) = pixels.as_chunks_mut::<32>();
+    for block in blocks {
+        *block = Simd::from_array(*block).swizzle_dyn(indices).to_array();
+    }
+    for sample in tail.as_chunks_mut::<W>().0 {
         sample.reverse();
+    }
+}
+
+fn swap_samples(pixels: &mut [u8], depth: u8) {
+    match depth / 8 {
+        2 => swap_samples_wide::<2>(pixels),
+        4 => swap_samples_wide::<4>(pixels),
+        width => {
+            for sample in pixels.chunks_exact_mut(usize::from(width)) {
+                sample.reverse();
+            }
+        }
     }
 }
 
@@ -321,6 +351,23 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn swap_samples_matches_scalar_across_lengths() {
+        for depth in [16, 32] {
+            let width = usize::from(depth / 8);
+            for samples in [0, 1, 7, 8, 9, 16, 17, 33, 100] {
+                let source: Vec<u8> = (0..samples * width).map(|i| (i * 7 + 3) as u8).collect();
+                let mut expected = source.clone();
+                for sample in expected.chunks_exact_mut(width) {
+                    sample.reverse();
+                }
+                let mut actual = source;
+                swap_samples(&mut actual, depth);
+                assert_eq!(actual, expected, "depth {depth}, samples {samples}");
+            }
+        }
+    }
 
     #[test]
     fn invalid_transform_profiles_identify_the_argument() {

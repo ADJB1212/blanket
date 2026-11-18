@@ -1,9 +1,11 @@
 //! Normalized luminance gradients and Canny edge masks.
 
 use std::simd::Simd;
+use std::simd::num::SimdUint;
 
 use blanket_core::buffers::{reserved, reserved_buffer};
 use blanket_core::parallel::{MIN_PARALLEL_BYTES, chunks_mut_above};
+use blanket_core::pixels::load;
 use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -18,6 +20,20 @@ fn zeros<T: Default + Clone>(len: usize) -> PyResult<Vec<T>> {
     let mut values = reserved(len)?;
     values.resize(len, T::default());
     Ok(values)
+}
+
+/// Converts whole 16-pixel blocks of 8-bit samples; returns the pixel count processed.
+fn luminance_u8<const C: usize>(source: &[u8], output: &mut Vec<f32>) -> usize {
+    let scale = Simd::<f32, 16>::splat(255.0);
+    let mut blocks = 0;
+    for block in source.chunks_exact(16 * C) {
+        blocks += 1;
+        let samples = load::<C>(block).map(|channel| channel.cast::<f32>() / scale);
+        let values =
+            if C < 3 { samples[0] } else { samples[0] * Simd::splat(0.299) + samples[1] * Simd::splat(0.587) + samples[2] * Simd::splat(0.114) };
+        output.extend_from_slice(&values.to_array());
+    }
+    blocks * 16
 }
 
 fn luminance(image: &Image) -> PyResult<Vec<f32>> {
@@ -49,7 +65,17 @@ fn luminance(image: &Image) -> PyResult<Vec<f32>> {
     let maximum = if mode.is_float() { 1.0 } else { ((1_u32 << image.bit_depth()) - 1) as f32 };
     let source = image.raw_data()?;
     let mut output = reserved(source.len() / (bytes * channels))?;
-    for pixel in source.chunks_exact(bytes * channels) {
+    let done = if mode.is_float() || bytes != 1 {
+        0
+    } else {
+        match channels {
+            1 => luminance_u8::<1>(source, &mut output),
+            2 => luminance_u8::<2>(source, &mut output),
+            3 => luminance_u8::<3>(source, &mut output),
+            _ => luminance_u8::<4>(source, &mut output),
+        }
+    };
+    for pixel in source[done * channels..].chunks_exact(bytes * channels) {
         let mut rgb = [0.0; 3];
         for (c, value) in rgb.iter_mut().enumerate().take(colors) {
             let sample = &pixel[c * bytes..][..bytes];
@@ -112,8 +138,9 @@ fn gradients<const VECTOR: bool>(source: &[f32], width: usize, height: usize, we
 
 fn float_image(image: &Image, values: &[f32]) -> PyResult<Image> {
     let mut pixels = reserved_buffer(image.size(), 4)?;
-    for value in values {
-        pixels.extend_from_slice(&value.to_le_bytes());
+    pixels.resize(values.len() * 4, 0);
+    for (value, dst) in values.iter().zip(pixels.as_chunks_mut::<4>().0) {
+        *dst = value.to_le_bytes();
     }
     Image::from_float_bytes(image.width(), image.height(), pixels)
 }
@@ -266,6 +293,25 @@ mod tests {
                     );
                 }
                 assert_eq!(storage[0], 0.0);
+            }
+        }
+    }
+
+    #[test]
+    fn vector_luminance_matches_scalar_formula() {
+        for (mode, channels) in [(PixelMode::L, 1), (PixelMode::La, 2), (PixelMode::Rgb, 3), (PixelMode::Rgba, 4)] {
+            for pixels in [1, 15, 16, 17, 33] {
+                let data: Vec<u8> = (0..pixels * channels).map(|i| (i * 37 + 11) as u8).collect();
+                let image = Image::from_raw_bytes(pixels as u32, 1, mode, data.clone(), 8).unwrap();
+                let actual = luminance(&image).unwrap();
+                let expected: Vec<f32> = data
+                    .chunks_exact(channels)
+                    .map(|p| {
+                        let v = |c: usize| f32::from(p[c]) / 255.0;
+                        if channels < 3 { v(0) } else { v(0) * 0.299 + v(1) * 0.587 + v(2) * 0.114 }
+                    })
+                    .collect();
+                assert_eq!(actual, expected, "{mode:?} {pixels}");
             }
         }
     }

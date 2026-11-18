@@ -1,7 +1,7 @@
 use std::ops::*;
 use std::simd::cmp::SimdPartialOrd;
 use std::simd::num::SimdFloat;
-use std::simd::{Select, Simd};
+use std::simd::{Select, Simd, StdFloat};
 
 use super::coordinate::*;
 
@@ -145,5 +145,22 @@ impl Coordinate for Coord2 {
     #[inline]
     fn dot(&self, target: &Self) -> f64 {
         (lanes(self.0, self.1) * lanes(target.0, target.1)).reduce_sum()
+    }
+
+    #[inline]
+    fn is_nan(&self) -> bool {
+        lanes(self.0, self.1).is_nan().any()
+    }
+
+    #[inline]
+    fn round(self, accuracy: f64) -> Coord2 {
+        let accuracy = Simd::splat(accuracy);
+        from_lanes((lanes(self.0, self.1) / accuracy).round() * accuracy)
+    }
+
+    #[inline]
+    fn is_near_to(&self, other: &Coord2, max_distance: f64) -> bool {
+        let delta = lanes(self.0, self.1) - lanes(other.0, other.1);
+        (delta * delta).reduce_sum() <= max_distance * max_distance
     }
 }

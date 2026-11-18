@@ -358,8 +358,52 @@ pub fn reduce_two_l(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
     end
 }
 
+/// 2x2 box reduction for interleaved pixels. Returns the output pixel count processed.
+pub fn reduce_two<const C: usize>(upper: &[u8], lower: &[u8], output: &mut [u8]) -> usize {
+    assert_eq!(upper.len(), output.len() * 2);
+    assert_eq!(lower.len(), upper.len());
+    let end = output.len() / (16 * C) * (16 * C);
+    for i in (0..end).step_by(16 * C) {
+        let mut sums = [Simd::<u16, 16>::splat(2); C];
+        for row in [upper, lower] {
+            let first = load::<C>(&row[i * 2..]);
+            let second = load::<C>(&row[i * 2 + 16 * C..]);
+            for c in 0..C {
+                let (even, odd) = first[c].deinterleave(second[c]);
+                sums[c] += even.cast::<u16>() + odd.cast::<u16>();
+            }
+        }
+        store::<C>(&mut output[i..], sums.map(|sum| (sum >> 2).cast::<u8>()));
+    }
+    end / C
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reduce_two_interleaved_matches_scalar() {
+        fn check<const C: usize>() {
+            for pixels in [0, 1, 15, 16, 17, 32, 33, 50] {
+                let upper: Vec<u8> = (0..pixels * 2 * C).map(|i| (i * 31 + 7) as u8).collect();
+                let lower: Vec<u8> = (0..pixels * 2 * C).map(|i| (i * 53 + 200) as u8).collect();
+                let mut output = vec![73; pixels * C];
+                let done = super::reduce_two::<C>(&upper, &lower, &mut output);
+                assert!(done <= pixels && (done == 0 || done % 16 == 0));
+                for p in 0..done {
+                    for c in 0..C {
+                        let at = |row: &[u8], x: usize| u32::from(row[(p * 2 + x) * C + c]);
+                        let sum = at(&upper, 0) + at(&upper, 1) + at(&lower, 0) + at(&lower, 1);
+                        assert_eq!(output[p * C + c], ((sum + 2) / 4) as u8);
+                    }
+                }
+                assert!(output[done * C..].iter().all(|&v| v == 73));
+            }
+        }
+        check::<2>();
+        check::<3>();
+        check::<4>();
+    }
+
     #[test]
     fn color_sampling_matches_scalar_edges_rounding_and_guards() {
         fn check<const C: usize>() {
