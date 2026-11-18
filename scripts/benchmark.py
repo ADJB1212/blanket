@@ -103,7 +103,7 @@ pillow_heif.register_heif_opener()
 # ── image sizes ──────────────────────────────────────────────────────────
 
 SIZES: dict[str, tuple[int, int]] = {"web": (800, 600), "square": (1024, 1024), "HD": (1280, 720), "photo": (1920, 1280), "4K": (3840, 2160)}
-CODEC_FORMATS = ("PNG", "JPEG", "JXL", "TIFF", "WEBP", "GIF", "PDF", "HEIF", "PBM", "PGM", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "MSP", "SPIDER", "FITS", "PIXAR", "SUN", "PALM", "XPM", "DDS", "EPS")
+CODEC_FORMATS = ("PNG", "JPEG", "JXL", "TIFF", "WEBP", "GIF", "PDF", "HEIF", "PBM", "PGM", "PPM", "PAM", "TGA", "QOI", "JPEG2000", "PCX", "SGI", "XBM", "MSP", "SPIDER", "FITS", "PIXAR", "SUN", "PALM", "XPM", "DDS", "EPS", "SVG")
 CODEC_ALIASES = {"JPG": "JPEG", "TIF": "TIFF", "HEIC": "HEIF", "JP2": "JPEG2000", "J2K": "JPEG2000"}
 METADATA_FORMATS = ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
 
@@ -116,11 +116,29 @@ METADATA_FORMATS = ("JPEG", "PNG", "WEBP", "JXL", "HEIF", "TIFF")
 Comparison = tuple[str, Callable[[], object], Callable[[], object] | None]
 
 
+def svg_save_comparisons(size: tuple[int, int]) -> list[Comparison]:
+    """Time SVG tracing of a prepared illustration in each fitting mode."""
+    w, h = size
+    if max(size) > 4096 or w * h > 4_194_304:
+        return []
+
+    rgba = BlanketImage.new("RGBA", size, (28, 38, 55, 0))
+    draw = BlanketDraw.Draw(rgba)
+    draw.rounded_rectangle((w // 8, h // 8, 7 * w // 8, 7 * h // 8), radius=min(size) // 10, fill=(28, 38, 55, 255))
+    draw.ellipse((w // 4, h // 4, w // 2, 3 * h // 4), fill=(255, 181, 74, 255))
+    draw.polygon(((w // 2, 3 * h // 4), (5 * w // 8, h // 3), (3 * w // 4, 3 * h // 4)), fill=(93, 197, 175, 255))
+    return [(f"save SVG {image.mode} ({fit})", lambda im=image, mode=fit: im.save(BytesIO(), "SVG", svg_mode=mode), None) for image in (rgba.convert("RGB"), rgba) for fit in ("pixel", "polygon", "spline")]
+
+
 def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired: bool = True, formats: set[str] | None = None) -> list[Comparison]:
     """Build load/save benchmarks for the selected codecs."""
 
     def enabled(fmt: str) -> bool:
         return (formats is None or fmt in formats) and (not skip_jxl or fmt != "JXL")
+
+    comps = svg_save_comparisons(size) if enabled("SVG") and (include_unpaired or formats is not None) else []
+    if formats == {"SVG"}:
+        return comps
 
     w, h = size
     raw_rgb = make_rgb(w, h)
@@ -138,9 +156,7 @@ def codec_comparisons(size: tuple[int, int], *, skip_jxl: bool, include_unpaired
         with PillowImage.open(BytesIO(payload)) as img:
             img.load()
 
-    comps: list[Comparison] = []
-
-    if any(enabled(fmt) for fmt in CODEC_FORMATS if fmt != "JXL"):
+    if any(enabled(fmt) for fmt in CODEC_FORMATS if fmt not in {"JXL", "SVG"}):
         # ── PNG ───────────────────────────────────────────────────────
         for label, _, p_img, _ in (("RGB", b_rgb, p_rgb, "RGB"), ("RGBA", b_rgba, p_rgba, "RGBA"), ("L", b_gray, p_gray, "L")):
             if not enabled("PNG"):
@@ -1546,7 +1562,8 @@ def main() -> None:
         for section_name, build in sections:
             with TemporaryDirectory() as directory:
                 comparisons = build()
-                results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=args.all, track_memory=not args.no_memory, only_memory=args.only_memory)
+                include_unpaired = args.all or (section_name == "Codec I/O" and args.formats is not None and "SVG" in args.formats)
+                results = run_section(comparisons, args.warmups, args.iterations, include_unpaired=include_unpaired, track_memory=not args.no_memory, only_memory=args.only_memory)
             del comparisons
             for r in results:
                 r["section"] = section_name
