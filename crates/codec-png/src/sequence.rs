@@ -15,7 +15,18 @@ trait CanvasSample: Copy + Into<u64> {
     fn pack_owned(canvas: Vec<[Self; 4]>, mode: PixelMode) -> Vec<u8> {
         Self::pack(&canvas, mode)
     }
-    fn over(src: [Self; 4], dst: &mut [Self; 4]);
+    fn over(src: [Self; 4], dst: &mut [Self; 4]) {
+        let max = Self::MAX_SAMPLE;
+        let sa = src[3].into();
+        let da = dst[3].into();
+        let source_weight = sa * max;
+        let destination_weight = da * (max - sa);
+        let alpha = source_weight + destination_weight;
+        for c in 0..3 {
+            dst[c] = Self::value((src[c].into() * source_weight + dst[c].into() * destination_weight + alpha / 2) / alpha);
+        }
+        dst[3] = Self::value((alpha + max / 2) / max);
+    }
     fn copy_row(source: &[u8], color: png::ColorType, canvas: &mut [[Self; 4]]) -> bool;
 }
 
@@ -61,12 +72,6 @@ impl CanvasSample for u8 {
     fn pack_owned(canvas: Vec<[Self; 4]>, mode: PixelMode) -> Vec<u8> {
         if mode == PixelMode::Rgba { canvas.into_flattened() } else { Self::pack(&canvas, mode) }
     }
-    fn over(src: [Self; 4], dst: &mut [Self; 4]) {
-        let sa = u32::from(src[3]);
-        for c in 0..4 {
-            dst[c] = ((u32::from(src[c]) * sa + u32::from(dst[c]) * (255 - sa) + 127) / 255) as u8;
-        }
-    }
 }
 
 impl CanvasSample for u16 {
@@ -89,16 +94,17 @@ impl CanvasSample for u16 {
         }
         true
     }
-    fn over(src: [Self; 4], dst: &mut [Self; 4]) {
-        let sa = u64::from(src[3]);
-        let da = u64::from(dst[3]);
-        let alpha = sa * Self::MAX_SAMPLE + da * (Self::MAX_SAMPLE - sa);
-        for c in 0..3 {
-            dst[c] = (u64::from(src[c]) * sa * Self::MAX_SAMPLE + u64::from(dst[c]) * da * (Self::MAX_SAMPLE - sa) + alpha / 2)
-                .checked_div(alpha)
-                .unwrap_or(0) as u16;
-        }
-        dst[3] = ((alpha + Self::MAX_SAMPLE / 2) / Self::MAX_SAMPLE) as u16;
+}
+
+fn palette_color(index: usize, palette: &[u8]) -> [u8; 3] {
+    let start = index * 3;
+    palette.get(start..start + 3).and_then(|rgb| rgb.try_into().ok()).unwrap_or([0; 3])
+}
+
+fn expand_indexed_pixel<T: CanvasSample>(pixel: &mut [T; 4], palette: &[u8], transparent_index: Option<usize>) {
+    if pixel[3].into() != 0 || transparent_index.is_some() {
+        let rgb = palette_color(pixel[0].into() as usize, palette);
+        pixel[..3].copy_from_slice(&rgb.map(|value| T::value(u64::from(value))));
     }
 }
 
@@ -164,6 +170,13 @@ fn decode_animation<T: CanvasSample>(
     let bit_depth = reader.info().bit_depth;
     let palette = reader.info().palette.as_deref().map(<[u8]>::to_vec);
     let alpha = reader.info().trns.as_deref().map(<[u8]>::to_vec);
+    let color_key = match (color_type, bit_depth, alpha.as_deref()) {
+        (png::ColorType::Grayscale, png::BitDepth::Eight, Some(&[gray])) => Some([u64::from(gray); 3]),
+        (png::ColorType::Rgb, png::BitDepth::Eight, Some(&[r, g, b])) => Some([r, g, b].map(u64::from)),
+        _ => None,
+    };
+    let indexed = reader.output_color_type().0 == png::ColorType::Indexed;
+    let mut indexed_canvas = indexed;
     let default_image = reader.info().frame_control.is_none();
     let count = animation.num_frames.checked_add(u32::from(default_image)).ok_or("APNG frame count overflow")?;
     if count == 0 {
@@ -179,11 +192,21 @@ fn decode_animation<T: CanvasSample>(
     let length = width as usize * height as usize;
     canvas.try_reserve_exact(length).map_err(|_| "cannot allocate APNG canvas")?;
     let zero = T::value(0);
-    canvas.resize(length, [zero; 4]);
+    let transparent_index = alpha.as_deref().and_then(|alpha| alpha.iter().position(|&sample| sample == 0));
+    let mut clear = if indexed {
+        let index = T::value(transparent_index.unwrap_or(0) as u64);
+        [index, index, index, zero]
+    } else {
+        [zero; 4]
+    };
+    canvas.resize(length, clear);
     let mut previous = Vec::new();
     for frame_index in 0..count {
         if progress.enabled() && frame_index > 0 {
             reader.next_frame_info().map_err(DecodeError::with_diagnostic_source)?;
+        }
+        if indexed && reader.info().interlaced && bit_depth != png::BitDepth::Eight {
+            buffer.fill(0);
         }
         let output = super::read_frame(&mut reader, &mut buffer, progress)?;
         let control = reader.info().frame_control;
@@ -209,8 +232,8 @@ fn decode_animation<T: CanvasSample>(
         let over = control.is_some_and(|c| c.blend_op == png::BlendOp::Over) && frame_index != u32::from(default_image);
         let opaque = matches!(output.color_type, png::ColorType::Rgb | png::ColorType::Grayscale);
         for row in 0..output.height as usize {
-            if !over || opaque {
-                let row_bytes = output.width as usize * channels * bytes;
+            if !indexed && (!over || opaque) {
+                let row_bytes = output.line_size;
                 let dst = (y as usize + row) * width as usize + x as usize;
                 if T::copy_row(&buffer[row * row_bytes..][..row_bytes], output.color_type, &mut canvas[dst..dst + output.width as usize]) {
                     continue;
@@ -219,7 +242,7 @@ fn decode_animation<T: CanvasSample>(
             for col in 0..output.width as usize {
                 let start = (row * output.width as usize + col) * channels * bytes;
                 let sample = |c: usize| T::read(&buffer[start + c * bytes..]);
-                let src = match output.color_type {
+                let mut src = match output.color_type {
                     png::ColorType::Grayscale => [sample(0), sample(0), sample(0), T::value(max)],
                     png::ColorType::GrayscaleAlpha => [sample(0), sample(0), sample(0), sample(1)],
                     png::ColorType::Rgb => [sample(0), sample(1), sample(2), T::value(max)],
@@ -232,12 +255,26 @@ fn decode_animation<T: CanvasSample>(
                         [value, value, value, T::value(u64::from(alpha))]
                     }
                 };
-                let dst = &mut canvas[(y as usize + row) * width as usize + x as usize + col];
-                if !over || src[3].into() == max || (bytes == 2 && dst[3].into() == 0 && src[3].into() != 0) {
+                let position = (y as usize + row) * width as usize + x as usize + col;
+                if indexed {
+                    let entries = palette.as_deref().ok_or("missing APNG palette")?;
+                    if indexed_canvas && over && (1..max).contains(&src[3].into()) && canvas[position][3].into() != 0 {
+                        for pixel in canvas.iter_mut().chain(&mut previous) {
+                            expand_indexed_pixel(pixel, entries, transparent_index);
+                        }
+                        indexed_canvas = false;
+                        clear = [zero; 4];
+                    }
+                    if !indexed_canvas {
+                        expand_indexed_pixel(&mut src, entries, transparent_index);
+                    }
+                }
+                let dst = &mut canvas[position];
+                if !over || src[3].into() == max || (dst[3].into() == 0 && src[3].into() != 0) {
                     *dst = src;
                 } else if src[3].into() == 0 {
-                    if bytes == 2 && dst[3].into() == 0 {
-                        *dst = [zero; 4];
+                    if dst[3].into() == 0 {
+                        *dst = clear;
                     }
                 } else {
                     T::over(src, dst);
@@ -245,10 +282,16 @@ fn decode_animation<T: CanvasSample>(
             }
         }
         if target.is_none_or(|target| target == frame_index as usize) {
-            let mode = if bytes == 2 {
+            let indexed_with_clear = indexed_canvas && transparent_index.is_none() && canvas.iter().any(|pixel| pixel[3].into() == 0);
+            let needs_alpha = bytes == 1
+                && matches!(color_type, png::ColorType::Rgb | png::ColorType::Grayscale)
+                && canvas.iter().any(|&[r, g, b, a]| a.into() == 0 && color_key != Some([r.into(), g.into(), b.into()]));
+            let mode = if bytes == 2 || indexed && (!indexed_canvas || indexed_with_clear) {
                 PixelMode::Rgba
             } else {
                 match color_type {
+                    png::ColorType::Grayscale if needs_alpha => PixelMode::La,
+                    png::ColorType::Rgb if needs_alpha => PixelMode::Rgba,
                     png::ColorType::Grayscale if bit_depth == png::BitDepth::One => PixelMode::One,
                     png::ColorType::Grayscale | png::ColorType::Indexed => PixelMode::L,
                     png::ColorType::GrayscaleAlpha => PixelMode::La,
@@ -256,14 +299,23 @@ fn decode_animation<T: CanvasSample>(
                     png::ColorType::Rgba => PixelMode::Rgba,
                 }
             };
-            let pixels = if terminal { T::pack_owned(std::mem::take(&mut canvas), mode) } else { T::pack(&canvas, mode) };
+            let mut pixels = if terminal { T::pack_owned(std::mem::take(&mut canvas), mode) } else { T::pack(&canvas, mode) };
+            if indexed_with_clear {
+                let entries = palette.as_deref().ok_or("missing APNG palette")?;
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    if pixel[3] != 0 {
+                        let rgb = palette_color(usize::from(pixel[0]), entries);
+                        pixel[..3].copy_from_slice(&rgb);
+                    }
+                }
+            }
             let mut image = if bytes == 2 {
                 Image::from_sample_bytes(width, height, PixelMode::Rgba, pixels, 16, Some("PNG".into()))
             } else {
                 Image::from_pixels(width, height, mode, pixels, Some("PNG".into()))
             }
             .map_err(DecodeError::with_source)?;
-            if color_type == png::ColorType::Indexed {
+            if indexed_canvas && !indexed_with_clear {
                 image.set_palette_data(Some((PixelMode::Rgb, palette.clone().ok_or("missing APNG palette")?))).map_err(DecodeError::with_source)?;
             }
             sequence.frames.push(Frame {
@@ -283,7 +335,7 @@ fn decode_animation<T: CanvasSample>(
             break;
         }
         if default_image && frame_index == 0 {
-            canvas.fill([zero; 4]);
+            canvas.fill(clear);
         } else if restore_previous {
             if previous.len() == canvas.len() {
                 std::mem::swap(&mut canvas, &mut previous);
@@ -296,7 +348,7 @@ fn decode_animation<T: CanvasSample>(
         } else if control.is_some_and(|c| c.dispose_op == png::DisposeOp::Background) {
             for row in y..y + output.height {
                 let start = row as usize * width as usize + x as usize;
-                canvas[start..start + output.width as usize].fill([zero; 4]);
+                canvas[start..start + output.width as usize].fill(clear);
             }
         }
     }
@@ -313,7 +365,7 @@ pub fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
     let (mut p0, mut q0, mut p1, mut q1) = (0u64, 1u64, 1u64, 0u64);
     loop {
         let a = remaining.floor() as u64;
-        if q1 != 0 && a > (65535 - q0) / q1 {
+        if (q1 != 0 && a > (65535 - q0) / q1) || (p1 != 0 && a > (65535 - p0) / p1) {
             break;
         }
         let (p2, q2) = (p0 + a * p1, q0 + a * q1);
@@ -327,7 +379,7 @@ pub fn frame_delay(duration: f64) -> PyResult<(u16, u16)> {
     if q1 == 0 {
         return Err(PyValueError::new_err("cannot write duration"));
     }
-    let k = (65535 - q0) / q1;
+    let k = (65535 - p0).checked_div(p1).unwrap_or(u64::MAX).min((65535 - q0) / q1);
     let (p2, q2) = (p0 + k * p1, q0 + k * q1);
     if q2 > 0 && (p2 as f64 / q2 as f64 - value).abs() < (p1 as f64 / q1 as f64 - value).abs() {
         (p1, q1) = (p2, q2);

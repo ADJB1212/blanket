@@ -20,7 +20,7 @@ fn rgba(py: Python<'_>, image: &Image, transparency: Option<&Bound<'_, PyAny>>) 
                 return convert_palette_alpha(py, image, "RGBA", Some(value.extract()?), None, None);
             }
         }
-    } else if matches!(image.pixel_mode(), PixelMode::L | PixelMode::Rgb)
+    } else if matches!(image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::Rgb)
         && let Some(value) = transparency
     {
         let key = if value.is_instance_of::<PyInt>() { vec![value.extract()?] } else { value.extract()? };
@@ -65,8 +65,9 @@ pub(crate) fn _png_frame_plan(
         let (duration, disposal, blend) = (durations[position], disposals[position], blends[position]);
         let replaces_pixels = blend == 0 || is_opaque(py, frame, transparencies[position].is_some())?;
         if let Some((base_index, clear)) = comparison_base
-            // Preserve Pillow-compatible delta bounds for differently sized frames.
-            && (frame.size() != images[base_index].size() || replaces_pixels)
+            && replaces_pixels
+            && disposal != 1
+            && frame.size() == images[base_index].size()
         {
             let base = &images[base_index];
             let clear = clear.map(|(l, t, r, b)| (l as u32, t as u32, r as u32, b as u32));
@@ -84,7 +85,6 @@ pub(crate) fn _png_frame_plan(
                 bbox = blanket_composite::chops::_difference_bbox(py, &current, &comparison, clear)?;
             }
             if bbox.is_none()
-                && frame.size() == base.size()
                 && duration_known
                 && disposal == 0
                 && let Some((_, _, previous_duration, 0, previous_blend)) = records.last_mut()

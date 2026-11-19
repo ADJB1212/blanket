@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import struct
 import tracemalloc
+import zlib
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises
+from helpers import assert_raises, png_chunk
 from pillow_helpers import PILLOW_IMAGES
 
 from blanket import CorruptImageError, Image, ImageSequence, PngImagePlugin
@@ -23,6 +24,129 @@ def assert_frame_pixels(image, first, second=None, *, frame=None):
         image.seek(frame)
     assert image.getpixel((0, 0)) == first
     assert image.getpixel((64, 32)) == (first if second is None else second)
+
+
+@pytest.mark.parametrize("name", ["mode_palette.png", "mode_palette_1bit_alpha.png", "mode_palette_alpha.png"])
+@pytest.mark.parametrize("lazy", [False, True])
+def test_packed_apng_palette_decodes_with_and_without_progress(name, lazy):
+    data = (PILLOW_IMAGES / "apng" / name).read_bytes()
+    with Image.decode(data, lazy=lazy) as expected, Image.decode(data, lazy=lazy, progress=lambda _: None) as actual:
+        assert actual.mode == expected.mode == "P"
+        for index in range(expected.n_frames):
+            expected.seek(index)
+            actual.seek(index, progress=lambda _: None)
+            assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("progress", [None, lambda _: None])
+def test_interlaced_packed_apng_does_not_reuse_bits_from_previous_frame(progress):
+    width, height = 13, 9
+    passes = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
+
+    def interlace(index):
+        rows = []
+        for left, top, dx, dy in passes:
+            count = len(range(left, width, dx))
+            row = bytes((0xFF if index else 0,)) * ((count + 7) // 8)
+            rows.extend([b"\0" + row] * len(range(top, height, dy)))
+        return zlib.compress(b"".join(rows))
+
+    def control(sequence):
+        return png_chunk(b"fcTL", struct.pack(">5I2H2B", sequence, width, height, 0, 0, 1, 10, 0, 0))
+
+    data = (
+        b"\x89PNG\r\n\x1a\n"
+        + png_chunk(b"IHDR", struct.pack(">2I5B", width, height, 1, 3, 0, 0, 1))
+        + png_chunk(b"PLTE", b"\x00\x00\x00\xff\xff\xff")
+        + png_chunk(b"acTL", struct.pack(">2I", 2, 0))
+        + control(0)
+        + png_chunk(b"IDAT", interlace(1))
+        + control(1)
+        + png_chunk(b"fdAT", struct.pack(">I", 2) + interlace(0))
+        + png_chunk(b"IEND", b"")
+    )
+    with Image.decode(data, progress=progress) as image:
+        assert image.tobytes() == b"\x01" * (width * height)
+        image.seek(1)
+        assert image.tobytes() == bytes(width * height)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_indexed_apng_over_expands_blended_palette_colors(lazy):
+    first = Image.new("P", (4, 4), 0)
+    first.putpalette(bytes([255, 0, 0, 0, 0, 255]))
+    first.info["transparency"] = b"\x80\x80"
+    second = first.copy()
+    second.putpixel((2, 2), 1)
+    data = first.encode("PNG", save_all=True, append_images=[second], blend=[0, 1])
+    with Image.decode(data, lazy=lazy) as image:
+        assert image.mode == "P"
+        image.seek(1)
+        assert image.mode == "RGBA"
+        assert "transparency" not in image.info
+        assert image.getpixel((2, 2)) == (85, 0, 170, 192)
+        assert image.getpixel((0, 0)) == (255, 0, 0, 192)
+
+
+@pytest.mark.parametrize("key", [0, 1])
+def test_bilevel_apng_transparency(key):
+    first = Image.frombytes("1", (2, 1), b"\x40")
+    first.info["transparency"] = key
+    second = Image.frombytes("1", (2, 1), b"\x80")
+    second.info["transparency"] = key
+    data = first.encode("PNG", save_all=True, append_images=[second])
+    with Image.decode(data) as image:
+        expected = bytes([255 if key == 1 else 0, 0 if key == 1 else 255])
+        assert first.convert("LA").getchannel("A").tobytes() == expected
+        assert image.convert("RGBA").getchannel("A").tobytes() == expected
+        image.seek(1)
+        assert image.convert("RGBA").getchannel("A").tobytes() == expected[::-1]
+
+
+def test_apng_canvas_preserves_transparent_padding_and_larger_frame_content():
+    first = Image.new("RGB", (3, 3), "red")
+    second = Image.new("RGB", (5, 5), "blue")
+    second.paste("red", (0, 0, 3, 3))
+    second.putpixel((0, 0), (0, 255, 0))
+    data = first.encode("PNG", save_all=True, append_images=[second])
+    with Image.decode(data) as image:
+        assert image.getpixel((4, 4)) == (0, 0, 0, 0)
+        image.seek(1)
+        assert image.convert("RGB").tobytes() == second.tobytes()
+
+
+def test_apng_rejects_empty_frame_before_padding():
+    empty = Image.new("RGBA", (0, 3))
+    full = Image.new("RGBA", (3, 3))
+    with pytest.raises(ValueError, match="empty image"):
+        empty.encode("PNG", save_all=True, append_images=[full])
+
+
+def test_apng_background_disposal_clears_the_full_submitted_frame():
+    first = Image.new("RGBA", (5, 4), "red")
+    second = first.copy()
+    second.putpixel((2, 2), (0, 255, 0, 255))
+    third = Image.new("RGBA", first.size)
+    data = first.encode("PNG", save_all=True, append_images=[second, third], disposal=[0, 1, 0], blend=[0, 0, 1])
+    with Image.decode(data) as image:
+        image.seek(1)
+        assert image.tobytes() == second.tobytes()
+        image.seek(2)
+        assert image.tobytes() == third.tobytes()
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_apng_resave_preserves_composited_frames_from_any_position(lazy):
+    first = Image.new("RGBA", (5, 4), (255, 0, 0, 128))
+    second = Image.new("RGBA", (3, 2), (0, 0, 255, 128))
+    data = first.encode("PNG", save_all=True, append_images=[second], blend=[0, 1], duration=[20, 40])
+    with Image.decode(data, lazy=lazy) as image:
+        expected = ImageSequence.all_frames(image)
+        for position in (0, 1):
+            image.seek(position)
+            with Image.decode(image.encode("PNG", save_all=True)) as result:
+                assert [frame.tobytes() for frame in ImageSequence.all_frames(result)] == [frame.tobytes() for frame in expected]
+            assert image.tell() == position
 
 
 def invalid_apng_without_pixels(width: int, height: int) -> bytes:
@@ -213,7 +337,7 @@ def test_apng_dispose_op_background_decompression_bomb() -> None:
         ("blend_op_source_transparent.png", (0, 0, 0, 0), (0, 0, 0, 0)),
         ("blend_op_source_near_transparent.png", (0, 255, 0, 2), (0, 255, 0, 2)),
         ("blend_op_over.png", (0, 255, 0, 255), (0, 255, 0, 255)),
-        ("blend_op_over_near_transparent.png", (0, 255, 0, 97), (0, 255, 0, 255)),
+        ("blend_op_over_near_transparent.png", (0, 255, 0, 255), (0, 255, 0, 255)),
     ],
 )
 def test_apng_blend(filename: str, first: tuple[int, ...], second: tuple[int, ...]) -> None:
@@ -404,9 +528,9 @@ def test_apng_over_composites_repeated_semitransparent_frames():
         assert decoded.n_frames == 4
         assert decoded.tobytes() == background.tobytes()
         decoded.seek(1)
-        assert decoded.getpixel((0, 0)) == (128, 0, 127, 191)
+        assert decoded.getpixel((0, 0)) == (128, 0, 127, 255)
         decoded.seek(2)
-        assert decoded.getpixel((0, 0)) == (192, 0, 63, 159)
+        assert decoded.getpixel((0, 0)) == (192, 0, 63, 255)
         decoded.seek(3)
         assert decoded.tobytes() == clear.tobytes()
 

@@ -46,6 +46,8 @@ class Iterator:
 def all_frames(image: Image | Sequence[Image], func: Callable[[Image], Image] | None = None) -> list[Image]:
     """Copy all frames, optionally transform them, and restore source positions.
 
+    Lazy frame caches retain their current contents and eviction order.
+
     Args:
         image: One image or a sequence of images. Each source is restored to its starting frame.
         func: Optional transform applied to each copied frame.
@@ -58,9 +60,17 @@ def all_frames(image: Image | Sequence[Image], func: Callable[[Image], Image] | 
     for source in images:
         position = source.tell()
         try:
-            for frame in Iterator(source):
-                copied = frame.copy()
-                frames.append(copied if func is None else func(copied))
+            if (storage := source._lazy_frames) is not None:
+                for index in range(source.n_frames):
+                    if source._seek_error is not None and index > 0:
+                        raise source._seek_error
+                    frame = source if index == position else storage.get(index, retain=False)
+                    copied = frame.copy()
+                    frames.append(copied if func is None else func(copied))
+            else:
+                for frame in Iterator(source):
+                    copied = frame.copy()
+                    frames.append(copied if func is None else func(copied))
         finally:
             source.seek(position)
     return frames

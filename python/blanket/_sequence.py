@@ -82,6 +82,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
                 frames.extend(source._frames)
     else:
         frames = [image]
+    if any(0 in frame.size for frame in frames):
+        raise ValueError("cannot encode empty image")
     default_image = controls.get("default_image", image.info.get("default_image", False)) if format == "PNG" else False
     if not isinstance(default_image, bool):
         raise TypeError("default_image must be a bool")
@@ -92,7 +94,9 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
 
     def array(name: str, default: int, maximum: int | None = None) -> list[float | int]:
         """Normalize a frame control, padding a separate APNG default image with zero."""
-        supplied = controls.get(name, image.info.get(name) if format == "PNG" and name != "duration" else None)
+        supplied = controls.get(name)
+        if name not in controls and name != "duration" and format == "PNG" and not image.is_animated:
+            supplied = image.info.get(name)
         if isinstance(supplied, (list, tuple)):
             if len(supplied) != count:
                 raise ValueError(f"{name} must have one value per animation frame")
@@ -125,6 +129,7 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
     png_depth = 8
     png_mode = "RGBA"
     png_palette = None
+    canvas = max(frame.width for frame in frames), max(frame.height for frame in frames)
     if format == "PNG" and any(frame.bit_depth in (10, 12, 16) or frame.mode == "I" for frame in frames):
         png_depth = 16
     if format == "PNG" and all(frame.bit_depth == 8 for frame in frames):
@@ -134,12 +139,10 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             png_mode = next(iter(modes))
             if png_mode not in ("RGBA", "RGB", "P", "LA", "L", "1"):
                 png_mode = "RGBA"
-            if png_mode in ("P", "L", "RGB"):
+            if png_mode in ("P", "1", "L", "RGB"):
                 transparency = frames[0].info.get("transparency")
                 if any(frame.info.get("transparency") != transparency for frame in frames[1:]):
-                    png_mode = "RGBA"
-                elif transparency is not None and png_mode in ("L", "RGB") and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
-                    metadata[3].append((b"tRNS", _png_color_key(png_mode, transparency), False))
+                    png_mode = "LA" if png_mode in ("1", "L") else "RGBA"
             if png_mode == "P":
                 png_palette = frames[0].palette
                 palette_values = frames[0].getpalette("RGBA")
@@ -149,6 +152,10 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
             png_mode = "LA" if has_alpha else "L"
         else:
             png_mode = "RGBA" if has_alpha else "RGB"
+        if frames[0].size != canvas and png_mode in ("1", "L", "P", "RGB"):
+            png_mode = "LA" if png_mode in ("1", "L") else "RGBA"
+        if png_mode in ("1", "L", "RGB") and (transparency := frames[0].info.get("transparency")) is not None and not any(chunk[0] == b"tRNS" for chunk in metadata[3]):
+            metadata[3].append((b"tRNS", _png_color_key(png_mode, transparency), False))
     for source in frames:
         frame = source
         if frame.mode in ("HSV", "LAB", "F", "YCbCr", "La", "RGBa", "RGBX") or (frame.mode == "CMYK" and format != "PDF"):
@@ -176,13 +183,12 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         if png_mode == "P" and png_palette is not None:
             prepared[0] = prepared[0].copy()
             prepared[0].putpalette(png_palette)
-            transparency = image.info.get("transparency")
+            transparency = frames[0].info.get("transparency")
             if isinstance(transparency, int):
                 prepared[0]._native.set_palette_alpha(index=transparency)
             elif isinstance(transparency, bytes):
                 prepared[0]._native.set_palette_alpha(alpha=transparency)
     elif format == "PNG":
-        canvas = max(frame.width for frame in prepared), max(frame.height for frame in prepared)
         if prepared[0].size != canvas:
             prepared[0] = prepared[0].crop((0, 0, *canvas))
         regions = (canvas, [(0, 0)] * len(prepared))

@@ -60,8 +60,7 @@ def test_apng_background_disposal_compares_without_copying(monkeypatch):
     first = Image.new("RGBA", (17, 3), (17, 31, 89, 255))
     second = first.copy()
     second.putpixel((5, 1), (71, 113, 173, 149))
-    third = second.copy()
-    third.putpixel((5, 1), (0, 0, 0, 0))
+    third = Image.new("RGBA", first.size)
     third.putpixel((8, 2), (1, 2, 3, 4))
 
     def no_copy(*args, **kwargs):
@@ -69,7 +68,8 @@ def test_apng_background_disposal_compares_without_copying(monkeypatch):
 
     monkeypatch.setattr(Image.Image, "copy", no_copy)
     frames, _, _, _, regions = _png_regions([first, second, third], [10, 20, 30], [0, 1, 0], [0, 0, 0], False, True)
-    assert regions == ((17, 3), [(0, 0), (5, 1), (8, 2)])
+    assert frames[1] is second
+    assert regions == ((17, 3), [(0, 0), (0, 0), (8, 2)])
     assert frames[2].getdata() == [(1, 2, 3, 4)]
 
 

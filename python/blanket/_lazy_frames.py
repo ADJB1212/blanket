@@ -34,12 +34,13 @@ class LazyFrames:
         self._tiff_frame = 0
         self._metadata: dict[object, object] | None = None
 
-    def get(self, frame: int, progress: ProgressCallback | None = None) -> Image:
+    def get(self, frame: int, progress: ProgressCallback | None = None, *, retain: bool = True) -> Image:
         """Decode or retrieve a cached frame by its zero-based index."""
         from .Image import Image
 
         if frame in self.cache:
-            self.cache.move_to_end(frame)
+            if retain:
+                self.cache.move_to_end(frame)
             return self.cache[frame]
         frames, controls, _, _ = _open_sequence(self.data, None, frame if self.count > 1 else None, progress)
         selected = Image(frames[0])
@@ -64,9 +65,12 @@ class LazyFrames:
             selected.info["disposal"] = disposal
         elif selected.format == "PNG" and (self.count > 1 or self.loop is not None):
             selected.info.update(disposal=disposal, blend=blend)
-        self.cache[frame] = selected
-        while len(self.cache) > self.capacity:
-            self.cache.popitem(last=False)
+            if selected.mode in ("LA", "RGBA"):
+                selected.info.pop("transparency", None)
+        if retain:
+            self.cache[frame] = selected
+            while len(self.cache) > self.capacity:
+                self.cache.popitem(last=False)
         return selected
 
     def close(self) -> None:

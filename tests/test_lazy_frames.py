@@ -229,6 +229,29 @@ def test_lazy_defers_bad_compressed_frame_and_preserves_position():
         assert list(image._lazy_frames.cache) == [0]
 
 
+def test_copying_and_saving_lazy_frames_preserves_cached_edits():
+    image = Image.decode(sequence_data(), lazy=True, frame_cache_size=2)
+    image.putpixel((0, 0), (17, 30, 47, 255))
+    image.info["custom"] = "first frame"
+    image.seek(1)
+    image.thumbnail((4, 3))
+    cache = list(image._lazy_frames.cache)
+
+    frames = ImageSequence.all_frames(image)
+    assert frames[0].getpixel((0, 0)) == (17, 30, 47, 255)
+    assert frames[0].info["custom"] == "first frame"
+    assert frames[1].size == (4, 2)
+    assert image.tell() == 1
+    assert list(image._lazy_frames.cache) == cache
+
+    reopened = Image.decode(image.encode("PNG", save_all=True))
+    assert reopened.getpixel((0, 0)) == (17, 30, 47, 255)
+    assert image.tell() == 1
+    assert list(image._lazy_frames.cache) == cache
+    image.seek(0)
+    assert image.info["custom"] == "first frame"
+
+
 def test_lazy_tiff_defers_bad_page_pixels():
     stream = BytesIO()
     first = PillowImage.new("RGB", (3, 2), "red")

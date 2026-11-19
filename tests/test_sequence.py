@@ -285,6 +285,14 @@ def test_apng_fractional_duration_matches_pillow(duration: float) -> None:
         assert actual.tobytes() == expected.tobytes()
 
 
+@pytest.mark.parametrize("duration,expected", [(32_768_000.5, 32_768_000), (65_534_876.5, 65_535_000)])
+def test_apng_fractional_duration_with_limited_numerator(duration, expected) -> None:
+    frame = Image.new("RGBA", (3, 2), "red")
+    following = Image.new("RGBA", frame.size, "blue")
+    data = frame.encode("PNG", save_all=True, append_images=[following], duration=duration)
+    assert Image.decode(data).info["duration"] == expected
+
+
 @pytest.mark.parametrize("duration,count", [(0.5, 1), (32767500, 1), (32768000, 2), (65535000, 2)])
 def test_apng_repeated_frames_respect_duration_capacity(duration: float, count: int) -> None:
     frame = Image.new("RGBA", (3, 2), "red")
@@ -467,23 +475,24 @@ def test_animation_requires_matching_dimensions(format: str) -> None:
 @pytest.mark.parametrize("size", [(3, 2), (3, 11)])
 @pytest.mark.parametrize("disposal", [0, 1, 2])
 @pytest.mark.parametrize("blend", [0, 1])
-def test_apng_partial_frame_sizes_and_info_controls_match_pillow(size: tuple[int, int], disposal: int, blend: int) -> None:
-    streams = []
-    for module in (Image, PillowImage):
-        first = module.new("RGBA", (9, 7), "red")
-        first.info.update(disposal=disposal, blend=blend)
-        following = module.new("RGBA", size, (0, 255, 0, 127))
-        stream = image_buffer(first, "PNG", save_all=True, append_images=[following], duration=30)
-        streams.append(stream.getvalue())
-    actual = Image.open(BytesIO(streams[0]))
-    expected = PillowImage.open(BytesIO(streams[1]))
-    assert actual.n_frames == expected.n_frames == 2
+def test_apng_partial_frame_sizes_and_info_controls(size: tuple[int, int], disposal: int, blend: int) -> None:
+    first = Image.new("RGBA", (9, 7), "red")
+    first.info.update(disposal=disposal, blend=blend)
+    following = Image.new("RGBA", size, (0, 255, 0, 127))
+    actual = Image.decode(first.encode("PNG", save_all=True, append_images=[following], duration=30))
+    assert actual.n_frames == 2
     canvas = (max(9, size[0]), max(7, size[1]))
-    for position in (0, 1, 0):
+    base = first.crop((0, 0, *canvas))
+    expected = base.copy() if disposal == 0 else Image.new("RGBA", canvas)
+    if blend:
+        expected.alpha_composite(following)
+    else:
+        expected.paste(following)
+    for position, frame in [(0, base), (1, expected), (0, base)]:
         actual.seek(position)
-        expected.seek(position)
-        assert actual.size == expected.size == canvas
-        assert actual.tobytes() == expected.tobytes()
+        assert actual.size == canvas
+        assert actual.tobytes() == frame.tobytes()
+        assert (actual.info["disposal"], actual.info["blend"]) == (disposal, blend)
 
 
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "P", "RGB", "RGBA"])
@@ -505,9 +514,19 @@ def test_apng_modes_and_transparency_match_pillow(mode: str, blend: int) -> None
         actual.seek(position)
         expected = PillowImage.open(BytesIO(streams[1]))
         expected.seek(position)
-        assert actual.mode == expected.mode == mode
-        assert actual.tobytes() == expected.tobytes()
-        assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+        if position == 1 and blend and mode in ("LA", "RGBA"):
+            first = Image.decode(streams[0]).convert("RGBA")
+            foreground = Image.new(mode, first.size, colors[1]).convert("RGBA")
+            assert actual.mode == mode
+            assert actual.convert("RGBA").tobytes() == Image.alpha_composite(first, foreground).tobytes()
+        elif position == 1 and blend and mode == "P":
+            assert actual.mode == mode
+            assert actual.getpixel((0, 0)) == 1
+            assert actual.convert("RGBA").getpixel((0, 0)) == (3, 4, 5, 127)
+        else:
+            assert actual.mode == expected.mode == mode
+            assert actual.tobytes() == expected.tobytes()
+            assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 
 
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG", "TIFF"])
@@ -526,11 +545,6 @@ def test_apng_over_blending_retains_sample_precision(depth: int) -> None:
     image = Image.open(stream)
     image.seek(1)
     assert image.info["blend"] == 1
-    if depth == 8:
-        expected = PillowImage.open(BytesIO(stream.getvalue()))
-        expected.seek(1)
-        assert image.tobytes() == expected.tobytes()
-        return
     expected = (maximum // 2, 0, (maximum + 1) // 2, maximum)
     assert image.tobytes() == (bytes(expected) if depth == 8 else struct.pack("<4H", *expected))
 
@@ -551,11 +565,6 @@ def test_apng_over_blending_alpha_boundaries(depth: int) -> None:
     reopened = Image.open(stream)
     assert reopened.tobytes() == pack(background)
     reopened.seek(1)
-    if depth == 8:
-        expected = PillowImage.open(BytesIO(stream.getvalue()))
-        expected.seek(1)
-        assert reopened.tobytes() == expected.tobytes()
-        return
     expected = []
     for dst, src in zip(background, foreground, strict=True):
         alpha = src[3] * maximum + dst[3] * (maximum - src[3])

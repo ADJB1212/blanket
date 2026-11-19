@@ -115,8 +115,9 @@ fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUni
 
 #[pyfunction(name = "image_convert_transparent_alpha", signature = (source_image, mode, key, bit_depth=None))]
 pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &str, key: Vec<u16>, bit_depth: Option<u8>) -> PyResult<Image> {
-    let maximum = (1_u32 << source_image.bit_depth().min(16)) - 1;
-    if !matches!(source_image.pixel_mode(), PixelMode::L | PixelMode::Rgb)
+    let bilevel = source_image.pixel_mode() == PixelMode::One;
+    let maximum = if bilevel { 1 } else { (1_u32 << source_image.bit_depth().min(16)) - 1 };
+    if !matches!(source_image.pixel_mode(), PixelMode::One | PixelMode::L | PixelMode::Rgb)
         || key.len() != source_image.pixel_mode().channels()
         || source_image.palette().is_some()
         || key.iter().any(|&value| u32::from(value) > maximum)
@@ -134,7 +135,8 @@ pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &st
     let output = image.pixels_mut().unwrap();
     py.detach(|| {
         for (pixel, output) in source.chunks_exact(key.len()).zip(output.chunks_exact_mut(stride)) {
-            if pixel == key {
+            let transparent = if bilevel { (pixel[0] != 0) == (key[0] != 0) } else { pixel == key };
+            if transparent {
                 output[alpha_start..].fill(0);
                 if source_image.pixel_mode() == PixelMode::Rgb && destination == "LA" {
                     output[0] = red;

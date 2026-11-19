@@ -1286,7 +1286,7 @@ class Image:
             result.info.update(self._metadata_info())
             return result
         transparency = self.info.get("transparency")
-        if ((self.mode == "L" and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None:
+        if ((self.mode in ("1", "L") and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None:
             key = [transparency] if isinstance(transparency, int) else list(cast("Iterable[int]", transparency))
             result = Image(image_convert_transparent_alpha(self._native, mode, key, bit_depth))
             result.info.update(self._metadata_info())
@@ -4122,6 +4122,10 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
             frame._info["disposal"] = disposal
         elif image.format == "PNG" and (len(frames) > 1 or loop_count is not None):
             frame._info.update(disposal=disposal, blend=blend)
+    if image.format == "PNG" and loop_count is not None:
+        for frame in decoded:
+            if frame.mode in ("LA", "RGBA"):
+                frame._info.pop("transparency", None)
     image._frames = decoded if len(decoded) > 1 else None
     image._info = decoded[0]._info
     if image.format == "JPEG":
