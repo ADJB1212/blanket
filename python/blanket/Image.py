@@ -248,6 +248,7 @@ def getmodetype(mode: str) -> str:
 
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
 _FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
+_EXPAND_TRANSPARENCY_FORMATS = frozenset({"AVIF", "BMP", "HEIF", "ICO", "JPEG2000", "JXL", "PAM", "PDF", "QOI", "SGI", "SVG", "TGA", "TIFF", "WEBP", "XPM"})
 _SAVE_OPTIONS = {
     "SVG": frozenset({"svg_mode", "svg_color_precision", "svg_filter_speckle", "svg_layer_difference", "svg_corner_threshold", "svg_length_threshold", "svg_splice_threshold", "svg_path_precision", "svg_alpha_threshold"}),
     "PCX": frozenset(),
@@ -3467,7 +3468,7 @@ class Image:
             return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, progress=progress, **options)
         self._sync_palette()
         native = self._native
-        if output_format in ("PDF", "SVG", "WEBP") and self.mode in ("1", "L", "P", "RGB") and self.info.get("transparency") is not None:
+        if output_format in _EXPAND_TRANSPARENCY_FORMATS and self.mode in ("1", "L", "P", "RGB") and self.info.get("transparency") is not None and not (output_format == "TIFF" and options.get("compression") == "jpeg"):
             native = self.convert("RGBA")._native
         if self.mode == "RGBX" and output_format == "JPEG":
             native = image_convert(native, "RGB")

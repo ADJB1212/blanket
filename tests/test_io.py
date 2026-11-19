@@ -137,6 +137,32 @@ def test_png_save_preserves_transparent_color_key(mode, key, other, explicit):
     assert image.info.get("transparency") == (None if explicit else key)
 
 
+@pytest.mark.parametrize("format", ["AVIF", "BMP", "HEIF", "ICO", "JPEG2000", "JXL", "PAM", "QOI", "SGI", "TGA", "TIFF", "XPM"])
+@pytest.mark.parametrize("mode,key,other", [("1", 1, 0), ("L", 42, 9), ("P", 1, 0), ("RGB", (4, 5, 6), (7, 8, 9))])
+def test_encode_expands_transparent_color_keys_for_alpha_codecs(format, mode, key, other):
+    image = Image.new(mode, (2, 1), key)
+    image.putpixel((1, 0), other)
+    image.info["transparency"] = key
+
+    options = {"effort": 1, "quality": 100} if format == "AVIF" else {}
+    decoded = Image.decode(image.encode(format, **options)).convert("RGBA")
+
+    assert decoded.getchannel("A").tobytes() == b"\x00\xff"
+    assert image.info["transparency"] == key
+
+
+@pytest.mark.parametrize("format", ["JPEG2000", "JXL", "PAM", "TIFF"])
+def test_encode_expands_wide_transparency_without_losing_sample_precision(format):
+    samples = (343, 217, 516, 344, 217, 516)
+    image = Image.frombytes("RGB", (2, 1), b"".join(value.to_bytes(2, "little") for value in samples), bit_depth=12)
+    image.info["transparency"] = samples[:3]
+
+    options = {"lossless": True} if format == "JXL" else {}
+    decoded = Image.decode(image.encode(format, **options)).convert("RGBA", bit_depth=12)
+
+    assert decoded.tobytes() == image.convert("RGBA").tobytes()
+
+
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("mode", ["L", "RGB"])
 def test_png_save_scales_wide_transparency_key_with_samples(depth, mode):
