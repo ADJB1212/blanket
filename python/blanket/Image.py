@@ -876,7 +876,9 @@ class Image:
 
         Access pixels with ``pixels[x, y]``; negative coordinates count from
         the right or bottom. The accessor stays bound to this raster across
-        frame navigation and raises ValueError once its raster is closed.
+        frame navigation. Accessors for owned rasters raise ValueError once
+        their raster is closed. Accessors for mapped buffers keep the buffer
+        alive after the image is closed.
 
         Args:
             progress: Callback for decoding deferred pixels, as in decode().
