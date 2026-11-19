@@ -125,7 +125,12 @@ pub fn convert_transparent_alpha(py: Python<'_>, source_image: &Image, mode: &st
         return Err(PyValueError::new_err("invalid transparency color"));
     }
     let destination = if matches!(mode, "LA" | "La") { "LA" } else { "RGBA" };
-    let mut image = convert(py, source_image, destination, if destination == mode { bit_depth } else { Some(8) })?;
+    let intermediate_depth = match mode {
+        "RGBA;F" => Some(source_image.bit_depth()),
+        "La" | "RGBa" => Some(8),
+        _ => bit_depth,
+    };
+    let mut image = convert(py, source_image, destination, intermediate_depth)?;
     let sample_bytes = usize::from(source_image.bit_depth().div_ceil(8));
     let stride = image.raw_bytes_per_pixel();
     let alpha_start = stride - usize::from(image.bit_depth().div_ceil(8));

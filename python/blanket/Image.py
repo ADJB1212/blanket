@@ -1302,7 +1302,7 @@ class Image:
             result.info.update(self._metadata_info())
             return result
         transparency = self.info.get("transparency")
-        if ((self.mode in ("1", "L") and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa"))) and transparency is not None:
+        if ((self.mode in ("1", "L") and mode in ("LA", "RGBA")) or (self.mode == "RGB" and mode in ("LA", "La", "RGBA", "RGBa", "RGBA;F"))) and transparency is not None:
             key = [transparency] if isinstance(transparency, int) else list(cast("Iterable[int]", transparency))
             result = Image(image_convert_transparent_alpha(self._native, mode, key, bit_depth))
             result.info.update(self._metadata_info())

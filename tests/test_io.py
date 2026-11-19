@@ -184,6 +184,21 @@ def test_color_keys_survive_conversion_to_indexed_alpha(mode, key):
     assert "transparency" not in converted.info
 
 
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
+def test_rgb_key_survives_conversion_to_float_alpha(depth):
+    maximum = (1 << depth) - 1
+    first, second = (10, 21, 31), (11, 21, 31)
+    raw = b"".join(sample.to_bytes(1 if depth == 8 else 2, "little") for sample in first + second)
+    image = Image.frombytes("RGB", (2, 1), raw, bit_depth=depth)
+    image.info["transparency"] = first
+
+    result = image.convert("RGBA;F")
+    assert result.tobytes() == image.convert("RGBA", bit_depth=depth).convert("RGBA;F").tobytes()
+    assert result.getpixel((0, 0)) == pytest.approx((*[sample / maximum for sample in first], 0.0))
+    assert result.getpixel((1, 0))[-1] == 1.0
+    assert "transparency" not in result.info
+
+
 @pytest.mark.parametrize("alpha", [127, Image.new("L", (2, 1), 127)])
 def test_replacing_alpha_removes_the_old_color_key(alpha):
     source = Image.new("RGB", (2, 1), (18, 18, 18))
