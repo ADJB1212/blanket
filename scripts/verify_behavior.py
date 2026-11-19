@@ -555,9 +555,7 @@ def check_imageops() -> int:
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
-        # Named fills go through ImageColor, which converts into HSV. Blanket's canvas fill stores the RGB tuple.
-        fill = 0 if mode == "HSV" else "rebeccapurple"
-        cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": fill}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
+        cases = [("crop", {"border": (1, 2, 3, 4)}), ("expand", {"border": (2, 3), "fill": "rebeccapurple"}), ("flip", {}), ("mirror", {}), ("grayscale", {})]
         if mode in ("L", "RGB"):
             cases += [("autocontrast", {}), ("autocontrast", {"cutoff": (2, 5), "ignore": [0, 255], "preserve_tone": True}), ("equalize", {}), ("invert", {}), ("posterize", {"bits": 4}), ("solarize", {"threshold": 100})]
             mask = pixels("L")
@@ -571,8 +569,7 @@ def check_imageops() -> int:
             compare(getattr(BlanketOps, name)(blanket, **options), getattr(PillowOps, name)(pillow, **options), f"{name} {mode} {options}")
 
         for method in BlanketImage.Resampling:
-            pad_color = 0 if mode == "HSV" else "#1234"
-            for name, options in (("contain", {}), ("cover", {}), ("fit", {"bleed": 0.05, "centering": (0.2, 0.8)}), ("pad", {"color": pad_color, "centering": (0, 1)})):
+            for name, options in (("contain", {}), ("cover", {}), ("fit", {"bleed": 0.05, "centering": (0.2, 0.8)}), ("pad", {"color": "#1234", "centering": (0, 1)})):
                 compare(getattr(BlanketOps, name)(blanket, (19, 17), method, **options), getattr(PillowOps, name)(pillow, (19, 17), method, **options), f"{name} {mode} {method.name}")
             compare(BlanketOps.scale(blanket, 1.5, method), PillowOps.scale(pillow, 1.5, method), f"scale {mode} {method.name}")
         for method in (BlanketImage.NEAREST, BlanketImage.BILINEAR, BlanketImage.BICUBIC):

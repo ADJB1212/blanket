@@ -3656,8 +3656,6 @@ def new(mode: str, size: tuple[int, int], color: str | float | tuple[float, ...]
             raise ValueError("wrong number of color components")
         return Image(image_new(mode, dimensions, struct.pack("<" + "f" * channels, *values)))
     native_mode = "L" if mode == "P" else mode
-    if mode == "HSV" and isinstance(color, str):
-        color = frombytes("RGB", (1, 1), bytes(color_pixel(color, "RGB"))).convert("HSV").getpixel((0, 0))
     if mode not in ("1", "L", "LA", "La", "RGB", "RGBA", "RGBa", "RGBX", "P", "PA", "HSV", "CMYK", "YCbCr", "LAB"):
         raise ValueError(f"unsupported image mode {mode!r}")
     palette_color = mode == "P" and (isinstance(color, str) or (isinstance(color, tuple) and len(color) in (3, 4)))

@@ -9,6 +9,24 @@ from PIL import ImageColor as PillowColor
 from blanket import Image, ImageColor, ImageDraw, ImageOps
 
 
+@pytest.mark.parametrize("color", ["rebeccapurple", "#1234", "rgb(5, 20, 120)"])
+def test_css_fills_use_hsv_samples(color: str) -> None:
+    image = Image.new("HSV", (2, 2))
+    expected = Image.new("RGB", (1, 1), color).convert("HSV").getpixel((0, 0))
+
+    results = [
+        ImageOps.expand(image, 1, fill=color),
+        ImageOps.pad(image, (4, 2), color=color),
+        image.transform(image.size, Image.Transform.AFFINE, (1, 0, -2, 0, 1, 0), fillcolor=color),
+        image.rotate(0, translate=(2, 0), fillcolor=color),
+        Image.new("HSV", (1, 1), color),
+    ]
+    ImageDraw.Draw(image).point((0, 0), fill=color)
+
+    for result in [*results, image]:
+        assert result.getpixel((0, 0)) == expected
+
+
 @pytest.mark.parametrize("depth", [8, 10, 12, 16])
 @pytest.mark.parametrize("sign", [-1, 1])
 def test_fill_colors_preserve_arbitrary_precision_integers(depth: int, sign: int) -> None:

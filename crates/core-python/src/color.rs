@@ -33,6 +33,9 @@ pub(crate) fn color_pixel(py: Python<'_>, color: &Bound<'_, PyAny>, mode: &str, 
             let gray =
                 (rgb[0] * i64::from(LUMA_RED) + rgb[1] * i64::from(LUMA_GREEN) + rgb[2] * i64::from(LUMA_BLUE) + i64::from(LUMA_ROUND)) >> LUMA_BITS;
             if mode == "LA" { vec![gray, alpha] } else { vec![gray] }
+        } else if mode == "HSV" {
+            let [r, g, b] = std::array::from_fn(|i| rgb[i].clamp(0, 255) as u8);
+            blanket_image_ops::convert::rgb_to_hsv(r, g, b).map(i64::from).to_vec()
         } else {
             let mut values = rgb[..3].to_vec();
             if matches!(mode, "RGBA" | "RGBX") {

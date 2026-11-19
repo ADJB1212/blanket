@@ -745,7 +745,8 @@ fn cmyk_to_rgb(pixel: [u8; 4]) -> [u8; 3] {
     })
 }
 
-fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {
+/// Convert 8-bit RGB samples to Pillow's 8-bit HSV representation.
+pub fn rgb_to_hsv(r: u8, g: u8, b: u8) -> [u8; 3] {
     let maxc = r.max(g).max(b);
     let minc = r.min(g).min(b);
     if minc == maxc {
