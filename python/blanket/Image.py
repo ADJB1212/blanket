@@ -3433,6 +3433,8 @@ class Image:
             return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, progress=progress, **options)
         self._sync_palette()
         native = self._native
+        if output_format in ("SVG", "WEBP") and self.mode in ("1", "L", "P", "RGB") and self.info.get("transparency") is not None:
+            native = self.convert("RGBA")._native
         if self.mode == "RGBX" and output_format == "JPEG":
             native = image_convert(native, "RGB")
         if output_format in ("PNG", "GIF") and self.mode == "P":

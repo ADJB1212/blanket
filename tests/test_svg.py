@@ -85,6 +85,16 @@ def test_open_svg_applies_pixel_threshold_to_requested_raster(monkeypatch):
     assert Image.decode(source, svg_size=(3, 3)).size == (3, 3)
 
 
+def test_svg_trace_preserves_indexed_transparency():
+    source = Image.new("P", (16, 16), 0)
+    source.putpalette(bytes([255, 0, 0, 0, 0, 255]))
+    source.info["transparency"] = 0
+    source.paste(1, (8, 0, 16, 16))
+    result = Image.decode(source.encode("SVG", svg_mode="pixel", svg_filter_speckle=0))
+    assert result.getpixel((4, 4)) == (0, 0, 0, 0)
+    assert result.getpixel((12, 4)) == (0, 0, 255, 255)
+
+
 @pytest.mark.parametrize(
     "options,error",
     [

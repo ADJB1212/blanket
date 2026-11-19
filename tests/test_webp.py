@@ -19,6 +19,16 @@ def test_webp_checks_pixel_limits_before_allocating_output():
         Image.decode(bytes(encoded))
 
 
+def test_webp_preserves_indexed_transparency():
+    source = Image.new("P", (2, 1), 0)
+    source.putpalette(bytes([255, 0, 0, 0, 0, 255]))
+    source.putpixel((1, 0), 1)
+    source.info["transparency"] = 0
+    result = Image.decode(source.encode("WEBP", lossless=True))
+    assert result.getchannel("A").tobytes() == b"\x00\xff"
+    assert result.getpixel((1, 0)) == (0, 0, 255, 255)
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("lossless", [False, True])
 def test_webp_decode_matches_pillow(mode: str, lossless: bool) -> None:

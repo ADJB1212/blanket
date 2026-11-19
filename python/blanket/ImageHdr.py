@@ -28,7 +28,8 @@ def tone_map(image: Image.Image, operator: str = "reinhard", *, transfer: str | 
 
     Negative and NaN color samples become black; positive infinity becomes
     white. Out-of-gamut negative channels are clipped. Alpha is scaled to
-    output depth without a transfer function. Output uses sRGB encoding;
+    output depth without a transfer function. Grayscale or RGB transparency
+    keys become explicit alpha channels. Output uses sRGB encoding;
     stale ICC, HDR, and gamma metadata is removed. No ICC transform is applied.
     Source pixels, metadata, and frame position are unchanged.
 
@@ -54,8 +55,12 @@ def tone_map(image: Image.Image, operator: str = "reinhard", *, transfer: str | 
                 raise ValueError("unsupported cICP primaries; specify primaries explicitly")
     if not 400 <= peak_luminance <= 10000:
         raise ValueError("peak_luminance must be between 400 and 10000 nits")
-    result = Image.Image(hdr_tone_map(image._native, operator, "linear" if transfer is None else transfer, "srgb" if primaries is None else primaries, exposure, reference_white, peak_luminance, bit_depth))
-    stale = {"cicp", "mastering_display", "content_light_level", "icc_profile", "gamma", "chromaticity", "srgb"}
+    source = image
+    if image.mode in ("L", "RGB") and image.info.get("transparency") is not None:
+        target = "LA" if image.mode == "L" and image.bit_depth == bit_depth == 8 else "RGBA"
+        source = image.convert(target)
+    result = Image.Image(hdr_tone_map(source._native, operator, "linear" if transfer is None else transfer, "srgb" if primaries is None else primaries, exposure, reference_white, peak_luminance, bit_depth))
+    stale = {"cicp", "mastering_display", "content_light_level", "icc_profile", "gamma", "chromaticity", "srgb", "transparency"}
     result.info.update({key: value for key, value in image._metadata_info().items() if key not in stale})
     result.info["cicp"] = (1, 13, 0, 1)
     return result

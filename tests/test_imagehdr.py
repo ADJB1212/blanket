@@ -36,6 +36,22 @@ def test_tone_map_validates_cicp_fields(cicp):
         ImageHdr.tone_map(image, transfer="linear", primaries="srgb")
 
 
+@pytest.mark.parametrize("mode,depth,output_depth", [("L", 8, 8), ("L", 12, 16), ("RGB", 8, 16), ("RGB", 16, 8)])
+def test_tone_map_preserves_color_key_as_alpha(mode, depth, output_depth):
+    source = Image.new(mode, (2, 1), "red").convert(mode, bit_depth=depth)
+    key = source.getpixel((0, 0))
+    source.info["transparency"] = key
+    source.putpixel((1, 0), 0 if mode == "L" else (0, 0, 0))
+    result = ImageHdr.tone_map(source, bit_depth=output_depth)
+    target = "LA" if mode == "L" and depth == output_depth == 8 else "RGBA"
+    expected = ImageHdr.tone_map(source.convert(target), bit_depth=output_depth)
+    assert result.tobytes() == expected.tobytes()
+    assert result.getpixel((0, 0))[-1] == 0
+    assert result.getpixel((1, 0))[-1] == (1 << output_depth) - 1
+    assert "transparency" not in result.info
+    assert source.info["transparency"] == key
+
+
 @pytest.mark.parametrize("mode,depth,transfer", [("RGB", 8, transfer) for transfer in ("srgb", "pq", "hlg")] + [("L", 8, "pq"), ("LA", 8, "hlg"), ("RGBA", 8, "srgb"), ("RGB", 10, "pq"), ("RGBA", 16, "hlg"), ("I;16B", 16, "pq")])
 @pytest.mark.parametrize("operator", ["reinhard", "aces", "filmic"])
 def test_transfer_tables_match_small_image_calculations(mode, depth, transfer, operator):
