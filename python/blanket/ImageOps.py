@@ -22,9 +22,8 @@ if TYPE_CHECKING:
 
     from ._blanket import _Image
 
-from . import Image
+from . import Image, ImageChops
 from ._blanket import (
-    chops_invert,
     ops_autocontrast,
     ops_autocontrast_lut,
     ops_canvas,
@@ -792,9 +791,8 @@ def invert(image: Image.Image) -> Image.Image:
         result = ImageOps.invert(image)
         ```
     """
-    if image.bit_depth in (10, 12, 16) and image.mode in ("L", "RGB"):
-        image.load()
-        return _result(image, chops_invert(image._native))
+    if image.mode in ("L", "RGB"):
+        return ImageChops.invert(image)
     if image.mode == "1":
         return _result(image, ops_lut(image._native, ops_tone_lut("invert")))
     return _lut(image, ops_tone_lut("invert"), palette=True)

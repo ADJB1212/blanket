@@ -12,6 +12,8 @@ modulo operations wrap at that maximum plus one. Alpha participates.
 
 from __future__ import annotations
 
+from contextlib import suppress
+
 from . import Image
 from ._blanket import chops_binary, chops_invert, chops_offset
 
@@ -459,6 +461,12 @@ def invert(image: Image.Image) -> Image.Image:
     image.load()
     result = Image.Image(chops_invert(image._native))
     result.info.update(image._metadata_info())
+    key = image.info.get("transparency")
+    if key is not None and image.mode in ("L", "RGB"):
+        maximum = (1 << image.bit_depth) - 1
+        with suppress(TypeError, ValueError):
+            samples = Image._png_key_samples(image.mode, key, maximum)
+            result.info["transparency"] = maximum - samples[0] if image.mode == "L" else tuple(maximum - sample for sample in samples)
     return result
 
 

@@ -9,7 +9,7 @@ from helpers import assert_image_properties, assert_pillow_equal, assert_pixels_
 from PIL import Image as PILImage, ImageChops as PILChops
 from pillow_helpers import PILLOW_IMAGES, assert_image_equal, hopper
 
-from blanket import Image, ImageChops
+from blanket import Image, ImageChops, ImageOps
 
 TYPE_CHECKING = False
 if TYPE_CHECKING:
@@ -87,6 +87,20 @@ def test_invert() -> None:
     assert new.getbbox() == (0, 0, 100, 100)
     assert new.getpixel((0, 0)) == WHITE
     assert new.getpixel((50, 50)) == CYAN
+
+
+@pytest.mark.parametrize("invert", [ImageChops.invert, ImageOps.invert])
+@pytest.mark.parametrize("mode,color", [("L", 17), ("RGB", (17, 37, 91))])
+@pytest.mark.parametrize("depth", [8, 12])
+def test_invert_updates_color_key(invert, mode, color, depth) -> None:
+    image = Image.new(mode, (2, 1)).convert(mode, bit_depth=depth)
+    image.putpixel((0, 0), color)
+    image.info["transparency"] = color
+
+    result = invert(image)
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert [pixel[-1] for pixel in result.convert("RGBA").getdata()] == [0, (1 << depth) - 1]
+    assert image.info["transparency"] == color
 
 
 def test_lighter_image() -> None:
