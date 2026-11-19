@@ -321,6 +321,16 @@ def test_png_writer_short_writes_and_sink_failures() -> None:
     assert_raises(RuntimeError, lambda: ImageFile.PngWriter(BrokenSink(), "L", (3, 2)), match="sink failure")
 
 
+@pytest.mark.parametrize("count,error", [(True, OSError), (-1, OSError), ("1", OSError), (100, OSError), (None, BlockingIOError), (0, BlockingIOError)])
+def test_png_writer_rejects_invalid_or_stalled_stream_writes(count, error) -> None:
+    class InvalidSink(BytesIO):
+        def write(self, data: bytes):
+            return count
+
+    with pytest.raises(error, match=r"invalid byte count|made no progress"):
+        ImageFile.PngWriter(InvalidSink(), "L", (1, 1))
+
+
 @pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
 @pytest.mark.parametrize("owned", [False, True])
 def test_png_writer_initialization_failure_respects_stream_ownership(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error_type: type[BaseException], owned: bool) -> None:

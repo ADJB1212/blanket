@@ -3,9 +3,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use blanket_codec_common::{codec_error, validate_dimensions};
-use pyo3::exceptions::{PyOSError, PyValueError};
+use pyo3::exceptions::{PyBlockingIOError, PyOSError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBytes;
+use pyo3::types::{PyBool, PyBytes, PyInt};
 
 struct Sink {
     object: Py<PyAny>,
@@ -21,14 +21,27 @@ impl Write for Sink {
         if !self.active.load(Ordering::Relaxed) {
             return Err(io::Error::other("closed PNG output"));
         }
+        if data.is_empty() {
+            return Ok(0);
+        }
         Python::attach(|py| {
-            let result = self.object.call_method1(py, "write", (PyBytes::new(py, data),)).and_then(|count| count.extract::<usize>(py));
-            match result {
-                Ok(count) if count <= data.len() => Ok(count),
-                Ok(_) => {
-                    self.active.store(false, Ordering::Relaxed);
-                    Err(io::Error::new(io::ErrorKind::InvalidData, "write() returned an invalid byte count"))
+            let result = self.object.call_method1(py, "write", (PyBytes::new(py, data),)).and_then(|count| {
+                let count = count.bind(py);
+                let written = if count.is_none() {
+                    Some(0)
+                } else if count.is_instance_of::<PyInt>() && !count.is_instance_of::<PyBool>() {
+                    count.extract::<usize>().ok()
+                } else {
+                    None
+                };
+                match written {
+                    Some(0) => Err(PyBlockingIOError::new_err("image output write made no progress")),
+                    Some(written) if written <= data.len() => Ok(written),
+                    _ => Err(PyOSError::new_err("write() returned an invalid byte count")),
                 }
+            });
+            match result {
+                Ok(count) => Ok(count),
                 Err(error) => {
                     self.active.store(false, Ordering::Relaxed);
                     *self.error.lock().expect("sink error lock") = Some(error);
