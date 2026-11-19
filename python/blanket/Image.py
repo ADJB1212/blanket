@@ -2463,7 +2463,7 @@ class Image:
         channel = index(channel)
         if not 0 <= channel < len(self.getbands()):
             raise ValueError("band index out of range")
-        if self.mode in ("1", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
+        if self.mode in ("1", "P", "I", "F", "I;16", "I;16L", "I;16B", "I;16N"):
             return self.copy()
         result = Image(self._native.getchannel(channel))
         result.info.update(self._metadata_info())

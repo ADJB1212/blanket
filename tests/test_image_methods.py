@@ -68,10 +68,14 @@ def test_palette_and_independent_channel() -> None:
     image = Image.frombytes("P", (2, 1), b"\x01\x02")
     image.putpalette(bytes(range(30)))
     image.info["custom"] = 42
+    image.info["transparency"] = b"\xff\x00"
     mapped = image.point(lambda v: 255 - v)
     assert mapped.getpalette() == image.getpalette()
     assert mapped.info == image.info
     channel = image.getchannel("P")
+    assert channel.mode == "P"
+    assert channel.palette is not image.palette
+    assert channel.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
     channel.paste(99, (0, 0, 2, 1))
     assert image.tobytes() == b"\x01\x02"
 
