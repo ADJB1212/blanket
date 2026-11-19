@@ -508,7 +508,8 @@ fn luminance_histogram(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
 }
 
 #[pyfunction]
-fn ops_colorize_stops(py: Python<'_>, image: &Image, stops: Vec<(usize, [u8; 3])>) -> PyResult<Image> {
+#[pyo3(signature = (image, stops, transparency=None))]
+fn ops_colorize_stops(py: Python<'_>, image: &Image, stops: Vec<(usize, [u8; 3])>, transparency: Option<u8>) -> PyResult<(Image, Option<[u8; 3]>)> {
     if !(2..=3).contains(&stops.len()) || stops.iter().any(|stop| stop.0 > 255) || stops.windows(2).any(|pair| pair[0].0 > pair[1].0) {
         return Err(PyValueError::new_err("invalid colorize stops"));
     }
@@ -528,7 +529,8 @@ fn ops_colorize_stops(py: Python<'_>, image: &Image, stops: Vec<(usize, [u8; 3])
             };
         }
     }
-    ops_colorize(py, image, table)
+    let key = transparency.map(|sample| std::array::from_fn(|band| table[band * 256 + usize::from(sample)]));
+    Ok((ops_colorize(py, image, table)?, key))
 }
 
 #[pyfunction]

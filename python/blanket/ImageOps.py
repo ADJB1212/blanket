@@ -354,6 +354,8 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
 def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None = None, blackpoint: int = 0, whitepoint: int = 255, midpoint: int = 127) -> Image.Image:
     """Map an L image to an RGB gradient with two or three color stops.
 
+    A grayscale transparency key follows the same color mapping.
+
     Args:
         image: Input image.
         black: Color mapped to the black point.
@@ -387,7 +389,14 @@ def colorize(image: Image.Image, black: Color, white: Color, mid: Color | None =
     if mid is not None:
         stops.append((midpoint, color_pixel(mid, "RGB")))
     stops.append((whitepoint, color_pixel(white, "RGB")))
-    return _result(image, ops_colorize_stops(image._native, stops))
+    key = image.info.get("transparency")
+    native, mapped_key = ops_colorize_stops(image._native, stops, key if isinstance(key, int) and 0 <= key <= 255 else None)
+    result = _result(image, native)
+    if mapped_key is None:
+        result.info.pop("transparency", None)
+    else:
+        result.info["transparency"] = tuple(mapped_key)
+    return result
 
 
 def contain(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC) -> Image.Image:

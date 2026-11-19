@@ -298,6 +298,18 @@ def test_colorize_invalid_mode() -> None:
     assert_raises(ValueError, lambda: ImageOps.colorize(hopper("RGB"), "black", "white"), match="mode must be L, not RGB")
 
 
+@pytest.mark.parametrize("mid", [None, "green"])
+def test_colorize_maps_transparency_key_through_the_gradient(mid: str | None) -> None:
+    image = Image.frombytes("L", (2, 1), b"\x40\xc0")
+    image.info["transparency"] = 64
+
+    result = ImageOps.colorize(image, "red", "blue", mid)
+    assert result.mode == "RGB"
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert [pixel[3] for pixel in result.convert("RGBA").getdata()] == [0, 255]
+    assert image.info["transparency"] == 64
+
+
 @pytest.mark.parametrize("bits", (0, 9))
 def test_posterize_invalid_bits(bits: int) -> None:
     assert_raises(ValueError, lambda: ImageOps.posterize(hopper("L"), bits), match="bits must be between or equal to 1 and 8")
