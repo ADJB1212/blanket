@@ -318,6 +318,19 @@ def test_matrix_truncated() -> None:
     assert_raises(TypeError, lambda: im.convert(mode="L", matrix=(0,)), match="matrix must be tuple of length 4 or 12")
 
 
+@pytest.mark.parametrize("mode,matrix", [("L", (0.5, 0, 0, 10)), ("RGB", (0.5, 0, 0, 10, 0, 1, 0, 0, 0, 0, 1, 0))])
+@pytest.mark.parametrize("key", [(41, 67, 89), [41, 67, 89]])
+def test_matrix_conversion_uses_same_rounding_for_pixels_and_transparency(mode, matrix, key) -> None:
+    image = Image.new("RGB", (17, 1), (41, 67, 89))
+    image.putpixel((1, 0), (101, 67, 89))
+    image.info["transparency"] = key
+
+    result = image.convert(mode, matrix)
+
+    assert result.info["transparency"] == result.getpixel((0, 0)) == result.getpixel((16, 0))
+    assert result.convert("RGBA").getchannel("A").tobytes() == b"\x00\xff" + bytes(15)
+
+
 @pytest.mark.parametrize("mode", ("RGB", "L"))
 def test_matrix_xyz(mode: str) -> None:
     im = hopper("RGB")
@@ -328,7 +341,7 @@ def test_matrix_xyz(mode: str) -> None:
     with Image.open(PILLOW_IMAGES / "hopper-XYZ.png") as target:
         if converted_im.mode == "RGB":
             assert_image_similar(converted_im, target, 3)
-            assert converted_im.info["transparency"] == (105, 54, 4)
+            assert converted_im.info["transparency"] == (105, 54, 5)
         else:
             assert_image_similar(converted_im, target.getchannel(0), 1)
             assert converted_im.info["transparency"] == 105

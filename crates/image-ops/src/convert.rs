@@ -48,6 +48,7 @@ pub fn convert_matrix(
     if matrix.len() < channels * 4 {
         return Err(PyTypeError::new_err("matrix must be tuple of length 12"));
     }
+    let matrix: Vec<_> = matrix.into_iter().map(|value| value as f32).collect();
     let transparency = transparency
         .map(|(r, g, b)| -> PyResult<Py<PyAny>> {
             let values = matrix
@@ -56,7 +57,7 @@ pub fn convert_matrix(
                 .iter()
                 .take(channels)
                 .map(|row| {
-                    let value = row[0] * r + row[1] * g + row[2] * b + row[3] * 0.5;
+                    let value = matrix_sample(row, r as f32, g as f32, b as f32);
                     if value.is_nan() {
                         return Err(PyValueError::new_err("cannot convert float NaN to integer"));
                     }
@@ -69,7 +70,6 @@ pub fn convert_matrix(
             if channels == 1 { Ok(values[0].into_pyobject(py)?.into_any().unbind()) } else { Ok(PyTuple::new(py, values)?.into_any().unbind()) }
         })
         .transpose()?;
-    let matrix: Vec<_> = matrix.into_iter().map(|value| value as f32).collect();
     let source = source_image.pixel_data()?;
     let length = source.len() / 3 * channels;
     let mut pixels = blanket_core::buffers::reserved(length)?;
@@ -86,6 +86,10 @@ pub fn convert_matrix(
         unsafe { pixels.set_len(length) };
     });
     Ok((Image::from_pixels(source_image.width(), source_image.height(), destination, pixels, None)?, transparency))
+}
+
+fn matrix_sample(row: &[f32], r: f32, g: f32, b: f32) -> f64 {
+    f64::from(row[0] * r + row[1] * g + row[2] * b + row[3]) + 0.5
 }
 
 fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUninit<u8>], matrix: &[f32]) {
@@ -105,10 +109,7 @@ fn matrix_pixels<const C: usize>(source: &[u8], output: &mut [std::mem::MaybeUni
     for (pixel, output) in source[end * 3..].as_chunks::<3>().0.iter().zip(output[end * C..].as_chunks_mut::<C>().0) {
         for (channel, value) in output.iter_mut().enumerate() {
             let m = &matrix[channel * 4..channel * 4 + 4];
-            value.write(
-                (f64::from(m[0] * f32::from(pixel[0]) + m[1] * f32::from(pixel[1]) + m[2] * f32::from(pixel[2]) + m[3]) + 0.5).clamp(0.0, 255.0)
-                    as u8,
-            );
+            value.write(matrix_sample(m, f32::from(pixel[0]), f32::from(pixel[1]), f32::from(pixel[2])).clamp(0.0, 255.0) as u8);
         }
     }
 }

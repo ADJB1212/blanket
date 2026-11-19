@@ -1287,7 +1287,7 @@ class Image:
             raise ValueError("image has wrong mode")
         if matrix is not None:
             transparency = self.info.get("transparency")
-            key = transparency if isinstance(transparency, tuple) and len(transparency) == 3 else None
+            key = tuple(transparency) if isinstance(transparency, (tuple, list)) and len(transparency) == 3 else None
             native, converted_key = image_convert_matrix(self._native, mode, list(matrix), key)
             result = Image(native)
             result.info.update(self._metadata_info())
