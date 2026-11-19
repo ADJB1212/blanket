@@ -64,7 +64,7 @@ def all_frames(image: Image | Sequence[Image], func: Callable[[Image], Image] | 
                 for index in range(source.n_frames):
                     if source._seek_error is not None and index > 0:
                         raise source._seek_error
-                    frame = source if index == position else storage.get(index, retain=False)
+                    frame = source if index == source.tell() else storage.get(index, retain=False)
                     copied = frame.copy()
                     frames.append(copied if func is None else func(copied))
             else:

@@ -229,6 +229,24 @@ def test_lazy_defers_bad_compressed_frame_and_preserves_position():
         assert list(image._lazy_frames.cache) == [0]
 
 
+def test_lazy_all_frames_copies_requested_frames_when_callback_seeks():
+    image = Image.decode(sequence_data(), lazy=True, frame_cache_size=2)
+    image.seek(1)
+    edited = (17, 30, 47, 255)
+    image.putpixel((0, 0), edited)
+    expected = [frame.tobytes() for frame in ImageSequence.all_frames(image)]
+
+    def advance(frame):
+        image.seek(2)
+        return frame
+
+    frames = ImageSequence.all_frames(image, advance)
+
+    assert [frame.tobytes() for frame in frames] == expected
+    assert image.tell() == 1
+    assert image.getpixel((0, 0)) == edited
+
+
 def test_copying_and_saving_lazy_frames_preserves_cached_edits():
     image = Image.decode(sequence_data(), lazy=True, frame_cache_size=2)
     image.putpixel((0, 0), (17, 30, 47, 255))
