@@ -334,6 +334,10 @@ def _check_tiff_size(size: tuple[int, int]) -> None:
     _decompression_bomb_check(size, format="TIFF")
 
 
+def _check_svg_size(size: tuple[int, int]) -> None:
+    _decompression_bomb_check(size, format="SVG")
+
+
 class Resampling(IntEnum):
     """Pillow-compatible resampling filter identifiers."""
 
@@ -4126,9 +4130,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     if svg_size is not None or svg_dpi is not None:
         if lazy:
             raise UnsupportedCodecError("SVG rasterization does not support lazy=True", format="SVG", operation="decode")
-        image = Image(_decode_svg(data, formats, svg_size, 96.0 if svg_dpi is None else svg_dpi, progress))
-        _decompression_bomb_check(image.size, format="SVG")
-        return image
+        size_check = _check_svg_size if MAX_IMAGE_PIXELS is not None else None
+        return Image(_decode_svg(data, formats, svg_size, 96.0 if svg_dpi is None else svg_dpi, progress, size_check))
     seek_error = None
     truncated_jpeg = False
     declared_frames = None

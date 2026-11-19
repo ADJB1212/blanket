@@ -220,9 +220,10 @@ fn input_format(data: &[u8], formats: Option<Vec<String>>) -> PyResult<ImageForm
 type Inspection = (String, (u32, u32), String, u8);
 
 #[pyfunction]
-#[pyo3(signature = (data, formats=None, size=None, dpi=96.0, progress=None))]
+#[pyo3(signature = (data, formats=None, size=None, dpi=96.0, progress=None, size_check=None))]
 pub fn _decode_svg(
     py: Python<'_>, data: &[u8], formats: Option<Vec<String>>, size: Option<(u32, u32)>, dpi: f32, progress: Option<Py<PyAny>>,
+    size_check: Option<Py<PyAny>>,
 ) -> PyResult<Image> {
     let format = input_format(data, formats)?;
     if format != ImageFormat::Svg {
@@ -230,9 +231,15 @@ pub fn _decode_svg(
     }
     let progress = Progress::new(py, progress)?;
     progress.checkpoint()?;
-    let image = py
-        .detach(|| blanket_codec_svg::decode_options(data, blanket_codec_svg::RenderOptions { size, dpi }))
-        .map_err(|error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode"))?;
+    let decode_error = |error: blanket_codec_svg::Error| error.kind().into_pyerr(error.to_string(), Some("SVG"), "decode");
+    let options = blanket_codec_svg::RenderOptions { size, dpi };
+    let image = if let Some(size_check) = size_check {
+        let document = py.detach(|| blanket_codec_svg::prepare(data, options)).map_err(decode_error)?;
+        size_check.call1(py, (document.size(),))?;
+        py.detach(|| document.into_image()).map_err(decode_error)?
+    } else {
+        py.detach(|| blanket_codec_svg::decode_options(data, options)).map_err(decode_error)?
+    };
     progress.checkpoint()?;
     Ok(image)
 }

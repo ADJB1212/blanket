@@ -85,6 +85,17 @@ def test_open_svg_applies_pixel_threshold_to_requested_raster(monkeypatch):
     assert Image.decode(source, svg_size=(3, 3)).size == (3, 3)
 
 
+@pytest.mark.parametrize("opener", [Image.decode, lambda data, **options: Image.open(BytesIO(data), **options)])
+@pytest.mark.parametrize("options", [{"svg_size": (10, 10)}, {"svg_dpi": 20}])
+def test_svg_checks_raster_limit_before_reporting_render_complete(monkeypatch, opener, options):
+    source = b"<svg xmlns='http://www.w3.org/2000/svg' width='0.5in' height='0.5in'/>"
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    checkpoints = []
+    with pytest.raises(Image.DecompressionBombError, match="100 pixels"):
+        opener(source, progress=checkpoints.append, **options)
+    assert checkpoints == [0]
+
+
 def test_svg_trace_preserves_indexed_transparency():
     source = Image.new("P", (16, 16), 0)
     source.putpalette(bytes([255, 0, 0, 0, 0, 255]))

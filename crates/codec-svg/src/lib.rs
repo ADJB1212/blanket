@@ -23,9 +23,20 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
 }
 
 pub fn decode_options(data: &[u8], options: RenderOptions) -> Result<Image, Error> {
-    let document = safety::parse_options(data, Limits::default(), options, safety::SampleValidation::Decode)?;
-    let (width, height) = document.size();
-    Image::from_pixels(width, height, PixelMode::Rgba, document.render()?, Some("SVG".into())).map_err(|_| Error::Corrupt("invalid rendered image"))
+    prepare(data, options)?.into_image()
+}
+
+/// Parse an SVG and resolve its raster dimensions before allocating the output.
+pub fn prepare(data: &[u8], options: RenderOptions) -> Result<Document, Error> {
+    safety::parse_options(data, Limits::default(), options, safety::SampleValidation::Decode)
+}
+
+impl Document {
+    /// Render this document as a straight-alpha RGBA image.
+    pub fn into_image(self) -> Result<Image, Error> {
+        let (width, height) = self.size();
+        Image::from_pixels(width, height, PixelMode::Rgba, self.render()?, Some("SVG".into())).map_err(|_| Error::Corrupt("invalid rendered image"))
+    }
 }
 
 pub fn inspect(data: &[u8]) -> Result<ImageHeader, Error> {
