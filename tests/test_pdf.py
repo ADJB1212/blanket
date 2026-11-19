@@ -94,6 +94,17 @@ def test_pdf_encode_dpi(save_all: bool) -> None:
     assert raster.decode() == source.tobytes()
 
 
+@pytest.mark.parametrize("save_all", [False, True])
+@pytest.mark.parametrize("mode", ["L", "RGB", "P"])
+def test_pdf_preserves_color_key_transparency(mode: str, save_all: bool) -> None:
+    source = Image.frombytes("L", (2, 1), bytes([0, 255])).convert(mode)
+    source.info["transparency"] = (0, 0, 0) if mode == "RGB" else source.getpixel((0, 0))
+    pdf = PdfParser.PdfParser(buf=source.encode("PDF", save_all=save_all))
+    page = pdf.read_indirect(pdf.pages[0])
+    raster = pdf.read_indirect(page[b"Resources"][b"XObject"][b"Im0"])
+    assert pdf.read_indirect(raster.dictionary[b"SMask"]).decode() == bytes([0, 255])
+
+
 @pytest.mark.parametrize("dpi", [0, -72, float("nan"), float("inf")])
 def test_pdf_native_rejects_invalid_dpi(dpi: float) -> None:
     source = Image.new("RGB", (2, 3))

@@ -170,6 +170,25 @@ def test_keyed_conversion_to_rgba_honors_depth(mode, source_depth, out_depth):
     assert "transparency" not in converted.info
 
 
+@pytest.mark.parametrize("mode,key", [("1", 1), ("L", 18), ("RGB", (18, 18, 18))])
+def test_color_keys_survive_conversion_to_indexed_alpha(mode, key):
+    source = Image.new(mode, (2, 1), key)
+    source.putpixel((1, 0), 0)
+    source.info["transparency"] = key
+    converted = source.convert("PA")
+    assert [pixel[-1] for pixel in converted.getdata()] == [0, 255]
+    assert "transparency" not in converted.info
+
+
+@pytest.mark.parametrize("alpha", [127, Image.new("L", (2, 1), 127)])
+def test_replacing_alpha_removes_the_old_color_key(alpha):
+    source = Image.new("RGB", (2, 1), (18, 18, 18))
+    source.info["transparency"] = (18, 18, 18)
+    source.putalpha(alpha)
+    assert source.getpixel((0, 0)) == (18, 18, 18, 127)
+    assert "transparency" not in source.info
+
+
 def test_png_save_after_discarding_decoded_alpha_does_not_restore_color_key():
     original = Image.new("RGB", (2, 1), (4, 5, 6))
     rgba = Image.decode(original.encode("PNG", transparency=(4, 5, 6)))

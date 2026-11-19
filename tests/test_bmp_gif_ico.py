@@ -7,7 +7,7 @@ import pytest
 from helpers import assert_raises, image_buffer
 from PIL import Image as PillowImage
 
-from blanket import Image, UnidentifiedImageError
+from blanket import Compressor, Image, UnidentifiedImageError
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -58,6 +58,30 @@ def test_animated_gif_first_frame() -> None:
     first = PillowImage.new("RGB", (32, 32), "red")
     first.save(output, "GIF", save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
     assert Image.open(output).convert("RGB").tobytes() == first.tobytes()
+
+
+@pytest.mark.parametrize("mode", ["1", "L", "RGB", "P"])
+def test_gif_preserves_binary_transparency(mode: str) -> None:
+    source = Image.frombytes("L", (3, 1), bytes([0, 0, 255])).convert(mode)
+    if mode == "P":
+        source = Image.frombytes("P", (3, 1), bytes([0, 1, 2]))
+        source.putpalette(bytes([255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]), "RGBA")
+    elif mode == "RGB":
+        source.info["transparency"] = (0, 0, 0)
+    else:
+        source.info["transparency"] = 0
+    with PillowImage.open(BytesIO(source.encode("GIF"))) as decoded:
+        assert decoded.convert("RGBA").getchannel("A").tobytes() == bytes([0, 0, 255])
+
+
+@pytest.mark.parametrize("mode", ["RGB", "RGBA", "P"])
+def test_gif_compressor_uses_the_normal_encoding(mode: str) -> None:
+    source_mode = "RGB" if mode == "P" else mode
+    samples = bytes((i * 37 + i // 13) % 256 for i in range(32 * 32 * len(source_mode)))
+    source = Image.frombytes(source_mode, (32, 32), samples)
+    if mode == "P":
+        source = source.quantize()
+    assert source.encode("GIF", compressor=Compressor.LosslessImageCompressor()) == source.encode("GIF")
 
 
 @pytest.mark.parametrize("bitmap_format", ["png", "bmp"])

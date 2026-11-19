@@ -1307,9 +1307,12 @@ class Image:
             source = self if self.mode == "P" else self.convert("RGB").quantize()
             source._sync_palette()
             table = None
+            alpha = self if self.mode in ("LA", "RGBA") else None
             if self.mode == "P" and isinstance(transparency, (int, bytes)):
                 table = bytes(0 if slot == transparency else 255 for slot in range(256)) if isinstance(transparency, int) else transparency.ljust(256, b"\xff")
-            result = Image(palette_to_pa(source._native, self._native if self.mode in ("LA", "RGBA") else None, table))
+            elif self.mode in ("1", "L", "RGB") and transparency is not None:
+                alpha = self.convert("RGBA")
+            result = Image(palette_to_pa(source._native, alpha._native if alpha is not None else None, table))
             if source.palette is not None:
                 result.palette = source.palette.copy()
             result.info.update(self._metadata_info())
@@ -2362,6 +2365,7 @@ class Image:
             image_putalpha_constant(self._native, value)
             self.readonly = 0
             self._bands = _BANDS[self.mode]
+            self.info.pop("transparency", None)
             return
         if band.mode != "L" or band.size != self.size:
             raise ValueError("illegal image mode or size for alpha")
@@ -2371,6 +2375,7 @@ class Image:
         image_putalpha(self._native, band._native)
         self.readonly = 0
         self._bands = _BANDS[self.mode]
+        self.info.pop("transparency", None)
 
     def split(self) -> tuple[Image, ...]:
         """Return independent single-band images in channel order.
@@ -3404,8 +3409,12 @@ class Image:
             encoded = save_sequence(self, fp, output_format, options, compressor)
             if encoded is not None:
                 return encoded if fp is None else None
-        if output_format == "GIF" and compressor is None and self.mode in ("RGB", "RGBA"):
-            return self.quantize()._save(fp, output_format, progress=progress, **options)
+        if output_format == "GIF":
+            source = self
+            if self.mode in ("1", "L", "RGB") and self.info.get("transparency") is not None:
+                source = self.convert("RGBA")
+            if source.mode in ("RGB", "RGBA"):
+                return source.quantize()._save(fp, output_format, compressor=compressor, progress=progress, **options)
         if self.mode == "LAB":
             if output_format != "TIFF":
                 raise UnsupportedCodecError(f"cannot write mode LAB as {output_format}", format=output_format, operation="encode")
@@ -3435,7 +3444,7 @@ class Image:
             return self.convert("L", bit_depth=16)._save(fp, output_format, compressor=compressor, progress=progress, **options)
         self._sync_palette()
         native = self._native
-        if output_format in ("SVG", "WEBP") and self.mode in ("1", "L", "P", "RGB") and self.info.get("transparency") is not None:
+        if output_format in ("PDF", "SVG", "WEBP") and self.mode in ("1", "L", "P", "RGB") and self.info.get("transparency") is not None:
             native = self.convert("RGBA")._native
         if self.mode == "RGBX" and output_format == "JPEG":
             native = image_convert(native, "RGB")

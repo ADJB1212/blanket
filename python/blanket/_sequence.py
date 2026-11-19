@@ -163,7 +163,12 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         if format == "PNG" and frame.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
             frame = frame.convert("L", bit_depth=16)
         if format == "PDF":
-            target = frame.mode if frame.mode in ("L", "RGB", "RGBA", "CMYK") else "RGBA" if frame.has_transparency_data else "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
+            if (frame.mode in ("L", "RGB") and frame.info.get("transparency") is None) or frame.mode == "CMYK":
+                target = frame.mode
+            elif frame.has_transparency_data:
+                target = "RGBA"
+            else:
+                target = "L" if frame.mode in ("1", "I", "I;16", "I;16L", "I;16B", "I;16N") else "RGB"
         elif format == "PNG":
             target = png_mode
         elif format == "WEBP" and frame.mode == "RGB" and "transparency" not in frame.info:

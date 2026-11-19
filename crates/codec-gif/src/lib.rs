@@ -260,21 +260,22 @@ pub fn encode_gif(image: &Image, pixels: &[u8]) -> PyResult<Vec<u8>> {
     if let Some((mode, entries)) = &image.palette() {
         let mut palette = Vec::with_capacity(entries.len());
         let mut transparent = None;
+        let mut remap_transparency = false;
         for (index, entry) in entries.chunks_exact(mode.channels()).enumerate() {
             palette.extend_from_slice(&entry[..3]);
-            if *mode == PixelMode::Rgba && entry[3] == 0 && transparent.is_none() {
-                transparent = Some(index as u8);
+            if *mode == PixelMode::Rgba && entry[3] == 0 {
+                remap_transparency |= transparent.is_some();
+                transparent.get_or_insert(index as u8);
             }
         }
         let required = usize::from(pixels.iter().copied().max().unwrap_or(0)) + 1;
         palette.resize(palette.len().max(required * 3), 0);
-        let frame = gif::Frame {
-            width: image.width() as u16,
-            height: image.height() as u16,
-            transparent,
-            buffer: Cow::Borrowed(pixels),
-            ..gif::Frame::default()
+        let buffer = if let Some(index) = transparent.filter(|_| remap_transparency) {
+            Cow::Owned(pixels.iter().map(|&pixel| if entries.get(usize::from(pixel) * 4 + 3) == Some(&0) { index } else { pixel }).collect())
+        } else {
+            Cow::Borrowed(pixels)
         };
+        let frame = gif::Frame { width: image.width() as u16, height: image.height() as u16, transparent, buffer, ..gif::Frame::default() };
         gif::Encoder::new(&mut output, frame.width, frame.height, &palette).map_err(codec_error)?.write_frame(&frame).map_err(codec_error)?;
     } else if image.pixel_mode() == PixelMode::L {
         let mut used = [false; 256];

@@ -146,7 +146,7 @@ fn encode_image(
         }
     }
     if let Some((palette_mode, _)) = image.palette() {
-        if format == ImageFormat::Gif && compressor.is_none() {
+        if format == ImageFormat::Gif {
             return py.detach(|| codecs::encode(image, format, options));
         }
         if matches!(format, ImageFormat::Pcx | ImageFormat::Palm) && *palette_mode == PixelMode::Rgb {
