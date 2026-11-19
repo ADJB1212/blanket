@@ -427,10 +427,13 @@ pub fn convert(py: Python<'_>, source_image: &Image, mode: &str, bit_depth: Opti
         let source = source_image.pixel_data()?;
         let pixels = py.detach(|| hsv_to_rgb_bytes(source));
         let rgb = Image::from_pixels(source_image.width(), source_image.height(), PixelMode::Rgb, pixels, None)?;
-        return if destination == PixelMode::Rgb { Ok(rgb) } else { convert(py, &rgb, mode, bit_depth) };
+        return convert(py, &rgb, mode, bit_depth);
     }
     if destination == PixelMode::Hsv && source_image.bit_depth() > 8 {
-        return convert(py, &convert(py, source_image, "RGB", Some(8))?, "HSV", None);
+        if bit_depth.is_some_and(|depth| depth != 8) {
+            return Err(PyValueError::new_err("this mode requires 8-bit pixels"));
+        }
+        return convert(py, &convert(py, source_image, "RGB", Some(8))?, mode, bit_depth);
     }
     if source_image.pixel_mode().is_integer() || destination.is_integer() {
         if let Some(depth) = bit_depth

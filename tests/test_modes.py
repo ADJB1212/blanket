@@ -555,3 +555,16 @@ def test_hsv_storage_conversion_and_geometry_match_pillow() -> None:
     assert blanket.split()[2].getdata() == list(pillow.split()[2].get_flattened_data())
     assert Image.merge("HSV", blanket.split()).tobytes() == blanket.tobytes()
     assert_raises(OSError, lambda: blanket.save(BytesIO(), "PNG"), match="cannot write mode HSV")
+
+
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_hsv_conversion_honors_requested_depth(depth: int) -> None:
+    hsv = Image.new("HSV", (2, 1), (30, 100, 180))
+    rgb = hsv.convert("RGB")
+    expected = rgb.convert("RGB", bit_depth=depth)
+
+    wide = hsv.convert("RGB", bit_depth=depth)
+
+    assert wide.bit_depth == depth
+    assert wide.tobytes() == expected.tobytes()
+    assert_raises(ValueError, lambda: wide.convert("HSV", bit_depth=depth), match="requires 8-bit pixels")
