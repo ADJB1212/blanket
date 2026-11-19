@@ -582,14 +582,14 @@ fn ops_canvas(py: Python<'_>, image: &Image, size: (u32, u32), offset: (i64, i64
             mode if mode.is_big_endian() => (fill[0] as u16).to_be_bytes().to_vec(),
             _ => (fill[0] as u16).to_le_bytes().to_vec(),
         }
-    } else {
-        let fill = fill.into_iter().map(u8::try_from).collect::<Result<Vec<_>, _>>().map_err(|_| PyValueError::new_err("invalid fill color"))?;
-        if !image.pixel_mode().is_float() && image.bit_depth() > 8 {
-            let maximum = (1_u32 << image.bit_depth()) - 1;
-            fill.into_iter().flat_map(|v| (((u32::from(v) * maximum + 127) / 255) as u16).to_le_bytes()).collect()
-        } else {
-            fill
+    } else if !image.pixel_mode().is_float() && image.bit_depth() > 8 {
+        let maximum = (1_i64 << image.bit_depth()) - 1;
+        if fill.iter().any(|value| !(0..=maximum).contains(value)) {
+            return Err(PyValueError::new_err("invalid fill color"));
         }
+        fill.into_iter().flat_map(|value| (value as u16).to_le_bytes()).collect()
+    } else {
+        fill.into_iter().map(u8::try_from).collect::<Result<Vec<_>, _>>().map_err(|_| PyValueError::new_err("invalid fill color"))?
     };
     if offset == (0, 0) && size == image.size() {
         return image.copy(py);

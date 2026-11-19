@@ -90,6 +90,18 @@ def test_geometry_with_empty_rasters_preserves_depth_and_metadata(method, source
     assert result.tobytes() == bytes(expected[0] * expected[1] * 6)
 
 
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("mode,value", [("L", 341), ("RGB", (341, 37, 911)), ("RGBA", (341, 37, 911, 512))])
+def test_pad_and_expand_preserve_wide_fill_samples(depth, mode, value):
+    image = Image.new(mode, (1, 1)).convert(mode, bit_depth=depth)
+    reference = image.copy()
+    reference.paste("#12345680", (0, 0, 1, 1))
+    for fill, expected in [(value, value), ("#12345680", reference.getpixel((0, 0)))]:
+        for result in (ImageOps.expand(image, 1, fill=fill), ImageOps.pad(image, (3, 1), color=fill)):
+            assert result.bit_depth == depth
+            assert result.getpixel((0, 0)) == expected
+
+
 @pytest.mark.parametrize("new_size", ((256, 256), (512, 256), (256, 512)))
 def test_contain(new_size: tuple[int, int]) -> None:
     im = hopper()

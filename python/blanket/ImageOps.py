@@ -275,7 +275,7 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
         return [0 if color is None else index(cast("SupportsIndex", color))]
     if image.mode == "F":
         return list(struct.pack("<f", 0.0 if color is None else float(cast("FloatInput", color))))
-    return color_pixel(color, image.mode)
+    return color_pixel(color, image.mode, image.bit_depth)
 
 
 def _lut(image: Image.Image, table: bytes, *, palette: bool = False) -> Image.Image:
@@ -446,6 +446,8 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
 
 def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, color: Color | None = None, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
     """Contain the image and pad it to size with the selected background.
+
+    High-depth numeric colors use native sample units.
 
     Args:
         image: Input image.
@@ -621,6 +623,8 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
 
 def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Image:
     """Add a border filled with a pixel value or CSS color.
+
+    High-depth numeric colors use native sample units.
 
     Args:
         image: Input image.
