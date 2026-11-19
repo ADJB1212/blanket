@@ -82,6 +82,25 @@ def test_alpha_is_preserved_and_hidden_pixels_are_ignored(operation, mode):
 
 
 @pytest.mark.parametrize("operation", OPERATIONS)
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+@pytest.mark.parametrize("depth", [8, 16])
+def test_color_keys_exclude_hidden_pixels_from_both_distributions(operation, mode, depth):
+    def color(value):
+        return value if mode == "L" else (value,) * 3
+
+    source = gray([color(100), color(10)], mode=mode, depth=depth)
+    source.info["transparency"] = color(100)
+    reference = gray([color(200), color(100)], mode=mode, depth=depth)
+    reference.info["transparency"] = color(200)
+    result = operation(source, reference)
+    assert result.mode == ("LA" if mode == "L" and depth == 8 else "RGBA")
+    assert result.bit_depth == depth
+    assert list(result.getdata()) == [(100,) * (len(result.mode) - 1) + (0,), (100,) * (len(result.mode) - 1) + ((1 << depth) - 1,)]
+    assert "transparency" not in result.info
+    assert source.info["transparency"] == color(100)
+
+
+@pytest.mark.parametrize("operation", OPERATIONS)
 def test_luminance_adjusts_color_differences_and_clips(operation):
     source = Image.new("RGB", (1, 1), (40, 80, 120))
     assert operation(source, gray([100]), mode="luminance").getpixel((0, 0)) == (67, 107, 147)

@@ -162,8 +162,10 @@ def match_histogram(image: Image.Image, reference: Image.Image, *, mode: Literal
     Luminance is rounded encoded Rec.601 luma (0.299 R + 0.587 G + 0.114 B).
     Apply its change equally to RGB channels, clipping to the source range.
     Alpha is preserved; zero-alpha pixels are excluded and left unchanged,
-    and all other pixels have equal weight. Empty or fully transparent inputs
-    raise ValueError. Geometry, depth and source metadata are preserved.
+    and all other pixels have equal weight. Color-key transparency is expanded
+    to an alpha channel in L and RGB images. Wide grayscale uses RGBA so it
+    retains its sample depth. Empty or fully transparent inputs
+    raise ValueError. Geometry, depth and remaining source metadata are preserved.
     ICC profiles and EXIF orientation are not applied.
 
     Args:
@@ -186,7 +188,7 @@ def match_histogram(image: Image.Image, reference: Image.Image, *, mode: Literal
         result = ImageOps.match_histogram(image, reference, mode="luminance")
         ```
     """
-    return _result(image, ops_reference_transfer(image._native, reference._native, mode, "histogram"))
+    return _reference_transfer(image, reference, mode, "histogram")
 
 
 def color_transfer(image: Image.Image, reference: Image.Image, *, mode: Literal["channels", "luminance"] = "channels") -> Image.Image:
@@ -220,7 +222,26 @@ def color_transfer(image: Image.Image, reference: Image.Image, *, mode: Literal[
         result = ImageOps.color_transfer(image, reference)
         ```
     """
-    return _result(image, ops_reference_transfer(image._native, reference._native, mode, "moments"))
+    return _reference_transfer(image, reference, mode, "moments")
+
+
+def _reference_transfer(image: Image.Image, reference: Image.Image, mode: str, method: str) -> Image.Image:
+    """Expand transparency before computing statistics or changing color samples."""
+    if not isinstance(image, Image.Image) or not isinstance(reference, Image.Image):
+        raise TypeError("image and reference must be Blanket Images")
+    source_key = image.mode in ("L", "RGB") and image.info.get("transparency") is not None
+    reference_key = reference.mode in ("L", "RGB") and reference.info.get("transparency") is not None
+    source_wide_gray = source_key and image.mode == "L" and image.bit_depth > 8
+    reference_wide_gray = reference_key and reference.mode == "L" and reference.bit_depth > 8
+    if mode == "channels" and (source_wide_gray or reference_wide_gray):
+        if image.mode in ("RGB", "RGBA") or reference.mode in ("RGB", "RGBA"):
+            raise ValueError("channel matching requires the same number of color channels")
+        mode = "luminance"
+    if source_key:
+        image = image.convert("LA" if image.mode == "L" and not source_wide_gray else "RGBA")
+    if reference_key:
+        reference = reference.convert("LA" if reference.mode == "L" and not reference_wide_gray else "RGBA")
+    return _result(image, ops_reference_transfer(image._native, reference._native, mode, method))
 
 
 def _result(image: Image.Image, native: _Image) -> Image.Image:
