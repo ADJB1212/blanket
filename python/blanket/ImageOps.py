@@ -770,7 +770,7 @@ def grayscale(image: Image.Image) -> Image.Image:
         result = ImageOps.grayscale(image)
         ```
     """
-    return _result(image, image.convert("L")._native)
+    return image.convert("L")
 
 
 def invert(image: Image.Image) -> Image.Image:

@@ -25,6 +25,18 @@ def test_sanity_special_options() -> None:
     ImageOps.invert(hopper("1"))
 
 
+@pytest.mark.parametrize("depth", [8, 12])
+def test_grayscale_uses_converted_transparency_key(depth: int) -> None:
+    image = Image.new("RGB", (2, 1), (20, 40, 60)).convert("RGB", bit_depth=depth)
+    image.putpixel((1, 0), (0, 0, 0))
+    image.info["transparency"] = image.getpixel((0, 0))
+
+    result = ImageOps.grayscale(image)
+    assert result.bit_depth == depth
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert [pixel[-1] for pixel in result.convert("RGBA").getdata()] == [0, (1 << depth) - 1]
+
+
 @pytest.mark.parametrize("border, expected_box", ((1, (1, 1, 127, 127)), ((1, 2), (1, 2, 127, 126)), ((1, 2, 3, 4), (1, 2, 125, 124))))
 def test_crop(border: int | tuple[int, ...], expected_box: tuple[int, int, int, int]) -> None:
     im = hopper()
