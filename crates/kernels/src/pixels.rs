@@ -179,23 +179,31 @@ pub fn paint_mask<const C: usize>(output: &mut [u8], mask: &[u8], ink: &[u8], bl
     assert_eq!(output.len(), mask.len() * C);
     assert!(ink.len() >= C && (!blend || ink.len() >= 4));
     let end = mask.len() / 16 * 16;
-    let max = Simd::<u32, 16>::splat(255);
-    let round = Simd::splat(127);
+    let max = Simd::<u16, 16>::splat(255);
+    // Round division by 255 for sums of 8-bit samples with complementary weights.
+    let divide = |sum: Simd<u16, 16>| {
+        let biased = sum + Simd::splat(128);
+        (biased + (biased >> 8)) >> 8
+    };
     for i in (0..end).step_by(16) {
-        let coverage = Bytes::from_slice(&mask[i..]).cast::<u32>();
-        let alpha = if blend { (coverage * Simd::splat(u32::from(ink[3])) + round) / max } else { coverage };
+        let coverage = Bytes::from_slice(&mask[i..]);
+        let empty = coverage.simd_eq(Bytes::splat(0));
+        if empty.all() {
+            continue;
+        }
+        let coverage = coverage.cast::<u16>();
+        let alpha = if blend { divide(coverage * Simd::splat(u16::from(ink[3]))) } else { coverage };
         let mut channels = load::<C>(&output[i * C..]);
-        let transparent = if C == 4 { channels[3].simd_eq(Bytes::splat(0)) } else { channels[0].simd_eq(channels[0]) };
+        let replace_rgb = if C == 4 { channels[3].simd_eq(Bytes::splat(0)) & !empty } else { empty };
         for c in 0..C {
             let weight = if C == 4 && c < 3 {
-                transparent.cast::<i32>().select(max, coverage)
+                replace_rgb.cast::<i16>().select(max, coverage)
             } else if C == 4 {
                 coverage
             } else {
                 alpha
             };
-            let value = ((Simd::splat(u32::from(ink[c])) * weight + channels[c].cast::<u32>() * (max - weight) + round) / max).cast::<u8>();
-            channels[c] = coverage.simd_eq(Simd::splat(0)).cast::<i8>().select(channels[c], value);
+            channels[c] = divide(Simd::splat(u16::from(ink[c])) * weight + channels[c].cast::<u16>() * (max - weight)).cast::<u8>();
         }
         store::<C>(&mut output[i * C..], channels);
     }
@@ -577,8 +585,8 @@ mod channel_swap_tests {
         fn check<const C: usize>() {
             for count in 0..=65 {
                 for offset in 0..16 {
-                    let source: Vec<u8> = (0..count * C).map(|i| (i * 73) as u8).collect();
-                    let mask: Vec<u8> = (0..count).map(|i| [0, 1, 127, 254, 255][i % 5]).collect();
+                    let source: Vec<u8> = (0..count * C).map(|i| if C == 4 && i % 8 == 3 { 0 } else { (i * 73) as u8 }).collect();
+                    let mask: Vec<u8> = (0..count).map(|i| if (16..32).contains(&i) { 0 } else { [0, 1, 127, 254, 255][i % 5] }).collect();
                     for blend in [false, true] {
                         let ink = [21, 149, 231, 137];
                         let mut data = vec![0xa5; offset + source.len() + 17];

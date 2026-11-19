@@ -4,6 +4,7 @@ use std::f64::consts::PI;
 
 use pyo3::exceptions::{PyOverflowError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyTuple;
 
 type Point = (f64, f64);
 type IntPoint = (i64, i64);
@@ -34,23 +35,26 @@ fn int_point(point: Point) -> PyResult<IntPoint> {
     Ok((integer(point.0)?, integer(point.1)?))
 }
 
-fn bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>, Point)> {
+const BEZIER_STEPS: usize = 32;
+
+fn bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<([Edge; BEZIER_STEPS], Point)> {
     let [(x1, y1), (x2, y2), (x3, y3)] = controls;
-    let mut previous = start;
-    let mut edges = Vec::with_capacity(32);
-    for step in 1..=32 {
-        let t = f64::from(step) / 32.0;
+    let mut previous = int_point(start)?;
+    let mut end = start;
+    let mut edges = [((0, 0), (0, 0)); BEZIER_STEPS];
+    for (i, edge) in edges.iter_mut().enumerate() {
+        let t = (i + 1) as f64 / BEZIER_STEPS as f64;
         let t2 = t * t;
         let t3 = t2 * t;
         let u = 1.0 - t;
         let u2 = u * u;
         let u3 = u2 * u;
-        let point =
-            (start.0 * u3 + 3.0 * (x1 * t * u2 + x2 * t2 * u) + x3 * t3 + 0.5, start.1 * u3 + 3.0 * (y1 * t * u2 + y2 * t2 * u) + y3 * t3 + 0.5);
-        edges.push((int_point(previous)?, int_point(point)?));
+        end = (start.0 * u3 + 3.0 * (x1 * t * u2 + x2 * t2 * u) + x3 * t3 + 0.5, start.1 * u3 + 3.0 * (y1 * t * u2 + y2 * t2 * u) + y3 * t3 + 0.5);
+        let point = int_point(end)?;
+        *edge = (previous, point);
         previous = point;
     }
-    Ok((edges, previous))
+    Ok((edges, end))
 }
 
 /// Flattened cubic Bezier and line segments for ImageDraw.shape().
@@ -95,7 +99,7 @@ impl Outline {
     /// Add a 32-segment cubic Bezier curve through two control points to (x3, y3).
     fn curve(&mut self, x1: f64, y1: f64, x2: f64, y2: f64, x3: f64, y3: f64) -> PyResult<()> {
         let (edges, position) = bezier_edges((self.x, self.y), [(x1, y1), (x2, y2), (x3, y3)])?;
-        self.edges.extend(edges);
+        self.edges.extend_from_slice(&edges);
         (self.x, self.y) = position;
         Ok(())
     }
@@ -114,9 +118,18 @@ impl Outline {
         if matrix.len().ok() != Some(6) {
             return Err(PyTypeError::new_err(format!("transform matrix must contain six values, got {}", describe())));
         }
-        let values = matrix.try_iter()?.map(|value| value?.extract::<f64>()).collect::<PyResult<Vec<_>>>()?;
-        let Ok([a, b, c, d, e, f]) = <[f64; 6]>::try_from(values) else {
-            return Err(PyTypeError::new_err(format!("transform matrix must contain six values, got {}", describe())));
+        let [a, b, c, d, e, f] = if let Ok(tuple) = matrix.cast_exact::<PyTuple>() {
+            let mut values = [0.0; 6];
+            for (value, item) in values.iter_mut().zip(tuple.as_slice()) {
+                *value = item.extract()?;
+            }
+            values
+        } else {
+            let values = matrix.try_iter()?.map(|value| value?.extract::<f64>()).collect::<PyResult<Vec<_>>>()?;
+            let Ok(values) = <[f64; 6]>::try_from(values) else {
+                return Err(PyTypeError::new_err(format!("transform matrix must contain six values, got {}", describe())));
+            };
+            values
         };
         if ![a, b, c, d, e, f].iter().all(|value| value.is_finite()) {
             return Err(PyValueError::new_err(format!("transform matrix must be finite, got {}", describe())));

@@ -262,8 +262,12 @@ fn paint_subpixel(image: &mut Image, x: i64, y: i64, ink: &[u8], blend: bool, co
     coverage_paint(image, x, y, ink, blend, ((covered * 255 + total / 2) / total) as u8);
 }
 
+fn supports_coverage(image: &Image) -> bool {
+    !image.pixel_mode().is_wide_scalar() && image.palette().is_none() && !matches!(image.pixel_mode(), PixelMode::Pa | PixelMode::One)
+}
+
 fn check_coverage(image: &Image) -> PyResult<()> {
-    if image.pixel_mode().is_wide_scalar() || image.palette().is_some() || matches!(image.pixel_mode(), PixelMode::Pa | PixelMode::One) {
+    if !supports_coverage(image) {
         return Err(PyValueError::new_err("anti-aliasing requires an 8-bit non-indexed image"));
     }
     Ok(())
@@ -537,30 +541,33 @@ fn draw_mask_impl(
     if size.0.checked_mul(size.1) != Some(mask.len()) {
         return Err(PyValueError::new_err("invalid mask size"));
     }
-    if !bilevel && value.py().detach(|| mask.iter().any(|&sample| sample != 0 && sample != 255)) {
+    if !bilevel && !supports_coverage(image) && value.py().detach(|| mask.iter().any(|&sample| sample != 0 && sample != 255)) {
         check_coverage(image)?;
     }
     let stroke = i64::try_from(stroke).map_err(|_| PyValueError::new_err("stroke is too large"))?;
     value.py().detach(|| {
         let left = (-stroke).max(position.0.saturating_neg());
         let right = (size.0 as i64).saturating_add(stroke).min(i64::from(image.width()).saturating_sub(position.0));
-        if left >= right || mask.is_empty() {
+        let top = (-stroke).max(position.1.saturating_neg());
+        let bottom = (size.1 as i64).saturating_add(stroke).min(i64::from(image.height()).saturating_sub(position.1));
+        if left >= right || top >= bottom || mask.is_empty() {
             return;
         }
+        let mode = image.pixel_mode();
+        let width = image.width() as usize;
+        let channels = mode.channels();
+        let packed = image.bit_depth() == 8 && matches!(mode, PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba);
         let mut row = vec![0; if stroke == 0 { 0 } else { (right - left) as usize }];
         let mut queue = VecDeque::new();
-        for y in (-stroke).max(position.1.saturating_neg())
-            ..(size.1 as i64).saturating_add(stroke).min(i64::from(image.height()).saturating_sub(position.1))
-        {
+        for y in top..bottom {
             let coverage = if stroke == 0 {
                 &mask[y as usize * size.0 + left as usize..y as usize * size.0 + right as usize]
             } else {
                 mask_row(mask, size, (left, y), stroke, &mut row, &mut queue);
                 &row
             };
-            if image.bit_depth() == 8 && matches!(image.pixel_mode(), PixelMode::L | PixelMode::La | PixelMode::Rgb | PixelMode::Rgba) {
-                let channels = image.pixel_mode().channels();
-                let start = ((position.1 + y) as usize * image.width() as usize + (position.0 + left) as usize) * channels;
+            if packed {
+                let start = ((position.1 + y) as usize * width + (position.0 + left) as usize) * channels;
                 let dst = &mut image.pixels_mut().unwrap()[start..start + coverage.len() * channels];
                 match channels {
                     1 => paint_bitmap_mask::<1>(dst, coverage, &ink, blend, bilevel),
@@ -573,8 +580,8 @@ fn draw_mask_impl(
             }
             for (x, &coverage) in (left..right).zip(coverage) {
                 let coverage = if bilevel { u8::from(coverage != 0) * 255 } else { coverage };
-                if image.pixel_mode() == PixelMode::Rgba && coverage != 0 {
-                    let offset = ((position.1 + y) as usize * image.width() as usize + (position.0 + x) as usize) * 4;
+                if mode == PixelMode::Rgba && coverage != 0 {
+                    let offset = ((position.1 + y) as usize * width + (position.0 + x) as usize) * 4;
                     let dst = &image.raw_data().unwrap()[offset..offset + 4];
                     let mut pixel = [0; 4];
                     for channel in 0..4 {
