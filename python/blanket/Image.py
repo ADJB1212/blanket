@@ -1772,6 +1772,8 @@ class Image:
                 result.info["transparency"] = mapping[old_transparency]
             else:
                 result.info.pop("transparency", None)
+        elif isinstance(old_transparency, bytes):
+            result.info["transparency"] = bytes(old_transparency[slot] if slot < len(old_transparency) else 255 for slot in positions)
         return result
 
     def putpixel(self, xy: tuple[int, int], value: float | tuple[int, ...]) -> None:

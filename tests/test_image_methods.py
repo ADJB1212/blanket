@@ -118,6 +118,19 @@ def test_remap_palette_matches_pillow_and_preserves_transparency() -> None:
     assert image.tobytes() == b"\x00\x01\x02\x01"
 
 
+def test_remap_palette_reorders_partial_alpha_table() -> None:
+    image = Image.frombytes("P", (3, 1), b"\x00\x01\x02")
+    image.putpalette(bytes([10, 20, 30, 40, 50, 60, 70, 80, 90]))
+    image.info["transparency"] = b"\x00\x80"
+
+    remapped = image.remap_palette([2, 0, 1])
+    assert remapped.info["transparency"] == b"\xff\x00\x80"
+    expected = image.convert("RGBA").tobytes()
+    assert remapped.convert("RGBA").tobytes() == expected
+    with Image.decode(remapped.encode("PNG")) as decoded:
+        assert decoded.convert("RGBA").tobytes() == expected
+
+
 @pytest.mark.parametrize("mode", ["L", "P"])
 @pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
 def test_remap_palette_with_source_palette(mode: str, palette_mode: str) -> None:
