@@ -334,6 +334,10 @@ def _decompression_bomb_check(size: tuple[int, int], *, error_only: bool = False
         warnings.warn(f"Image size ({pixels} pixels) exceeds limit of {MAX_IMAGE_PIXELS} pixels, could be decompression bomb DOS attack.", DecompressionBombWarning, stacklevel=2)
 
 
+def _check_tiff_size(size: tuple[int, int]) -> None:
+    _decompression_bomb_check(size, format="TIFF")
+
+
 class Resampling(IntEnum):
     """Pillow-compatible resampling filter identifiers."""
 
@@ -3943,7 +3947,8 @@ def _checked_header(data: bytes, formats: list[str] | tuple[str, ...] | None) ->
         format, size, pixel_mode, bit_depth = _inspect(data, formats)
     except (OSError, ValueError):
         return None
-    _decompression_bomb_check(size, format=format)
+    if format != "TIFF":
+        _decompression_bomb_check(size, format=format)
     return ImageHeader(format, size, pixel_mode, bit_depth, {})
 
 
@@ -4105,10 +4110,11 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         if truncated and b"\xff\xda" in data:
             data = data + b"\xff\xd9"
             truncated_jpeg = True
+    tiff_size_check = _check_tiff_size if MAX_IMAGE_PIXELS is not None else None
     if lazy:
         from ._lazy_frames import LazyFrames
 
-        count, loop_count, default_image = _index_sequence(data, formats)
+        count, loop_count, default_image = _index_sequence(data, formats, tiff_size_check)
         storage = LazyFrames(data, count, frame_cache_size, loop_count, default_image)
         first = storage.get(0, progress)
         image = Image(first._native)
@@ -4118,7 +4124,7 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
         image._seek_error = seek_error
         image._declared_frames = declared_frames
         return image
-    frames, controls, loop_count, default_image = _open_sequence(data, formats, None, progress)
+    frames, controls, loop_count, default_image = _open_sequence(data, formats, None, progress, tiff_size_check)
     image = Image(frames[0])
     image._seek_error = seek_error
     image._truncated_jpeg = truncated_jpeg
@@ -4210,14 +4216,17 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
     format, size, _, _ = _inspect(data, formats)
     if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
         raise ValueError("region must be a nonempty rectangle inside the image")
+    _decompression_bomb_check(size, error_only=True, format=format)
     native = _decode_region(data, box, formats, progress)
     if native is None:
         if fallback == "error":
             raise NotImplementedError("region decoding unavailable; use fallback='full'")
-        _decompression_bomb_check(size, format=format)
+        if format != "TIFF":
+            _decompression_bomb_check(size, format=format)
         with _decode(data, formats, False, 1, progress=progress) as source:
             result = source.crop(box)
     else:
+        _decompression_bomb_check(size, format=format)
         result = Image(native)
         result.info.update(read_metadata(data, result.format))
     result.info["decode_region"] = box

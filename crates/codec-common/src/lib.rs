@@ -75,15 +75,15 @@ pub struct DecodeError {
 
 /// Poll a decode boundary while preserving the original callback exception.
 pub fn decode_checkpoint(progress: &Progress) -> Result<(), DecodeError> {
-    progress.checkpoint().map_err(|error| DecodeError {
-        kind: CodecErrorKind::Other,
-        message: "decode interrupted by progress callback".into(),
-        source: None,
-        callback_error: Some(error),
-    })
+    progress.checkpoint().map_err(DecodeError::from_callback)
 }
 
 impl DecodeError {
+    /// Preserve the Python exception from a decode callback.
+    pub fn from_callback(error: PyErr) -> Self {
+        Self { kind: CodecErrorKind::Other, message: "decode interrupted by callback".into(), source: None, callback_error: Some(error) }
+    }
+
     /// Preserve a diagnostic chain when the native error cannot cross detached calls.
     pub fn with_diagnostic_source(error: impl std::error::Error) -> Self {
         fn snapshot(error: &dyn std::error::Error) -> DecodeError {

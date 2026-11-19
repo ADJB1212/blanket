@@ -568,8 +568,15 @@ pub fn decode_sequence(data: &[u8]) -> Result<blanket_codec_common::Sequence, De
 }
 
 pub fn index_sequence(data: &[u8]) -> Result<blanket_codec_common::SequenceInfo, String> {
+    index_sequence_with_size_check(data, |_| Ok(())).map_err(String::from)
+}
+
+pub fn index_sequence_with_size_check(
+    data: &[u8], mut check_size: impl FnMut((u32, u32)) -> Result<(), DecodeError>,
+) -> Result<blanket_codec_common::SequenceInfo, DecodeError> {
     let mut sequence = blanket_codec_common::SequenceInfo::default();
-    visit_pages(data, |_| {
+    visit_pages(data, |_, size| {
+        check_size(size)?;
         sequence.count += 1;
         Ok(())
     })?;
@@ -581,11 +588,18 @@ pub fn decode_frame(data: &[u8], target: usize) -> Result<blanket_codec_common::
 }
 
 pub fn decode_frames(data: &[u8], target: Option<usize>, progress: &Progress) -> Result<blanket_codec_common::Sequence, DecodeError> {
+    decode_frames_with_size_check(data, target, progress, |_| Ok(()))
+}
+
+pub fn decode_frames_with_size_check(
+    data: &[u8], target: Option<usize>, progress: &Progress, mut check_size: impl FnMut((u32, u32)) -> Result<(), DecodeError>,
+) -> Result<blanket_codec_common::Sequence, DecodeError> {
     use blanket_codec_common::{Frame, Sequence};
     let mut sequence = Sequence::default();
     let mut index = 0;
-    visit_pages(data, |page| {
+    visit_pages(data, |page, size| {
         if target.is_none_or(|target| index == target) {
+            check_size(size)?;
             sequence.frames.push(Frame { image: decode_tiff_with_progress(page, progress)?, duration: None, disposal: 0, blend: 0 });
             decode_checkpoint(progress)?;
         }
@@ -595,7 +609,7 @@ pub fn decode_frames(data: &[u8], target: Option<usize>, progress: &Progress) ->
     Ok(sequence)
 }
 
-fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), DecodeError>) -> Result<(), DecodeError> {
+fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8], (u32, u32)) -> Result<(), DecodeError>) -> Result<(), DecodeError> {
     use blanket_codec_common::validate_frame_budget;
     let little = data.starts_with(b"II");
     let read = |offset: usize, count: usize| -> Result<usize, String> {
@@ -631,7 +645,7 @@ fn visit_pages(data: &[u8], mut visit: impl FnMut(&[u8]) -> Result<(), DecodeErr
         let mut decoder = tiff::decoder::Decoder::new(Cursor::new(page_data.as_ref())).map_err(DecodeError::with_diagnostic_source)?;
         let (width, height) = decoder.dimensions().map_err(DecodeError::with_diagnostic_source)?;
         validate_frame_budget(&mut total, width, height)?;
-        visit(&page_data)?;
+        visit(&page_data, (width, height))?;
         offset = next_offset;
     }
     if seen.is_empty() {

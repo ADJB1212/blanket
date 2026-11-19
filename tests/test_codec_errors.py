@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from helpers import assert_raises, image_buffer
+from PIL import Image as PillowImage
 
 from blanket import CodecError, CodecResourceLimitError, CorruptImageError, Image, ImageFile, MissingBackendError, UnidentifiedImageError, UnsupportedCodecError
 
@@ -104,6 +105,22 @@ def test_configurable_decompression_bomb_threshold(monkeypatch: pytest.MonkeyPat
     assert Image.inspect(BytesIO(encoded)).size == (4, 4)
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", None)
     assert decode(encoded).size == (4, 4)
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_configurable_pixel_limit_checks_later_tiff_pages(monkeypatch: pytest.MonkeyPatch, lazy: bool) -> None:
+    stream = BytesIO()
+    PillowImage.new("L", (4, 4)).save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (8, 8))])
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 30)
+    with pytest.raises(Image.DecompressionBombError, match="64 pixels"):
+        Image.decode(stream.getvalue(), lazy=lazy)
+
+
+def test_tiff_region_checks_source_pixel_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    stream = image_buffer(Image.new("L", (8, 8)), "TIFF")
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 30)
+    with pytest.raises(Image.DecompressionBombError, match="64 pixels"):
+        Image.open_region(stream, (0, 0, 1, 1))
 
 
 def test_cumulative_frame_limit() -> None:
