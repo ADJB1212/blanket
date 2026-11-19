@@ -10,9 +10,8 @@ indices and palette alpha.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "contextlib", "operator"}
+__lazy_modules__ = {"collections.abc", "operator"}
 
-from contextlib import suppress
 from dataclasses import dataclass
 from operator import index
 from typing import TYPE_CHECKING, Protocol, cast, overload
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
 
 from . import Image, ImageChops
 from ._blanket import (
+    ops_apply_tone_table,
     ops_autocontrast,
     ops_autocontrast_lut,
     ops_canvas,
@@ -34,7 +34,6 @@ from ._blanket import (
     ops_equalize,
     ops_fit_box,
     ops_histogram,
-    ops_lut,
     ops_mesh,
     ops_pad_offset,
     ops_phase_correlate,
@@ -276,19 +275,10 @@ def _canvas_color(image: Image.Image, color: str | float | tuple[float, ...] | N
     return color_pixel(cast("Color | None", color), image.mode, image.bit_depth)
 
 
-def _tone_key(image: Image.Image) -> list[int] | None:
-    """Read a valid 8-bit color key for a tone operation."""
-    if image.mode in ("L", "RGB") and (key := image.info.get("transparency")) is not None:
-        with suppress(TypeError, ValueError):
-            return Image._png_key_samples(image.mode, key, 255)
-    return None
-
-
-def _tone_result(image: Image.Image, native: _Image, key: bytes | tuple[int, ...] | None) -> Image.Image:
+def _tone_result(image: Image.Image, native: _Image, key: bytes | None) -> Image.Image:
     """Attach the mapped key and other source metadata to a tone result."""
     result = _result(image, native)
-    if key is not None:
-        result.info["transparency"] = key[0] if image.mode == "L" else tuple(key)
+    result._set_lut_transparency(key)
     return result
 
 
@@ -306,10 +296,8 @@ def _lut(image: Image.Image, table: bytes, *, palette: bool = False) -> Image.Im
         return result
     if image.mode not in ("L", "RGB"):
         raise OSError(f"not supported for mode {image.mode}")
-    samples = _tone_key(image)
-    stride = 0 if len(table) == 256 else 256
-    key = None if samples is None else tuple(table[channel * stride + sample] for channel, sample in enumerate(samples))
-    return _tone_result(image, ops_lut(image._native, table), key)
+    native, key = ops_apply_tone_table(image._native, table, image._lut_transparency())
+    return _tone_result(image, native, key)
 
 
 def _border(border: Border) -> tuple[int, int, int, int]:
@@ -363,7 +351,7 @@ def autocontrast(image: Image.Image, cutoff: float | tuple[float, float] = 0, ig
     if len(tails) == 2 and all(isinstance(value, (int, float)) and 0 <= value <= 100 for value in tails) and isinstance(ignored, (tuple, list)) and all(isinstance(value, int) and -256 <= value < 256 for value in ignored):
         native_tone = preserve_tone and image.mode == "RGB" and image.bit_depth == 8
         source = image.convert("L") if preserve_tone and image.mode != "L" and not native_tone else image
-        native, key = ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored, native_tone, _tone_key(image))
+        native, key = ops_autocontrast(image._native, source._native, None if mask is None else mask._native, tails, ignored, native_tone, image._lut_transparency())
         return _tone_result(image, native, key)
     # Retain Python's permissive cutoff and index semantics outside the native fast path.
     source = image.convert("L") if preserve_tone and image.mode != "L" else image
@@ -645,7 +633,7 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
     """
     if image.mode == "P":
         image = image.convert("RGB")
-    native, key = ops_equalize(image._native, None if mask is None else mask._native, _tone_key(image))
+    native, key = ops_equalize(image._native, None if mask is None else mask._native, image._lut_transparency())
     return _tone_result(image, native, key)
 
 

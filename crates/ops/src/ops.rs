@@ -19,6 +19,7 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(ops_autocontrast_lut, module)?)?;
     module.add_function(wrap_pyfunction!(ops_color_composite, module)?)?;
     module.add_function(wrap_pyfunction!(ops_lut, module)?)?;
+    module.add_function(wrap_pyfunction!(apply_tone_table, module)?)?;
     module.add_function(wrap_pyfunction!(ops_point, module)?)?;
     module.add_function(wrap_pyfunction!(ops_linear_gradient, module)?)?;
     module.add_function(wrap_pyfunction!(wide_histogram, module)?)?;
@@ -341,8 +342,8 @@ fn ops_xbm<'py>(py: Python<'py>, image: &Image, name: &str) -> PyResult<Bound<'p
     Ok(PyBytes::new(py, &data))
 }
 
-#[pyfunction]
-fn ops_point(py: Python<'_>, image: &Image, values: Vec<Bound<'_, PyAny>>) -> PyResult<Image> {
+#[pyfunction(signature = (image, values, key=None))]
+fn ops_point(py: Python<'_>, image: &Image, values: Vec<Bound<'_, PyAny>>, key: Option<Vec<u8>>) -> PyResult<(Image, Option<Vec<u8>>)> {
     let lut = values
         .iter()
         .map(|value| {
@@ -372,7 +373,7 @@ fn ops_point(py: Python<'_>, image: &Image, values: Vec<Bound<'_, PyAny>>) -> Py
             }
         })
         .collect::<PyResult<Vec<_>>>()?;
-    ops_lut(py, image, lut)
+    apply_tone_table(py, image, lut, key)
 }
 
 #[pyfunction]
@@ -426,10 +427,15 @@ fn check_tone_mode(image: &Image) -> PyResult<()> {
     Ok(())
 }
 
+#[pyfunction(name = "ops_apply_tone_table", signature = (image, table, key=None))]
 fn apply_tone_table(py: Python<'_>, image: &Image, table: Vec<u8>, key: Option<Vec<u8>>) -> PyResult<(Image, Option<Vec<u8>>)> {
     let mapped = if let Some(key) = key {
-        if key.len() != image.pixel_mode().channels() {
+        let channels = image.pixel_mode().channels();
+        if key.len() != channels {
             return Err(PyValueError::new_err("transparency key does not match the image mode"));
+        }
+        if table.len() != 256 && table.len() != 256 * channels {
+            return Err(PyValueError::new_err("wrong number of lut entries"));
         }
         let stride = if table.len() == 256 { 0 } else { 256 };
         Some(key.into_iter().enumerate().map(|(channel, sample)| table[channel * stride + usize::from(sample)]).collect())

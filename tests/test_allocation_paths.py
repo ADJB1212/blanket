@@ -34,9 +34,9 @@ def test_point_callable_transfers_one_shared_table(mode, monkeypatch):
         calls.append(value)
         return values[value]
 
-    def shared_table(native, table):
+    def shared_table(native, table, key):
         assert len(table) == 256
-        return native_point(native, table)
+        return native_point(native, table, key)
 
     monkeypatch.setattr(Image, "ops_point", shared_table)
     assert image.point(lookup).tobytes() == expected.tobytes()

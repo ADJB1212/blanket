@@ -39,6 +39,18 @@ def test_float_point_rejects_a_different_output_mode_before_mapping() -> None:
         image.point(lookup, mode="L")
 
 
+@pytest.mark.parametrize("shared_table", [False, True])
+def test_point_maps_transparency_with_the_pixel_lookup(shared_table: bool) -> None:
+    image = Image.frombytes("RGB", (2, 1), bytes([47, 68, 89, 22, 33, 44]))
+    image.info["transparency"] = (47, 68, 89)
+    table = [i / 2 for i in range(256)]
+
+    result = image.point(lambda i: table[i]) if shared_table else image.point(table + table[::-1] + table)
+
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert result.convert("RGBA").getchannel("A").tobytes() == b"\x00\xff"
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_channels_and_point(mode: str) -> None:
     data = bytes((i * 37) % 256 for i in range(63 * len(mode)))

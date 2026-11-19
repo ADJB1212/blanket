@@ -17,7 +17,7 @@ import subprocess
 import sys
 import tempfile
 import warnings
-from contextlib import ExitStack
+from contextlib import ExitStack, suppress
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import IntEnum
@@ -1676,6 +1676,18 @@ class Image:
             info["exif"] = self._metadata_value("exif")
         return info
 
+    def _lut_transparency(self) -> list[int] | None:
+        """Read a valid 8-bit grayscale or RGB color key for a lookup table."""
+        if self.mode in ("L", "RGB") and (key := self.info.get("transparency")) is not None:
+            with suppress(TypeError, ValueError):
+                return _png_key_samples(self.mode, key, 255)
+        return None
+
+    def _set_lut_transparency(self, key: bytes | None) -> None:
+        """Store a color key mapped by the same lookup as the pixels."""
+        if key is not None:
+            self.info["transparency"] = key[0] if self.mode == "L" else tuple(key)
+
     def getpixel(self, xy: tuple[int, int] | list[int]) -> int | tuple[int, ...]:
         """Return a pixel value, accepting negative coordinates as Pillow does.
 
@@ -2593,8 +2605,10 @@ class Image:
             expected = 256 * len(self.getbands())
         if len(values) != expected:
             raise ValueError("wrong number of lut entries")
-        result = Image(ops_point(self._native, values))
+        native, key = ops_point(self._native, values, self._lut_transparency())
+        result = Image(native)
         result.info.update(self._metadata_info())
+        result._set_lut_transparency(key)
         return result
 
     def thumbnail(self, size: tuple[float, float], resample: int = Resampling.BICUBIC, reducing_gap: float | None = 2.0) -> None:
