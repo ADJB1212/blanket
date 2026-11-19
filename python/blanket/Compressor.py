@@ -2,14 +2,43 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"math", "re"}
+__lazy_modules__ = {"importlib", "math", "re", "collections.abc"}
 
 import math
 import re
+from contextlib import contextmanager, suppress
+from importlib import import_module
+from typing import TYPE_CHECKING
 
 from ._blanket import _LosslessImageCompressor, _LossyImageCompressor
 
+if TYPE_CHECKING:
+    from collections.abc import Generator
+
+    from ._typing import ProgressCallback
+
 __all__ = ["LosslessImageCompressor", "LossyImageCompressor"]
+
+
+@contextmanager
+def _compression_progress(progress: ProgressCallback | None, *, show_progress: bool) -> Generator[ProgressCallback | None, None, None]:
+    """Report compression checkpoints through an optional tqdm display."""
+    tqdm = None
+    if show_progress:
+        with suppress(ImportError):
+            tqdm = import_module("tqdm").tqdm
+    if tqdm is None:
+        yield progress
+        return
+
+    with tqdm(desc="Compressing", unit="checkpoint") as bar:
+
+        def report(completed: int) -> bool | None:
+            if completed:
+                bar.update(1)
+            return progress(completed) if progress is not None else None
+
+        yield report
 
 
 def _validate_target_size(target_size: int | str | None) -> int | None:
@@ -64,7 +93,7 @@ class LossyImageCompressor:
     guarantee that unsearched settings could not meet the budget.
     """
 
-    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7, target_size: int | str | None = None, metric: str | None = None, min_score: float | None = None) -> None:
+    def __init__(self, *, max_rmse: float = 2.0, effort: int = 7, target_size: int | str | None = None, metric: str | None = None, min_score: float | None = None, show_progress: bool = False) -> None:
         """Configure LossyImageCompressor.
 
         Args:
@@ -73,9 +102,10 @@ class LossyImageCompressor:
             target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
             metric: Optional perceptual metric name: "ssim", "ms_ssim", or "ssimulacra2".
             min_score: Minimum acceptable perceptual score; required together with metric.
+            show_progress: Show compression checkpoints when tqdm is installed.
 
         Raises:
-            TypeError: A numeric or string argument has the wrong type.
+            TypeError: An argument has the wrong type.
             ValueError: An effort, error limit, metric, score, or size budget is outside its allowed range.
 
         Examples:
@@ -117,6 +147,9 @@ class LossyImageCompressor:
             minimum = -1 if metric == "ssim" else 0 if metric == "ms_ssim" else -math.inf
             if not minimum <= min_score <= maximum or not math.isfinite(min_score):
                 raise ValueError("min_score must be finite and within the metric's score range")
+        if not isinstance(show_progress, bool):
+            raise TypeError("show_progress must be a boolean")
+        self._show_progress = show_progress
         self._target_size = _validate_target_size(target_size)
         self._native = _LossyImageCompressor(max_rmse=float(max_rmse), effort=effort, metric=metric, min_score=min_score)
 
@@ -197,6 +230,7 @@ class LosslessImageCompressor:
         effort: Optimization effort from 1 (fastest) to 10 (most thorough).
             Controls PNG filter search, JPEG scan coding, JXL effort search,
             WebP method search, and HEIF/HEIC encoder preset search. Higher settings can be slow.
+        show_progress: Show compression checkpoints when tqdm is installed.
 
     Eight-bit PNG saves try grayscale and opaque-alpha reductions and multiple
     row filters, including minimum-entropy filtering. Exact palettes use packed
@@ -232,15 +266,16 @@ class LosslessImageCompressor:
 
     """
 
-    def __init__(self, *, effort: int = 7, target_size: int | str | None = None) -> None:
+    def __init__(self, *, effort: int = 7, target_size: int | str | None = None, show_progress: bool = False) -> None:
         """Configure LosslessImageCompressor.
 
         Args:
             effort: Integer search effort from 1 (fastest) through 10 (most thorough); booleans are rejected.
             target_size: Positive byte budget as an integer or size string (such as "50kb" or "10MiB"), or None for no budget. Metadata is stripped.
+            show_progress: Show compression checkpoints when tqdm is installed.
 
         Raises:
-            TypeError: ``effort`` is not an integer.
+            TypeError: An argument has the wrong type.
             ValueError: ``effort`` or ``target_size`` is outside its allowed range.
 
         Examples:
@@ -261,6 +296,9 @@ class LosslessImageCompressor:
             raise TypeError("effort must be an integer")
         if not 1 <= effort <= 10:
             raise ValueError("effort must be between 1 and 10")
+        if not isinstance(show_progress, bool):
+            raise TypeError("show_progress must be a boolean")
+        self._show_progress = show_progress
         self._target_size = _validate_target_size(target_size)
         self._native = _LosslessImageCompressor(effort=effort)
 

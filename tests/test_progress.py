@@ -1,7 +1,10 @@
+import sys
 from concurrent.futures import ThreadPoolExecutor
 from io import BytesIO
 from struct import pack
 from threading import get_ident
+from types import SimpleNamespace
+from unittest.mock import MagicMock, call
 from zlib import compress, crc32
 
 import pytest
@@ -157,6 +160,56 @@ def test_cancelled_compressor_preserves_destination_and_can_retry(format, compre
     result = source.encode(format, compressor=compressor, progress=seen.append)
     assert result == source.encode(format, compressor=compressor)
     assert seen == list(range(len(seen))) and len(seen) > 3
+
+
+@pytest.mark.parametrize("compressor_type", [Compressor.LosslessImageCompressor, Compressor.LossyImageCompressor])
+def test_compressor_tqdm_progress(compressor_type, monkeypatch):
+    tqdm = MagicMock()
+    monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=tqdm))
+    image = Image.new("RGB", (17, 19), "red")
+    baseline = image.encode("PNG", compressor=compressor_type(effort=1))
+    tqdm.assert_not_called()
+
+    compressor = compressor_type(effort=1, show_progress=True)
+    seen = []
+    assert image.encode("PNG", compressor=compressor, progress=seen.append) == baseline
+    tqdm.assert_called_once_with(desc="Compressing", unit="checkpoint")
+    context = tqdm.return_value
+    bar = context.__enter__.return_value
+    assert seen == list(range(len(seen))) and len(seen) > 2
+    assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
+    context.__exit__.assert_called_once_with(None, None, None)
+
+    tqdm.reset_mock()
+    output = BytesIO()
+    image.save(output, "PNG", compressor=compressor)
+    assert output.getvalue() == baseline
+    tqdm.assert_called_once()
+    assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
+    context.__exit__.assert_called_once_with(None, None, None)
+
+    tqdm.reset_mock()
+    output = BytesIO(b"original")
+    with pytest.raises(OperationCancelledError):
+        image.save(output, "PNG", compressor=compressor, progress=lambda completed: completed < 1)
+    assert output.getvalue() == b"original"
+    tqdm.assert_called_once()
+    bar.update.assert_called_once_with(1)
+    assert context.__exit__.call_args.args[0] is OperationCancelledError
+
+
+def test_compressor_progress_when_tqdm_is_missing(monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "tqdm", None)
+    image = Image.new("RGB", (17, 19), "red")
+    seen = []
+    compressor = Compressor.LosslessImageCompressor(effort=1)
+    baseline = image.encode("PNG", compressor=compressor, progress=seen.append)
+    output = BytesIO()
+    reported = []
+    image.save(output, "PNG", compressor=Compressor.LosslessImageCompressor(effort=1, show_progress=True), progress=reported.append)
+    assert output.getvalue() == baseline
+    assert reported == seen
+    assert capsys.readouterr() == ("", "")
 
 
 def test_callback_exceptions_propagate_without_codec_wrapping():

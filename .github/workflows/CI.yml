@@ -39,7 +39,7 @@ env:
   HOMEBREW_NO_DEPRECATED_WARNINGS: "1"
   UV_NO_SYNC: "1"
   RUSTUP_AUTO_INSTALL: "0"
-  RUSTUP_TOOLCHAIN: nightly-2026-11-17
+  RUSTUP_TOOLCHAIN: nightly-2026-11-19
 
 permissions:
   contents: read
@@ -101,9 +101,13 @@ jobs:
       - name: Set up Python 3.14 for PyO3
         run: |
           uv python install 3.14
-          python_executable=$(uv python find --managed-python 3.14)
-          python_libdir=$("$python_executable" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')
+          uv tool install maturin
+          uv sync --no-install-project --only-group test --managed-python
+          python_libdir=$(uv run --no-sync python -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')
+          python_executable=$(uv run --no-sync python -c 'import sys; print(sys.executable)')
           echo "PYO3_PYTHON=$python_executable" >> "$GITHUB_ENV"
+          echo "$python_libdir" >> "$GITHUB_PATH"
+          echo "$(uv tool dir --bin)" >> "$GITHUB_PATH"
           echo "LD_LIBRARY_PATH=$python_libdir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
 
       - name: Verify native codec libraries
@@ -113,11 +117,7 @@ jobs:
         run: cargo test --tests --lib --workspace --profile ci --locked --features $BUILD_FEATURES
 
       - name: Install project and test dependencies
-        run: |
-          uv tool install maturin
-          export PATH="$(uv tool dir --bin):$PATH"
-          uv sync --no-install-project --only-group test --managed-python
-          maturin develop -G test --uv --profile ci --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
+        run: maturin develop -G test --uv --profile ci --features $BUILD_FEATURES -- -C linker=clang -C link-arg=-fuse-ld=$FUSE_LINKER
 
       - name: Verify GPU backend is compiled
         run: uv run python -c 'from blanket import ImageGpu; info = ImageGpu.capabilities("cuda"); assert info["compiled"], info; print(info)'

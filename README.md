@@ -63,6 +63,9 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
 - **Progress and cancellation.** Pass `progress=callback` to decode, resize,
   seam carving, or a save with a compressor. The callback receives consecutive
   checkpoint numbers starting at zero.
+  Set `show_progress=True` on either image compressor to display a tqdm
+  checkpoint counter during `save()` or `encode()`. If tqdm is unavailable,
+  compression proceeds silently.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
 - **Visual fingerprints.** `ImageHash` provides average, difference, perceptual,

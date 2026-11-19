@@ -108,7 +108,7 @@ from ._color import color_pixel
 from ._exif import ORIENTATION_RE, exif_source, read_metadata, read_tiff_metadata, save_metadata
 from ._ifd import Exif
 from ._io import read_bytes as _read_bytes, write_all
-from .Compressor import LosslessImageCompressor, LossyImageCompressor
+from .Compressor import LosslessImageCompressor, LossyImageCompressor, _compression_progress
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
 _EXTENSIONS = {
@@ -3480,21 +3480,22 @@ class Image:
         values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
-        encoded = _encode(
-            native,
-            output_format,
-            **values,
-            # PNG candidates can change sample values or the color type, invalidating the key.
-            compressor=None if compressor is None or png_key is not None else compressor._native,
-            target_size=None if compressor is None else compressor.target_size,
-            output=output,
-            icc_profile=metadata[2],
-            metadata_exif=metadata[0],
-            metadata_xmp=metadata[1],
-            attach_metadata=has_metadata,
-            metadata_chunks=metadata[3],
-            progress=progress,
-        )
+        with _compression_progress(progress, show_progress=compressor is not None and compressor._show_progress) as report:
+            encoded = _encode(
+                native,
+                output_format,
+                **values,
+                # PNG candidates can change sample values or the color type, invalidating the key.
+                compressor=None if compressor is None or png_key is not None else compressor._native,
+                target_size=None if compressor is None else compressor.target_size,
+                output=output,
+                icc_profile=metadata[2],
+                metadata_exif=metadata[0],
+                metadata_xmp=metadata[1],
+                attach_metadata=has_metadata,
+                metadata_chunks=metadata[3],
+                progress=report,
+            )
         if fp is None:
             return encoded
         if hasattr(fp, "write"):
