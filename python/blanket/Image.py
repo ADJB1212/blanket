@@ -108,7 +108,8 @@ from ._color import color_pixel
 from ._exif import ORIENTATION_RE, exif_source, read_metadata, read_tiff_metadata, save_metadata
 from ._ifd import Exif
 from ._io import read_bytes as _read_bytes, write_all
-from .Compressor import LosslessImageCompressor, LossyImageCompressor, _compression_progress
+from ._progress import progress_display, validate_progress
+from .Compressor import LosslessImageCompressor, LossyImageCompressor
 from .ImageFilter import ModeFilter, MultibandFilter, RankFilter
 
 _EXTENSIONS = {
@@ -311,11 +312,6 @@ class DecompressionBombWarning(RuntimeWarning):
 
 class DecompressionBombError(CodecResourceLimitError):
     """An image exceeds twice the configured decoded-pixel threshold."""
-
-
-def _validate_progress(progress: ProgressCallback | None) -> None:
-    if progress is not None and not callable(progress):
-        raise TypeError("progress must be callable or None")
 
 
 def _checkpoint(progress: ProgressCallback | None, completed: int) -> None:
@@ -797,12 +793,13 @@ class Image:
         self._check_open()
         return self._frame
 
-    def seek(self, frame: int, *, progress: ProgressCallback | None = None) -> None:
+    def seek(self, frame: int, *, progress: ProgressCallback | None = None, show_progress: bool = False) -> None:
         """Select a frame; raise EOFError when the index is outside the image.
 
         Args:
             frame: Zero-based frame or page index.
             progress: Callback for decoding a lazy frame on a cache miss, as in decode().
+            show_progress: Show lazy-frame decode checkpoints when tqdm is installed.
 
         Examples:
             ```python
@@ -814,10 +811,10 @@ class Image:
 
         Raises:
             EOFError: ``frame`` is outside the sequence.
-            TypeError: ``progress`` is not callable.
+            TypeError: A progress option has the wrong type.
             ValueError: The image is closed or its frame changes during decoding.
         """
-        _validate_progress(progress)
+        validate_progress(progress, show_progress=show_progress)
         self._check_open()
         frame = index(frame)
         if not 0 <= frame < self.n_frames:
@@ -831,19 +828,23 @@ class Image:
         storage = self._lazy_frames
         current_frame = self._frame
         current = storage.cache[current_frame] if storage is not None else frames[current_frame]
-        if storage is not None and progress is not None:
-            callback = progress
+        if storage is None:
+            selected = frames[frame]
+        else:
+            with progress_display(progress, show_progress=show_progress, description="Decoding frame") as callback:
+                if callback is None:
+                    selected = storage.get(frame)
+                else:
 
-            def report(completed: int) -> bool | None:
-                result = callback(completed)
-                if result is not False:
-                    self._check_open()
-                    if self._frame != current_frame or storage.cache.get(current_frame) is not current:
-                        raise ValueError("current frame changed during decode")
-                return result
+                    def report(completed: int) -> bool | None:
+                        result = callback(completed)
+                        if result is not False:
+                            self._check_open()
+                            if self._frame != current_frame or storage.cache.get(current_frame) is not current:
+                                raise ValueError("current frame changed during decode")
+                        return result
 
-            progress = report
-        selected = storage.get(frame, progress) if storage is not None else frames[frame]
+                    selected = storage.get(frame, report)
         current._native, current.palette, current._info = self._native, self.palette, self._info
         current._exif, current._exif_source = self._exif, self._exif_source
         self._native, self.palette, self._info = selected._native, selected.palette, selected._info
@@ -875,7 +876,7 @@ class Image:
         """
         return self.mode in ("LA", "La", "PA", "RGBA", "RGBa", "RGBA;F") or "transparency" in self.info or (self.palette is not None and self.palette.mode == "RGBA")
 
-    def load(self, *, progress: ProgressCallback | None = None) -> PixelAccess:
+    def load(self, *, progress: ProgressCallback | None = None, show_progress: bool = False) -> PixelAccess:
         """Return a pixel accessor for the current raster.
 
         Access pixels with ``pixels[x, y]``; negative coordinates count from
@@ -886,12 +887,13 @@ class Image:
 
         Args:
             progress: Callback for decoding deferred pixels, as in decode().
+            show_progress: Show deferred decode checkpoints when tqdm is installed.
 
         Returns:
             A pixel accessor bound to the current raster.
 
         Raises:
-            TypeError: ``progress`` is not callable.
+            TypeError: A progress option has the wrong type.
             ValueError: The image is closed or its draft changes during decoding.
 
         Examples:
@@ -903,8 +905,12 @@ class Image:
             pixels[0, 0] = (255, 0, 0)
             ```
         """
-        _validate_progress(progress)
-        native = self._load_native(progress) if progress is not None and self._encoded is not None else self._native
+        validate_progress(progress, show_progress=show_progress)
+        if self._encoded is not None and (progress is not None or show_progress):
+            with progress_display(progress, show_progress=show_progress, description="Decoding") as report:
+                native = self._load_native(report) if report is not None else self._native
+        else:
+            native = self._native
         native.load()
         self._sync_palette()
         return PixelAccess(self._native)
@@ -2865,6 +2871,7 @@ class Image:
         transfer: str = "srgb",
         premultiply_alpha: bool = True,
         progress: ProgressCallback | None = None,
+        show_progress: bool = False,
     ) -> Image:
         """Return a resized copy, using BICUBIC unless a filter is specified.
 
@@ -2881,6 +2888,7 @@ class Image:
             premultiply_alpha: Filter premultiplied color; applies to float or linear-light resizing.
             progress: Callback at row-tile boundaries, as in decode(). The
                 result uses the pixels and metadata selected before the callback.
+            show_progress: Show resize checkpoints when tqdm is installed.
 
         Returns:
             A new image of the requested size.
@@ -2898,7 +2906,7 @@ class Image:
             ```
         """
 
-        _validate_progress(progress)
+        validate_progress(progress, show_progress=show_progress)
         method = Resampling.BICUBIC if resample is None else resample
         if method not in range(8):
             raise ValueError(f"Unknown resampling filter ({method})")
@@ -2926,25 +2934,24 @@ class Image:
         if transfer not in ("srgb", "linear"):
             raise ValueError("transfer must be 'srgb' or 'linear'")
         self.load()
-        source = self if progress is None else self.copy()
-        native = source._native
-        if not linear_light and source.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
-            _checkpoint(progress, 0)
-            crop_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-            if method != Resampling.NEAREST and source.mode in ("LA", "RGBA") and box != (0, 0, *source.size):
-                result = source.convert("La" if source.mode == "LA" else "RGBa").crop(crop_box).convert(source.mode)
+        with progress_display(progress, show_progress=show_progress, description="Resizing") as report:
+            source = self if report is None else self.copy()
+            native = source._native
+            if not linear_light and source.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
+                _checkpoint(report, 0)
+                crop_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
+                if method != Resampling.NEAREST and source.mode in ("LA", "RGBA") and box != (0, 0, *source.size):
+                    result = source.convert("La" if source.mode == "LA" else "RGBa").crop(crop_box).convert(source.mode)
+                else:
+                    result = source.crop(crop_box)
+                _checkpoint(report, 1)
+                return result
+            if linear_light or source.mode in ("RGB;F", "RGBA;F"):
+                native = ops_color_resize(native, size, method, box, linear_light and transfer == "srgb", premultiply_alpha, report)
+            elif size == source.size and box == (0, 0, *source.size):
+                native = ops_transpose(native, 1)
             else:
-                result = source.crop(crop_box)
-            _checkpoint(progress, 1)
-            return result
-        if linear_light or source.mode in ("RGB;F", "RGBA;F"):
-            result = Image(ops_color_resize(native, size, method, box, linear_light and transfer == "srgb", premultiply_alpha, progress))
-            result.info.update(source._metadata_info())
-            return result
-        if size == source.size and box == (0, 0, *source.size):
-            native = ops_transpose(native, 1)
-        else:
-            native = ops_resize(native, size, method, box, reducing_gap, progress)
+                native = ops_resize(native, size, method, box, reducing_gap, report)
         result = Image(native)
         result.info.update(source._metadata_info())
         return result
@@ -3186,7 +3193,7 @@ class Image:
         finally:
             coordinates.close()
 
-    def seam_carve(self, size: tuple[int, int], *, progress: ProgressCallback | None = None) -> Image:
+    def seam_carve(self, size: tuple[int, int], *, progress: ProgressCallback | None = None, show_progress: bool = False) -> Image:
         """Return a content-aware resized copy by removing or inserting seams.
 
         Support 8-bit L/LA/RGB/RGBA and 10/12/16-bit L/RGB/RGBA. Retarget
@@ -3204,13 +3211,14 @@ class Image:
             size: Output (width, height) in integer pixels.
             progress: Callback between row tiles and seams, as in decode(). The
                 result uses the pixels and metadata selected before the callback.
+            show_progress: Show seam-carving checkpoints when tqdm is installed.
 
         Returns:
             A new image of the requested size.
 
         Raises:
-            TypeError: ``size`` has the wrong type.
-            ValueError: A dimension is not positive, or ``progress`` is not callable.
+            TypeError: ``size`` or a progress option has the wrong type.
+            ValueError: A dimension is not positive.
 
         Examples:
             ```python
@@ -3220,15 +3228,16 @@ class Image:
             result = image.seam_carve((9, 8))
             ```
         """
-        _validate_progress(progress)
+        validate_progress(progress, show_progress=show_progress)
         dimensions = tuple(index(value) for value in size)
         if len(dimensions) != 2:
             raise TypeError("size must contain two integers")
         if min(dimensions) <= 0:
             raise ValueError("height and width must be > 0")
         self.load()
-        source = self if progress is None else self.copy()
-        result = Image(ops_seam_carve(source._native, (dimensions[0], dimensions[1]), progress))
+        with progress_display(progress, show_progress=show_progress, description="Seam carving") as report:
+            source = self if report is None else self.copy()
+            result = Image(ops_seam_carve(source._native, (dimensions[0], dimensions[1]), report))
         result.info.update(source._metadata_info())
         return result
 
@@ -3403,7 +3412,7 @@ class Image:
         compressor = options.pop("compressor", None)
         if compressor is not None and not isinstance(compressor, (LosslessImageCompressor, LossyImageCompressor)):
             raise TypeError("compressor must be a LosslessImageCompressor, LossyImageCompressor, or None")
-        _validate_progress(progress)
+        validate_progress(progress)
         if progress is not None and compressor is None:
             raise ValueError("progress requires a compressor")
         output_format = _output_format(fp, format)
@@ -3480,7 +3489,7 @@ class Image:
         values = _save_options(output_format, options, self)
         has_metadata = any(metadata)
         output = None if fp is None or hasattr(fp, "write") else os.fspath(fp)
-        with _compression_progress(progress, show_progress=compressor is not None and compressor._show_progress) as report:
+        with progress_display(progress, show_progress=compressor is not None and compressor._show_progress, description="Compressing") as report:
             encoded = _encode(
                 native,
                 output_format,
@@ -3878,6 +3887,7 @@ def open(
     svg_size: tuple[int, int] | None = None,
     svg_dpi: float | None = None,
     progress: ProgressCallback | None = None,
+    show_progress: bool = False,
 ) -> Image:
     """Open an image, optionally decoding sequence frames on demand.
 
@@ -3903,6 +3913,8 @@ def open(
             unsupported. The decoded image does not retain its source document.
         progress: Decode callback, as in decode(). Passing it decodes still
             images eagerly. For lazy sequences it applies to frame zero.
+        show_progress: Show decode checkpoints when tqdm is installed. With
+            tqdm, still images decode eagerly and lazy sequences report frame zero.
 
     Returns:
         The opened image. Pixels may stay encoded until they are accessed.
@@ -3928,19 +3940,20 @@ def open(
     """
     if mode != "r":
         raise ValueError(f"bad mode {mode!r}")
-    _validate_progress(progress)
+    validate_progress(progress, show_progress=show_progress)
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
     svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     data = _read_bytes(fp)
-    if svg_size is None and svg_dpi is None:
-        header = _checked_header(data, formats)
-        if header is not None and progress is None and not lazy and header.format in ("JPEG", "PNG", "WEBP"):
-            image = _open_deferred(data, header)
-            if image is not None:
-                if not hasattr(fp, "read"):
-                    image.filename = os.fspath(fp)
-                return image
-    image = _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, progress)
+    with progress_display(progress, show_progress=show_progress, description="Decoding") as report:
+        if svg_size is None and svg_dpi is None:
+            header = _checked_header(data, formats)
+            if header is not None and report is None and not lazy and header.format in ("JPEG", "PNG", "WEBP"):
+                image = _open_deferred(data, header)
+                if image is not None:
+                    if not hasattr(fp, "read"):
+                        image.filename = os.fspath(fp)
+                    return image
+        image = _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, report)
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
     return image
@@ -4008,7 +4021,17 @@ def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
     return image
 
 
-def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, lazy: bool = False, frame_cache_size: int = 1, svg_size: tuple[int, int] | None = None, svg_dpi: float | None = None, progress: ProgressCallback | None = None) -> Image:
+def decode(
+    data: Buffer,
+    formats: list[str] | tuple[str, ...] | None = None,
+    *,
+    lazy: bool = False,
+    frame_cache_size: int = 1,
+    svg_size: tuple[int, int] | None = None,
+    svg_dpi: float | None = None,
+    progress: ProgressCallback | None = None,
+    show_progress: bool = False,
+) -> Image:
     """Decode encoded bytes without a file or stream.
 
     Args:
@@ -4026,6 +4049,7 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
             Checkpoints occur between PNG row groups, TIFF strips or tiles
             where supported, and sequence frames. Whole-image decoders report
             at the start and end of the native operation.
+        show_progress: Show decode checkpoints when tqdm is installed.
 
     Returns:
         The decoded image.
@@ -4044,7 +4068,7 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
         image = Image.decode(data)
         ```
     """
-    _validate_progress(progress)
+    validate_progress(progress, show_progress=show_progress)
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
     svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     if not isinstance(data, bytes):
@@ -4054,7 +4078,8 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
             raise TypeError("data must be a bytes-like object") from error
     if svg_size is None and svg_dpi is None and MAX_IMAGE_PIXELS is not None:
         _checked_header(data, formats)
-    return _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, progress)
+    with progress_display(progress, show_progress=show_progress, description="Decoding") as report:
+        return _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, report)
 
 
 def _svg_options(size: tuple[int, int] | None, dpi: float | None) -> tuple[tuple[int, int] | None, float | None]:
@@ -4173,7 +4198,15 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
     return image
 
 
-def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO, box: tuple[int, int, int, int], *, fallback: str = "error", formats: list[str] | tuple[str, ...] | None = None, progress: ProgressCallback | None = None) -> Image:
+def open_region(
+    fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | BinaryIO,
+    box: tuple[int, int, int, int],
+    *,
+    fallback: str = "error",
+    formats: list[str] | tuple[str, ...] | None = None,
+    progress: ProgressCallback | None = None,
+    show_progress: bool = False,
+) -> Image:
     """Decode a nonempty region of the first image/page.
 
     TIFF unsigned 8/16-bit chunky L/RGB/straight RGBA reads only intersecting
@@ -4188,6 +4221,7 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
             "full" permits full decoding followed by a crop.
         formats: Optional allowlist of format names.
         progress: Decode callback at strip or tile boundaries, as in decode().
+        show_progress: Show region decode checkpoints when tqdm is installed.
 
     Returns:
         The decoded region.
@@ -4207,7 +4241,7 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
         assert region.size == (4, 4)
         ```
     """
-    _validate_progress(progress)
+    validate_progress(progress, show_progress=show_progress)
     if fallback not in ("error", "full"):
         raise ValueError("fallback must be 'error' or 'full'")
     if formats is not None and not isinstance(formats, (list, tuple)):
@@ -4222,18 +4256,19 @@ def open_region(fp: str | bytes | os.PathLike[str] | os.PathLike[bytes] | Binary
     if not (0 <= left < right <= size[0] and 0 <= top < bottom <= size[1]):
         raise ValueError("region must be a nonempty rectangle inside the image")
     _decompression_bomb_check(size, error_only=True, format=format)
-    native = _decode_region(data, box, formats, progress)
-    if native is None:
-        if fallback == "error":
-            raise NotImplementedError("region decoding unavailable; use fallback='full'")
-        if format != "TIFF":
+    with progress_display(progress, show_progress=show_progress, description="Decoding region") as report:
+        native = _decode_region(data, box, formats, report)
+        if native is None:
+            if fallback == "error":
+                raise NotImplementedError("region decoding unavailable; use fallback='full'")
+            if format != "TIFF":
+                _decompression_bomb_check(size, format=format)
+            with _decode(data, formats, False, 1, progress=report) as source:
+                result = source.crop(box)
+        else:
             _decompression_bomb_check(size, format=format)
-        with _decode(data, formats, False, 1, progress=progress) as source:
-            result = source.crop(box)
-    else:
-        _decompression_bomb_check(size, format=format)
-        result = Image(native)
-        result.info.update(read_metadata(data, result.format))
+            result = Image(native)
+            result.info.update(read_metadata(data, result.format))
     result.info["decode_region"] = box
     result.info["decode_fallback"] = native is None
     return result

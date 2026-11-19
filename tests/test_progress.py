@@ -1,10 +1,11 @@
 import sys
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from io import BytesIO
 from struct import pack
 from threading import get_ident
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import Mock, call
 from zlib import compress, crc32
 
 import pytest
@@ -162,10 +163,25 @@ def test_cancelled_compressor_preserves_destination_and_can_retry(format, compre
     assert seen == list(range(len(seen))) and len(seen) > 3
 
 
-@pytest.mark.parametrize("compressor_type", [Compressor.LosslessImageCompressor, Compressor.LossyImageCompressor])
-def test_compressor_tqdm_progress(compressor_type, monkeypatch):
-    tqdm = MagicMock()
+@pytest.fixture
+def mock_tqdm(monkeypatch):
+    bar = Mock()
+
+    @contextmanager
+    def display(**kwargs):
+        try:
+            yield bar
+        finally:
+            bar.close()
+
+    tqdm = Mock(side_effect=display)
     monkeypatch.setitem(sys.modules, "tqdm", SimpleNamespace(tqdm=tqdm))
+    return tqdm, bar
+
+
+@pytest.mark.parametrize("compressor_type", [Compressor.LosslessImageCompressor, Compressor.LossyImageCompressor])
+def test_compressor_tqdm_progress(compressor_type, mock_tqdm):
+    tqdm, bar = mock_tqdm
     image = Image.new("RGB", (17, 19), "red")
     baseline = image.encode("PNG", compressor=compressor_type(effort=1))
     tqdm.assert_not_called()
@@ -174,28 +190,28 @@ def test_compressor_tqdm_progress(compressor_type, monkeypatch):
     seen = []
     assert image.encode("PNG", compressor=compressor, progress=seen.append) == baseline
     tqdm.assert_called_once_with(desc="Compressing", unit="checkpoint")
-    context = tqdm.return_value
-    bar = context.__enter__.return_value
     assert seen == list(range(len(seen))) and len(seen) > 2
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
-    context.__exit__.assert_called_once_with(None, None, None)
+    bar.close.assert_called_once_with()
 
     tqdm.reset_mock()
+    bar.reset_mock()
     output = BytesIO()
     image.save(output, "PNG", compressor=compressor)
     assert output.getvalue() == baseline
     tqdm.assert_called_once()
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
-    context.__exit__.assert_called_once_with(None, None, None)
+    bar.close.assert_called_once_with()
 
     tqdm.reset_mock()
+    bar.reset_mock()
     output = BytesIO(b"original")
     with pytest.raises(OperationCancelledError):
         image.save(output, "PNG", compressor=compressor, progress=lambda completed: completed < 1)
     assert output.getvalue() == b"original"
     tqdm.assert_called_once()
     bar.update.assert_called_once_with(1)
-    assert context.__exit__.call_args.args[0] is OperationCancelledError
+    bar.close.assert_called_once_with()
 
 
 def test_compressor_progress_when_tqdm_is_missing(monkeypatch, capsys):
@@ -209,6 +225,72 @@ def test_compressor_progress_when_tqdm_is_missing(monkeypatch, capsys):
     image.save(output, "PNG", compressor=Compressor.LosslessImageCompressor(effort=1, show_progress=True), progress=reported.append)
     assert output.getvalue() == baseline
     assert reported == seen
+    assert capsys.readouterr() == ("", "")
+
+
+@pytest.mark.parametrize(
+    ("operation", "description"),
+    [
+        (lambda image, **options: Image.open(BytesIO(image.encode("PNG")), **options), "Decoding"),
+        (lambda image, **options: Image.decode(image.encode("PNG"), **options), "Decoding"),
+        (lambda image, **options: Image.open_region(BytesIO(image.encode("TIFF")), (1, 1, 15, 17), **options), "Decoding region"),
+        (lambda image, **options: Image.open_region(BytesIO(image.encode("PNG")), (1, 1, 15, 17), fallback="full", **options), "Decoding region"),
+        (lambda image, **options: image.resize((15, 17), **options), "Resizing"),
+        (lambda image, **options: image.seam_carve((15, 17), **options), "Seam carving"),
+    ],
+    ids=["open", "decode", "region", "region-fallback", "resize", "seam-carve"],
+)
+def test_image_tqdm_progress(operation, description, mock_tqdm):
+    tqdm, bar = mock_tqdm
+    image = Image.new("RGB", (17, 19), "red")
+    expected = operation(image)
+    tqdm.assert_not_called()
+
+    seen = []
+    result = operation(image, progress=seen.append, show_progress=True)
+    assert result.size == expected.size
+    assert result.tobytes() == expected.tobytes()
+    tqdm.assert_called_once_with(desc=description, unit="checkpoint")
+    assert seen == list(range(len(seen))) and len(seen) >= 2
+    assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
+    bar.close.assert_called_once_with()
+
+    tqdm.reset_mock()
+    bar.reset_mock()
+    with pytest.raises(OperationCancelledError):
+        operation(image, progress=lambda _: False, show_progress=True)
+    bar.close.assert_called_once_with()
+
+
+def test_tqdm_only_displays_load_and_seek_when_decoding(mock_tqdm):
+    tqdm, _ = mock_tqdm
+    source = Image.new("RGB", (17, 19), "red")
+    image = Image.open(BytesIO(source.encode("PNG")))
+    assert image.load(show_progress=True)[0, 0] == (255, 0, 0)
+    tqdm.assert_called_once_with(desc="Decoding", unit="checkpoint")
+    image.load(show_progress=True)
+    mapped = Image.frombuffer("L", (2, 2), bytearray(4))
+    assert mapped.load(show_progress=True)[0, 0] == 0
+    tqdm.assert_called_once()
+
+    tqdm.reset_mock()
+    second = Image.new("RGB", source.size, "blue")
+    sequence = Image.decode(source.encode("PNG", save_all=True, append_images=[second]), lazy=True, frame_cache_size=2)
+    sequence.seek(1, show_progress=True)
+    assert sequence.tobytes() == second.tobytes()
+    tqdm.assert_called_once_with(desc="Decoding frame", unit="checkpoint")
+    sequence.seek(0, show_progress=True)
+    sequence.seek(1, show_progress=True)
+    tqdm.assert_called_once()
+
+
+def test_open_show_progress_without_tqdm_keeps_deferred_decode(monkeypatch, capsys):
+    monkeypatch.setitem(sys.modules, "tqdm", None)
+    source = Image.new("RGB", (17, 19), "red")
+    image = Image.open(BytesIO(source.encode("PNG")), show_progress=True)
+    seen = []
+    assert image.load(progress=seen.append, show_progress=True)[0, 0] == (255, 0, 0)
+    assert seen == list(range(len(seen))) and len(seen) >= 2
     assert capsys.readouterr() == ("", "")
 
 

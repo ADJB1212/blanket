@@ -60,12 +60,11 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   XMP parsing, and metadata rewrites that leave the pixels alone.
 - **Encoding.** JPEG controls, coefficient transforms without a recompress,
   and save-time compression search.
-- **Progress and cancellation.** Pass `progress=callback` to decode, resize,
-  seam carving, or a save with a compressor. The callback receives consecutive
-  checkpoint numbers starting at zero.
-  Set `show_progress=True` on either image compressor to display a tqdm
-  checkpoint counter during `save()` or `encode()`. If tqdm is unavailable,
-  compression proceeds silently.
+- **Progress and cancellation.** Pass `progress=callback` to receive checkpoint
+  numbers starting at zero. Set `show_progress=True` on `open()`, `decode()`,
+  `open_region()`, `load()`, `seek()`, `resize()`, or `seam_carve()` to show a tqdm
+  checkpoint counter. For `save()` and `encode()`, set it on the compressor.
+  If tqdm is unavailable, the operation proceeds without a display.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
 - **Visual fingerprints.** `ImageHash` provides average, difference, perceptual,

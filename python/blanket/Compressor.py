@@ -2,43 +2,14 @@
 
 from __future__ import annotations
 
-__lazy_modules__ = {"importlib", "math", "re", "collections.abc"}
+__lazy_modules__ = {"math", "re"}
 
 import math
 import re
-from contextlib import contextmanager, suppress
-from importlib import import_module
-from typing import TYPE_CHECKING
 
 from ._blanket import _LosslessImageCompressor, _LossyImageCompressor
 
-if TYPE_CHECKING:
-    from collections.abc import Generator
-
-    from ._typing import ProgressCallback
-
 __all__ = ["LosslessImageCompressor", "LossyImageCompressor"]
-
-
-@contextmanager
-def _compression_progress(progress: ProgressCallback | None, *, show_progress: bool) -> Generator[ProgressCallback | None, None, None]:
-    """Report compression checkpoints through an optional tqdm display."""
-    tqdm = None
-    if show_progress:
-        with suppress(ImportError):
-            tqdm = import_module("tqdm").tqdm
-    if tqdm is None:
-        yield progress
-        return
-
-    with tqdm(desc="Compressing", unit="checkpoint") as bar:
-
-        def report(completed: int) -> bool | None:
-            if completed:
-                bar.update(1)
-            return progress(completed) if progress is not None else None
-
-        yield report
 
 
 def _validate_target_size(target_size: int | str | None) -> int | None:
