@@ -7,7 +7,7 @@ use pyo3::prelude::*;
 
 type Point = (f64, f64);
 type IntPoint = (i64, i64);
-type Edge = (IntPoint, IntPoint);
+pub(crate) type Edge = (IntPoint, IntPoint);
 type Bounds = (f64, f64, f64, f64);
 type IntBounds = (i64, i64, i64, i64);
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
@@ -60,7 +60,7 @@ fn bezier_edges(start: Point, controls: [Point; 3]) -> PyResult<(Vec<Edge>, Poin
 #[pyclass(name = "Outline", module = "blanket.ImageDraw")]
 #[derive(Default)]
 pub(crate) struct Outline {
-    edges: Vec<Edge>,
+    pub(crate) edges: Vec<Edge>,
     #[pyo3(get)]
     x: f64,
     #[pyo3(get)]

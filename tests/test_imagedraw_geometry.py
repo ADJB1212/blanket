@@ -35,6 +35,21 @@ def test_native_outline_curves_preserve_position_and_transform():
     assert outline.edges[-1] == ((10, 19), (0, 2))
 
 
+@pytest.mark.parametrize("bounds", [((1, 1, 6, 6), (8, 8, 13, 13)), ((1, 1, 13, 13), (4, 4, 10, 10))])
+def test_shape_keeps_separate_outline_subpaths(bounds):
+    actual, expected = new_pair("L", (16, 16), 0)
+    for image, module in [(actual, ImageDraw), (expected, PILDraw)]:
+        outline = module.Outline()
+        for left, top, right, bottom in bounds:
+            outline.move(left, top)
+            outline.line(right, top)
+            outline.line(right, bottom)
+            outline.line(left, bottom)
+            outline.close()
+        module.Draw(image).shape(outline, fill=193)
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize("blend", [False, True])
 @pytest.mark.parametrize("offset", [-31, 0, 37])
 def test_polygon_horizontal_edges_and_reused_scanlines_match_pillow(blend: bool, offset: int) -> None:

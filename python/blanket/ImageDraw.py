@@ -24,6 +24,7 @@ from ._blanket import (
     draw_image_mask,
     draw_line_joints,
     draw_mask,
+    draw_outline,
     draw_path,
     draw_points,
     draw_polygon,
@@ -214,14 +215,13 @@ class ImageDraw:
             outline: Border ink, or None to skip the outline.
         """
         shape.close()
-        points = shape._points()
         if fill is None and outline is None:
             outline = 1 if self.mode in ("I", "F") else -1
         fill_ink = None if fill is None else self._ink(fill)
         outline_ink = None if outline is None else self._ink(outline)
         for ink in (fill_ink, None if outline_ink == fill_ink else outline_ink):
-            if ink is not None and points:
-                draw_polygon(self.im._native, points, 1, True, True, ink, bool(self.blend))
+            if ink is not None:
+                draw_outline(self.im._native, shape, ink, bool(self.blend))
 
     def _ink(self, fill: Color) -> int | float | tuple[float, ...]:
         """Normalize an ink to native pixel values in the drawing mode."""

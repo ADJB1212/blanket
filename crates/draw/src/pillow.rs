@@ -291,6 +291,7 @@ pub(crate) fn draw_curve(
 
 pub(crate) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(draw_curve, module)?)?;
+    module.add_function(wrap_pyfunction!(draw_outline, module)?)?;
     module.add_function(wrap_pyfunction!(draw_polygon, module)?)
 }
 
@@ -327,7 +328,7 @@ fn round_down(value: f64) -> i64 {
     if value >= 0.0 { (value - 0.5).ceil() as i64 } else { -((-value - 0.5).ceil() as i64) }
 }
 
-fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl FnMut(i64, i64, i64)) {
+fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, emit: impl FnMut(i64, i64, i64)) {
     if points.len() < 2 {
         return;
     }
@@ -349,10 +350,17 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
     if points.last() != points.first() {
         edges.push(Edge::new(*points.last().unwrap(), points[0]));
     }
+    edge_spans(&edges, height, blend, emit);
+}
+
+fn edge_spans(edges: &[Edge], height: u32, blend: bool, mut emit: impl FnMut(i64, i64, i64)) {
+    if edges.is_empty() {
+        return;
+    }
     let first = edges.iter().map(|e| e.ymin).min().unwrap().max(0);
     let last = edges.iter().map(|e| e.ymax).max().unwrap().min(i64::from(height));
     if !blend {
-        for edge in &edges {
+        for edge in edges {
             if edge.ymin == edge.ymax {
                 emit(edge.xmin, edge.ymin, edge.xmax);
             }
@@ -436,6 +444,19 @@ fn polygon_spans(points: &[(i64, i64)], height: u32, blend: bool, mut emit: impl
             emit(l, y, r);
         }
     }
+}
+
+#[pyfunction]
+fn draw_outline(image: &mut Image, outline: &super::geometry::Outline, value: &Bound<'_, PyAny>, blend: bool) -> PyResult<()> {
+    let ink = super::draw::ink(image, value, blend)?;
+    image.ensure_owned()?;
+    let edges: Vec<_> = outline.edges.iter().map(|&(a, b)| Edge::new(a, b)).collect();
+    let height = image.height();
+    value.py().detach(|| {
+        let mut spans = super::draw::SpanWriter::new(image, &ink, blend);
+        edge_spans(&edges, height, blend, |l, y, r| spans.write(l, r, y));
+    });
+    Ok(())
 }
 
 fn wide_line(a: (i64, i64), b: (i64, i64), width: i64, height: u32, blend: bool, emit: &mut impl FnMut(i64, i64, i64)) {
