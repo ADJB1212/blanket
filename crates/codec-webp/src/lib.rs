@@ -8,6 +8,8 @@ use image::ImageFormat as RustFormat;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+const MAX_FRAME_DURATION_MS: u32 = (1 << 24) - 1;
+
 pub fn inspect(data: &[u8]) -> Result<blanket_codec_common::ImageHeader, String> {
     let info = webpx::ImageInfo::from_webp(data).map_err(|e| e.to_string())?;
     blanket_codec_common::ImageHeader::new(info.width, info.height, if info.has_alpha { "RGBA" } else { "RGB" }, 8)
@@ -168,7 +170,9 @@ pub fn decode_frames(
     if !info.has_animation {
         return decode_webp(data).map(Sequence::single);
     }
-    let mut decoder = webpx::AnimationDecoder::new(data).map_err(DecodeError::with_diagnostic_source)?;
+    let limits = webpx::Limits::default().with_max_animation_ms(i32::MAX as u64);
+    let mut decoder = webpx::AnimationDecoder::with_options_limits(data, webpx::ColorMode::Rgba, !deterministic(), &limits)
+        .map_err(DecodeError::with_diagnostic_source)?;
     let mut sequence = Sequence { loop_count: Some(decoder.info().loop_count), ..Sequence::default() };
     let mut timestamp = 0;
     let mut total = 0;
@@ -265,6 +269,10 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
     }
     let mut timestamp: i32 = 0;
     for frame in &sequence.frames {
+        let duration = frame.duration.unwrap_or(0.0);
+        if !(0.0..f64::from(MAX_FRAME_DURATION_MS + 1)).contains(&duration) {
+            return Err(PyValueError::new_err(format!("WebP frame duration must be between 0 and {MAX_FRAME_DURATION_MS} milliseconds")));
+        }
         let image = frame.image.borrow();
         let channels = match image.pixel_mode() {
             PixelMode::Rgb => 3,
@@ -297,7 +305,7 @@ pub fn encode_sequence(sequence: &blanket_codec_common::Sequence<impl Borrow<Ima
         if unsafe { libwebp_sys::WebPAnimEncoderAdd(encoder.0, &raw mut picture.0, timestamp, &raw const config) } == 0 {
             return Err(encoder.error("failed to add WebP frame"));
         }
-        timestamp = timestamp.checked_add(frame.duration.unwrap_or(0.0) as i32).ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
+        timestamp = timestamp.checked_add(duration as i32).ok_or_else(|| PyValueError::new_err("WebP duration overflow"))?;
     }
     let mut data = libwebp_sys::WebPData::default();
     // SAFETY: a null frame finalizes the encoder; assembled data is copied before being freed.

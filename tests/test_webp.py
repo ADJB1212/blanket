@@ -51,6 +51,28 @@ def test_webp_animation_first_frame(lossless: bool) -> None:
     assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("duration", [160_000, 16_777_215])
+def test_webp_animation_round_trips_long_frame_delays(lazy: bool, duration: int) -> None:
+    first = Image.new("RGB", (4, 4), "red")
+    second = Image.new("RGB", first.size, "blue")
+    encoded = first.encode("WEBP", save_all=True, append_images=[second], lossless=True, duration=[duration, 160_000])
+    with Image.decode(encoded, lazy=lazy) as actual, PillowImage.open(BytesIO(encoded)) as expected:
+        for frame, delay in enumerate([duration, 160_000]):
+            actual.seek(frame)
+            expected.seek(frame)
+            expected.load()
+            assert actual.info["duration"] == expected.info["duration"] == delay
+            assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
+
+
+def test_webp_rejects_duration_above_the_frame_delay_field() -> None:
+    first = Image.new("RGB", (4, 4), "red")
+    second = Image.new("RGB", first.size, "blue")
+    with pytest.raises(ValueError, match="WebP frame duration"):
+        first.encode("WEBP", save_all=True, append_images=[second], duration=[16_777_216, 0])
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("lossless", [False, True])
 @pytest.mark.parametrize("size", [(19, 13), (513, 257)])
