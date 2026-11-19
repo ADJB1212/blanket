@@ -2879,7 +2879,8 @@ class Image:
             linear_light: Decode the selected transfer before filtering RGB/RGBA.
             transfer: "srgb" or "linear"; applies when linear_light is true.
             premultiply_alpha: Filter premultiplied color; applies to float or linear-light resizing.
-            progress: Callback at row-tile boundaries, as in decode().
+            progress: Callback at row-tile boundaries, as in decode(). The
+                result uses the pixels and metadata selected before the callback.
 
         Returns:
             A new image of the requested size.
@@ -2922,29 +2923,30 @@ class Image:
             raise ValueError("box can't be empty")
         if box[2] > self.width or box[3] > self.height:
             raise ValueError("box can't exceed original image size")
-        self.load()
-        native = self._native
         if transfer not in ("srgb", "linear"):
             raise ValueError("transfer must be 'srgb' or 'linear'")
-        if not linear_light and self.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
+        self.load()
+        source = self if progress is None else self.copy()
+        native = source._native
+        if not linear_light and source.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
             _checkpoint(progress, 0)
             crop_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-            if method != Resampling.NEAREST and self.mode in ("LA", "RGBA") and box != (0, 0, self.width, self.height):
-                result = self.convert("La" if self.mode == "LA" else "RGBa").crop(crop_box).convert(self.mode)
+            if method != Resampling.NEAREST and source.mode in ("LA", "RGBA") and box != (0, 0, *source.size):
+                result = source.convert("La" if source.mode == "LA" else "RGBa").crop(crop_box).convert(source.mode)
             else:
-                result = self.crop(crop_box)
+                result = source.crop(crop_box)
             _checkpoint(progress, 1)
             return result
-        if linear_light or self.mode in ("RGB;F", "RGBA;F"):
+        if linear_light or source.mode in ("RGB;F", "RGBA;F"):
             result = Image(ops_color_resize(native, size, method, box, linear_light and transfer == "srgb", premultiply_alpha, progress))
-            result.info.update(self._metadata_info())
+            result.info.update(source._metadata_info())
             return result
-        if size == self.size and box == (0, 0, self.width, self.height):
+        if size == source.size and box == (0, 0, *source.size):
             native = ops_transpose(native, 1)
         else:
             native = ops_resize(native, size, method, box, reducing_gap, progress)
         result = Image(native)
-        result.info.update(self._metadata_info())
+        result.info.update(source._metadata_info())
         return result
 
     def remap(self, coordinates: Image, resample: int = Resampling.NEAREST, *, border: str = "constant", fillcolor: float | Sequence[float] = 0, premultiply_alpha: bool = True) -> Image:
@@ -3200,7 +3202,8 @@ class Image:
 
         Args:
             size: Output (width, height) in integer pixels.
-            progress: Callback between row tiles and seams, as in decode().
+            progress: Callback between row tiles and seams, as in decode(). The
+                result uses the pixels and metadata selected before the callback.
 
         Returns:
             A new image of the requested size.
@@ -3224,8 +3227,9 @@ class Image:
         if min(dimensions) <= 0:
             raise ValueError("height and width must be > 0")
         self.load()
-        result = Image(ops_seam_carve(self._native, (dimensions[0], dimensions[1]), progress))
-        result.info.update(self._metadata_info())
+        source = self if progress is None else self.copy()
+        result = Image(ops_seam_carve(source._native, (dimensions[0], dimensions[1]), progress))
+        result.info.update(source._metadata_info())
         return result
 
     def rotate(self, angle: float, resample: int = Resampling.NEAREST, expand: bool = False, center: tuple[float, float] | None = None, translate: tuple[float, float] | None = None, fillcolor: str | int | tuple[int, ...] | None = None) -> Image:

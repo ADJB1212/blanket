@@ -92,6 +92,28 @@ def test_resize_progress_covers_pre_reduction_and_identity():
         image.resize(image.size, progress=lambda completed: completed == 0)
 
 
+@pytest.mark.parametrize("operation", ["identity_resize", "resize", "seam_carve"])
+def test_geometric_progress_uses_pixels_and_metadata_from_the_starting_frame(operation):
+    first = Image.new("RGB", (16, 16), "red")
+    second = Image.new("RGB", first.size, "blue")
+    data = first.encode("PNG", save_all=True, append_images=[second], duration=[30, 50])
+    with Image.decode(data, lazy=True) as source:
+
+        def change_frame(completed):
+            if completed == 0:
+                source.seek(1)
+
+        if operation == "identity_resize":
+            result = source.resize(source.size, progress=change_frame)
+        elif operation == "resize":
+            result = source.resize((12, 12), progress=change_frame)
+        else:
+            result = source.seam_carve((12, 12), progress=change_frame)
+        assert result.getpixel((0, 0)) == (255, 0, 0)
+        assert result.info["duration"] == 30
+        assert source.tell() == 1
+
+
 def test_seam_carving_progress_and_worker_thread():
     image = Image.new("RGB", (37, 41), "blue")
     seen = []
