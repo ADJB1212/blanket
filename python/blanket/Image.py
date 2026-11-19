@@ -2576,14 +2576,14 @@ class Image:
         """
 
         self.load()
+        if mode is not None and mode != self.mode:
+            raise ValueError("point mode conversion is not supported")
         if self.mode == "F":
             if not callable(lut):
                 raise ValueError("point operation not supported for this mode")
             result = Image(self._native.point_float(lut))
             result.info.update(self._metadata_info())
             return result
-        if mode is not None and mode != self.mode:
-            raise ValueError("point mode conversion is not supported")
         if callable(lut):
             values = [cast("Callable[[int], float]", lut)(i) for i in range(256)]
             expected = 256

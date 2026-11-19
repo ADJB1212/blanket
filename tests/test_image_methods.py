@@ -29,6 +29,16 @@ def test_point_rejects_nonfinite_table_entries(value: float, error: type[Excepti
         image.point([value] * 256)
 
 
+def test_float_point_rejects_a_different_output_mode_before_mapping() -> None:
+    image = Image.new("F", (1, 1), 2.5)
+
+    def lookup(value: float) -> float:
+        pytest.fail(f"unexpected point callback for {value}")
+
+    with pytest.raises(ValueError, match="point mode conversion is not supported"):
+        image.point(lookup, mode="L")
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA", "P"])
 def test_channels_and_point(mode: str) -> None:
     data = bytes((i * 37) % 256 for i in range(63 * len(mode)))
