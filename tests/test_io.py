@@ -138,13 +138,17 @@ def test_png_save_preserves_transparent_color_key(mode, key, other, explicit):
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
-def test_png_save_scales_wide_transparency_key_with_samples(depth):
-    key = 343
-    image = Image.frombytes("L", (2, 1), key.to_bytes(2, "little") + (key + 1).to_bytes(2, "little"), bit_depth=depth)
-    data = image.encode("PNG", transparency=key)
-    decoded = Image.decode(data).convert("RGBA")
-    assert decoded.getpixel((0, 0))[3] == 0
-    assert decoded.getpixel((1, 0))[3] == (1 << decoded.bit_depth) - 1
+@pytest.mark.parametrize("mode", ["L", "RGB"])
+def test_png_save_scales_wide_transparency_key_with_samples(depth, mode):
+    first, second = (343, 217, 516), (344, 217, 516)
+    samples = first + second if mode == "RGB" else (first[0], second[0])
+    raw = b"".join(value.to_bytes(2, "little") for value in samples)
+    image = Image.frombytes(mode, (2, 1), raw, bit_depth=depth)
+    data = image.encode("PNG", transparency=image.getpixel((0, 0)))
+    with Image.decode(data) as decoded:
+        assert (decoded.mode, decoded.bit_depth) == ("RGBA", depth)
+        assert decoded.getpixel((0, 0)) == (*(first if mode == "RGB" else (first[0],) * 3), 0)
+        assert decoded.getpixel((1, 0)) == (*(second if mode == "RGB" else (second[0],) * 3), (1 << depth) - 1)
 
 
 def test_png_save_after_depth_conversion_uses_rescaled_key():

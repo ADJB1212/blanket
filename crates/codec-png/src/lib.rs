@@ -232,15 +232,25 @@ fn decode_png_reader(mut reader: png::Reader<Cursor<&[u8]>>, bilevel: bool, prog
         png::ColorType::Indexed => return Err("unexpanded PNG palette".into()),
     };
     if frame.bit_depth == png::BitDepth::Sixteen {
-        let depth = reader
-            .info()
+        let info = reader.info();
+        let depth = info
             .sbit
             .as_deref()
-            .filter(|bits| bits.len() == mode.channels() && matches!(bits[0], 10 | 12) && bits.iter().all(|&b| b == bits[0]))
+            .filter(|bits| {
+                info.color_type != png::ColorType::GrayscaleAlpha
+                    && bits.len() == info.color_type.samples()
+                    && matches!(bits[0], 10 | 12)
+                    && bits.iter().all(|&b| b == bits[0])
+            })
             .map_or(16, |bits| bits[0]);
         if frame.color_type == png::ColorType::GrayscaleAlpha {
             let mut rgba = vec![0; pixels.len() * 2];
-            blanket_core::pixels::expand_luma_alpha::<true, true>(&pixels, &mut rgba);
+            if depth == 16 {
+                blanket_core::pixels::expand_luma_alpha::<true, true>(&pixels, &mut rgba);
+            } else {
+                blanket_convert_kernels::simd::samples_from_be16(&mut pixels, depth);
+                blanket_core::pixels::expand_luma_alpha::<true, false>(&pixels, &mut rgba);
+            }
             pixels = rgba;
         } else {
             blanket_convert_kernels::simd::samples_from_be16(&mut pixels, depth);
