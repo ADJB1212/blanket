@@ -89,20 +89,21 @@ def test_decoded_pixel_limit() -> None:
     assert caught.value.operation == "decode"
 
 
-def test_configurable_decompression_bomb_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("decode", [Image.decode, lambda data: Image.open(BytesIO(data)), lambda data: Image.decode(data, lazy=True)])
+def test_configurable_decompression_bomb_threshold(monkeypatch: pytest.MonkeyPatch, decode) -> None:
     encoded = Image.new("RGB", (4, 4), "red").encode("PNG")
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 12)
     with pytest.warns(Image.DecompressionBombWarning, match="16 pixels"):
-        assert Image.open(BytesIO(encoded)).size == (4, 4)
+        assert decode(encoded).size == (4, 4)
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 7)
     with pytest.raises(Image.DecompressionBombError) as caught:
-        Image.open(BytesIO(encoded))
+        decode(encoded)
     assert isinstance(caught.value, CodecResourceLimitError)
     assert caught.value.format == "PNG"
     assert caught.value.operation == "decode"
     assert Image.inspect(BytesIO(encoded)).size == (4, 4)
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", None)
-    assert Image.open(BytesIO(encoded)).size == (4, 4)
+    assert decode(encoded).size == (4, 4)
 
 
 def test_cumulative_frame_limit() -> None:

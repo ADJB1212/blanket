@@ -3910,14 +3910,10 @@ def open(
     frame_cache_size = _decode_options(formats, lazy, frame_cache_size)
     svg_size, svg_dpi = _svg_options(svg_size, svg_dpi)
     data = _read_bytes(fp)
-    try:
-        format, size, pixel_mode, bit_depth = _inspect(data, formats)
-    except (OSError, ValueError):
-        pass
-    else:
-        _decompression_bomb_check(size, format=format)
-        if progress is None and not lazy and svg_size is None and svg_dpi is None and format in ("JPEG", "PNG", "WEBP"):
-            image = _open_deferred(data, ImageHeader(format, size, pixel_mode, bit_depth, {}))
+    if svg_size is None and svg_dpi is None:
+        header = _checked_header(data, formats)
+        if header is not None and progress is None and not lazy and header.format in ("JPEG", "PNG", "WEBP"):
+            image = _open_deferred(data, header)
             if image is not None:
                 if not hasattr(fp, "read"):
                     image.filename = os.fspath(fp)
@@ -3926,6 +3922,16 @@ def open(
     if not hasattr(fp, "read"):
         image.filename = os.fspath(fp)
     return image
+
+
+def _checked_header(data: bytes, formats: list[str] | tuple[str, ...] | None) -> ImageHeader | None:
+    """Check recognized dimensions before decoding; let the decoder diagnose errors."""
+    try:
+        format, size, pixel_mode, bit_depth = _inspect(data, formats)
+    except (OSError, ValueError):
+        return None
+    _decompression_bomb_check(size, format=format)
+    return ImageHeader(format, size, pixel_mode, bit_depth, {})
 
 
 def _open_deferred(data: bytes, header: ImageHeader) -> Image | None:
@@ -4023,6 +4029,8 @@ def decode(data: Buffer, formats: list[str] | tuple[str, ...] | None = None, *, 
             data = memoryview(data).tobytes()
         except TypeError as error:
             raise TypeError("data must be a bytes-like object") from error
+    if svg_size is None and svg_dpi is None and MAX_IMAGE_PIXELS is not None:
+        _checked_header(data, formats)
     return _decode(data, formats, lazy, frame_cache_size, svg_size, svg_dpi, progress)
 
 

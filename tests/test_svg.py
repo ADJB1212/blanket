@@ -76,6 +76,15 @@ def test_render_options_and_physical_units() -> None:
     assert Image.decode(detail, svg_size=(100, 100)).getpixel((20, 5)) == (0, 0, 0, 0)
 
 
+def test_open_svg_applies_pixel_threshold_to_requested_raster(monkeypatch):
+    source = b"<svg xmlns='http://www.w3.org/2000/svg' width='100' height='100'/>"
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    with pytest.raises(Image.DecompressionBombError):
+        Image.open(BytesIO(source))
+    assert Image.open(BytesIO(source), svg_size=(3, 3)).size == (3, 3)
+    assert Image.decode(source, svg_size=(3, 3)).size == (3, 3)
+
+
 @pytest.mark.parametrize(
     "options,error",
     [
