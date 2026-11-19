@@ -1362,12 +1362,14 @@ class Image:
         if self.mode in alpha_modes and result.mode not in alpha_modes:
             result.info.pop("transparency", None)
             return
-        if self.mode not in ("L", "RGB", "P") or result.mode not in ("L", "RGB", "P"):
+        if self.mode not in ("1", "L", "RGB", "P") or result.mode not in ("L", "RGB", "P"):
             return
         if not isinstance(transparency, (int, tuple, list)):
             result.info.pop("transparency", None)
             return
-        if self.bit_depth > 8:
+        if self.mode == "1":
+            key = new("1", (1, 1), _png_key_samples("1", transparency, 1)[0])
+        elif self.bit_depth > 8:
             samples = _png_key_samples(self.mode, transparency, (1 << self.bit_depth) - 1)
             key = frombytes(self.mode, (1, 1), b"".join(sample.to_bytes(2, "little") for sample in samples), bit_depth=self.bit_depth)
         else:

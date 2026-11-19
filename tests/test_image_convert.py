@@ -232,6 +232,16 @@ def test_l_macro_rounding(convert_mode: str) -> None:
         assert converted_color == 1
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "P"])
+@pytest.mark.parametrize("key", [0, 1])
+def test_bilevel_transparency_survives_conversion(mode: str, key: int) -> None:
+    image = Image.frombytes("1", (2, 1), b"\x40")
+    image.info["transparency"] = key
+
+    result = image.convert(mode)
+    assert result.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+
+
 def test_gif_with_rgba_palette_to_p() -> None:
     # See https://github.com/python-pillow/Pillow/issues/2433
     with Image.open(PILLOW_IMAGES / "hopper.gif") as im:
