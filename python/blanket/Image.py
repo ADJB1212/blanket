@@ -1343,22 +1343,18 @@ class Image:
         if mode == "P" and self.mode != "P":
             source = self if self.mode in ("L", "RGB", "RGBA") else self.convert("RGB")
             if palette == Palette.ADAPTIVE or source.mode == "RGBA":
-                result = source.quantize(colors=colors)
-                self._conversion_transparency(result)
-                return result
+                return source.quantize(colors=colors)
             reference = new("P", (1, 1))
             entries = _GRAY_PALETTE if source.mode == "L" else palette_web()
             reference.putpalette(entries)
-            result = source.quantize(palette=reference, dither=dither)
-            self._conversion_transparency(result)
-            return result
+            return source.quantize(palette=reference, dither=dither)
         self._sync_palette()
         result = Image(image_convert(self._native, mode, bit_depth))
         result.info.update(self._metadata_info())
         self._conversion_transparency(result)
         return result
 
-    def _conversion_transparency(self, result: Image) -> None:
+    def _conversion_transparency(self, result: Image, *, allocate_palette_entry: bool = True) -> None:
         """Update transparency metadata across compatible mode conversions."""
         transparency = self.info.get("transparency")
         if transparency is None or (self.mode == result.mode and self.bit_depth == result.bit_depth):
@@ -1386,9 +1382,12 @@ class Image:
         elif result.palette is not None:
             color = cast("tuple[int, ...]", key.convert("RGB").getpixel((0, 0)))
             try:
-                result.info["transparency"] = result.palette.getcolor(color, result)
-                result._sync_palette()
-            except ValueError:
+                if allocate_palette_entry:
+                    result.info["transparency"] = result.palette.getcolor(color, result)
+                    result._sync_palette()
+                else:
+                    result.info["transparency"] = result.palette.colors[color]
+            except (KeyError, ValueError):
                 warnings.warn("Couldn't allocate palette entry for transparency", UserWarning, stacklevel=3)
                 result.info.pop("transparency", None)
 
@@ -1989,8 +1988,10 @@ class Image:
         source = self.convert("RGBA" if indexed_alpha else "RGB") if self.mode == "P" else self
         result = Image(_native_quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
         result.info.update(source._metadata_info())
-        if indexed_alpha:
+        if rgba:
             result.info.pop("transparency", None)
+        elif self.mode == "RGB" or (self.mode == "L" and palette is None):
+            self._conversion_transparency(result, allocate_palette_entry=palette is not None)
         return result
 
     def tobytes(self, encoder_name: str = "raw", *args: object) -> bytes:

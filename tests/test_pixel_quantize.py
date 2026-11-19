@@ -188,6 +188,29 @@ def test_quantizing_indexed_images_preserves_transparency(transparency):
     assert result.info == {"custom": "retained"}
 
 
+@pytest.mark.parametrize("mode,key,other", [("L", 41, 139), ("RGB", (41, 53, 61), (139, 173, 211))])
+def test_quantize_remaps_color_key_to_the_generated_palette(mode, key, other):
+    image = Image.new(mode, (3, 1), key)
+    image.putpixel((1, 0), other)
+    image.info["transparency"] = key
+
+    result = image.quantize(colors=2)
+
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert result.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+
+
+def test_quantize_does_not_add_an_unused_transparency_entry_to_a_reduced_palette():
+    image = Image.frombytes("L", (2, 1), b"\x29\x8b")
+    image.info["transparency"] = 41
+
+    with pytest.warns(UserWarning, match="Couldn't allocate palette entry for transparency"):
+        result = image.quantize(colors=1)
+
+    assert len(result.getpalette()) == 3
+    assert "transparency" not in result.info
+
+
 def test_empty_supplied_palette() -> None:
     palette = Image.frombytes("P", (1, 1), b"\x00")
     palette.putpalette([])
