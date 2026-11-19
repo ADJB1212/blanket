@@ -317,6 +317,8 @@ class ImageDraw:
     def bitmap(self, xy: Sequence[float], bitmap: Image.Image, fill: Color = None) -> None:
         """Draw ink through a bilevel, grayscale, or RGBA alpha mask.
 
+        In an RGBA context on an RGB image, mask coverage scales the ink alpha.
+
         Args:
             xy: Top-left position. Fractional coordinates are truncated toward zero.
             bitmap: Mode 1, L, or RGBA mask.
@@ -329,7 +331,7 @@ class ImageDraw:
         mask = bitmap.getchannel("A") if bitmap.mode == "RGBA" else bitmap
         if mask.mode not in ("1", "L"):
             raise ValueError("bad transparency mask")
-        if bitmap.mode != "RGBA":
+        if bitmap.mode != "RGBA" or self.blend:
             mask.load()
             if mask._native is self.im._native:
                 mask = mask.copy()

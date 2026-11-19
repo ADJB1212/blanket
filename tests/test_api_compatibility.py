@@ -134,3 +134,17 @@ def test_bitmap_and_circle_match_pillow(mode: str, mask_mode: str) -> None:
     ImageDraw.Draw(actual).circle((9, 8), 5, fill="red", outline="white", width=2)
     PILDraw.Draw(expected).circle((9, 8), 5, fill="red", outline="white", width=2)
     assert actual.tobytes() == expected.tobytes()
+
+
+@pytest.mark.parametrize("ink_alpha", [0, 128, 255])
+def test_rgba_bitmap_blends_ink_alpha_like_grayscale_mask(ink_alpha: int) -> None:
+    expected = Image.new("RGB", (17, 1), "blue")
+    actual = expected.copy()
+    alpha = Image.frombytes("L", (17, 1), bytes(range(0, 241, 15)))
+    bitmap = Image.new("RGBA", alpha.size, "green")
+    bitmap.putalpha(alpha)
+    ink = (255, 0, 0, ink_alpha)
+
+    ImageDraw.Draw(expected, "RGBA").bitmap((0, 0), alpha, fill=ink)
+    ImageDraw.Draw(actual, "RGBA").bitmap((0, 0), bitmap, fill=ink)
+    assert actual.tobytes() == expected.tobytes()
