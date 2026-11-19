@@ -103,6 +103,18 @@ def test_invert_updates_color_key(invert, mode, color, depth) -> None:
     assert image.info["transparency"] == color
 
 
+@pytest.mark.parametrize("invert", [ImageChops.invert, ImageOps.invert])
+@pytest.mark.parametrize("key", [0, 1])
+def test_invert_updates_bilevel_color_key(invert, key: int) -> None:
+    image = Image.frombytes("1", (2, 1), b"\x40")
+    image.info["transparency"] = key
+
+    result = invert(image)
+
+    assert result.info["transparency"] == 1 - key
+    assert result.convert("RGBA").getchannel("A").tobytes() == image.convert("RGBA").getchannel("A").tobytes()
+
+
 def test_lighter_image() -> None:
     with Image.open(PILLOW_IMAGES / "imagedraw_chord_RGB.png") as im1:
         with Image.open(PILLOW_IMAGES / "imagedraw_outline_chord_RGB.png") as im2:

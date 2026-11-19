@@ -800,10 +800,8 @@ def invert(image: Image.Image) -> Image.Image:
         result = ImageOps.invert(image)
         ```
     """
-    if image.mode in ("L", "RGB"):
+    if image.mode in ("1", "L", "RGB"):
         return ImageChops.invert(image)
-    if image.mode == "1":
-        return _result(image, ops_lut(image._native, ops_tone_lut("invert")))
     return _lut(image, ops_tone_lut("invert"), palette=True)
 
 

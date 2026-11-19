@@ -462,11 +462,11 @@ def invert(image: Image.Image) -> Image.Image:
     result = Image.Image(chops_invert(image._native))
     result.info.update(image._metadata_info())
     key = image.info.get("transparency")
-    if key is not None and image.mode in ("L", "RGB"):
-        maximum = (1 << image.bit_depth) - 1
+    if key is not None and image.mode in ("1", "L", "RGB"):
+        maximum = 1 if image.mode == "1" else (1 << image.bit_depth) - 1
         with suppress(TypeError, ValueError):
             samples = Image._png_key_samples(image.mode, key, maximum)
-            result.info["transparency"] = maximum - samples[0] if image.mode == "L" else tuple(maximum - sample for sample in samples)
+            result.info["transparency"] = tuple(maximum - sample for sample in samples) if image.mode == "RGB" else maximum - samples[0]
     return result
 
 
