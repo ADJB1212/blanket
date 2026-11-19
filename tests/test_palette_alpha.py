@@ -66,6 +66,15 @@ def test_pa_conversion_reads_original_alpha(mode: str, count: int) -> None:
     assert image.tobytes() == raw
 
 
+@pytest.mark.parametrize("mode,color", [("RGBa", (40, 60, 80, 128)), ("RGBA;F", (0.25, 0.5, 0.75, 0.25))])
+def test_pa_conversion_keeps_alpha_from_premultiplied_and_float_color(mode, color) -> None:
+    image = Image.new(mode, (1, 1), color)
+
+    indexed = image.convert("PA")
+
+    assert indexed.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+
+
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])
 @pytest.mark.parametrize("palette_mode", ["RGB", "RGBA"])
 @pytest.mark.parametrize("transparency", [1, b"\x00\x7f"])

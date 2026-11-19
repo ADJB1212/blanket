@@ -1319,10 +1319,13 @@ class Image:
             result.info.pop("transparency", None)
             return result
         if mode == "PA" and self.mode != "PA":
-            source = self if self.mode == "P" else self.convert("RGB").quantize()
+            alpha = self if self.mode in ("LA", "RGBA") else None
+            if self.mode in ("RGBa", "RGBA;F"):
+                alpha = self.convert("RGBA")
+            color_source = alpha if alpha is not None else self
+            source = self if self.mode == "P" else color_source.convert("RGB").quantize()
             source._sync_palette()
             table = None
-            alpha = self if self.mode in ("LA", "RGBA") else None
             if self.mode == "P" and isinstance(transparency, (int, bytes)):
                 table = bytes(0 if slot == transparency else 255 for slot in range(256)) if isinstance(transparency, int) else transparency.ljust(256, b"\xff")
             elif self.mode in ("1", "L", "RGB") and transparency is not None:
