@@ -68,6 +68,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         frames: list[Image] = []
         for source in sources:
             source._native.load()
+            if source._seek_error is not None and source.n_frames > 1:
+                raise source._seek_error
             source._sync_palette()
             if source._lazy_frames is not None:
                 from .ImageSequence import all_frames
@@ -84,7 +86,8 @@ def save_sequence(image: Image, fp: str | bytes | os.PathLike[str] | os.PathLike
         frames = [image]
     if any(0 in frame.size for frame in frames):
         raise ValueError("cannot encode empty image")
-    default_image = controls.get("default_image", image.info.get("default_image", False)) if format == "PNG" else False
+    inherited_default = image.info.get("default_image", False) if len(frames) > 1 else False
+    default_image = controls.get("default_image", inherited_default) if format == "PNG" else False
     if not isinstance(default_image, bool):
         raise TypeError("default_image must be a bool")
     start = int(default_image)

@@ -88,6 +88,29 @@ def test_indexed_apng_over_expands_blended_palette_colors(lazy):
         assert image.getpixel((0, 0)) == (255, 0, 0, 192)
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+@pytest.mark.parametrize("frame", [0, 1])
+def test_apng_save_current_frame_with_timing_ignores_inherited_default_image(lazy, frame):
+    first = Image.new("RGB", (4, 4), "red")
+    second = Image.new("RGB", first.size, "blue")
+    data = first.encode("PNG", save_all=True, append_images=[second], default_image=True)
+    with Image.decode(data, lazy=lazy) as image:
+        image.seek(frame)
+        with Image.decode(image.encode("PNG", duration=20)) as saved:
+            assert saved.n_frames == 1
+            assert saved.tobytes() == image.tobytes()
+        assert image.tell() == frame
+
+
+@pytest.mark.parametrize("lazy", [False, True])
+def test_saving_all_apng_frames_reports_deferred_sequence_error(lazy):
+    with Image.open(PILLOW_IMAGES / "apng" / "sequence_repeat_chunk.png", lazy=lazy) as image:
+        assert image.n_frames > 1
+        with pytest.raises(SyntaxError, match="frame sequence"):
+            image.encode("PNG", save_all=True)
+        assert image.tell() == 0
+
+
 @pytest.mark.parametrize("key", [0, 1])
 def test_bilevel_apng_transparency(key):
     first = Image.frombytes("1", (2, 1), b"\x40")
