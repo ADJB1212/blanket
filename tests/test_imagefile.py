@@ -227,6 +227,19 @@ def test_completed_parser_snapshots_can_be_mutated_independently(format: str) ->
     assert parser.close().tobytes() == expected
 
 
+@pytest.mark.parametrize("format", ["JPEG", "JXL"])
+def test_parser_accepts_noncontiguous_memoryview_chunks(format: str) -> None:
+    data = jpeg_encoded() if format == "JPEG" else encoded("RGB")
+    storage = bytearray(2 * len(data))
+    view = memoryview(storage)[::2]
+    view[:] = data
+
+    parser = ImageFile.Parser()
+    for start in range(0, len(view), 7):
+        parser.feed(view[start : start + 7])
+    assert parser.close().tobytes() == Image.decode(data).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["1", "L", "LA", "RGB", "RGBA"])
 @pytest.mark.parametrize("compress_level", [0, 6, 9])
 @pytest.mark.parametrize("buffer_type", [bytes, bytearray, memoryview])

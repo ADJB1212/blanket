@@ -64,7 +64,9 @@ class Parser:
         """
         if self._closed:
             raise ValueError("closed image parser")
-        view = data if isinstance(data, bytes) else memoryview(data).cast("B")
+        view = data if isinstance(data, bytes) else memoryview(data)
+        if isinstance(view, memoryview):
+            view = view.cast("B") if view.c_contiguous else view.tobytes()
         try:
             if self._decoder is None:
                 whole_chunk = isinstance(view, bytes) and not self._prefix
