@@ -43,6 +43,17 @@ def test_rgba_resize_box_at_native_size_preserves_wide_samples(depth, resample):
     assert result.tobytes() == image.crop(box).tobytes()
 
 
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("target_depth", [None, 8])
+def test_wide_rgba_to_rgb_premultiplied_normalizes_before_multiplying(depth, target_depth):
+    image = make_image("RGBA", depth)
+
+    result = image.convert("RGBa", bit_depth=target_depth)
+
+    assert (result.mode, result.bit_depth) == ("RGBa", 8)
+    assert result.tobytes() == image.convert("RGBA", bit_depth=8).convert("RGBa").tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("target", ["1", "LA"])

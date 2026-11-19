@@ -238,7 +238,12 @@ pub fn convert(py: Python<'_>, source_image: &Image, mode: &str, bit_depth: Opti
             let straight = if destination == PixelMode::PremulLa { PixelMode::La } else { PixelMode::Rgba };
             let converted;
             let image = if source_image.pixel_mode() == straight {
-                source_image
+                if source_image.bit_depth() == 8 {
+                    source_image
+                } else {
+                    converted = convert(py, source_image, straight.as_str(), Some(8))?;
+                    &converted
+                }
             } else if source_image.pixel_mode().channels() >= 3 || source_image.palette().is_some() {
                 converted = convert(py, &convert(py, source_image, "RGB", Some(8))?, straight.as_str(), None)?;
                 &converted
