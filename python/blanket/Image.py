@@ -1382,8 +1382,6 @@ class Image:
             key.putpalette(self.palette)
         if result.mode != "P":
             result.info["transparency"] = key.convert(result.mode, bit_depth=result.bit_depth).getpixel((0, 0))
-        elif self.mode == "L":
-            result.info["transparency"] = transparency
         elif result.palette is not None:
             color = cast("tuple[int, ...]", key.convert("RGB").getpixel((0, 0)))
             try:

@@ -217,6 +217,16 @@ def test_trns_RGB(tmp_path: Path) -> None:
     im_p.save(f)
 
 
+def test_adaptive_grayscale_conversion_remaps_transparent_index() -> None:
+    image = Image.frombytes("L", (3, 1), bytes([40, 90, 40]))
+    image.info["transparency"] = 40
+
+    indexed = image.convert("P", palette=Image.Palette.ADAPTIVE)
+
+    assert indexed.info["transparency"] == indexed.getpixel((0, 0))
+    assert indexed.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+
+
 @pytest.mark.parametrize("convert_mode", ("L", "LA", "I"))
 def test_l_macro_rounding(convert_mode: str) -> None:
     for mode in ("P", "PA"):
