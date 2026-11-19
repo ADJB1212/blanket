@@ -360,6 +360,15 @@ impl SampledContour for BoolSampledContour {
         let mut ranges = smallvec![];
         let mut inside = None;
         let mut x = 0;
+        while x + 32 <= width {
+            let mut samples = [0u8; 32];
+            for lane in 0..32 {
+                samples[lane] = u8::from(self.point_is_inside(ContourPosition(x + lane, y)));
+            }
+            let filled = Simd::<u8, 32>::from_array(samples).simd_ne(Simd::splat(0));
+            scan_filled_lanes_32(x, filled, &mut inside, &mut ranges);
+            x += 32;
+        }
         while x + 16 <= width {
             let mut samples = [0u8; 16];
             for lane in 0..16 {
@@ -408,12 +417,18 @@ impl SampledContour for U8SampledContour {
 
         let mut ranges = smallvec![];
         let mut inside = None;
-        let (blocks, tail) = row.as_chunks::<16>();
-        for (block_index, block) in blocks.iter().enumerate() {
-            let filled = Simd::<u8, 16>::from_slice(block).simd_ne(Simd::splat(0));
-            scan_filled_lanes(block_index * 16, filled, &mut inside, &mut ranges);
+        let (blocks32, rest) = row.as_chunks::<32>();
+        for (block_index, block) in blocks32.iter().enumerate() {
+            let filled = Simd::<u8, 32>::from_slice(block).simd_ne(Simd::splat(0));
+            scan_filled_lanes_32(block_index * 32, filled, &mut inside, &mut ranges);
         }
-        let tail_start = blocks.len() * 16;
+        let tail_start32 = blocks32.len() * 32;
+        let (blocks16, tail) = rest.as_chunks::<16>();
+        for (block_index, block) in blocks16.iter().enumerate() {
+            let filled = Simd::<u8, 16>::from_slice(block).simd_ne(Simd::splat(0));
+            scan_filled_lanes(tail_start32 + block_index * 16, filled, &mut inside, &mut ranges);
+        }
+        let tail_start = tail_start32 + blocks16.len() * 16;
         for (offset, byte) in tail.iter().enumerate() {
             let x = tail_start + offset;
             match (inside, *byte != 0) {
@@ -451,6 +466,37 @@ fn scan_filled_lanes(x0: usize, filled: Mask<i8, 16>, inside: &mut Option<usize>
 
     let mut was_inside = inside.is_some();
     for lane in 0..16 {
+        let is_inside = (bits >> lane) & 1 == 1;
+        if is_inside == was_inside {
+            continue;
+        }
+        let x = x0 + lane;
+        if is_inside {
+            *inside = Some(x);
+        } else if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x as f64));
+        }
+        was_inside = is_inside;
+    }
+}
+
+fn scan_filled_lanes_32(x0: usize, filled: Mask<i8, 32>, inside: &mut Option<usize>, ranges: &mut SmallVec<[Range<f64>; 4]>) {
+    let bits = filled.to_bitmask();
+    if bits == 0 {
+        if let Some(start_x) = inside.take() {
+            ranges.push((start_x as f64)..(x0 as f64));
+        }
+        return;
+    }
+    if bits == u32::MAX as u64 {
+        if inside.is_none() {
+            *inside = Some(x0);
+        }
+        return;
+    }
+
+    let mut was_inside = inside.is_some();
+    for lane in 0..32 {
         let is_inside = (bits >> lane) & 1 == 1;
         if is_inside == was_inside {
             continue;
@@ -549,6 +595,18 @@ mod test {
         let contour = U8SampledContour(ContourSize(40, 1), samples);
         let ranges = contour.intercepts_on_line(0.0);
         assert_eq!(ranges.as_slice(), &[0.0..2.0, 15.0..18.0, 20.0..22.0, 31.0..33.0, 39.0..40.0]);
+    }
+
+    #[test]
+    fn u8_intercepts_cross_32_lane_boundary() {
+        // Tests that spans crossing the 32-wide SIMD boundary are merged correctly
+        let mut samples = vec![0u8; 80];
+        for x in [30, 31, 32, 33, 62, 63, 64, 65, 79] {
+            samples[x] = 1;
+        }
+        let contour = U8SampledContour(ContourSize(80, 1), samples);
+        let ranges = contour.intercepts_on_line(0.0);
+        assert_eq!(ranges.as_slice(), &[30.0..34.0, 62.0..66.0, 79.0..80.0]);
     }
 
     fn bottom_at_coordinate() {

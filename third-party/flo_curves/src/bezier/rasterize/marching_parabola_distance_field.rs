@@ -88,11 +88,23 @@ fn first_y_closer_to_next(y: usize, end: f64, next_start: f64, height: usize) ->
 }
 
 fn fill_offset_squared(field: &mut [f64], x: usize, stride: usize, mut y: usize, end: usize, origin: f64) {
-    while y + 4 <= end {
-        let ys = Simd::<f64, 4>::from_array([y as f64, (y + 1) as f64, (y + 2) as f64, (y + 3) as f64]);
+    while y + 8 <= end {
+        let ys = Simd::<f64, 8>::from_array([
+            y as f64,
+            (y + 1) as f64,
+            (y + 2) as f64,
+            (y + 3) as f64,
+            (y + 4) as f64,
+            (y + 5) as f64,
+            (y + 6) as f64,
+            (y + 7) as f64,
+        ]);
         let delta = ys - Simd::splat(origin);
-        scatter_column(field, x, stride, y, delta * delta);
-        y += 4;
+        let values = (delta * delta).to_array();
+        for lane in 0..8 {
+            field[x + (y + lane) * stride] = values[lane];
+        }
+        y += 8;
     }
     while y < end {
         field[x + y * stride] = squared(y as f64 - origin);
@@ -101,13 +113,25 @@ fn fill_offset_squared(field: &mut [f64], x: usize, stride: usize, mut y: usize,
 }
 
 fn fill_inside_span(field: &mut [f64], x: usize, stride: usize, mut y: usize, end: usize, start: f64, stop: f64) {
-    while y + 4 <= end {
-        let ys = Simd::<f64, 4>::from_array([y as f64, (y + 1) as f64, (y + 2) as f64, (y + 3) as f64]);
+    while y + 8 <= end {
+        let ys = Simd::<f64, 8>::from_array([
+            y as f64,
+            (y + 1) as f64,
+            (y + 2) as f64,
+            (y + 3) as f64,
+            (y + 4) as f64,
+            (y + 5) as f64,
+            (y + 6) as f64,
+            (y + 7) as f64,
+        ]);
         let to_start = ys - Simd::splat(start);
         let to_end = ys - Simd::splat(stop);
         let nearest = (to_start * to_start).simd_min(to_end * to_end);
-        scatter_column(field, x, stride, y, -nearest);
-        y += 4;
+        let values = (-nearest).to_array();
+        for lane in 0..8 {
+            field[x + (y + lane) * stride] = values[lane];
+        }
+        y += 8;
     }
     while y < end {
         let ypos = y as f64;
@@ -116,19 +140,12 @@ fn fill_inside_span(field: &mut [f64], x: usize, stride: usize, mut y: usize, en
     }
 }
 
-fn scatter_column(field: &mut [f64], x: usize, stride: usize, y: usize, values: Simd<f64, 4>) {
-    let values = values.to_array();
-    for lane in 0..4 {
-        field[x + (y + lane) * stride] = values[lane];
-    }
-}
-
 fn apply_input_signs(distances: &mut [f64], original: &[f64]) {
-    let (blocks, tail) = distances.as_chunks_mut::<4>();
-    let (sign_blocks, sign_tail) = original.as_chunks::<4>();
+    let (blocks, tail) = distances.as_chunks_mut::<8>();
+    let (sign_blocks, sign_tail) = original.as_chunks::<8>();
     for (block, signs) in blocks.iter_mut().zip(sign_blocks) {
-        let values = Simd::from_array(*block);
-        let negative = Simd::from_slice(signs).simd_lt(Simd::splat(0.0));
+        let values = Simd::<f64, 8>::from_array(*block);
+        let negative = Simd::<f64, 8>::from_slice(signs).simd_lt(Simd::splat(0.0));
         *block = negative.select(-values, values).to_array();
     }
     for (distance, sign) in tail.iter_mut().zip(sign_tail) {
@@ -305,14 +322,14 @@ impl SampledContour for MarchingParabolaDistanceField {
         let row = &self.squared_distance_field[y * width..(y + 1) * width];
         let mut ranges = smallvec![];
         let mut inside = None;
-        let (blocks, tail) = row.as_chunks::<4>();
+        let (blocks, tail) = row.as_chunks::<8>();
         for (block_index, block) in blocks.iter().enumerate() {
-            let filled = Simd::<f64, 4>::from_slice(block).simd_le(Simd::splat(0.0));
+            let filled = Simd::<f64, 8>::from_slice(block).simd_le(Simd::splat(0.0));
             let bits = filled.to_bitmask();
-            record_inside_bits(block_index * 4, bits, 4, &mut inside, &mut ranges);
+            record_inside_bits(block_index * 8, bits, 8, &mut inside, &mut ranges);
         }
         for (offset, distance) in tail.iter().enumerate() {
-            let x = blocks.len() * 4 + offset;
+            let x = blocks.len() * 8 + offset;
             match (inside, *distance <= 0.0) {
                 (None, true) => inside = Some(x),
                 (Some(start_x), false) => {
@@ -370,10 +387,10 @@ impl ColumnSampledContour for MarchingParabolaDistanceField {
         let mut ranges = smallvec![];
         let mut inside = None;
         let mut y = 0;
-        while y + 4 <= height {
-            let column = Simd::<f64, 4>::from_array(std::array::from_fn(|lane| self.squared_distance_field[x + (y + lane) * self.width]));
-            record_inside_bits(y, column.simd_le(Simd::splat(0.0)).to_bitmask(), 4, &mut inside, &mut ranges);
-            y += 4;
+        while y + 8 <= height {
+            let column = Simd::<f64, 8>::from_array(std::array::from_fn(|lane| self.squared_distance_field[x + (y + lane) * self.width]));
+            record_inside_bits(y, column.simd_le(Simd::splat(0.0)).to_bitmask(), 8, &mut inside, &mut ranges);
+            y += 8;
         }
         for y in y..height {
             match (inside, self.squared_distance_field[x + y * self.width] <= 0.0) {

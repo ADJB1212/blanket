@@ -1,3 +1,5 @@
+use std::simd::Simd;
+
 use super::super::geo::*;
 use super::basis::*;
 
@@ -22,9 +24,14 @@ pub fn find_extremities<Point: Coordinate>(w1: Point, w2: Point, w3: Point, w4: 
         let b = (p1 - p2 * 2.0 + p3) * 6.0;
         let c = (p2 - p1) * 3.0;
 
-        // Extremities are points at which the curve has a 0 gradient (in any of its dimensions)
-        let root1 = (-b + f64::sqrt(b * b - a * c * 4.0)) / (a * 2.0);
-        let root2 = (-b - f64::sqrt(b * b - a * c * 4.0)) / (a * 2.0);
+        // Compute both roots of the quadratic in one SIMD op: [-b+sqrt(d), -b-sqrt(d)] / (2a)
+        // where d = b^2 - 4ac
+        let discriminant = b * b - a * c * 4.0;
+        let sqrt_d = Simd::<f64, 2>::splat(discriminant.sqrt());
+        let neg_b = Simd::splat(-b);
+        let signs = Simd::from_array([1.0_f64, -1.0]);
+        let two_a = Simd::splat(a * 2.0);
+        let [root1, root2] = ((neg_b + signs * sqrt_d) / two_a).to_array();
 
         if root1 > 0.0 && root1 < 1.0 {
             t_extremes.push(root1);
