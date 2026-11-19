@@ -81,7 +81,8 @@ def test_tone_preserving_autocontrast_needs_no_grayscale_image(size, masked, cut
     mask = Image.frombytes("L", size, bytes(i % 3 for i in range(size[0] * size[1]))) if masked else None
     ignored = () if ignore is None else (ignore,) if isinstance(ignore, int) else ignore
     tails = cutoff if isinstance(cutoff, tuple) else (cutoff, cutoff)
-    expected = Image.Image(_blanket.ops_autocontrast(image._native, image.convert("L")._native, None if mask is None else mask._native, tails, ignored))
+    native, _ = _blanket.ops_autocontrast(image._native, image.convert("L")._native, None if mask is None else mask._native, tails, ignored)
+    expected = Image.Image(native)
 
     def no_conversion(*args, **kwargs):
         pytest.fail("autocontrast allocated a grayscale image")

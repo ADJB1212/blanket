@@ -37,6 +37,20 @@ def test_grayscale_uses_converted_transparency_key(depth: int) -> None:
     assert [pixel[-1] for pixel in result.convert("RGBA").getdata()] == [0, (1 << depth) - 1]
 
 
+@pytest.mark.parametrize("mode,key,other", [("L", 47, 96), ("RGB", (47, 68, 89), (96, 117, 138))])
+@pytest.mark.parametrize("operation,options", [("autocontrast", {}), ("autocontrast", {"preserve_tone": True}), ("autocontrast", {"ignore": range(2)}), ("equalize", {}), ("posterize", {"bits": 4}), ("solarize", {"threshold": 30})])
+def test_tone_operations_map_color_key(mode, key, other, operation, options):
+    image = Image.new(mode, (512, 1), key)
+    image.paste(other, (256, 0, 512, 1))
+    image.info["transparency"] = key
+
+    result = getattr(ImageOps, operation)(image, **options)
+
+    assert result.info["transparency"] == result.getpixel((0, 0))
+    assert result.convert("RGBA").getchannel("A").tobytes() == bytes(256) + b"\xff" * 256
+    assert image.info["transparency"] == key
+
+
 @pytest.mark.parametrize("border, expected_box", ((1, (1, 1, 127, 127)), ((1, 2), (1, 2, 127, 126)), ((1, 2, 3, 4), (1, 2, 125, 124))))
 def test_crop(border: int | tuple[int, ...], expected_box: tuple[int, int, int, int]) -> None:
     im = hopper()

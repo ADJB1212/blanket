@@ -426,8 +426,21 @@ fn check_tone_mode(image: &Image) -> PyResult<()> {
     Ok(())
 }
 
-#[pyfunction]
-fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult<Image> {
+fn apply_tone_table(py: Python<'_>, image: &Image, table: Vec<u8>, key: Option<Vec<u8>>) -> PyResult<(Image, Option<Vec<u8>>)> {
+    let mapped = if let Some(key) = key {
+        if key.len() != image.pixel_mode().channels() {
+            return Err(PyValueError::new_err("transparency key does not match the image mode"));
+        }
+        let stride = if table.len() == 256 { 0 } else { 256 };
+        Some(key.into_iter().enumerate().map(|(channel, sample)| table[channel * stride + usize::from(sample)]).collect())
+    } else {
+        None
+    };
+    Ok((ops_lut(py, image, table)?, mapped))
+}
+
+#[pyfunction(signature = (image, mask, key=None))]
+fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>, key: Option<Vec<u8>>) -> PyResult<(Image, Option<Vec<u8>>)> {
     let bins = ops_histogram(py, image, mask)?;
     check_tone_mode(image)?;
     let mut table = Vec::with_capacity(bins.len());
@@ -445,13 +458,14 @@ fn ops_equalize(py: Python<'_>, image: &Image, mask: Option<&Image>) -> PyResult
             }
         }
     }
-    ops_lut(py, image, table)
+    apply_tone_table(py, image, table, key)
 }
 
-#[pyfunction(signature = (image, histogram_image, mask, cutoff, ignore, preserve_tone=false))]
+#[pyfunction(signature = (image, histogram_image, mask, cutoff, ignore, preserve_tone=false, key=None))]
 fn ops_autocontrast(
     py: Python<'_>, image: &Image, histogram_image: &Image, mask: Option<&Image>, cutoff: [f64; 2], ignore: Vec<i64>, preserve_tone: bool,
-) -> PyResult<Image> {
+    key: Option<Vec<u8>>,
+) -> PyResult<(Image, Option<Vec<u8>>)> {
     let bins = if preserve_tone && histogram_image.pixel_mode() == PixelMode::Rgb {
         let source = histogram_image.pixel_data()?;
         let mask = validate_mask(mask, histogram_image)?;
@@ -467,7 +481,7 @@ fn ops_autocontrast(
     for counts in bins.as_chunks::<256>().0 {
         table.extend(autocontrast_lut(counts, &cutoff, &ignore)?);
     }
-    ops_lut(py, image, table)
+    apply_tone_table(py, image, table, key)
 }
 
 fn luminance_histogram(source: &[u8], mask: Option<&[u8]>) -> Vec<u64> {
