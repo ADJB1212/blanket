@@ -1938,11 +1938,12 @@ class Image:
         MEDIANCUT, MAXCOVERAGE, and FASTOCTREE run in the native backend.
         LIBIMAGEQUANT is unavailable in this build. Generated palette ordering
         and color choices may differ from Pillow's implementations.
-        Non-RGB sources convert through RGB except RGBA, which quantizes directly.
+        Indexed sources convert through RGB or RGBA, depending on whether they
+        carry transparency. RGBA quantizes directly.
 
         Args:
             colors: Maximum palette size, from 1 through 256.
-            method: Quantizer from `Image.Quantize`; defaults to FASTOCTREE for RGBA and MEDIANCUT otherwise.
+            method: Quantizer from `Image.Quantize`; defaults to FASTOCTREE for RGBA or transparent indexed input and MEDIANCUT otherwise.
             kmeans: Number of k-means refinement iterations for supported quantizers.
             palette: Optional indexed image supplying the destination palette.
             dither: Dithering mode from `Image.Dither`.
@@ -1963,8 +1964,10 @@ class Image:
         """
 
         self.load()
-        method = Quantize.FASTOCTREE if method is None and self.mode == "RGBA" else Quantize.MEDIANCUT if method is None else index(method)
-        if self.mode == "RGBA" and method not in (2, 3):
+        indexed_alpha = self.mode == "P" and self.has_transparency_data
+        rgba = self.mode == "RGBA" or indexed_alpha
+        method = (Quantize.FASTOCTREE if rgba else Quantize.MEDIANCUT) if method is None else index(method)
+        if rgba and method not in (2, 3):
             raise ValueError("Fast Octree (method == 2) and libimagequant (method == 3) are the only valid methods for quantizing RGBA images")
         if palette is not None:
             palette.load()
@@ -1983,9 +1986,11 @@ class Image:
                 raise ValueError("kmeans must not be negative")
             if method not in range(4):
                 raise ValueError("quantization error")
-        source = self.convert("RGB") if self.mode == "P" else self
+        source = self.convert("RGBA" if indexed_alpha else "RGB") if self.mode == "P" else self
         result = Image(_native_quantize(source._native, colors, method, kmeans, None if palette is None else palette._native, index(dither)))
-        result.info.update(self._metadata_info())
+        result.info.update(source._metadata_info())
+        if indexed_alpha:
+            result.info.pop("transparency", None)
         return result
 
     def tobytes(self, encoder_name: str = "raw", *args: object) -> bytes:

@@ -174,6 +174,20 @@ def test_quantize_palette_validation() -> None:
     assert palette.quantize().convert("RGB").tobytes() == rgb.tobytes()
 
 
+@pytest.mark.parametrize("transparency", [None, 0, b"\x00\x80"])
+def test_quantizing_indexed_images_preserves_transparency(transparency):
+    image = Image.frombytes("P", (2, 1), b"\x00\x01")
+    image.putpalette(b"\xff\x00\x00\x00\x00\xff\x00\x80", "RGBA")
+    image.info["custom"] = "retained"
+    if transparency is not None:
+        image.info["transparency"] = transparency
+
+    result = image.quantize(2)
+
+    assert result.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+    assert result.info == {"custom": "retained"}
+
+
 def test_empty_supplied_palette() -> None:
     palette = Image.frombytes("P", (1, 1), b"\x00")
     palette.putpalette([])
