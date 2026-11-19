@@ -102,6 +102,18 @@ def test_pad_and_expand_preserve_wide_fill_samples(depth, mode, value):
             assert result.getpixel((0, 0)) == expected
 
 
+@pytest.mark.parametrize("mode,value", [("F", (0.5,)), ("RGB;F", (-0.5, 1.25, 3.5)), ("RGBA;F", (0.5, -1.25, 3.5, 0.75))])
+def test_pad_and_expand_accept_float_fill_samples(mode, value):
+    image = Image.new(mode, (1, 1), 0.25)
+    for fill in (None, value):
+        expected = Image.new(mode, (1, 1), fill).getpixel((0, 0))
+        for result in (ImageOps.expand(image, 1, fill=fill), ImageOps.pad(image, (3, 1), color=fill)):
+            assert (result.mode, result.bit_depth) == (mode, 32)
+            assert result.getpixel((0, 0)) == expected
+            center = (1, 1) if result.height == 3 else (1, 0)
+            assert result.getpixel(center) == image.getpixel((0, 0))
+
+
 @pytest.mark.parametrize("new_size", ((256, 256), (512, 256), (256, 512)))
 def test_contain(new_size: tuple[int, int]) -> None:
     im = hopper()

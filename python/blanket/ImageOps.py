@@ -10,9 +10,8 @@ indices and palette alpha.
 
 from __future__ import annotations
 
-__lazy_modules__ = {"collections.abc", "struct", "operator"}
+__lazy_modules__ = {"collections.abc", "operator"}
 
-import struct
 from dataclasses import dataclass
 from operator import index
 from typing import TYPE_CHECKING, Protocol, cast, overload
@@ -22,7 +21,6 @@ if TYPE_CHECKING:
     from typing import Literal, SupportsIndex
 
     from ._blanket import _Image
-    from ._typing import FloatInput
 
 from . import Image
 from ._blanket import (
@@ -256,7 +254,7 @@ def _copy(image: Image.Image) -> Image.Image:
     return image.copy()
 
 
-def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
+def _canvas_color(image: Image.Image, color: str | float | tuple[float, ...] | None) -> list[int]:
     """Adapt scalar canvas fills without narrowing integer samples."""
     if image.mode == "P":
         if isinstance(color, str):
@@ -264,7 +262,7 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
         if isinstance(color, tuple) and len(color) in (3, 4):
             if image.palette is None:
                 raise ValueError("image has no palette")
-            color = image.palette.getcolor(color, image)
+            color = image.palette.getcolor(cast("tuple[int, ...]", color), image)
             image._sync_palette()
         return [0 if color is None else index(cast("SupportsIndex", color))]
     if image.mode in ("I", "I;16", "I;16L", "I;16B", "I;16N"):
@@ -273,9 +271,9 @@ def _canvas_color(image: Image.Image, color: Color | None) -> list[int]:
                 raise TypeError("color must be an integer or a single-element tuple")
             color = color[0]
         return [0 if color is None else index(cast("SupportsIndex", color))]
-    if image.mode == "F":
-        return list(struct.pack("<f", 0.0 if color is None else float(cast("FloatInput", color))))
-    return color_pixel(color, image.mode, image.bit_depth)
+    if image.mode in ("F", "RGB;F", "RGBA;F"):
+        return list(Image.new(image.mode, (1, 1), color).tobytes())
+    return color_pixel(cast("Color | None", color), image.mode, image.bit_depth)
 
 
 def _lut(image: Image.Image, table: bytes, *, palette: bool = False) -> Image.Image:
@@ -444,7 +442,7 @@ def cover(image: Image.Image, size: tuple[int, int], method: int = Image.Resampl
     return _resize(image, size, method)
 
 
-def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, color: Color | None = None, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
+def pad(image: Image.Image, size: tuple[int, int], method: int = Image.Resampling.BICUBIC, color: str | float | tuple[float, ...] | None = None, centering: tuple[float, float] = (0.5, 0.5)) -> Image.Image:
     """Contain the image and pad it to size with the selected background.
 
     High-depth numeric colors use native sample units.
@@ -621,7 +619,7 @@ def equalize(image: Image.Image, mask: Image.Image | None = None) -> Image.Image
     return _result(image, ops_equalize(image._native, None if mask is None else mask._native))
 
 
-def expand(image: Image.Image, border: Border = 0, fill: Color = 0) -> Image.Image:
+def expand(image: Image.Image, border: Border = 0, fill: str | float | tuple[float, ...] | None = 0) -> Image.Image:
     """Add a border filled with a pixel value or CSS color.
 
     High-depth numeric colors use native sample units.
