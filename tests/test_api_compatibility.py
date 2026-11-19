@@ -55,7 +55,8 @@ def test_matrix_conversion_matches_pillow(target: str) -> None:
     for image in (actual, expected):
         image.info["transparency"] = (255, 0, 0)
     result, reference = actual.convert(target, matrix), expected.convert(target, matrix)
-    assert_image_properties(result, pixels=reference.tobytes(), info=reference.info)
+    key_pixel = PILImage.new("RGB", (1, 1), (255, 0, 0)).convert(target, matrix).getpixel((0, 0))
+    assert_image_properties(result, pixels=reference.tobytes(), info={**reference.info, "transparency": key_pixel})
 
 
 def test_uint16_tiff_decodes_as_integer_mode() -> None:
