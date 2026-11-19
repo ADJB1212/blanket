@@ -268,7 +268,16 @@ impl Compressor {
         self.handle.set(raw::TJPARAM_TJPARAM_NOREALLOC, if output.is_owned { 0 } else { 1 } as libc::c_int)?;
         let mut output_len = output.len as raw::size_t;
         let res = unsafe {
-            raw::tj3Compress8(self.handle.as_ptr(), pixels.as_ptr(), width, pitch, height, format as libc::c_int, &raw mut output.ptr, &raw mut output_len)
+            raw::tj3Compress8(
+                self.handle.as_ptr(),
+                pixels.as_ptr(),
+                width,
+                pitch,
+                height,
+                format as libc::c_int,
+                &raw mut output.ptr,
+                &raw mut output_len,
+            )
         };
         output.len = output_len as usize;
         if res != 0 {
@@ -371,7 +380,9 @@ impl Compressor {
         self.handle.set(raw::TJPARAM_TJPARAM_NOREALLOC, if output.is_owned { 0 } else { 1 } as libc::c_int)?;
 
         let mut output_len = output.len as raw::size_t;
-        let res = unsafe { raw::tj3CompressFromYUV8(self.handle.as_ptr(), pixels.as_ptr(), width, align, height, &raw mut output.ptr, &raw mut output_len) };
+        let res = unsafe {
+            raw::tj3CompressFromYUV8(self.handle.as_ptr(), pixels.as_ptr(), width, align, height, &raw mut output.ptr, &raw mut output_len)
+        };
         output.len = output_len as usize;
         if res != 0 {
             return Err(self.handle.get_error());
@@ -478,7 +489,15 @@ impl Compressor {
 
         let mut output_len = output.len as raw::size_t;
         let result = unsafe {
-            raw::tj3CompressFromYUVPlanes8(self.handle.as_ptr(), planes.as_ptr(), width, strides.as_ptr(), height, &raw mut output.ptr, &raw mut output_len)
+            raw::tj3CompressFromYUVPlanes8(
+                self.handle.as_ptr(),
+                planes.as_ptr(),
+                width,
+                strides.as_ptr(),
+                height,
+                &raw mut output.ptr,
+                &raw mut output_len,
+            )
         };
         output.len = output_len as usize;
 

@@ -191,7 +191,6 @@ pub enum TransformOp {
     Rot270 = raw::TJXOP_TJXOP_ROT270,
 }
 
-
 /// Transform cropping region.
 ///
 /// The [`x`][Self::x] and [`y`][Self::y] position of the region must be aligned on MCU boundaries.
