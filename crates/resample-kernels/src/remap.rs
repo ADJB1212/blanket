@@ -55,7 +55,7 @@ pub fn lens_map(output: &mut [u8], width: usize, start: usize, coefficients: [f6
             )
         };
         let (sx, sy) = if coefficients == [0.0; 3] {
-            (x.cast::<f32>() + Simd::splat(0.5), y.cast::<f32>() + Simd::splat(0.5))
+            ((x + Simd::splat(0.5)).cast::<f32>(), (y + Simd::splat(0.5)).cast::<f32>())
         } else {
             let dx = x + Simd::splat(0.5) - Simd::splat(center.0);
             let dy = y + Simd::splat(0.5) - Simd::splat(center.1);
@@ -77,7 +77,7 @@ pub fn lens_map(output: &mut [u8], width: usize, start: usize, coefficients: [f6
         let x = (index % width) as f64;
         let y = (index / width) as f64;
         let (sx, sy) = if coefficients == [0.0; 3] {
-            (x as f32 + 0.5, y as f32 + 0.5)
+            ((x + 0.5) as f32, (y + 0.5) as f32)
         } else {
             let dx = x + 0.5 - center.0;
             let dy = y + 0.5 - center.1;
@@ -157,7 +157,8 @@ mod tests {
 
     #[test]
     fn radial_maps_match_scalar_at_unaligned_vector_boundaries_and_tails() {
-        for width in [1, 3, 4, 5, 17] {
+        let large_coordinate = (1 << 24) + 1;
+        for (width, start) in [(1, 31), (3, 31), (4, 31), (5, 31), (17, 31), (1, large_coordinate), (large_coordinate + 100, large_coordinate)] {
             for count in [0, 1, 3, 4, 5, 7, 8, 9, 17, 33] {
                 for offset in 0..5 {
                     for (coefficients, center, focal) in [
@@ -165,14 +166,13 @@ mod tests {
                         ([-0.2, 0.03, 0.005], (3.25, 2.75), (4.0, 3.0)),
                         ([1e300, -1e300, 1e300], (0.0, 0.0), (1e-300, 1e-300)),
                     ] {
-                        let start = 31;
                         let mut output = vec![123; offset + count * 12 + 5];
                         lens_map(&mut output[offset..offset + count * 12], width, start, coefficients, center, focal);
                         for (i, pixel) in output[offset..offset + count * 12].as_chunks::<12>().0.iter().enumerate() {
                             let x = ((start + i) % width) as f64;
                             let y = ((start + i) / width) as f64;
                             let expected = if coefficients == [0.0; 3] {
-                                [x as f32 + 0.5, y as f32 + 0.5]
+                                [(x + 0.5) as f32, (y + 0.5) as f32]
                             } else {
                                 let dx = x + 0.5 - center.0;
                                 let dy = y + 0.5 - center.1;

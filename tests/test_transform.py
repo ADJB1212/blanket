@@ -113,6 +113,15 @@ def test_invalid_transform(method: int, data: object, resample: int) -> None:
     assert_raises(ValueError, lambda: image.transform((5, 5), method, data, resample))
 
 
+@pytest.mark.parametrize("size", [(0, 3), (3, 0), (0, 0)])
+def test_empty_extent_transform(size: tuple[int, int]) -> None:
+    source = Image.new("RGB", (3, 3), "red")
+    result = source.transform(size, Image.EXTENT, (0, 0, 3, 3))
+    assert result.size == size
+    assert result.mode == source.mode
+    assert result.tobytes() == b""
+
+
 def test_closed_and_invalid_transpose() -> None:
     image, _ = patterned_pair("L", (13, 9), divisor=7)
     assert_raises(ValueError, lambda: image.transpose(7))

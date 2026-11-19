@@ -2310,6 +2310,8 @@ class Image:
             raise ValueError("Source must be a sequence of length 2 or 4")
         if not isinstance(dest, (list, tuple)) or len(dest) != 2:
             raise ValueError("Destination must be a sequence of length 2")
+        if transfer not in ("srgb", "linear"):
+            raise ValueError("transfer must be 'srgb' or 'linear'")
         source = tuple(index(v) for v in source)
         dest = (index(dest[0]), index(dest[1]))
         if min(source) < 0:
@@ -2321,8 +2323,6 @@ class Image:
         if linear_light or self.mode == "RGBA;F":
             if full_image and not self.readonly:
                 self.load()
-                if transfer not in ("srgb", "linear"):
-                    raise ValueError("transfer must be 'srgb' or 'linear'")
                 native = self._native
                 result = ops_color_composite(native, overlay._native, linear_light and transfer == "srgb")
                 native._replace_pixels(result)
@@ -2794,7 +2794,7 @@ class Image:
         if method in (Transform.AFFINE, Transform.EXTENT):
             if method == Transform.EXTENT:
                 left, top, right, bottom = coordinates(data, 4)
-                matrix = ((right - left) / size[0], 0, left, 0, (bottom - top) / size[1], top)
+                matrix = ((right - left) / max(1, size[0]), 0, left, 0, (bottom - top) / max(1, size[1]), top)
             else:
                 matrix = coordinates(data, 6)
             native = ops_affine(self._native, size, matrix, resample, color, isinstance(fillcolor, str))
