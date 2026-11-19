@@ -31,6 +31,18 @@ def samples(image):
     return list(struct.unpack(f"{'>' if image.mode == 'I;16B' else '<'}{len(raw) // 2}H", raw))
 
 
+@pytest.mark.parametrize("depth", [10, 12, 16])
+@pytest.mark.parametrize("resample", [Image.Resampling.BOX, Image.Resampling.BICUBIC])
+def test_rgba_resize_box_at_native_size_preserves_wide_samples(depth, resample):
+    image = make_image("RGBA", depth, size=(3, 1), values=[0, 0, 0, 0, 13, 144, 240, 1, 951, 91, 17, 0])
+    box = (1, 0, 3, 1)
+
+    result = image.resize((2, 1), resample, box)
+
+    assert (result.mode, result.bit_depth, result.size) == ("RGBA", depth, (2, 1))
+    assert result.tobytes() == image.crop(box).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("depth", [10, 12, 16])
 @pytest.mark.parametrize("target", ["1", "LA"])

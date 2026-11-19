@@ -2946,7 +2946,7 @@ class Image:
             if not linear_light and source.mode not in ("RGB;F", "RGBA;F") and box[0] == int(box[0]) and box[1] == int(box[1]) and (box[2] - box[0], box[3] - box[1]) == size:
                 _checkpoint(report, 0)
                 crop_box = (int(box[0]), int(box[1]), int(box[2]), int(box[3]))
-                if method != Resampling.NEAREST and source.mode in ("LA", "RGBA") and box != (0, 0, *source.size):
+                if method != Resampling.NEAREST and source.mode in ("LA", "RGBA") and source.bit_depth == 8 and box != (0, 0, *source.size):
                     result = source.convert("La" if source.mode == "LA" else "RGBa").crop(crop_box).convert(source.mode)
                 else:
                     result = source.crop(crop_box)
