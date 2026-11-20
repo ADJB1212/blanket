@@ -3730,7 +3730,8 @@ def merge(mode: str, bands: Sequence[Image]) -> Image:
 def blend(im1: Image, im2: Image, alpha: float) -> Image:
     """Interpolate equal-sized images of matching depth, clipping extrapolated values.
 
-    Indexed `P` images are unsupported.
+    Indexed `P` images are unsupported. `PA` images blend their palette
+    colors and quantize the result to indexed alpha.
 
     Args:
         im1: First image; both inputs must have the same mode and dimensions.
@@ -3757,8 +3758,17 @@ def blend(im1: Image, im2: Image, alpha: float) -> Image:
     im2.load()
     if im1.mode == "P" or im2.mode == "P":
         raise ValueError("image has wrong mode")
-    result = Image(enhance_blend(im1._native, im2._native, alpha))
-    result.info.update(im1._metadata_info())
+    if im1.mode == im2.mode == "PA":
+        if im1.size != im2.size:
+            raise ValueError("images do not match")
+        if alpha in (0, 1):
+            result = (im1 if alpha == 0 else im2).copy()
+        else:
+            first, second = im1.convert("RGBA"), im2.convert("RGBA")
+            result = Image(enhance_blend(first._native, second._native, alpha)).convert("PA")
+    else:
+        result = Image(enhance_blend(im1._native, im2._native, alpha))
+    result._info = im1._metadata_info()
     return result
 
 

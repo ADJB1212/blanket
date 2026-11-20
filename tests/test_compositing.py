@@ -203,6 +203,26 @@ def test_validation_and_closed_images():
         assert_raises(ValueError, operation, match="closed")
 
 
+@pytest.mark.parametrize("alpha", [0, 0.5, 1, 1.5])
+def test_blend_indexed_alpha_uses_each_images_palette(alpha):
+    first = Image.frombytes("PA", (2, 1), b"\x00\x14\x01\x50")
+    first.putpalette(bytes((240, 23, 109, 29, 135, 44)))
+    first.info["label"] = "first"
+    second = Image.frombytes("PA", (2, 1), b"\x01\x8c\x00\xff")
+    second.putpalette(bytes((53, 111, 233, 0, 90, 141)))
+    second.info["label"] = "second"
+
+    result = Image.blend(first, second, alpha)
+
+    assert result.mode == "PA"
+    assert result.convert("RGBA").tobytes() == Image.blend(first.convert("RGBA"), second.convert("RGBA"), alpha).tobytes()
+    assert result.info == first.info
+    if alpha in (0, 1):
+        selected = first if alpha == 0 else second
+        assert result.tobytes() == selected.tobytes()
+        assert result.getpalette() == selected.getpalette()
+
+
 def test_high_depth_compositing():
     image = Image.frombytes("RGBA", (1, 1), bytes(8), bit_depth=16)
     assert_raises(ValueError, lambda: image.paste(Image.new("RGBA", (1, 1))), match="match")
