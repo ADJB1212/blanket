@@ -5,7 +5,7 @@ from io import BytesIO
 from struct import pack
 from threading import get_ident
 from types import SimpleNamespace
-from unittest.mock import Mock, call
+from unittest.mock import ANY, Mock, call
 from zlib import compress, crc32
 
 import pytest
@@ -182,6 +182,8 @@ def mock_tqdm(monkeypatch):
 @pytest.mark.parametrize("compressor_type", [Compressor.LosslessImageCompressor, Compressor.LossyImageCompressor])
 def test_compressor_tqdm_progress(compressor_type, mock_tqdm):
     tqdm, bar = mock_tqdm
+    frames = []
+    bar.update.side_effect = lambda _: frames.append(bar.bar_format)
     image = Image.new("RGB", (17, 19), "red")
     baseline = image.encode("PNG", compressor=compressor_type(effort=1))
     tqdm.assert_not_called()
@@ -189,9 +191,12 @@ def test_compressor_tqdm_progress(compressor_type, mock_tqdm):
     compressor = compressor_type(effort=1, show_progress=True)
     seen = []
     assert image.encode("PNG", compressor=compressor, progress=seen.append) == baseline
-    tqdm.assert_called_once_with(desc="Compressing", unit="checkpoint")
+    tqdm.assert_called_once_with(desc="Compressing", unit="checkpoint", bar_format=ANY)
     assert seen == list(range(len(seen))) and len(seen) > 2
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
+    assert "| ===                |" in frames[0]
+    assert "|  ===               |" in frames[1]
+    assert "|====================|" in bar.bar_format
     bar.close.assert_called_once_with()
 
     tqdm.reset_mock()
@@ -211,7 +216,17 @@ def test_compressor_tqdm_progress(compressor_type, mock_tqdm):
     assert output.getvalue() == b"original"
     tqdm.assert_called_once()
     bar.update.assert_called_once_with(1)
+    assert "| ===                |" in bar.bar_format
     bar.close.assert_called_once_with()
+
+
+def test_compressor_tqdm_renders_bar(capsys):
+    pytest.importorskip("tqdm")
+    image = Image.new("RGB", (17, 19), "red")
+    image.encode("PNG", compressor=Compressor.LosslessImageCompressor(effort=1, show_progress=True))
+    display = capsys.readouterr().err
+    assert "Compressing: |===                 | 0 [" in display
+    assert "Compressing: |====================|" in display
 
 
 def test_compressor_progress_when_tqdm_is_missing(monkeypatch, capsys):
@@ -250,7 +265,7 @@ def test_image_tqdm_progress(operation, description, mock_tqdm):
     result = operation(image, progress=seen.append, show_progress=True)
     assert result.size == expected.size
     assert result.tobytes() == expected.tobytes()
-    tqdm.assert_called_once_with(desc=description, unit="checkpoint")
+    tqdm.assert_called_once_with(desc=description, unit="checkpoint", bar_format=ANY)
     assert seen == list(range(len(seen))) and len(seen) >= 2
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
     bar.close.assert_called_once_with()
@@ -267,7 +282,7 @@ def test_tqdm_only_displays_load_and_seek_when_decoding(mock_tqdm):
     source = Image.new("RGB", (17, 19), "red")
     image = Image.open(BytesIO(source.encode("PNG")))
     assert image.load(show_progress=True)[0, 0] == (255, 0, 0)
-    tqdm.assert_called_once_with(desc="Decoding", unit="checkpoint")
+    tqdm.assert_called_once_with(desc="Decoding", unit="checkpoint", bar_format=ANY)
     image.load(show_progress=True)
     mapped = Image.frombuffer("L", (2, 2), bytearray(4))
     assert mapped.load(show_progress=True)[0, 0] == 0
@@ -278,7 +293,7 @@ def test_tqdm_only_displays_load_and_seek_when_decoding(mock_tqdm):
     sequence = Image.decode(source.encode("PNG", save_all=True, append_images=[second]), lazy=True, frame_cache_size=2)
     sequence.seek(1, show_progress=True)
     assert sequence.tobytes() == second.tobytes()
-    tqdm.assert_called_once_with(desc="Decoding frame", unit="checkpoint")
+    tqdm.assert_called_once_with(desc="Decoding frame", unit="checkpoint", bar_format=ANY)
     sequence.seek(0, show_progress=True)
     sequence.seek(1, show_progress=True)
     tqdm.assert_called_once()

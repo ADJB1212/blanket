@@ -17,7 +17,7 @@ tar -xJf "$RUNNER_TEMP/nasm.tar.xz" -C "$RUNNER_TEMP"
 (
 	cd "$nasm_source"
 	./configure --prefix=/usr/local --disable-gdb --disable-pedantic
-	make -j2
+	make -j4
 	make install
 )
 for tool in clang clang++ ld.lld llvm-ar llvm-ranlib cmake meson nasm ninja pkg-config; do

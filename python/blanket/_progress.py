@@ -14,12 +14,20 @@ if TYPE_CHECKING:
     from ._typing import ProgressCallback
 
 
+_BAR_WIDTH = 20
+_BAR_MARKER = "==="
+
+
 def validate_progress(progress: ProgressCallback | None, *, show_progress: bool = False) -> None:
     """Validate the public callback and display options."""
     if progress is not None and not callable(progress):
         raise TypeError("progress must be callable or None")
     if not isinstance(show_progress, bool):
         raise TypeError("show_progress must be a boolean")
+
+
+def _bar_format(indicator: str) -> str:
+    return "{desc}: |" + indicator + "| {n_fmt} [{elapsed}, {rate_fmt}]"
 
 
 @contextmanager
@@ -39,9 +47,13 @@ def progress_display(progress: ProgressCallback | None, *, show_progress: bool, 
         def report(completed: int) -> bool | None:
             nonlocal bar
             if bar is None:
-                bar = stack.enter_context(tqdm(desc=description, unit="checkpoint"))
+                bar = stack.enter_context(tqdm(desc=description, unit="checkpoint", bar_format=_bar_format(_BAR_MARKER.ljust(_BAR_WIDTH))))
             if completed:
+                offset = completed % (_BAR_WIDTH - len(_BAR_MARKER) + 1)
+                bar.bar_format = _bar_format((" " * offset + _BAR_MARKER).ljust(_BAR_WIDTH))
                 bar.update(1)
             return progress(completed) if progress is not None else None
 
         yield report
+        if bar is not None:
+            bar.bar_format = _bar_format("=" * _BAR_WIDTH)
