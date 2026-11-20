@@ -45,6 +45,17 @@ def test_public_classes_match_pillow() -> None:
     assert set(ImageEnhance.__all__) == expected
 
 
+@pytest.mark.parametrize("name", ["Brightness", "Sharpness"])
+@pytest.mark.parametrize("factor", [0.0, 0.5, 2.0])
+def test_grayscale_alpha_enhancement_keeps_original_alpha(name, factor):
+    image, reference = random_pair("LA", (19, 5), seed=84)
+    result = getattr(ImageEnhance, name)(image).enhance(factor)
+    expected = getattr(PILEnhance, name)(reference).enhance(factor)
+
+    assert_pillow_equal(result, expected, tolerance=1)
+    assert result.getchannel("A").tobytes() == image.getchannel("A").tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
 def test_small_images_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:

@@ -264,15 +264,21 @@ pub fn enhance_brightness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "brightness");
     }
-    if image.pixel_mode() == PixelMode::Rgba {
+    if matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba) {
         let source = image.pixel_data()?;
         let mut pixels = blanket_core::buffers::reserved(source.len())?;
+        let channels = image.pixel_mode().channels();
         py.detach(|| {
-            chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS << 2, 4 << 20, |i, dst| {
-                let start = (i * CHUNK_PIXELS) << 2;
-                brightness_rgba(&source[start..start + dst.len()], dst);
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS * channels, 4 << 20, |i, dst| {
+                let start = i * CHUNK_PIXELS * channels;
+                let source = &source[start..start + dst.len()];
+                if channels == 2 {
+                    contrast_alpha::<2>(source, dst, 0);
+                } else {
+                    brightness_rgba(source, dst);
+                }
             });
-            // SAFETY: the kernel writes zero RGB and source alpha for every pixel.
+            // SAFETY: the kernels write zero color and source alpha for every pixel.
             unsafe { pixels.set_len(source.len()) };
         });
         return output(image, pixels);
@@ -313,7 +319,8 @@ pub fn enhance_sharpness(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let spare = &mut pixels.spare_capacity_mut()[..source.len()];
     py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => smooth::<1, 1>(source, spare, width),
-        PixelMode::La | PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, spare, width),
+        PixelMode::La => smooth::<2, 1>(source, spare, width),
+        PixelMode::PremulLa | PixelMode::Pa => smooth::<2, 2>(source, spare, width),
         PixelMode::Rgb | PixelMode::Hsv | PixelMode::YCbCr | PixelMode::Lab => smooth::<3, 3>(source, spare, width),
         PixelMode::Cmyk | PixelMode::PremulRgba | PixelMode::Rgbx => smooth::<4, 4>(source, spare, width),
         PixelMode::Rgba => smooth::<4, 3>(source, spare, width),
