@@ -86,6 +86,7 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
         "jpg": ("jpeg",),
         "jxl": ("lossless", "lossy"),
         "libtiff": ("raw", "tiff_lzw", "tiff_adobe_deflate", "jpeg"),
+        "exr": ("zip",),
         "webp": ("lossless", "lossy"),
         "heif": ("lossless", "lossy"),
         "avif": ("lossy",),
@@ -115,6 +116,8 @@ def encoding_capabilities(format: str) -> EncodingCapabilities | None:
     elif name == "libtiff":
         modes.pop("LA")
         modes.update({"CMYK": (8,), "LAB": (8,), "F": (32,), "RGB;F": (32,), "RGBA;F": (32,)})
+    elif name == "exr":
+        modes = dict.fromkeys(("RGB;F", "RGBA;F"), (32,))
     elif name in ("qoi", "ico"):
         modes = dict.fromkeys(("RGB", "RGBA"), (8,))
     elif name == "pdf":
@@ -163,6 +166,7 @@ _FEATURES = (
     "jpg",
     "jxl",
     "libtiff",
+    "exr",
     "webp",
     "avif",
     "libheif",
@@ -183,7 +187,7 @@ _FEATURES = (
     "qoi",
     "jpg_2000",
 )
-_ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "heic": "heif", "jpeg2000": "jpg_2000", "pbm": "ppm", "pgm": "ppm", "pnm": "ppm"}
+_ALIASES = {"jpeg": "jpg", "jpegxl": "jxl", "tiff": "libtiff", "openexr": "exr", "heic": "heif", "jpeg2000": "jpg_2000", "pbm": "ppm", "pgm": "ppm", "pnm": "ppm"}
 _FORMATS = (
     ("SVG", "svg"),
     ("PCX", "pcx"),
@@ -210,6 +214,7 @@ _FORMATS = (
     ("JPEG", "jpg"),
     ("JXL", "jxl"),
     ("TIFF", "libtiff"),
+    ("EXR", "exr"),
     ("WEBP", "webp"),
     ("AVIF", "avif"),
     ("HEIF/HEIC", "heif"),

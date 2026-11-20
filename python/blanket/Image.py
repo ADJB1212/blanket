@@ -132,6 +132,7 @@ _EXTENSIONS = {
     ".jxl": "JXL",
     ".tif": "TIFF",
     ".tiff": "TIFF",
+    ".exr": "EXR",
     ".webp": "WEBP",
     ".heic": "HEIF",
     ".heif": "HEIF",
@@ -247,7 +248,7 @@ def getmodetype(mode: str) -> str:
 
 
 _GRAY_PALETTE = bytes(value for value in range(256) for _ in range(3))
-_FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
+_FORMAT_ALIASES = {"JPG": "JPEG", "JPEGXL": "JXL", "TIF": "TIFF", "OPENEXR": "EXR", "HEIC": "HEIF", "PNM": "PPM", "PBM": "PPM", "PGM": "PPM", "TARGA": "TGA", "JP2": "JPEG2000", "J2K": "JPEG2000", "J2C": "JPEG2000", "JPC": "JPEG2000"}
 _EXPAND_TRANSPARENCY_FORMATS = frozenset({"AVIF", "BMP", "HEIF", "ICO", "JPEG2000", "JXL", "PAM", "PDF", "QOI", "SGI", "SVG", "TGA", "TIFF", "WEBP", "XPM"})
 _SAVE_OPTIONS = {
     "SVG": frozenset({"svg_mode", "svg_color_precision", "svg_filter_speckle", "svg_layer_difference", "svg_corner_threshold", "svg_length_threshold", "svg_splice_threshold", "svg_path_precision", "svg_alpha_threshold"}),
@@ -269,6 +270,7 @@ _SAVE_OPTIONS = {
     "JPEG": frozenset({"quality", "subsampling", "progressive", "progression", "optimize", "keep_rgb", "smooth", "qtables", "restart_marker_blocks", "restart_marker_rows", "streamtype"}),
     "JXL": frozenset({"quality", "lossless", "effort"}),
     "TIFF": frozenset({"compression", "quality"}),
+    "EXR": frozenset({"exr_sample_type"}),
     "PDF": frozenset({"dpi"}),
     "WEBP": frozenset({"quality", "lossless"}),
     "HEIF": frozenset({"quality", "lossless"}),
@@ -280,6 +282,7 @@ _MIME_TYPES = {
     "JPEG": "image/jpeg",
     "GIF": "image/gif",
     "TIFF": "image/tiff",
+    "EXR": "image/x-exr",
     "BMP": "image/bmp",
     "ICO": "image/x-icon",
     "WEBP": "image/webp",
@@ -3374,9 +3377,11 @@ class Image:
 
         La and RGBa require explicit conversion before saving. RGBX writes
         JPEG (discarding X); other formats require conversion first.
-        HSV cannot be saved. Float modes and `LAB` write TIFF only. `YCbCr` writes
-        JPEG only. CMYK writes JPEG, TIFF, or PDF. Integer modes
-        convert to `L` for encoding.
+        HSV cannot be saved. `F` and `LAB` write TIFF. `RGB;F` and `RGBA;F`
+        write TIFF or OpenEXR. OpenEXR defaults to 32-bit FLOAT samples
+        and accepts ``exr_sample_type="half"`` for 16-bit HALF samples.
+        `YCbCr` writes JPEG only. CMYK writes JPEG, TIFF, or PDF.
+        Integer modes convert to `L` for encoding.
 
         PDF accepts a finite positive scalar ``dpi`` (default 72), which sets
         page size in inches without resampling pixels and applies to every page.
@@ -4610,6 +4615,13 @@ def _save_options(format: str, supplied: dict[str, object], image: Image | None 
     effort = _bounded_int("effort", supplied.get("effort", 7), 1, 10)
 
     values = {"quality": quality, "compress_level": compress_level, "lossless": lossless, "effort": effort}
+    if format == "EXR":
+        sample_type = supplied.get("exr_sample_type", "float")
+        if not isinstance(sample_type, str):
+            raise TypeError("exr_sample_type must be a string")
+        if sample_type not in ("half", "float"):
+            raise ValueError("exr_sample_type must be half or float")
+        values["exr_sample_type"] = sample_type
     if format == "SVG":
         mode = supplied.get("svg_mode", "spline")
         if not isinstance(mode, str):

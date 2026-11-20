@@ -13,6 +13,7 @@ blanket-core.workspace = true
 pyo3.workspace = true
 blanket-metadata.workspace = true
 blanket-codec-common.workspace = true
+blanket-codec-exr.workspace = true
 blanket-codec-png.workspace = true
 blanket-codec-jpeg.workspace = true
 blanket-codec-jxl.workspace = true

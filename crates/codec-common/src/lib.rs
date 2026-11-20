@@ -320,6 +320,7 @@ pub struct SaveOptions<'a> {
     pub lossless: bool = false,
     pub effort: u8 = 7,
     pub tiff_compression: u8 = 0,
+    pub exr_sample_type: &'a str = "float",
     pub jpeg_subsampling: i8 = -1,
     pub jpeg_optimize: bool = false,
     pub jpeg_progressive: bool = false,

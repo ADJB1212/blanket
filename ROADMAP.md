@@ -355,7 +355,7 @@ with new processing semantics exposed explicitly.
       through the existing sequence API where codec backends support them
 - [ ] **Multi-resolution containers** — select and write multiple ICO sizes,
       and expose TIFF pyramid levels without treating them as animation frames
-- [ ] **OpenEXR support** — read and write half/float RGB and alpha samples,
+- [x] **OpenEXR support** — read and write half/float RGB and alpha samples,
       building on floating-point color storage
 
 #### Drawing and Analysis

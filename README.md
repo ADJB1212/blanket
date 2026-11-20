@@ -92,12 +92,12 @@ do not promise byte-exact Pillow output. Start with
 
 ## Supported formats
 
-| Support        | Formats                                                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Read and write | PNG/APNG, JPEG, JPEG XL, TIFF, WebP, AVIF, HEIC/HEIF, BMP, GIF, ICO, Netpbm/PAM, TGA, QOI, JPEG 2000, PCX, SGI, XBM, XPM, MSP |
-| Read only      | DDS, EPS, FITS, SPIDER, Pixar, Sun raster                                                                                     |
-| Write only     | PDF, PALM                                                                                                                     |
-| Read and trace | SVG                                                                                                                           |
+| Support        | Formats                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Read and write | PNG/APNG, JPEG, JPEG XL, TIFF, OpenEXR, WebP, AVIF, HEIC/HEIF, BMP, GIF, ICO, Netpbm/PAM, TGA, QOI, JPEG 2000, PCX, SGI, XBM, XPM, MSP |
+| Read only      | DDS, EPS, FITS, SPIDER, Pixar, Sun raster                                                                                              |
+| Write only     | PDF, PALM                                                                                                                              |
+| Read and trace | SVG                                                                                                                                    |
 
 The file extension only tells part of the story. Support also depends on mode,
 depth, and the codec backends in your build. EPS needs Ghostscript. TIFF writes

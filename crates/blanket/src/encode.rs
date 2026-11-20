@@ -9,7 +9,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
 #[pyfunction(name = "_encode")]
-#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0, target_size=None, pdf_dpi=72.0, svg_mode="spline", svg_color_precision=6, svg_filter_speckle=4, svg_layer_difference=16, svg_corner_threshold=60.0, svg_length_threshold=4.0, svg_splice_threshold=45.0, svg_path_precision=2, svg_alpha_threshold=128, progress=None))]
+#[pyo3(signature = (image, format, quality, compress_level, lossless, effort, compressor=None, tiff_compression=0, output=None, icc_profile=None, metadata_exif=None, metadata_xmp=None, attach_metadata=false, metadata_chunks=Vec::new(), jpeg_subsampling=-1, jpeg_optimize=false, jpeg_progressive=false, jpeg_keep_rgb=false, jpeg_qtables=Vec::new(), jpeg_smooth=0, jpeg_qtable_quality=-1, jpeg_restart_marker_blocks=0, jpeg_restart_marker_rows=0, jpeg_streamtype=0, target_size=None, pdf_dpi=72.0, svg_mode="spline", svg_color_precision=6, svg_filter_speckle=4, svg_layer_difference=16, svg_corner_threshold=60.0, svg_length_threshold=4.0, svg_splice_threshold=45.0, svg_path_precision=2, svg_alpha_threshold=128, progress=None, exr_sample_type="float"))]
 pub(crate) fn _encode(
     py: Python<'_>, image: &Image, format: &str, quality: u8, compress_level: u8, lossless: bool, effort: u8, compressor: Option<Compressor>,
     tiff_compression: u8, output: Option<Bound<'_, PyAny>>, icc_profile: Option<&[u8]>, metadata_exif: Option<&[u8]>, metadata_xmp: Option<&[u8]>,
@@ -17,7 +17,7 @@ pub(crate) fn _encode(
     jpeg_progressive: bool, jpeg_keep_rgb: bool, jpeg_qtables: Vec<[u16; 64]>, jpeg_smooth: i32, jpeg_qtable_quality: i16,
     jpeg_restart_marker_blocks: u32, jpeg_restart_marker_rows: u32, jpeg_streamtype: i32, target_size: Option<u64>, pdf_dpi: f64, svg_mode: &str,
     svg_color_precision: u8, svg_filter_speckle: u32, svg_layer_difference: u32, svg_corner_threshold: f64, svg_length_threshold: f64,
-    svg_splice_threshold: f64, svg_path_precision: u8, svg_alpha_threshold: u8, progress: Option<Py<PyAny>>,
+    svg_splice_threshold: f64, svg_path_precision: u8, svg_alpha_threshold: u8, progress: Option<Py<PyAny>>, exr_sample_type: &str,
 ) -> PyResult<Option<Py<PyBytes>>> {
     if target_size == Some(0) {
         return Err(PyValueError::new_err("target_size must be positive"));
@@ -30,6 +30,7 @@ pub(crate) fn _encode(
         lossless,
         effort,
         tiff_compression,
+        exr_sample_type,
         jpeg_subsampling,
         jpeg_optimize,
         jpeg_progressive,

@@ -7,6 +7,7 @@ pub(crate) fn _feature_info(feature: &str) -> Option<(bool, Option<String>)> {
         "png" => Some(format!("png {}", env!("BLANKET_BACKEND_PNG"))),
         "jpg" | "libjpeg_turbo" => Some(format!("turbojpeg {}", env!("BLANKET_BACKEND_TURBOJPEG"))),
         "libtiff" => Some(format!("tiff {}", env!("BLANKET_BACKEND_TIFF"))),
+        "exr" => Some(format!("exr {}", env!("BLANKET_BACKEND_EXR"))),
         "gif" => Some(format!("gif {}", env!("BLANKET_BACKEND_GIF"))),
         "svg" => Some(format!("resvg {}", env!("BLANKET_BACKEND_RESVG"))),
         "bmp" | "ico" | "ppm" | "pam" | "tga" | "dds" | "qoi" => Some(format!("image {}", env!("BLANKET_BACKEND_IMAGE"))),

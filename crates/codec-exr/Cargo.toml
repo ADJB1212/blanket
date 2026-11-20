@@ -1,0 +1,21 @@
+[package]
+name = "blanket-codec-exr"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+blanket-core.workspace = true
+blanket-codec-common.workspace = true
+exr = { version = "1", default-features = false, features = ["rayon"] }
+pyo3.workspace = true
+
+[lib]
+doctest = false
+
+[lints]
+workspace = true

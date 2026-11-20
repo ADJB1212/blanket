@@ -17,6 +17,7 @@ members = [
     "crates/codecs",
     "crates/metadata",
     "crates/codec-common",
+    "crates/codec-exr",
     "crates/codec-png",
     "crates/codec-image",
     "crates/codec-jpeg",
@@ -69,6 +70,7 @@ blanket-resample-kernels = { path = "crates/resample-kernels" }
 blanket-resample = { path = "crates/resample" }
 blanket-font = { path = "crates/font" }
 blanket-codec-common = { path = "crates/codec-common" }
+blanket-codec-exr = { path = "crates/codec-exr" }
 blanket-codec-avif = { path = "crates/codec-avif" }
 blanket-codec-bmp-ico = { path = "crates/codec-bmp-ico" }
 blanket-codec-extended = { path = "crates/codec-extended" }

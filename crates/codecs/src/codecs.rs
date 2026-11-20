@@ -56,6 +56,7 @@ pub enum ImageFormat {
     Jpeg,
     Jxl,
     Tiff,
+    Exr,
     Webp,
     Heif,
     Avif,
@@ -107,6 +108,7 @@ impl ImageFormat {
             "SVG" => Ok(Self::Svg),
             "AVIF" => Ok(Self::Avif),
             "TIFF" | "TIF" => Ok(Self::Tiff),
+            "EXR" | "OPENEXR" => Ok(Self::Exr),
             "WEBP" => Ok(Self::Webp),
             "HEIF" | "HEIC" => Ok(Self::Heif),
             "PNG" => Ok(Self::Png),
@@ -142,6 +144,7 @@ impl ImageFormat {
             Self::Svg => "SVG",
             Self::Avif => "AVIF",
             Self::Tiff => "TIFF",
+            Self::Exr => "EXR",
             Self::Webp => "WEBP",
             Self::Heif => "HEIF",
             Self::Png => "PNG",
@@ -153,6 +156,8 @@ impl ImageFormat {
     fn detect(data: &[u8]) -> Option<Self> {
         if data.starts_with(b"qoif") {
             Some(Self::Qoi)
+        } else if data.starts_with(blanket_codec_exr::SIGNATURE) {
+            Some(Self::Exr)
         } else if data.starts_with(b"DDS ") {
             Some(Self::Dds)
         } else if data.starts_with(b"%!PS") || data.starts_with(b"\xc5\xd0\xd3\xc6") {
@@ -272,6 +277,7 @@ pub fn _inspect(py: Python<'_>, data: &[u8], formats: Option<Vec<String>>) -> Py
             ImageFormat::Jpeg => blanket_codec_jpeg::inspect(data),
             ImageFormat::Jxl => blanket_codec_jxl::inspect(data),
             ImageFormat::Tiff => blanket_codec_tiff::inspect(data),
+            ImageFormat::Exr => blanket_codec_exr::inspect(data),
             ImageFormat::Webp => blanket_codec_webp::inspect(data),
             ImageFormat::Heif | ImageFormat::Avif => blanket_codec_heif::inspect(data),
             ImageFormat::Jpeg2000 => blanket_codec_jpeg2000::inspect(data),
@@ -534,6 +540,7 @@ pub fn decode(data: &[u8], format: ImageFormat) -> Result<Image, DecodeError> {
         ImageFormat::Svg => blanket_codec_svg::decode(data).map_err(DecodeError::with_source),
         ImageFormat::Avif => decode_avif(data),
         ImageFormat::Tiff => decode_tiff(data),
+        ImageFormat::Exr => blanket_codec_exr::decode(data),
         ImageFormat::Webp => decode_webp(data),
     }
 }
@@ -546,6 +553,9 @@ pub fn encode(image: &Image, format: ImageFormat, options: SaveOptions) -> PyRes
 fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyResult<Vec<u8>> {
     if format == ImageFormat::Svg {
         return blanket_codec_svg::encode(image, options);
+    }
+    if format == ImageFormat::Exr {
+        return blanket_codec_exr::encode(image, options.exr_sample_type);
     }
     if format == ImageFormat::Tiff && options.tiff_compression != 0 {
         return blanket_codec_tiff::encode_compressed_tiff(image, options);
@@ -605,6 +615,7 @@ fn encode_inner(image: &Image, format: ImageFormat, options: SaveOptions) -> PyR
         ImageFormat::Ico => encode_ico(image, pixels),
         ImageFormat::Pdf => encode_pdf(image, pixels, options.pdf_dpi),
         ImageFormat::Svg => unreachable!(),
+        ImageFormat::Exr => unreachable!(),
         ImageFormat::Avif => encode_avif(image, pixels, options),
         ImageFormat::Heif => unreachable!(),
         ImageFormat::Tiff => encode_tiff(image, pixels),
