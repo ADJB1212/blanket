@@ -67,6 +67,25 @@ def test_hsv_enhancement_uses_luminance(name):
     assert enhancer.enhance(0.5).tobytes() == expected.enhance(0.5).tobytes()
 
 
+@pytest.mark.parametrize("name", ImageEnhance.__all__)
+@pytest.mark.parametrize("factor", [0.0, 0.5, 1.0, 2.0])
+def test_indexed_alpha_enhancement_uses_palette_colors(name, factor):
+    image = Image.frombytes("PA", (3, 3), bytes((0, 40, 1, 80, 2, 255)) * 3)
+    image.putpalette(bytes((240, 23, 109, 29, 135, 44, 53, 111, 233)))
+    image.info["label"] = "retained"
+    rgba = image.convert("RGBA")
+    operation = getattr(ImageEnhance, name)
+
+    result = operation(image).enhance(factor)
+
+    assert result.mode == "PA"
+    assert result.convert("RGBA").tobytes() == operation(rgba).enhance(factor).tobytes()
+    assert result.info == image.info
+    if factor == 1:
+        assert result.tobytes() == image.tobytes()
+        assert result.getpalette() == image.getpalette()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
 def test_small_images_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:

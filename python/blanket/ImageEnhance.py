@@ -4,12 +4,20 @@ Color, Contrast, Brightness, and Sharpness operate on 8-bit images, including
 `1`, `LA`, `PA`, `HSV`, `CMYK`, `YCbCr`, and `LAB`, as well as 10/12/16-bit
 `L`/`RGB`/`RGBA` and the `I;16` variants. High-depth outputs retain their
 sample range and storage mode. Finite enhancement factors preserve RGBA alpha.
+Indexed-alpha enhancements process palette colors and quantize the result to PA.
 """
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from . import Image
 from ._blanket import enhance_blend, enhance_brightness, enhance_color, enhance_contrast, enhance_sharpness
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from ._blanket import _Image
 
 __all__ = ["Brightness", "Color", "Contrast", "Sharpness"]
 
@@ -19,6 +27,13 @@ class _Enhance:
 
     image: Image.Image
     degenerate: Image.Image
+
+    def _make_degenerate(self, operation: Callable[[_Image], _Image]) -> Image.Image:
+        """Build the factor-zero image from direct colors."""
+        source = self.image
+        if source.mode == "PA":
+            source = source.convert("RGBA")
+        return Image.Image(operation(source._native))
 
     def enhance(self, factor: float) -> Image.Image:
         """Return an enhanced copy, interpolated by an unrestricted factor.
@@ -36,7 +51,17 @@ class _Enhance:
             ```
         """
 
-        result = Image.Image(enhance_blend(self.degenerate._native, self.image._native, factor))
+        source = self.image
+        indexed = source.mode == "PA"
+        if indexed:
+            if source.size != self.degenerate.size:
+                raise ValueError("images do not match")
+            if factor == 1:
+                return source.copy()
+            source = source.convert("RGBA")
+        result = Image.Image(enhance_blend(self.degenerate._native, source._native, factor))
+        if indexed:
+            result = result.convert("PA")
         result.info.update(self.image._metadata_info())
         return result
 
@@ -61,7 +86,7 @@ class Color(_Enhance):
         """
         self.image = image
         self.intermediate_mode = "LA" if image.mode == "RGBA" else "L"
-        self.degenerate = image if image.mode == "L" else Image.Image(enhance_color(image._native))
+        self.degenerate = image if image.mode == "L" else self._make_degenerate(enhance_color)
         if self.degenerate is not image:
             self.degenerate.info.update(image.info)
 
@@ -85,7 +110,7 @@ class Contrast(_Enhance):
             ```
         """
         self.image = image
-        self.degenerate = Image.Image(enhance_contrast(image._native))
+        self.degenerate = self._make_degenerate(enhance_contrast)
 
 
 class Brightness(_Enhance):
@@ -107,7 +132,7 @@ class Brightness(_Enhance):
             ```
         """
         self.image = image
-        self.degenerate = Image.Image(enhance_brightness(image._native))
+        self.degenerate = self._make_degenerate(enhance_brightness)
 
 
 class Sharpness(_Enhance):
@@ -129,5 +154,5 @@ class Sharpness(_Enhance):
             ```
         """
         self.image = image
-        self.degenerate = Image.Image(enhance_sharpness(image._native))
+        self.degenerate = self._make_degenerate(enhance_sharpness)
         self.degenerate.info.update(image.info)
