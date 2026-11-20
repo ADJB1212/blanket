@@ -2438,6 +2438,8 @@ class Image:
             return (self.copy(),)
         bands = tuple(Image(native) for native in ops_split(self._native))
         info = self._metadata_info()
+        if len(bands) > 1:
+            info.pop("transparency", None)
         for band in bands:
             band.info.update(info)
         return bands
@@ -2491,6 +2493,8 @@ class Image:
             return self.copy()
         result = Image(self._native.getchannel(channel))
         result.info.update(self._metadata_info())
+        if len(self.getbands()) > 1:
+            result.info.pop("transparency", None)
         return result
 
     def histogram(self, mask: Image | None = None, extrema: tuple[float, float] | None = None) -> list[int]:

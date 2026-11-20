@@ -84,6 +84,26 @@ def test_sanity() -> None:
             convert(im, output_mode)
 
 
+@pytest.mark.parametrize("depth", [8, 12])
+def test_extracting_rgb_channels_removes_the_unrepresentable_color_key(depth):
+    image = Image.new("RGB", (2, 1), (40, 50, 60)).convert("RGB", bit_depth=depth)
+    image.info["transparency"] = image.getpixel((0, 0))
+    image.info["label"] = "kept"
+
+    for band in (*image.split(), image.getchannel("G")):
+        assert band.info == {"label": "kept"}
+        assert band.convert("RGBA").getpixel((0, 0))[-1] == (1 << depth) - 1
+    assert image.info["transparency"] == image.getpixel((0, 0))
+
+
+def test_extracting_the_grayscale_channel_keeps_its_transparency():
+    image = Image.new("L", (2, 1), 40)
+    image.info["transparency"] = 40
+
+    for band in (*image.split(), image.getchannel("L")):
+        assert band.convert("RGBA").getpixel((0, 0))[-1] == 0
+
+
 def test_unsupported_conversion() -> None:
     im = hopper()
     assert_raises(ValueError, lambda: im.convert("INVALID"), match="image has wrong mode")
