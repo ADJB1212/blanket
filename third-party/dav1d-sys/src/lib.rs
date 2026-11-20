@@ -1,5 +1,4 @@
-// TODO: Use core::ffi once we depend on Rust >= 1.64
-use std::os::raw::{c_char, c_int, c_uint, c_void};
+use std::ffi::{c_char, c_int, c_uint, c_void};
 
 pub const DAV1D_OBU_SEQ_HDR: Dav1dObuType = 1;
 pub const DAV1D_OBU_TD: Dav1dObuType = 2;
@@ -281,8 +280,8 @@ pub struct Dav1dSequenceHeader {
 pub struct Dav1dSequenceHeaderOperatingPoint {
     pub major_level: u8,
     pub minor_level: u8,
-    pub initial_display_delay: u16,
-    pub idc: u8,
+    pub initial_display_delay: u8,
+    pub idc: u16,
     pub tier: u8,
     pub decoder_model_param_present: u8,
     pub display_model_param_present: u8,
@@ -672,6 +671,12 @@ mod tests {
         assert_size!(Dav1dSettings, 96);
         #[cfg(target_pointer_width = "32")]
         assert_size!(Dav1dSettings, 76);
+
+        // The sequence header layout is ABI critical, the values match
+        // dav1d's include/dav1d/headers.h for every supported release.
+        assert_size!(Dav1dSequenceHeader, 808);
+        assert_size!(Dav1dSequenceHeaderOperatingPoint, 10);
+        assert_size!(Dav1dSequenceHeaderOperatingParameterInfo, 12);
     }
 
     #[test]
