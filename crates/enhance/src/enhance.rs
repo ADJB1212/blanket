@@ -117,7 +117,7 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "color");
     }
-    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx | PixelMode::Hsv) {
         return blanket_image_ops::convert::convert(
             py,
             &blanket_image_ops::convert::convert(py, image, "L", None)?,
@@ -133,7 +133,7 @@ pub fn enhance_color(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let mut pixels = blanket_core::buffers::reserved(source.len())?;
     py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L | PixelMode::La | PixelMode::Pa => unreachable!(),
-        PixelMode::Rgb | PixelMode::Hsv => color_degenerate::<3>(source, &mut pixels.spare_capacity_mut()[..source.len()]),
+        PixelMode::Rgb => color_degenerate::<3>(source, &mut pixels.spare_capacity_mut()[..source.len()]),
         PixelMode::Rgba => color_degenerate::<4>(source, &mut pixels.spare_capacity_mut()[..source.len()]),
         _ => unreachable!(),
     });
@@ -180,7 +180,7 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     if blanket_core::samples::supported(image) {
         return crate::high_depth::degenerate(py, image, "contrast");
     }
-    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx) {
+    if matches!(image.pixel_mode(), PixelMode::Cmyk | PixelMode::YCbCr | PixelMode::Lab | PixelMode::Rgbx | PixelMode::Hsv) {
         let gray = blanket_image_ops::convert::convert(py, image, "L", None)?;
         let source = gray.pixel_data()?;
         let mean = py.detach(|| if source.is_empty() { 0 } else { (byte_sum::<1>(source) as f64 / source.len() as f64 + 0.5) as u8 });
@@ -191,7 +191,7 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
     let sum = py.detach(|| match image.pixel_mode() {
         PixelMode::One | PixelMode::L => byte_sum::<1>(source),
         PixelMode::La | PixelMode::Pa => byte_sum::<2>(source),
-        PixelMode::Rgb | PixelMode::Hsv => luminance_sum::<3>(source),
+        PixelMode::Rgb => luminance_sum::<3>(source),
         PixelMode::Rgba => luminance_sum::<4>(source),
         _ => unreachable!(),
     });
@@ -203,7 +203,7 @@ pub fn enhance_contrast(py: Python<'_>, image: &Image) -> PyResult<Image> {
         chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], CHUNK_PIXELS * image.pixel_mode().channels(), 4 << 20, |i, dst| {
             let start = i * CHUNK_PIXELS * image.pixel_mode().channels();
             match image.pixel_mode() {
-                PixelMode::One | PixelMode::L | PixelMode::Rgb | PixelMode::Hsv => dst.fill(std::mem::MaybeUninit::new(mean)),
+                PixelMode::One | PixelMode::L | PixelMode::Rgb => dst.fill(std::mem::MaybeUninit::new(mean)),
                 PixelMode::La | PixelMode::Pa => contrast_alpha::<2>(&source[start..start + dst.len()], dst, mean),
                 PixelMode::Rgba => contrast_alpha::<4>(&source[start..start + dst.len()], dst, mean),
                 _ => unreachable!(),

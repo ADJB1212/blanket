@@ -56,6 +56,17 @@ def test_grayscale_alpha_enhancement_keeps_original_alpha(name, factor):
     assert result.getchannel("A").tobytes() == image.getchannel("A").tobytes()
 
 
+@pytest.mark.parametrize("name", ["Color", "Contrast"])
+def test_hsv_enhancement_uses_luminance(name):
+    raw = bytes((16, 255, 200, 200, 255, 210, 0, 0, 25))
+    image, reference = image_pair("HSV", (3, 1), raw)
+    enhancer = getattr(ImageEnhance, name)(image)
+    expected = getattr(PILEnhance, name)(reference)
+
+    assert enhancer.enhance(0).tobytes() == expected.enhance(0).tobytes()
+    assert enhancer.enhance(0.5).tobytes() == expected.enhance(0.5).tobytes()
+
+
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
 @pytest.mark.parametrize("name", ImageEnhance.__all__)
 def test_small_images_match_pillow(mode: str, name: str, subtests: pytest.Subtests) -> None:
