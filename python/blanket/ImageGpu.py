@@ -1063,7 +1063,7 @@ class GpuImage:
                 their values. Values outside 0..1 are allowed.
 
         Returns:
-            A resident image with RGBA alpha preserved. LA alpha is scaled.
+            A resident image with LA and RGBA alpha preserved.
             Byte samples are truncated and clipped; float colors are not clipped.
         """
         return self._run(10, values=[_scalar(factor)])
@@ -1115,8 +1115,8 @@ class GpuImage:
                 and values above 1 sharpen.
 
         Returns:
-            A resident image retaining borders and RGBA alpha. LA alpha is
-            processed; images smaller than 3 pixels on either axis are copied.
+            A resident image retaining borders and LA and RGBA alpha.
+            Images smaller than 3 pixels on either axis are copied.
         """
         self._check()
         factor = _scalar(factor)

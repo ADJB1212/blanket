@@ -354,8 +354,8 @@ __device__ void process(const T *__restrict__ src, T *__restrict__ dst, const T 
     }
     if (op == 22) {
         float original = float(src[i]), base = original;
-        if ((k != 2 && (c == 2 || c == 4) && band == c - 1) ||
-            (k == 2 && (x == 0 || y == 0 || x + 1 >= sw || y + 1 >= sh || (c == 4 && band == c - 1)))) {
+        bool alpha_band = (c == 2 || c == 4) && band == c - 1;
+        if (alpha_band || (k == 2 && (x == 0 || y == 0 || x + 1 >= sw || y + 1 >= sh))) {
             dst[i] = src[i];
             return;
         }
@@ -603,7 +603,7 @@ __device__ void process(const T *__restrict__ src, T *__restrict__ dst, const T 
         if (op == 5 && is_same_v<T, uchar>)
             out = floorf(out);
     } else if (op == 10) {
-        if (!(c == 4 && band == 3)) {
+        if (!((c == 2 || c == 4) && band == c - 1)) {
             out = a * v[0];
             if (is_same_v<T, uchar>)
                 out = floorf(out);

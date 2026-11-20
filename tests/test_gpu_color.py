@@ -54,6 +54,8 @@ def test_enhancement_cpu_parity(runtime, mode, method, enhancer, factor):
     image = source(mode)
     actual = getattr(ImageGpu.from_image(image, runtime=runtime), method)(factor).to_image()
     assert_images_equal(actual, enhancer(image).enhance(factor))
+    if mode in ("LA", "RGBA"):
+        assert actual.getchannel("A").tobytes() == image.getchannel("A").tobytes()
     assert actual.info["description"] == image.info["description"]
 
 

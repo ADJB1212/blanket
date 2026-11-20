@@ -53,6 +53,24 @@ template <typename T> bool statistics_match_serial() {
 }
 
 int main() {
+    {
+        uchar source[18] = {20, 10, 20, 10, 20, 10, 20, 10, 150, 173, 20, 10, 20, 10, 20, 10, 20, 10};
+        uchar output[18] = {};
+        uint p[8] = {3, 3, 2, 3, 3, 10, 0, 0};
+        float factor[1] = {0};
+        for (uint i = 0; i < 18; i++)
+            process(source, output, source, p, factor, i);
+        for (uint i = 0; i < 18; i++)
+            if (output[i] != (i % 2 ? source[i] : 0))
+                return 15;
+        p[5] = 22;
+        p[6] = 2;
+        for (uint i = 0; i < 18; i++)
+            process(source, output, source, p, factor, i);
+        for (uint i = 0; i < 18; i++)
+            if (output[i] != (i == 8 ? 70 : source[i]))
+                return 16;
+    }
     for (uint channels : {3u, 4u}) {
         for (uint count : {1u, 15u, 16u, 17u, 33u}) {
             std::vector<uchar> source(count * channels + 2, 173);

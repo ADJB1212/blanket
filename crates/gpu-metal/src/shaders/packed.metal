@@ -148,7 +148,9 @@ kernel void packed_u8(device const uchar *s [[buffer(0)]], device uchar *d [[buf
         result = fma(b - a, v[0], a);
     } else {
         result = a * v[0];
-        if (SPECIALIZED_CHANNELS == 4)
+        if (SPECIALIZED_CHANNELS == 2)
+            result.y = a.y;
+        if (SPECIALIZED_CHANNELS == 2 || SPECIALIZED_CHANNELS == 4)
             result.w = a.w;
     }
     reinterpret_cast<device uchar4 *>(d)[i] = uchar4(clamp(floor(result), 0.0f, 255.0f));

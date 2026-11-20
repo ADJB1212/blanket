@@ -10,8 +10,8 @@ void enhance_sample(device const T *src, device T *dst, device const T *other, c
     uint x = pixel_idx - y * dw;
 
     T raw_src = src[i];
-    if ((k != 2 && (c == 2 || c == 4) && band == c - 1) ||
-        (k == 2 && (x == 0 || y == 0 || x + 1 >= sw || y + 1 >= sh || (c == 4 && band == c - 1)))) {
+    bool alpha_band = (c == 2 || c == 4) && band == c - 1;
+    if (alpha_band || (k == 2 && (x == 0 || y == 0 || x + 1 >= sw || y + 1 >= sh))) {
         dst[i] = raw_src;
         return;
     }
@@ -106,7 +106,7 @@ float arithmetic_sample(device const T *src, device const T *other, constant uin
         break;
     }
     case OP_BRIGHTNESS: {
-        if (!(c == 4 && band == 3)) {
+        if (!((c == 2 || c == 4) && band == c - 1)) {
             out = a * v[0];
             if (is_same_v<T, uchar>)
                 out = floor(out);
