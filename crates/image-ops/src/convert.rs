@@ -230,6 +230,8 @@ pub fn convert(py: Python<'_>, source_image: &Image, mode: &str, bit_depth: Opti
             let image = Image::from_pixels(source_image.width(), source_image.height(), straight, pixels, None)?;
             return if destination == straight {
                 if bit_depth.is_none_or(|depth| depth == 8) { Ok(image) } else { convert(py, &image, mode, bit_depth) }
+            } else if destination == PixelMode::RgbaF {
+                convert(py, &image, mode, bit_depth)
             } else {
                 convert(py, &convert(py, &image, "RGB", None)?, mode, bit_depth)
             };
@@ -244,7 +246,13 @@ pub fn convert(py: Python<'_>, source_image: &Image, mode: &str, bit_depth: Opti
                     converted = convert(py, source_image, straight.as_str(), Some(8))?;
                     &converted
                 }
-            } else if source_image.pixel_mode().channels() >= 3 || source_image.palette().is_some() {
+            } else if source_image.pixel_mode() == PixelMode::RgbaF {
+                converted = convert(py, &convert(py, source_image, "RGBA", Some(8))?, straight.as_str(), Some(8))?;
+                &converted
+            } else if source_image.palette().is_some() {
+                converted = convert(py, source_image, straight.as_str(), Some(8))?;
+                &converted
+            } else if source_image.pixel_mode().channels() >= 3 {
                 converted = convert(py, &convert(py, source_image, "RGB", Some(8))?, straight.as_str(), None)?;
                 &converted
             } else {

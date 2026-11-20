@@ -31,6 +31,41 @@ def test_conversion_buffers_preserve_pixels_and_source(width, source, target):
     assert image.tobytes() == raw
 
 
+@pytest.mark.parametrize("target", ["La", "RGBa"])
+@pytest.mark.parametrize("source_mode", ["RGBA;F", "P:palette", "P:key", "P:table", "PA"])
+def test_premultiplied_conversion_retains_alpha(source_mode, target):
+    if source_mode.startswith("P:"):
+        image = Image.frombytes("P", (2, 1), b"\x00\x01")
+        if source_mode == "P:palette":
+            image.putpalette(bytes((130, 80, 200, 0, 50, 110, 70, 127)), "RGBA")
+        else:
+            image.putpalette(bytes((130, 80, 200, 50, 110, 70)))
+            image.info["transparency"] = 0 if source_mode == "P:key" else b"\x00\x7f"
+    elif source_mode == "RGBA;F":
+        image = Image.new(source_mode, (2, 1), (0.25, 0.4, 0.5, 0.125))
+    else:
+        image = Image.new("PA", (2, 1), (0, 127))
+        image.putpalette(bytes((130, 80, 200)))
+    straight_mode = "LA" if target == "La" else "RGBA"
+    straight = image.convert("RGBA", bit_depth=8) if source_mode == "RGBA;F" else image
+    expected = straight.convert(straight_mode).convert(target)
+
+    result = image.convert(target)
+
+    assert result.tobytes() == expected.tobytes()
+    assert "transparency" not in result.info
+
+
+def test_premultiplied_to_float_keeps_alpha():
+    source = Image.new("RGBa", (1, 1), (11, 22, 33, 64))
+
+    actual = source.convert("RGBA;F")
+    expected = source.convert("RGBA").convert("RGBA;F")
+
+    assert actual.tobytes() == expected.tobytes()
+    assert actual.getpixel((0, 0))[-1] == pytest.approx(64 / 255)
+
+
 def test_sanity() -> None:
     def convert(im: Image.Image, mode: str) -> None:
         out = im.convert(mode)

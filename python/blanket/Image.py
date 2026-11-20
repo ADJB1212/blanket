@@ -1309,6 +1309,8 @@ class Image:
             result.info.update(self._metadata_info())
             result.info.pop("transparency", None)
             return result
+        if self.mode == "P" and mode in ("La", "RGBa") and isinstance(transparency, (int, bytes)):
+            return self.convert("LA" if mode == "La" else "RGBA").convert(mode, bit_depth=bit_depth)
         if self.mode == "P" and mode in ("LA", "RGBA") and isinstance(transparency, (int, bytes)):
             self._sync_palette()
             if isinstance(transparency, int):
