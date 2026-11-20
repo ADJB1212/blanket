@@ -11,9 +11,13 @@
     <img src="assets/benchmark.svg" width="800"/>
 </p>
 
-Blanket is a Pillow-shaped image library with the heavy lifting in Rust:
-SIMD kernels, parallel execution, and a Python API that stays out of the way.
-Open, transform, and save images with no runtime Python dependencies for CPU use.
+Blanket is for when you want to write `image.resize(...)` and get on with your
+day. The API feels like Pillow, and Rust does the heavy lifting with SIMD kernels
+and parallel execution. Open, transform, and save images on the CPU with no
+runtime Python dependencies.
+
+Start with a sideways photo. Give it a turn, fit it to a square, and save it
+as a WebP thumbnail.
 
 ```python
 from blanket import Image, ImageOps
@@ -31,35 +35,35 @@ with Image.open("photo.jpg") as image:
 
 ## Installation
 
-Python **3.12+**:
+With Python **3.12+**, one install gets you going.
 
 ```sh
 pip install pyblanket
 ```
 
-Release wheels ship CPU processing plus the platform GPU backend: Metal on
-macOS, CUDA on Linux. CPU work needs no GPU stack. An explicit GPU request
-raises an error when the hardware or runtime is missing. Setup and
-diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/).
+For CPU work, you're ready to go. The same wheels include Metal on macOS and
+CUDA on Linux. Ask for the GPU and Blanket raises an error if the hardware or
+runtime is missing. See setup and diagnostics in the
+[GPU guide](https://adjb1212.github.io/blanket-docs/gpu/).
 
 ## Capabilities
 
-- **Familiar surface.** Resize, crop, draw, filter, enhance, composite,
-  quantize, and image statistics through Pillow-shaped modules.
-- **Real sample depth.** Selected operations keep 10/12/16-bit samples, float
-  color, and linear-light resize and compositing.
-- **Content-aware resizing.** `image.seam_carve(size)` shrinks or enlarges images
-  while favoring salient color and alpha edges.
+- **Reach for the familiar tools.** Resize, crop, draw, filter, enhance,
+  composite, quantize, and gather image statistics through Pillow-shaped modules.
+- **Keep the extra bits.** Selected operations preserve 10/12/16-bit samples and
+  float color. Resize and composite in linear light where supported.
+- **Make room around the subject.** `image.seam_carve(size)` shrinks or enlarges
+  images while favoring prominent color and alpha edges.
 - **Polar resampling.** `image.polar(size, scaling="log")` unwraps
   radius into columns and angle into rows; `image.polar_map()` builds reusable
   linear or log-polar coordinate maps for sampling with constant, clamp,
   reflect, or wrap borders.
-- **Frames and pages.** Read GIF, WebP, APNG, and TIFF with eager or lazy
-  access; write animations and multi-page PDFs.
+- **Flip through frames and pages.** Read GIF, WebP, APNG, and TIFF all at once
+  or on demand. Write animations and multi-page PDFs.
 - **Color and metadata.** ICC transforms, HDR tone mapping, editable EXIF,
   XMP parsing, and metadata rewrites that leave the pixels alone.
-- **Encoding.** JPEG controls, coefficient transforms without a recompress,
-  and save-time compression search.
+- **Make every byte count.** Tune JPEG encoding, transform coefficients without
+  recompressing, or have Blanket search for a smaller encoding when you save.
 - **Progress and cancellation.** Pass `progress=callback` to receive checkpoint
   numbers starting at zero. Set `show_progress=True` on `open()`, `decode()`,
   `open_region()`, `load()`, `seek()`, `resize()`, or `seam_carve()` to show a tqdm
@@ -67,13 +71,14 @@ diagnostics are in the [GPU guide](https://adjb1212.github.io/blanket-docs/gpu/)
   If tqdm is unavailable, the operation proceeds without a display.
 - **Quality scoring.** Native SSIM, MS-SSIM, and SSIMULACRA2 through
   `ImageMetrics`, preserving integer sample depth.
-- **Visual fingerprints.** `ImageHash` provides average, difference, perceptual,
-  color-distribution, and crop-resistant local-texture hashes with hexadecimal
-  serialization and Hamming distance. Use `ImageHash.nearest_neighbors` to find
-  matches within a Hamming radius and `ImageHash.group_hashes` to group hashes
-  connected by matches.
-- **Batch processing.** `ImageBatch.Pipeline` reuses transforms across images
-  or paths, with parallel execution and ordered, bounded streaming results.
+- **Find the near-duplicates.** `ImageHash` provides average, difference,
+  perceptual, color-distribution, and crop-resistant local-texture hashes with
+  hexadecimal serialization and Hamming distance. Use
+  `ImageHash.nearest_neighbors` to find matches within a Hamming radius and
+  `ImageHash.group_hashes` to group hashes connected by matches.
+- **Set up the edit once.** Give `ImageBatch.Pipeline` a stack of images or file
+  paths. It can run transforms in parallel and stream results in input order,
+  with a cap on pending work.
 - **Interop.** Array imports (including float16), fused NumPy/PyTorch exports,
   binary streams, perceptual hashes, a shared Pillow bridge, native capsules,
   and explicit Metal/CUDA pipelines.
@@ -94,10 +99,12 @@ do not promise byte-exact Pillow output. Start with
 | Write only     | PDF, PALM                                                                                                                     |
 | Read and trace | SVG                                                                                                                           |
 
-What actually works depends on mode, depth, and the codec backends in the
-build. EPS needs Ghostscript. TIFF writes a single page; PDF can write many.
-`features.blanketinfo()` reports the installed build. Encoder settings and
-limits are in the [format guide](https://adjb1212.github.io/blanket-docs/formats/).
+The file extension only tells part of the story. Support also depends on mode,
+depth, and the codec backends in your build. EPS needs Ghostscript. TIFF writes
+a single page, while PDF can write many.
+Curious what your build can handle? Run `features.blanketinfo()`. For encoder
+settings and limits, see the
+[format guide](https://adjb1212.github.io/blanket-docs/formats/).
 
 JPEG saves keep EXIF and ICC profiles. Pass `xmp=image.info.get("xmp")` if
 you want XMP to come along. Retention rules and pixel-preserving edits are
@@ -105,10 +112,10 @@ in the [metadata guide](https://adjb1212.github.io/blanket-docs/metadata/).
 
 ## Deterministic execution
 
-Set `BLANKET_DETERMINISTIC=1` before starting Python for repeatable CPU image
-processing. Blanket processes pixel partitions and compression candidates in
-serial order. `ImageBatch.Pipeline` processes one source at a time in input
-order, even when given a larger `max_workers`. Each call to
+Need the same result on the next CPU run? Set `BLANKET_DETERMINISTIC=1` before
+starting Python. Blanket works through pixel partitions and compression
+candidates in serial order. `ImageBatch.Pipeline` takes sources one
+at a time in input order, even when given a larger `max_workers`. Each call to
 `image.effect_spread()` or `ImagePalette.random()` starts from the same seed.
 
 ```sh
@@ -133,13 +140,12 @@ uv run --no-sync pytest tests/test_api.py
 uv run --no-sync scripts/verify_behavior.py
 ```
 
-Native code is in [`crates/`](crates/), the Python API in
-[`python/blanket/`](python/blanket/), tests in [`tests/`](tests/).
-Fixes and features need a focused regression test. Build options are in the
-[development guide](https://adjb1212.github.io/blanket-docs/development/);
-timing comparisons are in the
+Follow a pixel into [`crates/`](crates/) for native code, or start in
+[`python/blanket/`](python/blanket/) for the public API. Add a focused regression
+test in [`tests/`](tests/) with your fix or feature. For build options, see the
+[development guide](https://adjb1212.github.io/blanket-docs/development/).
+If you're bringing a stopwatch, use a release build and follow the
 [benchmark guide](https://adjb1212.github.io/blanket-docs/benchmarking/).
-Benchmarks expect a release build.
 
 ## License
 
