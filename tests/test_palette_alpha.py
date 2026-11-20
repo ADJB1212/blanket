@@ -66,13 +66,31 @@ def test_pa_conversion_reads_original_alpha(mode: str, count: int) -> None:
     assert image.tobytes() == raw
 
 
-@pytest.mark.parametrize("mode,color", [("RGBa", (40, 60, 80, 128)), ("RGBA;F", (0.25, 0.5, 0.75, 0.25))])
+@pytest.mark.parametrize("mode,color", [("La", (40, 128)), ("RGBa", (40, 60, 80, 128)), ("RGBA;F", (0.25, 0.5, 0.75, 0.25))])
 def test_pa_conversion_keeps_alpha_from_premultiplied_and_float_color(mode, color) -> None:
     image = Image.new(mode, (1, 1), color)
 
     indexed = image.convert("PA")
 
-    assert indexed.convert("RGBA").tobytes() == image.convert("RGBA").tobytes()
+    straight = image.convert("LA") if mode == "La" else image
+    assert indexed.convert("RGBA").tobytes() == straight.convert("RGBA").tobytes()
+
+
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_pa_conversion_keeps_wide_alpha_when_quantizing(mode, depth):
+    image = Image.new(mode, (2, 1), 0).convert(mode, bit_depth=depth)
+    maximum = (1 << depth) - 1
+    if mode == "RGBA":
+        image.putpixel((1, 0), (0, maximum // 3, maximum, maximum // 2))
+    else:
+        image.info["transparency"] = image.getpixel((0, 0))
+        # The non-key sample rounds to the same 8-bit value as the key.
+        image.putpixel((1, 0), 1 if mode == "L" else (1, 0, 0))
+
+    indexed = image.convert("PA")
+
+    assert indexed.convert("RGBA").tobytes() == image.convert("RGBA", bit_depth=8).tobytes()
 
 
 @pytest.mark.parametrize("mode", ["LA", "RGBA"])

@@ -1320,16 +1320,18 @@ class Image:
             return result
         if mode == "PA" and self.mode != "PA":
             alpha = self if self.mode in ("LA", "RGBA") else None
-            if self.mode in ("RGBa", "RGBA;F"):
-                alpha = self.convert("RGBA")
+            if self.mode == "La":
+                alpha = self.convert("LA")
+            if self.mode in ("RGBa", "RGBA;F") or (self.mode == "RGBA" and self.bit_depth != 8):
+                alpha = self.convert("RGBA", bit_depth=8)
             color_source = alpha if alpha is not None else self
-            source = self if self.mode == "P" else color_source.convert("RGB").quantize()
+            source = self if self.mode == "P" else color_source.convert("RGB", bit_depth=8).quantize()
             source._sync_palette()
             table = None
             if self.mode == "P" and isinstance(transparency, (int, bytes)):
                 table = bytes(0 if slot == transparency else 255 for slot in range(256)) if isinstance(transparency, int) else transparency.ljust(256, b"\xff")
             elif self.mode in ("1", "L", "RGB") and transparency is not None:
-                alpha = self.convert("RGBA")
+                alpha = self.convert("RGBA", bit_depth=8)
             result = Image(palette_to_pa(source._native, alpha._native if alpha is not None else None, table))
             if source.palette is not None:
                 result.palette = source.palette.copy()
