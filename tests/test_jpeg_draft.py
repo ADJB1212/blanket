@@ -6,7 +6,7 @@ import pytest
 from helpers import assert_pixels_equal, encode_image
 from PIL import Image as PillowImage
 
-from blanket import Image
+from blanket import Image, ImageOps
 
 
 @pytest.mark.parametrize("source_mode", ["L", "RGB", "CMYK"])
@@ -58,3 +58,22 @@ def test_eager_jpeg_metadata_does_not_disable_draft() -> None:
         image.seek(0)
         assert image.draft("L", (4, 4)) == ("L", (0, 0, 4.0, 4.0))
         assert image.size == (4, 4)
+
+
+@pytest.mark.parametrize("operation", ["thumbnail", "exif_transpose"])
+def test_in_place_geometry_keeps_jpeg_format_and_save_settings(operation):
+    source = Image.new("RGB", (32, 16), "red")
+    source.getexif()[274] = 6
+    with Image.open(BytesIO(source.encode("JPEG", quality=83, subsampling=0))) as image:
+        if operation == "thumbnail":
+            image.thumbnail((8, 8))
+            assert image.size == (8, 4)
+        else:
+            ImageOps.exif_transpose(image, in_place=True)
+            assert image.size == (16, 32)
+        assert image.format == "JPEG"
+        assert image.get_format_mimetype() == "image/jpeg"
+        assert image.copy().format is None
+        with Image.decode(image.encode("JPEG", quality="keep")) as saved:
+            assert saved.size == image.size
+            assert saved.quantization == image.quantization

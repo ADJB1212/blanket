@@ -540,6 +540,7 @@ class Image:
             ```
         """
         self._header = native if isinstance(native, ImageHeader) else None
+        self._format = native.format
         self._decoded: _Image | None = None
         self._encoded: bytes | None = None
         self._draft_scale = 1
@@ -723,7 +724,7 @@ class Image:
             print(image.format)
             ```
         """
-        return self._header.format if self._header is not None else cast("_Image", self._decoded).format
+        return self._format
 
     @property
     def info(self) -> dict[object, object]:

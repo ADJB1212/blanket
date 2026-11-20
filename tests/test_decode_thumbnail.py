@@ -44,7 +44,7 @@ def test_thumbnail_uses_reduced_native_raster(monkeypatch, format, mode, lossles
     assert decoded_sizes[0][1] < size[1] // 2
     assert image.size == (30, 23)
     assert image.info["custom"] == "retained"
-    assert image.format is None
+    assert image.format == format
     assert image.mode == mode
     assert image.bit_depth == 8
     before = image.tobytes()
