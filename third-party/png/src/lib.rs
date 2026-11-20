@@ -87,6 +87,3 @@ pub use crate::filter::Filter;
 
 #[cfg(test)]
 pub(crate) mod test_utils;
-
-#[cfg(feature = "benchmarks")]
-pub mod benchable_apis;

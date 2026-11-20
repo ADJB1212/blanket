@@ -17,8 +17,7 @@ along with jpegxl-sys.  If not, see <https://www.gnu.org/licenses/>.
 
 //! Decoding API for JPEG XL.
 
-use std::ffi::c_void;
-use std::os::raw::{c_char, c_int};
+use std::ffi::{c_char, c_int, c_void};
 
 use crate::color::cms_interface::JxlCmsInterface;
 use crate::color::color_encoding::JxlColorEncoding;
