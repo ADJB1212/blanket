@@ -15,12 +15,11 @@ from operator import index
 from typing import TYPE_CHECKING, cast
 
 from . import Image, _blanket
-from ._gpu_async import Event, Stream, submit
+from ._gpu_async import Event, Stream, TransferFuture, submit
 from ._gpu_plan import _OPERATIONS as _PLAN_OPERATIONS, ProcessingPlan, cache_info, configure_cache
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from concurrent.futures import Future
     from types import ModuleType
     from typing import SupportsIndex
 
@@ -288,7 +287,7 @@ def from_image(image: Image.Image, *, backend: str = "metal", runtime: str = "na
     return GpuImage(resource, image.size, image.mode, runtime, dict(image._metadata_info()), unified_memory=unified_memory)
 
 
-def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> Future[GpuImage | GpuUnsignedImage]:
+def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str = "native", device: int = 0, unified_memory: bool = False) -> TransferFuture[GpuImage | GpuUnsignedImage]:
     """Snapshot the current frame and upload it on a transfer worker.
 
     Args:
@@ -300,9 +299,9 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
         unified_memory: Enable native Metal sharing as in from_image.
 
     Returns:
-        A Future whose result is a synchronized GpuImage or GpuUnsignedImage.
-        Calling result() waits and re-raises upload errors. CUDA work uses
-        the stream current when the transfer was submitted.
+        An awaitable Future resolving to a synchronized GpuImage or
+        GpuUnsignedImage. Calling result() blocks and re-raises upload errors.
+        CUDA work uses the stream current when the transfer was submitted.
 
     Raises:
         ValueError: The runtime is not native Metal or CUDA.
@@ -312,9 +311,7 @@ def from_image_async(image: Image.Image, *, backend: str = "metal", runtime: str
     try:
         _require(backend, device)
     except (RuntimeError, ValueError) as error:
-        from concurrent.futures import Future
-
-        failed: Future[GpuImage | GpuUnsignedImage] = Future()
+        failed: TransferFuture[GpuImage | GpuUnsignedImage] = TransferFuture()
         failed.set_exception(error)
         return failed
     snapshot = image.copy()
@@ -1439,13 +1436,14 @@ class GpuImage:
         self._check()
         return Event(self._resource, self.runtime, self.device)
 
-    def to_image_async(self) -> Future[Image.Image]:
+    def to_image_async(self) -> TransferFuture[Image.Image]:
         """Export pixels and metadata on a transfer worker.
 
         Returns:
-            A Future resolving to a CPU Image after completion. Storage is
-            retained even if this GPU handle closes; result() reports errors.
-            CUDA uses the stream current at submission.
+            An awaitable Future resolving to a CPU Image after completion.
+            Storage is retained even if this GPU handle closes. Awaiting or
+            calling result() reports errors. CUDA uses the stream current at
+            submission.
 
         Raises:
             ValueError: This image uses the PyTorch MPS runtime.
@@ -1542,12 +1540,13 @@ class GpuReduction:
         """
         return self._image.record_event()
 
-    def to_cpu_async(self) -> Future[list[list[int]] | list[dict[str, object]]]:
+    def to_cpu_async(self) -> TransferFuture[list[list[int]] | list[dict[str, object]]]:
         """Download and decode the reduction on a transfer worker.
 
         Returns:
-            A Future resolving to the same band-ordered lists as to_cpu().
-            Storage survives closing this handle; result() reports transfer errors.
+            An awaitable Future resolving to the same band-ordered lists as
+            to_cpu(). Storage survives closing this handle. Awaiting or calling
+            result() reports transfer errors.
 
         Raises:
             ValueError: The reduction uses the PyTorch MPS runtime.

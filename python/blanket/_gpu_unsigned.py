@@ -10,12 +10,11 @@ from . import Image, _blanket
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from concurrent.futures import Future
 
     from torch import Tensor
 
     from ._blanket import MetalImage
-    from ._gpu_async import Event
+    from ._gpu_async import Event, TransferFuture
     from .ImageGpu import GpuImage, GpuReduction
 
 
@@ -108,13 +107,13 @@ class GpuUnsignedImage:
         """
         return self._image.record_event()
 
-    def to_image_async(self) -> Future[Image.Image]:
+    def to_image_async(self) -> TransferFuture[Image.Image]:
         """Export original-depth CPU pixels on a transfer worker.
 
         Returns:
-            A Future resolving to an Image as described by to_image(). The
-            operation retains storage after this handle closes; result() waits
-            for completion and reports errors.
+            An awaitable Future resolving to an Image as described by
+            to_image(). The operation retains storage after this handle closes.
+            Awaiting or calling result() reports transfer errors.
 
         Raises:
             ValueError: The image uses the PyTorch MPS runtime.

@@ -737,8 +737,8 @@ silent CPU fallback when a kernel is missing.
       ISO 21496-1 gain-map application on an already-resident image
 - [ ] **Resident perceptual color** — OKLab conversions, white balance, and
       3D LUT application without a download between steps
-- [ ] **Async upload and download** — await the existing stream completion
-      from Python instead of blocking the caller thread
+- [x] **Async upload and download** — await native Metal and CUDA transfers
+      in an `asyncio` event loop, or call `result()` from synchronous code
 - [ ] **Preview quantization** — GPU palette and dither for preview-sized
       images, with the CPU quantizers remaining the reference result
 - [ ] **Platform still decode** — accept a VideoToolbox or NVDEC surface for

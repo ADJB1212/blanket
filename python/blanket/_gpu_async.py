@@ -11,7 +11,7 @@ from threading import local
 from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Generator
     from types import TracebackType
     from typing import Self
 
@@ -23,13 +23,23 @@ if TYPE_CHECKING:
     from ._gpu_cuda import CudaImage
 
 
+class TransferFuture[T](Future[T]):
+    """A transfer result that can be awaited in an asyncio event loop."""
+
+    def __await__(self) -> Generator[object, None, T]:
+        """Wait for the transfer without blocking the event loop."""
+        from asyncio import get_running_loop, wrap_future
+
+        return wrap_future(self, loop=get_running_loop()).__await__()
+
+
 @lru_cache(maxsize=1)
 def _executor() -> ThreadPoolExecutor:
     """Return the shared two-worker pool used for CPU/GPU transfers."""
     return ThreadPoolExecutor(max_workers=2, thread_name_prefix="blanket-transfer")
 
 
-def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
+def submit[T](operation: Callable[[], T], *, device: str) -> TransferFuture[T]:
     """Schedule an operation while retaining the caller's CUDA stream context.
 
     Args:
@@ -38,7 +48,7 @@ def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
             device stream before submission.
 
     Returns:
-        A Future propagating the callable's result or exception.
+        An awaitable Future propagating the callable's result or exception.
     """
     stream = None
     if device.startswith("cuda:"):
@@ -56,7 +66,25 @@ def submit[T](operation: Callable[[], T], *, device: str) -> Future[T]:
         with cp.cuda.Device(index), stream:
             return operation()
 
-    return _executor().submit(run)
+    transfer = TransferFuture[T]()
+
+    def complete() -> None:
+        if not transfer.set_running_or_notify_cancel():
+            return
+        try:
+            result = run()
+        except BaseException as error:
+            transfer.set_exception(error)
+        else:
+            transfer.set_result(result)
+
+    def cancel_queued_transfer(worker: Future[None]) -> None:
+        if worker.cancelled():
+            transfer.cancel()
+            transfer.set_running_or_notify_cancel()
+
+    _executor().submit(complete).add_done_callback(cancel_queued_transfer)
+    return transfer
 
 
 class Event:

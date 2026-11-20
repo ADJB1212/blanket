@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import CancelledError, ThreadPoolExecutor
 from threading import Event as ThreadEvent
 
@@ -11,6 +12,64 @@ from blanket import Image, ImageGpu
 @pytest.fixture
 def metal():
     require_metal()
+
+
+def test_await_transfer_keeps_event_loop_responsive():
+    from blanket._gpu_async import submit
+
+    release = ThreadEvent()
+
+    def transfer():
+        assert release.wait(timeout=5)
+        return 57
+
+    async def run():
+        pending = submit(transfer, device="metal")
+        asyncio.get_running_loop().call_soon(release.set)
+        assert await pending == 57
+        assert pending.result(timeout=0) == 57
+
+    asyncio.run(run())
+
+
+def test_await_transfer_propagates_errors():
+    from blanket._gpu_async import submit
+
+    def fail():
+        raise RuntimeError("transfer failed")
+
+    async def run():
+        with pytest.raises(RuntimeError, match="transfer failed"):
+            await submit(fail, device="metal")
+        with pytest.raises(ValueError, match="backend"):
+            await ImageGpu.from_image_async(Image.new("L", (3, 5)), backend="invalid")
+
+    asyncio.run(run())
+
+
+def test_cancelling_await_cancels_queued_transfer(monkeypatch):
+    from blanket import _gpu_async
+
+    gate = ThreadEvent()
+    ran = ThreadEvent()
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        executor.submit(gate.wait)
+        monkeypatch.setattr(_gpu_async, "_executor", lambda: executor)
+
+        async def run():
+            transfer = _gpu_async.submit(ran.set, device="metal")
+            waiter = asyncio.ensure_future(transfer)
+            await asyncio.sleep(0)
+            waiter.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await waiter
+            assert transfer.cancelled()
+
+        try:
+            asyncio.run(run())
+        finally:
+            gate.set()
+    assert not ran.is_set()
 
 
 @pytest.mark.parametrize("unified", [False, True])
@@ -29,7 +88,7 @@ def test_async_transfers_snapshot_and_lifetime(metal, unified):
     result.close()
     completion.wait()
     assert completion.done()
-    assert download.result(timeout=10).tobytes() == expected
+    assert asyncio.run(asyncio.wait_for(download, timeout=10)).tobytes() == expected
     assert upload.done() and download.done()
     assert not upload.cancel()
 
@@ -86,12 +145,16 @@ def test_stream_context_validation(metal):
 
 def test_async_unsigned_roundtrip(metal):
     source = Image.frombytes("L", (3, 1), b"\x00\x00\x80\x00\xff\x03", bit_depth=10)
-    resident = ImageGpu.from_image_async(source).result(timeout=10)
-    event = resident.record_event()
-    transfer = resident.to_image_async()
-    resident.close()
-    event.wait()
-    assert transfer.result(timeout=10).tobytes() == source.tobytes()
+
+    async def roundtrip():
+        resident = await ImageGpu.from_image_async(source)
+        transfer = resident.to_image_async()
+        resident.close()
+        return await transfer
+
+    result = asyncio.run(asyncio.wait_for(roundtrip(), timeout=10))
+    assert result.bit_depth == source.bit_depth
+    assert result.tobytes() == source.tobytes()
 
 
 def test_async_reduction_retains_closed_inputs(metal):
@@ -120,11 +183,21 @@ def test_running_transfer_cannot_be_cancelled(metal, monkeypatch):
 
     monkeypatch.setattr(ImageGpu, "from_image", blocked)
     transfer = ImageGpu.from_image_async(Image.new("L", (17, 9), 57))
+
+    async def cancel_waiter():
+        waiter = asyncio.ensure_future(transfer)
+        await asyncio.sleep(0)
+        waiter.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await waiter
+
     try:
         assert started.wait(timeout=10)
         assert transfer.running()
         assert not transfer.cancel()
         assert_raises(TimeoutError, lambda: transfer.result(timeout=0))
+        asyncio.run(cancel_waiter())
+        assert transfer.running()
     finally:
         release.set()
     assert transfer.result(timeout=10).to_image().tobytes() == bytes([57]) * (17 * 9)
@@ -138,7 +211,7 @@ def test_cuda_async_transfers_and_stream_events():
     consumer = ImageGpu.Stream("cuda")
     with producer:
         upload = ImageGpu.from_image_async(source, backend="cuda")
-    resident = upload.result(timeout=30)
+    resident = asyncio.run(asyncio.wait_for(upload, timeout=30))
     with producer:
         result = resident.invert()
         event = result.record_event()
@@ -148,7 +221,7 @@ def test_cuda_async_transfers_and_stream_events():
         download = result.to_image_async()
     resident.close()
     result.close()
-    assert download.result(timeout=30).tobytes() == source.tobytes()
+    assert asyncio.run(asyncio.wait_for(download, timeout=30)).tobytes() == source.tobytes()
     consumer.synchronize()
     event.wait()
     assert event.done()
