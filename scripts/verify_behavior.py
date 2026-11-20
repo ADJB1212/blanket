@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import random
+from contextlib import closing
 from io import BytesIO, StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -27,6 +28,7 @@ from PIL.FontFile import FontFile
 
 from blanket import (
     Image as BlanketImage,
+    ImageBatch as BlanketBatch,
     ImageChops as BlanketChops,
     ImageCms as BlanketCms,
     ImageColor as BlanketColor,
@@ -34,12 +36,15 @@ from blanket import (
     ImageEnhance as BlanketEnhance,
     ImageFilter as BlanketFilter,
     ImageFont as BlanketFont,
+    ImageHash as BlanketHash,
     ImageMath as BlanketMath,
+    ImageMetrics as BlanketMetrics,
     ImageOps as BlanketOps,
     ImagePalette as BlanketPalette,
     ImagePath as BlanketPath,
     ImageSequence as BlanketSequence,
     ImageStat as BlanketStat,
+    OperationCancelledError,
     features,
 )
 from blanket._blanket import _deterministic_seed
@@ -264,6 +269,28 @@ def check_indexed_images() -> int:
     return checks
 
 
+def check_color_key_transparency() -> int:
+    """Follow a transparent RGB pixel through point lookup and band extraction."""
+    size = (3, 1)
+    key = (23, 57, 201)
+    raw = bytes((*key, 23, 57, 202, 200, 57, 201))
+    reference = PillowImage.frombytes("RGB", size, raw)
+    stream = BytesIO()
+    reference.save(stream, "PNG", transparency=key)
+    with PillowImage.open(stream) as expected, BlanketImage.open(stream) as decoded:
+        rgba = expected.convert("RGBA")
+        compare_images(decoded, rgba, "PNG color key")
+    actual = BlanketImage.frombytes("RGB", size, raw)
+    actual.info["transparency"] = key
+    inverted = actual.point(lambda value: 255 - value)
+    assert inverted.info["transparency"] == (232, 198, 54)
+    compare_images(inverted.convert("RGBA"), rgba.point(list(range(255, -1, -1)) * 3 + list(range(256))), "point color key")
+    red = actual.getchannel("R")
+    assert "transparency" not in red.info
+    compare_images(red, reference.getchannel("R"), "color key band")
+    return 3
+
+
 def check_imagecolor() -> int:
     checks = 0
     colors = (*PillowColor.colormap, "#123", "#1234", "#102030", "#10203080", "rgb(12,34,56)", "rgb(100%,0%,50%)", "rgba(1,2,3,4)", "hsl(120,30%,50%)", "hsv(250,50%,80%)")
@@ -417,17 +444,113 @@ def check_jpeg_interop() -> int:
     return 2
 
 
-def check_jxl_roundtrip() -> int:
+def check_jxl_interop() -> int:
+    """Compare lossless JPEG XL output in both directions."""
+    import pillow_jxl
+
     checks = 0
     for mode in ("L", "RGB", "RGBA"):
-        raw = pixels(mode, 16, 12)
-        stream = BytesIO()
-        BlanketImage.frombytes(mode, (16, 12), raw).save(stream, "JXL", lossless=True, effort=1)
-        loaded = BlanketImage.open(stream)
-        assert (loaded.format, loaded.mode, loaded.size) == ("JXL", mode, (16, 12))
-        assert loaded.tobytes() == raw
-        checks += 1
+        size = (37, 29)
+        raw = pixels(mode)
+        for writer in (BlanketImage, PillowImage):
+            stream = BytesIO()
+            writer.frombytes(mode, size, raw).save(stream, "JXL", lossless=True, effort=1)
+            with BlanketImage.open(stream) as actual, PillowImage.open(stream) as expected:
+                assert actual.format == "JXL"
+                compare_images(actual, expected, ("JXL", mode, writer.__name__))
+                assert actual.tobytes() == raw
+            checks += 1
     return checks
+
+
+def check_lossless_raster_interop() -> int:
+    """Use patterned pixels to check lossless raster codecs in both directions."""
+    checks = 0
+    size = (37, 29)
+    for format, modes, options in (
+        ("TIFF", ("L", "RGB", "RGBA"), {"compression": "tiff_lzw"}),
+        ("WEBP", ("RGB", "RGBA"), {"lossless": True}),
+        ("PPM", ("L", "RGB"), {}),
+        ("TGA", ("L", "LA", "RGB", "RGBA"), {}),
+        ("QOI", ("RGB", "RGBA"), {}),
+        ("JPEG2000", ("L", "LA", "RGB", "RGBA"), {}),
+        ("PCX", ("L", "RGB"), {}),
+        ("SGI", ("L", "RGB", "RGBA"), {}),
+    ):
+        for mode in modes:
+            raw = pixels(mode)
+            if format == "WEBP" and mode == "RGBA":
+                # Lossless WebP encoders can discard color at fully transparent pixels.
+                samples = bytearray(raw)
+                samples[3::4] = bytes(max(1, alpha) for alpha in raw[3::4])
+                raw = bytes(samples)
+            for writer in (BlanketImage, PillowImage):
+                label = (format, mode, writer.__name__)
+                stream = BytesIO()
+                writer.frombytes(mode, size, raw).save(stream, format, **options)
+                with BlanketImage.open(stream, formats=[format]) as actual, PillowImage.open(stream) as expected:
+                    assert (actual.format, actual.bit_depth) == (format, 8), label
+                    compare_images(actual, expected, label)
+                    assert actual.tobytes() == raw, label
+                    checks += 1
+                if format == "TIFF":
+                    box = (3, 2, 19, 13)
+                    region = BlanketImage.open_region(stream, box)
+                    compare_images(region, PillowImage.frombytes(mode, size, raw).crop(box), (label, "region"))
+                    checks += 1
+    return checks
+
+
+def check_metadata_interop() -> int:
+    """Check EXIF edits and ICC preservation across readers and writers."""
+    size = (37, 29)
+    reference = PillowImage.frombytes("RGB", size, pixels("RGB"))
+    profile = PillowCms.ImageCmsProfile(PillowCms.createProfile("sRGB")).tobytes()
+    exif = reference.getexif()
+    exif[270] = "Behavior verification"
+    exif[305] = "Pillow"
+    for format in ("PNG", "TIFF", "WEBP", "JPEG"):
+        options = {"lossless": True} if format == "WEBP" else {}
+        stream = BytesIO()
+        reference.save(stream, format, exif=exif, icc_profile=profile, **options)
+        with BlanketImage.open(stream) as actual:
+            assert actual.getexif()[270] == exif[270], format
+            assert actual.getexif()[305] == exif[305], format
+            assert actual.info["icc_profile"] == profile, format
+            actual.getexif()[305] = "Blanket"
+            payload = actual.encode(format, **options)
+        with PillowImage.open(BytesIO(payload)) as restored:
+            assert restored.getexif()[270] == exif[270], format
+            assert restored.getexif()[305] == "Blanket", format
+            assert restored.info["icc_profile"] == profile, format
+            assert (restored.mode, restored.size) == (reference.mode, size), format
+            if format != "JPEG":
+                assert restored.tobytes() == reference.tobytes(), format
+    return 8
+
+
+def check_progress() -> int:
+    """Check progress ordering and retry a cancelled deferred PNG load."""
+    reference = PillowImage.frombytes("RGB", (37, 29), pixels("RGB"))
+    stream = BytesIO()
+    reference.save(stream, "PNG")
+    checkpoints: list[int] = []
+    with BlanketImage.decode(stream.getvalue(), progress=checkpoints.append) as actual:
+        compare_images(actual, reference, "PNG decode progress")
+    assert len(checkpoints) > 1 and checkpoints == list(range(len(checkpoints))), checkpoints
+    with BlanketImage.open(stream) as actual:
+        try:
+            actual.load(progress=lambda completed: completed < 1)
+        except OperationCancelledError:
+            pass
+        else:
+            raise AssertionError("deferred PNG load ignored cancellation")
+        compare_images(actual, reference, "PNG load retry")
+        checkpoints.clear()
+        resized = actual.resize((19, 17), BlanketImage.LANCZOS, progress=checkpoints.append)
+        compare_images(resized, reference.resize((19, 17), PillowImage.Resampling.LANCZOS), "resize progress")
+        assert len(checkpoints) > 1 and checkpoints == list(range(len(checkpoints))), checkpoints
+    return 3
 
 
 def check_pillow_adapter() -> int:
@@ -607,9 +730,7 @@ def check_imageenhance() -> int:
         raw = pixels(mode)
         blanket = BlanketImage.frombytes(mode, (37, 29), raw)
         pillow = PillowImage.frombytes(mode, (37, 29), raw)
-        # Color and Contrast on HSV use Pillow's luminance of H,S,V. Blanket matches that only for RGB-family modes.
-        names = ("Brightness", "Sharpness") if mode == "HSV" else ("Color", "Contrast", "Brightness", "Sharpness")
-        for name in names:
+        for name in BlanketEnhance.__all__:
             actual = getattr(BlanketEnhance, name)(blanket)
             expected = getattr(PillowEnhance, name)(pillow)
             assert actual.degenerate.tobytes() == expected.degenerate.tobytes(), f"{name} degenerate {mode}"
@@ -620,6 +741,18 @@ def check_imageenhance() -> int:
                 assert (result.mode, result.size) == (reference.mode, reference.size), f"{name} {mode} {factor}"
                 assert result.tobytes() == reference.tobytes(), f"{name} {mode} {factor}"
                 checks += 1
+    raw = pixels("LA")
+    blanket = BlanketImage.frombytes("LA", (37, 29), raw)
+    pillow = PillowImage.frombytes("LA", blanket.size, raw)
+    for name in ("Brightness", "Sharpness"):
+        for factor in (0.0, 0.5, 2.0):
+            result = getattr(BlanketEnhance, name)(blanket).enhance(factor)
+            reference = getattr(PillowEnhance, name)(pillow).enhance(factor)
+            label = ("LA", name, factor)
+            assert (result.mode, result.size) == (reference.mode, reference.size), label
+            assert result.getchannel("A").tobytes() == raw[1::2], label
+            assert max(abs(a - b) for a, b in zip(result.tobytes(), reference.tobytes(), strict=True)) <= 1, label
+            checks += 1
     return checks
 
 
@@ -805,6 +938,17 @@ def check_compositing() -> int:
             expected.alpha_composite(reference, (-2, 3), (1, 2, 30, 20))
             assert actual.tobytes() == expected.tobytes()
             checks += 2
+    first = BlanketImage.frombytes("PA", (2, 1), bytes((0, 20, 1, 80)))
+    second = BlanketImage.frombytes("PA", first.size, bytes((1, 140, 0, 255)))
+    first.putpalette(bytes((240, 23, 109, 29, 135, 44)))
+    second.putpalette(bytes((53, 111, 233, 0, 90, 141)))
+    reference = PillowImage.frombytes("RGBA", first.size, bytes((240, 23, 109, 20, 29, 135, 44, 80)))
+    other = PillowImage.frombytes("RGBA", first.size, bytes((0, 90, 141, 140, 53, 111, 233, 255)))
+    for alpha in (0.0, 0.5, 1.0):
+        result = BlanketImage.blend(first, second, alpha)
+        assert result.mode == "PA"
+        compare_images(result.convert("RGBA"), PillowImage.blend(reference, other, alpha), ("PA blend", alpha))
+        checks += 1
     return checks
 
 
@@ -1040,23 +1184,70 @@ def check_sequences() -> int:
             options = {"lossless": True} if format == "WEBP" else {}
             if format != "TIFF":
                 options.update(duration=[20, 40, 60], loop=2)
+            if format == "GIF":
+                for frame in frames:
+                    frame.putpixel((0, 0), (0, 0, 0, 0))
             frames[0].save(output, format, save_all=True, append_images=frames[1:], **options)
-            actual = BlanketImage.open(output)
-            expected = PillowImage.open(output)
-            assert actual.n_frames == expected.n_frames == 3
-            for i in range(3):
-                actual.seek(i)
-                expected.seek(i)
-                assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
-                if format != "TIFF":
-                    expected.load()
-                    assert actual.info["duration"] == expected.info["duration"]
-                    assert actual.info["loop"] == expected.info["loop"] == 2
-                checks += 1
-            assert len(BlanketSequence.all_frames(actual)) == 3
-            assert actual.tell() == 2
-            checks += 2
+            expected_frames = []
+            expected_durations = []
+            with PillowImage.open(output) as expected:
+                assert expected.n_frames == 3
+                for index in range(expected.n_frames):
+                    expected.seek(index)
+                    expected_frames.append(expected.convert("RGBA"))
+                    if format != "TIFF":
+                        expected_durations.append(expected.info["duration"])
+                        assert expected.info["loop"] == 2
+            for lazy in (False, True):
+                with BlanketImage.open(output, lazy=lazy) as actual:
+                    assert actual.n_frames == len(expected_frames)
+                    for index in (0, 2, 0, 1):
+                        actual.seek(index)
+                        label = (format, writer.__name__, lazy, index)
+                        compare_images(actual.convert("RGBA"), expected_frames[index], label)
+                        if format != "TIFF":
+                            assert actual.info["duration"] == expected_durations[index], label
+                            assert actual.info["loop"] == 2, label
+                        checks += 1
+                    copies = BlanketSequence.all_frames(actual)
+                    assert actual.tell() == 1
+                    for index, (frame, reference) in enumerate(zip(copies, expected_frames, strict=True)):
+                        compare_images(frame.convert("RGBA"), reference, (format, lazy, "all_frames", index))
+                        checks += 1
     return checks
+
+
+def check_batch_pipeline() -> int:
+    """Verify streamed results match Pillow and preserve their input order."""
+    size = (37, 29)
+    raw = pixels("RGB")
+    inputs = [BlanketImage.frombytes("RGB", size, samples) for samples in (raw, raw[::-1])]
+    pipeline = BlanketBatch.Pipeline([BlanketOps.grayscale, BlanketOps.mirror])
+    with closing(pipeline.iter(inputs, max_workers=2)) as results:
+        for source, result, samples in zip(inputs, results, (raw, raw[::-1]), strict=True):
+            reference = PillowImage.frombytes("RGB", size, samples)
+            compare_images(result, PillowOps.mirror(PillowOps.grayscale(reference)), "batch pipeline")
+            assert (source.mode, source.size, source.tobytes()) == ("RGB", size, samples)
+    return len(inputs)
+
+
+def check_image_analysis() -> int:
+    """Check hash preprocessing against Pillow and verify metric identities."""
+    size = (161, 163)
+    raw = pixels("RGB", *size)
+    image = BlanketImage.frombytes("RGB", size, raw)
+    reference = PillowImage.frombytes("RGB", size, raw).convert("L").resize((8, 8), PillowImage.Resampling.LANCZOS)
+    samples = np.asarray(reference)
+    expected = int.from_bytes(np.packbits(samples > samples.mean()).tobytes(), "big")
+    actual = BlanketHash.average_hash(image)
+    assert actual.value == expected
+    assert BlanketHash.hex_to_hash(str(actual)) == actual
+    distorted = image.filter(BlanketFilter.GaussianBlur(2))
+    for metric, perfect in ((BlanketMetrics.ssim, 1.0), (BlanketMetrics.ms_ssim, 1.0), (BlanketMetrics.ssimulacra2, 100.0)):
+        identical = metric(image, image.copy())
+        assert abs(identical - perfect) <= 1e-9, metric.__name__
+        assert metric(image, distorted) < identical, metric.__name__
+    return 4
 
 
 def check_svg() -> int:
@@ -1074,13 +1265,16 @@ def check_svg() -> int:
 
 
 def main() -> None:
-    checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_roundtrip() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
+    checks = check_conversions() + check_fromarray() + check_png_interop() + check_jpeg_interop() + check_jxl_interop() + check_pillow_adapter() + check_crop_apis() + check_bands_statistics()
     imageops_checks = check_imageops()
     checks += check_lab()
     checks += check_imagecms()
     checks += check_heif_and_high_depth()
     checks += check_avif_interop()
     checks += check_bmp_gif_ico_interop()
+    checks += check_lossless_raster_interop()
+    checks += check_metadata_interop()
+    checks += check_progress()
     checks += check_compositing()
     checks += check_imagechops()
     checks += check_imagestat()
@@ -1088,6 +1282,7 @@ def main() -> None:
     checks += check_image_access()
     checks += check_image_geometry()
     checks += check_indexed_images()
+    checks += check_color_key_transparency()
     checks += check_imagecolor()
     checks += check_imagepath()
     checks += check_imagemath()
@@ -1095,6 +1290,8 @@ def main() -> None:
     checks += check_save_compressors()
     checks += check_image_utilities()
     checks += check_sequences()
+    checks += check_batch_pipeline()
+    checks += check_image_analysis()
     checks += check_svg()
     imageenhance_checks = check_imageenhance()
     imagepalette_checks = check_imagepalette()
