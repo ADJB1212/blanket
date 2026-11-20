@@ -134,7 +134,7 @@ def test_animated_webp_retains_frame_navigation(monkeypatch, lazy):
         assert image.size == (65, 49)
 
 
-@pytest.mark.parametrize("depth", [8, 16])
+@pytest.mark.parametrize("depth", [8, 10, 12, 16])
 def test_png_fallback_preserves_depth(monkeypatch, depth):
     source = Image.new("RGB", (65, 49), (17, 51, 99)).convert("RGB", bit_depth=depth)
     data = source.encode("PNG")
@@ -146,15 +146,10 @@ def test_png_fallback_preserves_depth(monkeypatch, depth):
     monkeypatch.setattr(Image, "_draft_webp", unexpected_draft)
     with Image.open(BytesIO(data)) as image:
         assert image.draft(None, (4, 4)) is None
-        if depth == 16:
-            with pytest.raises(ValueError, match="requires 8-bit pixels"):
-                image.thumbnail((9, 9))
-            assert image.bit_depth == 16
-            assert image.size == source.size
-            return
         image.thumbnail((9, 9))
         assert image.size == (9, 7)
         assert image.bit_depth == depth
+        assert image.getpixel((4, 3)) == source.getpixel((0, 0))
 
 
 @pytest.mark.parametrize("format", ["JPEG", "WEBP"])

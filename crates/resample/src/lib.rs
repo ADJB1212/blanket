@@ -525,7 +525,7 @@ fn resize(
         return Err(PyValueError::new_err("box can't exceed original image size"));
     }
     if method != 0
-        && !image.pixel_mode().is_wide_scalar()
+        && image.bit_depth() == 8
         && !matches!(image.pixel_mode(), PixelMode::La | PixelMode::Rgba)
         && let Some(gap) = reducing_gap
     {

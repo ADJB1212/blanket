@@ -2916,6 +2916,7 @@ class Image:
 
         ``box`` selects a source rectangle within the image. ``reducing_gap``
         optionally enables integer reduction before filtering (at least 1.0).
+        Wide samples use direct filtering at their original precision.
 
         Args:
             size: Output `(width, height)` in pixels.

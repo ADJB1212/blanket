@@ -272,6 +272,18 @@ def test_unsharp_identity_preserves_samples(mode, depth, subtests: pytest.Subtes
             assert samples(image)[0] == 257
 
 
+@pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
+@pytest.mark.parametrize("depth", [10, 12, 16])
+def test_wide_resize_with_reducing_gap_uses_full_precision(mode, depth):
+    image = make_image(mode, depth, size=(13, 11))
+    expected = image.resize((2, 2))
+
+    actual = image.resize((2, 2), reducing_gap=2.0)
+
+    assert actual.bit_depth == depth
+    assert actual.tobytes() == expected.tobytes()
+
+
 @pytest.mark.parametrize(("mode", "depth"), FORMATS)
 def test_enhancements_retain_precision_and_alpha(mode, depth, subtests: pytest.Subtests):
     for name in ImageEnhance.__all__:
