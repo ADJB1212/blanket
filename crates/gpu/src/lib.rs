@@ -135,7 +135,7 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
         // Byte resize follows Pillow's accumulated coordinates; float resize uses direct coordinates.
         let mut position = 0.5 * scale;
         for (i, row) in result.chunks_exact_mut(stride).enumerate() {
-            let center = if floating { (i as f64 + 0.5) * scale } else { position };
+            let center = if floating { (i as f64 + 0.5) * f64::from(input) / f64::from(output) } else { position };
             row[weights::START] = (center.floor() as u32).min(input - 1) as f32;
             row[weights::COUNT] = 1.0;
             row[weights::HEADER_LEN] = 1.0;
