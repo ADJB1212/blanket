@@ -4214,6 +4214,8 @@ def _decode(data: bytes, formats: list[str] | tuple[str, ...] | None, lazy: bool
             frame._info["default_image"] = True
         if image.format == "GIF":
             frame._info["disposal"] = disposal
+            if frame.mode != "P":
+                frame._info.pop("transparency", None)
         elif image.format == "PNG" and (len(frames) > 1 or loop_count is not None):
             frame._info.update(disposal=disposal, blend=blend)
     if image.format == "PNG" and loop_count is not None:

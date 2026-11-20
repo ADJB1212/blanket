@@ -63,6 +63,8 @@ class LazyFrames:
             selected.info["default_image"] = True
         if selected.format == "GIF":
             selected.info["disposal"] = disposal
+            if selected.mode != "P":
+                selected.info.pop("transparency", None)
         elif selected.format == "PNG" and (self.count > 1 or self.loop is not None):
             selected.info.update(disposal=disposal, blend=blend)
             if selected.mode in ("LA", "RGBA"):

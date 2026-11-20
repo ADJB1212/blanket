@@ -146,6 +146,25 @@ def test_static_navigation_and_sequence_protocol() -> None:
     assert image.tell() == 2
 
 
+@pytest.mark.parametrize("lazy", [False, True])
+def test_gif_keeps_transparent_index_only_on_palette_frames(lazy):
+    first = Image.new("RGBA", (3, 2), (255, 0, 0, 0))
+    first.putpixel((0, 0), (255, 0, 0, 255))
+    second = Image.new("RGBA", first.size, "blue")
+    data = first.encode("GIF", save_all=True, append_images=[second])
+
+    with Image.decode(data, lazy=lazy) as image:
+        assert image.mode == "P"
+        transparent = image.info["transparency"]
+        assert image.getpixel((1, 0)) == transparent
+        image.seek(1)
+        assert image.mode == "RGBA"
+        assert "transparency" not in image.info
+        assert image.tobytes() == second.tobytes()
+        image.seek(0)
+        assert image.info["transparency"] == transparent
+
+
 @pytest.mark.parametrize("format", ["GIF", "WEBP", "PNG"])
 @pytest.mark.parametrize("writer", ["pillow", "blanket"])
 def test_animation_interoperability(format: str, writer: str) -> None:
