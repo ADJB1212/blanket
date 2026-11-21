@@ -666,7 +666,7 @@ def expand(image: Image.Image, border: Border = 0, fill: str | float | tuple[flo
     if min(size) < 0:
         raise ValueError("Width and height must be >= 0")
     image.load()
-    if image.mode == "P":
+    if image.mode == "P" and isinstance(fill, (str, tuple)):
         image = image.copy()
     color = _canvas_color(image, fill)
     return _result(image, ops_canvas(image._native, size, (left, top), color))
