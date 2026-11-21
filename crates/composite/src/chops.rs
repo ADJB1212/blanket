@@ -466,49 +466,53 @@ pub fn chops_invert(py: Python<'_>, image: &Image) -> PyResult<Image> {
 #[pyfunction]
 fn chops_offset(py: Python<'_>, image: &Image, xoffset: i64, yoffset: i64) -> PyResult<Image> {
     let source = image.raw_data()?;
+    if source.is_empty() {
+        return image.copy(py);
+    }
+    let bytes_per_pixel = image.raw_bytes_per_pixel();
+    let head = xoffset.rem_euclid(i64::from(image.width())) as usize * bytes_per_pixel;
+    let shift_y = yoffset.rem_euclid(i64::from(image.height())) as usize;
+    if head == 0 && shift_y == 0 {
+        return image.copy(py);
+    }
     let mut pixels = reserved_buffer(source.len())?;
-    if image.width() != 0 && image.height() != 0 {
-        let bytes_per_pixel = image.raw_bytes_per_pixel();
-        let row = image.width() as usize * bytes_per_pixel;
-        let head = xoffset.rem_euclid(i64::from(image.width())) as usize * bytes_per_pixel;
-        let shift_y = yoffset.rem_euclid(i64::from(image.height())) as usize;
-        let height = image.height() as usize;
-        py.detach(|| {
-            let tail = row - head;
-            if head.min(tail) <= row / 8 && source.len() < 4 << 20 {
-                // Rotate the flat buffer, then repair the narrow wrap at each row.
-                let shift = (shift_y * row + if head <= tail { head } else { source.len() - tail }) % source.len();
-                pixels.extend_from_slice(&source[source.len() - shift..]);
-                pixels.extend_from_slice(&source[..source.len() - shift]);
-                let mut sy = height - shift_y;
-                if head != 0 {
-                    for y in 0..height {
-                        if sy == height {
-                            sy = 0;
-                        }
-                        let (src, target, count) = if head <= tail { (sy * row + tail, y * row, head) } else { (sy * row, y * row + head, tail) };
-                        pixels[target..target + count].copy_from_slice(&source[src..src + count]);
-                        sy += 1;
+    let row = image.width() as usize * bytes_per_pixel;
+    let height = image.height() as usize;
+    py.detach(|| {
+        let tail = row - head;
+        if head.min(tail) <= row / 8 && source.len() < 4 << 20 {
+            // Rotate the flat buffer, then repair the narrow wrap at each row.
+            let shift = (shift_y * row + if head <= tail { head } else { source.len() - tail }) % source.len();
+            pixels.extend_from_slice(&source[source.len() - shift..]);
+            pixels.extend_from_slice(&source[..source.len() - shift]);
+            let mut sy = height - shift_y;
+            if head != 0 {
+                for y in 0..height {
+                    if sy == height {
+                        sy = 0;
+                    }
+                    let (src, target, count) = if head <= tail { (sy * row + tail, y * row, head) } else { (sy * row, y * row + head, tail) };
+                    pixels[target..target + count].copy_from_slice(&source[src..src + count]);
+                    sy += 1;
+                }
+            }
+        } else {
+            chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], row * 32, 4 << 20, |band, rows| {
+                let mut sy = (band * 32 + height - shift_y) % height;
+                for dst in rows.chunks_exact_mut(row) {
+                    let src = &source[sy * row..(sy + 1) * row];
+                    dst[..head].write_copy_of_slice(&src[tail..]);
+                    dst[head..].write_copy_of_slice(&src[..tail]);
+                    sy += 1;
+                    if sy == height {
+                        sy = 0;
                     }
                 }
-            } else {
-                chunks_mut_above(&mut pixels.spare_capacity_mut()[..source.len()], row * 32, 4 << 20, |band, rows| {
-                    let mut sy = (band * 32 + height - shift_y) % height;
-                    for dst in rows.chunks_exact_mut(row) {
-                        let src = &source[sy * row..(sy + 1) * row];
-                        dst[..head].write_copy_of_slice(&src[tail..]);
-                        dst[head..].write_copy_of_slice(&src[..tail]);
-                        sy += 1;
-                        if sy == height {
-                            sy = 0;
-                        }
-                    }
-                });
-                // SAFETY: every reserved byte was initialized by the row copies.
-                unsafe { pixels.set_len(source.len()) };
-            }
-        });
-    }
+            });
+            // SAFETY: every reserved byte was initialized by the row copies.
+            unsafe { pixels.set_len(source.len()) };
+        }
+    });
     let mut result = Image::from_raw_bytes(image.width(), image.height(), image.pixel_mode(), pixels, image.bit_depth())?;
     result.copy_palette_from(image);
     Ok(result)

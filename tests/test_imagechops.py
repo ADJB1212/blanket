@@ -183,6 +183,14 @@ def test_offset_zero_size(size: tuple[int, int]) -> None:
     assert_image_equal(ImageChops.offset(im, 1, 1), im)
 
 
+def test_offset_full_wrap_result_is_independent() -> None:
+    source = Image.new("RGBA", (33, 17), (4, 3, 2, 1))
+    result = ImageChops.offset(source, -66, 51)
+    assert_image_equal(result, source)
+    result.putpixel((0, 0), (5, 6, 7, 8))
+    assert source.getpixel((0, 0)) == (4, 3, 2, 1)
+
+
 def test_logical() -> None:
     def table(op: Callable[[Image.Image, Image.Image], Image.Image], a: int, b: int) -> list[float]:
         out = []
