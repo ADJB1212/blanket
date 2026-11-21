@@ -110,7 +110,9 @@ fn autocontrast_lut(histogram: &[u64; 256], cutoff: &[f64], ignore: &[i64]) -> P
 
 #[pyfunction]
 fn ops_color_composite(py: Python<'_>, background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
-    py.detach(|| blanket_image_ops::float::composite_rgba(background, foreground, srgb))
+    use blanket_image_ops::float::{self, Transfer};
+    let transfer = if srgb { Transfer::Srgb } else { Transfer::Linear };
+    py.detach(|| float::composite_rgba(background, foreground, transfer))
 }
 
 /// Copy complete rows into a reserved, empty image without first zeroing it.

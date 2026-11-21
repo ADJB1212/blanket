@@ -39,13 +39,16 @@ pub fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
 fn ops_color_resize(
     py: Python<'_>, image: &Image, size: (u32, u32), method: u8, bounds: BoxF, srgb: bool, premultiply: bool, progress: Option<Py<PyAny>>,
 ) -> PyResult<Image> {
+    use blanket_image_ops::float::{self, Alpha, Transfer};
+    let transfer = if srgb { Transfer::Srgb } else { Transfer::Linear };
+    let alpha = if premultiply { Alpha::Premultiplied } else { Alpha::Straight };
     let progress = Progress::new(py, progress)?;
     progress.checkpoint()?;
-    let prepared = py.detach(|| blanket_image_ops::float::prepare(image, srgb, premultiply))?;
+    let prepared = py.detach(|| float::prepare(image, transfer, alpha))?;
     progress.checkpoint()?;
     let resized = resize(py, &prepared, size, method, bounds, None, &progress)?;
     drop(prepared);
-    let result = py.detach(|| blanket_image_ops::float::finish(&resized, image, srgb, premultiply))?;
+    let result = py.detach(|| float::finish(&resized, image, transfer, alpha))?;
     progress.checkpoint()?;
     Ok(result)
 }

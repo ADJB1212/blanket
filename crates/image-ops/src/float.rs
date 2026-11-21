@@ -4,6 +4,20 @@ use blanket_core::{Image, PixelMode};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+/// Transfer function of the original color samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transfer {
+    Linear,
+    Srgb,
+}
+
+/// Alpha representation of intermediate color samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Alpha {
+    Straight,
+    Premultiplied,
+}
+
 pub fn convert(image: &Image, mode: PixelMode, depth: Option<u8>) -> PyResult<Image> {
     let color = |m| matches!(m, PixelMode::Rgb | PixelMode::Rgba | PixelMode::RgbF | PixelMode::RgbaF);
     if !color(image.pixel_mode()) || !color(mode) {
@@ -177,7 +191,7 @@ pub fn values(image: &Image) -> PyResult<Vec<f32>> {
     Ok(result)
 }
 
-pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
+pub fn prepare(image: &Image, transfer: Transfer, alpha_mode: Alpha) -> PyResult<Image> {
     if !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba | PixelMode::RgbF | PixelMode::RgbaF) {
         return Err(PyValueError::new_err("linear-light processing requires RGB or RGBA color"));
     }
@@ -199,11 +213,11 @@ pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> 
             let values = &mut values[..count];
             let src = &source[start + block * 256 * channels * sample_bytes..][..count * sample_bytes];
             decode_values(src, image.pixel_mode().is_float(), image.bit_depth(), values);
-            if srgb {
+            if transfer == Transfer::Srgb {
                 transfer_colors(values, channels, true);
             }
             if channels == 4 {
-                alpha(values, if premultiply { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
+                alpha(values, if alpha_mode == Alpha::Premultiplied { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
             }
             for (value, dst) in values.iter().zip(dst.as_chunks_mut::<4>().0) {
                 *dst = value.to_le_bytes();
@@ -218,22 +232,22 @@ pub fn prepare(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> 
     )
 }
 
-pub fn prepare_values(image: &Image, srgb: bool, premultiply: bool) -> PyResult<Vec<f32>> {
+pub fn prepare_values(image: &Image, transfer: Transfer, alpha_mode: Alpha) -> PyResult<Vec<f32>> {
     if !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba | PixelMode::RgbF | PixelMode::RgbaF) {
         return Err(PyValueError::new_err("linear-light processing requires RGB or RGBA color"));
     }
     let mut values = values(image)?;
     let channels = image.pixel_mode().channels();
-    if srgb {
+    if transfer == Transfer::Srgb {
         transfer_colors(&mut values, channels, true);
     }
     if channels == 4 {
-        alpha(&mut values, if premultiply { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
+        alpha(&mut values, if alpha_mode == Alpha::Premultiplied { AlphaOperation::Premultiply } else { AlphaOperation::ClampInput });
     }
     Ok(values)
 }
 
-pub fn composite_rgba(background: &Image, foreground: &Image, srgb: bool) -> PyResult<Image> {
+pub fn composite_rgba(background: &Image, foreground: &Image, transfer: Transfer) -> PyResult<Image> {
     if background.size() != foreground.size()
         || background.pixel_mode() != foreground.pixel_mode()
         || background.bit_depth() != foreground.bit_depth()
@@ -262,14 +276,14 @@ pub fn composite_rgba(background: &Image, foreground: &Image, srgb: bool) -> PyR
             decode_values(&back[range.clone()], floating, depth, back_values);
             decode_values(&front[range], floating, depth, front_values);
             for values in [&mut *back_values, &mut *front_values] {
-                if srgb {
+                if transfer == Transfer::Srgb {
                     transfer_colors(values, 4, true);
                 }
                 alpha(values, AlphaOperation::Premultiply);
             }
             composite(back_values, front_values);
             alpha(back_values, AlphaOperation::Unpremultiply);
-            if srgb {
+            if transfer == Transfer::Srgb {
                 transfer_colors(back_values, 4, false);
             }
             if floating {
@@ -284,12 +298,12 @@ pub fn composite_rgba(background: &Image, foreground: &Image, srgb: bool) -> PyR
     Image::from_raw_bytes(background.width(), background.height(), background.pixel_mode(), pixels, depth)
 }
 
-pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) -> PyResult<Image> {
+pub fn finish(image: &Image, original: &Image, transfer: Transfer, alpha_mode: Alpha) -> PyResult<Image> {
     if !image.pixel_mode().is_float() && !matches!(image.pixel_mode(), PixelMode::Rgb | PixelMode::Rgba) {
         return Err(PyValueError::new_err("requires RGB or RGBA color"));
     }
     if image.pixel_mode().channels() != original.pixel_mode().channels() {
-        return finish_values(image, original, srgb, premultiply, values(image)?);
+        return finish_values(image, original, transfer, alpha_mode, values(image)?);
     }
     let channels = image.pixel_mode().channels();
     let source = image.raw_data()?;
@@ -317,9 +331,9 @@ pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) ->
             let src = &source[start + block * 256 * channels * sample_bytes..][..count * sample_bytes];
             decode_values(src, image.pixel_mode().is_float(), image.bit_depth(), values);
             if channels == 4 {
-                alpha(values, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
+                alpha(values, if alpha_mode == Alpha::Premultiplied { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
             }
-            if srgb {
+            if transfer == Transfer::Srgb {
                 transfer_colors(values, channels, false);
             }
             if original.pixel_mode().is_float() {
@@ -340,11 +354,11 @@ pub fn finish(image: &Image, original: &Image, srgb: bool, premultiply: bool) ->
     }
 }
 
-pub fn finish_values(image: &Image, original: &Image, srgb: bool, premultiply: bool, mut values: Vec<f32>) -> PyResult<Image> {
+pub fn finish_values(image: &Image, original: &Image, transfer: Transfer, alpha_mode: Alpha, mut values: Vec<f32>) -> PyResult<Image> {
     if image.pixel_mode().channels() == 4 {
-        alpha(&mut values, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
+        alpha(&mut values, if alpha_mode == Alpha::Premultiplied { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
     }
-    if srgb {
+    if transfer == Transfer::Srgb {
         transfer_colors(&mut values, image.pixel_mode().channels(), false);
     }
     convert_values(image, original.pixel_mode(), original.bit_depth(), values)
@@ -364,11 +378,11 @@ mod tests {
             };
             let back = build(7);
             let front = build(17);
-            for srgb in [false, true] {
-                let mut values = prepare_values(&back, srgb, true).unwrap();
-                composite(&mut values, &prepare_values(&front, srgb, true).unwrap());
-                let expected = finish_values(&back, &back, srgb, true, values).unwrap();
-                let actual = composite_rgba(&back, &front, srgb).unwrap();
+            for transfer in [Transfer::Linear, Transfer::Srgb] {
+                let mut values = prepare_values(&back, transfer, Alpha::Premultiplied).unwrap();
+                composite(&mut values, &prepare_values(&front, transfer, Alpha::Premultiplied).unwrap());
+                let expected = finish_values(&back, &back, transfer, Alpha::Premultiplied, values).unwrap();
+                let actual = composite_rgba(&back, &front, transfer).unwrap();
                 assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
             }
         }
@@ -385,14 +399,14 @@ mod tests {
                     Image::from_color_float_bytes(count as u32, 1, if channels == 3 { PixelMode::RgbF } else { PixelMode::RgbaF }, bytes).unwrap();
                 for depth in [8, 10, 12, 16, 32] {
                     let image = if depth == 32 { floating.clone() } else { convert(&floating, mode, Some(depth)).unwrap() };
-                    for srgb in [false, true] {
-                        for premultiply in [false, true] {
+                    for transfer in [Transfer::Linear, Transfer::Srgb] {
+                        for alpha_mode in [Alpha::Straight, Alpha::Premultiplied] {
                             let expected: Vec<_> =
-                                prepare_values(&image, srgb, premultiply).unwrap().into_iter().flat_map(f32::to_le_bytes).collect();
-                            let actual = prepare(&image, srgb, premultiply).unwrap();
+                                prepare_values(&image, transfer, alpha_mode).unwrap().into_iter().flat_map(f32::to_le_bytes).collect();
+                            let actual = prepare(&image, transfer, alpha_mode).unwrap();
                             assert_eq!(actual.raw_data().unwrap(), expected, "prepare count={count}, mode={mode:?}, depth={depth}");
-                            let expected = finish_values(&floating, &image, srgb, premultiply, values(&floating).unwrap()).unwrap();
-                            let actual = finish(&floating, &image, srgb, premultiply).unwrap();
+                            let expected = finish_values(&floating, &image, transfer, alpha_mode, values(&floating).unwrap()).unwrap();
+                            let actual = finish(&floating, &image, transfer, alpha_mode).unwrap();
                             assert_eq!(
                                 actual.raw_data().unwrap(),
                                 expected.raw_data().unwrap(),
@@ -469,18 +483,21 @@ mod tests {
                 for target in [PixelMode::Rgb, PixelMode::Rgba, PixelMode::RgbF, PixelMode::RgbaF] {
                     for depth in if target.is_float() { &[32][..] } else { &[8, 10, 12, 16][..] } {
                         let original = convert(&image, target, Some(*depth)).unwrap();
-                        for srgb in [false, true] {
-                            for premultiply in [false, true] {
+                        for transfer in [Transfer::Linear, Transfer::Srgb] {
+                            for alpha_mode in [Alpha::Straight, Alpha::Premultiplied] {
                                 let mut expected = values(&image).unwrap();
                                 if mode.channels() == 4 {
-                                    alpha(&mut expected, if premultiply { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput });
+                                    alpha(
+                                        &mut expected,
+                                        if alpha_mode == Alpha::Premultiplied { AlphaOperation::Unpremultiply } else { AlphaOperation::ClampOutput },
+                                    );
                                 }
-                                if srgb {
+                                if transfer == Transfer::Srgb {
                                     transfer_colors(&mut expected, mode.channels(), false);
                                 }
                                 let intermediate = color_output(width, 1, mode, 32, &expected).unwrap();
                                 let expected = convert(&intermediate, target, Some(*depth)).unwrap();
-                                let actual = finish(&image, &original, srgb, premultiply).unwrap();
+                                let actual = finish(&image, &original, transfer, alpha_mode).unwrap();
                                 assert_eq!(actual.raw_data().unwrap(), expected.raw_data().unwrap());
                                 assert_eq!((actual.pixel_mode(), actual.bit_depth()), (target, *depth));
                             }
