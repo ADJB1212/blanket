@@ -108,10 +108,13 @@ class Path:
         """Return a coordinate pair or an independent path for a contiguous slice."""
         if isinstance(key, slice):
             start, stop, step = key.indices(len(self))
-            if range(start, stop, step) and step != 1:
-                raise TypeError("slice steps not supported")
-            result = Path(0)
-            result._points = self._points.slice(start, max(start, stop)) if step == 1 else _Path.zeros(0)
+            if step != 1:
+                if range(start, stop, step):
+                    raise TypeError("slice steps not supported")
+                return Path(0)
+            result = Path.__new__(Path)
+            result._mapping = False
+            result._points = self._points.slice(start, max(start, stop))
             return result
         return self._points[index(key)]
 
