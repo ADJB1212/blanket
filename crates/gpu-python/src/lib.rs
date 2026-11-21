@@ -122,7 +122,7 @@ mod native {
     use blanket_gpu::protocol::{
         BINARY_CONTROL_LEN, BINARY_SUBTRACT, COLOR_ALPHA_CHANNELS, CONVOLUTION_HEADER_LEN, GRAY_ALPHA_CHANNELS, HORIZONTAL, LARGE_KERNEL_SIZE,
         LUT_ENTRIES, MAX_RANK_SIZE, PARAMETER_COUNT, SMALL_KERNEL_SIZE, VERTICAL, enhancement, format, lut, operation, parameter, reduction,
-        transpose, weights,
+        transpose,
     };
     use blanket_gpu::{Backend, Descriptor, Dispatch};
     use blanket_gpu_metal::{Context, Image};
@@ -504,15 +504,8 @@ mod native {
                     let count = if axis == HORIZONTAL { output.width } else { output.height };
                     let input = if axis == HORIZONTAL { d.width } else { d.height };
                     axis <= VERTICAL
-                        && k > weights::HEADER_LEN
-                        && values.len() == count as usize * k
                         && (if axis == HORIZONTAL { output.height == d.height } else { output.width == d.width })
-                        && values.chunks_exact(k).all(|row| {
-                            row[weights::START] >= 0.0
-                                && row[weights::COUNT] >= 1.0
-                                && row[weights::COUNT] as usize <= k - weights::HEADER_LEN
-                                && row[weights::START] + row[weights::COUNT] <= input as f32
-                        })
+                        && blanket_gpu::valid_resize_weights(input, count, k, &values)
                 }
                 operation::CONVOLVE => {
                     matches!(k, SMALL_KERNEL_SIZE | LARGE_KERNEL_SIZE)

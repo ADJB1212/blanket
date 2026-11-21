@@ -10,6 +10,7 @@ use protocol::{PARAMETER_COUNT, resampling, weights};
 const MAX_PIXELS: u64 = 178_956_970;
 // Packed grayscale through RGBA images have at most four channels.
 const MAX_CHANNELS: u32 = 4;
+const MAX_EXACT_F32_INDEX: u32 = 1 << f32::MANTISSA_DIGITS;
 // Filter radii are measured in source pixels before downsampling expansion.
 const LANCZOS_RADIUS: f64 = 3.0;
 const BICUBIC_RADIUS: f64 = 2.0;
@@ -120,6 +121,9 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
     if input == 0 || output == 0 || method > resampling::HAMMING {
         return Err(GpuError::invalid("invalid resize arguments"));
     }
+    if input > MAX_EXACT_F32_INDEX {
+        return Err(GpuError::invalid("resize axis exceeds GPU weight index precision"));
+    }
     let scale = f64::from(input) / f64::from(output);
     let support = match method {
         resampling::NEAREST => 0.0,
@@ -130,7 +134,10 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
     } * scale.max(1.0);
     // Include the row header and one extra tap for rounded support endpoints.
     let stride = ((2.0 * support).ceil() as usize + weights::HEADER_LEN + 1).min(input as usize + weights::HEADER_LEN);
-    let mut result = vec![0.0; stride.checked_mul(output as usize).ok_or_else(|| GpuError::invalid("resize weights overflow"))?];
+    let length = resize_table_len(output, stride).ok_or_else(|| GpuError::invalid("resize weights exceed GPU index range"))?;
+    let mut result = Vec::new();
+    result.try_reserve_exact(length).map_err(|error| GpuError::with_source(GpuErrorKind::Allocation, "cannot allocate resize weights", &error))?;
+    result.resize(length, 0.0);
     if method == resampling::NEAREST {
         // Byte resize follows Pillow's accumulated coordinates; float resize uses direct coordinates.
         let mut position = 0.5 * scale;
@@ -144,7 +151,9 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
         return Ok((stride as u32, result));
     }
     let inverse_scale = 1.0 / scale.max(1.0);
-    let mut raw = Vec::with_capacity(stride - weights::HEADER_LEN);
+    let mut raw = Vec::new();
+    raw.try_reserve_exact(stride - weights::HEADER_LEN)
+        .map_err(|error| GpuError::with_source(GpuErrorKind::Allocation, "cannot allocate resize taps", &error))?;
     for (i, row) in result.chunks_exact_mut(stride).enumerate() {
         let center = (i as f64 + 0.5) * scale;
         let left = ((center - support + 0.5) as i64).clamp(0, i64::from(input)) as usize;
@@ -165,6 +174,27 @@ pub fn resize_weights(input: u32, output: u32, method: u8, floating: bool) -> Re
         }
     }
     Ok((stride as u32, result))
+}
+
+fn resize_table_len(output: u32, stride: usize) -> Option<usize> {
+    let length = (output as usize).checked_mul(stride)?;
+    (length <= u32::MAX as usize).then_some(length)
+}
+
+/// Check that every resize row fits the shader's control and source ranges.
+pub fn valid_resize_weights(input: u32, output: u32, stride: usize, values: &[f32]) -> bool {
+    input <= MAX_EXACT_F32_INDEX
+        && output != 0
+        && stride > weights::HEADER_LEN
+        && resize_table_len(output, stride) == Some(values.len())
+        && values.chunks_exact(stride).all(|row| {
+            let (start, count) = (row[weights::START], row[weights::COUNT]);
+            let (start_index, taps) = (start as u32, count as u32);
+            start == start_index as f32
+                && count == taps as f32
+                && (1..=stride - weights::HEADER_LEN).contains(&(taps as usize))
+                && start_index.checked_add(taps).is_some_and(|end| end <= input)
+        })
 }
 
 fn kernel(x: f64, method: u8) -> f64 {
@@ -219,6 +249,16 @@ mod tests {
             assert_eq!(stride, 3);
             assert!(rows.as_chunks::<3>().0.iter().all(|row| *row == [0.0, 1.0, 1.0]));
         }
+    }
+
+    #[test]
+    fn resize_controls_respect_index_precision_and_table_size() {
+        let input = MAX_EXACT_F32_INDEX;
+        let (stride, values) = resize_weights(input, 1, resampling::NEAREST, false).unwrap();
+        assert!(valid_resize_weights(input, 1, stride as usize, &values));
+        assert!(resize_weights(input + 1, 1, resampling::NEAREST, false).is_err());
+        assert!(resize_weights(1, u32::MAX, resampling::NEAREST, false).is_err());
+        assert!(!valid_resize_weights(4, 1, 3, &[1.5, 1.0, 1.0]));
     }
     #[test]
     fn float_resize_weights_retain_fractional_precision() {
