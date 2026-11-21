@@ -88,21 +88,34 @@ fn stat_histogram(py: Python<'_>, image: &blanket_core::Image, mask: Option<&bla
             mask.pixel_data()
         })
         .transpose()?;
-    let channels = image.pixel_mode().channels();
     let bins = usize::from(samples::maximum(image)) + 1;
-    Ok(py.detach(|| {
-        let mut histogram = vec![0; bins * channels];
-        for (i, pixel) in source.chunks_exact(channels * 2).enumerate() {
-            if mask.is_some_and(|mask| mask[i] == 0) {
-                continue;
-            }
-            for (c, &bytes) in pixel.as_chunks::<2>().0.iter().enumerate() {
-                let value = if image.pixel_mode().is_big_endian() { u16::from_be_bytes(bytes) } else { u16::from_le_bytes(bytes) };
-                histogram[c * bins + usize::from(value)] += 1;
+    Ok(py.detach(|| match image.pixel_mode() {
+        PixelMode::Rgb => sample_counts::<3, false>(source, mask, bins),
+        PixelMode::Rgba => sample_counts::<4, false>(source, mask, bins),
+        mode if mode.is_big_endian() => sample_counts::<1, true>(source, mask, bins),
+        _ => sample_counts::<1, false>(source, mask, bins),
+    }))
+}
+
+fn sample_counts<const C: usize, const BIG_ENDIAN: bool>(source: &[u8], mask: Option<&[u8]>, bins: usize) -> Vec<u64> {
+    let pixels = source.as_chunks::<2>().0.as_chunks::<C>().0;
+    let mut histogram = vec![0; bins * C];
+    let mut add = |pixel: &[[u8; 2]; C]| {
+        for (channel, &sample) in pixel.iter().enumerate() {
+            let value = if BIG_ENDIAN { u16::from_be_bytes(sample) } else { u16::from_le_bytes(sample) };
+            histogram[channel * bins + usize::from(value)] += 1;
+        }
+    };
+    if let Some(mask) = mask {
+        for (pixel, &selected) in pixels.iter().zip(mask) {
+            if selected != 0 {
+                add(pixel);
             }
         }
-        histogram
-    }))
+    } else {
+        pixels.iter().for_each(add);
+    }
+    histogram
 }
 
 fn sample_bands(histogram: &[u64], bins: usize) -> PyResult<std::slice::ChunksExact<'_, u64>> {
