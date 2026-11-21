@@ -6,7 +6,7 @@ from io import BytesIO
 from random import Random
 
 import pytest
-from helpers import assert_image_properties, assert_raises, image_buffer, image_pair
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, image_buffer, image_pair
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -17,20 +17,22 @@ from blanket import Image
 @pytest.mark.parametrize("size", [(17, 13)])
 def test_median_cut_matches_pillow(mode: str, colors: int, size: tuple[int, int]) -> None:
     raw = Random(913).randbytes(size[0] * size[1] * len(mode))
-    actual = Image.frombytes(mode, size, raw).quantize(colors, method=0)
-    expected = PillowImage.frombytes(mode, size, raw).quantize(colors, method=0)
+    blanket, pillow = image_pair(mode, size, raw)
+    actual = blanket.quantize(colors, method=0)
+    expected = pillow.quantize(colors, method=0)
     assert actual.getpalette() == expected.getpalette()
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("colors", [7, 256])
 def test_median_cut_reduces_large_color_histogram(colors: int) -> None:
     size = (257, 263)
     raw = Random(917).randbytes(size[0] * size[1] * 3)
-    actual = Image.frombytes("RGB", size, raw).quantize(colors, method=0)
-    expected = PillowImage.frombytes("RGB", size, raw).quantize(colors, method=0)
+    blanket, pillow = image_pair("RGB", size, raw)
+    actual = blanket.quantize(colors, method=0)
+    expected = pillow.quantize(colors, method=0)
     assert actual.getpalette() == expected.getpalette()
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])
@@ -38,10 +40,11 @@ def test_median_cut_reduces_large_color_histogram(colors: int) -> None:
 def test_octree_matches_pillow(mode: str, colors: int) -> None:
     size = (129, 131)
     raw = Random(914).randbytes(size[0] * size[1] * len(mode))
-    actual = Image.frombytes(mode, size, raw).quantize(colors, method=2)
-    expected = PillowImage.frombytes(mode, size, raw).quantize(colors, method=2)
+    blanket, pillow = image_pair(mode, size, raw)
+    actual = blanket.quantize(colors, method=2)
+    expected = pillow.quantize(colors, method=2)
     assert actual.getpalette("RGBA") == expected.getpalette("RGBA")
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "RGBA"])

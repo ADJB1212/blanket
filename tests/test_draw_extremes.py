@@ -1,4 +1,5 @@
 import pytest
+from helpers import assert_pixels_equal
 
 from blanket import Image, ImageDraw
 
@@ -15,7 +16,7 @@ def test_drawing_clips_coordinates_across_the_i64_range(mode: str, shape: str) -
         draw.line([(low, 1), (high, 1)], fill="white", width=3)
     else:
         draw.ellipse((low, low, high, high), fill="white")
-    assert image.tobytes() == Image.new(mode, image.size, "white").tobytes()
+    assert_pixels_equal(image, Image.new(mode, image.size, "white"))
 
 
 @pytest.mark.parametrize("origin", [-(1 << 63), (1 << 63) - 11])
@@ -37,4 +38,4 @@ def test_ellipse_extreme_stroke_width_matches_filled_ellipse() -> None:
     expected = actual.copy()
     ImageDraw.Draw(actual).ellipse((1, 1, 5, 5), outline=255, width=(1 << 63) - 1)
     ImageDraw.Draw(expected).ellipse((1, 1, 5, 5), fill=255)
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)

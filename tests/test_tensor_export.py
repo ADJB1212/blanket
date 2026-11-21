@@ -6,6 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -160,8 +161,7 @@ def test_closed(export):
 @pytest.mark.parametrize("lazy", [False, True])
 @pytest.mark.parametrize("export", ["to_numpy", "to_torch"])
 def test_current_frame(lazy, export):
-    stream = BytesIO()
-    PillowImage.new("RGB", (3, 2), "red").save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
+    stream = image_buffer(PillowImage.new("RGB", (3, 2), "red"), "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
     image = Image.open(stream, lazy=lazy)
     first = getattr(image, export)(layout="CHW")
     image.seek(1)

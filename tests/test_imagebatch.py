@@ -7,6 +7,7 @@ from threading import Barrier, Event, Lock, current_thread
 from weakref import ref
 
 import pytest
+from helpers import assert_pixels_equal
 
 from blanket import Image, ImageBatch, ImageOps
 
@@ -18,8 +19,7 @@ def test_pipeline_matches_serial_operations(mode):
     expected = ImageOps.flip(ImageOps.crop(source, 1))
     results = pipeline.map([source, source], max_workers=2)
     for result in results:
-        assert (result.mode, result.size, result.bit_depth) == (expected.mode, expected.size, expected.bit_depth)
-        assert result.tobytes() == expected.tobytes()
+        assert_pixels_equal(result, expected)
 
 
 @pytest.mark.parametrize("depth", [10, 12, 16])
@@ -28,7 +28,7 @@ def test_sample_depth_preserved(depth):
     source = Image.frombytes("RGBA", (11, 7), raw, bit_depth=depth)
     result = ImageBatch.Pipeline([ImageOps.flip]).map([source], max_workers=1)[0]
     assert result.bit_depth == depth
-    assert result.tobytes() == ImageOps.flip(source).tobytes()
+    assert_pixels_equal(result, ImageOps.flip(source))
     assert source.tobytes() == raw
 
 

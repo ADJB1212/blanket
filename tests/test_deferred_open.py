@@ -4,6 +4,7 @@ import zlib
 from io import BytesIO
 
 import pytest
+from helpers import encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageFile
@@ -14,15 +15,14 @@ CASES = [("JPEG", mode) for mode in ("L", "RGB", "CMYK")] + [("PNG", mode) for m
 @pytest.mark.parametrize("format,mode", CASES)
 def test_metadata_and_verify_do_not_decode(monkeypatch, format, mode):
     source = PillowImage.new(mode, (19, 13), 73)
-    stream = BytesIO()
-    source.save(stream, format)
+    stream = image_buffer(source, format)
 
     def unexpected_decode(*args):
         pytest.fail("metadata access decoded pixels")
 
     monkeypatch.setattr(Image, "_open_sequence", unexpected_decode)
     monkeypatch.setattr(Image, "_draft_jpeg", unexpected_decode)
-    with Image.open(BytesIO(stream.getvalue())) as image:
+    with Image.open(stream) as image:
         assert image.mode == mode
         assert image.size == (19, 13)
         assert (image.width, image.height, image.bit_depth) == (19, 13, 8)
@@ -53,9 +53,7 @@ def test_metadata_and_verify_do_not_decode(monkeypatch, format, mode):
 def test_pixels_decode_once_and_retain_metadata(monkeypatch, format, mode):
     channels = PillowImage.getmodebands(mode)
     raw = bytes((i * 37 + i // 7) % 256 for i in range(19 * 13 * channels))
-    stream = BytesIO()
-    PillowImage.frombytes(mode, (19, 13), raw).save(stream, format)
-    encoded = stream.getvalue()
+    encoded = encode_image(PillowImage.frombytes(mode, (19, 13), raw), format)
     native_decode = Image._open_sequence
     calls = []
 

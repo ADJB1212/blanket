@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from helpers import assert_image_properties, assert_raises
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises, image_pair
 from PIL import Image as PillowImage
 from pillow_helpers import PILLOW_IMAGES, assert_image, assert_image_equal, assert_image_similar, hopper
 
@@ -23,10 +23,10 @@ def test_conversion_buffers_preserve_pixels_and_source(width, source, target):
     size = (width, 3)
     channels = PillowImage.getmodebands(source)
     raw = bytes((i * 137 + i // 7) % 256 for i in range(width * 3 * channels))
-    image = Image.frombytes(source, size, raw)
-    expected = PillowImage.frombytes(source, size, raw).convert(target)
+    image, pillow = image_pair(source, size, raw)
+    expected = pillow.convert(target)
     actual = image.convert(target)
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     actual.putpixel((0, 0), 0 if target in ("L", "F") else (0,) * len(actual.getbands()))
     assert image.tobytes() == raw
 

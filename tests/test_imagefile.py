@@ -78,11 +78,9 @@ def test_parser_rejects_unsupported_and_corrupt_input() -> None:
 
 
 def jpeg_encoded(mode: str = "RGB", *, progressive: bool = True, **options: object) -> bytes:
-    output = BytesIO()
     channels = {"L": 1, "RGB": 3, "CMYK": 4}[mode]
     source = PillowImage.frombytes(mode, (33, 19), random.Random(81).randbytes(33 * 19 * channels))
-    source.save(output, "JPEG", progressive=progressive, **options)
-    return output.getvalue()
+    return encode_image(source, "JPEG", progressive=progressive, **options)
 
 
 @pytest.mark.parametrize("mode", ["L", "RGB", "CMYK"])

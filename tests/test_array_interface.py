@@ -5,7 +5,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_pixels_equal, assert_raises
+from helpers import assert_pixels_equal, assert_raises, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -88,9 +88,8 @@ def test_array_interface_exposes_immutable_bytes():
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_array_conversion_uses_current_frame(lazy):
-    stream = BytesIO()
     first = PillowImage.new("RGB", (3, 2), "red")
-    first.save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
     image = Image.open(stream, lazy=lazy)
     first_array = np.asarray(image)
     image.seek(1)

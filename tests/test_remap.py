@@ -132,11 +132,10 @@ def test_map_reuse_output_dimensions_and_current_frame() -> None:
     mapping = coordinate_map([(2.5, 0.5), (0.5, 1.5), (1.5, 1.5), (0.5, 0.5)], (2, 2))
     assert source.remap(mapping).tobytes() == bytes((2, 3, 4, 0))
     assert source.point(lambda v: v + 10).remap(mapping).tobytes() == bytes((12, 13, 14, 10))
-    stream = BytesIO()
     first = PillowImage.frombytes("L", source.size, source.tobytes())
     second = PillowImage.frombytes("L", source.size, source.point(lambda v: v + 10).tobytes())
-    first.save(stream, "TIFF", save_all=True, append_images=[second])
-    with Image.open(BytesIO(stream.getvalue())) as sequence:
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[second])
+    with Image.open(stream) as sequence:
         sequence.seek(1)
         sequence.info["custom"] = "second"
         result = sequence.remap(mapping)

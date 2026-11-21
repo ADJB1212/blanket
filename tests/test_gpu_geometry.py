@@ -3,7 +3,7 @@ import struct
 
 import pytest
 from gpu_helpers import require_metal, runtime as metal_runtime
-from helpers import assert_pixels_equal, assert_raises
+from helpers import assert_pixels_equal, assert_raises, float_samples
 
 from blanket import Image, ImageGpu
 
@@ -83,7 +83,7 @@ def test_opaque_float_composite_discards_nonfinite_background(runtime, alpha):
     background = Image.new("RGBA;F", (3, 1), (math.nan, math.inf, -math.inf, 1.0))
     source = Image.new("RGBA;F", background.size, (0.2, 0.3, 0.4, alpha))
     actual = ImageGpu.from_image(background, runtime=runtime).alpha_composite(ImageGpu.from_image(source, runtime=runtime)).to_image()
-    assert struct.unpack("12f", actual.tobytes()) == pytest.approx((0.2, 0.3, 0.4, 1.0) * 3)
+    assert float_samples(actual) == pytest.approx((0.2, 0.3, 0.4, 1.0) * 3)
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA"])
@@ -221,13 +221,13 @@ def test_float_geometry_samples_and_statistics(runtime, mode, channels):
     image = Image.frombytes(mode, (3, 2), struct.pack(f"{len(samples)}f", *samples))
     gpu = ImageGpu.from_image(image, runtime=runtime)
     actual = gpu.transform((3, 2), Image.Transform.AFFINE, (1, 0, 0, 0, 1, 0)).to_image()
-    assert actual.tobytes() == image.tobytes()
+    assert_pixels_equal(actual, image)
     for band, values in enumerate(gpu.statistics().to_cpu()):
         channel = samples[band::channels]
         assert values["extrema"] == pytest.approx((min(channel), max(channel)))
         assert values["moments"] == pytest.approx([sum(value**order for value in channel) / 6 for order in range(1, 5)], rel=1e-5, abs=1e-6)
     singular = gpu.transform((1, 1), Image.Transform.PERSPECTIVE, (1, 0, 0, 0, 1, 0, -2, 0), fillcolor=-3)
-    assert struct.unpack(f"{channels}f", singular.to_image().tobytes()) == (-3.0,) * channels
+    assert float_samples(singular.to_image()) == (-3.0,) * channels
 
 
 def test_nonfinite_statistics_and_mask_edges(runtime):
@@ -239,7 +239,7 @@ def test_nonfinite_statistics_and_mask_edges(runtime):
     assert all(math.isnan(value) for value in values["extrema"])
     background = ImageGpu.from_image(Image.new("F", (2, 1), 7.0), runtime=runtime)
     mask = ImageGpu.from_image(Image.frombytes("F", (2, 1), struct.pack("2f", 0.0, 1.0)), runtime=runtime)
-    actual = struct.unpack("2f", background.paste(gpu, mask=mask).to_image().tobytes())
+    actual = float_samples(background.paste(gpu, mask=mask).to_image())
     assert actual == (7.0, math.inf)
 
 
@@ -291,7 +291,7 @@ def test_native_float_paste_nonfinite_channels_and_odd_rows(mode, channels, mask
     gpu.close()
     rhs.close()
     coverage.close()
-    actual = struct.unpack(f"{len(background_samples)}f", result.to_image().tobytes())
+    actual = float_samples(result.to_image())
     expected = background_samples.copy()
     for y in range(1, 3):
         for x in range(33):

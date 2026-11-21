@@ -56,12 +56,8 @@ def test_gif_save_matches_pillow_quantization(mode: str) -> None:
         palette = Random(915).randbytes(768)
         actual.putpalette(palette)
         expected.putpalette(palette)
-    output = BytesIO()
-    reference = BytesIO()
-    actual.save(output, "GIF")
-    expected.save(reference, "GIF")
-    result = PillowImage.open(BytesIO(output.getvalue()))
-    baseline = PillowImage.open(BytesIO(reference.getvalue()))
+    result = PillowImage.open(image_buffer(actual, "GIF"))
+    baseline = PillowImage.open(image_buffer(expected, "GIF"))
     assert result.mode == baseline.mode
     assert result.convert("RGBA").tobytes() == baseline.convert("RGBA").tobytes()
 

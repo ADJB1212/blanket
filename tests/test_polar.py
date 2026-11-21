@@ -7,6 +7,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -81,10 +82,9 @@ def test_polar_alpha_option() -> None:
 
 
 def test_current_frame_and_map_reuse() -> None:
-    stream = BytesIO()
     first = PillowImage.new("L", (3, 3), 10)
-    first.save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (3, 3), 20)])
-    with Image.open(BytesIO(stream.getvalue())) as source:
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[PillowImage.new("L", (3, 3), 20)])
+    with Image.open(stream) as source:
         mapping = source.polar_map((5, 7))
         source.seek(1)
         source.info["custom"] = "second"

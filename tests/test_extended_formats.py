@@ -156,9 +156,8 @@ def test_jpeg2000_parallel_codec_preserves_serial_output(monkeypatch: pytest.Mon
 def test_jpeg2000_parallel_lossy_decode_matches_serial_and_pillow(monkeypatch: pytest.MonkeyPatch) -> None:
     size = (513, 513)
     raw = bytes((i * 37 + i // 13) % 256 for i in range(size[0] * size[1] * 3))
-    stream = BytesIO()
     monkeypatch.setenv("OPJ_NUM_THREADS", "1")
-    PillowImage.frombytes("RGB", size, raw).save(stream, "JPEG2000", irreversible=True)
+    stream = image_buffer(PillowImage.frombytes("RGB", size, raw), "JPEG2000", irreversible=True)
     expected = Image.open(stream).tobytes()
     assert expected == PillowImage.open(stream).tobytes()
     monkeypatch.delenv("OPJ_NUM_THREADS")

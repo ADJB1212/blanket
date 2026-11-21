@@ -9,6 +9,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -78,9 +79,7 @@ def test_from_pillow_palette_without_pixel_copy(monkeypatch):
 
 
 def test_from_pillow_current_frame():
-    stream = BytesIO()
-    PillowImage.new("RGB", (4, 2), "red").save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("RGB", (3, 5), "blue")])
-    stream.seek(0)
+    stream = image_buffer(PillowImage.new("RGB", (4, 2), "red"), "TIFF", save_all=True, append_images=[PillowImage.new("RGB", (3, 5), "blue")])
     with PillowImage.open(stream) as source:
         source.seek(1)
         result = Image.from_pillow(source)

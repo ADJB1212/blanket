@@ -161,8 +161,9 @@ def test_color_counts_merge_partitions_and_partial_tail(mode: str, limit: int) -
     tiles = [b"".join(bytes((v, v ^ 31, v ^ 127, v ^ 255)[: len(mode)]) for v in range(start, start + 128)) for start in (0, 128)]
     raw = tiles[0] * (chunk // 128) + tiles[1] * (chunk // 128) + tiles[0][: 17 * len(mode)]
     size = (chunk * 2 + 17, 1)
-    actual = Image.frombytes(mode, size, raw).getcolors(limit)
-    expected = PIL.frombytes(mode, size, raw).getcolors(limit)
+    blanket, pillow = image_pair(mode, size, raw)
+    actual = blanket.getcolors(limit)
+    expected = pillow.getcolors(limit)
     assert (sorted(actual) if actual is not None else None) == (sorted(expected) if expected is not None else None)
 
 
@@ -213,8 +214,9 @@ def test_extrema_late_band_extremes(mode: str) -> None:
 @pytest.mark.parametrize("limit", [0, 1, 255, 256, 257, 1000])
 def test_color_count_table_limits(mode: str, limit: int) -> None:
     raw = bytes(component for i in range(256) for component in (i, (i * 73) % 256, 0, 255)[: len(mode)]) * 3
-    actual = Image.frombytes(mode, (256, 3), raw).getcolors(limit)
-    expected = PIL.frombytes(mode, (256, 3), raw).getcolors(limit)
+    blanket, pillow = image_pair(mode, (256, 3), raw)
+    actual = blanket.getcolors(limit)
+    expected = pillow.getcolors(limit)
     assert (None if actual is None else sorted(actual)) == (None if expected is None else sorted(expected))
 
 

@@ -54,9 +54,8 @@ def test_truncated_input(data: bytes) -> None:
 
 
 def test_animated_gif_first_frame() -> None:
-    output = BytesIO()
     first = PillowImage.new("RGB", (32, 32), "red")
-    first.save(output, "GIF", save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
+    output = image_buffer(first, "GIF", save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")])
     assert Image.open(output).convert("RGB").tobytes() == first.tobytes()
 
 

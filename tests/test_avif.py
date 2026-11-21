@@ -4,7 +4,7 @@ from io import BytesIO
 from typing import TYPE_CHECKING
 
 import pytest
-from helpers import assert_raises, image_buffer
+from helpers import assert_raises, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, UnidentifiedImageError
@@ -18,12 +18,10 @@ if TYPE_CHECKING:
 def test_avif_interop(mode: str, writer: str) -> None:
     color = {"L": 120, "RGB": (60, 120, 180), "RGBA": (60, 120, 180, 150)}[mode]
     source = PillowImage.new(mode, (19, 13), color)
-    output = BytesIO()
     if writer == "blanket":
-        Image.frombytes(mode, source.size, source.tobytes()).save(output, "AVIF", quality=95, effort=1)
+        data = encode_image(Image.frombytes(mode, source.size, source.tobytes()), "AVIF", quality=95, effort=1)
     else:
-        source.save(output, "AVIF", quality=95, speed=10)
-    data = output.getvalue()
+        data = encode_image(source, "AVIF", quality=95, speed=10)
     actual = Image.open(BytesIO(data), formats=["AVIF"])
     expected = PillowImage.open(BytesIO(data)).convert("RGBA")
     assert actual.format == "AVIF"

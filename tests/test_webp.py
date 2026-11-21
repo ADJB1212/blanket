@@ -43,11 +43,10 @@ def test_webp_decode_matches_pillow(mode: str, lossless: bool) -> None:
 
 @pytest.mark.parametrize("lossless", [False, True])
 def test_webp_animation_first_frame(lossless: bool) -> None:
-    stream = BytesIO()
     first = PillowImage.new("RGB", (19, 13), "red")
-    first.save(stream, "WEBP", save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")], lossless=lossless, duration=100)
-    actual = Image.open(BytesIO(stream.getvalue()))
-    expected = PillowImage.open(BytesIO(stream.getvalue()))
+    stream = image_buffer(first, "WEBP", save_all=True, append_images=[PillowImage.new("RGB", first.size, "blue")], lossless=lossless, duration=100)
+    actual = Image.open(stream)
+    expected = PillowImage.open(stream)
     assert actual.convert("RGBA").tobytes() == expected.convert("RGBA").tobytes()
 
 

@@ -5,7 +5,7 @@ import tracemalloc
 import weakref
 
 import pytest
-from helpers import assert_image_properties, assert_raises
+from helpers import assert_image_properties, assert_pixels_equal, assert_raises
 from PIL import Image as PillowImage, ImageDraw as PillowDraw
 
 from blanket import Image, ImageDraw
@@ -25,7 +25,7 @@ def test_mapped_snapshots_preserve_sliced_buffer_layout(storage, offset, orienta
     image = Image.frombuffer("RGBA", size, view, "raw", "RGBA", stride, orientation)
     expected = PillowImage.frombuffer("RGBA", size, view, "raw", "RGBA", stride, orientation)
     snapshot = image.copy()
-    assert snapshot.tobytes() == expected.tobytes()
+    assert_pixels_equal(snapshot, expected)
     image.close()
     if isinstance(data, bytearray):
         data[:] = bytes(len(data))
@@ -138,13 +138,13 @@ def test_frombuffer_mutations_detach(mode: str, operation: str) -> None:
             image.frombytes(bytes(len(data)))
         else:
             drawing.Draw(image).rectangle((0, 0, 2, 2), fill=71)
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     assert actual.readonly == expected.readonly == (1 if operation == "frombytes" else 0)
     assert data == expected_data
     assert bytes(data) == (bytes(len(data)) if operation == "frombytes" else before)
     data[:] = bytes([199]) * len(data)
     expected_data[:] = data
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     assert access[0, 0] == PillowImage.frombuffer(mode, size, data).getpixel((0, 0))
 
 
@@ -156,7 +156,7 @@ def test_frombuffer_decodes_other_layouts_independently(mode: str, rawmode: str,
     actual = Image.frombuffer(mode, size, data, "raw", rawmode, 0, 1)
     expected = PillowImage.frombuffer(mode, size, data, "raw", rawmode, 0, 1)
     data[:] = bytes(len(data))
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
     assert actual.readonly == expected.readonly == 0
 
 

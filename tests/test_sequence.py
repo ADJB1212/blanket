@@ -292,11 +292,10 @@ def test_tiff_special_mode_on_later_page(mode: str) -> None:
 def test_apng_fractional_duration_matches_pillow(duration: float) -> None:
     frames = [Image.new("RGBA", (3, 2), color) for color in ("red", "blue")]
     reference = [PillowImage.new("RGBA", (3, 2), color) for color in ("red", "blue")]
-    actual_data, expected_data = BytesIO(), BytesIO()
-    frames[0].save(actual_data, "PNG", save_all=True, append_images=frames[1:], duration=duration)
-    reference[0].save(expected_data, "PNG", save_all=True, append_images=reference[1:], duration=duration)
-    actual = Image.open(BytesIO(actual_data.getvalue()))
-    expected = PillowImage.open(BytesIO(expected_data.getvalue()))
+    actual_data = image_buffer(frames[0], "PNG", save_all=True, append_images=frames[1:], duration=duration)
+    expected_data = image_buffer(reference[0], "PNG", save_all=True, append_images=reference[1:], duration=duration)
+    actual = Image.open(actual_data)
+    expected = PillowImage.open(expected_data)
     for index in range(2):
         actual.seek(index)
         expected.seek(index)

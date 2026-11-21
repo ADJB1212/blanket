@@ -3,6 +3,7 @@
 from io import BytesIO
 
 import pytest
+from helpers import image_buffer
 
 from blanket import Image, ImageOps
 
@@ -133,9 +134,7 @@ def test_invalid_inputs(operation):
 @pytest.mark.parametrize("operation", OPERATIONS)
 @pytest.mark.parametrize("lazy", [False, True])
 def test_sequence_current_frame_and_navigation(operation, lazy):
-    stream = BytesIO()
-    Image.new("RGB", (3, 2), (10, 20, 30)).save(stream, "PNG", save_all=True, append_images=[Image.new("RGB", (3, 2), (80, 90, 100))], duration=20)
-    stream.seek(0)
+    stream = image_buffer(Image.new("RGB", (3, 2), (10, 20, 30)), "PNG", save_all=True, append_images=[Image.new("RGB", (3, 2), (80, 90, 100))], duration=20)
     with Image.open(stream, lazy=lazy) as source:
         source.seek(1)
         before = source.tobytes()

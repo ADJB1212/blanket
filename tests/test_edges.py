@@ -5,6 +5,7 @@ import struct
 from io import BytesIO
 
 import pytest
+from helpers import image_buffer
 
 from blanket import Image, ImageFilter
 
@@ -139,9 +140,7 @@ def test_current_frame_metadata_and_output_lifetime(lazy):
     first = Image.new("L", (17, 9))
     second = first.copy()
     second.paste(255, (8, 0, 17, 9))
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=[second], duration=[20, 40])
-    stream.seek(0)
+    stream = image_buffer(first, "PNG", save_all=True, append_images=[second], duration=[20, 40])
     with Image.open(stream, lazy=lazy) as image:
         image.seek(1)
         image.info["test"] = "metadata"

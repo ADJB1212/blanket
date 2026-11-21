@@ -5,7 +5,7 @@ from itertools import starmap
 
 import pytest
 from gpu_helpers import CHANNELS, MODES, require_metal, shader_runtime
-from helpers import assert_pixels_equal, assert_raises
+from helpers import assert_pixels_equal, assert_raises, float_samples
 
 from blanket import Image, ImageChops, ImageEnhance, ImageGpu
 
@@ -86,24 +86,23 @@ def test_binary(runtime, mode, operation):
     arguments = (2.5, -13) if operation in ("add", "subtract") else ()
     actual = getattr(gpu, operation)(rhs, *arguments).to_image()
     expected = getattr(ImageChops, operation)(image, other, *arguments)
-    assert actual.tobytes() == expected.tobytes()
+    assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", MODES[4:])
 def test_float_arithmetic(runtime, mode):
     image, other = source(mode), source(mode, 83)
     gpu, rhs = (ImageGpu.from_image(im, runtime=runtime) for im in (image, other))
-    count = image.width * image.height * CHANNELS[mode]
-    a = struct.unpack(f"{count}f", image.tobytes())
-    b = struct.unpack(f"{count}f", other.tobytes())
+    a = float_samples(image)
+    b = float_samples(other)
     operations = {"difference": lambda x, y: abs(x - y), "multiply": operator.mul, "screen": lambda x, y: 1 - (1 - x) * (1 - y), "lighter": max, "darker": min, "add": operator.add, "subtract": operator.sub}
     for name, operation in operations.items():
-        actual = struct.unpack(f"{count}f", getattr(gpu, name)(rhs).to_image().tobytes())
+        actual = float_samples(getattr(gpu, name)(rhs).to_image())
         expected = list(starmap(operation, zip(a, b, strict=True)))
         assert actual == pytest.approx(expected, rel=1e-5, abs=1e-6)
-    inverted = struct.unpack(f"{count}f", gpu.invert().to_image().tobytes())
+    inverted = float_samples(gpu.invert().to_image())
     assert inverted == pytest.approx([1 - v for v in a], rel=1e-5, abs=1e-6)
-    bright = struct.unpack(f"{count}f", gpu.brightness(1.5).to_image().tobytes())
+    bright = float_samples(gpu.brightness(1.5).to_image())
     expected = [v if mode == "RGBA;F" and i % 4 == 3 else v * 1.5 for i, v in enumerate(a)]
     assert bright == pytest.approx(expected, rel=1e-5, abs=1e-6)
 
@@ -114,7 +113,7 @@ def test_nonfinite_geometry_and_arithmetic(runtime):
     assert gpu.transpose(0).crop((0, 0, 3, 1)).offset(3).to_image().tobytes() == image.transpose(0).tobytes()
     other = ImageGpu.from_image(Image.new("F", image.size, 1), runtime=runtime)
     for name in ("lighter", "darker", "multiply", "difference", "add", "subtract"):
-        output = struct.unpack("3f", getattr(gpu, name)(other).to_image().tobytes())
+        output = float_samples(getattr(gpu, name)(other).to_image())
         assert math.isnan(output[2])
 
 

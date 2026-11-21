@@ -6,6 +6,7 @@ from math import cos, radians, sin
 
 import numpy as np
 import pytest
+from helpers import image_buffer
 
 from blanket import Image, ImageChops, ImageFilter, ImageOps
 
@@ -182,9 +183,7 @@ def test_invalid_dimensions_and_types():
 def test_sequence_positions_and_close(lazy):
     first = texture()
     second = ImageChops.offset(first, 3, -2)
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=[second], duration=20)
-    stream.seek(0)
+    stream = image_buffer(first, "PNG", save_all=True, append_images=[second], duration=20)
     with Image.open(stream, lazy=lazy) as image:
         image.seek(1)
         before = image.tobytes()

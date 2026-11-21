@@ -7,6 +7,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import pytest
+from helpers import encode_image
 
 from blanket import CodecResourceLimitError, CorruptImageError, Image, ImageDraw, UnidentifiedImageError, UnsupportedCodecError, features
 from blanket.Compressor import LosslessImageCompressor, LossyImageCompressor
@@ -297,10 +298,8 @@ def test_svg_lossless_compressor_minifies_trace(tmp_path: Path, fit: str) -> Non
     assert Image.decode(encoded).tobytes() == Image.decode(baseline).tobytes()
 
     path = tmp_path / "minified.svg"
-    stream = BytesIO()
     image.save(path, svg_mode=fit, compressor=compressor)
-    image.save(stream, "SVG", svg_mode=fit, compressor=compressor)
-    assert path.read_bytes() == stream.getvalue() == encoded
+    assert path.read_bytes() == encode_image(image, "SVG", svg_mode=fit, compressor=compressor) == encoded
 
 
 def test_svg_trace_fitting_color_and_speckle_controls() -> None:

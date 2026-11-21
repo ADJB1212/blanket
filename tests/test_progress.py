@@ -6,9 +6,10 @@ from struct import pack
 from threading import get_ident
 from types import SimpleNamespace
 from unittest.mock import ANY, Mock, call
-from zlib import compress, crc32
+from zlib import compress
 
 import pytest
+from helpers import assert_pixels_equal, encode_image, png_chunk
 from PIL import Image as Pillow
 
 from blanket import Compressor, Image, OperationCancelledError
@@ -18,14 +19,12 @@ from blanket import Compressor, Image, OperationCancelledError
 def test_png_progress_preserves_pixels_and_can_cancel_deferred_load(mode):
     size = (41, 49)
     source = Pillow.frombytes("L", size, bytes(i % 256 for i in range(size[0] * size[1]))).convert(mode)
-    stream = BytesIO()
-    source.save(stream, format="PNG")
-    data = stream.getvalue()
+    data = encode_image(source, "PNG")
     expected = Image.decode(data)
     seen = []
-    assert Image.decode(data, progress=seen.append).tobytes() == expected.tobytes()
+    assert_pixels_equal(Image.decode(data, progress=seen.append), expected)
     assert seen == list(range(len(seen))) and len(seen) > 3
-    assert Image.open(BytesIO(data), progress=lambda _: True).tobytes() == expected.tobytes()
+    assert_pixels_equal(Image.open(BytesIO(data), progress=lambda _: True), expected)
     with pytest.raises(OperationCancelledError):
         Image.decode(data, progress=lambda completed: completed < 1)
 
@@ -33,7 +32,7 @@ def test_png_progress_preserves_pixels_and_can_cancel_deferred_load(mode):
         image = Image.open(BytesIO(data))
         with pytest.raises(OperationCancelledError):
             image.load(progress=lambda completed: completed < 1)
-        assert image.tobytes() == expected.tobytes()
+        assert_pixels_equal(image, expected)
 
 
 def test_interlaced_png_progress_preserves_adam7_output():
@@ -42,10 +41,7 @@ def test_interlaced_png_progress_preserves_adam7_output():
     passes = [(0, 0, 8, 8), (4, 0, 8, 8), (0, 4, 4, 8), (2, 0, 4, 4), (0, 2, 2, 4), (1, 0, 2, 2), (0, 1, 1, 2)]
     rows = b"".join(b"\0" + pixels[y * width + x : (y + 1) * width : dx] for x, top, dx, dy in passes for y in range(top, height, dy))
 
-    def chunk(kind, payload):
-        return pack(">I", len(payload)) + kind + payload + pack(">I", crc32(kind + payload))
-
-    data = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", pack(">IIBBBBB", width, height, 8, 0, 0, 0, 1)) + chunk(b"IDAT", compress(rows)) + chunk(b"IEND", b"")
+    data = b"\x89PNG\r\n\x1a\n" + png_chunk(b"IHDR", pack(">IIBBBBB", width, height, 8, 0, 0, 0, 1)) + png_chunk(b"IDAT", compress(rows)) + png_chunk(b"IEND", b"")
     seen = []
     assert Image.decode(data, progress=seen.append).tobytes() == pixels
     assert seen == list(range(len(seen))) and len(seen) > 3
@@ -66,7 +62,7 @@ def test_sequence_progress_and_cancelled_lazy_seek(format):
     assert lazy.tell() == 0 and lazy.tobytes() == first
     lazy.seek(2, progress=lambda _: True)
     eager.seek(2)
-    assert lazy.tobytes() == eager.tobytes()
+    assert_pixels_equal(lazy, eager)
 
 
 @pytest.mark.parametrize(
@@ -201,9 +197,7 @@ def test_compressor_tqdm_progress(compressor_type, mock_tqdm):
 
     tqdm.reset_mock()
     bar.reset_mock()
-    output = BytesIO()
-    image.save(output, "PNG", compressor=compressor)
-    assert output.getvalue() == baseline
+    assert encode_image(image, "PNG", compressor=compressor) == baseline
     tqdm.assert_called_once()
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
     bar.close.assert_called_once_with()
@@ -235,10 +229,8 @@ def test_compressor_progress_when_tqdm_is_missing(monkeypatch, capsys):
     seen = []
     compressor = Compressor.LosslessImageCompressor(effort=1)
     baseline = image.encode("PNG", compressor=compressor, progress=seen.append)
-    output = BytesIO()
     reported = []
-    image.save(output, "PNG", compressor=Compressor.LosslessImageCompressor(effort=1, show_progress=True), progress=reported.append)
-    assert output.getvalue() == baseline
+    assert encode_image(image, "PNG", compressor=Compressor.LosslessImageCompressor(effort=1, show_progress=True), progress=reported.append) == baseline
     assert reported == seen
     assert capsys.readouterr() == ("", "")
 
@@ -264,7 +256,7 @@ def test_image_tqdm_progress(operation, description, mock_tqdm):
     seen = []
     result = operation(image, progress=seen.append, show_progress=True)
     assert result.size == expected.size
-    assert result.tobytes() == expected.tobytes()
+    assert_pixels_equal(result, expected)
     tqdm.assert_called_once_with(desc=description, unit="checkpoint", bar_format=ANY)
     assert seen == list(range(len(seen))) and len(seen) >= 2
     assert bar.update.call_args_list == [call(1)] * (len(seen) - 1)
@@ -292,7 +284,7 @@ def test_tqdm_only_displays_load_and_seek_when_decoding(mock_tqdm):
     second = Image.new("RGB", source.size, "blue")
     sequence = Image.decode(source.encode("PNG", save_all=True, append_images=[second]), lazy=True, frame_cache_size=2)
     sequence.seek(1, show_progress=True)
-    assert sequence.tobytes() == second.tobytes()
+    assert_pixels_equal(sequence, second)
     tqdm.assert_called_once_with(desc="Decoding frame", unit="checkpoint", bar_format=ANY)
     sequence.seek(0, show_progress=True)
     sequence.seek(1, show_progress=True)

@@ -139,16 +139,16 @@ def test_bilevel_logical_operations_with_different_widths(widths: tuple[int, int
 def test_scalar_resize_preserves_constant_precision(mode: str, resample: Image.Resampling) -> None:
     values = [-2147483648, -123456789, 0, 123456789, 2147483647] if mode == "I" else [-1e20, -123.125, 0.0, 1.0, 1e20]
     for value in values:
-        actual = Image.new(mode, (19, 13), value).resize((7, 23), resample)
-        expected = PillowImage.new(mode, (19, 13), value).resize((7, 23), resample)
-        assert actual.tobytes() == expected.tobytes()
+        blanket, pillow = new_pair(mode, (19, 13), value)
+        actual = blanket.resize((7, 23), resample)
+        expected = pillow.resize((7, 23), resample)
+        assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize("mode", ["I", "I;16", "I;16L", "I;16B"])
 def test_integer_modes_pixel_storage_and_geometry(mode: str) -> None:
     values = [-42, 258, 65535] if mode == "I" else [0, 258, 65535]
-    pillow = PillowImage.new(mode, (3, 1))
-    blanket = Image.new(mode, (3, 1))
+    blanket, pillow = new_pair(mode, (3, 1))
     pillow.putdata(values)
     blanket.putdata(values)
     assert blanket.mode == mode
@@ -219,9 +219,10 @@ def test_vertical_reduce_reuses_sums_without_carrying_previous_rows(mode: str, s
             size = (13, 137)
             channels = 3 if mode == "YCbCr" else len(mode)
             raw = bytes((i * 71 + i // 13) % 256 for i in range(size[0] * size[1] * channels))
-            actual = Image.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
-            expected = PillowImage.frombytes(mode, size, raw).reduce((1, factor), box=(1, 3, 12, 134))
-            assert actual.tobytes() == expected.tobytes()
+            blanket, pillow = image_pair(mode, size, raw)
+            actual = blanket.reduce((1, factor), box=(1, 3, 12, 134))
+            expected = pillow.reduce((1, factor), box=(1, 3, 12, 134))
+            assert_pixels_equal(actual, expected)
 
 
 @pytest.mark.parametrize(("mode", "value"), [("I", -1024), ("I;16", 1024), ("I;16L", 1024), ("I;16B", 1024)])
@@ -343,12 +344,9 @@ def test_integer_mode_paste(mode: str) -> None:
 
 def test_signed_integer_masked_paste_matches_pillow() -> None:
     mode = "I"
-    target = Image.new(mode, (3, 1), 10)
-    source = Image.new(mode, (3, 1), 1000)
-    pillow_target = PillowImage.new(mode, (3, 1), 10)
-    pillow_source = PillowImage.new(mode, (3, 1), 1000)
-    mask = Image.frombytes("L", (3, 1), bytes([0, 128, 255]))
-    pillow_mask = PillowImage.frombytes("L", (3, 1), mask.tobytes())
+    target, pillow_target = new_pair(mode, (3, 1), 10)
+    source, pillow_source = new_pair(mode, (3, 1), 1000)
+    mask, pillow_mask = image_pair("L", (3, 1), bytes([0, 128, 255]))
     target.paste(source, (0, 0), mask)
     pillow_target.paste(pillow_source, (0, 0), pillow_mask)
     assert target.getdata() == list(pillow_target.get_flattened_data())

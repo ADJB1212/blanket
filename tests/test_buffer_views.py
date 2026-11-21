@@ -9,6 +9,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image
@@ -205,9 +206,8 @@ def test_array_option_validation(options):
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_views_retain_current_frame_after_navigation_and_close(lazy):
-    stream = BytesIO()
     first = PillowImage.new("RGB", (3, 2), "red")
-    first.save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
+    stream = image_buffer(first, "TIFF", save_all=True, append_images=[PillowImage.new("L", (2, 4), 42)])
     with Image.open(stream, lazy=lazy) as image:
         first_view = image.array_view()
         image.seek(1)

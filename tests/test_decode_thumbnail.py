@@ -7,7 +7,7 @@ from shutil import which
 from subprocess import run
 
 import pytest
-from helpers import image_buffer
+from helpers import assert_pixels_equal, encode_image, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import CorruptImageError, Image
@@ -58,14 +58,11 @@ def test_thumbnail_uses_reduced_native_raster(monkeypatch, format, mode, lossles
 @pytest.mark.parametrize("gap", [None, 1.0, 2.0, 3.0])
 def test_jpeg_thumbnail_matches_pillow(size, mode, resample, gap):
     raw = bytes((i * 37 + i // 7) % 256 for i in range(size[0] * size[1] * len(mode)))
-    stream = BytesIO()
-    PillowImage.frombytes(mode, size, raw).save(stream, "JPEG")
-    data = stream.getvalue()
+    data = encode_image(PillowImage.frombytes(mode, size, raw), "JPEG")
     with Image.open(BytesIO(data)) as image, PillowImage.open(BytesIO(data)) as reference:
         image.thumbnail((7.9, 5.2), resample, reducing_gap=gap)
         reference.thumbnail((7.9, 5.2), resample, reducing_gap=gap)
-        assert image.size == reference.size
-        assert image.tobytes() == reference.tobytes()
+        assert_pixels_equal(image, reference)
 
 
 @pytest.mark.parametrize("mode", ["RGB", "RGBA"])

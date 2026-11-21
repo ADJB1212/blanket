@@ -163,10 +163,9 @@ def test_jpeg_encodes_like_pillow(mode: str, size: tuple[int, int], quality: int
     rgb = PIL.frombytes("RGB", size, random.Random(5).randbytes(size[0] * size[1] * 3)).filter(PILFilter.SMOOTH_MORE)
     expected_image = rgb.convert(mode)
     actual_image = Image.frombytes(mode, size, expected_image.tobytes())
-    streams = [BytesIO(), BytesIO()]
-    actual_image.save(streams[0], "JPEG", quality=quality)
-    expected_image.save(streams[1], "JPEG", quality=quality)
-    actual, expected = (PIL.open(BytesIO(stream.getvalue())) for stream in streams)
+    actual_stream = image_buffer(actual_image, "JPEG", quality=quality)
+    expected_stream = image_buffer(expected_image, "JPEG", quality=quality)
+    actual, expected = PIL.open(actual_stream), PIL.open(expected_stream)
     assert actual.mode == expected.mode == ("CMYK" if mode == "CMYK" else "RGB")
     if size[0] % 16 == 0 and size[1] % 16 == 0:
         assert actual.tobytes() == expected.tobytes()

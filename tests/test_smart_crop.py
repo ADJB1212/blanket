@@ -3,6 +3,7 @@
 from io import BytesIO
 
 import pytest
+from helpers import assert_pixels_equal, image_buffer
 
 from blanket import Image, ImageOps
 
@@ -72,9 +73,7 @@ def test_current_frame_and_source_navigation(lazy):
     first.paste((255, 0, 0), (0, 0, 20, 40))
     second = Image.new("RGB", (120, 40))
     second.paste((0, 0, 255), (100, 0, 120, 40))
-    stream = BytesIO()
-    first.save(stream, "PNG", save_all=True, append_images=[second], duration=[20, 40])
-    stream.seek(0)
+    stream = image_buffer(first, "PNG", save_all=True, append_images=[second], duration=[20, 40])
     with Image.open(stream, lazy=lazy) as image:
         image.seek(1)
         image.info["custom"] = b"current frame"
@@ -85,7 +84,7 @@ def test_current_frame_and_source_navigation(lazy):
         assert image.tell() == 1
         assert image.tobytes() == before
         image.seek(0)
-        assert image.tobytes() == first.tobytes()
+        assert_pixels_equal(image, first)
     assert result.getpixel((30, 20)) == (0, 0, 255)
 
 

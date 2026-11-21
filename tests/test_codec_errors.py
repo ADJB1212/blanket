@@ -109,8 +109,7 @@ def test_configurable_decompression_bomb_threshold(monkeypatch: pytest.MonkeyPat
 
 @pytest.mark.parametrize("lazy", [False, True])
 def test_configurable_pixel_limit_checks_later_tiff_pages(monkeypatch: pytest.MonkeyPatch, lazy: bool) -> None:
-    stream = BytesIO()
-    PillowImage.new("L", (4, 4)).save(stream, "TIFF", save_all=True, append_images=[PillowImage.new("L", (8, 8))])
+    stream = image_buffer(PillowImage.new("L", (4, 4)), "TIFF", save_all=True, append_images=[PillowImage.new("L", (8, 8))])
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 30)
     with pytest.raises(Image.DecompressionBombError, match="64 pixels"):
         Image.decode(stream.getvalue(), lazy=lazy)
@@ -124,9 +123,8 @@ def test_tiff_region_checks_source_pixel_limit(monkeypatch: pytest.MonkeyPatch) 
 
 
 def test_cumulative_frame_limit() -> None:
-    stream = BytesIO()
     image = Image.new("RGBA", (2, 2))
-    image.save(stream, "PNG", save_all=True, append_images=[Image.new("RGBA", (2, 2), "red")])
+    stream = image_buffer(image, "PNG", save_all=True, append_images=[Image.new("RGBA", (2, 2), "red")])
     data = bytearray(stream.getvalue())
     start = data.index(b"acTL")
     struct.pack_into(">I", data, start + 4, 0x7FFFFFFF)

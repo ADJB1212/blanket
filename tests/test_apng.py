@@ -8,7 +8,7 @@ import zlib
 from io import BytesIO
 
 import pytest
-from helpers import assert_raises, png_chunk
+from helpers import assert_raises, encode_image, png_chunk
 from pillow_helpers import PILLOW_IMAGES
 
 from blanket import CorruptImageError, Image, ImageSequence, PngImagePlugin
@@ -760,12 +760,9 @@ def test_apng_save_size(tmp_path: Path) -> None:
 def test_compress_level() -> None:
     compress_level_sizes = {}
     for compress_level in (0, 9):
-        out = BytesIO()
-
         im = Image.new("L", (100, 100))
-        im.save(out, "PNG", save_all=True, append_images=[Image.new("L", (200, 200))], compress_level=compress_level)
-
-        compress_level_sizes[compress_level] = len(out.getvalue())
+        data = encode_image(im, "PNG", save_all=True, append_images=[Image.new("L", (200, 200))], compress_level=compress_level)
+        compress_level_sizes[compress_level] = len(data)
 
     assert compress_level_sizes[0] > compress_level_sizes[9]
 

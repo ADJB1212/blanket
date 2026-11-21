@@ -1,6 +1,6 @@
 import pytest
 from gpu_helpers import require_metal
-from helpers import assert_raises
+from helpers import assert_raises, float_samples, image_buffer
 
 from blanket import Image, ImageFilter, ImageGpu
 
@@ -91,10 +91,7 @@ def test_unified_memory_mutations_preserve_gpu_pixels(operation: str) -> None:
         cpu.paste(Image.new("RGBA", cpu.size, "red"))
     assert cpu.tobytes() != original.tobytes()
     assert gpu.to_image().tobytes() == original.tobytes()
-    output = io.BytesIO()
-    shared = gpu.to_image()
-    shared.save(output, format="PNG")
-    assert Image.open(io.BytesIO(output.getvalue())).tobytes() == original.tobytes()
+    assert Image.open(image_buffer(gpu.to_image(), format="PNG")).tobytes() == original.tobytes()
 
 
 @pytest.mark.parametrize("mode", ["L", "LA", "RGB", "RGBA", "F", "RGB;F", "RGBA;F"])
@@ -358,10 +355,10 @@ def test_float_resize(mode, method):
     channels = {"F": 1, "RGB;F": 3, "RGBA;F": 4}[mode]
     samples = [((i * 31) % 251) / 250 for i in range(13 * 17 * channels)]
     image = Image.frombytes(mode, (13, 17), struct.pack(f"{len(samples)}f", *samples))
-    actual = ImageGpu.from_image(image).resize((7, 23), method).to_image().tobytes()
-    expected = image.resize((7, 23), method).tobytes()
-    a = struct.unpack(f"{len(actual) // 4}f", actual)
-    b = struct.unpack(f"{len(expected) // 4}f", expected)
+    actual = ImageGpu.from_image(image).resize((7, 23), method).to_image()
+    expected = image.resize((7, 23), method)
+    a = float_samples(actual)
+    b = float_samples(expected)
     assert all(abs(x - y) <= 1e-6 + 1e-5 * abs(y) for x, y in zip(a, b, strict=True))
 
 

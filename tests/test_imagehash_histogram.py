@@ -6,6 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
+from helpers import image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageHash
@@ -117,9 +118,8 @@ def test_alpha_is_discarded(hasher) -> None:
 @pytest.mark.parametrize("hasher", HASHERS)
 def test_current_frame_source_state_and_lifetime(hasher) -> None:
     pixels = bytes((i * 37 + i // 7) % 256 for i in range(17 * 13 * 3))
-    stream = BytesIO()
-    PillowImage.new("RGB", (17, 13), "red").save(stream, "TIFF", save_all=True, append_images=[PillowImage.frombytes("RGB", (17, 13), pixels)])
-    with Image.open(BytesIO(stream.getvalue())) as source:
+    stream = image_buffer(PillowImage.new("RGB", (17, 13), "red"), "TIFF", save_all=True, append_images=[PillowImage.frombytes("RGB", (17, 13), pixels)])
+    with Image.open(stream) as source:
         source.seek(1)
         source.info["custom"] = "retained"
         before = source.info.copy(), source.tobytes()

@@ -6,7 +6,7 @@ from io import BytesIO
 
 import numpy as np
 import pytest
-from helpers import assert_raises, encode_image, image_buffer
+from helpers import assert_raises, encode_image, float_samples, image_buffer
 from PIL import Image as PillowImage
 
 from blanket import Image, ImageHdr, PngImagePlugin
@@ -108,7 +108,7 @@ def test_float_scene_values_match_reference(operator, depth):
     values = [0, 0.001, 0.25, 1, 4, 11.2, 100]
     image = Image.frombytes("F", (len(values), 1), struct.pack(f"<{len(values)}f", *values))
     result = ImageHdr.tone_map(image, operator, exposure=1, bit_depth=depth)
-    expected = [encoded(curve(v * 2, operator), depth) for v in struct.unpack(f"<{len(values)}f", image.tobytes())]
+    expected = [encoded(curve(v * 2, operator), depth) for v in float_samples(image)]
     assert list(result.getdata()) == expected
     assert (result.mode, result.bit_depth) == ("L", depth)
     assert image.tobytes() == struct.pack(f"<{len(values)}f", *values)

@@ -281,11 +281,9 @@ def test_explicit_xmp_overrides_pnginfo(replacement, policy, compressed, animate
 
 @pytest.mark.parametrize("format", ["PNG", "WEBP"])
 def test_animation_bytes_controls_and_all_frames_preserved(format):
-    stream = BytesIO()
     first = Image.new("RGBA", (8, 6), (255, 0, 0, 255))
     second = Image.new("RGBA", (8, 6), (0, 255, 0, 127))
-    first.save(stream, format, save_all=True, append_images=[second], duration=[40, 90], loop=3, xmp=XMP)
-    data = stream.getvalue()
+    data = encode_image(first, format, save_all=True, append_images=[second], duration=[40, 90], loop=3, xmp=XMP)
     rewritten = ImageMetadata.rewrite(BytesIO(data), xmp=None)
     before, after = Image.open(BytesIO(data)), Image.open(BytesIO(rewritten))
     assert before.n_frames == after.n_frames == 2
