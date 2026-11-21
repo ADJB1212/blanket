@@ -1,0 +1,43 @@
+[package]
+edition = "2024"
+name = "lcms2-sys"
+version = "4.2.0"
+authors = ["Kornel Lesiński <kornel@geekhood.net>"]
+build = "src/build.rs"
+links = "lcms2"
+rust-version = "1.98"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+publish = false
+description = "Bindings for liblcms2 (Little CMS) with support for Linux, macOS, and Windows. See lcms2 crate for a safe Rust wrapper."
+documentation = "https://kornelski.github.io/rust-lcms2-sys/"
+keywords = ["icc", "color", "profile", "lcms", "sys"]
+categories = ["multimedia::images", "external-ffi-bindings"]
+license = "MIT"
+repository = "https://github.com/kornelski/rust-lcms2-sys.git"
+
+[lib]
+doctest = false
+
+[build-dependencies]
+pkg-config = "0.3"
+
+[dependencies]
+libc = "0.2"
+
+[features]
+default = ["dynamic", "static-fallback", "parallel"]
+# Try pkg-config to link dynamically. You can also set `LCMS2_LIB_DIR` and `LCMS2_INCLUDE_DIR` instead.
+dynamic = []
+# Retained for compatibility; Ninja builds in parallel by default.
+parallel = []
+# Prefer static build
+static = []
+# Allow static build if dynamic linking fails. You can set `LCMS2_STATIC` env var to prefer static.
+static-fallback = []
+
+# If building lcms2 from source, configure it to be strict about parsing CGATS.13.
+lcms2-strict-cgats = []

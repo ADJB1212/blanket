@@ -958,12 +958,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dunce"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92773504d58c093f6de2459af4af33faa518c13451eb8f2b5698ed3d36e7c813"
-
-[[package]]
 name = "either"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1363,11 +1357,7 @@ dependencies = [
 [[package]]
 name = "lcms2-sys"
 version = "4.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a0fc4c537f27eb6fd5497862c47072f731c96fc914eba9f63f385240d5978b3"
 dependencies = [
- "cc",
- "dunce",
  "libc",
  "pkg-config",
 ]
